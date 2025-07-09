@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# SecretSpec Installation Script
+# https://github.com/cachix/secretspec
+
+# Colors for output
+if [[ -t 1 ]]; then
+    RESET='\033[0m'
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    BOLD='\033[1m'
+else
+    RESET=''
+    RED=''
+    GREEN=''
+    YELLOW=''
+    BOLD=''
+fi
+
+# Helper functions
+error() {
+    echo -e "${RED}error:${RESET} $*" >&2
+    exit 1
+}
+
+info() {
+    echo -e "${YELLOW}info:${RESET} $*"
+}
+
+success() {
+    echo -e "${GREEN}success:${RESET} $*"
+}
+
+# Check dependencies
+for cmd in curl tar; do
+    if ! command -v "$cmd" >/dev/null; then
+        error "$cmd is required to install secretspec"
+    fi
+done
+
+# Detect platform
+PLATFORM=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m)
+
+case "$PLATFORM" in
+    linux)
+        case "$ARCH" in
+            x86_64) TARGET="x86_64-unknown-linux-gnu" ;;
+            aarch64|arm64) TARGET="aarch64-unknown-linux-gnu" ;;
+            *) error "Unsupported architecture: $ARCH" ;;
+        esac
+        # Check for musl
+        if ldd --version 2>&1 | grep -q musl; then
+            TARGET="${TARGET/gnu/musl}"
+        fi
+        ;;
+    darwin)
+        case "$ARCH" in
+            x86_64) TARGET="x86_64-apple-darwin" ;;
+            arm64|aarch64) TARGET="aarch64-apple-darwin" ;;
+            *) error "Unsupported architecture: $ARCH" ;;
+        esac
+        ;;
+    *) error "Unsupported platform: $PLATFORM" ;;
+esac
+
+# Parse arguments
+VERSION="latest"
+if [[ $# -ge 1 ]]; then
+    VERSION="$1"
+fi
+
+# Set installation directory
+INSTALL_DIR="${SECRETSPEC_INSTALL:-$HOME/.secretspec}"
+BIN_DIR="$INSTALL_DIR/bin"
+EXE="$BIN_DIR/secretspec"
+
+# Create directories
+mkdir -p "$BIN_DIR" || error "Failed to create installation directory"
+
+# Determine download URL
+GITHUB_REPO="https://github.com/cachix/secretspec"
+if [[ "$VERSION" == "latest" ]]; then
+    DOWNLOAD_URL="$GITHUB_REPO/releases/latest/download/secretspec-$TARGET.tar.gz"
+else
+    DOWNLOAD_URL="$GITHUB_REPO/releases/download/$VERSION/secretspec-$TARGET.tar.gz"
+fi
+
+# Download and extract
+info "Downloading secretspec for $TARGET..."
+TEMP_FILE=$(mktemp)
+curl --fail --location --progress-bar --output "$TEMP_FILE" "$DOWNLOAD_URL" ||
+    error "Failed to download from $DOWNLOAD_URL"
+
+info "Extracting..."
+tar -xzf "$TEMP_FILE" -C "$BIN_DIR" ||
+    error "Failed to extract secretspec"
+
+chmod +x "$EXE" || error "Failed to set executable permissions"
+rm -f "$TEMP_FILE"
+
+# Verify installation
+if ! "$EXE" --version >/dev/null 2>&1; then
+    error "Installation verification failed"
+fi
+
+success "secretspec was installed successfully to ${BOLD}$EXE${RESET}"
+
+# Shell configuration
+SHELL_NAME=$(basename "$SHELL")
+CONFIG_UPDATED=false
+
+add_to_path() {
+    local config_file="$1"
+    local export_cmd="export PATH=\"\$HOME/.secretspec/bin:\$PATH\""
+    
+    if [[ -w "$config_file" ]]; then
+        # Check if already configured
+        if ! grep -q "secretspec/bin" "$config_file" 2>/dev/null; then
+            {
+                echo ""
+                echo "# SecretSpec"
+                echo "$export_cmd"
+            } >> "$config_file"
+            CONFIG_UPDATED=true
+            return 0
+        fi
+    fi
+    return 1
+}
+
+case "$SHELL_NAME" in
+    bash)
+        for config in "$HOME/.bashrc" "$HOME/.bash_profile"; do
+            if add_to_path "$config"; then
+                info "Added secretspec to PATH in $config"
+                break
+            fi
+        done
+        ;;
+    zsh)
+        if add_to_path "$HOME/.zshrc"; then
+            info "Added secretspec to PATH in ~/.zshrc"
+        fi
+        ;;
+    fish)
+        FISH_CONFIG="$HOME/.config/fish/config.fish"
+        if [[ -w "$FISH_CONFIG" ]]; then
+            if ! grep -q "secretspec/bin" "$FISH_CONFIG" 2>/dev/null; then
+                {
+                    echo ""
+                    echo "# SecretSpec"
+                    echo "set -gx PATH \$HOME/.secretspec/bin \$PATH"
+                } >> "$FISH_CONFIG"
+                CONFIG_UPDATED=true
+                info "Added secretspec to PATH in $FISH_CONFIG"
+            fi
+        fi
+        ;;
+esac
+
+# Final instructions
+echo
+if [[ "$CONFIG_UPDATED" == true ]]; then
+    info "To get started, run:"
+    echo -e "  ${BOLD}source ~/.$SHELL_NAME rc${RESET}  # or restart your shell"
+    echo -e "  ${BOLD}secretspec --help${RESET}"
+else
+    info "Add the following to your shell configuration:"
+    echo -e "  ${BOLD}export PATH=\"\$HOME/.secretspec/bin:\$PATH\"${RESET}"
+    echo
+    info "Then run:"
+    echo -e "  ${BOLD}secretspec --help${RESET}"
+fi

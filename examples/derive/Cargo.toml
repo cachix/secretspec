@@ -11,5 +11,6 @@ path = "derive.rs"
 [dependencies]
 secretspec = { path = "../../secretspec" }
 secretspec-derive = { path = "../../secretspec-derive" }
+secrecy = { workspace = true }
 serde = { workspace = true }
 url = { workspace = true }

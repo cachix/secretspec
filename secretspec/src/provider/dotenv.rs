@@ -1,5 +1,6 @@
 use super::Provider;
 use crate::{Result, SecretSpecError};
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -242,7 +243,7 @@ impl Provider for DotEnvProvider {
     /// Uses the dotenvy crate for parsing to ensure compatibility with
     /// standard .env file formats and proper handling of quoted values,
     /// multiline strings, and escape sequences.
-    fn get(&self, _project: &str, key: &str, _profile: &str) -> Result<Option<String>> {
+    fn get(&self, _project: &str, key: &str, _profile: &str) -> Result<Option<SecretString>> {
         if !self.config.path.exists() {
             return Ok(None);
         }
@@ -255,7 +256,7 @@ impl Provider for DotEnvProvider {
             vars.insert(k, v);
         }
 
-        Ok(vars.get(key).cloned())
+        Ok(vars.get(key).map(|v| SecretString::new(v.clone().into())))
     }
 
     /// Sets a secret value in the .env file.
@@ -280,7 +281,7 @@ impl Provider for DotEnvProvider {
     /// 1. Loads existing variables using dotenvy to preserve them
     /// 2. Updates or adds the new key-value pair
     /// 3. Serializes back using serde-envfile for proper escaping
-    fn set(&self, _project: &str, key: &str, value: &str, _profile: &str) -> Result<()> {
+    fn set(&self, _project: &str, key: &str, value: &SecretString, _profile: &str) -> Result<()> {
         // Load existing vars using dotenvy
         let mut vars = HashMap::new();
         if self.config.path.exists() {
@@ -292,7 +293,7 @@ impl Provider for DotEnvProvider {
         }
 
         // Update the value
-        vars.insert(key.to_string(), value.to_string());
+        vars.insert(key.to_string(), value.expose_secret().to_string());
 
         // Save back to file using serde-envfile for proper escaping
         let content = serde_envfile::to_string(&vars).map_err(|e| {

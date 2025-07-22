@@ -5,6 +5,7 @@ use crate::error::{Result, SecretSpecError};
 use crate::provider::Provider as ProviderTrait;
 use crate::validation::{ValidatedSecrets, ValidationErrors};
 use colored::Colorize;
+use secrecy::{ExposeSecret, SecretString};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::env;
@@ -359,16 +360,16 @@ impl Secrets {
         }
 
         let value = if let Some(v) = value {
-            v
+            SecretString::new(v.into())
         } else if io::stdin().is_terminal() {
             print!("Enter value for {} (profile: {}): ", name, profile_display);
             io::stdout().flush()?;
-            rpassword::read_password()?
+            SecretString::new(rpassword::read_password()?.into())
         } else {
             // Read from stdin when input is piped
             let mut buffer = String::new();
             io::stdin().read_line(&mut buffer)?;
-            buffer.trim().to_string()
+            SecretString::new(buffer.trim().to_string().into())
         };
 
         backend.set(&self.config.project.name, name, &value, &profile_name)?;
@@ -414,7 +415,8 @@ impl Secrets {
 
         match backend.get(&self.config.project.name, name, &profile_name)? {
             Some(value) => {
-                println!("{}", value);
+                // Use expose_secret() to access the actual value for printing
+                println!("{}", value.expose_secret());
                 Ok(())
             }
             None => {
@@ -492,7 +494,7 @@ impl Secrets {
                             backend.set(
                                 &self.config.project.name,
                                 secret_name,
-                                &value,
+                                &SecretString::new(value.into()),
                                 &profile_display,
                             )?;
                             println!(
@@ -833,7 +835,7 @@ impl Secrets {
     /// ```
     pub fn validate(&self) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
         let backend = self.get_provider(None)?;
-        let mut secrets = HashMap::new();
+        let mut secrets: HashMap<String, SecretString> = HashMap::new();
         let mut missing_required = Vec::new();
         let mut missing_optional = Vec::new();
         let mut with_defaults = Vec::new();
@@ -874,7 +876,10 @@ impl Secrets {
                 }
                 None => {
                     if let Some(default_value) = default {
-                        secrets.insert(name.clone(), default_value.clone());
+                        secrets.insert(
+                            name.clone(),
+                            SecretString::new(default_value.clone().into()),
+                        );
                         with_defaults.push((name.clone(), default_value));
                     } else if required {
                         missing_required.push(name.clone());
@@ -950,7 +955,10 @@ impl Secrets {
         let validation_result = self.ensure_secrets(None, None, false)?;
 
         let mut env_vars = env::vars().collect::<HashMap<_, _>>();
-        env_vars.extend(validation_result.resolved.secrets);
+        // Convert SecretString values to regular strings for environment variables
+        for (key, secret) in validation_result.resolved.secrets {
+            env_vars.insert(key, secret.expose_secret().to_string());
+        }
 
         let mut cmd = Command::new(&command[0]);
         cmd.args(&command[1..]);

@@ -313,6 +313,26 @@ fn test_bitwarden_config_parsing() {
     assert_eq!(config.service, BitwardenService::SecretsManager);
     assert_eq!(config.default_item_type, Some(BitwardenItemType::Login));
     assert_eq!(config.default_field, Some("password".to_string()));
+
+    // Test timeout configuration
+    let url = Url::parse("bitwarden://?timeout=60").unwrap();
+    let config = BitwardenConfig::try_from(&url).unwrap();
+    assert_eq!(config.service, BitwardenService::PasswordManager);
+    assert_eq!(config.cli_timeout, Some(60));
+
+    // Test timeout configuration with other parameters
+    let url = Url::parse("bws://?project=test&timeout=45&field=password").unwrap();
+    let config = BitwardenConfig::try_from(&url).unwrap();
+    assert_eq!(config.service, BitwardenService::SecretsManager);
+    assert_eq!(config.project_id, Some("test".to_string()));
+    assert_eq!(config.cli_timeout, Some(45));
+    assert_eq!(config.default_field, Some("password".to_string()));
+
+    // Test invalid timeout value is ignored
+    let url = Url::parse("bitwarden://?timeout=invalid").unwrap();
+    let config = BitwardenConfig::try_from(&url).unwrap();
+    assert_eq!(config.service, BitwardenService::PasswordManager);
+    assert_eq!(config.cli_timeout, Some(30)); // Should use default
 }
 
 #[test]
@@ -497,6 +517,102 @@ fn test_bitwarden_environment_variables() {
         env::remove_var("BITWARDEN_ORGANIZATION");
         env::remove_var("BITWARDEN_COLLECTION");
     }
+}
+
+#[test]
+fn test_bitwarden_timeout_configuration() {
+    use crate::provider::bitwarden::{BitwardenConfig, BitwardenProvider};
+    use std::env;
+    use std::time::Duration;
+
+    // Test default timeout
+    let config = BitwardenConfig::default();
+    let provider = BitwardenProvider::new(config);
+    assert_eq!(provider.get_cli_timeout(), Duration::from_secs(30));
+
+    // Test timeout from configuration
+    let mut config = BitwardenConfig::default();
+    config.cli_timeout = Some(45);
+    let provider = BitwardenProvider::new(config);
+    assert_eq!(provider.get_cli_timeout(), Duration::from_secs(45));
+
+    // Test environment variable override
+    unsafe {
+        env::set_var("BITWARDEN_CLI_TIMEOUT", "60");
+    }
+
+    let config = BitwardenConfig::default();
+    let provider = BitwardenProvider::new(config);
+    assert_eq!(provider.get_cli_timeout(), Duration::from_secs(60));
+
+    // Clean up
+    unsafe {
+        env::remove_var("BITWARDEN_CLI_TIMEOUT");
+    }
+}
+
+#[test]
+fn test_bitwarden_error_message_sanitization() {
+    use crate::provider::bitwarden::{BitwardenConfig, BitwardenProvider};
+
+    let config = BitwardenConfig::default();
+    let provider = BitwardenProvider::new(config);
+
+    // Test JSON token redaction
+    let error_with_token = r#"{"error": "authentication failed", "token": "test_secret_token_12345678901234567890", "code": 401}"#;
+    let sanitized = provider.sanitize_error_message(error_with_token);
+    assert!(!sanitized.contains("test_secret_token_12345678901234567890"));
+    assert!(sanitized.contains("\"[REDACTED]\""));
+
+    // Test Bearer token redaction
+    let error_with_bearer = "HTTP 401: Bearer eyJ0eXAiOiJKV1QiLnothinghere invalid or expired";
+    let sanitized = provider.sanitize_error_message(error_with_bearer);
+    assert!(!sanitized.contains("eyJ0eXAiOiJKV1QiLnothinghere"));
+    assert!(sanitized.contains("Bearer [REDACTED]"));
+
+    // Test password redaction
+    let error_with_password = r#"{"password": "supersecretpassword123", "username": "user"}"#;
+    let sanitized = provider.sanitize_error_message(error_with_password);
+    assert!(!sanitized.contains("supersecretpassword123"));
+    assert!(sanitized.contains("\"[REDACTED]\""));
+
+    // Test URL parameter redaction
+    let error_with_url_params = "Failed to authenticate: token=abc123def456ghi789jkl012 expired";
+    let sanitized = provider.sanitize_error_message(error_with_url_params);
+    assert!(!sanitized.contains("abc123def456ghi789jkl012"));
+    assert!(sanitized.contains("token=[REDACTED]"));
+
+    // Test long base64-like string redaction
+    let error_with_base64 =
+        "Session YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5eg== expired";
+    let sanitized = provider.sanitize_error_message(error_with_base64);
+    assert!(
+        !sanitized
+            .contains("YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5eg==")
+    );
+    assert!(sanitized.contains("[REDACTED]"));
+
+    // Test file path redaction
+    let error_with_path = "Cannot read /home/user/.config/bitwarden/session.json";
+    let sanitized = provider.sanitize_error_message(error_with_path);
+    assert!(!sanitized.contains("/home/user/.config/bitwarden/session.json"));
+    assert!(sanitized.contains(".../session.json"));
+
+    // Test short values are NOT redacted (to avoid false positives)
+    let error_with_short_values = r#"{"key": "short", "status": "ok"}"#;
+    let sanitized = provider.sanitize_error_message(error_with_short_values);
+    assert!(sanitized.contains("short")); // Should not be redacted
+
+    // Test normal error messages are preserved
+    let normal_error = "Vault is locked. Please unlock with bw unlock.";
+    let sanitized = provider.sanitize_error_message(normal_error);
+    assert_eq!(sanitized, normal_error);
+
+    // Test message truncation for very long messages
+    let long_message = "A".repeat(600);
+    let sanitized = provider.sanitize_error_message(&long_message);
+    assert!(sanitized.len() <= 500);
+    assert!(sanitized.ends_with("... [truncated for security]"));
 }
 
 // Integration tests for all providers

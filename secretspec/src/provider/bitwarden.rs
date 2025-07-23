@@ -821,7 +821,17 @@ impl BitwardenProvider {
     pub(crate) fn sanitize_error_message(&self, error_msg: &str) -> String {
         let mut sanitized = error_msg.to_string();
 
-        // 1. Redact potential secret patterns in JSON/key-value formats
+        sanitized = self.redact_secret_patterns(sanitized);
+        sanitized = self.redact_bearer_tokens(sanitized);
+        sanitized = self.redact_base64_tokens(sanitized);
+        sanitized = self.redact_file_paths(sanitized);
+        sanitized = self.truncate_long_message(sanitized);
+
+        sanitized
+    }
+
+    /// Redacts potential secret patterns in JSON/key-value formats.
+    fn redact_secret_patterns(&self, mut sanitized: String) -> String {
         let secret_patterns = [
             // JSON patterns: "token": "value", "key": "value"
             ("\"token\":", "\"[REDACTED]\""),
@@ -878,7 +888,11 @@ impl BitwardenProvider {
             }
         }
 
-        // 2. Redact Bearer tokens
+        sanitized
+    }
+
+    /// Redacts Bearer tokens from error messages.
+    fn redact_bearer_tokens(&self, mut sanitized: String) -> String {
         if let Some(bearer_start) = sanitized.to_lowercase().find("bearer ") {
             let token_start = bearer_start + 7;
             if let Some(token_part) = sanitized.get(token_start..) {
@@ -891,8 +905,11 @@ impl BitwardenProvider {
                 }
             }
         }
+        sanitized
+    }
 
-        // 3. Redact long base64-like strings (potential tokens/keys)
+    /// Redacts long base64-like strings (potential tokens/keys).
+    fn redact_base64_tokens(&self, sanitized: String) -> String {
         let words: Vec<String> = sanitized
             .split_whitespace()
             .map(|word| {
@@ -908,9 +925,11 @@ impl BitwardenProvider {
                 }
             })
             .collect();
-        sanitized = words.join(" ");
+        words.join(" ")
+    }
 
-        // 4. Redact sensitive file paths, preserve filenames for debugging
+    /// Redacts sensitive file paths while preserving filenames for debugging.
+    fn redact_file_paths(&self, sanitized: String) -> String {
         let words: Vec<String> = sanitized
             .split_whitespace()
             .map(|word| {
@@ -929,14 +948,15 @@ impl BitwardenProvider {
                 }
             })
             .collect();
-        sanitized = words.join(" ");
+        words.join(" ")
+    }
 
-        // 5. Truncate overly long error messages
+    /// Truncates overly long error messages for security and readability.
+    fn truncate_long_message(&self, mut sanitized: String) -> String {
         if sanitized.len() > 500 {
             sanitized.truncate(450);
             sanitized.push_str("... [truncated for security]");
         }
-
         sanitized
     }
 

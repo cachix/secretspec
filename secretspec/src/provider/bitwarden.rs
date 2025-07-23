@@ -794,7 +794,6 @@ impl BitwardenProvider {
     /// Gets the CLI timeout value from configuration or environment variable.
     ///
     /// Priority: environment variable > config value > default (30s)
-    #[allow(dead_code)]
     pub(crate) fn get_cli_timeout(&self) -> Duration {
         // Check environment variable first
         if let Ok(timeout_str) = std::env::var("BITWARDEN_CLI_TIMEOUT") {
@@ -970,22 +969,69 @@ impl BitwardenProvider {
         sanitized
     }
 
-    /// Executes a command with timeout using a simple approach.
+    /// Executes a command with timeout using cross-platform approach.
     ///
-    /// For now, we'll use a simple Command::output() call.
-    /// TODO: Add proper timeout handling in a future version.
+    /// This method implements proper timeout handling using threads and channels
+    /// to prevent CLI commands from hanging indefinitely.
+    ///
+    /// # Arguments
+    ///
+    /// * `cmd` - The command to execute with configured arguments
+    ///
+    /// # Returns
+    ///
+    /// * `Result<std::process::Output>` - The command output or timeout error
+    ///
+    /// # Errors
+    ///
+    /// Returns errors for:
+    /// - Command timeout (based on configuration)
+    /// - CLI not installed
+    /// - Command execution failures
     fn execute_command_with_timeout(&self, mut cmd: Command) -> Result<std::process::Output> {
-        // TODO: Implement proper timeout handling
-        // For now, just execute the command directly
-        cmd.output().map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                SecretSpecError::ProviderOperationFailed(
-                    "Bitwarden CLI is not installed. Please install it and ensure it's in your PATH.".to_string(),
-                )
-            } else {
-                SecretSpecError::ProviderOperationFailed(format!("Command execution failed: {}", e))
+        use std::sync::mpsc;
+        use std::thread;
+
+        let timeout = self.get_cli_timeout();
+        let (tx, rx) = mpsc::channel();
+
+        // Spawn command execution in separate thread
+        let _handle = thread::spawn(move || {
+            let result = cmd.output();
+            // Send result through channel (ignore send errors if receiver dropped)
+            let _ = tx.send(result);
+        });
+
+        // Wait for either completion or timeout
+        match rx.recv_timeout(timeout) {
+            Ok(Ok(output)) => Ok(output),
+            Ok(Err(e)) => {
+                // Command execution failed
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Err(SecretSpecError::ProviderOperationFailed(
+                        "Bitwarden CLI is not installed. Please install it and ensure it's in your PATH.".to_string(),
+                    ))
+                } else {
+                    Err(SecretSpecError::ProviderOperationFailed(format!(
+                        "Command execution failed: {}",
+                        e
+                    )))
+                }
             }
-        })
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Command timed out - thread will continue running but we abandon it
+                Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "Bitwarden CLI command timed out after {} seconds. You can increase the timeout with BITWARDEN_CLI_TIMEOUT environment variable.",
+                    timeout.as_secs()
+                )))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // Thread panicked or channel closed unexpectedly
+                Err(SecretSpecError::ProviderOperationFailed(
+                    "Command execution failed: internal error".to_string(),
+                ))
+            }
+        }
     }
 
     /// Executes a Bitwarden Password Manager CLI command with proper error handling.

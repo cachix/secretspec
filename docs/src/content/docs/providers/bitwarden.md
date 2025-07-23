@@ -229,6 +229,11 @@ To install it:
 - Field validation and suggestions
 - Organization/collection permission guidance
 
+### Timeout Configuration
+- Commands timeout after 30 seconds by default
+- Configurable via `BITWARDEN_CLI_TIMEOUT` environment variable
+- Prevents hanging on network issues or CLI problems
+
 ## Performance Monitoring
 
 The Bitwarden provider includes detailed performance instrumentation to help identify bottlenecks and optimize operations.
@@ -309,6 +314,9 @@ $ secretspec get DATABASE_PASSWORD --provider bitwarden://
 
 # Run performance analysis
 $ ./tests/bitwarden_performance.sh $BW_SESSION
+
+# Configure timeout (in seconds)
+$ BITWARDEN_CLI_TIMEOUT=60 secretspec get SECRET --provider bitwarden://
 ```
 
 ### Troubleshooting Performance

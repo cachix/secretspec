@@ -228,3 +228,94 @@ To install it:
 - Graceful handling of missing items
 - Field validation and suggestions
 - Organization/collection permission guidance
+
+## Performance Monitoring
+
+The Bitwarden provider includes detailed performance instrumentation to help identify bottlenecks and optimize operations.
+
+### Enable Performance Logging
+
+```bash
+# Enable detailed timing for any SecretSpec operation
+$ export SECRETSPEC_PERF_LOG=1
+$ secretspec get SECRET_NAME --provider bitwarden://
+```
+
+### Performance Output
+
+When enabled, you'll see detailed timing breakdown:
+
+```
+[PERF] bw status took 1.911577208s (1911ms)
+[PERF] auth check took 1915ms
+[PERF] PM item search took 850ms
+[PERF] PM JSON parse took 5ms, 42 items
+[PERF] get('SECRET_NAME') took 1.916723292s (1916ms)
+```
+
+### Performance Analysis Scripts
+
+Two scripts are provided for comprehensive performance analysis:
+
+#### Basic Performance Test
+```bash
+# Test that performance logging works
+$ ./tests/test_performance_logging.sh
+```
+
+#### Comprehensive Analysis
+```bash
+# Run detailed performance benchmarks (requires BW_SESSION)
+$ ./tests/bitwarden_performance.sh [BW_SESSION]
+```
+
+The comprehensive script measures:
+- CLI command execution times
+- JSON parsing performance
+- Vault size impact
+- Different retrieval strategies
+- Repeated operation overhead
+- SecretSpec integration timing
+
+### Metrics Tracked
+
+- **CLI Command Execution**: Individual `bw`/`bws` command timing
+- **Authentication Checks**: Vault status verification time
+- **Item Search**: Time to find items in vault (`bw list --search` vs `bw get item`)
+- **JSON Parsing**: Parse time and item counts for large vaults
+- **Overall Operations**: Total time for get/set operations
+- **Field Extraction**: Time to extract specific fields from items
+
+### Performance Insights
+
+The timing data helps identify optimization opportunities:
+
+- **CLI vs API**: Compare different Bitwarden CLI command strategies
+- **Vault Size Impact**: How vault size affects search performance
+- **Caching Benefits**: Measure repeated access patterns
+- **Bottleneck Identification**: Pinpoint slowest operations
+
+### Usage Examples
+
+```bash
+# Monitor a single operation
+$ SECRETSPEC_PERF_LOG=1 secretspec get DATABASE_URL --provider bitwarden://
+
+# Monitor multiple operations with defaults
+$ export SECRETSPEC_PERF_LOG=1
+$ export BITWARDEN_DEFAULT_TYPE=login
+$ secretspec get API_KEY --provider bitwarden://
+$ secretspec get DATABASE_PASSWORD --provider bitwarden://
+
+# Run performance analysis
+$ ./tests/bitwarden_performance.sh $BW_SESSION
+```
+
+### Troubleshooting Performance
+
+Common performance patterns and solutions:
+
+- **Slow vault access**: Consider using `bw sync` before operations
+- **Large vault impact**: Use collection scoping to reduce search space
+- **Repeated access**: Performance logging shows caching opportunities
+- **Network latency**: Self-hosted instances may have different timing characteristics

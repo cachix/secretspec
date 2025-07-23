@@ -3,7 +3,12 @@
     "allow": [
       "Bash(mkdir:*)",
       "Bash(jq:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(SECRETSPEC_PERF_LOG=1 ./target/debug/secretspec get NONEXISTENT_KEY --provider bitwarden://)",
+      "Bash(rustc:*)",
+      "Bash(./test_json_parse)",
+      "Bash(SECRETSPEC_PERF_LOG=1 ./target/debug/secretspec get 'Test Item That Does Not Exist' --provider 'bitwarden://?type=login&field=password')",
+      "Bash(SECRETSPEC_DEBUG=1 ./target/debug/secretspec get 'Test Database' --provider 'bitwarden://?type=login')"
     ],
     "deny": []
   }

@@ -57,6 +57,7 @@ use url::Url;
 
 pub mod dotenv;
 pub mod env;
+#[cfg(feature = "keyring")]
 pub mod keyring;
 pub mod lastpass;
 pub mod onepassword;

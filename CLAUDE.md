@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-When commiting changes, make sure to update /CHANGELOG.md
+When commiting changes, make sure to update /CHANGELOG.md with one entry (can be multi-line)
 
 ## Project Overview
 
@@ -34,7 +34,8 @@ pre-commit run -a
 The project is organized as a Rust workspace with two crates:
 
 1. **secretspec** (src/): Main CLI and library
-   - `main.rs`: CLI entry point with command definitions (init, config, set/get, check, run, import)
+   - `bin/secretspec.rs`: CLI entry point that calls the main CLI module
+   - `cli/mod.rs`: CLI command definitions (init, config, set/get, check, run, import)
    - `lib.rs`: Core library with `Secrets` struct, validation logic, and CRUD operations
    - `config.rs`: Core configuration types (Config, Secret), TOML parsing, and inheritance logic
    - `provider/`: Storage backend implementations with trait-based plugin architecture
@@ -54,7 +55,7 @@ The provider system uses a trait-based architecture defined in `src/provider/mod
 3. Use the `#[provider]` macro for automatic registration
 4. Handle profile-aware storage paths (e.g., `secretspec/{project}/{profile}/{key}`)
 
-Providers support URI-based configuration (e.g., `keyring://`, `onepassword://vault`, `dotenv://.env.production`).
+Providers support URI-based configuration (e.g., `keyring://`, `onepassword://vault`, `dotenv://.env.production`). The provider system handles URI parsing and provider instantiation directly within each provider module.
 
 ## Configuration System
 
@@ -89,20 +90,17 @@ Projects can extend other configurations via `extends = ["../shared/common"]`. T
 
 ### Provider Integration Tests
 
-Provider tests are located in `tests/integration/provider_tests.rs` and test all provider implementations generically.
+Provider tests are located in `secretspec/src/provider/tests.rs` and test all provider implementations generically.
 
 ```bash
-# Run all provider tests (defaults to testing available providers)
-cargo test provider_tests
+# Run provider tests
+cargo test --package secretspec provider::tests
 
 # Test specific providers using SECRETSPEC_TEST_PROVIDERS env var
-SECRETSPEC_TEST_PROVIDERS=keyring,dotenv cargo test provider_tests
-
-# Test all providers
-SECRETSPEC_TEST_PROVIDERS=keyring,dotenv,env,onepassword,lastpass cargo test provider_tests
+SECRETSPEC_TEST_PROVIDERS=keyring,dotenv cargo test --package secretspec provider::tests::integration_tests
 
 # Run with output visible
-SECRETSPEC_TEST_PROVIDERS=dotenv cargo test provider_tests -- --nocapture
+SECRETSPEC_TEST_PROVIDERS=dotenv cargo test --package secretspec provider::tests -- --nocapture
 ```
 
 The integration tests cover:
@@ -117,9 +115,9 @@ Note: Some providers (like `env`) are read-only and will skip write tests.
 ## Key Files
 
 - `secretspec.toml`: Project secrets configuration
-- `src/provider/mod.rs`: Provider trait definition
-- `src/provider/registry.rs`: Provider factory and URI parsing
-- `src/main.rs`: CLI command definitions
-- `src/lib.rs`: Core SecretSpec implementation
+- `secretspec/src/provider/mod.rs`: Provider trait definition and documentation
+- `secretspec/src/cli/mod.rs`: CLI command definitions
+- `secretspec/src/bin/secretspec.rs`: CLI entry point
+- `secretspec/src/lib.rs`: Core SecretSpec implementation
 - `secretspec-derive/src/lib.rs`: Code generation macro implementation
-- `tests/integration/provider_tests.rs`: Generic provider test suite
+- `secretspec/src/provider/tests.rs`: Generic provider test suite

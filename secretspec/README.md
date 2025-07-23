@@ -22,7 +22,7 @@ SecretSpec separates the declaration of what secrets an application needs from w
 
 ## Quick Start
 
-```bash
+```shell-session
 # 1. Initialize secretspec.toml (discovers secrets from .env)
 $ secretspec init
 ✓ Created secretspec.toml with 0 secrets
@@ -60,12 +60,11 @@ See the [Quick Start Guide](https://secretspec.dev/quick-start) for detailed ins
 
 ## Installation
 
-```bash
-# Quick install
+```shell-session
 $ curl -sSL https://install.secretspec.dev | sh
 ```
 
-See the [installation guide](https://secretspec.dev/quick-start#installation) for more options including Nix, Homebrew, and Docker.
+See the [installation guide](https://secretspec.dev/quick-start#installation) for more options including Nix and Devenv.
 
 ## Configuration
 
@@ -98,8 +97,7 @@ See the [configuration reference](https://secretspec.dev/reference/configuration
 
 Profiles allow you to define different secret requirements for each environment (development, production, etc.):
 
-```bash
-# Use specific profile
+```shell-session
 $ secretspec run --profile development -- npm start
 $ secretspec run --profile production -- npm start
 
@@ -120,7 +118,6 @@ SecretSpec supports multiple storage backends for secrets:
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager
 
 ```bash
-# Use specific provider
 $ secretspec run --provider keyring -- npm start
 $ secretspec run --provider dotenv -- npm start
 
@@ -135,7 +132,6 @@ See [provider concepts](https://secretspec.dev/concepts/providers) and [provider
 Generate strongly-typed Rust structs from your `secretspec.toml`:
 
 ```rust
-// Generate typed structs from secretspec.toml
 secretspec_derive::declare_secrets!("secretspec.toml");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

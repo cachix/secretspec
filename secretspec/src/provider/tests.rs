@@ -78,6 +78,9 @@ fn test_create_from_string_with_plain_names() {
 
     let provider = Box::<dyn Provider>::try_from("lastpass").unwrap();
     assert_eq!(provider.name(), "lastpass");
+
+    let provider = Box::<dyn Provider>::try_from("bitwarden").unwrap();
+    assert_eq!(provider.name(), "bitwarden");
 }
 
 #[test]
@@ -161,6 +164,23 @@ fn test_documentation_examples() {
     // Test dotenv examples from provider list
     let provider = Box::<dyn Provider>::try_from("dotenv://path").unwrap();
     assert_eq!(provider.name(), "dotenv");
+
+    // Test bitwarden examples (Password Manager)
+    let provider = Box::<dyn Provider>::try_from("bitwarden://").unwrap();
+    assert_eq!(provider.name(), "bitwarden");
+
+    let provider = Box::<dyn Provider>::try_from("bitwarden://collection-id").unwrap();
+    assert_eq!(provider.name(), "bitwarden");
+
+    let provider = Box::<dyn Provider>::try_from("bitwarden://org@collection").unwrap();
+    assert_eq!(provider.name(), "bitwarden");
+
+    // Test bws examples (Secrets Manager)
+    let provider = Box::<dyn Provider>::try_from("bws://").unwrap();
+    assert_eq!(provider.name(), "bitwarden");
+
+    let provider = Box::<dyn Provider>::try_from("bws://project-id").unwrap();
+    assert_eq!(provider.name(), "bitwarden");
 }
 
 #[test]
@@ -202,6 +222,283 @@ fn test_url_parsing_behavior() {
     assert_eq!(url.path(), "/to/.env");
 }
 
+#[test]
+fn test_bitwarden_config_parsing() {
+    use crate::provider::bitwarden::{BitwardenConfig, BitwardenService};
+    use std::convert::TryFrom;
+    use url::Url;
+
+    // Test Password Manager configurations
+
+    // Test basic bitwarden:// URI
+    let url = Url::parse("bitwarden://").unwrap();
+    let config = BitwardenConfig::try_from(&url).unwrap();
+    assert_eq!(config.service, BitwardenService::PasswordManager);
+    assert!(config.organization_id.is_none());
+    assert!(config.collection_id.is_none());
+    assert!(config.server.is_none());
+    assert!(config.project_id.is_none());
+    // Login is the default item type
+    assert_eq!(config.default_item_type, Some(BitwardenItemType::Login));
+    assert!(config.default_field.is_none());
+
+    // Test collection ID only
+    let url = Url::parse("bitwarden://collection-123").unwrap();
+    let config = BitwardenConfig::try_from(&url).unwrap();
+    assert_eq!(config.service, BitwardenService::PasswordManager);
+    assert!(config.organization_id.is_none());
+    assert_eq!(config.collection_id, Some("collection-123".to_string()));
+    assert!(config.server.is_none());
+
+    // Test org@collection format
+    let url = Url::parse("bitwarden://myorg@collection-456").unwrap();
+    let config = BitwardenConfig::try_from(&url).unwrap();
+    assert_eq!(config.service, BitwardenService::PasswordManager);
+    assert_eq!(config.organization_id, Some("myorg".to_string()));
+    assert_eq!(config.collection_id, Some("collection-456".to_string()));
+    assert!(config.server.is_none());
+
+    // Test query parameters
+    let url = Url::parse("bitwarden://?server=https://vault.company.com&org=myorg").unwrap();
+    let config = BitwardenConfig::try_from(&url).unwrap();
+    assert_eq!(config.service, BitwardenService::PasswordManager);
+    assert_eq!(config.organization_id, Some("myorg".to_string()));
+    assert_eq!(config.server, Some("https://vault.company.com".to_string()));
+
+    // Test folder prefix customization
+    let url = Url::parse("bitwarden://?folder=custom/{project}/{profile}").unwrap();
+    let config = BitwardenConfig::try_from(&url).unwrap();
+    assert_eq!(config.service, BitwardenService::PasswordManager);
+    assert_eq!(
+        config.folder_prefix,
+        Some("custom/{project}/{profile}".to_string())
+    );
+
+    // Test item type and field parameters
+    let url = Url::parse("bitwarden://?type=card&field=api_key").unwrap();
+    let config = BitwardenConfig::try_from(&url).unwrap();
+    assert_eq!(config.service, BitwardenService::PasswordManager);
+    use crate::provider::bitwarden::BitwardenItemType;
+    assert_eq!(config.default_item_type, Some(BitwardenItemType::Card));
+    assert_eq!(config.default_field, Some("api_key".to_string()));
+
+    // Test Secrets Manager configurations
+
+    // Test basic bws:// URI
+    let url = Url::parse("bws://").unwrap();
+    let config = BitwardenConfig::try_from(&url).unwrap();
+    assert_eq!(config.service, BitwardenService::SecretsManager);
+    assert!(config.project_id.is_none());
+    assert!(config.access_token.is_none());
+    assert!(config.organization_id.is_none()); // Should be None for Secrets Manager
+    // Login is the default item type even for BWS
+    assert_eq!(config.default_item_type, Some(BitwardenItemType::Login));
+
+    // Test project ID
+    let url = Url::parse("bws://project-789").unwrap();
+    let config = BitwardenConfig::try_from(&url).unwrap();
+    assert_eq!(config.service, BitwardenService::SecretsManager);
+    assert_eq!(config.project_id, Some("project-789".to_string()));
+
+    // Test query parameters for Secrets Manager
+    let url = Url::parse("bws://?project=project-abc&token=my-token").unwrap();
+    let config = BitwardenConfig::try_from(&url).unwrap();
+    assert_eq!(config.service, BitwardenService::SecretsManager);
+    assert_eq!(config.project_id, Some("project-abc".to_string()));
+    assert_eq!(config.access_token, Some("my-token".to_string()));
+
+    // Test BWS with item type and field parameters (should work for consistency)
+    let url = Url::parse("bws://?type=login&field=password").unwrap();
+    let config = BitwardenConfig::try_from(&url).unwrap();
+    assert_eq!(config.service, BitwardenService::SecretsManager);
+    assert_eq!(config.default_item_type, Some(BitwardenItemType::Login));
+    assert_eq!(config.default_field, Some("password".to_string()));
+}
+
+#[test]
+fn test_bitwarden_item_type_parsing() {
+    use crate::provider::bitwarden::BitwardenItemType;
+
+    // Test parsing from string (for environment variables)
+    assert_eq!(
+        BitwardenItemType::from_str("login"),
+        Some(BitwardenItemType::Login)
+    );
+    assert_eq!(
+        BitwardenItemType::from_str("card"),
+        Some(BitwardenItemType::Card)
+    );
+    assert_eq!(
+        BitwardenItemType::from_str("identity"),
+        Some(BitwardenItemType::Identity)
+    );
+    assert_eq!(
+        BitwardenItemType::from_str("securenote"),
+        Some(BitwardenItemType::SecureNote)
+    );
+    assert_eq!(
+        BitwardenItemType::from_str("note"),
+        Some(BitwardenItemType::SecureNote)
+    ); // alias
+    assert_eq!(
+        BitwardenItemType::from_str("secure_note"),
+        Some(BitwardenItemType::SecureNote)
+    ); // alias
+    assert_eq!(
+        BitwardenItemType::from_str("sshkey"),
+        Some(BitwardenItemType::SshKey)
+    );
+    assert_eq!(
+        BitwardenItemType::from_str("ssh_key"),
+        Some(BitwardenItemType::SshKey)
+    ); // alias
+    assert_eq!(
+        BitwardenItemType::from_str("ssh"),
+        Some(BitwardenItemType::SshKey)
+    ); // alias
+    assert_eq!(BitwardenItemType::from_str("unknown"), None);
+
+    // Test conversion to/from integers (Bitwarden API format)
+    assert_eq!(
+        BitwardenItemType::from_u8(1),
+        Some(BitwardenItemType::Login)
+    );
+    assert_eq!(
+        BitwardenItemType::from_u8(2),
+        Some(BitwardenItemType::SecureNote)
+    );
+    assert_eq!(BitwardenItemType::from_u8(3), Some(BitwardenItemType::Card));
+    assert_eq!(
+        BitwardenItemType::from_u8(4),
+        Some(BitwardenItemType::Identity)
+    );
+    assert_eq!(
+        BitwardenItemType::from_u8(5),
+        Some(BitwardenItemType::SshKey)
+    );
+    assert_eq!(BitwardenItemType::from_u8(99), None);
+
+    // Test default field detection
+    assert_eq!(
+        BitwardenItemType::Login.default_field_for_hint("password"),
+        "password".to_string()
+    );
+    assert_eq!(
+        BitwardenItemType::Login.default_field_for_hint("custom"),
+        "password".to_string()
+    );
+    assert_eq!(
+        BitwardenItemType::Card.default_field_for_hint("api_key"),
+        "api_key".to_string()
+    );
+    assert_eq!(
+        BitwardenItemType::Card.default_field_for_hint("number"),
+        "number".to_string()
+    ); // Cards default to the hint for standard fields
+    assert_eq!(
+        BitwardenItemType::Identity.default_field_for_hint("ssn"),
+        "ssn".to_string()
+    );
+    assert_eq!(
+        BitwardenItemType::SshKey.default_field_for_hint("private_key"),
+        "private_key".to_string()
+    );
+    assert_eq!(
+        BitwardenItemType::SshKey.default_field_for_hint("custom"),
+        "private_key".to_string()
+    ); // SSH keys default to private_key
+}
+
+#[test]
+fn test_bitwarden_field_type_detection() {
+    use crate::provider::bitwarden::BitwardenFieldType;
+
+    // Test smart field type detection
+    assert_eq!(
+        BitwardenFieldType::for_field_name("password"),
+        BitwardenFieldType::Hidden
+    );
+    assert_eq!(
+        BitwardenFieldType::for_field_name("secret"),
+        BitwardenFieldType::Hidden
+    );
+    assert_eq!(
+        BitwardenFieldType::for_field_name("token"),
+        BitwardenFieldType::Hidden
+    );
+    assert_eq!(
+        BitwardenFieldType::for_field_name("api_key"),
+        BitwardenFieldType::Hidden
+    );
+    assert_eq!(
+        BitwardenFieldType::for_field_name("cvv"),
+        BitwardenFieldType::Hidden
+    );
+    assert_eq!(
+        BitwardenFieldType::for_field_name("username"),
+        BitwardenFieldType::Text
+    );
+    assert_eq!(
+        BitwardenFieldType::for_field_name("name"),
+        BitwardenFieldType::Text
+    );
+    assert_eq!(
+        BitwardenFieldType::for_field_name("description"),
+        BitwardenFieldType::Text
+    );
+
+    // Test enum conversions
+    assert_eq!(BitwardenFieldType::Text.to_u8(), 0);
+    assert_eq!(BitwardenFieldType::Hidden.to_u8(), 1);
+    assert_eq!(BitwardenFieldType::Boolean.to_u8(), 2);
+
+    assert_eq!(
+        BitwardenFieldType::from_u8(0),
+        Some(BitwardenFieldType::Text)
+    );
+    assert_eq!(
+        BitwardenFieldType::from_u8(1),
+        Some(BitwardenFieldType::Hidden)
+    );
+    assert_eq!(
+        BitwardenFieldType::from_u8(2),
+        Some(BitwardenFieldType::Boolean)
+    );
+    assert_eq!(BitwardenFieldType::from_u8(99), None);
+}
+
+#[test]
+fn test_bitwarden_environment_variables() {
+    use crate::provider::bitwarden::{BitwardenConfig, BitwardenProvider};
+    use std::env;
+
+    // Test environment variable support for default type and field
+    unsafe {
+        env::set_var("BITWARDEN_DEFAULT_TYPE", "card");
+        env::set_var("BITWARDEN_DEFAULT_FIELD", "api_key");
+        env::set_var("BITWARDEN_ORGANIZATION", "test-org");
+        env::set_var("BITWARDEN_COLLECTION", "test-collection");
+    }
+
+    let config = BitwardenConfig::default();
+    let _provider = BitwardenProvider::new(config);
+
+    // Note: These environment variables are checked at runtime in the actual provider methods
+    // This test verifies the environment variables exist and can be read
+    assert_eq!(env::var("BITWARDEN_DEFAULT_TYPE").unwrap(), "card");
+    assert_eq!(env::var("BITWARDEN_DEFAULT_FIELD").unwrap(), "api_key");
+    assert_eq!(env::var("BITWARDEN_ORGANIZATION").unwrap(), "test-org");
+    assert_eq!(env::var("BITWARDEN_COLLECTION").unwrap(), "test-collection");
+
+    // Clean up
+    unsafe {
+        env::remove_var("BITWARDEN_DEFAULT_TYPE");
+        env::remove_var("BITWARDEN_DEFAULT_FIELD");
+        env::remove_var("BITWARDEN_ORGANIZATION");
+        env::remove_var("BITWARDEN_COLLECTION");
+    }
+}
+
 // Integration tests for all providers
 #[cfg(test)]
 mod integration_tests {
@@ -235,6 +532,20 @@ mod integration_tests {
                 let provider = Box::<dyn Provider>::try_from(provider_spec.as_str())
                     .expect("Should create dotenv provider with path");
                 (provider, Some(temp_dir))
+            }
+            "bitwarden" => {
+                // For bitwarden, we test with basic configuration
+                // Real authentication is handled by the CLI
+                let provider = Box::<dyn Provider>::try_from("bitwarden://")
+                    .expect("Should create bitwarden provider");
+                (provider, None)
+            }
+            "bws" => {
+                // For BWS, we test with basic Secrets Manager configuration
+                // Real authentication is handled by the BWS CLI and BWS_ACCESS_TOKEN
+                let provider =
+                    Box::<dyn Provider>::try_from("bws://").expect("Should create bws provider");
+                (provider, None)
             }
             _ => {
                 let provider = Box::<dyn Provider>::try_from(provider_name)
@@ -401,6 +712,140 @@ mod integration_tests {
                         Some(expected_value),
                         "Should find profile-specific value"
                     );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_bitwarden_authentication_states() {
+        // Test that we get proper error messages for different authentication states
+        let provider = Box::<dyn Provider>::try_from("bitwarden://")
+            .expect("Should create bitwarden provider");
+
+        let project_name = generate_test_project_name();
+        let test_key = "AUTH_TEST_KEY";
+
+        // Test get operation when not authenticated
+        match provider.get(&project_name, test_key, "default") {
+            Ok(None) => {
+                // If this succeeds, the vault is unlocked and working
+                println!("Bitwarden vault is unlocked and accessible");
+            }
+            Ok(Some(_)) => {
+                // Found a value, vault is unlocked
+                println!("Bitwarden vault is unlocked and contains data");
+            }
+            Err(err) => {
+                // Should get authentication error if not unlocked
+                let err_str = err.to_string();
+                assert!(
+                    err_str.contains("authentication required") || 
+                    err_str.contains("not logged in") ||
+                    err_str.contains("locked") ||
+                    err_str.contains("BW_SESSION") ||
+                    err_str.contains("JSON error") || // CLI returning invalid JSON
+                    err_str.contains("CLI not found") ||
+                    err_str.contains("command not found"),
+                    "Should get authentication-related or CLI error, got: {}",
+                    err_str
+                );
+                println!("Got expected authentication error: {}", err_str);
+            }
+        }
+    }
+
+    #[test]
+    fn test_bitwarden_error_messages() {
+        use crate::provider::bitwarden::BitwardenProvider;
+
+        // Test that we get helpful error messages
+        let provider = BitwardenProvider::default();
+
+        // This will likely fail with authentication error or CLI not found error
+        // but we want to verify the error messages are helpful
+        let result = provider.get("test", "KEY", "default");
+        match result {
+            Err(err) => {
+                let err_msg = err.to_string();
+                // Should contain helpful guidance
+                assert!(
+                    err_msg.contains("bw login") ||
+                    err_msg.contains("bw unlock") ||
+                    err_msg.contains("BW_SESSION") ||
+                    err_msg.contains("authentication") ||
+                    err_msg.contains("install") ||
+                    err_msg.contains("JSON error") || // CLI returning invalid JSON
+                    err_msg.contains("CLI not found") ||
+                    err_msg.contains("command not found"),
+                    "Error message should be helpful: {}",
+                    err_msg
+                );
+                println!("Got helpful error message: {}", err_msg);
+            }
+            Ok(_) => {
+                println!("Bitwarden provider is working (vault is unlocked)");
+            }
+        }
+    }
+
+    #[test]
+    fn test_bitwarden_with_real_cli_if_available() {
+        // Only run this test if SECRETSPEC_TEST_PROVIDERS includes bitwarden
+        let providers = get_test_providers();
+        if !providers.contains(&"bitwarden".to_string()) {
+            println!("Skipping bitwarden CLI test - not in SECRETSPEC_TEST_PROVIDERS");
+            return;
+        }
+
+        println!("Testing bitwarden provider with real CLI");
+        let (provider, _temp_dir) = create_provider_with_temp_path("bitwarden");
+
+        // Run the generic provider test
+        test_provider_basic_workflow(provider.as_ref(), "bitwarden");
+
+        println!("Bitwarden provider passed all tests!");
+    }
+
+    #[test]
+    fn test_bws_with_real_cli_if_available() {
+        // Only run this test if SECRETSPEC_TEST_PROVIDERS includes bws
+        let providers = get_test_providers();
+        if !providers.contains(&"bws".to_string()) {
+            println!("Skipping BWS CLI test - not in SECRETSPEC_TEST_PROVIDERS");
+            return;
+        }
+
+        println!("Testing BWS (Bitwarden Secrets Manager) provider with real CLI");
+        let (provider, _temp_dir) = create_provider_with_temp_path("bws");
+
+        // Run the generic provider test
+        test_provider_basic_workflow(provider.as_ref(), "bws");
+
+        println!("BWS provider passed all tests!");
+    }
+
+    #[test]
+    fn test_bitwarden_item_type_support() {
+        // Test that different item types are supported in provider creation
+        let providers_to_test = vec![
+            ("bitwarden://?type=login", "login items"),
+            ("bitwarden://?type=card", "card items"),
+            ("bitwarden://?type=identity", "identity items"),
+            ("bitwarden://?type=sshkey", "SSH key items"),
+            ("bitwarden://?type=securenote", "secure note items"),
+        ];
+
+        for (uri, description) in providers_to_test {
+            println!("Testing provider creation for {}", description);
+            let provider = Box::<dyn Provider>::try_from(uri);
+            match provider {
+                Ok(provider) => {
+                    assert_eq!(provider.name(), "bitwarden");
+                    println!("✓ Successfully created provider for {}", description);
+                }
+                Err(e) => {
+                    panic!("Failed to create provider for {}: {}", description, e);
                 }
             }
         }

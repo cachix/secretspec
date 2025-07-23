@@ -20,6 +20,7 @@
 //! - [`EnvProvider`]: Environment variables (read-only)
 //! - [`OnePasswordProvider`]: OnePassword integration
 //! - [`LastPassProvider`]: LastPass integration
+//! - [`BitwardenProvider`]: Bitwarden password manager
 //!
 //! ## URI-Based Configuration
 //!
@@ -30,6 +31,7 @@
 //! dotenv://.env.production
 //! onepassword://vault/items
 //! lastpass://folder
+//! bitwarden://collection-id
 //! ```
 //!
 //! ## Example
@@ -55,6 +57,7 @@ use secrecy::SecretString;
 use std::convert::TryFrom;
 use url::Url;
 
+pub mod bitwarden;
 pub mod dotenv;
 pub mod env;
 #[cfg(feature = "keyring")]

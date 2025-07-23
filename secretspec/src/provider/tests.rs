@@ -835,6 +835,13 @@ mod integration_tests {
 
     #[test]
     fn test_bitwarden_authentication_states() {
+        // Only run this test if SECRETSPEC_TEST_PROVIDERS includes bitwarden
+        let providers = get_test_providers();
+        if !providers.contains(&"bitwarden".to_string()) {
+            println!("Skipping bitwarden authentication test - not in SECRETSPEC_TEST_PROVIDERS");
+            return;
+        }
+
         // Test that we get proper error messages for different authentication states
         let provider = Box::<dyn Provider>::try_from("bitwarden://")
             .expect("Should create bitwarden provider");
@@ -873,6 +880,13 @@ mod integration_tests {
 
     #[test]
     fn test_bitwarden_error_messages() {
+        // Only run this test if SECRETSPEC_TEST_PROVIDERS includes bitwarden
+        let providers = get_test_providers();
+        if !providers.contains(&"bitwarden".to_string()) {
+            println!("Skipping bitwarden error messages test - not in SECRETSPEC_TEST_PROVIDERS");
+            return;
+        }
+
         use crate::provider::bitwarden::BitwardenProvider;
 
         // Test that we get helpful error messages

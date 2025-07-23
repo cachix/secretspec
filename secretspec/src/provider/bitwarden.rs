@@ -118,6 +118,7 @@ impl BitwardenItemType {
     }
 
     /// Get string representation
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             BitwardenItemType::Login => "login",
@@ -176,6 +177,7 @@ impl BitwardenFieldType {
     }
 
     /// Get string representation
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             BitwardenFieldType::Text => "text",
@@ -190,6 +192,7 @@ impl BitwardenFieldType {
 /// This struct deserializes the JSON output from the `bw get item` and `bw list items` commands.
 /// It supports all Bitwarden item types: Login, Secure Note, Card, Identity, etc.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct BitwardenItem {
     /// Unique identifier for the item.
     id: String,
@@ -342,6 +345,7 @@ struct BitwardenSshKey {
 /// or boolean values. The field's name is used to identify specific
 /// data within an item.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct BitwardenField {
     /// The name/label of the field.
     name: Option<String>,
@@ -373,6 +377,7 @@ where
 /// using encoded JSON. It defines the structure and metadata for items that store secrets.
 /// Default item type is Login for better script compatibility.
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 struct BitwardenItemTemplate {
     /// The type of item (Login by default).
     #[serde(rename = "type", serialize_with = "serialize_item_type")]
@@ -405,6 +410,7 @@ struct BitwardenItemTemplate {
 }
 
 /// Custom serializer for item type
+#[allow(dead_code)]
 fn serialize_item_type<S>(
     item_type: &BitwardenItemType,
     serializer: S,
@@ -417,6 +423,7 @@ where
 
 /// Secure note configuration required for Bitwarden secure note items.
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 struct BitwardenSecureNote {
     /// Type of secure note. Always 0 for generic secure notes.
     #[serde(rename = "type")]
@@ -428,6 +435,7 @@ struct BitwardenSecureNote {
 /// Each field represents a piece of data to store in the item.
 /// Used within BitwardenItemTemplate to define the item's content.
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 struct BitwardenFieldTemplate {
     /// The name/label of the field (e.g., "project", "key", "value").
     name: String,
@@ -439,6 +447,7 @@ struct BitwardenFieldTemplate {
 }
 
 /// Custom serializer for field type
+#[allow(dead_code)]
 fn serialize_field_type<S>(
     field_type: &BitwardenFieldType,
     serializer: S,
@@ -785,6 +794,7 @@ impl BitwardenProvider {
     /// Gets the CLI timeout value from configuration or environment variable.
     ///
     /// Priority: environment variable > config value > default (30s)
+    #[allow(dead_code)]
     pub(crate) fn get_cli_timeout(&self) -> Duration {
         // Check environment variable first
         if let Ok(timeout_str) = std::env::var("BITWARDEN_CLI_TIMEOUT") {
@@ -1250,6 +1260,7 @@ impl BitwardenProvider {
     /// # Returns
     ///
     /// A BitwardenItemTemplate ready for serialization
+    #[allow(dead_code)]
     fn create_item_template(
         &self,
         _project: &str,
@@ -1292,9 +1303,9 @@ impl BitwardenProvider {
     /// extracting values using smart field detection.
     fn get_from_password_manager(
         &self,
-        project: &str,
+        _project: &str,
         key: &str,
-        profile: &str,
+        _profile: &str,
     ) -> Result<Option<SecretString>> {
         // Check authentication status first
         if !self.is_authenticated()? {

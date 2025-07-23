@@ -7,7 +7,7 @@ mod test_provider_not_found {
     fn test_keyring_provider_when_feature_disabled() {
         // This test checks what error we get when trying to use keyring provider
         // when the keyring feature is disabled
-        
+
         #[cfg(not(feature = "keyring"))]
         {
             match Box::<dyn Provider>::try_from("keyring") {
@@ -24,18 +24,21 @@ mod test_provider_not_found {
                 }
             }
         }
-        
+
         #[cfg(feature = "keyring")]
         {
             // When feature is enabled, keyring should work
             match Box::<dyn Provider>::try_from("keyring") {
                 Ok(provider) => assert_eq!(provider.name(), "keyring"),
-                Err(e) => panic!("Should create keyring provider when feature is enabled: {}", e),
+                Err(e) => panic!(
+                    "Should create keyring provider when feature is enabled: {}",
+                    e
+                ),
             }
         }
     }
-    
-    #[test] 
+
+    #[test]
     fn test_truly_unknown_provider() {
         // Test a provider that really doesn't exist
         match Box::<dyn Provider>::try_from("nonexistent_provider") {

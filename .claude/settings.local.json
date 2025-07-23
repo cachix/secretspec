@@ -5,7 +5,6 @@
       "Bash(jq:*)",
       "Bash(cat:*)",
       "Bash(rustc:*)",
-      "Bash(./test_json_parse)",
       "Bash(git commit:*)",
       "Bash(git push:*)"
     ],

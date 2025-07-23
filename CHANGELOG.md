@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Integrate `secrecy` crate for secure secret handling with automatic memory zeroing
 - Bitwarden provider supports Bitwarden & Bitwarden Secrets Manager via
-  `bitwarden://` & `bws://` URIs.
+  `bitwarden://` & `bws://` URIs with enhanced error message sanitization.
 
 ### Changed
 - Made keyring provider optional via `keyring` feature flag (enabled by default)

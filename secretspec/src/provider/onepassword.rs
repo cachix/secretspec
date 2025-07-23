@@ -232,8 +232,8 @@ impl OnePasswordProvider {
     /// # Arguments
     ///
     /// * `config` - The configuration for the provider
-    pub fn new(config: OnePasswordConfig) -> Self {
-        Self { config }
+    pub fn new(config: OnePasswordConfig) -> crate::Result<Self> {
+        Ok(Self { config })
     }
 
     /// Executes a OnePassword CLI command with proper error handling.
@@ -570,5 +570,6 @@ impl Default for OnePasswordProvider {
     /// Uses interactive authentication and the "Private" vault by default.
     fn default() -> Self {
         Self::new(OnePasswordConfig::default())
+            .expect("Failed to create default OnePasswordProvider")
     }
 }

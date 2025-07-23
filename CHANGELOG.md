@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added Infisical provider support via `infisical` feature flag for integration with Infisical secrets management platform
+
 ### Changed
 - Made keyring provider optional via `keyring` feature flag (enabled by default)
 

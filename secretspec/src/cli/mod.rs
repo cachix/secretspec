@@ -224,7 +224,7 @@ pub fn main() -> Result<()> {
 
             // Create dotenv provider and reflect secrets
             let dotenv_config = (&uri).try_into().into_diagnostic()?;
-            let dotenv_provider = DotEnvProvider::new(dotenv_config);
+            let dotenv_provider = DotEnvProvider::new(dotenv_config).into_diagnostic()?;
             let secrets = dotenv_provider.reflect().into_diagnostic()?;
 
             // Create a new project config

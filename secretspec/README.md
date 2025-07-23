@@ -14,7 +14,13 @@ SecretSpec separates the declaration of what secrets an application needs from w
 ## Features
 
 - **[Declarative Configuration](https://secretspec.dev/reference/configuration/)**: Define your secrets in `secretspec.toml` with descriptions and requirements
-- **[Multiple Provider Backends](https://secretspec.dev/concepts/providers/)**: [Keyring](https://secretspec.dev/providers/keyring), [.env](https://secretspec.dev/providers/dotenv), [OnePassword](https://secretspec.dev/providers/onepassword), [LastPass](https://secretspec.dev/providers/lastpass), and [environment variables](https://secretspec.dev/providers/env)
+- **[Multiple Provider Backends](https://secretspec.dev/concepts/providers/)**:
+  - [Keyring](https://secretspec.dev/providers/keyring) - System keychain (macOS, Windows, Linux)
+  - [.env](https://secretspec.dev/providers/dotenv) - Traditional .env files
+  - [Infisical](https://secretspec.dev/providers/infisical) - Infisical secrets management platform
+  - [OnePassword](https://secretspec.dev/providers/onepassword) - 1Password password manager
+  - [LastPass](https://secretspec.dev/providers/lastpass) - LastPass password manager
+  - [Environment variables](https://secretspec.dev/providers/env) - Read-only environment variables
 - **[Type-Safe Rust SDK](https://secretspec.dev/sdk/rust/)**: Generate strongly-typed structs from your `secretspec.toml` for compile-time safety
 - **[Profile Support](https://secretspec.dev/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
 - **Configuration Inheritance**: Extend and override shared configurations using the `extends` feature
@@ -38,6 +44,7 @@ $ secretspec config init
 > onepassword: OnePassword password manager
   dotenv: Traditional .env files
   env: Read-only environment variables
+  infisical: Infisical secrets management platform
   keyring: Uses system keychain (Recommended)
   lastpass: LastPass password manager
 ? Select your default profile:

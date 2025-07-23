@@ -150,10 +150,10 @@ impl DotEnvProvider {
     /// use secretspec::provider::dotenv::{DotEnvProvider, DotEnvConfig};
     ///
     /// let config = DotEnvConfig::default();
-    /// let provider = DotEnvProvider::new(config);
+    /// let provider = DotEnvProvider::new(config)?;
     /// ```
-    pub fn new(config: DotEnvConfig) -> Self {
-        Self { config }
+    pub fn new(config: DotEnvConfig) -> Result<Self> {
+        Ok(Self { config })
     }
 
     /// Reflects all secrets available in the .env file as Secret entries.
@@ -359,7 +359,7 @@ mod tests {
             path: env_file.clone(),
         });
 
-        let secrets = provider.reflect().unwrap();
+        let secrets = provider.unwrap().reflect().unwrap();
         assert_eq!(secrets.len(), 2);
         assert!(secrets.contains_key("API_KEY"));
         assert!(secrets.contains_key("DATABASE_URL"));
@@ -379,7 +379,7 @@ mod tests {
             path: PathBuf::from("/tmp/nonexistent/.env"),
         });
 
-        let secrets = provider.reflect().unwrap();
+        let secrets = provider.unwrap().reflect().unwrap();
         assert!(secrets.is_empty());
     }
 }

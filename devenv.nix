@@ -15,6 +15,8 @@
     pkgs.cargo-tarpaulin
     # installers
     pkgs.cargo-dist
+    # openssl for infisical provider
+    pkgs.openssl
   ];
 
   git-hooks.hooks = {

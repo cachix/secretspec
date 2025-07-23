@@ -155,6 +155,13 @@ fn test_documentation_examples() {
     let provider = Box::<dyn Provider>::try_from("lastpass://folder").unwrap();
     assert_eq!(provider.name(), "lastpass");
 
+    // Test infisical provider
+    #[cfg(feature = "infisical")]
+    {
+        let provider = Box::<dyn Provider>::try_from("infisical://?token=st.xxxx").unwrap();
+        assert_eq!(provider.name(), "infisical");
+    }
+
     // Test dotenv examples from provider list
     let provider = Box::<dyn Provider>::try_from("dotenv://path").unwrap();
     assert_eq!(provider.name(), "dotenv");

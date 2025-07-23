@@ -47,6 +47,7 @@ export default defineConfig({
             { label: "Keyring", slug: "providers/keyring" },
             { label: "Dotenv", slug: "providers/dotenv" },
             { label: "Environment Variables", slug: "providers/env" },
+            { label: "Infisical", slug: "providers/infisical" },
             { label: "LastPass", slug: "providers/lastpass" },
             { label: "1Password", slug: "providers/onepassword" },
           ],

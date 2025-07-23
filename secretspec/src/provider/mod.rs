@@ -18,6 +18,7 @@
 //! - [`KeyringProvider`]: System keyring integration (default)
 //! - [`DotEnvProvider`]: `.env` file support
 //! - [`EnvProvider`]: Environment variables (read-only)
+//! - [`InfisicalProvider`]: Infisical secrets management platform
 //! - [`OnePasswordProvider`]: OnePassword integration
 //! - [`LastPassProvider`]: LastPass integration
 //!
@@ -28,6 +29,7 @@
 //! ```text
 //! keyring://
 //! dotenv://.env.production
+//! infisical://project-id?client_id=xxx&client_secret=yyy
 //! onepassword://vault/items
 //! lastpass://folder
 //! ```
@@ -56,6 +58,8 @@ use url::Url;
 
 pub mod dotenv;
 pub mod env;
+#[cfg(feature = "infisical")]
+pub mod infisical;
 #[cfg(feature = "keyring")]
 pub mod keyring;
 pub mod lastpass;

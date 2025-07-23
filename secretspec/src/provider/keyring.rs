@@ -80,8 +80,8 @@ impl KeyringProvider {
     /// # Returns
     ///
     /// A new instance of KeyringProvider
-    pub fn new(config: KeyringConfig) -> Self {
-        Self { config }
+    pub fn new(config: KeyringConfig) -> crate::Result<Self> {
+        Ok(Self { config })
     }
 }
 

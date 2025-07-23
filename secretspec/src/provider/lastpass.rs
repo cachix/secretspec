@@ -144,8 +144,8 @@ impl LastPassProvider {
     /// # Arguments
     ///
     /// * `config` - The LastPass configuration to use
-    pub fn new(config: LastPassConfig) -> Self {
-        Self { config }
+    pub fn new(config: LastPassConfig) -> crate::Result<Self> {
+        Ok(Self { config })
     }
 
     /// Executes a LastPass CLI command and returns its output.
@@ -430,6 +430,6 @@ impl Default for LastPassProvider {
     ///
     /// This is equivalent to calling `LastPassProvider::new(LastPassConfig::default())`.
     fn default() -> Self {
-        Self::new(LastPassConfig::default())
+        Self::new(LastPassConfig::default()).expect("Failed to create default LastPassProvider")
     }
 }

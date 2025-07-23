@@ -99,10 +99,10 @@ impl EnvProvider {
     /// ```ignore
     /// # use secretspec::provider::env::{EnvProvider, EnvConfig};
     /// let config = EnvConfig::default();
-    /// let provider = EnvProvider::new(config);
+    /// let provider = EnvProvider::new(config)?;
     /// ```
-    pub fn new(config: EnvConfig) -> Self {
-        Self { config }
+    pub fn new(config: EnvConfig) -> Result<Self> {
+        Ok(Self { config })
     }
 }
 

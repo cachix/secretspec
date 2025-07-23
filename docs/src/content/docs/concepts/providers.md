@@ -12,6 +12,7 @@ Providers are pluggable storage backends that handle the storage and retrieval o
 | **keyring** | System credential storage (macOS Keychain, Windows Credential Manager, Linux Secret Service) | ✓ | ✓ | ✓ |
 | **dotenv** | Traditional `.env` file in your project directory | ✓ | ✓ | ✗ |
 | **env** | Read-only access to existing environment variables | ✓ | ✗ | ✗ |
+| **infisical** | Integration with Infisical secrets management platform | ✓ | ✓ | ✓ |
 | **onepassword** | Integration with OnePassword password manager | ✓ | ✓ | ✓ |
 | **lastpass** | Integration with LastPass password manager | ✓ | ✓ | ✓ |
 

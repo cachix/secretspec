@@ -57,7 +57,7 @@ macro_rules! register_provider {
                 schemes: &[$($scheme,)*],
                 factory: |url| {
                     let config = <$config_type>::try_from(url)?;
-                    Ok(Box::new(<$struct_name>::new(config)))
+                    <$struct_name>::new(config).map(|p| Box::new(p) as Box<dyn $crate::provider::Provider>)
                 },
             };
         };

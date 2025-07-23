@@ -34,8 +34,11 @@ http.workspace = true
 url.workspace = true
 whoami = { workspace = true, optional = true }
 linkme.workspace = true
+infisical = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 
 [features]
 default = ["cli", "keyring"]
 cli = []
 keyring = ["dep:keyring", "dep:whoami"]
+infisical = ["dep:infisical", "dep:tokio"]

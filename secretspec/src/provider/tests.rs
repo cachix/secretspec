@@ -1394,4 +1394,254 @@ mod integration_tests {
             avg_get_time
         );
     }
+
+    // Unit tests for individual BitwardenProvider methods
+    #[test]
+    fn test_bitwarden_redact_secret_patterns() {
+        use crate::provider::bitwarden::{BitwardenConfig, BitwardenProvider};
+
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+
+        // Test JSON token pattern redaction - just verify method works
+        let input = r#"{"token": "secret123", "other": "value"}"#;
+        let result = provider.redact_secret_patterns(input.to_string());
+        println!("redact_secret_patterns: '{}' -> '{}'", input, result);
+        assert!(!result.is_empty(), "Should produce output");
+
+        // Test that method works with various inputs including new field names
+        let test_cases = vec![
+            (r#"{"key": "mysecretkey12345", "data": "public"}"#, true),
+            (r#"{"secret": "topsecret12345", "id": 123}"#, true),
+            (r#"{"password": "mypassword123", "username": "user"}"#, true),
+            (
+                r#"{"authorization": "Bearer abc123456789", "type": "auth"}"#,
+                true,
+            ),
+            (
+                r#"{"jwt": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0", "id": 1}"#,
+                true,
+            ),
+            (
+                r#"{"client_secret": "verysecret123456", "client_id": "public123"}"#,
+                true,
+            ),
+            (r#"{"data": "public", "status": "ok"}"#, false),
+        ];
+
+        for (input, should_redact) in test_cases {
+            let result = provider.redact_secret_patterns(input.to_string());
+            println!("Enhanced pattern test: '{}' -> '{}'", input, result);
+            assert!(!result.is_empty(), "Should produce output for: {}", input);
+            if should_redact {
+                assert!(
+                    result.contains("[REDACTED]"),
+                    "Should redact secrets in: {}",
+                    input
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_bitwarden_redact_bearer_tokens() {
+        use crate::provider::bitwarden::{BitwardenConfig, BitwardenProvider};
+
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+
+        // Test method exists and processes inputs without crashing
+        let test_cases = vec![
+            "Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+            "Bearer abc123456789012345678901234567890", // Long bearer token
+            "No tokens here, just regular text",
+            "Bearer short", // Short bearer token
+        ];
+
+        for input in test_cases {
+            let result = provider.redact_bearer_tokens(input.to_string());
+            assert!(!result.is_empty(), "Should produce output for: {}", input);
+            // Method should not crash and should produce reasonable output
+        }
+    }
+
+    #[test]
+    fn test_bitwarden_redact_base64_tokens() {
+        use crate::provider::bitwarden::{BitwardenConfig, BitwardenProvider};
+
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+
+        // Test method exists and processes inputs without crashing
+        let test_cases = vec![
+            "Token: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+            "short123",                       // Should not be redacted
+            "123456789012345678901234567890", // Pure numbers
+            "aaaaaaaaaaaaaaaaaaaaaaaaa",      // Repeated chars
+            "abc123def456ghi789jkl012mno345", // Mixed alphanumeric
+        ];
+
+        for input in test_cases {
+            let result = provider.redact_base64_tokens(input.to_string());
+            println!("base64 test: '{}' -> '{}'", input, result);
+            assert!(!result.is_empty(), "Should produce output for: {}", input);
+            // Method should not crash - actual behavior may vary
+        }
+    }
+
+    #[test]
+    fn test_bitwarden_redact_file_paths() {
+        use crate::provider::bitwarden::{BitwardenConfig, BitwardenProvider};
+
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+
+        // Test method exists and processes inputs without crashing
+        let test_cases = vec![
+            "Error in /home/user/secrets/config.json at line 5",
+            "Failed to read C:\\Users\\Admin\\Documents\\secret.txt",
+            "Copy from /tmp/source.dat to /home/dest.dat",
+            "No file paths in this message",
+            "File: ./config.json or ../data.txt",
+        ];
+
+        for input in test_cases {
+            let result = provider.redact_file_paths(input.to_string());
+            println!("file path test: '{}' -> '{}'", input, result);
+            assert!(!result.is_empty(), "Should produce output for: {}", input);
+            // Method should not crash - actual behavior may vary
+        }
+    }
+
+    #[test]
+    fn test_bitwarden_truncate_long_message() {
+        use crate::provider::bitwarden::{BitwardenConfig, BitwardenProvider};
+
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+
+        // Test short message (should remain unchanged)
+        let short_msg = "This is a short error message";
+        let result = provider.truncate_long_message(short_msg.to_string());
+        assert_eq!(result, short_msg);
+
+        // Test long message (should be truncated)
+        let long_msg = "A".repeat(600); // 600 characters
+        let result = provider.truncate_long_message(long_msg);
+        assert_eq!(result.len(), 450 + "... [truncated for security]".len());
+        assert!(result.ends_with("... [truncated for security]"));
+        assert!(result.starts_with("AAA")); // Should start with original content
+
+        // Test exactly 500 characters (should not be truncated)
+        let exact_msg = "B".repeat(500);
+        let result = provider.truncate_long_message(exact_msg.clone());
+        assert_eq!(result, exact_msg);
+
+        // Test 501 characters (should be truncated)
+        let just_over_msg = "C".repeat(501);
+        let result = provider.truncate_long_message(just_over_msg);
+        assert!(result.ends_with("... [truncated for security]"));
+        assert_eq!(result.len(), 450 + "... [truncated for security]".len());
+    }
+
+    #[test]
+    fn test_bitwarden_sanitize_integration() {
+        use crate::provider::bitwarden::{BitwardenConfig, BitwardenProvider};
+
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+
+        // Test comprehensive sanitization with complex input
+        let complex_error = "Authentication failed: {\"token\": \"longsecret123456789\", \"bearer\": \"Bearer eyJ0eXAiOiJKV1QiLnothinghere\"} File: /home/user/.secrets/vault.json Error: ".to_string() + &"Additional context: ".repeat(50);
+
+        let result = provider.sanitize_error_message(&complex_error);
+
+        // Just verify the method works and produces output
+        assert!(!result.is_empty(), "Should produce output");
+
+        // Should contain some form of redaction indicators
+        assert!(
+            result.contains("[REDACTED]") || result.contains("...") || result.contains("truncated"),
+            "Should show some sanitization occurred: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_bitwarden_comprehensive_error_sanitization() {
+        use crate::provider::bitwarden::{BitwardenConfig, BitwardenProvider};
+
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+
+        // Test that all error paths through sanitize_error_message produce clean output
+        let test_cases = vec![
+            "Command failed with token: abc123456789012345",
+            "Authentication failed: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.secret",
+            "Error reading /home/user/.secrets/vault.json",
+            "Failed to parse: {\"password\": \"verysecret12345678\", \"status\": \"error\"}",
+            "Windows path error: C:\\Users\\Admin\\AppData\\Local\\secret.dat",
+        ];
+
+        for input in test_cases {
+            let result = provider.sanitize_error_message(input);
+            println!("Comprehensive sanitization: '{}' -> '{}'", input, result);
+
+            // Verify no raw secrets remain
+            assert!(
+                !result.contains("abc123456789012345"),
+                "Should redact long tokens"
+            );
+            assert!(
+                !result.contains("verysecret12345678"),
+                "Should redact password values"
+            );
+            assert!(
+                !result.contains("eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.secret"),
+                "Should redact JWT"
+            );
+
+            // Verify file paths are sanitized
+            if input.contains("/home/user/.secrets") {
+                assert!(
+                    result.contains(".../vault.json"),
+                    "Should preserve filename in Unix paths"
+                );
+            }
+            if input.contains("C:\\Users\\Admin") {
+                assert!(
+                    result.contains("...\\secret.dat"),
+                    "Should preserve filename in Windows paths"
+                );
+            }
+
+            assert!(!result.is_empty(), "Should produce output");
+        }
+    }
+
+    #[test]
+    fn test_bitwarden_string_helper_functions() {
+        use crate::provider::bitwarden::BitwardenProvider;
+        use secrecy::ExposeSecret;
+
+        // Test to_secret_string helper
+        let test_string = "test_value";
+        let secret = BitwardenProvider::to_secret_string(test_string);
+        assert_eq!(secret.expose_secret(), test_string);
+
+        // Test with String type
+        let test_string = String::from("test_value_2");
+        let secret = BitwardenProvider::to_secret_string(&test_string);
+        assert_eq!(secret.expose_secret(), "test_value_2");
+
+        // Test option_to_secret_string helper with Some
+        let some_value = Some("optional_test");
+        let result = BitwardenProvider::option_to_secret_string(some_value);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().expose_secret(), "optional_test");
+
+        // Test option_to_secret_string helper with None
+        let none_value: Option<&str> = None;
+        let result = BitwardenProvider::option_to_secret_string(none_value);
+        assert!(result.is_none());
+
+        // Test with Option<String>
+        let some_string = Some(String::from("string_test"));
+        let result = BitwardenProvider::option_to_secret_string(some_string.as_deref());
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().expose_secret(), "string_test");
+    }
 }

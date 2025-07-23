@@ -779,7 +779,7 @@ impl BitwardenProvider {
     ///
     /// This centralizes the conversion logic and uses AsRef<str> to accept
     /// various string types (&str, String, &String, etc.) efficiently.
-    fn to_secret_string<S: AsRef<str>>(value: S) -> SecretString {
+    pub(crate) fn to_secret_string<S: AsRef<str>>(value: S) -> SecretString {
         SecretString::new(value.as_ref().into())
     }
 
@@ -787,7 +787,7 @@ impl BitwardenProvider {
     ///
     /// This reduces the repetitive pattern of `.map(|s| SecretString::new(s.as_str().into()))`
     /// to a more concise and efficient `.and_then(Self::option_to_secret_string)`.
-    fn option_to_secret_string<S: AsRef<str>>(opt: Option<S>) -> Option<SecretString> {
+    pub(crate) fn option_to_secret_string<S: AsRef<str>>(opt: Option<S>) -> Option<SecretString> {
         opt.map(Self::to_secret_string)
     }
 
@@ -830,17 +830,18 @@ impl BitwardenProvider {
     pub(crate) fn sanitize_error_message(&self, error_msg: &str) -> String {
         let mut sanitized = error_msg.to_string();
 
+        // Redact file paths first to avoid false positives with secret patterns
+        sanitized = self.redact_file_paths(sanitized);
         sanitized = self.redact_secret_patterns(sanitized);
         sanitized = self.redact_bearer_tokens(sanitized);
         sanitized = self.redact_base64_tokens(sanitized);
-        sanitized = self.redact_file_paths(sanitized);
         sanitized = self.truncate_long_message(sanitized);
 
         sanitized
     }
 
     /// Redacts potential secret patterns in JSON/key-value formats.
-    fn redact_secret_patterns(&self, mut sanitized: String) -> String {
+    pub(crate) fn redact_secret_patterns(&self, mut sanitized: String) -> String {
         let secret_patterns = [
             // JSON patterns: "token": "value", "key": "value"
             ("\"token\":", "\"[REDACTED]\""),
@@ -850,6 +851,13 @@ impl BitwardenProvider {
             ("\"session\":", "\"[REDACTED]\""),
             ("\"access_token\":", "\"[REDACTED]\""),
             ("\"api_key\":", "\"[REDACTED]\""),
+            ("\"authorization\":", "\"[REDACTED]\""),
+            ("\"bearer\":", "\"[REDACTED]\""),
+            ("\"jwt\":", "\"[REDACTED]\""),
+            ("\"refresh_token\":", "\"[REDACTED]\""),
+            ("\"client_secret\":", "\"[REDACTED]\""),
+            ("\"private_key\":", "\"[REDACTED]\""),
+            ("\"client_id\":", "\"[REDACTED]\""),
             // URL/form patterns: token=value, key=value
             ("token=", "token=[REDACTED]"),
             ("key=", "key=[REDACTED]"),
@@ -858,6 +866,28 @@ impl BitwardenProvider {
             ("session=", "session=[REDACTED]"),
             ("access_token=", "access_token=[REDACTED]"),
             ("api_key=", "api_key=[REDACTED]"),
+            ("authorization=", "authorization=[REDACTED]"),
+            ("bearer=", "bearer=[REDACTED]"),
+            ("jwt=", "jwt=[REDACTED]"),
+            ("refresh_token=", "refresh_token=[REDACTED]"),
+            ("client_secret=", "client_secret=[REDACTED]"),
+            ("private_key=", "private_key=[REDACTED]"),
+            ("client_id=", "client_id=[REDACTED]"),
+            // Error message patterns: "token: value", "key: value"
+            ("token: ", "token: [REDACTED]"),
+            ("key: ", "key: [REDACTED]"),
+            ("secret: ", "secret: [REDACTED]"),
+            ("password: ", "password: [REDACTED]"),
+            ("session: ", "session: [REDACTED]"),
+            ("access_token: ", "access_token: [REDACTED]"),
+            ("api_key: ", "api_key: [REDACTED]"),
+            ("authorization: ", "authorization: [REDACTED]"),
+            ("bearer: ", "bearer: [REDACTED]"),
+            ("jwt: ", "jwt: [REDACTED]"),
+            ("refresh_token: ", "refresh_token: [REDACTED]"),
+            ("client_secret: ", "client_secret: [REDACTED]"),
+            ("private_key: ", "private_key: [REDACTED]"),
+            ("client_id: ", "client_id: [REDACTED]"),
         ];
 
         for (pattern, replacement) in &secret_patterns {
@@ -874,8 +904,9 @@ impl BitwardenProvider {
                     }
 
                     if let Some(actual_value) = value_part.get(actual_value_start..) {
-                        // Find end of value (quote, space, comma, newline, etc.)
-                        let end_chars = ['"', ' ', ',', '\n', '\r', '}', ']'];
+                        // Find end of value (quote, comma, newline, brace, bracket)
+                        // Don't break on spaces for values like "Bearer token123"
+                        let end_chars = ['"', ',', '\n', '\r', '}', ']'];
                         let mut end_pos = actual_value.len();
 
                         for &end_char in &end_chars {
@@ -901,7 +932,7 @@ impl BitwardenProvider {
     }
 
     /// Redacts Bearer tokens from error messages.
-    fn redact_bearer_tokens(&self, mut sanitized: String) -> String {
+    pub(crate) fn redact_bearer_tokens(&self, mut sanitized: String) -> String {
         if let Some(bearer_start) = sanitized.to_lowercase().find("bearer ") {
             let token_start = bearer_start + 7;
             if let Some(token_part) = sanitized.get(token_start..) {
@@ -918,15 +949,25 @@ impl BitwardenProvider {
     }
 
     /// Redacts long base64-like strings (potential tokens/keys).
-    fn redact_base64_tokens(&self, sanitized: String) -> String {
+    pub(crate) fn redact_base64_tokens(&self, sanitized: String) -> String {
         let words: Vec<String> = sanitized
             .split_whitespace()
             .map(|word| {
+                // Check for JWT pattern (base64.base64.base64 or base64.base64)
+                if word.contains('.') && word.len() >= 20 {
+                    let parts: Vec<&str> = word.split('.').collect();
+                    if parts.len() >= 2 && parts.iter().all(|part| {
+                        part.len() >= 4 && part.chars().all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '=' || c == '-' || c == '_')
+                    }) {
+                        return "[REDACTED]".to_string();
+                    }
+                }
+
+                // Check for regular base64-like strings
                 if word.len() >= 20
-                   && word.chars().all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '=')
+                   && word.chars().all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '=' || c == '-' || c == '_')
                    && !word.chars().all(|c| c.is_ascii_digit()) // Don't redact pure numbers
-                   && !word.chars().all(|c| c == word.chars().next().unwrap())
-                // Don't redact repeated chars
+                   && !word.chars().all(|c| c == word.chars().next().unwrap()) // Don't redact repeated chars
                 {
                     "[REDACTED]".to_string()
                 } else {
@@ -938,14 +979,31 @@ impl BitwardenProvider {
     }
 
     /// Redacts sensitive file paths while preserving filenames for debugging.
-    fn redact_file_paths(&self, sanitized: String) -> String {
+    pub(crate) fn redact_file_paths(&self, sanitized: String) -> String {
         let words: Vec<String> = sanitized
             .split_whitespace()
             .map(|word| {
+                // Unix paths: /path/to/file
                 if word.starts_with('/') && word.matches('/').count() >= 2 {
                     if let Some(filename) = word.split('/').last() {
                         if !filename.is_empty() {
                             format!(".../{}", filename)
+                        } else {
+                            "[PATH_REDACTED]".to_string()
+                        }
+                    } else {
+                        "[PATH_REDACTED]".to_string()
+                    }
+                }
+                // Windows paths: C:\path\to\file or \\server\share\file
+                else if (word.len() >= 3
+                    && word.chars().nth(1) == Some(':')
+                    && word.chars().nth(2) == Some('\\'))
+                    || word.starts_with("\\\\")
+                {
+                    if let Some(filename) = word.split('\\').last() {
+                        if !filename.is_empty() && filename != word {
+                            format!("...\\{}", filename)
                         } else {
                             "[PATH_REDACTED]".to_string()
                         }
@@ -961,7 +1019,7 @@ impl BitwardenProvider {
     }
 
     /// Truncates overly long error messages for security and readability.
-    fn truncate_long_message(&self, mut sanitized: String) -> String {
+    pub(crate) fn truncate_long_message(&self, mut sanitized: String) -> String {
         if sanitized.len() > 500 {
             sanitized.truncate(450);
             sanitized.push_str("... [truncated for security]");
@@ -972,7 +1030,8 @@ impl BitwardenProvider {
     /// Executes a command with timeout using cross-platform approach.
     ///
     /// This method implements proper timeout handling using threads and channels
-    /// to prevent CLI commands from hanging indefinitely.
+    /// to prevent CLI commands from hanging indefinitely. It attempts to minimize
+    /// resource leaks by using detached threads for command execution.
     ///
     /// # Arguments
     ///
@@ -988,25 +1047,72 @@ impl BitwardenProvider {
     /// - Command timeout (based on configuration)
     /// - CLI not installed
     /// - Command execution failures
+    ///
+    /// # Resource Management
+    ///
+    /// When a timeout occurs, the spawned thread may continue running until the
+    /// CLI command completes. This is a known limitation of cross-platform timeout
+    /// implementation without external process management dependencies.
     fn execute_command_with_timeout(&self, mut cmd: Command) -> Result<std::process::Output> {
-        use std::sync::mpsc;
+        use std::sync::{Arc, Mutex, mpsc};
         use std::thread;
+        use std::time::Instant;
 
         let timeout = self.get_cli_timeout();
         let (tx, rx) = mpsc::channel();
 
+        // Use Arc<Mutex<Option<Child>>> to potentially store process handle for future cleanup
+        let process_handle: Arc<Mutex<Option<std::process::Child>>> = Arc::new(Mutex::new(None));
+        let process_handle_clone = Arc::clone(&process_handle);
+
         // Spawn command execution in separate thread
-        let _handle = thread::spawn(move || {
-            let result = cmd.output();
+        let handle = thread::spawn(move || {
+            // Configure command for potential process management
+            let child = match cmd.spawn() {
+                Ok(mut child) => {
+                    // Store the child process handle for potential cleanup
+                    if let Ok(mut handle_guard) = process_handle_clone.lock() {
+                        *handle_guard = Some(child);
+                    } else {
+                        // If we can't store the handle, kill the child and return error
+                        let _ = child.kill();
+                        let _ = tx.send(Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "Failed to manage process handle",
+                        )));
+                        return;
+                    }
+
+                    // Get the child from the mutex to wait for it
+                    let child = process_handle_clone.lock().unwrap().take().unwrap();
+                    child
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                    return;
+                }
+            };
+
+            // Wait for the process to complete and collect output
+            let result = child.wait_with_output();
+
             // Send result through channel (ignore send errors if receiver dropped)
             let _ = tx.send(result);
         });
 
+        let _start_time = Instant::now();
+
         // Wait for either completion or timeout
         match rx.recv_timeout(timeout) {
-            Ok(Ok(output)) => Ok(output),
+            Ok(Ok(output)) => {
+                // Command completed successfully, thread will naturally terminate
+                let _ = handle.join(); // Clean up the thread
+                Ok(output)
+            }
             Ok(Err(e)) => {
-                // Command execution failed
+                // Command execution failed, thread will naturally terminate
+                let _ = handle.join(); // Clean up the thread
+
                 if e.kind() == std::io::ErrorKind::NotFound {
                     Err(SecretSpecError::ProviderOperationFailed(
                         "Bitwarden CLI is not installed. Please install it and ensure it's in your PATH.".to_string(),
@@ -1019,7 +1125,16 @@ impl BitwardenProvider {
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Command timed out - thread will continue running but we abandon it
+                // Attempt to kill the process if we still have the handle
+                if let Ok(mut handle_guard) = process_handle.lock() {
+                    if let Some(ref mut child) = handle_guard.as_mut() {
+                        let _ = child.kill(); // Best effort to stop the process
+                        let _ = child.wait(); // Clean up zombie process
+                    }
+                }
+
+                // Note: The thread may still be running briefly, but the process should be killed
+                // We don't join the thread here to avoid blocking on the cleanup
                 Err(SecretSpecError::ProviderOperationFailed(format!(
                     "Bitwarden CLI command timed out after {} seconds. You can increase the timeout with BITWARDEN_CLI_TIMEOUT environment variable.",
                     timeout.as_secs()
@@ -1027,6 +1142,9 @@ impl BitwardenProvider {
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 // Thread panicked or channel closed unexpectedly
+                // Try to clean up if possible
+                let _ = handle.join();
+
                 Err(SecretSpecError::ProviderOperationFailed(
                     "Command execution failed: internal error".to_string(),
                 ))
@@ -1103,8 +1221,9 @@ impl BitwardenProvider {
             ));
         }
 
-        let result = String::from_utf8(output.stdout)
-            .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()));
+        let result = String::from_utf8(output.stdout).map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(self.sanitize_error_message(&e.to_string()))
+        });
 
         // Log performance timing if enabled
         if let Some(start) = start_time {
@@ -1203,8 +1322,9 @@ impl BitwardenProvider {
             )));
         }
 
-        let result = String::from_utf8(output.stdout)
-            .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()));
+        let result = String::from_utf8(output.stdout).map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(self.sanitize_error_message(&e.to_string()))
+        });
 
         // Log performance timing if enabled
         if let Some(start) = start_time {
@@ -2193,7 +2313,7 @@ impl BitwardenProvider {
                     "Bitwarden CLI (bw) is not installed.\n\nTo install it:\n  - npm: npm install -g @bitwarden/cli\n  - Homebrew: brew install bitwarden-cli\n  - Chocolatey: choco install bitwarden-cli\n  - Download: https://bitwarden.com/help/cli/".to_string(),
                 )
             } else {
-                SecretSpecError::ProviderOperationFailed(e.to_string())
+                SecretSpecError::ProviderOperationFailed(self.sanitize_error_message(&e.to_string()))
             }
         })?;
 
@@ -2481,7 +2601,7 @@ impl BitwardenProvider {
                     "Bitwarden CLI (bw) is not installed.\n\nTo install it:\n  - npm: npm install -g @bitwarden/cli\n  - Homebrew: brew install bitwarden-cli\n  - Chocolatey: choco install bitwarden-cli\n  - Download: https://bitwarden.com/help/cli/".to_string(),
                 )
             } else {
-                SecretSpecError::ProviderOperationFailed(e.to_string())
+                SecretSpecError::ProviderOperationFailed(self.sanitize_error_message(&e.to_string()))
             }
         })?;
 
@@ -2619,18 +2739,11 @@ impl Provider for BitwardenProvider {
             None
         };
 
-        eprintln!(
-            "DEBUG: BitwardenProvider.get() called with key='{}', service={:?}",
-            key, self.config.service
-        );
-
         let result = match self.config.service {
             BitwardenService::PasswordManager => {
-                eprintln!("DEBUG: Calling get_from_password_manager");
                 self.get_from_password_manager(project, key, profile)
             }
             BitwardenService::SecretsManager => {
-                eprintln!("DEBUG: Calling get_from_secrets_manager");
                 self.get_from_secrets_manager(project, key, profile)
             }
         };

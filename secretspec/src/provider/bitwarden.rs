@@ -766,6 +766,22 @@ impl BitwardenProvider {
         Self { config }
     }
 
+    /// Helper to convert any string-like type to SecretString.
+    ///
+    /// This centralizes the conversion logic and uses AsRef<str> to accept
+    /// various string types (&str, String, &String, etc.) efficiently.
+    fn to_secret_string<S: AsRef<str>>(value: S) -> SecretString {
+        SecretString::new(value.as_ref().into())
+    }
+
+    /// Helper to convert Option<String-like> to Option<SecretString>.
+    ///
+    /// This reduces the repetitive pattern of `.map(|s| SecretString::new(s.as_str().into()))`
+    /// to a more concise and efficient `.and_then(Self::option_to_secret_string)`.
+    fn option_to_secret_string<S: AsRef<str>>(opt: Option<S>) -> Option<SecretString> {
+        opt.map(Self::to_secret_string)
+    }
+
     /// Gets the CLI timeout value from configuration or environment variable.
     ///
     /// Priority: environment variable > config value > default (30s)
@@ -1322,27 +1338,18 @@ impl BitwardenProvider {
             if let Some(field_name) = requested_field {
                 match field_name.to_lowercase().as_str() {
                     "password" => {
-                        return Ok(login
-                            .password
-                            .as_ref()
-                            .map(|p| SecretString::new(p.clone().into())));
+                        return Ok(Self::option_to_secret_string(login.password.as_deref()));
                     }
                     "username" => {
-                        return Ok(login
-                            .username
-                            .as_ref()
-                            .map(|u| SecretString::new(u.clone().into())));
+                        return Ok(Self::option_to_secret_string(login.username.as_deref()));
                     }
                     "totp" => {
-                        return Ok(login
-                            .totp
-                            .as_ref()
-                            .map(|t| SecretString::new(t.clone().into())));
+                        return Ok(Self::option_to_secret_string(login.totp.as_deref()));
                     }
                     _ => {
                         // Check custom fields for requested field name
                         if let Some(value) = self.extract_from_custom_fields(item, field_name)? {
-                            return Ok(Some(SecretString::new(value.into())));
+                            return Ok(Some(Self::to_secret_string(value)));
                         } else {
                             return Ok(None);
                         }
@@ -1358,13 +1365,13 @@ impl BitwardenProvider {
                 || hint_lower.contains("token")
             {
                 if let Some(password) = &login.password {
-                    return Ok(Some(SecretString::new(password.clone().into())));
+                    return Ok(Some(Self::to_secret_string(password)));
                 }
             }
 
             if hint_lower.contains("user") || hint_lower.contains("login") {
                 if let Some(username) = &login.username {
-                    return Ok(Some(SecretString::new(username.clone().into())));
+                    return Ok(Some(Self::to_secret_string(username)));
                 }
             }
 
@@ -1373,16 +1380,16 @@ impl BitwardenProvider {
                 || hint_lower.contains("mfa")
             {
                 if let Some(totp) = &login.totp {
-                    return Ok(Some(SecretString::new(totp.clone().into())));
+                    return Ok(Some(Self::to_secret_string(totp)));
                 }
             }
 
             // Default: prefer password, then username
             if let Some(password) = &login.password {
-                return Ok(Some(SecretString::new(password.clone().into())));
+                return Ok(Some(Self::to_secret_string(password)));
             }
             if let Some(username) = &login.username {
-                return Ok(Some(SecretString::new(username.clone().into())));
+                return Ok(Some(Self::to_secret_string(username)));
             }
         }
 
@@ -1404,25 +1411,22 @@ impl BitwardenProvider {
         // If specific field requested, check custom fields first
         if let Some(field_name) = requested_field {
             if let Some(value) = self.extract_from_custom_fields(item, field_name)? {
-                return Ok(Some(SecretString::new(value.into())));
+                return Ok(Some(Self::to_secret_string(value)));
             }
         }
 
         // Look for legacy "value" field (backward compatibility)
         if let Some(value) = self.extract_from_custom_fields(item, "value")? {
-            return Ok(Some(SecretString::new(value.into())));
+            return Ok(Some(Self::to_secret_string(value)));
         }
 
         // Look for field matching the hint
         if let Some(value) = self.extract_from_custom_fields(item, field_hint)? {
-            return Ok(Some(SecretString::new(value.into())));
+            return Ok(Some(Self::to_secret_string(value)));
         }
 
         // Fallback: return notes content
-        Ok(item
-            .notes
-            .as_ref()
-            .map(|notes| SecretString::new(notes.clone().into())))
+        Ok(Self::option_to_secret_string(item.notes.as_deref()))
     }
 
     /// Extracts value from Card item (type 3).
@@ -1437,44 +1441,28 @@ impl BitwardenProvider {
             if let Some(field_name) = requested_field {
                 match field_name.to_lowercase().as_str() {
                     "number" => {
-                        return Ok(card
-                            .number
-                            .as_ref()
-                            .map(|n| SecretString::new(n.clone().into())));
+                        return Ok(Self::option_to_secret_string(card.number.as_deref()));
                     }
                     "code" | "cvv" | "cvc" => {
-                        return Ok(card
-                            .code
-                            .as_ref()
-                            .map(|c| SecretString::new(c.clone().into())));
+                        return Ok(Self::option_to_secret_string(card.code.as_deref()));
                     }
                     "cardholder" | "name" => {
-                        return Ok(card
-                            .cardholder_name
-                            .as_ref()
-                            .map(|n| SecretString::new(n.clone().into())));
+                        return Ok(Self::option_to_secret_string(
+                            card.cardholder_name.as_deref(),
+                        ));
                     }
                     "brand" => {
-                        return Ok(card
-                            .brand
-                            .as_ref()
-                            .map(|b| SecretString::new(b.clone().into())));
+                        return Ok(Self::option_to_secret_string(card.brand.as_deref()));
                     }
                     "expmonth" | "exp_month" => {
-                        return Ok(card
-                            .exp_month
-                            .as_ref()
-                            .map(|m| SecretString::new(m.clone().into())));
+                        return Ok(Self::option_to_secret_string(card.exp_month.as_deref()));
                     }
                     "expyear" | "exp_year" => {
-                        return Ok(card
-                            .exp_year
-                            .as_ref()
-                            .map(|y| SecretString::new(y.clone().into())));
+                        return Ok(Self::option_to_secret_string(card.exp_year.as_deref()));
                     }
                     _ => {
                         if let Some(value) = self.extract_from_custom_fields(item, field_name)? {
-                            return Ok(Some(SecretString::new(value.into())));
+                            return Ok(Some(Self::to_secret_string(value)));
                         } else {
                             return Ok(None);
                         }
@@ -1486,7 +1474,7 @@ impl BitwardenProvider {
             let hint_lower = field_hint.to_lowercase();
             if hint_lower.contains("number") || hint_lower.contains("card") {
                 if let Some(number) = &card.number {
-                    return Ok(Some(SecretString::new(number.clone().into())));
+                    return Ok(Some(Self::to_secret_string(number)));
                 }
             }
 
@@ -1495,13 +1483,13 @@ impl BitwardenProvider {
                 || hint_lower.contains("cvc")
             {
                 if let Some(code) = &card.code {
-                    return Ok(Some(SecretString::new(code.clone().into())));
+                    return Ok(Some(Self::to_secret_string(code)));
                 }
             }
 
             // Default: return card number
             if let Some(number) = &card.number {
-                return Ok(Some(SecretString::new(number.clone().into())));
+                return Ok(Some(Self::to_secret_string(number)));
             }
         }
 
@@ -1525,16 +1513,10 @@ impl BitwardenProvider {
             if let Some(field_name) = requested_field {
                 match field_name.to_lowercase().as_str() {
                     "email" => {
-                        return Ok(identity
-                            .email
-                            .as_ref()
-                            .map(|e| SecretString::new(e.clone().into())));
+                        return Ok(identity.email.as_ref().map(Self::to_secret_string));
                     }
                     "username" => {
-                        return Ok(identity
-                            .username
-                            .as_ref()
-                            .map(|u| SecretString::new(u.clone().into())));
+                        return Ok(identity.username.as_ref().map(Self::to_secret_string));
                     }
                     "phone" => {
                         return Ok(identity
@@ -1543,26 +1525,19 @@ impl BitwardenProvider {
                             .map(|p| SecretString::new(p.clone().into())));
                     }
                     "firstname" | "first_name" => {
-                        return Ok(identity
-                            .first_name
-                            .as_ref()
-                            .map(|f| SecretString::new(f.clone().into())));
+                        return Ok(Self::option_to_secret_string(
+                            identity.first_name.as_deref(),
+                        ));
                     }
                     "lastname" | "last_name" => {
-                        return Ok(identity
-                            .last_name
-                            .as_ref()
-                            .map(|l| SecretString::new(l.clone().into())));
+                        return Ok(Self::option_to_secret_string(identity.last_name.as_deref()));
                     }
                     "company" => {
-                        return Ok(identity
-                            .company
-                            .as_ref()
-                            .map(|c| SecretString::new(c.clone().into())));
+                        return Ok(Self::option_to_secret_string(identity.company.as_deref()));
                     }
                     _ => {
                         if let Some(value) = self.extract_from_custom_fields(item, field_name)? {
-                            return Ok(Some(SecretString::new(value.into())));
+                            return Ok(Some(Self::to_secret_string(value)));
                         } else {
                             return Ok(None);
                         }
@@ -1574,28 +1549,28 @@ impl BitwardenProvider {
             let hint_lower = field_hint.to_lowercase();
             if hint_lower.contains("email") || hint_lower.contains("mail") {
                 if let Some(email) = &identity.email {
-                    return Ok(Some(SecretString::new(email.clone().into())));
+                    return Ok(Some(Self::to_secret_string(email)));
                 }
             }
 
             if hint_lower.contains("phone") || hint_lower.contains("tel") {
                 if let Some(phone) = &identity.phone {
-                    return Ok(Some(SecretString::new(phone.clone().into())));
+                    return Ok(Some(Self::to_secret_string(phone)));
                 }
             }
 
             if hint_lower.contains("user") || hint_lower.contains("login") {
                 if let Some(username) = &identity.username {
-                    return Ok(Some(SecretString::new(username.clone().into())));
+                    return Ok(Some(Self::to_secret_string(username)));
                 }
             }
 
             // Default: prefer email, then username
             if let Some(email) = &identity.email {
-                return Ok(Some(SecretString::new(email.clone().into())));
+                return Ok(Some(Self::to_secret_string(email)));
             }
             if let Some(username) = &identity.username {
-                return Ok(Some(SecretString::new(username.clone().into())));
+                return Ok(Some(Self::to_secret_string(username)));
             }
         }
 
@@ -1619,26 +1594,21 @@ impl BitwardenProvider {
             if let Some(field_name) = requested_field {
                 match field_name.to_lowercase().as_str() {
                     "private_key" | "privatekey" | "private" => {
-                        return Ok(ssh_key
-                            .private_key
-                            .as_ref()
-                            .map(|k| SecretString::new(k.clone().into())));
+                        return Ok(Self::option_to_secret_string(
+                            ssh_key.private_key.as_deref(),
+                        ));
                     }
                     "public_key" | "publickey" | "public" => {
-                        return Ok(ssh_key
-                            .public_key
-                            .as_ref()
-                            .map(|k| SecretString::new(k.clone().into())));
+                        return Ok(Self::option_to_secret_string(ssh_key.public_key.as_deref()));
                     }
                     "fingerprint" | "key_fingerprint" => {
-                        return Ok(ssh_key
-                            .key_fingerprint
-                            .as_ref()
-                            .map(|f| SecretString::new(f.clone().into())));
+                        return Ok(Self::option_to_secret_string(
+                            ssh_key.key_fingerprint.as_deref(),
+                        ));
                     }
                     _ => {
                         if let Some(value) = self.extract_from_custom_fields(item, field_name)? {
-                            return Ok(Some(SecretString::new(value.into())));
+                            return Ok(Some(Self::to_secret_string(value)));
                         } else {
                             return Ok(None);
                         }
@@ -1650,19 +1620,19 @@ impl BitwardenProvider {
             let hint_lower = field_hint.to_lowercase();
             if hint_lower.contains("public") || hint_lower.contains("pub") {
                 if let Some(public_key) = &ssh_key.public_key {
-                    return Ok(Some(SecretString::new(public_key.clone().into())));
+                    return Ok(Some(Self::to_secret_string(public_key)));
                 }
             }
 
             if hint_lower.contains("fingerprint") || hint_lower.contains("finger") {
                 if let Some(fingerprint) = &ssh_key.key_fingerprint {
-                    return Ok(Some(SecretString::new(fingerprint.clone().into())));
+                    return Ok(Some(Self::to_secret_string(fingerprint)));
                 }
             }
 
             // Default: return private key (most common use case for SSH keys)
             if let Some(private_key) = &ssh_key.private_key {
-                return Ok(Some(SecretString::new(private_key.clone().into())));
+                return Ok(Some(Self::to_secret_string(private_key)));
             }
         }
 

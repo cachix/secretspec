@@ -962,7 +962,7 @@ impl BitwardenProvider {
 
     /// Executes a command with timeout using a simple approach.
     ///
-    /// For now, we'll use a simple Command::output() call. 
+    /// For now, we'll use a simple Command::output() call.
     /// TODO: Add proper timeout handling in a future version.
     fn execute_command_with_timeout(&self, mut cmd: Command) -> Result<std::process::Output> {
         // TODO: Implement proper timeout handling
@@ -1303,7 +1303,6 @@ impl BitwardenProvider {
             ));
         }
 
-
         // Use Bitwarden's built-in search to find items matching the key
         let mut list_args = vec!["list", "items", "--search", key];
 
@@ -1316,7 +1315,7 @@ impl BitwardenProvider {
         }
 
         let output = self.execute_bw_command(&list_args)?;
-        
+
         // Handle empty output (no search results)
         let items: Vec<BitwardenItem> = if output.trim().is_empty() {
             Vec::new()
@@ -1327,15 +1326,15 @@ impl BitwardenProvider {
             } else {
                 None
             };
-            
+
             let items: Vec<BitwardenItem> = serde_json::from_str(&output).map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to parse Bitwarden search results: {}. Output was: '{}'", 
-                    e, 
+                    "Failed to parse Bitwarden search results: {}. Output was: '{}'",
+                    e,
                     output.chars().take(100).collect::<String>()
                 ))
             })?;
-            
+
             // Log JSON parsing performance (equivalent to jq timing)
             if let Some(start) = parse_start {
                 let duration = start.elapsed();
@@ -1346,7 +1345,7 @@ impl BitwardenProvider {
                     output.len()
                 );
             }
-            
+
             items
         };
 
@@ -1747,7 +1746,7 @@ impl BitwardenProvider {
         _profile: &str,
     ) -> Result<Option<SecretString>> {
         let perf_enabled = std::env::var("SECRETSPEC_PERF_LOG").is_ok();
-        
+
         // For Secrets Manager, we create a secret name based on project and key
         // Profile is encoded in the secret name since SM doesn't have built-in profile support
         let secret_name = format!("{}_{}", project, key);
@@ -1760,17 +1759,32 @@ impl BitwardenProvider {
             args.push(project_id);
         }
 
-        let list_start = if perf_enabled { Some(Instant::now()) } else { None };
+        let list_start = if perf_enabled {
+            Some(Instant::now())
+        } else {
+            None
+        };
         match self.execute_bws_command(&args) {
             Ok(output) => {
                 if let Some(start) = list_start {
-                    eprintln!("[PERF] BWS secret list took {}ms", start.elapsed().as_millis());
+                    eprintln!(
+                        "[PERF] BWS secret list took {}ms",
+                        start.elapsed().as_millis()
+                    );
                 }
-                
-                let parse_start = if perf_enabled { Some(Instant::now()) } else { None };
+
+                let parse_start = if perf_enabled {
+                    Some(Instant::now())
+                } else {
+                    None
+                };
                 let secrets: Vec<BitwardenSecret> = serde_json::from_str(&output)?;
                 if let Some(start) = parse_start {
-                    eprintln!("[PERF] BWS JSON parse took {}μs, {} secrets", start.elapsed().as_micros(), secrets.len());
+                    eprintln!(
+                        "[PERF] BWS JSON parse took {}μs, {} secrets",
+                        start.elapsed().as_micros(),
+                        secrets.len()
+                    );
                 }
 
                 // Look for a secret with matching key name
@@ -1820,15 +1834,15 @@ impl BitwardenProvider {
         }
 
         let output = self.execute_bw_command(&list_args)?;
-        
+
         // Handle empty output (no search results)
         let items: Vec<BitwardenItem> = if output.trim().is_empty() {
             Vec::new()
         } else {
             serde_json::from_str(&output).map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to parse Bitwarden item list: {}. Output was: '{}'", 
-                    e, 
+                    "Failed to parse Bitwarden item list: {}. Output was: '{}'",
+                    e,
                     output.chars().take(100).collect::<String>()
                 ))
             })?
@@ -2552,7 +2566,7 @@ impl Provider for BitwardenProvider {
             "DEBUG: BitwardenProvider.get() called with key='{}', service={:?}",
             key, self.config.service
         );
-        
+
         let result = match self.config.service {
             BitwardenService::PasswordManager => {
                 eprintln!("DEBUG: Calling get_from_password_manager");

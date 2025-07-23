@@ -966,4 +966,418 @@ mod integration_tests {
             }
         }
     }
+
+    #[test]
+    fn test_concurrent_access_to_mock_provider() {
+        use std::sync::Arc;
+        use std::thread;
+        use std::time::Duration;
+
+        let provider = Arc::new(MockProvider::new());
+        let num_threads = 10;
+        let operations_per_thread = 50;
+
+        // Set up initial data
+        let project = "concurrent-test";
+        let profile = "default";
+
+        // Create threads that perform concurrent read/write operations
+        let mut handles = vec![];
+
+        for thread_id in 0..num_threads {
+            let provider = Arc::clone(&provider);
+
+            let handle = thread::spawn(move || {
+                for op_id in 0..operations_per_thread {
+                    let key = format!("key-{}-{}", thread_id, op_id);
+                    let value = format!("value-{}-{}", thread_id, op_id);
+
+                    // Set the value
+                    let secret = SecretString::new(value.clone().into());
+                    provider.set(project, &key, &secret, profile).unwrap();
+
+                    // Small delay to increase chance of race conditions
+                    thread::sleep(Duration::from_millis(1));
+
+                    // Get the value back
+                    let retrieved = provider.get(project, &key, profile).unwrap();
+                    assert!(retrieved.is_some(), "Key {} should exist", key);
+                    assert_eq!(
+                        retrieved.unwrap().expose_secret(),
+                        &value,
+                        "Value mismatch for key {}",
+                        key
+                    );
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Verify final state - should have all keys
+        let expected_total = num_threads * operations_per_thread;
+        let storage = provider.storage.lock().unwrap();
+        let actual_count = storage.len();
+
+        assert_eq!(
+            actual_count, expected_total,
+            "Expected {} keys but found {}",
+            expected_total, actual_count
+        );
+
+        println!(
+            "✓ Concurrent access test passed: {} threads × {} operations = {} total keys",
+            num_threads, operations_per_thread, actual_count
+        );
+    }
+
+    #[test]
+    fn test_concurrent_read_heavy_workload() {
+        use std::sync::Arc;
+        use std::thread;
+        use std::time::Instant;
+
+        let provider = Arc::new(MockProvider::new());
+        let project = "read-heavy-test";
+        let profile = "default";
+
+        // Pre-populate with test data
+        let num_keys = 100;
+        for i in 0..num_keys {
+            let key = format!("key-{}", i);
+            let value = format!("value-{}", i);
+            let secret = SecretString::new(value.into());
+            provider.set(project, &key, &secret, profile).unwrap();
+        }
+
+        let num_reader_threads = 20;
+        let reads_per_thread = 200;
+        let start_time = Instant::now();
+
+        let mut handles = vec![];
+
+        for thread_id in 0..num_reader_threads {
+            let provider = Arc::clone(&provider);
+
+            let handle = thread::spawn(move || {
+                for read_id in 0..reads_per_thread {
+                    let key_index = (thread_id + read_id) % num_keys;
+                    let key = format!("key-{}", key_index);
+                    let expected_value = format!("value-{}", key_index);
+
+                    let result = provider.get(project, &key, profile).unwrap();
+                    assert!(result.is_some(), "Key {} should exist", key);
+                    assert_eq!(
+                        result.unwrap().expose_secret(),
+                        &expected_value,
+                        "Value mismatch for key {}",
+                        key
+                    );
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        // Wait for all readers to complete
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let elapsed = start_time.elapsed();
+        let total_reads = num_reader_threads * reads_per_thread;
+        let reads_per_second = total_reads as f64 / elapsed.as_secs_f64();
+
+        println!(
+            "✓ Read-heavy test: {} reads in {:?} ({:.0} reads/sec)",
+            total_reads, elapsed, reads_per_second
+        );
+
+        // Performance assertion - should handle at least 1000 reads/sec
+        assert!(
+            reads_per_second > 1000.0,
+            "Performance too slow: {:.0} reads/sec (expected > 1000)",
+            reads_per_second
+        );
+    }
+
+    #[test]
+    fn test_mixed_concurrent_workload() {
+        use std::sync::Arc;
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        let provider = Arc::new(MockProvider::new());
+        let project = "mixed-workload-test";
+        let profile = "default";
+
+        // Pre-populate with some initial data
+        for i in 0..50 {
+            let key = format!("initial-key-{}", i);
+            let value = format!("initial-value-{}", i);
+            let secret = SecretString::new(value.into());
+            provider.set(project, &key, &secret, profile).unwrap();
+        }
+
+        let num_writer_threads = 5;
+        let num_reader_threads = 15;
+        let operations_per_thread = 100;
+        let start_time = Instant::now();
+
+        let mut handles = vec![];
+
+        // Writer threads
+        for thread_id in 0..num_writer_threads {
+            let provider = Arc::clone(&provider);
+
+            let handle = thread::spawn(move || {
+                for op_id in 0..operations_per_thread {
+                    let key = format!("writer-{}-key-{}", thread_id, op_id);
+                    let value = format!("writer-{}-value-{}", thread_id, op_id);
+                    let secret = SecretString::new(value.into());
+
+                    provider.set(project, &key, &secret, profile).unwrap();
+
+                    // Simulate some processing time
+                    thread::sleep(Duration::from_millis(2));
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        // Reader threads
+        for thread_id in 0..num_reader_threads {
+            let provider = Arc::clone(&provider);
+
+            let handle = thread::spawn(move || {
+                for op_id in 0..operations_per_thread {
+                    // Try to read existing keys
+                    let key_index = (thread_id + op_id) % 50;
+                    let key = format!("initial-key-{}", key_index);
+
+                    let result = provider.get(project, &key, profile).unwrap();
+                    assert!(result.is_some(), "Initial key {} should exist", key);
+
+                    // Small delay to allow more interleaving
+                    thread::sleep(Duration::from_millis(1));
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let elapsed = start_time.elapsed();
+        let total_operations = (num_writer_threads + num_reader_threads) * operations_per_thread;
+        let ops_per_second = total_operations as f64 / elapsed.as_secs_f64();
+
+        // Verify we have the expected number of keys
+        let storage = provider.storage.lock().unwrap();
+        let expected_keys = 50 + (num_writer_threads * operations_per_thread); // initial + written
+        assert_eq!(
+            storage.len(),
+            expected_keys,
+            "Expected {} keys but found {}",
+            expected_keys,
+            storage.len()
+        );
+
+        println!(
+            "✓ Mixed workload test: {} operations in {:?} ({:.0} ops/sec)",
+            total_operations, elapsed, ops_per_second
+        );
+
+        // Performance assertion - should handle reasonable throughput
+        assert!(
+            ops_per_second > 500.0,
+            "Performance too slow: {:.0} ops/sec (expected > 500)",
+            ops_per_second
+        );
+    }
+
+    #[test]
+    fn test_provider_thread_safety() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let provider = Arc::new(MockProvider::new());
+        let project = "thread-safety-test";
+        let profile = "default";
+
+        // Test that the same provider instance can be safely shared across threads
+        let num_threads = 8;
+        let mut handles = vec![];
+
+        for thread_id in 0..num_threads {
+            let provider = Arc::clone(&provider);
+
+            let handle = thread::spawn(move || {
+                // Each thread sets and gets its own unique key
+                let key = format!("thread-{}-key", thread_id);
+                let value = format!("thread-{}-value", thread_id);
+                let secret = SecretString::new(value.clone().into());
+
+                // Set the value
+                provider.set(project, &key, &secret, profile).unwrap();
+
+                // Immediately try to get it back
+                let result = provider.get(project, &key, profile).unwrap();
+                assert!(
+                    result.is_some(),
+                    "Key {} should exist immediately after setting",
+                    key
+                );
+                assert_eq!(
+                    result.unwrap().expose_secret(),
+                    &value,
+                    "Value should match for key {}",
+                    key
+                );
+
+                // Try multiple get operations
+                for _ in 0..10 {
+                    let result = provider.get(project, &key, profile).unwrap();
+                    assert!(result.is_some(), "Key {} should remain accessible", key);
+                    assert_eq!(
+                        result.unwrap().expose_secret(),
+                        &value,
+                        "Value should remain consistent for key {}",
+                        key
+                    );
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Verify all keys are present and correct
+        for thread_id in 0..num_threads {
+            let key = format!("thread-{}-key", thread_id);
+            let expected_value = format!("thread-{}-value", thread_id);
+
+            let result = provider.get(project, &key, profile).unwrap();
+            assert!(
+                result.is_some(),
+                "Key {} should exist after all threads complete",
+                key
+            );
+            assert_eq!(
+                result.unwrap().expose_secret(),
+                &expected_value,
+                "Final value should be correct for key {}",
+                key
+            );
+        }
+
+        println!(
+            "✓ Thread safety test passed: {} threads completed successfully",
+            num_threads
+        );
+    }
+
+    #[test]
+    fn test_performance_baseline_measurements() {
+        use std::time::Instant;
+
+        let provider = MockProvider::new();
+        let project = "perf-baseline";
+        let profile = "default";
+
+        // Test single operation performance
+        let key = "perf-test-key";
+        let value = "perf-test-value";
+        let secret = SecretString::new(value.into());
+
+        // Measure set operation
+        let start = Instant::now();
+        provider.set(project, key, &secret, profile).unwrap();
+        let set_duration = start.elapsed();
+
+        // Measure get operation
+        let start = Instant::now();
+        let result = provider.get(project, key, profile).unwrap();
+        let get_duration = start.elapsed();
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().expose_secret(), value);
+
+        // Measure batch operations
+        let batch_size = 1000;
+        let start = Instant::now();
+
+        for i in 0..batch_size {
+            let batch_key = format!("batch-key-{}", i);
+            let batch_value = format!("batch-value-{}", i);
+            let batch_secret = SecretString::new(batch_value.into());
+            provider
+                .set(project, &batch_key, &batch_secret, profile)
+                .unwrap();
+        }
+
+        let batch_set_duration = start.elapsed();
+        let avg_set_time = batch_set_duration / batch_size;
+
+        // Measure batch gets
+        let start = Instant::now();
+
+        for i in 0..batch_size {
+            let batch_key = format!("batch-key-{}", i);
+            let result = provider.get(project, &batch_key, profile).unwrap();
+            assert!(result.is_some());
+        }
+
+        let batch_get_duration = start.elapsed();
+        let avg_get_time = batch_get_duration / batch_size;
+
+        println!("✓ Performance baseline measurements:");
+        println!("  Single set: {:?}", set_duration);
+        println!("  Single get: {:?}", get_duration);
+        println!("  Average set ({}): {:?}", batch_size, avg_set_time);
+        println!("  Average get ({}): {:?}", batch_size, avg_get_time);
+        println!(
+            "  Batch set throughput: {:.0} ops/sec",
+            batch_size as f64 / batch_set_duration.as_secs_f64()
+        );
+        println!(
+            "  Batch get throughput: {:.0} ops/sec",
+            batch_size as f64 / batch_get_duration.as_secs_f64()
+        );
+
+        // Performance assertions - should be very fast for in-memory operations
+        assert!(
+            set_duration.as_micros() < 1000,
+            "Set operation too slow: {:?}",
+            set_duration
+        );
+        assert!(
+            get_duration.as_micros() < 1000,
+            "Get operation too slow: {:?}",
+            get_duration
+        );
+        assert!(
+            avg_set_time.as_micros() < 100,
+            "Average set too slow: {:?}",
+            avg_set_time
+        );
+        assert!(
+            avg_get_time.as_micros() < 100,
+            "Average get too slow: {:?}",
+            avg_get_time
+        );
+    }
 }

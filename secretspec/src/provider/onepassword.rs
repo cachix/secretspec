@@ -1,5 +1,6 @@
 use crate::provider::Provider;
 use crate::{Result, SecretSpecError};
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use url::Url;
@@ -385,7 +386,7 @@ impl OnePasswordProvider {
         &self,
         project: &str,
         key: &str,
-        value: &str,
+        value: &SecretString,
         profile: &str,
     ) -> OnePasswordItemTemplate {
         OnePasswordItemTemplate {
@@ -405,7 +406,7 @@ impl OnePasswordProvider {
                 OnePasswordFieldTemplate {
                     label: "value".to_string(),
                     field_type: "STRING".to_string(),
-                    value: value.to_string(),
+                    value: value.expose_secret().to_string(),
                 },
             ],
             tags: vec!["automated".to_string(), project.to_string()],
@@ -441,7 +442,7 @@ impl Provider for OnePasswordProvider {
     /// - Authentication required if not signed in
     /// - Item retrieval failures
     /// - JSON parsing errors
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<String>> {
+    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
         // Check authentication status first
         if !self.whoami()? {
             return Err(SecretSpecError::ProviderOperationFailed(
@@ -465,14 +466,20 @@ impl Provider for OnePasswordProvider {
                 // Look for the "value" field
                 for field in &item.fields {
                     if field.label.as_deref() == Some("value") {
-                        return Ok(field.value.clone());
+                        return Ok(field
+                            .value
+                            .as_ref()
+                            .map(|v| SecretString::new(v.clone().into())));
                     }
                 }
 
                 // Fallback: look for password field or first concealed field
                 for field in &item.fields {
                     if field.field_type == "CONCEALED" || field.id == "password" {
-                        return Ok(field.value.clone());
+                        return Ok(field
+                            .value
+                            .as_ref()
+                            .map(|v| SecretString::new(v.clone().into())));
                     }
                 }
 
@@ -507,7 +514,7 @@ impl Provider for OnePasswordProvider {
     /// - Authentication required if not signed in
     /// - Item creation/update failures
     /// - Temporary file creation errors
-    fn set(&self, project: &str, key: &str, value: &str, profile: &str) -> Result<()> {
+    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
         // Check authentication status first
         if !self.whoami()? {
             return Err(SecretSpecError::ProviderOperationFailed(
@@ -522,7 +529,7 @@ impl Provider for OnePasswordProvider {
         // First, try to update existing item
         if let Ok(Some(_)) = self.get(project, key, profile) {
             // Item exists, update it
-            let field_assignment = format!("value={}", value);
+            let field_assignment = format!("value={}", value.expose_secret());
             let args = vec![
                 "item",
                 "edit",

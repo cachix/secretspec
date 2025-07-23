@@ -1,6 +1,7 @@
 use super::Provider;
 use crate::{Result, SecretSpecError};
 use keyring::Entry;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -108,12 +109,12 @@ impl Provider for KeyringProvider {
     /// * `Ok(Some(String))` - The secret value if found
     /// * `Ok(None)` - If the secret doesn't exist
     /// * `Err` - If there was an error accessing the keychain
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<String>> {
+    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
         let service = format!("secretspec/{}/{}/{}", project, profile, key);
 
         let entry = Entry::new(&service, &whoami::username())?;
         match entry.get_password() {
-            Ok(password) => Ok(Some(password)),
+            Ok(password) => Ok(Some(SecretString::new(password.into()))),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -138,11 +139,11 @@ impl Provider for KeyringProvider {
     ///
     /// * `Ok(())` - If the secret was stored successfully
     /// * `Err` - If there was an error accessing the keychain
-    fn set(&self, project: &str, key: &str, value: &str, profile: &str) -> Result<()> {
+    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
         let service = format!("secretspec/{}/{}/{}", project, profile, key);
 
         let entry = Entry::new(&service, &whoami::username())?;
-        entry.set_password(value)?;
+        entry.set_password(value.expose_secret())?;
         Ok(())
     }
 }

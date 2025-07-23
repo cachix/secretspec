@@ -1,6 +1,7 @@
 //! Validation results for secret checking
 
 use crate::config::Resolved;
+use secrecy::SecretString;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -10,7 +11,7 @@ use std::fmt;
 /// which secrets are present, missing, or using default values.
 pub struct ValidatedSecrets {
     /// Resolved secrets with provider and profile information
-    pub resolved: Resolved<HashMap<String, String>>,
+    pub resolved: Resolved<HashMap<String, SecretString>>,
     /// List of optional secrets that are missing
     pub missing_optional: Vec<String>,
     /// List of secrets using their default values (name, default_value)

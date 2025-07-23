@@ -51,6 +51,7 @@
 //! ```
 
 use crate::{Result, SecretSpecError};
+use secrecy::SecretString;
 use std::convert::TryFrom;
 use url::Url;
 
@@ -179,7 +180,7 @@ pub trait Provider: Send + Sync {
     ///     None => println!("DATABASE_URL not found"),
     /// }
     /// ```
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<String>>;
+    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>>;
 
     /// Stores a secret value in the provider.
     ///
@@ -204,7 +205,7 @@ pub trait Provider: Send + Sync {
     /// ```rust,ignore
     /// provider.set("myapp", "API_KEY", "secret123", "production")?;
     /// ```
-    fn set(&self, project: &str, key: &str, value: &str, profile: &str) -> Result<()>;
+    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()>;
 
     /// Returns whether this provider supports setting values.
     ///

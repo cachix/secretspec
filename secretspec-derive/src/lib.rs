@@ -524,13 +524,14 @@ fn generate_secret_assignment(
 ) -> proc_macro2::TokenStream {
     if is_optional {
         quote! {
-            #field_name: #source.get(#secret_name).cloned()
+            #field_name: #source.get(#secret_name).map(|s| s.expose_secret().to_string())
         }
     } else {
         quote! {
             #field_name: #source.get(#secret_name)
                 .ok_or_else(|| secretspec::SecretSpecError::RequiredSecretMissing(#secret_name.to_string()))?
-                .clone()
+                .expose_secret()
+                .to_string()
         }
     }
 }
@@ -1431,6 +1432,8 @@ fn generate_secret_spec_code(config: Config) -> proc_macro2::TokenStream {
 
     // Combine all components
     quote! {
+        use ::secrecy::ExposeSecret;
+
         #secret_spec_struct
         #secret_spec_profile_enum
         #profile_code

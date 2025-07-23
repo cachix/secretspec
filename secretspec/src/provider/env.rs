@@ -1,5 +1,6 @@
 use super::Provider;
 use crate::{Result, SecretSpecError};
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::env;
 use url::Url;
@@ -138,8 +139,8 @@ impl Provider for EnvProvider {
     /// let value = provider.get("myproject", "MY_SECRET", "production").unwrap();
     /// assert_eq!(value, Some("value123".to_string()));
     /// ```
-    fn get(&self, _project: &str, key: &str, _profile: &str) -> Result<Option<String>> {
-        Ok(env::var(key).ok())
+    fn get(&self, _project: &str, key: &str, _profile: &str) -> Result<Option<SecretString>> {
+        Ok(env::var(key).ok().map(|v| SecretString::new(v.into())))
     }
 
     /// Attempts to set a secret value (always fails).
@@ -168,7 +169,7 @@ impl Provider for EnvProvider {
     /// let result = provider.set("myproject", "MY_SECRET", "value", "production");
     /// assert!(result.is_err());
     /// ```
-    fn set(&self, _project: &str, _key: &str, _value: &str, _profile: &str) -> Result<()> {
+    fn set(&self, _project: &str, _key: &str, _value: &SecretString, _profile: &str) -> Result<()> {
         // Environment variables are read-only in this backend
         // Setting environment variables at runtime doesn't persist across processes
         Err(crate::SecretSpecError::ProviderOperationFailed(

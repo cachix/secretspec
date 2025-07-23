@@ -1,5 +1,6 @@
 use crate::provider::Provider;
 use crate::{Result, SecretSpecError};
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -300,7 +301,7 @@ impl Provider for LastPassProvider {
     ///
     /// - Returns an error if not logged in to LastPass
     /// - Returns an error if the LastPass CLI fails
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<String>> {
+    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
         self.check_if_logged_in()?;
 
         let item_name = self.format_item_name(project, key, profile);
@@ -311,7 +312,7 @@ impl Provider for LastPassProvider {
                 if password.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(password.to_string()))
+                    Ok(Some(SecretString::new(password.to_string().into())))
                 }
             }
             Err(SecretSpecError::ProviderOperationFailed(msg))
@@ -351,7 +352,7 @@ impl Provider for LastPassProvider {
     /// The method uses non-interactive mode and disables pinentry to avoid
     /// GUI prompts. The secret value is passed via stdin to avoid exposing
     /// it in the process list.
-    fn set(&self, project: &str, key: &str, value: &str, profile: &str) -> Result<()> {
+    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
         self.check_if_logged_in()?;
 
         let item_name = self.format_item_name(project, key, profile);
@@ -378,7 +379,7 @@ impl Provider for LastPassProvider {
                 .spawn()?;
 
             if let Some(stdin) = child.stdin.as_mut() {
-                stdin.write_all(value.as_bytes())?;
+                stdin.write_all(value.expose_secret().as_bytes())?;
             }
 
             let output = child.wait_with_output()?;
@@ -409,7 +410,7 @@ impl Provider for LastPassProvider {
                 .spawn()?;
 
             if let Some(stdin) = child.stdin.as_mut() {
-                stdin.write_all(value.as_bytes())?;
+                stdin.write_all(value.expose_secret().as_bytes())?;
             }
 
             let output = child.wait_with_output()?;

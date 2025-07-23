@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Integrate `secrecy` crate for secure secret handling with automatic memory zeroing
+
 ### Changed
 - Made keyring provider optional via `keyring` feature flag (enabled by default)
 

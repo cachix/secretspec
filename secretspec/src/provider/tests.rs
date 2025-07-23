@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::provider::Provider;
+use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::{Arc, Mutex};
@@ -21,16 +22,18 @@ impl MockProvider {
 }
 
 impl Provider for MockProvider {
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<String>> {
+    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
         let storage = self.storage.lock().unwrap();
         let full_key = format!("{}/{}/{}", project, profile, key);
-        Ok(storage.get(&full_key).cloned())
+        Ok(storage
+            .get(&full_key)
+            .map(|v| SecretString::new(v.clone().into())))
     }
 
-    fn set(&self, project: &str, key: &str, value: &str, profile: &str) -> Result<()> {
+    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
         let mut storage = self.storage.lock().unwrap();
         let full_key = format!("{}/{}/{}", project, profile, key);
-        storage.insert(full_key, value.to_string());
+        storage.insert(full_key, value.expose_secret().to_string());
         Ok(())
     }
 
@@ -260,7 +263,7 @@ mod integration_tests {
         }
 
         // Test 2: Try to set a secret (may fail for read-only providers)
-        let test_value = format!("test_password_{}", provider_name);
+        let test_value = SecretString::new(format!("test_password_{}", provider_name).into());
 
         if provider.allows_set() {
             // Provider claims to support set, so it should work
@@ -282,7 +285,8 @@ mod integration_tests {
             match retrieved {
                 Some(value) => {
                     assert_eq!(
-                        value, test_value,
+                        value.expose_secret(),
+                        test_value.expose_secret(),
                         "[{}] Retrieved value should match set value",
                         provider_name
                     );
@@ -340,8 +344,9 @@ mod integration_tests {
         let project_name = generate_test_project_name();
 
         for (key, value) in &test_cases {
+            let secret_value = SecretString::new(value.to_string().into());
             provider
-                .set(&project_name, key, value, "default")
+                .set(&project_name, key, &secret_value, "default")
                 .expect("Mock provider should handle all characters");
 
             let result = provider
@@ -349,8 +354,8 @@ mod integration_tests {
                 .expect("Should not error when getting");
 
             assert_eq!(
-                result.as_deref(),
-                Some(*value),
+                result.map(|s| s.expose_secret().to_string()),
+                Some(value.to_string()),
                 "Special characters should be preserved"
             );
         }
@@ -364,7 +369,7 @@ mod integration_tests {
         let test_key = "API_KEY";
 
         for profile in &profiles {
-            let value = format!("key_for_{}", profile);
+            let value = SecretString::new(format!("key_for_{}", profile).into());
             provider
                 .set(&project_name, test_key, &value, profile)
                 .expect("Should set with profile");
@@ -373,7 +378,11 @@ mod integration_tests {
                 .get(&project_name, test_key, profile)
                 .expect("Should get with profile");
 
-            assert_eq!(result, Some(value), "Profile-specific value should match");
+            assert_eq!(
+                result.map(|s| s.expose_secret().to_string()),
+                Some(value.expose_secret().to_string()),
+                "Profile-specific value should match"
+            );
         }
 
         // Verify isolation between profiles
@@ -388,7 +397,7 @@ mod integration_tests {
                 } else {
                     let expected_value = format!("key_for_{}", profiles[j]);
                     assert_eq!(
-                        result,
+                        result.map(|s| s.expose_secret().to_string()),
                         Some(expected_value),
                         "Should find profile-specific value"
                     );

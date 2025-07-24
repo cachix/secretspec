@@ -149,7 +149,33 @@ check_success "Set secret in production profile"
 secretspec config show > /dev/null
 check_success "Config show command works"
 
-# Test 11: Default value handling
+# Test 11: Init from provider
+# Create a .env file to import from
+cat > .env.source << EOF
+API_KEY=test-api-key
+DATABASE_URL=postgres://localhost/test
+EOF
+
+# Test init with bare provider name
+rm -f secretspec.toml
+secretspec init --from dotenv:.env.source
+check_success "Init from dotenv provider with path"
+
+# Verify secrets were imported
+grep -q "API_KEY" secretspec.toml && grep -q "DATABASE_URL" secretspec.toml
+check_success "Init imported secrets from .env file"
+
+# Test init with bare provider name (should use default .env)
+echo "DEFAULT_KEY=default-value" > .env
+rm -f secretspec.toml
+secretspec init --from dotenv
+check_success "Init from dotenv provider (bare name)"
+
+# Verify it found the default .env
+grep -q "DEFAULT_KEY" secretspec.toml
+check_success "Init found default .env file"
+
+# Test 12: Default value handling
 cat > secretspec.toml << EOF
 [project]
 name = "test-app"

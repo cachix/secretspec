@@ -52,6 +52,7 @@
 
 use crate::{Result, SecretSpecError};
 use secrecy::SecretString;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use url::Url;
 
@@ -234,6 +235,32 @@ pub trait Provider: Send + Sync {
     ///
     /// This should match the name registered with the provider macro.
     fn name(&self) -> &'static str;
+
+    /// Discovers and returns all secrets available in this provider.
+    ///
+    /// This method is used to introspect the provider and find all available secrets.
+    /// It's particularly useful for importing secrets from external sources.
+    ///
+    /// # Returns
+    ///
+    /// A HashMap where keys are secret names and values are `Secret` configurations.
+    /// The default implementation returns an empty map, indicating the provider
+    /// doesn't support reflection.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let secrets = provider.reflect()?;
+    /// for (name, secret) in secrets {
+    ///     println!("Found secret: {} = {:?}", name, secret);
+    /// }
+    /// ```
+    fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
+        Err(SecretSpecError::ProviderOperationFailed(format!(
+            "Provider '{}' does not support reflection",
+            self.name()
+        )))
+    }
 }
 
 impl TryFrom<String> for Box<dyn Provider> {

@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Integrate `secrecy` crate for secure secret handling with automatic memory zeroing
+- Add `reflect()` method to Provider trait for provider introspection
 
 ### Changed
 - Made keyring provider optional via `keyring` feature flag (enabled by default)
+- Unified provider parsing logic in init command to support all provider formats consistently
 
 ## [0.2.0] - 2025-07-17
 

@@ -1,4 +1,4 @@
-use crate::provider::{dotenv::DotEnvProvider, providers};
+use crate::provider::{Provider, providers};
 use crate::{Config, GlobalConfig, GlobalDefaults, Profile, Project, Secrets};
 use clap::{Parser, Subcommand};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
@@ -206,26 +206,20 @@ pub fn main() -> Result<()> {
                 }
             }
 
-            // Parse the provider URL
-            let uri = from
-                .parse::<url::Url>()
-                .map_err(|e| miette!("Invalid provider URL '{}': {}", from, e))?;
+            // Create provider from the specification string
+            // This handles various formats like "dotenv", "dotenv:.env", "dotenv://.env.production"
+            let provider: Box<dyn Provider> = from.as_str().try_into().into_diagnostic()?;
 
-            // Extract scheme from URI to validate provider
-            let scheme = uri.scheme();
-
-            // Currently only support dotenv provider
-            if scheme != "dotenv" {
+            // Check if it's a dotenv provider
+            if provider.name() != "dotenv" {
                 return Err(miette!(
-                    "Only 'dotenv://' provider URLs are currently supported for init --from. Got: {}",
-                    from
+                    "Only 'dotenv' provider is currently supported for init --from. Got provider: {}",
+                    provider.name()
                 ));
             }
 
-            // Create dotenv provider and reflect secrets
-            let dotenv_config = (&uri).try_into().into_diagnostic()?;
-            let dotenv_provider = DotEnvProvider::new(dotenv_config);
-            let secrets = dotenv_provider.reflect().into_diagnostic()?;
+            // Reflect secrets from the provider
+            let secrets = provider.reflect().into_diagnostic()?;
 
             // Create a new project config
             let mut profiles = HashMap::new();
@@ -266,6 +260,13 @@ pub fn main() -> Result<()> {
                 .map(|p| p.secrets.len())
                 .sum::<usize>();
             println!("✓ Created secretspec.toml with {} secrets", secret_count);
+
+            // If we imported from a provider, suggest migration
+            if provider.name() == "dotenv" && secret_count > 0 {
+                println!("\nTo migrate your secrets from {}:", from);
+                println!("  1. Review secretspec.toml and adjust as needed");
+                println!("  2. secretspec import {}    # Import secret values", from);
+            }
 
             println!("\nNext steps:");
             println!("  1. secretspec config init    # Set up user configuration");

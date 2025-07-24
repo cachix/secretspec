@@ -441,9 +441,10 @@ fn field_name_ident(name: &str) -> proc_macro2::Ident {
 
 /// Helper function to check if a secret is optional.
 ///
-/// A secret is considered optional if:
-/// - It has `required = false` in the config, OR
-/// - It has a default value specified
+/// A secret is considered optional only if:
+/// - It has `required = false` in the config
+///
+/// Having a default value does not make a secret optional.
 ///
 /// # Arguments
 ///
@@ -453,7 +454,7 @@ fn field_name_ident(name: &str) -> proc_macro2::Ident {
 ///
 /// `true` if the secret is optional, `false` if required
 fn is_secret_optional(secret_config: &Secret) -> bool {
-    !secret_config.required || secret_config.default.is_some()
+    !secret_config.required
 }
 
 /// Determines if a field should be optional across all profiles.

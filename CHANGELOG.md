@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Made keyring provider optional via `keyring` feature flag (enabled by default)
 - Unified provider parsing logic in init command to support all provider formats consistently
+- Fixed secret optionality logic: having a default value no longer makes a secret optional in generated types
 
 ## [0.2.0] - 2025-07-17
 

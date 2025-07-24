@@ -42,7 +42,7 @@ mod profile_generation {
                     redis_url,
                 } => {
                     let _: Option<String> = api_key; // Optional in dev
-                    let _: Option<String> = database_url; // Required but has default
+                    let _: String = database_url; // Required but has default
                     let _: Option<String> = redis_url; // Optional
                 }
                 _ => panic!("Expected Development variant"),
@@ -70,7 +70,7 @@ mod profile_generation {
         // Verify the union struct has Option for fields that are optional in any profile
         fn _test_field_types(s: SecretSpec) {
             let _: Option<String> = s.api_key; // Optional in development
-            let _: Option<String> = s.database_url; // Has default in dev, so optional in union type
+            let _: String = s.database_url; // Has default in dev but still required
             let _: Option<String> = s.redis_url; // Optional by default
         }
     }
@@ -85,7 +85,7 @@ mod complex_generation {
     fn test_complex_field_types() {
         fn _test_field_types(s: SecretSpec) {
             let _: String = s.always_required;
-            let _: Option<String> = s.required_with_default; // Has default
+            let _: String = s.required_with_default; // Has default but still required
             let _: Option<String> = s.always_optional;
             let _: Option<String> = s.complex_secret; // Optional in dev and test
             let _: Option<String> = s.multi_profile; // Optional in base
@@ -199,8 +199,8 @@ mod profile_inheritance {
                 } => {
                     let _: String = database_url; // Required
                     let _: String = api_key; // Required
-                    let _: Option<String> = log_level; // Optional with default
-                    let _: Option<String> = cache_ttl; // Optional with default
+                    let _: Option<String> = log_level; // Optional (required=false) with default
+                    let _: Option<String> = cache_ttl; // Optional (required=false) with default
                 }
                 _ => panic!("Expected Default variant"),
             }
@@ -212,8 +212,8 @@ mod profile_inheritance {
                     database_url,
                     debug_mode,
                 } => {
-                    let _: Option<String> = database_url; // Override: not required with default
-                    let _: Option<String> = debug_mode; // New field in development
+                    let _: Option<String> = database_url; // Override: required=false with default
+                    let _: Option<String> = debug_mode; // New field in development (required=false)
                 }
                 _ => panic!("Expected Development variant"),
             }
@@ -228,7 +228,7 @@ mod profile_inheritance {
                 } => {
                     let _: String = database_url; // Override: required
                     let _: String = api_key; // Override: required
-                    let _: Option<String> = log_level; // Override: different default
+                    let _: Option<String> = log_level; // Override: required=false with different default
                 }
                 _ => panic!("Expected Production variant"),
             }
@@ -242,8 +242,8 @@ mod profile_inheritance {
                     enable_profiling,
                 } => {
                     let _: String = database_url; // Override: required
-                    let _: Option<String> = log_level; // Override: different default
-                    let _: Option<String> = enable_profiling; // New field in staging
+                    let _: Option<String> = log_level; // Override: required=false with different default
+                    let _: Option<String> = enable_profiling; // New field in staging (required=false)
                 }
                 _ => panic!("Expected Staging variant"),
             }

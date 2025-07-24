@@ -531,13 +531,13 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         };
         assert!(!is_secret_optional(&required_no_default));
 
-        // Required with default (should be optional)
+        // Required with default (should NOT be optional)
         let required_with_default = Secret {
             description: Some("Required with default".to_string()),
             required: true,
             default: Some("default_value".to_string()),
         };
-        assert!(is_secret_optional(&required_with_default));
+        assert!(!is_secret_optional(&required_with_default));
 
         // Not required
         let not_required = Secret {
@@ -633,8 +633,8 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             profiles,
         };
 
-        // API_KEY is optional because it has default in development
-        assert!(is_field_optional_across_profiles("API_KEY", &config));
+        // API_KEY is NOT optional (required in all profiles, default doesn't make it optional)
+        assert!(!is_field_optional_across_profiles("API_KEY", &config));
 
         // DATABASE_URL is optional because it's not required in default
         assert!(is_field_optional_across_profiles("DATABASE_URL", &config));

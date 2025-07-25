@@ -1,4 +1,5 @@
 .devenv*
-.pre-commit*
+.pre-commit-hooks.yaml
 .direnv
 target
+.DS_Store

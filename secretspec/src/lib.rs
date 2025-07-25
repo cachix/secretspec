@@ -65,6 +65,7 @@ pub use config::Secret;
 
 // Public API exports
 pub use error::{Result, SecretSpecError};
+pub use provider::Provider;
 pub use secrets::Secrets;
 pub use validation::ValidatedSecrets;
 

@@ -1099,14 +1099,14 @@ mod builder_generation {
     ///
     /// ```ignore
     /// pub struct SecretSpecBuilder {
-    ///     provider: Option<Box<dyn FnOnce() -> Result<url::Url, String>>>,
+    ///     provider: Option<Box<dyn FnOnce() -> Result<Box<dyn secretspec::Provider>, String>>>,
     ///     profile: Option<Box<dyn FnOnce() -> Result<Profile, String>>>,
     /// }
     /// ```
     pub fn generate_struct() -> proc_macro2::TokenStream {
         quote! {
             pub struct SecretSpecBuilder {
-                provider: Option<Box<dyn FnOnce() -> Result<url::Url, String>>>,
+                provider: Option<Box<dyn FnOnce() -> Result<Box<dyn secretspec::Provider>, String>>>,
                 profile: Option<Box<dyn FnOnce() -> Result<Profile, String>>>,
             }
         }
@@ -1149,18 +1149,13 @@ mod builder_generation {
 
                 pub fn with_provider<T>(mut self, provider: T) -> Self
                 where
-                    T: TryInto<url::Url>,
-                    T::Error: std::fmt::Display,
+                    T: TryInto<Box<dyn secretspec::Provider>> + 'static,
+                    T::Error: std::fmt::Display + 'static,
                 {
-                    match provider.try_into() {
-                        Ok(url) => {
-                            self.provider = Some(Box::new(move || Ok(url)));
-                        }
-                        Err(e) => {
-                            let error_msg = format!("Invalid provider URI: {}", e);
-                            self.provider = Some(Box::new(move || Err(error_msg)));
-                        }
-                    }
+                    self.provider = Some(Box::new(move || {
+                        provider.try_into()
+                            .map_err(|e| format!("Invalid provider: {}", e))
+                    }));
                     self
                 }
 
@@ -1194,17 +1189,18 @@ mod builder_generation {
     ///
     /// # Generated Logic
     ///
-    /// 1. If provider is set, call the closure to get the URI
+    /// 1. If provider is set, call the closure to get the Provider instance
     /// 2. Convert any errors to SecretSpecError
-    /// 3. Convert URI to string for the loading system
+    /// 3. Extract the provider name to pass to the loading system
     fn generate_provider_resolution(
         provider_expr: proc_macro2::TokenStream,
     ) -> proc_macro2::TokenStream {
         quote! {
             let provider_str = if let Some(provider_fn) = #provider_expr {
-                let uri = provider_fn()
+                let provider_box = provider_fn()
                     .map_err(|e| secretspec::SecretSpecError::ProviderOperationFailed(e))?;
-                Some(uri.to_string())
+                // Get the provider name to pass as a string to set_provider
+                Some(provider_box.name().to_string())
             } else {
                 None
             };

@@ -17,4 +17,7 @@ install-path = "CARGO_HOME"
 install-updater = true
 
 [dist.dependencies.apt]
-libdbus-1-dev = '*'
+libdbus-1-dev = { version = "*", targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+] }

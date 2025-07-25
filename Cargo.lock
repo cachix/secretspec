@@ -647,7 +647,6 @@ checksum = "1961983669d57bdfe6c0f3ef8e4c229b5ef751afcc7d87e4271d2f71f6ccfa8b"
 dependencies = [
  "byteorder",
  "dbus-secret-service",
- "linux-keyutils",
  "log",
  "security-framework 2.11.1",
  "security-framework 3.2.0",
@@ -703,16 +702,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "linux-keyutils"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "761e49ec5fd8a5a463f9b84e877c373d888935b71c6be78f3767fe2ae6bed18e"
-dependencies = [
- "bitflags 2.9.1",
- "libc",
 ]
 
 [[package]]
@@ -1118,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "secretspec"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "colored",
@@ -1143,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "secretspec-derive"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "http",
  "insta",

@@ -11,9 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integrate `secrecy` crate for secure secret handling with automatic memory zeroing
 - Bitwarden provider supports Bitwarden & Bitwarden Secrets Manager via
   `bitwarden://` & `bws://` URIs with enhanced error message sanitization.
+- Add `reflect()` method to Provider trait for provider introspection
+- Export `Provider` trait from secretspec crate for use in derived code
 
 ### Changed
 - Made keyring provider optional via `keyring` feature flag (enabled by default)
+- Unified provider parsing logic in init command to support all provider formats consistently
+- Downgraded keyring dependency to 3.6.2
+- Updated `with_provider` in derive macro to accept `TryInto<Box<dyn Provider>>` for consistent provider handling
+
+### Fixed
+- Fixed secret optionality logic: having a default value no longer makes a secret optional in generated types
 
 ## [0.2.0] - 2025-07-17
 

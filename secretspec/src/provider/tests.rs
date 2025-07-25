@@ -1644,4 +1644,22 @@ mod integration_tests {
         assert!(result.is_some());
         assert_eq!(result.unwrap().expose_secret(), "string_test");
     }
+
+  #[test]
+  fn test_default_reflect_returns_error() {
+        // Test that the default reflect implementation returns an error
+        let provider = MockProvider::new();
+        let result = provider.reflect();
+        assert!(
+            result.is_err(),
+            "Default reflect implementation should return an error"
+        );
+
+        let error = result.unwrap_err();
+        let error_msg = error.to_string();
+        assert!(
+            error_msg.contains("does not support reflection"),
+            "Error message should indicate reflection is not supported"
+        );
+    }
 }

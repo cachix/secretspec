@@ -156,63 +156,6 @@ impl DotEnvProvider {
     pub fn new(config: DotEnvConfig) -> Self {
         Self { config }
     }
-
-    /// Reflects all secrets available in the .env file as Secret entries.
-    ///
-    /// This method reads the .env file and returns all environment variables
-    /// as Secret entries with default descriptions and all marked as required.
-    /// If the file doesn't exist, returns an empty HashMap.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(HashMap<String, Secret>)` - All environment variables as Secret
-    /// * `Err(SecretSpecError)` - If reading the file fails
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use secretspec::provider::dotenv::{DotEnvProvider, DotEnvConfig};
-    ///
-    /// let provider = DotEnvProvider::new(DotEnvConfig::default());
-    /// let secrets = provider.reflect().unwrap();
-    /// for (key, config) in secrets {
-    ///     println!("Found secret: {} - {}", key, config.description);
-    /// }
-    /// ```
-    pub fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
-        use crate::config::Secret;
-
-        if !self.config.path.exists() {
-            return Ok(HashMap::new());
-        }
-
-        // Check if path is a directory
-        if self.config.path.is_dir() {
-            return Err(SecretSpecError::Io(std::io::Error::new(
-                std::io::ErrorKind::IsADirectory,
-                format!(
-                    "Expected file but found directory: {}",
-                    self.config.path.display()
-                ),
-            )));
-        }
-
-        let mut secrets = HashMap::new();
-        let env_vars = dotenvy::from_path_iter(&self.config.path)?;
-        for item in env_vars {
-            let (key, _value) = item?;
-            secrets.insert(
-                key.clone(),
-                Secret {
-                    description: Some(format!("{} secret", key)),
-                    required: true,
-                    default: None,
-                },
-            );
-        }
-
-        Ok(secrets)
-    }
 }
 
 impl Provider for DotEnvProvider {
@@ -305,6 +248,41 @@ impl Provider for DotEnvProvider {
 
         fs::write(&self.config.path, content)?;
         Ok(())
+    }
+
+    fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
+        use crate::config::Secret;
+
+        if !self.config.path.exists() {
+            return Ok(HashMap::new());
+        }
+
+        // Check if path is a directory
+        if self.config.path.is_dir() {
+            return Err(SecretSpecError::Io(std::io::Error::new(
+                std::io::ErrorKind::IsADirectory,
+                format!(
+                    "Expected file but found directory: {}",
+                    self.config.path.display()
+                ),
+            )));
+        }
+
+        let mut secrets = HashMap::new();
+        let env_vars = dotenvy::from_path_iter(&self.config.path)?;
+        for item in env_vars {
+            let (key, _value) = item?;
+            secrets.insert(
+                key.clone(),
+                Secret {
+                    description: Some(format!("{} secret", key)),
+                    required: true,
+                    default: None,
+                },
+            );
+        }
+
+        Ok(secrets)
     }
 }
 

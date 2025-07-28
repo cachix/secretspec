@@ -21,18 +21,22 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: cachix/install-nix-action@v26
+      - uses: cachix/cachix-action@v14
+        with:
+          name: devenv
+      - name: Install devenv.sh
+        run: nix profile install nixpkgs#devenv
 
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
 
       - name: Publish secretspec crate
-        run: cargo publish -p secretspec
+        run: devenv shell cargo publish -p secretspec
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
       - name: Publish secretspec-derive crate
-        run: cargo publish -p secretspec-derive
+        run: devenv shell cargo publish -p secretspec-derive
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

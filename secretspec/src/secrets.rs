@@ -896,14 +896,14 @@ impl Secrets {
                 missing_required,
                 missing_optional,
                 with_defaults,
-                backend.name().to_string(),
+                backend.uri(),
                 profile_name.to_string(),
             )))
         } else {
             Ok(Ok(ValidatedSecrets {
                 resolved: Resolved::new(
                     secrets,
-                    backend.name().to_string(),
+                    backend.uri(),
                     profile_name.to_string(),
                 ),
                 missing_optional,

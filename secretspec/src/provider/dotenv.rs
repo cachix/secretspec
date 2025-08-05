@@ -162,6 +162,23 @@ impl Provider for DotEnvProvider {
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
+    
+    fn uri(&self) -> String {
+        // Dotenv uses single colon format: dotenv:path
+        // The path can be relative or absolute
+        let path_str = self.config.path.display().to_string();
+        
+        if path_str == ".env" {
+            // Default case - just return "dotenv" 
+            "dotenv".to_string()
+        } else if path_str.starts_with('/') {
+            // Absolute path
+            format!("dotenv:{}", path_str)
+        } else {
+            // Relative path
+            format!("dotenv:{}", path_str)
+        }
+    }
 
     /// Retrieves a secret value from the .env file.
     ///

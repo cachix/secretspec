@@ -1199,8 +1199,8 @@ mod builder_generation {
             let provider_str = if let Some(provider_fn) = #provider_expr {
                 let provider_box = provider_fn()
                     .map_err(|e| secretspec::SecretSpecError::ProviderOperationFailed(e))?;
-                // Get the provider name to pass as a string to set_provider
-                Some(provider_box.name().to_string())
+                // Get the full URI to pass as a string to set_provider (preserves vault info)
+                Some(provider_box.uri())
             } else {
                 None
             };

@@ -9,7 +9,7 @@ use secrecy::{ExposeSecret, SecretString};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::env;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::Path;
 use std::process::Command;
 
@@ -368,7 +368,7 @@ impl Secrets {
         } else {
             // Read from stdin when input is piped
             let mut buffer = String::new();
-            io::stdin().read_line(&mut buffer)?;
+            io::stdin().read_to_string(&mut buffer)?;
             SecretString::new(buffer.trim().to_string().into())
         };
 

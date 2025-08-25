@@ -1,6 +1,6 @@
 //! Core secrets management functionality
 
-use crate::config::{Config, GlobalConfig, Resolved};
+use crate::config::{Config, GlobalConfig, Profile, Resolved};
 use crate::error::{Result, SecretSpecError};
 use crate::provider::Provider as ProviderTrait;
 use crate::validation::{ValidatedSecrets, ValidationErrors};
@@ -173,7 +173,7 @@ impl Secrets {
     /// # Returns
     ///
     /// The resolved profile name
-    pub(crate) fn resolve_profile(&self, profile: Option<&str>) -> String {
+    pub(crate) fn resolve_profile_name(&self, profile: Option<&str>) -> String {
         profile
             .map(|p| p.to_string())
             .or_else(|| self.profile.clone())
@@ -186,37 +186,36 @@ impl Secrets {
             .unwrap_or_else(|| "default".to_string())
     }
 
-    /// Collects all secret names for a given profile, including those from the default profile
-    ///
-    /// This method returns all secrets that are available for the specified profile,
-    /// which includes secrets defined in the profile itself plus any secrets from
-    /// the default profile (unless the profile is already "default").
+    /// Resolves the full profile configuration, merging with default profile if needed
     ///
     /// # Arguments
     ///
-    /// * `profile_name` - The name of the profile to collect secrets for
+    /// * `profile` - Optional profile name to resolve (if None, uses resolved profile name)
     ///
     /// # Returns
     ///
-    /// A HashSet containing all available secret names for the profile
-    fn collect_all_secrets_for_profile(&self, profile_name: &str) -> HashSet<String> {
-        let mut all_secrets = HashSet::new();
+    /// The resolved profile configuration
+    pub(crate) fn resolve_profile(&self, profile: Option<&str>) -> Result<Profile> {
+        let profile_name = profile
+            .map(str::to_string)
+            .unwrap_or_else(|| self.resolve_profile_name(None));
+        let mut profile_config = self
+            .config
+            .profiles
+            .get(&profile_name)
+            .cloned()
+            .ok_or_else(|| {
+                SecretSpecError::SecretNotFound(format!("Profile '{}' not found", profile_name))
+            })?;
 
-        if let Some(profile_config) = self.config.profiles.get(profile_name) {
-            for name in profile_config.secrets.keys() {
-                all_secrets.insert(name.clone());
-            }
-        }
-
+        // If not the default profile, also add secrets from default profile
         if profile_name != "default" {
-            if let Some(default_profile) = self.config.profiles.get("default") {
-                for name in default_profile.secrets.keys() {
-                    all_secrets.insert(name.clone());
-                }
+            if let Some(default_profile) = self.config.profiles.get("default").cloned() {
+                profile_config.merge_with(default_profile);
             }
         }
 
-        all_secrets
+        Ok(profile_config)
     }
 
     /// Resolves the configuration for a specific secret
@@ -238,7 +237,7 @@ impl Secrets {
         name: &str,
         profile: Option<&str>,
     ) -> Option<crate::config::Secret> {
-        let profile_name = self.resolve_profile(profile);
+        let profile_name = self.resolve_profile_name(profile);
 
         let current_secret = self
             .config
@@ -344,8 +343,8 @@ impl Secrets {
     /// ```
     pub fn set(&self, name: &str, value: Option<String>) -> Result<()> {
         // Check if the secret exists in the spec
-        let profile_name = self.resolve_profile(None);
-        let profile_config = self.config.profiles.get(&profile_name).ok_or_else(|| {
+        let profile_name = self.resolve_profile_name(None);
+        let _profile_config = self.config.profiles.get(&profile_name).ok_or_else(|| {
             SecretSpecError::SecretNotFound(format!(
                 "Profile '{}' is not defined in secretspec.toml. Available profiles: {}",
                 profile_name,
@@ -361,9 +360,10 @@ impl Secrets {
         // Check if the secret exists in the profile or is inherited from default
         if self.resolve_secret_config(name, None).is_none() {
             // Collect available secrets from both current profile and default
-            let mut available_secrets = self
-                .collect_all_secrets_for_profile(&profile_name)
+            let profile = self.resolve_profile(Some(&profile_name))?;
+            let mut available_secrets = profile
                 .into_iter()
+                .map(|(name, _)| name)
                 .collect::<Vec<_>>();
             available_secrets.sort();
 
@@ -376,7 +376,6 @@ impl Secrets {
         }
 
         let backend = self.get_provider(None)?;
-        let profile_display = self.resolve_profile(None);
 
         // Check if the provider supports setting values
         if !backend.allows_set() {
@@ -392,7 +391,7 @@ impl Secrets {
             // Use rpassword for single-line input (most common case)
             // For multiline secrets, users should pipe the content
             let secret = rpassword::prompt_password(format!(
-                "Enter value for {name} (profile: {profile_display}): "
+                "Enter value for {name} (profile: {profile_name}): "
             ))?;
             SecretString::new(secret.into())
         } else {
@@ -408,7 +407,7 @@ impl Secrets {
             "✓".green(),
             name,
             backend.name(),
-            profile_display
+            profile_name
         );
 
         Ok(())
@@ -437,7 +436,7 @@ impl Secrets {
     /// - The secret is not found and has no default value
     pub fn get(&self, name: &str) -> Result<()> {
         let backend = self.get_provider(None)?;
-        let profile_name = self.resolve_profile(None);
+        let profile_name = self.resolve_profile_name(None);
         let secret_config = self
             .resolve_secret_config(name, None)
             .ok_or_else(|| SecretSpecError::SecretNotFound(name.to_string()))?;
@@ -487,7 +486,7 @@ impl Secrets {
         interactive: bool,
     ) -> Result<ValidatedSecrets> {
         let backend = self.get_provider(provider_arg.clone())?;
-        let profile_display = self.resolve_profile(profile.as_deref());
+        let profile_display = self.resolve_profile_name(profile.as_deref());
 
         // First validate to see what's missing
         let validation_result = self.validate()?;
@@ -587,7 +586,7 @@ impl Secrets {
     /// ```
     pub fn check(&self) -> Result<()> {
         let provider = self.get_provider(None)?;
-        let profile_display = self.resolve_profile(None);
+        let profile_display = self.resolve_profile_name(None);
 
         println!(
             "Checking secrets in {} using {} (profile: {})...\n",
@@ -596,59 +595,93 @@ impl Secrets {
             profile_display.cyan()
         );
 
-        // First get the initial validation result to display status
-        let initial_validation_result = self.validate()?;
-
-        // We need to handle both success and error cases for display
-        let empty_map = HashMap::new();
-        let (secrets_map, missing_required, missing_optional, with_defaults) =
-            match &initial_validation_result {
-                Ok(valid) => (
-                    &valid.resolved.secrets,
-                    vec![],
-                    valid.missing_optional.clone(),
-                    valid.with_defaults.clone(),
-                ),
-                Err(errors) => (
-                    &empty_map,
-                    errors.missing_required.clone(),
-                    errors.missing_optional.clone(),
-                    errors.with_defaults.clone(),
-                ),
-            };
-
-        // Display status for each secret
-        let profile_name = self.resolve_profile(None);
-        let profile_config = self.config.profiles.get(&profile_name).ok_or_else(|| {
-            SecretSpecError::SecretNotFound(format!("Profile '{}' not found", profile_name))
-        })?;
-
-        // Collect all secrets to display - from current profile and default profile
-        let mut all_secrets_to_display = Vec::new();
-
-        // Add secrets from the current profile
-        for (name, config) in &profile_config.secrets {
-            all_secrets_to_display.push((name.clone(), config.clone()));
-        }
-
-        // If not the default profile, also add secrets from default profile
-        if profile_name != "default" {
-            if let Some(default_profile) = self.config.profiles.get("default") {
-                for (name, config) in &default_profile.secrets {
-                    // Only add if not already in current profile
-                    if !profile_config.secrets.contains_key(name) {
-                        all_secrets_to_display.push((name.clone(), config.clone()));
-                    }
-                }
+        // Validate and display results
+        match self.validate()? {
+            Ok(valid) => {
+                self.display_validation_success(&valid)?;
+            }
+            Err(errors) => {
+                self.display_validation_errors(&errors)?;
             }
         }
 
-        // Sort by name for consistent display
-        all_secrets_to_display.sort_by(|a, b| a.0.cmp(&b.0));
+        // Now ensure all secrets are present (will prompt if needed)
+        self.ensure_secrets(None, None, true)?;
 
-        for (name, config) in all_secrets_to_display {
-            if secrets_map.contains_key(&name) {
-                if with_defaults.iter().any(|(n, _)| n == &name) {
+        Ok(())
+    }
+
+    /// Display validation success results
+    fn display_validation_success(&self, valid: &ValidatedSecrets) -> Result<()> {
+        let profile = self.resolve_profile(Some(&valid.resolved.profile))?;
+        let mut found_count = 0;
+        let default_names = valid
+            .with_defaults
+            .iter()
+            .map(|(name, _)| name)
+            .collect::<HashSet<_>>();
+
+        for (name, config) in profile.iter() {
+            found_count += 1;
+            if config.default.is_some() && default_names.contains(&name) {
+                println!(
+                    "{} {} - {} {}",
+                    "○".yellow(),
+                    name,
+                    config.description.as_deref().unwrap_or("No description"),
+                    "(has default)".yellow()
+                );
+            } else {
+                println!(
+                    "{} {} - {}",
+                    "✓".green(),
+                    name,
+                    config.description.as_deref().unwrap_or("No description")
+                );
+            }
+        }
+
+        println!(
+            "\nSummary: {} found, {} missing",
+            found_count.to_string().green(),
+            0.to_string().red()
+        );
+
+        Ok(())
+    }
+
+    /// Display validation error results
+    fn display_validation_errors(&self, errors: &ValidationErrors) -> Result<()> {
+        let profile = self.resolve_profile(Some(&errors.profile))?;
+        let mut found_count = 0;
+        let mut missing_count = 0;
+        let default_names = errors
+            .with_defaults
+            .iter()
+            .map(|(name, _)| name)
+            .collect::<HashSet<_>>();
+
+        for (name, config) in &profile {
+            if errors.missing_required.contains(&name) {
+                missing_count += 1;
+                println!(
+                    "{} {} - {} {}",
+                    "✗".red(),
+                    name,
+                    config.description.as_deref().unwrap_or("No description"),
+                    "(required)".red()
+                );
+            } else if errors.missing_optional.contains(&name) {
+                println!(
+                    "{} {} - {} {}",
+                    "○".blue(),
+                    name,
+                    config.description.as_deref().unwrap_or("No description"),
+                    "(optional)".blue()
+                );
+            } else {
+                found_count += 1;
+                if default_names.contains(name) {
                     println!(
                         "{} {} - {} {}",
                         "○".yellow(),
@@ -664,36 +697,14 @@ impl Secrets {
                         config.description.as_deref().unwrap_or("No description")
                     );
                 }
-            } else if missing_required.contains(&name) {
-                println!(
-                    "{} {} - {} {}",
-                    "✗".red(),
-                    name,
-                    config.description.as_deref().unwrap_or("No description"),
-                    "(required)".red()
-                );
-            } else if missing_optional.contains(&name) {
-                println!(
-                    "{} {} - {} {}",
-                    "○".blue(),
-                    name,
-                    config.description.as_deref().unwrap_or("No description"),
-                    "(optional)".blue()
-                );
             }
         }
-
-        let found_count = secrets_map.len() - with_defaults.len();
-        let missing_count = missing_required.len();
 
         println!(
             "\nSummary: {} found, {} missing",
             found_count.to_string().green(),
             missing_count.to_string().red()
         );
-
-        // Now ensure all secrets are present (will prompt if needed)
-        self.ensure_secrets(None, None, true)?;
 
         Ok(())
     }
@@ -731,7 +742,7 @@ impl Secrets {
         let to_provider = self.get_provider(None)?;
 
         // Resolve profile (checks env var, then global config, then defaults to "default")
-        let profile_display = self.resolve_profile(None);
+        let profile_display = self.resolve_profile_name(None);
 
         // Create the "from" provider
         let from_provider_instance = Box::<dyn ProviderTrait>::try_from(from_provider.to_string())?;
@@ -744,7 +755,7 @@ impl Secrets {
         );
 
         // Get the profile configuration
-        let profile_config = self.config.profiles.get(&profile_display).ok_or_else(|| {
+        let _profile_config = self.config.profiles.get(&profile_display).ok_or_else(|| {
             SecretSpecError::SecretNotFound(format!("Profile '{}' not found", profile_display))
         })?;
 
@@ -754,14 +765,10 @@ impl Secrets {
 
         // Collect all secrets to import - from current profile and default profile
         // This ensures we can import secrets defined in default profile when using other profiles
-        let all_secrets_to_import = self.collect_all_secrets_for_profile(&profile_display);
+        let profile = self.resolve_profile(Some(&profile_display))?;
 
         // Process each secret using proper profile resolution
-        for name in all_secrets_to_import {
-            // Use resolve_secret_config to get the proper merged configuration
-            let config = self
-                .resolve_secret_config(&name, None)
-                .expect("Secret should exist in config since we're iterating over it");
+        for (name, config) in profile.into_iter() {
             // First check if the secret exists in the "from" provider
             match from_provider_instance.get(&self.config.project.name, &name, &profile_display)? {
                 Some(value) => {
@@ -878,13 +885,14 @@ impl Secrets {
         let mut missing_optional = Vec::new();
         let mut with_defaults = Vec::new();
 
-        let profile_name = self.resolve_profile(None);
-        let profile_config = self.config.profiles.get(&profile_name).ok_or_else(|| {
-            SecretSpecError::SecretNotFound(format!("Profile '{}' not found", profile_name))
-        })?;
+        let profile_name = self.resolve_profile_name(None);
+        let profile = self.resolve_profile(Some(&profile_name))?;
 
         // Collect all secrets to check - from current profile and default profile
-        let all_secrets = self.collect_all_secrets_for_profile(&profile_name);
+        let all_secrets = profile
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<HashSet<_>>();
 
         // Now check all secrets
         for name in all_secrets {

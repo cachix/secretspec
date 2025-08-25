@@ -282,11 +282,37 @@ impl Profile {
             self.secrets.entry(secret_name).or_insert(secret_config);
         }
     }
+
+    /// Returns an iterator over the secrets in this profile.
+    ///
+    /// The iterator yields (&String, &Secret) pairs, where the string is the secret name
+    /// and the Secret contains the configuration for that secret.
+    pub fn iter(&self) -> std::collections::hash_map::Iter<'_, String, Secret> {
+        self.secrets.iter()
+    }
 }
 
 impl Default for Profile {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<'a> IntoIterator for &'a Profile {
+    type Item = (&'a String, &'a Secret);
+    type IntoIter = std::collections::hash_map::Iter<'a, String, Secret>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.secrets.iter()
+    }
+}
+
+impl IntoIterator for Profile {
+    type Item = (String, Secret);
+    type IntoIter = std::collections::hash_map::IntoIter<String, Secret>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.secrets.into_iter()
     }
 }
 

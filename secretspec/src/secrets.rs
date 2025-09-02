@@ -9,7 +9,7 @@ use secrecy::{ExposeSecret, SecretString};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::env;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::Path;
 use std::process::Command;
 
@@ -362,13 +362,16 @@ impl Secrets {
         let value = if let Some(v) = value {
             SecretString::new(v.into())
         } else if io::stdin().is_terminal() {
-            print!("Enter value for {} (profile: {}): ", name, profile_display);
-            io::stdout().flush()?;
-            SecretString::new(rpassword::read_password()?.into())
+            // Use rpassword for single-line input (most common case)
+            // For multiline secrets, users should pipe the content
+            let secret = rpassword::prompt_password(format!(
+                "Enter value for {name} (profile: {profile_display}): "
+            ))?;
+            SecretString::new(secret.into())
         } else {
             // Read from stdin when input is piped
             let mut buffer = String::new();
-            io::stdin().read_line(&mut buffer)?;
+            io::stdin().read_to_string(&mut buffer)?;
             SecretString::new(buffer.trim().to_string().into())
         };
 

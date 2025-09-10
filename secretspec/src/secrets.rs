@@ -186,6 +186,39 @@ impl Secrets {
             .unwrap_or_else(|| "default".to_string())
     }
 
+    /// Collects all secret names for a given profile, including those from the default profile
+    ///
+    /// This method returns all secrets that are available for the specified profile,
+    /// which includes secrets defined in the profile itself plus any secrets from
+    /// the default profile (unless the profile is already "default").
+    ///
+    /// # Arguments
+    ///
+    /// * `profile_name` - The name of the profile to collect secrets for
+    ///
+    /// # Returns
+    ///
+    /// A HashSet containing all available secret names for the profile
+    fn collect_all_secrets_for_profile(&self, profile_name: &str) -> HashSet<String> {
+        let mut all_secrets = HashSet::new();
+
+        if let Some(profile_config) = self.config.profiles.get(profile_name) {
+            for name in profile_config.secrets.keys() {
+                all_secrets.insert(name.clone());
+            }
+        }
+
+        if profile_name != "default" {
+            if let Some(default_profile) = self.config.profiles.get("default") {
+                for name in default_profile.secrets.keys() {
+                    all_secrets.insert(name.clone());
+                }
+            }
+        }
+
+        all_secrets
+    }
+
     /// Resolves the configuration for a specific secret
     ///
     /// This method looks for the secret in the specified profile, falling back
@@ -328,16 +361,10 @@ impl Secrets {
         // Check if the secret exists in the profile or is inherited from default
         if self.resolve_secret_config(name, None).is_none() {
             // Collect available secrets from both current profile and default
-            let mut available_secrets = profile_config.secrets.keys().cloned().collect::<Vec<_>>();
-            if profile_name != "default" {
-                if let Some(default_profile) = self.config.profiles.get("default") {
-                    for key in default_profile.secrets.keys() {
-                        if !available_secrets.contains(key) {
-                            available_secrets.push(key.clone());
-                        }
-                    }
-                }
-            }
+            let mut available_secrets = self
+                .collect_all_secrets_for_profile(&profile_name)
+                .into_iter()
+                .collect::<Vec<_>>();
             available_secrets.sort();
 
             return Err(SecretSpecError::SecretNotFound(format!(
@@ -725,13 +752,21 @@ impl Secrets {
         let mut already_exists = 0;
         let mut not_found = 0;
 
-        // Process each secret in the profile
-        for (name, config) in &profile_config.secrets {
+        // Collect all secrets to import - from current profile and default profile
+        // This ensures we can import secrets defined in default profile when using other profiles
+        let all_secrets_to_import = self.collect_all_secrets_for_profile(&profile_display);
+
+        // Process each secret using proper profile resolution
+        for name in all_secrets_to_import {
+            // Use resolve_secret_config to get the proper merged configuration
+            let config = self
+                .resolve_secret_config(&name, None)
+                .expect("Secret should exist in config since we're iterating over it");
             // First check if the secret exists in the "from" provider
-            match from_provider_instance.get(&self.config.project.name, name, &profile_display)? {
+            match from_provider_instance.get(&self.config.project.name, &name, &profile_display)? {
                 Some(value) => {
                     // Secret exists in "from" provider, check if it exists in "to" provider
-                    match to_provider.get(&self.config.project.name, name, &profile_display)? {
+                    match to_provider.get(&self.config.project.name, &name, &profile_display)? {
                         Some(_) => {
                             println!(
                                 "{} {} - {} {}",
@@ -746,7 +781,7 @@ impl Secrets {
                             // Secret doesn't exist in "to" provider, import it
                             to_provider.set(
                                 &self.config.project.name,
-                                name,
+                                &name,
                                 &value,
                                 &profile_display,
                             )?;
@@ -763,7 +798,7 @@ impl Secrets {
                 None => {
                     // Secret doesn't exist in "from" provider
                     // Check if it exists in the "to" provider
-                    match to_provider.get(&self.config.project.name, name, &profile_display)? {
+                    match to_provider.get(&self.config.project.name, &name, &profile_display)? {
                         Some(_) => {
                             println!(
                                 "{} {} - {} {}",
@@ -849,21 +884,7 @@ impl Secrets {
         })?;
 
         // Collect all secrets to check - from current profile and default profile
-        let mut all_secrets = HashSet::new();
-
-        // Add secrets from the current profile
-        for name in profile_config.secrets.keys() {
-            all_secrets.insert(name.clone());
-        }
-
-        // If not the default profile, also add secrets from default profile
-        if profile_name != "default" {
-            if let Some(default_profile) = self.config.profiles.get("default") {
-                for name in default_profile.secrets.keys() {
-                    all_secrets.insert(name.clone());
-                }
-            }
-        }
+        let all_secrets = self.collect_all_secrets_for_profile(&profile_name);
 
         // Now check all secrets
         for name in all_secrets {

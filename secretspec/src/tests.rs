@@ -2110,3 +2110,97 @@ fn test_get_nonexistent_secret() {
         _ => panic!("Expected SecretNotFound error"),
     }
 }
+
+#[test]
+fn test_import_dotenv_profile_issue_36() {
+    // Reproduces the exact bug reported in GitHub issue #36
+    // https://github.com/cachix/secretspec/issues/36
+
+    let temp_dir = TempDir::new().unwrap();
+    let project_path = temp_dir.path();
+
+    // Load project config from fixture that matches the bug report exactly
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let fixture_path = Path::new(manifest_dir).join("src/fixtures/issue_36_secretspec.toml");
+
+    let project_config =
+        Config::try_from(fixture_path.as_path()).expect("Should load fixture config");
+
+    // Create the .env file with only JWT_SECRET (matching the actual bug scenario)
+    // The bug is that other secrets with defaults show as "not found in source"
+    // instead of using their defaults from the development profile
+    let source_env_path = project_path.join(".env");
+    fs::write(&source_env_path, "JWT_SECRET=super-secret-jwt-token\n").unwrap();
+
+    // Create target .env for import (using mock provider for testing)
+    let target_env_path = project_path.join(".env.target");
+
+    // Create global config with development profile and mock provider as target
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", target_env_path.display())),
+            profile: Some("development".to_string()), // Using development profile as per bug report
+        },
+    };
+
+    // Create SecretSpec instance
+    let spec = Secrets::new(project_config, Some(global_config), None, None);
+
+    // Import from source dotenv (this should reproduce the bug)
+    let from_provider = format!("dotenv://{}", source_env_path.display());
+
+    println!("=== Testing Issue #36 Bug Reproduction ===");
+    println!("Source .env file: {}", source_env_path.display());
+    println!("Target provider: dotenv://{}", target_env_path.display());
+    println!("Profile: development");
+    println!("Source .env contents:");
+    println!("{}", fs::read_to_string(&source_env_path).unwrap());
+
+    let result = spec.import(&from_provider);
+
+    // The bug report shows that this results in "0 imported, 0 already exists, 7 not found in source"
+    // This test should initially fail, helping us identify the root cause
+
+    match result {
+        Ok(_) => {
+            // Check what was actually imported by reading the target file
+            if target_env_path.exists() {
+                let target_contents = fs::read_to_string(&target_env_path).unwrap();
+                println!("Target file after import:");
+                println!("{}", target_contents);
+
+                // The real bug: JWT_SECRET should be imported from .env
+                assert!(
+                    target_contents.contains("JWT_SECRET=\"super-secret-jwt-token\""),
+                    "JWT_SECRET should have been imported from source .env"
+                );
+
+                // The import should NOT import defaults - those stay as defaults
+                // The bug is that JWT_SECRET (which exists in .env but is only defined in [profiles.default])
+                // is not being imported because the import only looks at the active profile
+
+                // JWT_SECRET should be imported since it exists in source .env
+                // Other variables should NOT be in the target file since they have defaults and aren't in source
+                assert!(
+                    !target_contents.contains("MONGODB_HOST"),
+                    "MONGODB_HOST should not be in target - it has a default and isn't in source"
+                );
+                assert!(
+                    !target_contents.contains("MONGODB_PORT"),
+                    "MONGODB_PORT should not be in target - it has a default and isn't in source"
+                );
+            } else {
+                // The bug might also be that no file is created if only some secrets are imported
+                println!("Target file was not created - this might be part of the bug");
+
+                // At minimum, JWT_SECRET should be importable, so a file should be created
+                panic!("Target file should have been created after importing JWT_SECRET");
+            }
+        }
+        Err(e) => {
+            panic!("Import should not fail: {:?}", e);
+        }
+    }
+
+    println!("=== Issue #36 test completed ===");
+}

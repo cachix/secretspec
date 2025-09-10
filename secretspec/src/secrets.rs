@@ -725,13 +725,35 @@ impl Secrets {
         let mut already_exists = 0;
         let mut not_found = 0;
 
-        // Process each secret in the profile
-        for (name, config) in &profile_config.secrets {
+        // Collect all secrets to import - from current profile and default profile
+        // This ensures we can import secrets defined in default profile when using other profiles
+        let mut all_secrets_to_import = HashSet::new();
+
+        // Add secrets from the current profile
+        for name in profile_config.secrets.keys() {
+            all_secrets_to_import.insert(name.clone());
+        }
+
+        // If not the default profile, also add secrets from default profile
+        if profile_display != "default" {
+            if let Some(default_profile) = self.config.profiles.get("default") {
+                for name in default_profile.secrets.keys() {
+                    all_secrets_to_import.insert(name.clone());
+                }
+            }
+        }
+
+        // Process each secret using proper profile resolution
+        for name in all_secrets_to_import {
+            // Use resolve_secret_config to get the proper merged configuration
+            let config = self
+                .resolve_secret_config(&name, None)
+                .expect("Secret should exist in config since we're iterating over it");
             // First check if the secret exists in the "from" provider
-            match from_provider_instance.get(&self.config.project.name, name, &profile_display)? {
+            match from_provider_instance.get(&self.config.project.name, &name, &profile_display)? {
                 Some(value) => {
                     // Secret exists in "from" provider, check if it exists in "to" provider
-                    match to_provider.get(&self.config.project.name, name, &profile_display)? {
+                    match to_provider.get(&self.config.project.name, &name, &profile_display)? {
                         Some(_) => {
                             println!(
                                 "{} {} - {} {}",
@@ -746,7 +768,7 @@ impl Secrets {
                             // Secret doesn't exist in "to" provider, import it
                             to_provider.set(
                                 &self.config.project.name,
-                                name,
+                                &name,
                                 &value,
                                 &profile_display,
                             )?;
@@ -763,7 +785,7 @@ impl Secrets {
                 None => {
                     // Secret doesn't exist in "from" provider
                     // Check if it exists in the "to" provider
-                    match to_provider.get(&self.config.project.name, name, &profile_display)? {
+                    match to_provider.get(&self.config.project.name, &name, &profile_display)? {
                         Some(_) => {
                             println!(
                                 "{} {} - {} {}",

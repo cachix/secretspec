@@ -672,6 +672,7 @@ impl Secrets {
                     "(required)".red()
                 );
             } else if errors.missing_optional.contains(&name) {
+                found_count += 1;
                 println!(
                     "{} {} - {} {}",
                     "○".blue(),

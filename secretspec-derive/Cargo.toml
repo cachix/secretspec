@@ -15,7 +15,7 @@ quote.workspace = true
 proc-macro2.workspace = true
 toml.workspace = true
 serde.workspace = true
-secretspec = { version = "0.3.2", path = "../secretspec" }
+secretspec = { version = "0.3.3", path = "../secretspec" }
 url.workspace = true
 
 [dev-dependencies]

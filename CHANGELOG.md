@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2025-09-10
+
+### Fixed
+- CLI: Count optional secrets as "found" in the summary
+
 ## [0.3.2] - 2025-09-10
 
 ### Added

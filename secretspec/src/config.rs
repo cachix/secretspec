@@ -34,7 +34,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -287,7 +287,7 @@ impl Profile {
     ///
     /// The iterator yields (&String, &Secret) pairs, where the string is the secret name
     /// and the Secret contains the configuration for that secret.
-    pub fn iter(&self) -> std::collections::hash_map::Iter<'_, String, Secret> {
+    pub fn iter(&self) -> hash_map::Iter<'_, String, Secret> {
         self.secrets.iter()
     }
 }
@@ -300,8 +300,9 @@ impl Default for Profile {
 
 impl<'a> IntoIterator for &'a Profile {
     type Item = (&'a String, &'a Secret);
-    type IntoIter = std::collections::hash_map::Iter<'a, String, Secret>;
+    type IntoIter = hash_map::Iter<'a, String, Secret>;
 
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         self.secrets.iter()
     }
@@ -309,8 +310,9 @@ impl<'a> IntoIterator for &'a Profile {
 
 impl IntoIterator for Profile {
     type Item = (String, Secret);
-    type IntoIter = std::collections::hash_map::IntoIter<String, Secret>;
+    type IntoIter = hash_map::IntoIter<String, Secret>;
 
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         self.secrets.into_iter()
     }

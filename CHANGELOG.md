@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Import command now resolves secrets from all profiles, not just the active profile (fixes issue #36)
+- Fix incorrect stats in the summary for certain configurations
 
 ## [0.3.1] - 2025-07-28
 

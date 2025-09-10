@@ -293,10 +293,10 @@ fn test_resolve_profile() {
     );
 
     // Test with explicit profile
-    assert_eq!(spec.resolve_profile(Some("production")), "production");
+    assert_eq!(spec.resolve_profile_name(Some("production")), "production");
 
     // Test with global config default
-    assert_eq!(spec.resolve_profile(None), "development");
+    assert_eq!(spec.resolve_profile_name(None), "development");
 
     // Test without global config
     let spec_no_global = Secrets::new(
@@ -312,7 +312,7 @@ fn test_resolve_profile() {
         None,
         None,
     );
-    assert_eq!(spec_no_global.resolve_profile(None), "default");
+    assert_eq!(spec_no_global.resolve_profile_name(None), "default");
 }
 
 #[test]

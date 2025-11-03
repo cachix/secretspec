@@ -321,7 +321,8 @@ impl IntoIterator for Profile {
 /// Configuration for an individual secret.
 ///
 /// Defines the properties of a secret including its documentation,
-/// whether it's required, and an optional default value.
+/// whether it's required, an optional default value, and optionally
+/// which providers to use for retrieving this secret (in fallback order).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Secret {
     /// Human-readable description of what this secret is used for
@@ -333,6 +334,13 @@ pub struct Secret {
     /// Optional default value if the secret is not provided
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+    /// Optional list of provider aliases for retrieving this secret.
+    /// Providers are tried in order until one has the secret.
+    /// If not specified, uses the global or profile-level provider.
+    /// Each alias is resolved against the providers map in GlobalConfig.
+    /// Example: providers = ["keyring", "env"] will try keyring first, then env.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub providers: Option<Vec<String>>,
 }
 
 impl Secret {
@@ -398,6 +406,16 @@ pub struct GlobalDefaults {
     /// Default profile to use when not specified
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Named provider aliases that map alias names to provider URIs.
+    /// Used by per-secret provider configuration to avoid storing sensitive
+    /// provider details in secretspec.toml. Example:
+    /// ```toml
+    /// [providers]
+    /// shared = "onepassword://vault/Shared"
+    /// local = "dotenv://.env.local"
+    /// ```
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub providers: Option<HashMap<String, String>>,
 }
 
 impl GlobalConfig {

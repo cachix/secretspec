@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Per-secret provider configuration: secrets can now specify their own provider(s) with fallback chains
+- New `providers` field in secret configuration (list of provider aliases tried in order)
+- Provider alias management via `secretspec config provider add/remove/list` commands
+- New `providers` map in global config for defining named provider aliases
+
+### Changed
+- Secret configuration now supports `providers: [...]` field instead of single provider assignment
+- Provider resolution includes per-secret provider overrides before falling back to global defaults
+- Validation results now use provider URIs (e.g., "dotenv:.env.production") instead of just provider names for better transparency
+
 ## [0.3.4] - 2025-11-09
 
 ### Changed

@@ -66,10 +66,46 @@ Providers support URI-based configuration (e.g., `keyring://`, `onepassword://va
 4. Falls back to "default" profile
 
 ### Provider Resolution
-1. CLI flag (`--provider`)
-2. Environment variable (`SECRETSPEC_PROVIDER`)
-3. User config default per profile
-4. Falls back to keyring provider
+1. **Per-secret providers** (with fallback chain): specified in `secretspec.toml` as `providers: [alias1, alias2, ...]`
+   - Aliases resolved against `~/.config/secretspec/config.toml` providers map
+   - Tries each provider in order until secret is found
+2. CLI flag (`--provider`)
+3. Environment variable (`SECRETSPEC_PROVIDER`)
+4. User config default provider
+5. Falls back to keyring provider
+
+### Per-Secret Provider Configuration
+Secrets can specify their own providers using the `providers` field to override global defaults:
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "Production DB", providers = ["prod_vault", "keyring"] }
+API_KEY = { description = "API Key", providers = ["shared"] }
+GITHUB_TOKEN = { description = "GitHub token from env", providers = ["env"] }
+```
+
+Provider aliases are defined in `~/.config/secretspec/config.toml`:
+```toml
+[defaults]
+provider = "keyring"
+
+[providers]
+prod_vault = "onepassword://vault/Production"
+shared = "onepassword://vault/Shared"
+env = "env://"
+```
+
+Or managed via CLI:
+```bash
+# Add provider alias
+secretspec config provider add prod_vault "onepassword://vault/Production"
+
+# List all aliases
+secretspec config provider list
+
+# Remove alias
+secretspec config provider remove prod_vault
+```
 
 ### Secret Resolution
 1. Check active profile for secret

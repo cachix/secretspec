@@ -295,6 +295,7 @@ impl Provider for DotEnvProvider {
                     description: Some(format!("{} secret", key)),
                     required: true,
                     default: None,
+                    providers: None,
                 },
             );
         }

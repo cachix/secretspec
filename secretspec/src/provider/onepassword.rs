@@ -418,6 +418,40 @@ impl Provider for OnePasswordProvider {
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
+    
+    fn uri(&self) -> String {
+        // Reconstruct the URI from the config
+        // Format: onepassword://[account@]vault or onepassword+token://[token@]vault
+        
+        let scheme = if self.config.service_account_token.is_some() {
+            "onepassword+token"
+        } else {
+            "onepassword"
+        };
+        
+        let mut uri = format!("{}://", scheme);
+        
+        // For service account token, the token itself might be in the URI
+        // but we don't want to expose the actual token value, just indicate it's configured
+        if self.config.service_account_token.is_some() {
+            // Just indicate token auth is being used without exposing the token
+            if let Some(ref vault) = self.config.default_vault {
+                uri.push_str(vault);
+            }
+        } else {
+            // Regular auth: account@vault format
+            if let Some(ref account) = self.config.account {
+                uri.push_str(account);
+                uri.push('@');
+            }
+            
+            if let Some(ref vault) = self.config.default_vault {
+                uri.push_str(vault);
+            }
+        }
+        
+        uri
+    }
 
     /// Retrieves a secret from OnePassword.
     ///

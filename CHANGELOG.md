@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Secret configuration now supports `providers: [...]` field instead of single provider assignment
 - Provider resolution includes per-secret provider overrides before falling back to global defaults
 - Validation results now use provider URIs (e.g., "dotenv:.env.production") instead of just provider names for better transparency
+- `Secrets::check()` now returns `Result<ValidatedSecrets>` instead of `Result<()>`, allowing callers to access the validated secrets
 
 ## [0.3.4] - 2025-11-09
 

@@ -1112,11 +1112,7 @@ impl Secrets {
             )))
         } else {
             Ok(Ok(ValidatedSecrets {
-                resolved: Resolved::new(
-                    secrets,
-                    primary_provider.uri(),
-                    profile_name.to_string(),
-                ),
+                resolved: Resolved::new(secrets, primary_provider.uri(), profile_name.to_string()),
                 missing_optional,
                 with_defaults,
             }))

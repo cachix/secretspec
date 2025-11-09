@@ -278,7 +278,7 @@ impl Provider for LastPassProvider {
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
-    
+
     fn uri(&self) -> String {
         // LastPass can be "lastpass" (default) or "lastpass://folder" or "lastpass://Folder/Subfolder"
         if let Some(ref prefix) = self.config.folder_prefix {

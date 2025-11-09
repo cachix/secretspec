@@ -235,7 +235,7 @@ pub trait Provider: Send + Sync {
     ///
     /// This should match the name registered with the provider macro.
     fn name(&self) -> &'static str;
-    
+
     /// Returns the full URI representation of this provider.
     ///
     /// This includes any configuration like vault names, paths, etc.

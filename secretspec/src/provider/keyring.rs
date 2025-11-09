@@ -90,7 +90,7 @@ impl Provider for KeyringProvider {
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
-    
+
     fn uri(&self) -> String {
         // Keyring can be just "keyring" or "keyring://"
         "keyring".to_string()

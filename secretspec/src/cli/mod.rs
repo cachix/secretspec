@@ -421,7 +421,8 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
-            app.check()
+            let _validated = app
+                .check()
                 .into_diagnostic()
                 .wrap_err("Failed to check secrets")?;
             Ok(())

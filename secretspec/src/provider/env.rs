@@ -111,7 +111,7 @@ impl Provider for EnvProvider {
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
-    
+
     fn uri(&self) -> String {
         // Env can be "env", "env:", or "env://"
         "env".to_string()

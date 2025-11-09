@@ -582,9 +582,9 @@ impl Secrets {
     /// use secretspec::Secrets;
     ///
     /// let mut spec = Secrets::load().unwrap();
-    /// spec.check().unwrap();
+    /// let validated = spec.check().unwrap();
     /// ```
-    pub fn check(&self) -> Result<()> {
+    pub fn check(&self) -> Result<ValidatedSecrets> {
         let provider = self.get_provider(None)?;
         let profile_display = self.resolve_profile_name(None);
 
@@ -606,9 +606,9 @@ impl Secrets {
         }
 
         // Now ensure all secrets are present (will prompt if needed)
-        self.ensure_secrets(None, None, true)?;
+        let validated = self.ensure_secrets(None, None, true)?;
 
-        Ok(())
+        Ok(validated)
     }
 
     /// Display validation success results
@@ -934,11 +934,7 @@ impl Secrets {
             )))
         } else {
             Ok(Ok(ValidatedSecrets {
-                resolved: Resolved::new(
-                    secrets,
-                    backend.uri(),
-                    profile_name.to_string(),
-                ),
+                resolved: Resolved::new(secrets, backend.uri(), profile_name.to_string()),
                 missing_optional,
                 with_defaults,
             }))

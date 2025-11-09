@@ -40,7 +40,7 @@ impl Provider for MockProvider {
     fn name(&self) -> &'static str {
         "mock"
     }
-    
+
     fn uri(&self) -> String {
         "mock://".to_string()
     }

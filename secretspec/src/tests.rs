@@ -204,7 +204,7 @@ API_KEY = { description = "API key for external service", required = false, defa
         redis_config.description,
         Some("Redis connection URL".to_string())
     );
-    assert!(!redis_config.required);
+    assert_eq!(redis_config.required, Some(false));
     assert_eq!(
         redis_config.default,
         Some("redis://localhost:6379".to_string())
@@ -215,7 +215,7 @@ API_KEY = { description = "API key for external service", required = false, defa
         jwt_config.description,
         Some("Secret key for JWT token signing".to_string())
     );
-    assert!(jwt_config.required);
+    assert_eq!(jwt_config.required, Some(true));
 }
 
 #[test]
@@ -326,7 +326,7 @@ fn test_resolve_secret_config() {
         "API_KEY".to_string(),
         Secret {
             description: Some("API Key".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: None,
         },
@@ -335,7 +335,7 @@ fn test_resolve_secret_config() {
         "DATABASE_URL".to_string(),
         Secret {
             description: Some("Database URL".to_string()),
-            required: false,
+            required: Some(false),
             default: Some("sqlite:///default.db".to_string()),
             providers: None,
         },
@@ -346,7 +346,7 @@ fn test_resolve_secret_config() {
         "API_KEY".to_string(),
         Secret {
             description: Some("Dev API Key".to_string()),
-            required: false,
+            required: Some(false),
             default: Some("dev-key".to_string()),
             providers: None,
         },
@@ -356,12 +356,14 @@ fn test_resolve_secret_config() {
     profiles.insert(
         "default".to_string(),
         Profile {
+            defaults: None,
             secrets: default_secrets,
         },
     );
     profiles.insert(
         "development".to_string(),
         Profile {
+            defaults: None,
             secrets: dev_secrets,
         },
     );
@@ -384,14 +386,14 @@ fn test_resolve_secret_config() {
     let secret_config = spec
         .resolve_secret_config("API_KEY", Some("development"))
         .unwrap();
-    assert!(!secret_config.required);
+    assert_eq!(secret_config.required, Some(false));
     assert_eq!(secret_config.default, Some("dev-key".to_string()));
 
     // Test fallback to default profile
     let secret_config = spec
         .resolve_secret_config("DATABASE_URL", Some("development"))
         .unwrap();
-    assert!(!secret_config.required);
+    assert_eq!(secret_config.required, Some(false));
     assert_eq!(
         secret_config.default,
         Some("sqlite:///default.db".to_string())
@@ -582,7 +584,7 @@ MONITORING_TOKEN = { description = "Token for monitoring service", required = tr
         database_url.description,
         Some("Custom database for my app".to_string())
     );
-    assert!(database_url.required);
+    assert_eq!(database_url.required, Some(true));
 
     // Verify inherited secrets from common
     let redis_url = default_profile.secrets.get("REDIS_URL").unwrap();
@@ -590,7 +592,7 @@ MONITORING_TOKEN = { description = "Token for monitoring service", required = tr
         redis_url.description,
         Some("Redis cache connection".to_string())
     );
-    assert!(!redis_url.required);
+    assert_eq!(redis_url.required, Some(false));
     assert_eq!(
         redis_url.default,
         Some("redis://localhost:6379".to_string())
@@ -602,12 +604,12 @@ MONITORING_TOKEN = { description = "Token for monitoring service", required = tr
         jwt_secret.description,
         Some("Secret for JWT signing".to_string())
     );
-    assert!(jwt_secret.required);
+    assert_eq!(jwt_secret.required, Some(true));
 
     // Verify development profile
     let dev_profile = config.profiles.get("development").unwrap();
     let dev_api_key = dev_profile.secrets.get("API_KEY").unwrap();
-    assert!(!dev_api_key.required);
+    assert_eq!(dev_api_key.required, Some(false));
     assert_eq!(dev_api_key.default, Some("dev-key-123".to_string()));
 
     let dev_database_url = dev_profile.secrets.get("DATABASE_URL").unwrap();
@@ -615,7 +617,7 @@ MONITORING_TOKEN = { description = "Token for monitoring service", required = tr
         dev_database_url.description,
         Some("Development database".to_string())
     );
-    assert!(!dev_database_url.required);
+    assert_eq!(dev_database_url.required, Some(false));
     assert_eq!(
         dev_database_url.default,
         Some("sqlite:///dev.db".to_string())
@@ -623,30 +625,45 @@ MONITORING_TOKEN = { description = "Token for monitoring service", required = tr
 
     // Verify production profile has all required secrets
     let prod_profile = config.profiles.get("production").unwrap();
-    assert!(prod_profile.secrets.get("API_KEY").unwrap().required);
-    assert!(prod_profile.secrets.get("DATABASE_URL").unwrap().required);
-    assert!(prod_profile.secrets.get("REDIS_URL").unwrap().required);
-    assert!(prod_profile.secrets.get("JWT_SECRET").unwrap().required);
-    assert!(
+    assert_eq!(
+        prod_profile.secrets.get("API_KEY").unwrap().required,
+        Some(true)
+    );
+    assert_eq!(
+        prod_profile.secrets.get("DATABASE_URL").unwrap().required,
+        Some(true)
+    );
+    assert_eq!(
+        prod_profile.secrets.get("REDIS_URL").unwrap().required,
+        Some(true)
+    );
+    assert_eq!(
+        prod_profile.secrets.get("JWT_SECRET").unwrap().required,
+        Some(true)
+    );
+    assert_eq!(
         prod_profile
             .secrets
             .get("OAUTH_CLIENT_ID")
             .unwrap()
-            .required
+            .required,
+        Some(true)
     );
-    assert!(
+    assert_eq!(
         prod_profile
             .secrets
             .get("OAUTH_CLIENT_SECRET")
             .unwrap()
-            .required
+            .required,
+        Some(true)
     );
-    assert!(
+    assert_eq!(
         prod_profile
             .secrets
             .get("MONITORING_TOKEN")
             .unwrap()
-            .required
+            .required,
+        Some(true)
     );
 }
 
@@ -830,7 +847,7 @@ SECRET_A = { description = "Secret A for staging", required = false, default = "
         common_secret.description,
         Some("Common secret overridden by B".to_string())
     );
-    assert!(!common_secret.required);
+    assert_eq!(common_secret.required, Some(false));
     assert_eq!(common_secret.default, Some("default-b".to_string()));
 
     // Verify staging profile exists from both A and B
@@ -1115,7 +1132,7 @@ SECRET_E = { description = "New secret E", required = true }
     // Verify SECRET_A: only description changed
     let secret_a = default_profile.secrets.get("SECRET_A").unwrap();
     assert_eq!(secret_a.description, Some("New description A".to_string()));
-    assert!(secret_a.required);
+    assert_eq!(secret_a.required, Some(true));
     assert_eq!(secret_a.default, None);
 
     // Verify SECRET_B: only required flag changed
@@ -1124,7 +1141,7 @@ SECRET_E = { description = "New secret E", required = true }
         secret_b.description,
         Some("Original description B".to_string())
     );
-    assert!(!secret_b.required); // Changed from true to false
+    assert_eq!(secret_b.required, Some(false)); // Changed from true to false
     assert_eq!(secret_b.default, Some("original-b".to_string()));
 
     // Verify SECRET_C: only default value added
@@ -1133,19 +1150,19 @@ SECRET_E = { description = "New secret E", required = true }
         secret_c.description,
         Some("Original description C".to_string())
     );
-    assert!(!secret_c.required);
+    assert_eq!(secret_c.required, Some(false));
     assert_eq!(secret_c.default, Some("new-c".to_string()));
 
     // Verify SECRET_D: multiple properties changed
     let secret_d = default_profile.secrets.get("SECRET_D").unwrap();
     assert_eq!(secret_d.description, Some("New description D".to_string()));
-    assert!(secret_d.required); // Changed from false to true
+    assert_eq!(secret_d.required, Some(true)); // Changed from false to true
     assert_eq!(secret_d.default, None); // Removed default
 
     // Verify SECRET_E: new secret added
     let secret_e = default_profile.secrets.get("SECRET_E").unwrap();
     assert_eq!(secret_e.description, Some("New secret E".to_string()));
-    assert!(secret_e.required);
+    assert_eq!(secret_e.required, Some(true));
     assert_eq!(secret_e.default, None);
 }
 
@@ -1300,12 +1317,18 @@ fn test_set_with_undefined_secret() {
                 "DEFINED_SECRET".to_string(),
                 Secret {
                     description: Some("A defined secret".to_string()),
-                    required: true,
+                    required: Some(true),
                     default: None,
                     providers: None,
                 },
             );
-            profiles.insert("default".to_string(), Profile { secrets });
+            profiles.insert(
+                "default".to_string(),
+                Profile {
+                    defaults: None,
+                    secrets,
+                },
+            );
             profiles
         },
     };
@@ -1358,12 +1381,18 @@ fn test_set_with_defined_secret() {
                 "DEFINED_SECRET".to_string(),
                 Secret {
                     description: Some("A defined secret".to_string()),
-                    required: true,
+                    required: Some(true),
                     default: None,
                     providers: None,
                 },
             );
-            profiles.insert("default".to_string(), Profile { secrets });
+            profiles.insert(
+                "default".to_string(),
+                Profile {
+                    defaults: None,
+                    secrets,
+                },
+            );
             profiles
         },
     };
@@ -1403,12 +1432,18 @@ fn test_set_with_readonly_provider() {
                 "DEFINED_SECRET".to_string(),
                 Secret {
                     description: Some("A defined secret".to_string()),
-                    required: true,
+                    required: Some(true),
                     default: None,
                     providers: None,
                 },
             );
-            profiles.insert("default".to_string(), Profile { secrets });
+            profiles.insert(
+                "default".to_string(),
+                Profile {
+                    defaults: None,
+                    secrets,
+                },
+            );
             profiles
         },
     };
@@ -1457,7 +1492,7 @@ fn test_import_between_dotenv_files() {
                 "SECRET_ONE".to_string(),
                 Secret {
                     description: Some("First test secret".to_string()),
-                    required: true,
+                    required: Some(true),
                     default: None,
                     providers: None,
                 },
@@ -1466,7 +1501,7 @@ fn test_import_between_dotenv_files() {
                 "SECRET_TWO".to_string(),
                 Secret {
                     description: Some("Second test secret".to_string()),
-                    required: true,
+                    required: Some(true),
                     default: None,
                     providers: None,
                 },
@@ -1475,7 +1510,7 @@ fn test_import_between_dotenv_files() {
                 "SECRET_THREE".to_string(),
                 Secret {
                     description: Some("Third test secret".to_string()),
-                    required: false,
+                    required: Some(false),
                     default: Some("default_value".to_string()),
                     providers: None,
                 },
@@ -1484,13 +1519,19 @@ fn test_import_between_dotenv_files() {
                 "SECRET_FOUR".to_string(),
                 Secret {
                     description: Some("Fourth test secret (not in source)".to_string()),
-                    required: false,
+                    required: Some(false),
                     default: None,
                     providers: None,
                 },
             );
 
-            profiles.insert("default".to_string(), Profile { secrets });
+            profiles.insert(
+                "default".to_string(),
+                Profile {
+                    defaults: None,
+                    secrets,
+                },
+            );
             profiles
         },
     };
@@ -1580,7 +1621,7 @@ fn test_import_edge_cases() {
                 "EMPTY_VALUE".to_string(),
                 Secret {
                     description: Some("Secret with empty value".to_string()),
-                    required: true,
+                    required: Some(true),
                     default: None,
                     providers: None,
                 },
@@ -1589,7 +1630,7 @@ fn test_import_edge_cases() {
                 "SPECIAL_CHARS".to_string(),
                 Secret {
                     description: Some("Secret with special characters".to_string()),
-                    required: true,
+                    required: Some(true),
                     default: None,
                     providers: None,
                 },
@@ -1598,13 +1639,19 @@ fn test_import_edge_cases() {
                 "MULTILINE".to_string(),
                 Secret {
                     description: Some("Secret with multiline value".to_string()),
-                    required: true,
+                    required: Some(true),
                     default: None,
                     providers: None,
                 },
             );
 
-            profiles.insert("default".to_string(), Profile { secrets });
+            profiles.insert(
+                "default".to_string(),
+                Profile {
+                    defaults: None,
+                    secrets,
+                },
+            );
             profiles
         },
     };
@@ -1718,7 +1765,7 @@ API_KEY = { description = "Dev API key", required = true }
     let secret_config = spec
         .resolve_secret_config("DATABASE_URL", Some("default"))
         .expect("DATABASE_URL should exist in default");
-    assert!(secret_config.required);
+    assert_eq!(secret_config.required, Some(true));
     assert_eq!(
         secret_config.default,
         Some("postgres://localhost/default".to_string())
@@ -1728,7 +1775,7 @@ API_KEY = { description = "Dev API key", required = true }
     let secret_config = spec
         .resolve_secret_config("DATABASE_URL", Some("development"))
         .expect("DATABASE_URL should exist in development");
-    assert!(secret_config.required);
+    assert_eq!(secret_config.required, Some(true));
     assert_eq!(
         secret_config.default,
         Some("postgres://localhost/dev".to_string())
@@ -1811,7 +1858,7 @@ fn test_import_with_profiles() {
                 "DEV_SECRET".to_string(),
                 Secret {
                     description: Some("Development secret".to_string()),
-                    required: true,
+                    required: Some(true),
                     default: None,
                     providers: None,
                 },
@@ -1820,7 +1867,7 @@ fn test_import_with_profiles() {
                 "SHARED_SECRET".to_string(),
                 Secret {
                     description: Some("Shared secret".to_string()),
-                    required: true,
+                    required: Some(true),
                     default: None,
                     providers: None,
                 },
@@ -1828,6 +1875,7 @@ fn test_import_with_profiles() {
             profiles.insert(
                 "development".to_string(),
                 Profile {
+                    defaults: None,
                     secrets: dev_secrets,
                 },
             );
@@ -1838,7 +1886,7 @@ fn test_import_with_profiles() {
                 "PROD_SECRET".to_string(),
                 Secret {
                     description: Some("Production secret".to_string()),
-                    required: true,
+                    required: Some(true),
                     default: None,
                     providers: None,
                 },
@@ -1847,7 +1895,7 @@ fn test_import_with_profiles() {
                 "SHARED_SECRET".to_string(),
                 Secret {
                     description: Some("Shared secret".to_string()),
-                    required: true,
+                    required: Some(true),
                     default: None,
                     providers: None,
                 },
@@ -1855,6 +1903,7 @@ fn test_import_with_profiles() {
             profiles.insert(
                 "production".to_string(),
                 Profile {
+                    defaults: None,
                     secrets: prod_secrets,
                 },
             );
@@ -1969,14 +2018,20 @@ fn test_run_with_missing_required_secrets() {
         "REQUIRED_SECRET".to_string(),
         Secret {
             description: Some("A required secret".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: None,
         },
     );
 
     let mut profiles = HashMap::new();
-    profiles.insert("default".to_string(), Profile { secrets });
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
 
     let spec = Secrets::new(
         Config {
@@ -2020,14 +2075,20 @@ fn test_get_existing_secret() {
         "TEST_SECRET".to_string(),
         Secret {
             description: Some("Test secret".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: None,
         },
     );
 
     let mut profiles = HashMap::new();
-    profiles.insert("default".to_string(), Profile { secrets });
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
 
     let spec = Secrets::new(
         Config {
@@ -2065,14 +2126,20 @@ fn test_get_secret_with_default() {
         "SECRET_WITH_DEFAULT".to_string(),
         Secret {
             description: Some("Secret with default value".to_string()),
-            required: false,
+            required: Some(false),
             default: Some("default_value".to_string()),
             providers: None,
         },
     );
 
     let mut profiles = HashMap::new();
-    profiles.insert("default".to_string(), Profile { secrets });
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
 
     let spec = Secrets::new(
         Config {
@@ -2109,14 +2176,20 @@ fn test_get_nonexistent_secret() {
         "EXISTING_SECRET".to_string(),
         Secret {
             description: Some("Existing secret".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: None,
         },
     );
 
     let mut profiles = HashMap::new();
-    profiles.insert("default".to_string(), Profile { secrets });
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
 
     let spec = Secrets::new(
         Config {
@@ -2254,7 +2327,7 @@ fn test_per_secret_provider_configuration() {
         "API_KEY".to_string(),
         Secret {
             description: Some("API Key from shared provider".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: Some(vec!["shared".to_string()]),
         },
@@ -2265,14 +2338,20 @@ fn test_per_secret_provider_configuration() {
         "DATABASE_URL".to_string(),
         Secret {
             description: Some("Database URL from default provider".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: None,
         },
     );
 
     let mut profiles = HashMap::new();
-    profiles.insert("default".to_string(), Profile { secrets });
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
 
     let config = Config {
         project: Project {
@@ -2435,7 +2514,7 @@ fn test_per_secret_provider_with_fallback_chain() {
         "DATABASE_URL".to_string(),
         Secret {
             description: Some("Database URL".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
         },
@@ -2446,14 +2525,20 @@ fn test_per_secret_provider_with_fallback_chain() {
         "API_KEY".to_string(),
         Secret {
             description: Some("API Key".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: Some(vec!["fallback".to_string(), "primary".to_string()]),
         },
     );
 
     let mut profiles = HashMap::new();
-    profiles.insert("default".to_string(), Profile { secrets });
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
 
     let config = Config {
         project: Project {
@@ -2522,7 +2607,7 @@ fn test_get_secret_with_fallback_chain() {
         "API_KEY".to_string(),
         Secret {
             description: Some("API Key from fallback".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
         },
@@ -2533,14 +2618,20 @@ fn test_get_secret_with_fallback_chain() {
         "DATABASE_URL".to_string(),
         Secret {
             description: Some("Database URL from primary".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
         },
     );
 
     let mut profiles = HashMap::new();
-    profiles.insert("default".to_string(), Profile { secrets });
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
 
     let config = Config {
         project: Project {
@@ -2609,7 +2700,7 @@ fn test_validate_with_per_secret_providers() {
         "API_KEY".to_string(),
         Secret {
             description: Some("API Key".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: Some(vec!["env_provider".to_string()]),
         },
@@ -2620,7 +2711,7 @@ fn test_validate_with_per_secret_providers() {
         "DATABASE_URL".to_string(),
         Secret {
             description: Some("Database URL".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: Some(vec!["keyring_provider".to_string()]),
         },
@@ -2631,14 +2722,20 @@ fn test_validate_with_per_secret_providers() {
         "OPTIONAL_CONFIG".to_string(),
         Secret {
             description: Some("Optional configuration".to_string()),
-            required: false,
+            required: Some(false),
             default: Some("default-config".to_string()),
             providers: None,
         },
     );
 
     let mut profiles = HashMap::new();
-    profiles.insert("default".to_string(), Profile { secrets });
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
 
     let config = Config {
         project: Project {
@@ -2717,7 +2814,7 @@ fn test_secret_config_merges_providers_from_default() {
         "API_KEY".to_string(),
         Secret {
             description: Some("API Key from default".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: Some(vec!["shared".to_string()]),
         },
@@ -2730,7 +2827,7 @@ fn test_secret_config_merges_providers_from_default() {
         "API_KEY".to_string(),
         Secret {
             description: Some("API Key from current".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: None,
         },
@@ -2741,7 +2838,7 @@ fn test_secret_config_merges_providers_from_default() {
         "DATABASE_URL".to_string(),
         Secret {
             description: Some("Database URL".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: Some(vec!["prod".to_string()]),
         },
@@ -2751,12 +2848,14 @@ fn test_secret_config_merges_providers_from_default() {
     profiles.insert(
         "default".to_string(),
         Profile {
+            defaults: None,
             secrets: default_secrets,
         },
     );
     profiles.insert(
         "production".to_string(),
         Profile {
+            defaults: None,
             secrets: current_secrets,
         },
     );
@@ -2790,6 +2889,102 @@ fn test_secret_config_merges_providers_from_default() {
         db_config.providers,
         Some(vec!["prod".to_string()]),
         "DATABASE_URL should use its own providers"
+    );
+}
+
+#[test]
+fn test_profile_defaults_from_toml() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_file = temp_dir.path().join("secretspec.toml");
+
+    let toml_content = r#"[project]
+name = "test"
+revision = "1.0"
+
+[profiles.production.defaults]
+providers = ["prod_vault", "keyring"]
+
+[profiles.production]
+DATABASE_URL = { description = "Production DB" }
+API_KEY = { description = "API key" }
+SECRET_KEY = { description = "Secret key", providers = ["env"] }
+
+[profiles.development.defaults]
+required = false
+default = "dev-default"
+
+[profiles.development]
+DATABASE_URL = { description = "Dev DB" }
+API_KEY = { description = "Dev API key" }
+SPECIAL_SECRET = { description = "Special secret", required = true }
+"#;
+
+    fs::write(&config_file, toml_content).unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let spec = Secrets::new(config, None, None, None);
+
+    // Test production profile provider defaults
+    let db_prod = spec
+        .resolve_secret_config("DATABASE_URL", Some("production"))
+        .unwrap();
+    assert_eq!(
+        db_prod.providers,
+        Some(vec!["prod_vault".to_string(), "keyring".to_string()]),
+        "DATABASE_URL should inherit production profile defaults"
+    );
+
+    let api_prod = spec
+        .resolve_secret_config("API_KEY", Some("production"))
+        .unwrap();
+    assert_eq!(
+        api_prod.providers,
+        Some(vec!["prod_vault".to_string(), "keyring".to_string()]),
+        "API_KEY should inherit production profile defaults"
+    );
+
+    let secret_prod = spec
+        .resolve_secret_config("SECRET_KEY", Some("production"))
+        .unwrap();
+    assert_eq!(
+        secret_prod.providers,
+        Some(vec!["env".to_string()]),
+        "SECRET_KEY should override with its own providers"
+    );
+
+    // Test development profile required and default values
+    let db_dev = spec
+        .resolve_secret_config("DATABASE_URL", Some("development"))
+        .unwrap();
+    assert_eq!(
+        db_dev.required,
+        Some(false),
+        "DATABASE_URL should inherit required=false from dev defaults"
+    );
+    assert_eq!(
+        db_dev.default,
+        Some("dev-default".to_string()),
+        "DATABASE_URL should inherit default value from dev defaults"
+    );
+
+    let api_dev = spec
+        .resolve_secret_config("API_KEY", Some("development"))
+        .unwrap();
+    assert_eq!(api_dev.required, Some(false));
+    assert_eq!(api_dev.default, Some("dev-default".to_string()));
+
+    let special_dev = spec
+        .resolve_secret_config("SPECIAL_SECRET", Some("development"))
+        .unwrap();
+    assert_eq!(
+        special_dev.required,
+        Some(true),
+        "SPECIAL_SECRET should override required setting"
+    );
+    assert_eq!(
+        special_dev.default,
+        Some("dev-default".to_string()),
+        "SPECIAL_SECRET should still inherit default value"
     );
 }
 

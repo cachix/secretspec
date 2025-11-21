@@ -29,11 +29,11 @@ DATABASE_URL = { description = "Database URL", required = false, default = "post
         assert_eq!(default_profile.secrets.len(), 2);
 
         let api_key = &default_profile.secrets["API_KEY"];
-        assert!(api_key.required);
+        assert_eq!(api_key.required, Some(true));
         assert!(api_key.default.is_none());
 
         let db_url = &default_profile.secrets["DATABASE_URL"];
-        assert!(!db_url.required);
+        assert_eq!(db_url.required, Some(false));
         assert_eq!(db_url.default.as_deref(), Some("postgres://localhost"));
     }
 
@@ -60,15 +60,15 @@ revision = "1.0"
         .unwrap();
         let api_key = &config.profiles["default"].secrets["API_KEY"];
 
-        assert!(api_key.required);
+        assert_eq!(api_key.required, Some(true));
         assert_eq!(config.profiles.len(), 3);
 
         let dev_api_key = &config.profiles["development"].secrets["API_KEY"];
-        assert!(!dev_api_key.required);
+        assert_eq!(dev_api_key.required, Some(false));
         assert_eq!(dev_api_key.default.as_deref(), Some("dev-key"));
 
         let prod_api_key = &config.profiles["production"].secrets["API_KEY"];
-        assert!(prod_api_key.required);
+        assert_eq!(prod_api_key.required, Some(true));
         assert!(prod_api_key.default.is_none());
     }
 
@@ -93,7 +93,7 @@ SOMETIMES_REQUIRED = { description = "Sometimes required secret", required = fal
 
         for (_profile_name, profile_config) in &config.profiles {
             if let Some(secret_config) = profile_config.secrets.get("SOMETIMES_REQUIRED") {
-                if !secret_config.required || secret_config.default.is_some() {
+                if secret_config.required != Some(true) || secret_config.default.is_some() {
                     is_ever_optional = true;
                     break;
                 }
@@ -130,7 +130,7 @@ ALWAYS_REQUIRED = { description = "Always required secret", required = true }
         let secret_config = &config.profiles["default"].secrets["ALWAYS_REQUIRED"];
         let mut is_ever_optional = false;
 
-        if !secret_config.required || secret_config.default.is_some() {
+        if secret_config.required != Some(true) || secret_config.default.is_some() {
             is_ever_optional = true;
         }
 
@@ -153,7 +153,8 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         let config: Config = toml::from_str(toml_str).unwrap();
         let secret_config = &config.profiles["default"].secrets["HAS_DEFAULT"];
 
-        let is_ever_optional = !secret_config.required || secret_config.default.is_some();
+        let is_ever_optional =
+            secret_config.required != Some(true) || secret_config.default.is_some();
         assert!(
             is_ever_optional,
             "Field with default should be treated as optional"
@@ -198,7 +199,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "API_KEY".to_string(),
             Secret {
                 description: Some("API Key".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -207,7 +208,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "database_url".to_string(),
             Secret {
                 description: Some("Database URL".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -217,6 +218,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         valid_profiles.insert(
             "default".to_string(),
             Profile {
+                defaults: None,
                 secrets: valid_secrets,
             },
         );
@@ -242,7 +244,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "123invalid".to_string(),
             Secret {
                 description: Some("Invalid name".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -251,7 +253,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "invalid-name".to_string(),
             Secret {
                 description: Some("Invalid name".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -261,6 +263,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         invalid_profiles.insert(
             "default".to_string(),
             Profile {
+                defaults: None,
                 secrets: invalid_secrets,
             },
         );
@@ -309,7 +312,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "fn".to_string(),
             Secret {
                 description: Some("Function keyword".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -318,7 +321,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "struct".to_string(),
             Secret {
                 description: Some("Struct keyword".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -327,7 +330,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "async".to_string(),
             Secret {
                 description: Some("Async keyword".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -337,6 +340,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         keyword_profiles.insert(
             "default".to_string(),
             Profile {
+                defaults: None,
                 secrets: keyword_secrets,
             },
         );
@@ -384,7 +388,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "API_KEY".to_string(),
             Secret {
                 description: Some("API Key upper".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -393,7 +397,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "api_key".to_string(),
             Secret {
                 description: Some("API Key lower".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -402,7 +406,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "Api_Key".to_string(),
             Secret {
                 description: Some("API Key mixed".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -412,6 +416,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         duplicate_profiles.insert(
             "default".to_string(),
             Profile {
+                defaults: None,
                 secrets: duplicate_secrets,
             },
         );
@@ -451,18 +456,21 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         valid_profiles.insert(
             "default".to_string(),
             Profile {
+                defaults: None,
                 secrets: HashMap::new(),
             },
         );
         valid_profiles.insert(
             "development".to_string(),
             Profile {
+                defaults: None,
                 secrets: HashMap::new(),
             },
         );
         valid_profiles.insert(
             "production".to_string(),
             Profile {
+                defaults: None,
                 secrets: HashMap::new(),
             },
         );
@@ -487,12 +495,14 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         invalid_profiles.insert(
             "123invalid".to_string(),
             Profile {
+                defaults: None,
                 secrets: HashMap::new(),
             },
         );
         invalid_profiles.insert(
             "invalid-name".to_string(),
             Profile {
+                defaults: None,
                 secrets: HashMap::new(),
             },
         );
@@ -536,7 +546,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         // Required without default
         let required_no_default = Secret {
             description: Some("Required".to_string()),
-            required: true,
+            required: Some(true),
             default: None,
             providers: None,
         };
@@ -545,7 +555,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         // Required with default (should NOT be optional)
         let required_with_default = Secret {
             description: Some("Required with default".to_string()),
-            required: true,
+            required: Some(true),
             default: Some("default_value".to_string()),
             providers: None,
         };
@@ -554,7 +564,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         // Not required
         let not_required = Secret {
             description: Some("Not required".to_string()),
-            required: false,
+            required: Some(false),
             default: None,
             providers: None,
         };
@@ -563,7 +573,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         // Not required with default
         let not_required_with_default = Secret {
             description: Some("Not required with default".to_string()),
-            required: false,
+            required: Some(false),
             default: Some("default_value".to_string()),
             providers: None,
         };
@@ -585,7 +595,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "API_KEY".to_string(),
             Secret {
                 description: Some("API Key".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -594,7 +604,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "DATABASE_URL".to_string(),
             Secret {
                 description: Some("Database URL".to_string()),
-                required: false,
+                required: Some(false),
                 default: None,
                 providers: None,
             },
@@ -602,6 +612,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         profiles.insert(
             "default".to_string(),
             Profile {
+                defaults: None,
                 secrets: default_secrets,
             },
         );
@@ -612,7 +623,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "API_KEY".to_string(),
             Secret {
                 description: Some("API Key".to_string()),
-                required: true,
+                required: Some(true),
                 default: Some("dev-key".to_string()),
                 providers: None,
             },
@@ -621,7 +632,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "DATABASE_URL".to_string(),
             Secret {
                 description: Some("Database URL".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -631,7 +642,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "CACHE_URL".to_string(),
             Secret {
                 description: Some("Cache URL".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -639,6 +650,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         profiles.insert(
             "development".to_string(),
             Profile {
+                defaults: None,
                 secrets: dev_secrets,
             },
         );
@@ -668,7 +680,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "ALWAYS_REQUIRED".to_string(),
             Secret {
                 description: Some("Always required".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -678,7 +690,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "ALWAYS_REQUIRED".to_string(),
             Secret {
                 description: Some("Always required".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -686,12 +698,14 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         strict_profiles.insert(
             "default".to_string(),
             Profile {
+                defaults: None,
                 secrets: strict_default,
             },
         );
         strict_profiles.insert(
             "development".to_string(),
             Profile {
+                defaults: None,
                 secrets: strict_dev,
             },
         );
@@ -726,7 +740,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "REQUIRED_SECRET".to_string(),
             Secret {
                 description: Some("Always required".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -735,7 +749,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "OPTIONAL_SECRET".to_string(),
             Secret {
                 description: Some("Optional".to_string()),
-                required: false,
+                required: Some(false),
                 default: None,
                 providers: None,
             },
@@ -744,7 +758,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "DEFAULT_SECRET".to_string(),
             Secret {
                 description: Some("Has default".to_string()),
-                required: true,
+                required: Some(true),
                 default: Some("default_value".to_string()),
                 providers: None,
             },
@@ -752,6 +766,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         profiles.insert(
             "default".to_string(),
             Profile {
+                defaults: None,
                 secrets: default_secrets,
             },
         );
@@ -762,7 +777,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "REQUIRED_SECRET".to_string(),
             Secret {
                 description: Some("Always required".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -771,7 +786,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "DEV_ONLY_SECRET".to_string(),
             Secret {
                 description: Some("Development only".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -779,6 +794,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         profiles.insert(
             "development".to_string(),
             Profile {
+                defaults: None,
                 secrets: dev_secrets,
             },
         );
@@ -911,7 +927,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "API_KEY".to_string(),
             Secret {
                 description: Some("API Key".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -920,7 +936,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "database_url".to_string(),
             Secret {
                 description: Some("Database URL".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -930,12 +946,14 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         valid_profiles.insert(
             "default".to_string(),
             Profile {
+                defaults: None,
                 secrets: valid_secrets,
             },
         );
         valid_profiles.insert(
             "development".to_string(),
             Profile {
+                defaults: None,
                 secrets: HashMap::new(),
             },
         );
@@ -958,7 +976,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "123invalid".to_string(),
             Secret {
                 description: Some("Invalid name".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -967,7 +985,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             "fn".to_string(),
             Secret {
                 description: Some("Rust keyword".to_string()),
-                required: true,
+                required: Some(true),
                 default: None,
                 providers: None,
             },
@@ -977,6 +995,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         invalid_profiles.insert(
             "123invalid-profile".to_string(),
             Profile {
+                defaults: None,
                 secrets: invalid_secrets,
             },
         );

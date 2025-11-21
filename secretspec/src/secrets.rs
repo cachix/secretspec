@@ -223,6 +223,12 @@ impl Secrets {
     /// This method looks for the secret in the specified profile, falling back
     /// to the default profile if not found. If the secret exists in both profiles,
     /// fields are merged with the current profile taking precedence.
+    /// Profile defaults are also applied with lower precedence than explicit secret config.
+    ///
+    /// Precedence order (highest to lowest):
+    /// 1. Secret config in current profile
+    /// 2. Secret config in default profile
+    /// 3. Profile defaults from current profile
     ///
     /// # Arguments
     ///
@@ -239,11 +245,11 @@ impl Secrets {
     ) -> Option<crate::config::Secret> {
         let profile_name = self.resolve_profile_name(profile);
 
-        let current_secret = self
-            .config
-            .profiles
-            .get(&profile_name)
-            .and_then(|profile_config| profile_config.secrets.get(name));
+        let current_profile = self.config.profiles.get(&profile_name);
+        let current_secret =
+            current_profile.and_then(|profile_config| profile_config.secrets.get(name));
+        let current_defaults =
+            current_profile.and_then(|profile_config| profile_config.defaults.as_ref());
 
         let default_secret = if profile_name != "default" {
             self.config
@@ -256,21 +262,45 @@ impl Secrets {
 
         match (current_secret, default_secret) {
             (Some(current), Some(default)) => {
-                // Merge: current profile takes precedence
+                // Merge: current profile takes precedence, then default profile, then profile defaults
                 Some(crate::config::Secret {
                     description: current
                         .description
                         .clone()
                         .or_else(|| default.description.clone()),
-                    required: current.required,
-                    default: current.default.clone(),
+                    required: current
+                        .required
+                        .or(default.required)
+                        .or(current_defaults.and_then(|d| d.required)),
+                    default: current
+                        .default
+                        .clone()
+                        .or_else(|| default.default.clone())
+                        .or_else(|| current_defaults.and_then(|d| d.default.clone())),
                     providers: current
                         .providers
                         .clone()
-                        .or_else(|| default.providers.clone()),
+                        .or_else(|| default.providers.clone())
+                        .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
                 })
             }
-            (Some(secret), None) | (None, Some(secret)) => Some(secret.clone()),
+            (Some(secret), None) | (None, Some(secret)) => {
+                // Apply profile defaults to the found secret
+                Some(crate::config::Secret {
+                    description: secret.description.clone(),
+                    required: secret
+                        .required
+                        .or(current_defaults.and_then(|d| d.required)),
+                    default: secret
+                        .default
+                        .clone()
+                        .or_else(|| current_defaults.and_then(|d| d.default.clone())),
+                    providers: secret
+                        .providers
+                        .clone()
+                        .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
+                })
+            }
             (None, None) => None,
         }
     }
@@ -1064,7 +1094,7 @@ impl Secrets {
             let secret_config = self
                 .resolve_secret_config(&name, Some(&profile_name))
                 .expect("Secret should exist in config since we're iterating over it");
-            let required = secret_config.required;
+            let required = secret_config.required.unwrap_or(true);
             let default = secret_config.default.clone();
 
             // Resolve per-secret provider aliases to URIs

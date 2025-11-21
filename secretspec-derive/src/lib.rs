@@ -454,7 +454,7 @@ fn field_name_ident(name: &str) -> proc_macro2::Ident {
 ///
 /// `true` if the secret is optional, `false` if required
 fn is_secret_optional(secret_config: &Secret) -> bool {
-    !secret_config.required
+    secret_config.required != Some(true)
 }
 
 /// Determines if a field should be optional across all profiles.

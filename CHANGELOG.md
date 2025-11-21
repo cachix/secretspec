@@ -8,16 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Per-secret provider configuration: secrets can now specify their own provider(s) with fallback chains
-- New `providers` field in secret configuration (list of provider aliases tried in order)
-- Provider alias management via `secretspec config provider add/remove/list` commands
-- New `providers` map in global config for defining named provider aliases
+- Profile-level default configuration: `profiles.<name>.defaults` section for shared settings across secrets in a profile
+- Default providers for profiles: define common providers once and have all secrets use them unless overridden
+- Default values and required settings can now be specified at profile level to reduce repetition
 
 ### Changed
-- Secret configuration now supports `providers: [...]` field instead of single provider assignment
-- Provider resolution includes per-secret provider overrides before falling back to global defaults
-- Validation results now use provider URIs (e.g., "dotenv:.env.production") instead of just provider names for better transparency
-- `Secrets::check()` now returns `Result<ValidatedSecrets>` instead of `Result<()>`, allowing callers to access the validated secrets
+- Secret `required` field is now `Option<bool>` to allow profile-level defaults to apply when not explicitly set
+- Secret `default` field can now inherit from profile-level defaults if not specified per-secret
+- Secret `providers` field can now inherit from profile-level defaults if not specified per-secret
+- Profile defaults only apply to secrets that don't explicitly set these fields
 
 ## [0.3.4] - 2025-11-09
 

@@ -59,6 +59,33 @@ When using profiles, inheritance works as follows:
 3. **Complete override**: When a profile defines a secret, it can override any or all properties (`required`, `default`, `description`)
 4. **Profile-specific secrets**: Secrets not in the default profile can be added to any profile
 
+## Profile-Level Defaults
+
+To reduce repetition when multiple secrets in a profile share the same settings, use the `profiles.<name>.defaults` section:
+
+```toml
+[profiles.production.defaults]
+providers = ["prod_vault", "keyring"]
+required = true
+
+[profiles.production]
+DATABASE_URL = { description = "Production DB" }
+API_KEY = { description = "API Key" }
+SENTRY_DSN = { description = "Error tracking" }
+```
+
+Profile defaults apply to all secrets in that profile unless explicitly overridden. The precedence order is:
+
+1. **Secret-level configuration** (highest priority) - explicit settings in the secret definition
+2. **Profile defaults** - from `profiles.<name>.defaults`
+3. **Profile inheritance** - inherited from default profile
+4. **Global defaults** (lowest priority) - from CLI, environment, or global config
+
+This is particularly useful for:
+- **Providers**: Define common provider chains once instead of repeating for each secret
+- **Requirements**: Set all production secrets to required at the profile level
+- **Defaults**: Provide sensible defaults for development profiles
+
 ## Practical Example
 
 A web application with different requirements per environment:

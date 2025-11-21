@@ -183,11 +183,15 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
 
         for (secret_name, secret_config) in &profile_config.secrets {
             output.push_str(&format!(
-                "{} = {{ description = \"{}\", required = {}",
+                "{} = {{ description = \"{}\"",
                 secret_name,
                 secret_config.description.as_deref().unwrap_or(""),
-                secret_config.required
             ));
+
+            // Only include required if it's explicitly set
+            if let Some(required) = secret_config.required {
+                output.push_str(&format!(", required = {}", required));
+            }
 
             if let Some(default) = &secret_config.default {
                 output.push_str(&format!(", default = \"{}\"", default));
@@ -247,7 +251,13 @@ pub fn main() -> Result<()> {
 
             // Create a new project config
             let mut profiles = HashMap::new();
-            profiles.insert("default".to_string(), Profile { secrets });
+            profiles.insert(
+                "default".to_string(),
+                Profile {
+                    defaults: None,
+                    secrets,
+                },
+            );
 
             let project_config = Config {
                 project: Project {

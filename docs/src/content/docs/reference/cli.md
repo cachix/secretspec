@@ -54,6 +54,57 @@ Provider: keyring
 Profile:  development
 ```
 
+### config provider add
+Add a provider alias to your configuration.
+
+```bash
+secretspec config provider add <ALIAS> <URI>
+```
+
+**Arguments:**
+- `<ALIAS>` - Short name for the provider (e.g., `prod_vault`, `shared`)
+- `<URI>` - Provider URI (e.g., `onepassword://vault/Production`, `env://`)
+
+**Example:**
+```bash
+$ secretspec config provider add prod_vault "onepassword://vault/Production"
+✓ Provider alias 'prod_vault' saved
+
+$ secretspec config provider add shared "onepassword://vault/Shared"
+✓ Provider alias 'shared' saved
+```
+
+### config provider list
+List all configured provider aliases.
+
+```bash
+secretspec config provider list
+```
+
+**Example:**
+```bash
+$ secretspec config provider list
+prod_vault  → onepassword://vault/Production
+shared      → onepassword://vault/Shared
+env         → env://
+```
+
+### config provider remove
+Remove a provider alias from your configuration.
+
+```bash
+secretspec config provider remove <ALIAS>
+```
+
+**Arguments:**
+- `<ALIAS>` - Name of the alias to remove
+
+**Example:**
+```bash
+$ secretspec config provider remove prod_vault
+✓ Provider alias 'prod_vault' removed
+```
+
 ### check
 Check if all required secrets are available, with interactive prompting for missing secrets.
 

@@ -235,15 +235,42 @@ pub struct Project {
 /// Each profile contains its own set of secret definitions with their requirements.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
+    /// Default configuration for secrets in this profile
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub defaults: Option<ProfileDefaults>,
     /// Map of secret names to their configurations, flattened in TOML for cleaner syntax
     #[serde(flatten)]
     pub secrets: HashMap<String, Secret>,
+}
+
+/// Default configuration for a profile.
+///
+/// Provides defaults that apply to all secrets within the profile.
+/// Individual secrets can override any of these defaults.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileDefaults {
+    /// Default value for the required field of secrets in this profile.
+    /// If not specified, secrets default to required=true.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+
+    /// Default value to use for secrets in this profile if they are not found.
+    /// Individual secrets can override this with their own default value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+
+    /// List of provider aliases to use for secrets in this profile.
+    /// Providers are tried in order until one has the secret.
+    /// Individual secrets can override this with their own providers field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub providers: Option<Vec<String>>,
 }
 
 impl Profile {
     /// Create a new empty profile configuration.
     pub fn new() -> Self {
         Self {
+            defaults: None,
             secrets: HashMap::new(),
         }
     }
@@ -321,18 +348,26 @@ impl IntoIterator for Profile {
 /// Configuration for an individual secret.
 ///
 /// Defines the properties of a secret including its documentation,
-/// whether it's required, and an optional default value.
+/// whether it's required, an optional default value, and optionally
+/// which providers to use for retrieving this secret (in fallback order).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Secret {
     /// Human-readable description of what this secret is used for
     pub description: Option<String>,
     /// Whether this secret must be provided (no default value)
-    /// Defaults to true if not specified
-    #[serde(default = "default_true")]
-    pub required: bool,
+    /// If not specified, defaults to true unless overridden by profile defaults
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
     /// Optional default value if the secret is not provided
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+    /// Optional list of provider aliases for retrieving this secret.
+    /// Providers are tried in order until one has the secret.
+    /// If not specified, uses the profile defaults.providers or global provider.
+    /// Each alias is resolved against the providers map in GlobalConfig.
+    /// Example: providers = ["keyring", "env"] will try keyring first, then env.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub providers: Option<Vec<String>>,
 }
 
 impl Secret {
@@ -348,16 +383,13 @@ impl Secret {
             return Err("missing description".into());
         }
 
-        if self.required && self.default.is_some() {
+        // If required is explicitly true and default is set, that's an error
+        if self.required == Some(true) && self.default.is_some() {
             return Err("Required secrets cannot have default values".into());
         }
 
         Ok(())
     }
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// Check if a string is a valid identifier.
@@ -398,6 +430,16 @@ pub struct GlobalDefaults {
     /// Default profile to use when not specified
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Named provider aliases that map alias names to provider URIs.
+    /// Used by per-secret provider configuration to avoid storing sensitive
+    /// provider details in secretspec.toml. Example:
+    /// ```toml
+    /// [providers]
+    /// shared = "onepassword://vault/Shared"
+    /// local = "dotenv://.env.local"
+    /// ```
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub providers: Option<HashMap<String, String>>,
 }
 
 impl GlobalConfig {

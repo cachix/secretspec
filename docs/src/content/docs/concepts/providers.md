@@ -19,9 +19,10 @@ Providers are pluggable storage backends that handle the storage and retrieval o
 
 SecretSpec determines which provider to use in this order:
 
-1. **CLI flag**: `secretspec --provider` flag
-2. **Environment**: `SECRETSPEC_PROVIDER` (highest priority)
-3. **Global default**: Default provider in user config set via `secretspec config init`
+1. **Per-secret providers**: `providers` field in `secretspec.toml` (highest priority, with fallback chain)
+2. **CLI flag**: `secretspec --provider` flag
+3. **Environment**: `SECRETSPEC_PROVIDER`
+4. **Global default**: Default provider in user config set via `secretspec config init`
 
 ## Configuration
 
@@ -59,6 +60,80 @@ $ secretspec run --provider "onepassword://Personal/Development" -- npm start
 
 # Use a specific dotenv file
 $ secretspec run --provider "dotenv:/home/user/work/.env" -- npm test
+```
+
+## Per-Secret Provider Configuration
+
+For fine-grained control, you can specify different providers for individual secrets using the `providers` field in `secretspec.toml`. This enables fallback chains where secrets are retrieved from multiple providers in order of preference:
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "Production DB", providers = ["prod_vault", "keyring"] }
+API_KEY = { description = "API key from env", providers = ["env"] }
+SENTRY_DSN = { description = "Error tracking", providers = ["shared_vault", "keyring"] }
+```
+
+### Profile-Level Default Providers
+
+To avoid repetition when multiple secrets share the same providers, you can define default providers at the profile level using `profiles.<name>.defaults`:
+
+```toml
+[profiles.production.defaults]
+providers = ["prod_vault", "keyring"]
+
+[profiles.production]
+DATABASE_URL = { description = "Production DB" }
+API_KEY = { description = "API key from env", providers = ["env"] }
+SENTRY_DSN = { description = "Error tracking" }
+```
+
+In this example:
+- `DATABASE_URL` uses the profile default: `["prod_vault", "keyring"]`
+- `API_KEY` overrides with: `["env"]`
+- `SENTRY_DSN` uses the profile default: `["prod_vault", "keyring"]`
+
+Profile defaults apply to all secrets in that profile unless explicitly overridden with a secret-level `providers` field.
+
+Provider aliases are defined in your user configuration file (`~/.config/secretspec/config.toml`):
+
+```toml
+[defaults]
+provider = "keyring"
+
+[providers]
+prod_vault = "onepassword://vault/Production"
+shared_vault = "onepassword://vault/Shared"
+env = "env://"
+```
+
+### Fallback Chains
+
+When a secret specifies multiple providers, SecretSpec tries each provider in order until it finds the secret:
+
+```toml
+# Try OnePassword first, then fall back to keyring if not found
+DATABASE_URL = { description = "DB", providers = ["prod_vault", "keyring"] }
+```
+
+This enables complex workflows:
+- **Shared vs environment-specific**: Try a shared vault first, fall back to local keyring
+- **Redundancy**: Maintain secrets in multiple locations for backup
+- **Migration**: Gradually move secrets from one provider to another
+- **Multi-team setups**: Different teams can manage different providers
+
+### Managing Provider Aliases
+
+Use CLI commands to manage provider aliases:
+
+```bash
+# Add a provider alias
+$ secretspec config provider add prod_vault "onepassword://vault/Production"
+
+# List all aliases
+$ secretspec config provider list
+
+# Remove an alias
+$ secretspec config provider remove prod_vault
 ```
 
 ## Next Steps

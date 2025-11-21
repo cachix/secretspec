@@ -223,6 +223,12 @@ impl Secrets {
     /// This method looks for the secret in the specified profile, falling back
     /// to the default profile if not found. If the secret exists in both profiles,
     /// fields are merged with the current profile taking precedence.
+    /// Profile defaults are also applied with lower precedence than explicit secret config.
+    ///
+    /// Precedence order (highest to lowest):
+    /// 1. Secret config in current profile
+    /// 2. Secret config in default profile
+    /// 3. Profile defaults from current profile
     ///
     /// # Arguments
     ///
@@ -239,11 +245,11 @@ impl Secrets {
     ) -> Option<crate::config::Secret> {
         let profile_name = self.resolve_profile_name(profile);
 
-        let current_secret = self
-            .config
-            .profiles
-            .get(&profile_name)
-            .and_then(|profile_config| profile_config.secrets.get(name));
+        let current_profile = self.config.profiles.get(&profile_name);
+        let current_secret =
+            current_profile.and_then(|profile_config| profile_config.secrets.get(name));
+        let current_defaults =
+            current_profile.and_then(|profile_config| profile_config.defaults.as_ref());
 
         let default_secret = if profile_name != "default" {
             self.config
@@ -256,19 +262,105 @@ impl Secrets {
 
         match (current_secret, default_secret) {
             (Some(current), Some(default)) => {
-                // Merge: current profile takes precedence
+                // Merge: current profile takes precedence, then default profile, then profile defaults
                 Some(crate::config::Secret {
                     description: current
                         .description
                         .clone()
                         .or_else(|| default.description.clone()),
-                    required: current.required,
-                    default: current.default.clone(),
+                    required: current
+                        .required
+                        .or(default.required)
+                        .or(current_defaults.and_then(|d| d.required)),
+                    default: current
+                        .default
+                        .clone()
+                        .or_else(|| default.default.clone())
+                        .or_else(|| current_defaults.and_then(|d| d.default.clone())),
+                    providers: current
+                        .providers
+                        .clone()
+                        .or_else(|| default.providers.clone())
+                        .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
                 })
             }
-            (Some(secret), None) | (None, Some(secret)) => Some(secret.clone()),
+            (Some(secret), None) | (None, Some(secret)) => {
+                // Apply profile defaults to the found secret
+                Some(crate::config::Secret {
+                    description: secret.description.clone(),
+                    required: secret
+                        .required
+                        .or(current_defaults.and_then(|d| d.required)),
+                    default: secret
+                        .default
+                        .clone()
+                        .or_else(|| current_defaults.and_then(|d| d.default.clone())),
+                    providers: secret
+                        .providers
+                        .clone()
+                        .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
+                })
+            }
             (None, None) => None,
         }
+    }
+
+    /// Resolves a list of provider aliases to their URIs using the global config providers map.
+    ///
+    /// Returns a list of provider URIs in the same order. Used for fallback chain resolution.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider_aliases` - Optional list of provider aliases to resolve
+    ///
+    /// # Returns
+    ///
+    /// A list of provider URIs in the same order, or None if no aliases were provided
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any alias is not found in the providers map.
+    pub(crate) fn resolve_provider_aliases(
+        &self,
+        provider_aliases: Option<&[String]>,
+    ) -> Result<Option<Vec<String>>> {
+        if let Some(aliases) = provider_aliases {
+            let mut uris = Vec::new();
+
+            for alias in aliases {
+                // If a per-secret provider alias is specified, resolve it from the global config
+                if let Some(global_config) = &self.global_config {
+                    if let Some(providers_map) = &global_config.defaults.providers {
+                        if let Some(uri) = providers_map.get(alias) {
+                            uris.push(uri.clone());
+                        } else {
+                            return Err(SecretSpecError::ProviderNotFound(format!(
+                                "Provider alias '{}' is not defined in the global config. Available aliases: {}",
+                                alias,
+                                providers_map
+                                    .keys()
+                                    .map(|s| s.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )));
+                        }
+                    } else {
+                        return Err(SecretSpecError::ProviderNotFound(format!(
+                            "Provider alias '{}' specified but no providers are configured in global config",
+                            alias
+                        )));
+                    }
+                } else {
+                    return Err(SecretSpecError::ProviderNotFound(format!(
+                        "Provider alias '{}' specified but no global config is loaded",
+                        alias
+                    )));
+                }
+            }
+
+            return Ok(Some(uris));
+        }
+        Ok(None)
     }
 
     /// Gets the provider instance to use for secret operations
@@ -276,8 +368,9 @@ impl Secrets {
     /// Provider resolution order:
     /// 1. Provided provider argument
     /// 2. Provider set via builder
-    /// 3. Global configuration default provider
-    /// 4. Error if no provider is configured
+    /// 3. Environment variable (SECRETSPEC_PROVIDER)
+    /// 4. Global configuration default provider
+    /// 5. Error if no provider is configured
     ///
     /// # Arguments
     ///
@@ -309,6 +402,48 @@ impl Secrets {
         let provider = Box::<dyn ProviderTrait>::try_from(provider_spec)?;
 
         Ok(provider)
+    }
+
+    /// Gets a secret from a list of providers with fallback.
+    ///
+    /// Tries each provider in order until one has the secret.
+    /// If no provider URIs are specified, falls back to the global provider.
+    ///
+    /// # Arguments
+    ///
+    /// * `project_name` - The project name
+    /// * `secret_name` - The secret name
+    /// * `profile_name` - The profile name
+    /// * `provider_uris` - Optional list of provider URIs to try in order
+    /// * `default_provider_arg` - Optional default provider if no URIs provided
+    ///
+    /// # Returns
+    ///
+    /// The secret value if found in any provider, or None if not found in any
+    fn get_secret_from_providers(
+        &self,
+        project_name: &str,
+        secret_name: &str,
+        profile_name: &str,
+        provider_uris: Option<&[String]>,
+        default_provider_arg: Option<String>,
+    ) -> Result<Option<SecretString>> {
+        // If provider URIs are specified, try them in order
+        if let Some(uris) = provider_uris {
+            for uri in uris {
+                let provider = Box::<dyn ProviderTrait>::try_from(uri.clone())?;
+                match provider.get(project_name, secret_name, profile_name)? {
+                    Some(value) => return Ok(Some(value)),
+                    None => continue, // Try next provider
+                }
+            }
+            // Not found in any provider, return None
+            Ok(None)
+        } else {
+            // No per-secret providers, use default provider
+            let backend = self.get_provider(default_provider_arg)?;
+            backend.get(project_name, secret_name, profile_name)
+        }
     }
 
     /// Sets a secret value in the provider
@@ -358,7 +493,8 @@ impl Secrets {
         })?;
 
         // Check if the secret exists in the profile or is inherited from default
-        if self.resolve_secret_config(name, None).is_none() {
+        let secret_config = self.resolve_secret_config(name, None);
+        if secret_config.is_none() {
             // Collect available secrets from both current profile and default
             let profile = self.resolve_profile(Some(&profile_name))?;
             let mut available_secrets = profile
@@ -375,7 +511,23 @@ impl Secrets {
             )));
         }
 
-        let backend = self.get_provider(None)?;
+        // Resolve provider: use first provider in list if specified, otherwise use default
+        let backend = if let Some(provider_aliases) = secret_config
+            .as_ref()
+            .and_then(|sc| sc.providers.as_ref())
+            .and_then(|p| p.first())
+        {
+            let provider_uris = self.resolve_provider_aliases(Some(&[provider_aliases.clone()]))?;
+            let uri = provider_uris.and_then(|uris| uris.first().cloned()).ok_or(
+                SecretSpecError::ProviderNotFound(format!(
+                    "Provider alias '{}' could not be resolved",
+                    provider_aliases
+                )),
+            )?;
+            Box::<dyn ProviderTrait>::try_from(uri)?
+        } else {
+            self.get_provider(None)?
+        };
 
         // Check if the provider supports setting values
         if !backend.allows_set() {
@@ -435,14 +587,23 @@ impl Secrets {
     /// - The secret is not defined in the specification
     /// - The secret is not found and has no default value
     pub fn get(&self, name: &str) -> Result<()> {
-        let backend = self.get_provider(None)?;
         let profile_name = self.resolve_profile_name(None);
         let secret_config = self
             .resolve_secret_config(name, None)
             .ok_or_else(|| SecretSpecError::SecretNotFound(name.to_string()))?;
         let default = secret_config.default.clone();
 
-        match backend.get(&self.config.project.name, name, &profile_name)? {
+        // Resolve per-secret provider aliases to URIs
+        let provider_uris = self.resolve_provider_aliases(secret_config.providers.as_deref())?;
+
+        // Try to get the secret from configured providers with fallback
+        match self.get_secret_from_providers(
+            &self.config.project.name,
+            name,
+            &profile_name,
+            provider_uris.as_deref(),
+            None,
+        )? {
             Some(value) => {
                 // Use expose_secret() to access the actual value for printing
                 println!("{}", value.expose_secret());
@@ -485,7 +646,6 @@ impl Secrets {
         profile: Option<String>,
         interactive: bool,
     ) -> Result<ValidatedSecrets> {
-        let backend = self.get_provider(provider_arg.clone())?;
         let profile_display = self.resolve_profile_name(profile.as_deref());
 
         // First validate to see what's missing
@@ -520,6 +680,23 @@ impl Secrets {
                                 ));
                             };
 
+                            // Get the provider for this specific secret
+                            // Use first provider in list if specified, otherwise use CLI provider or default
+                            let backend = if let Some(provider_aliases) =
+                                secret_config.providers.as_ref().and_then(|p| p.first())
+                            {
+                                let provider_uris = self
+                                    .resolve_provider_aliases(Some(&[provider_aliases.clone()]))?;
+                                let uri = provider_uris
+                                    .and_then(|uris| uris.first().cloned())
+                                    .ok_or(SecretSpecError::ProviderNotFound(format!(
+                                        "Provider alias '{}' could not be resolved",
+                                        provider_aliases
+                                    )))?;
+                                Box::<dyn ProviderTrait>::try_from(uri)?
+                            } else {
+                                self.get_provider(provider_arg.clone())?
+                            };
                             backend.set(
                                 &self.config.project.name,
                                 secret_name,
@@ -585,13 +762,11 @@ impl Secrets {
     /// let validated = spec.check().unwrap();
     /// ```
     pub fn check(&self) -> Result<ValidatedSecrets> {
-        let provider = self.get_provider(None)?;
         let profile_display = self.resolve_profile_name(None);
 
         println!(
-            "Checking secrets in {} using {} (profile: {})...\n",
+            "Checking secrets in {} (profile: {})...\n",
             self.config.project.name.bold(),
-            provider.name().blue(),
             profile_display.cyan()
         );
 
@@ -739,9 +914,6 @@ impl Secrets {
     /// spec.import("dotenv://.env.production").unwrap();
     /// ```
     pub fn import(&self, from_provider: &str) -> Result<()> {
-        // Get the "to" provider from global config (default)
-        let to_provider = self.get_provider(None)?;
-
         // Resolve profile (checks env var, then global config, then defaults to "default")
         let profile_display = self.resolve_profile_name(None);
 
@@ -749,9 +921,8 @@ impl Secrets {
         let from_provider_instance = Box::<dyn ProviderTrait>::try_from(from_provider.to_string())?;
 
         println!(
-            "Importing secrets from {} to {} (profile: {})...\n",
+            "Importing secrets from {} (profile: {})...\n",
             from_provider.blue(),
-            to_provider.name().blue(),
             profile_display.cyan()
         );
 
@@ -770,6 +941,28 @@ impl Secrets {
 
         // Process each secret using proper profile resolution
         for (name, config) in profile.into_iter() {
+            // Get the target provider for this secret
+            let secret_config = self
+                .resolve_secret_config(&name, Some(&profile_display))
+                .expect("Secret should exist since we're iterating over it");
+
+            // Use first provider in list if specified, otherwise use default
+            let to_provider = if let Some(provider_aliases) =
+                secret_config.providers.as_ref().and_then(|p| p.first())
+            {
+                let provider_uris =
+                    self.resolve_provider_aliases(Some(&[provider_aliases.clone()]))?;
+                let uri = provider_uris.and_then(|uris| uris.first().cloned()).ok_or(
+                    SecretSpecError::ProviderNotFound(format!(
+                        "Provider alias '{}' could not be resolved",
+                        provider_aliases
+                    )),
+                )?;
+                Box::<dyn ProviderTrait>::try_from(uri)?
+            } else {
+                self.get_provider(None)?
+            };
+
             // First check if the secret exists in the "from" provider
             match from_provider_instance.get(&self.config.project.name, &name, &profile_display)? {
                 Some(value) => {
@@ -777,11 +970,12 @@ impl Secrets {
                     match to_provider.get(&self.config.project.name, &name, &profile_display)? {
                         Some(_) => {
                             println!(
-                                "{} {} - {} {}",
+                                "{} {} - {} {} (→ {})",
                                 "○".yellow(),
                                 name,
                                 config.description.as_deref().unwrap_or("No description"),
-                                "(already exists in target)".yellow()
+                                "(already exists in target)".yellow(),
+                                to_provider.name().blue()
                             );
                             already_exists += 1;
                         }
@@ -794,10 +988,11 @@ impl Secrets {
                                 &profile_display,
                             )?;
                             println!(
-                                "{} {} - {}",
+                                "{} {} - {} (→ {})",
                                 "✓".green(),
                                 name,
-                                config.description.as_deref().unwrap_or("No description")
+                                config.description.as_deref().unwrap_or("No description"),
+                                to_provider.name().blue()
                             );
                             imported += 1;
                         }
@@ -809,11 +1004,12 @@ impl Secrets {
                     match to_provider.get(&self.config.project.name, &name, &profile_display)? {
                         Some(_) => {
                             println!(
-                                "{} {} - {} {}",
+                                "{} {} - {} {} (→ {})",
                                 "○".blue(),
                                 name,
                                 config.description.as_deref().unwrap_or("No description"),
-                                "(already in target, not in source)".blue()
+                                "(already in target, not in source)".blue(),
+                                to_provider.name().blue()
                             );
                             already_exists += 1;
                         }
@@ -841,11 +1037,10 @@ impl Secrets {
 
         if imported > 0 {
             println!(
-                "\n{} Successfully imported {} secrets from {} to {}",
+                "\n{} Successfully imported {} secrets from {}",
                 "✓".green(),
                 imported,
                 from_provider,
-                to_provider.name()
             );
         }
 
@@ -880,7 +1075,6 @@ impl Secrets {
     /// }
     /// ```
     pub fn validate(&self) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
-        let backend = self.get_provider(None)?;
         let mut secrets: HashMap<String, SecretString> = HashMap::new();
         let mut missing_required = Vec::new();
         let mut missing_optional = Vec::new();
@@ -895,15 +1089,26 @@ impl Secrets {
             .map(|(name, _)| name)
             .collect::<HashSet<_>>();
 
-        // Now check all secrets
+        // Now check all secrets, each with their own provider(s) or fallback to default
         for name in all_secrets {
             let secret_config = self
-                .resolve_secret_config(&name, None)
+                .resolve_secret_config(&name, Some(&profile_name))
                 .expect("Secret should exist in config since we're iterating over it");
-            let required = secret_config.required;
+            let required = secret_config.required.unwrap_or(true);
             let default = secret_config.default.clone();
 
-            match backend.get(&self.config.project.name, &name, &profile_name)? {
+            // Resolve per-secret provider aliases to URIs
+            let provider_uris =
+                self.resolve_provider_aliases(secret_config.providers.as_deref())?;
+
+            // Try to get the secret from configured providers with fallback
+            match self.get_secret_from_providers(
+                &self.config.project.name,
+                &name,
+                &profile_name,
+                provider_uris.as_deref(),
+                None,
+            )? {
                 Some(value) => {
                     secrets.insert(name.clone(), value);
                 }
@@ -923,18 +1128,21 @@ impl Secrets {
             }
         }
 
+        // Use default provider for error reporting
+        let primary_provider = self.get_provider(None)?;
+
         // Check if there are any missing required secrets
         if !missing_required.is_empty() {
             Ok(Err(ValidationErrors::new(
                 missing_required,
                 missing_optional,
                 with_defaults,
-                backend.uri(),
+                primary_provider.uri(),
                 profile_name.to_string(),
             )))
         } else {
             Ok(Ok(ValidatedSecrets {
-                resolved: Resolved::new(secrets, backend.uri(), profile_name.to_string()),
+                resolved: Resolved::new(secrets, primary_provider.uri(), profile_name.to_string()),
                 missing_optional,
                 with_defaults,
             }))

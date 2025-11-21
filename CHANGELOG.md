@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Profile-level default configuration: `profiles.<name>.defaults` section for shared settings across secrets in a profile
+- Default providers for profiles: define common providers once and have all secrets use them unless overridden
+- Default values and required settings can now be specified at profile level to reduce repetition
+
+### Changed
+- Secret `required` field is now `Option<bool>` to allow profile-level defaults to apply when not explicitly set
+- Secret `default` field can now inherit from profile-level defaults if not specified per-secret
+- Secret `providers` field can now inherit from profile-level defaults if not specified per-secret
+- Profile defaults only apply to secrets that don't explicitly set these fields
+
 ## [0.3.4] - 2025-11-09
 
 ### Changed

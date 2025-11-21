@@ -95,13 +95,37 @@ enum Commands {
 /// Configuration-related subcommands.
 ///
 /// These actions handle the user's global configuration settings,
-/// including initialization and viewing current settings.
+/// including initialization, viewing current settings, and managing provider aliases.
 #[derive(Subcommand)]
 enum ConfigAction {
     /// Initialize user configuration
     Init,
     /// Show current configuration
     Show,
+    /// Manage provider aliases
+    #[command(subcommand)]
+    Provider(ProviderAction),
+}
+
+/// Provider alias management subcommands.
+///
+/// These actions allow managing named provider aliases in the global configuration.
+#[derive(Subcommand)]
+enum ProviderAction {
+    /// Add or update a provider alias
+    Add {
+        /// Name of the provider alias
+        name: String,
+        /// Provider URI (e.g., "keyring://", "onepassword://vault/Shared", "dotenv://.env.local")
+        uri: String,
+    },
+    /// Remove a provider alias
+    Remove {
+        /// Name of the provider alias to remove
+        name: String,
+    },
+    /// List all configured provider aliases
+    List,
 }
 
 /// Returns an example TOML configuration string
@@ -159,11 +183,15 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
 
         for (secret_name, secret_config) in &profile_config.secrets {
             output.push_str(&format!(
-                "{} = {{ description = \"{}\", required = {}",
+                "{} = {{ description = \"{}\"",
                 secret_name,
                 secret_config.description.as_deref().unwrap_or(""),
-                secret_config.required
             ));
+
+            // Only include required if it's explicitly set
+            if let Some(required) = secret_config.required {
+                output.push_str(&format!(", required = {}", required));
+            }
 
             if let Some(default) = &secret_config.default {
                 output.push_str(&format!(", default = \"{}\"", default));
@@ -223,7 +251,13 @@ pub fn main() -> Result<()> {
 
             // Create a new project config
             let mut profiles = HashMap::new();
-            profiles.insert("default".to_string(), Profile { secrets });
+            profiles.insert(
+                "default".to_string(),
+                Profile {
+                    defaults: None,
+                    secrets,
+                },
+            );
 
             let project_config = Config {
                 project: Project {
@@ -313,6 +347,7 @@ pub fn main() -> Result<()> {
                     defaults: GlobalDefaults {
                         provider: Some(provider.to_string()),
                         profile,
+                        providers: None,
                     },
                 };
 
@@ -339,6 +374,16 @@ pub fn main() -> Result<()> {
                             Some(profile) => println!("Profile:  {}", profile),
                             None => println!("Profile:  (none)"),
                         }
+                        if let Some(providers) = &config.defaults.providers {
+                            println!("\nProvider Aliases:");
+                            let mut aliases: Vec<_> = providers.iter().collect();
+                            aliases.sort_by(|(a, _), (b, _)| a.cmp(b));
+                            for (alias, uri) in aliases {
+                                println!("  {} = {}", alias, uri);
+                            }
+                        } else {
+                            println!("\nProvider Aliases: (none)");
+                        }
                     }
                     None => {
                         println!(
@@ -347,6 +392,91 @@ pub fn main() -> Result<()> {
                     }
                 }
                 Ok(())
+            }
+            // Manage provider aliases
+            ConfigAction::Provider(action) => {
+                match action {
+                    ProviderAction::Add { name, uri } => {
+                        // Load or create config
+                        let mut config =
+                            GlobalConfig::load().into_diagnostic()?.unwrap_or_else(|| {
+                                GlobalConfig {
+                                    defaults: GlobalDefaults {
+                                        provider: None,
+                                        profile: None,
+                                        providers: None,
+                                    },
+                                }
+                            });
+
+                        // Initialize providers map if needed
+                        if config.defaults.providers.is_none() {
+                            config.defaults.providers = Some(HashMap::new());
+                        }
+
+                        // Add or update the provider alias
+                        if let Some(providers) = &mut config.defaults.providers {
+                            let existing = providers.insert(name.clone(), uri.clone());
+                            config.save().into_diagnostic()?;
+
+                            if existing.is_some() {
+                                println!("✓ Provider alias '{}' updated to '{}'", name, uri);
+                            } else {
+                                println!("✓ Provider alias '{}' added: '{}'", name, uri);
+                            }
+                        }
+                        Ok(())
+                    }
+                    ProviderAction::Remove { name } => {
+                        // Load config
+                        match GlobalConfig::load().into_diagnostic()? {
+                            Some(mut config) => {
+                                if let Some(providers) = &mut config.defaults.providers {
+                                    if providers.remove(&name).is_some() {
+                                        config.save().into_diagnostic()?;
+                                        println!("✓ Provider alias '{}' removed", name);
+                                    } else {
+                                        println!("✗ Provider alias '{}' not found", name);
+                                    }
+                                } else {
+                                    println!("✗ No provider aliases configured");
+                                }
+                            }
+                            None => {
+                                println!(
+                                    "✗ No configuration found. Run 'secretspec config init' first."
+                                );
+                            }
+                        }
+                        Ok(())
+                    }
+                    ProviderAction::List => {
+                        match GlobalConfig::load().into_diagnostic()? {
+                            Some(config) => {
+                                if let Some(providers) = config.defaults.providers {
+                                    if providers.is_empty() {
+                                        println!("No provider aliases configured.");
+                                    } else {
+                                        println!("Provider Aliases:");
+                                        let mut aliases: Vec<_> = providers.into_iter().collect();
+                                        aliases.sort_by(|(a, _), (b, _)| a.cmp(b));
+                                        for (alias, uri) in aliases {
+                                            println!("  {} = {}", alias, uri);
+                                        }
+                                    }
+                                } else {
+                                    println!("No provider aliases configured.");
+                                }
+                            }
+                            None => {
+                                println!(
+                                    "No configuration found. Run 'secretspec config init' first."
+                                );
+                            }
+                        }
+                        Ok(())
+                    }
+                }
             }
         },
         // Set a secret value in the specified provider

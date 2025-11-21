@@ -293,8 +293,9 @@ impl Provider for DotEnvProvider {
                 key.clone(),
                 Secret {
                     description: Some(format!("{} secret", key)),
-                    required: true,
+                    required: Some(true),
                     default: None,
+                    providers: None,
                 },
             );
         }
@@ -365,7 +366,7 @@ mod tests {
             api_key_config.description,
             Some("API_KEY secret".to_string())
         );
-        assert!(api_key_config.required);
+        assert_eq!(api_key_config.required, Some(true));
         assert!(api_key_config.default.is_none());
     }
 

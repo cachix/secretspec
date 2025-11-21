@@ -4,6 +4,7 @@ use crate::config::Resolved;
 use secrecy::SecretString;
 use std::collections::HashMap;
 use std::fmt;
+use tempfile::NamedTempFile;
 
 /// Container for validated secrets with metadata
 ///
@@ -16,6 +17,45 @@ pub struct ValidatedSecrets {
     pub missing_optional: Vec<String>,
     /// List of secrets using their default values (name, default_value)
     pub with_defaults: Vec<(String, String)>,
+    /// Temporary files for secrets with as_path=true.
+    /// These are kept alive for the lifetime of ValidatedSecrets and automatically
+    /// cleaned up when dropped.
+    #[doc(hidden)]
+    pub(crate) temp_files: Vec<NamedTempFile>,
+}
+
+impl ValidatedSecrets {
+    /// Persist all temporary files, preventing automatic cleanup.
+    ///
+    /// This method consumes the temporary file handles and persists them,
+    /// so they won't be automatically deleted when this struct is dropped.
+    /// This is useful when you want the temporary files to outlive the
+    /// ValidatedSecrets instance, such as in CLI commands.
+    ///
+    /// # Returns
+    ///
+    /// A vector of paths to the persisted files
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any file cannot be persisted
+    pub fn keep_temp_files(&mut self) -> Result<Vec<std::path::PathBuf>, std::io::Error> {
+        let mut paths = Vec::new();
+        let temp_files = std::mem::take(&mut self.temp_files);
+
+        for temp_file in temp_files {
+            let temp_path = temp_file.into_temp_path();
+            let path = temp_path.keep().map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to persist temporary file: {}", e),
+                )
+            })?;
+            paths.push(path);
+        }
+
+        Ok(paths)
+    }
 }
 
 /// Container for validation errors

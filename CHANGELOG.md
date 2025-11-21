@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Profile-level default configuration: `profiles.<name>.defaults` section for shared settings across secrets in a profile
 - Default providers for profiles: define common providers once and have all secrets use them unless overridden
 - Default values and required settings can now be specified at profile level to reduce repetition
+- `as_path` option for secrets: write secret values to temporary files and return the file path instead of the value. Temporary files are automatically cleaned up when the resolved secrets are dropped in Rust SDK usage. For CLI commands (`get` and `check`), temporary files are persisted and NOT deleted after the command exits. In the Rust SDK, fields with `as_path = true` are generated as `PathBuf` or `Option<PathBuf>` instead of `String`
 
 ### Changed
 - Secret `required` field is now `Option<bool>` to allow profile-level defaults to apply when not explicitly set

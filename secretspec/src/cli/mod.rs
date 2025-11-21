@@ -551,10 +551,15 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
-            let _validated = app
+            let mut validated = app
                 .check()
                 .into_diagnostic()
                 .wrap_err("Failed to check secrets")?;
+            // Persist temp files so they outlive the command
+            validated
+                .keep_temp_files()
+                .into_diagnostic()
+                .wrap_err("Failed to persist temporary files")?;
             Ok(())
         }
         // Import secrets from one provider to another

@@ -296,6 +296,7 @@ impl Provider for DotEnvProvider {
                     required: Some(true),
                     default: None,
                     providers: None,
+                    as_path: None,
                 },
             );
         }

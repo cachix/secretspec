@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2025-11-24
+
 ### Added
 - Profile-level default configuration: `profiles.<name>.defaults` section for shared settings across secrets in a profile
 - Default providers for profiles: define common providers once and have all secrets use them unless overridden

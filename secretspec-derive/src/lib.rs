@@ -35,13 +35,15 @@ use syn::{LitStr, parse_macro_input};
 /// # Fields
 ///
 /// * `name` - The original secret name (e.g., "DATABASE_URL")
-/// * `field_type` - The Rust type for this field (String or Option<String>)
+/// * `field_type` - The Rust type for this field (String, PathBuf, or Option variants)
 /// * `is_optional` - Whether this field is optional across all profiles
+/// * `as_path` - Whether this field represents a path to a temporary file
 #[derive(Clone)]
 struct FieldInfo {
     name: String,
     field_type: proc_macro2::TokenStream,
     is_optional: bool,
+    as_path: bool,
 }
 
 impl FieldInfo {
@@ -50,13 +52,20 @@ impl FieldInfo {
     /// # Arguments
     ///
     /// * `name` - The secret name as defined in the config
-    /// * `field_type` - The generated Rust type (String or Option<String>)
+    /// * `field_type` - The generated Rust type (String, PathBuf, or Option variants)
     /// * `is_optional` - Whether the field should be optional
-    fn new(name: String, field_type: proc_macro2::TokenStream, is_optional: bool) -> Self {
+    /// * `as_path` - Whether this field represents a path to a temporary file
+    fn new(
+        name: String,
+        field_type: proc_macro2::TokenStream,
+        is_optional: bool,
+        as_path: bool,
+    ) -> Self {
         Self {
             name,
             field_type,
             is_optional,
+            as_path,
         }
     }
 
@@ -107,13 +116,20 @@ impl FieldInfo {
     ///
     /// Token stream for the field assignment, with proper error handling for required fields
     fn generate_assignment(&self, source: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
-        generate_secret_assignment(&self.field_name(), &self.name, source, self.is_optional)
+        generate_secret_assignment(
+            &self.field_name(),
+            &self.name,
+            source,
+            self.is_optional,
+            self.as_path,
+        )
     }
 
     /// Generate environment variable setter.
     ///
     /// Creates code to set an environment variable from this field's value.
     /// For optional fields, only sets the variable if a value is present.
+    /// For PathBuf fields, converts to string using to_string_lossy().
     ///
     /// # Safety
     ///
@@ -128,18 +144,41 @@ impl FieldInfo {
         let field_name = self.field_name();
         let env_name = &self.name;
 
-        if self.is_optional {
-            quote! {
-                if let Some(ref value) = self.#field_name {
-                    unsafe {
-                        std::env::set_var(#env_name, value);
+        match (self.is_optional, self.as_path) {
+            (true, true) => {
+                // Optional PathBuf
+                quote! {
+                    if let Some(ref value) = self.#field_name {
+                        unsafe {
+                            std::env::set_var(#env_name, value.to_string_lossy().as_ref());
+                        }
                     }
                 }
             }
-        } else {
-            quote! {
-                unsafe {
-                    std::env::set_var(#env_name, &self.#field_name);
+            (true, false) => {
+                // Optional String
+                quote! {
+                    if let Some(ref value) = self.#field_name {
+                        unsafe {
+                            std::env::set_var(#env_name, value);
+                        }
+                    }
+                }
+            }
+            (false, true) => {
+                // Required PathBuf
+                quote! {
+                    unsafe {
+                        std::env::set_var(#env_name, self.#field_name.to_string_lossy().as_ref());
+                    }
+                }
+            }
+            (false, false) => {
+                // Required String
+                quote! {
+                    unsafe {
+                        std::env::set_var(#env_name, &self.#field_name);
+                    }
                 }
             }
         }
@@ -492,6 +531,29 @@ fn is_field_optional_across_profiles(secret_name: &str, config: &Config) -> bool
     false
 }
 
+/// Check if a field should be represented as a path across all profiles.
+///
+/// A field is considered `as_path` if any profile defines it with `as_path = true`.
+///
+/// # Arguments
+///
+/// * `secret_name` - The name of the secret to check
+/// * `config` - The configuration to analyze
+///
+/// # Returns
+///
+/// `true` if any profile has this secret with `as_path = true`, `false` otherwise
+fn is_field_as_path(secret_name: &str, config: &Config) -> bool {
+    for profile_config in config.profiles.values() {
+        if let Some(secret_config) = profile_config.secrets.get(secret_name) {
+            if secret_config.as_path == Some(true) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Generate a unified secret assignment from a HashMap.
 ///
 /// Creates the code to assign a value from a secrets map to a struct field,
@@ -502,37 +564,68 @@ fn is_field_optional_across_profiles(secret_name: &str, config: &Config) -> bool
 /// * `field_name` - The struct field identifier
 /// * `secret_name` - The key to look up in the map
 /// * `source` - Token stream representing the source map
-/// * `is_optional` - Whether to generate Option<String> or String assignment
+/// * `is_optional` - Whether to generate Option<T> or T assignment
+/// * `as_path` - Whether to generate PathBuf or String
 ///
 /// # Generated Code
 ///
-/// For required fields:
+/// For required String fields:
 /// ```ignore
 /// field_name: source.get("SECRET_NAME")
 ///     .ok_or_else(|| SecretSpecError::RequiredSecretMissing("SECRET_NAME".to_string()))?
-///     .clone()
+///     .expose_secret().to_string()
+/// ```
+///
+/// For required PathBuf fields:
+/// ```ignore
+/// field_name: std::path::PathBuf::from(source.get("SECRET_NAME")
+///     .ok_or_else(|| SecretSpecError::RequiredSecretMissing("SECRET_NAME".to_string()))?
+///     .expose_secret())
 /// ```
 ///
 /// For optional fields:
 /// ```ignore
-/// field_name: source.get("SECRET_NAME").cloned()
+/// field_name: source.get("SECRET_NAME").map(|s| s.expose_secret().to_string())
+/// field_name: source.get("SECRET_NAME").map(|s| std::path::PathBuf::from(s.expose_secret()))
 /// ```
 fn generate_secret_assignment(
     field_name: &proc_macro2::Ident,
     secret_name: &str,
     source: proc_macro2::TokenStream,
     is_optional: bool,
+    as_path: bool,
 ) -> proc_macro2::TokenStream {
-    if is_optional {
-        quote! {
-            #field_name: #source.get(#secret_name).map(|s| s.expose_secret().to_string())
+    match (is_optional, as_path) {
+        (true, true) => {
+            // Optional PathBuf
+            quote! {
+                #field_name: #source.get(#secret_name).map(|s| std::path::PathBuf::from(s.expose_secret()))
+            }
         }
-    } else {
-        quote! {
-            #field_name: #source.get(#secret_name)
-                .ok_or_else(|| secretspec::SecretSpecError::RequiredSecretMissing(#secret_name.to_string()))?
-                .expose_secret()
-                .to_string()
+        (true, false) => {
+            // Optional String
+            quote! {
+                #field_name: #source.get(#secret_name).map(|s| s.expose_secret().to_string())
+            }
+        }
+        (false, true) => {
+            // Required PathBuf
+            quote! {
+                #field_name: std::path::PathBuf::from(
+                    #source.get(#secret_name)
+                        .ok_or_else(|| secretspec::SecretSpecError::RequiredSecretMissing(#secret_name.to_string()))?
+                        .expose_secret()
+                )
+            }
+        }
+        (false, false) => {
+            // Required String
+            quote! {
+                #field_name: #source.get(#secret_name)
+                    .ok_or_else(|| secretspec::SecretSpecError::RequiredSecretMissing(#secret_name.to_string()))?
+                    .expose_secret()
+                    .to_string()
+            }
         }
     }
 }
@@ -566,12 +659,14 @@ fn analyze_field_types(config: &Config) -> BTreeMap<String, FieldInfo> {
         for secret_name in profile_config.secrets.keys() {
             field_info.entry(secret_name.clone()).or_insert_with(|| {
                 let is_optional = is_field_optional_across_profiles(secret_name, config);
-                let field_type = if is_optional {
-                    quote! { Option<String> }
-                } else {
-                    quote! { String }
+                let as_path = is_field_as_path(secret_name, config);
+                let field_type = match (is_optional, as_path) {
+                    (true, true) => quote! { Option<std::path::PathBuf> },
+                    (true, false) => quote! { Option<String> },
+                    (false, true) => quote! { std::path::PathBuf },
+                    (false, false) => quote! { String },
                 };
-                FieldInfo::new(secret_name.clone(), field_type, is_optional)
+                FieldInfo::new(secret_name.clone(), field_type, is_optional, as_path)
             });
         }
     }
@@ -883,10 +978,13 @@ mod secret_spec_generation {
                                 .iter()
                                 .map(|(secret_name, secret_config)| {
                                     let field_name = field_name_ident(secret_name);
-                                    let field_type = if is_secret_optional(secret_config) {
-                                        quote! { Option<String> }
-                                    } else {
-                                        quote! { String }
+                                    let is_optional = is_secret_optional(secret_config);
+                                    let as_path = secret_config.as_path.unwrap_or(false);
+                                    let field_type = match (is_optional, as_path) {
+                                        (true, true) => quote! { Option<std::path::PathBuf> },
+                                        (true, false) => quote! { Option<String> },
+                                        (false, true) => quote! { std::path::PathBuf },
+                                        (false, false) => quote! { String },
                                     };
                                     quote! { #field_name: #field_type }
                                 });
@@ -960,6 +1058,7 @@ mod secret_spec_generation {
                                         secret_name,
                                         quote! { secrets },
                                         is_secret_optional(secret_config),
+                                        secret_config.as_path.unwrap_or(false),
                                     )
                                 });
 

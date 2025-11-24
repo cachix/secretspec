@@ -282,6 +282,7 @@ impl Secrets {
                         .clone()
                         .or_else(|| default.providers.clone())
                         .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
+                    as_path: current.as_path.or(default.as_path),
                 })
             }
             (Some(secret), None) | (None, Some(secret)) => {
@@ -299,6 +300,7 @@ impl Secrets {
                         .providers
                         .clone()
                         .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
+                    as_path: secret.as_path,
                 })
             }
             (None, None) => None,
@@ -592,6 +594,7 @@ impl Secrets {
             .resolve_secret_config(name, None)
             .ok_or_else(|| SecretSpecError::SecretNotFound(name.to_string()))?;
         let default = secret_config.default.clone();
+        let as_path = secret_config.as_path.unwrap_or(false);
 
         // Resolve per-secret provider aliases to URIs
         let provider_uris = self.resolve_provider_aliases(secret_config.providers.as_deref())?;
@@ -605,13 +608,40 @@ impl Secrets {
             None,
         )? {
             Some(value) => {
-                // Use expose_secret() to access the actual value for printing
-                println!("{}", value.expose_secret());
+                if as_path {
+                    // Write to temp file and persist it (don't auto-delete)
+                    let (temp_file, _path_str) = self.write_secret_to_temp_file(&value)?;
+                    let temp_path = temp_file.into_temp_path();
+                    let persisted_path = temp_path.keep().map_err(|e| {
+                        SecretSpecError::Io(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("Failed to persist temporary file: {}", e),
+                        ))
+                    })?;
+                    println!("{}", persisted_path.display());
+                } else {
+                    // Use expose_secret() to access the actual value for printing
+                    println!("{}", value.expose_secret());
+                }
                 Ok(())
             }
             None => {
                 if let Some(default_value) = default {
-                    println!("{}", default_value);
+                    if as_path {
+                        // Write default value to temp file and persist it
+                        let (temp_file, _) = self
+                            .write_secret_to_temp_file(&SecretString::new(default_value.into()))?;
+                        let temp_path = temp_file.into_temp_path();
+                        let persisted_path = temp_path.keep().map_err(|e| {
+                            SecretSpecError::Io(io::Error::new(
+                                io::ErrorKind::Other,
+                                format!("Failed to persist temporary file: {}", e),
+                            ))
+                        })?;
+                        println!("{}", persisted_path.display());
+                    } else {
+                        println!("{}", default_value);
+                    }
                     Ok(())
                 } else {
                     Err(SecretSpecError::SecretNotFound(name.to_string()))
@@ -1047,6 +1077,65 @@ impl Secrets {
         Ok(())
     }
 
+    /// Writes a secret value to a temporary file and returns the file handle and path
+    ///
+    /// # Arguments
+    ///
+    /// * `secret` - The secret value to write
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing the temporary file handle and the path as a string
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the temporary file cannot be created or written to
+    fn write_secret_to_temp_file(
+        &self,
+        secret: &SecretString,
+    ) -> Result<(tempfile::NamedTempFile, String)> {
+        use std::io::Write;
+
+        let mut temp_file = tempfile::NamedTempFile::new().map_err(|e| SecretSpecError::Io(e))?;
+
+        temp_file
+            .write_all(secret.expose_secret().as_bytes())
+            .map_err(|e| SecretSpecError::Io(e))?;
+
+        // Flush to ensure the data is written
+        temp_file.flush().map_err(|e| SecretSpecError::Io(e))?;
+
+        // Set restrictive permissions (0o400) so only the owner can read
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = temp_file
+                .as_file()
+                .metadata()
+                .map_err(|e| SecretSpecError::Io(e))?
+                .permissions();
+            perms.set_mode(0o400);
+            temp_file
+                .as_file()
+                .set_permissions(perms)
+                .map_err(|e| SecretSpecError::Io(e))?;
+        }
+
+        // Get the path as a string
+        let path_str = temp_file
+            .path()
+            .to_str()
+            .ok_or_else(|| {
+                SecretSpecError::Io(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Temporary file path is not valid UTF-8",
+                ))
+            })?
+            .to_string();
+
+        Ok((temp_file, path_str))
+    }
+
     /// Validates all secrets in the specification
     ///
     /// This method checks all secrets defined in the current profile (and default
@@ -1079,6 +1168,7 @@ impl Secrets {
         let mut missing_required = Vec::new();
         let mut missing_optional = Vec::new();
         let mut with_defaults = Vec::new();
+        let mut temp_files = Vec::new();
 
         let profile_name = self.resolve_profile_name(None);
         let profile = self.resolve_profile(Some(&profile_name))?;
@@ -1096,6 +1186,7 @@ impl Secrets {
                 .expect("Secret should exist in config since we're iterating over it");
             let required = secret_config.required.unwrap_or(true);
             let default = secret_config.default.clone();
+            let as_path = secret_config.as_path.unwrap_or(false);
 
             // Resolve per-secret provider aliases to URIs
             let provider_uris =
@@ -1110,14 +1201,30 @@ impl Secrets {
                 None,
             )? {
                 Some(value) => {
-                    secrets.insert(name.clone(), value);
+                    if as_path {
+                        // Write secret to temp file and store the path
+                        let (temp_file, path_str) = self.write_secret_to_temp_file(&value)?;
+                        temp_files.push(temp_file);
+                        secrets.insert(name.clone(), SecretString::new(path_str.into()));
+                    } else {
+                        secrets.insert(name.clone(), value);
+                    }
                 }
                 None => {
                     if let Some(default_value) = default {
-                        secrets.insert(
-                            name.clone(),
-                            SecretString::new(default_value.clone().into()),
-                        );
+                        if as_path {
+                            // Write default value to temp file
+                            let (temp_file, path_str) = self.write_secret_to_temp_file(
+                                &SecretString::new(default_value.clone().into()),
+                            )?;
+                            temp_files.push(temp_file);
+                            secrets.insert(name.clone(), SecretString::new(path_str.into()));
+                        } else {
+                            secrets.insert(
+                                name.clone(),
+                                SecretString::new(default_value.clone().into()),
+                            );
+                        }
                         with_defaults.push((name.clone(), default_value));
                     } else if required {
                         missing_required.push(name.clone());
@@ -1145,6 +1252,7 @@ impl Secrets {
                 resolved: Resolved::new(secrets, primary_provider.uri(), profile_name.to_string()),
                 missing_optional,
                 with_defaults,
+                temp_files,
             }))
         }
     }

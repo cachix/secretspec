@@ -368,6 +368,12 @@ pub struct Secret {
     /// Example: providers = ["keyring", "env"] will try keyring first, then env.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub providers: Option<Vec<String>>,
+    /// Whether to write the secret value to a temporary file and return the path.
+    /// If true, the secret will be written to a temporary file and the field
+    /// will contain the path to that file instead of the secret value.
+    /// The temporary file will be cleaned up when the resolved secrets are dropped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_path: Option<bool>,
 }
 
 impl Secret {

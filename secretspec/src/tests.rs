@@ -225,6 +225,7 @@ fn test_validation_result_structure() {
         resolved: Resolved::new(HashMap::new(), "keyring".to_string(), "default".to_string()),
         missing_optional: vec!["optional_secret".to_string()],
         with_defaults: Vec::new(),
+        temp_files: Vec::new(),
     };
     assert_eq!(valid_result.missing_optional.len(), 1);
     assert_eq!(valid_result.with_defaults.len(), 0);
@@ -329,6 +330,7 @@ fn test_resolve_secret_config() {
             required: Some(true),
             default: None,
             providers: None,
+            as_path: None,
         },
     );
     default_secrets.insert(
@@ -338,6 +340,7 @@ fn test_resolve_secret_config() {
             required: Some(false),
             default: Some("sqlite:///default.db".to_string()),
             providers: None,
+            as_path: None,
         },
     );
 
@@ -349,6 +352,7 @@ fn test_resolve_secret_config() {
             required: Some(false),
             default: Some("dev-key".to_string()),
             providers: None,
+            as_path: None,
         },
     );
 
@@ -1320,6 +1324,7 @@ fn test_set_with_undefined_secret() {
                     required: Some(true),
                     default: None,
                     providers: None,
+                    as_path: None,
                 },
             );
             profiles.insert(
@@ -1384,6 +1389,7 @@ fn test_set_with_defined_secret() {
                     required: Some(true),
                     default: None,
                     providers: None,
+                    as_path: None,
                 },
             );
             profiles.insert(
@@ -1435,6 +1441,7 @@ fn test_set_with_readonly_provider() {
                     required: Some(true),
                     default: None,
                     providers: None,
+                    as_path: None,
                 },
             );
             profiles.insert(
@@ -1495,6 +1502,7 @@ fn test_import_between_dotenv_files() {
                     required: Some(true),
                     default: None,
                     providers: None,
+                    as_path: None,
                 },
             );
             secrets.insert(
@@ -1504,6 +1512,7 @@ fn test_import_between_dotenv_files() {
                     required: Some(true),
                     default: None,
                     providers: None,
+                    as_path: None,
                 },
             );
             secrets.insert(
@@ -1513,6 +1522,7 @@ fn test_import_between_dotenv_files() {
                     required: Some(false),
                     default: Some("default_value".to_string()),
                     providers: None,
+                    as_path: None,
                 },
             );
             secrets.insert(
@@ -1522,6 +1532,7 @@ fn test_import_between_dotenv_files() {
                     required: Some(false),
                     default: None,
                     providers: None,
+                    as_path: None,
                 },
             );
 
@@ -1624,6 +1635,7 @@ fn test_import_edge_cases() {
                     required: Some(true),
                     default: None,
                     providers: None,
+                    as_path: None,
                 },
             );
             secrets.insert(
@@ -1633,6 +1645,7 @@ fn test_import_edge_cases() {
                     required: Some(true),
                     default: None,
                     providers: None,
+                    as_path: None,
                 },
             );
             secrets.insert(
@@ -1642,6 +1655,7 @@ fn test_import_edge_cases() {
                     required: Some(true),
                     default: None,
                     providers: None,
+                    as_path: None,
                 },
             );
 
@@ -1861,6 +1875,7 @@ fn test_import_with_profiles() {
                     required: Some(true),
                     default: None,
                     providers: None,
+                    as_path: None,
                 },
             );
             dev_secrets.insert(
@@ -1870,6 +1885,7 @@ fn test_import_with_profiles() {
                     required: Some(true),
                     default: None,
                     providers: None,
+                    as_path: None,
                 },
             );
             profiles.insert(
@@ -1889,6 +1905,7 @@ fn test_import_with_profiles() {
                     required: Some(true),
                     default: None,
                     providers: None,
+                    as_path: None,
                 },
             );
             prod_secrets.insert(
@@ -1898,6 +1915,7 @@ fn test_import_with_profiles() {
                     required: Some(true),
                     default: None,
                     providers: None,
+                    as_path: None,
                 },
             );
             profiles.insert(
@@ -2021,6 +2039,7 @@ fn test_run_with_missing_required_secrets() {
             required: Some(true),
             default: None,
             providers: None,
+            as_path: None,
         },
     );
 
@@ -2078,6 +2097,7 @@ fn test_get_existing_secret() {
             required: Some(true),
             default: None,
             providers: None,
+            as_path: None,
         },
     );
 
@@ -2129,6 +2149,7 @@ fn test_get_secret_with_default() {
             required: Some(false),
             default: Some("default_value".to_string()),
             providers: None,
+            as_path: None,
         },
     );
 
@@ -2179,6 +2200,7 @@ fn test_get_nonexistent_secret() {
             required: Some(true),
             default: None,
             providers: None,
+            as_path: None,
         },
     );
 
@@ -2330,6 +2352,7 @@ fn test_per_secret_provider_configuration() {
             required: Some(true),
             default: None,
             providers: Some(vec!["shared".to_string()]),
+            as_path: None,
         },
     );
 
@@ -2341,6 +2364,7 @@ fn test_per_secret_provider_configuration() {
             required: Some(true),
             default: None,
             providers: None,
+            as_path: None,
         },
     );
 
@@ -2517,6 +2541,7 @@ fn test_per_secret_provider_with_fallback_chain() {
             required: Some(true),
             default: None,
             providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
+            as_path: None,
         },
     );
 
@@ -2528,6 +2553,7 @@ fn test_per_secret_provider_with_fallback_chain() {
             required: Some(true),
             default: None,
             providers: Some(vec!["fallback".to_string(), "primary".to_string()]),
+            as_path: None,
         },
     );
 
@@ -2610,6 +2636,7 @@ fn test_get_secret_with_fallback_chain() {
             required: Some(true),
             default: None,
             providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
+            as_path: None,
         },
     );
 
@@ -2621,6 +2648,7 @@ fn test_get_secret_with_fallback_chain() {
             required: Some(true),
             default: None,
             providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
+            as_path: None,
         },
     );
 
@@ -2703,6 +2731,7 @@ fn test_validate_with_per_secret_providers() {
             required: Some(true),
             default: None,
             providers: Some(vec!["env_provider".to_string()]),
+            as_path: None,
         },
     );
 
@@ -2714,6 +2743,7 @@ fn test_validate_with_per_secret_providers() {
             required: Some(true),
             default: None,
             providers: Some(vec!["keyring_provider".to_string()]),
+            as_path: None,
         },
     );
 
@@ -2725,6 +2755,7 @@ fn test_validate_with_per_secret_providers() {
             required: Some(false),
             default: Some("default-config".to_string()),
             providers: None,
+            as_path: None,
         },
     );
 
@@ -2817,6 +2848,7 @@ fn test_secret_config_merges_providers_from_default() {
             required: Some(true),
             default: None,
             providers: Some(vec!["shared".to_string()]),
+            as_path: None,
         },
     );
 
@@ -2830,6 +2862,7 @@ fn test_secret_config_merges_providers_from_default() {
             required: Some(true),
             default: None,
             providers: None,
+            as_path: None,
         },
     );
 
@@ -2841,6 +2874,7 @@ fn test_secret_config_merges_providers_from_default() {
             required: Some(true),
             default: None,
             providers: Some(vec!["prod".to_string()]),
+            as_path: None,
         },
     );
 
@@ -3050,4 +3084,157 @@ provider = "keyring"
         .collect();
     assert_eq!(aliases.len(), 1);
     assert_eq!(aliases[0].0, "shared");
+}
+
+#[test]
+fn test_as_path_secrets() {
+    use secrecy::ExposeSecret;
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let secret_value = "my-secret-certificate-content";
+
+    // Create a dotenv file with a secret
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, format!("CERT_DATA={}", secret_value)).unwrap();
+    fs::write(
+        &env_file,
+        format!("CERT_DATA={}\nREGULAR_SECRET=not-a-path", secret_value),
+    )
+    .unwrap();
+
+    // Create config with as_path secret
+    let config_file = temp_dir.path().join("secretspec.toml");
+    let toml_content = r#"[project]
+name = "test-as-path"
+revision = "1.0"
+
+[profiles.default]
+CERT_DATA = { description = "Certificate data", as_path = true }
+REGULAR_SECRET = { description = "Regular secret", as_path = false }
+"#;
+    fs::write(&config_file, toml_content).unwrap();
+
+    // Load and validate
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+    };
+
+    let spec = Secrets::new(config, Some(global_config), None, None);
+    let validated = spec.validate().unwrap().unwrap();
+
+    // Check that CERT_DATA contains a path
+    let cert_path_str = validated
+        .resolved
+        .secrets
+        .get("CERT_DATA")
+        .unwrap()
+        .expose_secret();
+    let cert_path = std::path::PathBuf::from(cert_path_str);
+
+    // Verify the temp file exists and contains the secret
+    assert!(cert_path.exists(), "Temporary file should exist");
+    let file_content = fs::read_to_string(&cert_path).unwrap();
+    assert_eq!(
+        file_content, secret_value,
+        "Temporary file should contain the secret value"
+    );
+
+    // Check that REGULAR_SECRET contains the actual value (not a path)
+    let regular_secret = validated
+        .resolved
+        .secrets
+        .get("REGULAR_SECRET")
+        .unwrap()
+        .expose_secret();
+    assert_eq!(regular_secret, "not-a-path");
+
+    // Check that temp_files vector is not empty
+    assert!(
+        !validated.temp_files.is_empty(),
+        "temp_files should contain the temporary file"
+    );
+
+    // Drop validated to trigger cleanup
+    drop(validated);
+
+    // Verify the temp file is cleaned up
+    assert!(
+        !cert_path.exists(),
+        "Temporary file should be cleaned up after drop"
+    );
+}
+
+#[test]
+fn test_as_path_secrets_keep_temp_files() {
+    use secrecy::ExposeSecret;
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let secret_value = "certificate-data-to-keep";
+
+    // Create a dotenv file with a secret
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, format!("CERT_DATA={}", secret_value)).unwrap();
+
+    // Create config with as_path secret
+    let config_file = temp_dir.path().join("secretspec.toml");
+    let toml_content = r#"[project]
+name = "test-keep-files"
+revision = "1.0"
+
+[profiles.default]
+CERT_DATA = { description = "Certificate data", as_path = true }
+"#;
+    fs::write(&config_file, toml_content).unwrap();
+
+    // Load and validate
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+    };
+
+    let spec = Secrets::new(config, Some(global_config), None, None);
+    let mut validated = spec.validate().unwrap().unwrap();
+
+    // Get the cert path before keeping files
+    let cert_path_str = validated
+        .resolved
+        .secrets
+        .get("CERT_DATA")
+        .unwrap()
+        .expose_secret();
+    let cert_path = std::path::PathBuf::from(cert_path_str);
+
+    // Verify the temp file exists
+    assert!(cert_path.exists(), "Temporary file should exist");
+
+    // Keep the temp files (persist them)
+    let kept_paths = validated.keep_temp_files().unwrap();
+    assert_eq!(kept_paths.len(), 1, "Should have kept one temp file");
+
+    // Drop validated
+    drop(validated);
+
+    // Verify the temp file still exists after drop (because we kept it)
+    assert!(
+        cert_path.exists(),
+        "Temporary file should still exist after keep_temp_files()"
+    );
+
+    // Verify the content
+    let file_content = fs::read_to_string(&cert_path).unwrap();
+    assert_eq!(file_content, secret_value);
+
+    // Clean up manually
+    fs::remove_file(&cert_path).unwrap();
 }

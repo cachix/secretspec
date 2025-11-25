@@ -216,6 +216,8 @@ impl OnePasswordConfig {}
 pub struct OnePasswordProvider {
     /// Configuration for the provider including auth settings and default vault.
     config: OnePasswordConfig,
+    /// The OnePassword CLI command to use (either "op" or a custom path).
+    op_command: String,
 }
 
 crate::register_provider! {
@@ -234,7 +236,9 @@ impl OnePasswordProvider {
     ///
     /// * `config` - The configuration for the provider
     pub fn new(config: OnePasswordConfig) -> Self {
-        Self { config }
+        let op_command =
+            std::env::var("SECRETSPEC_OPCLI_PATH").unwrap_or_else(|_| "op".to_string());
+        Self { config, op_command }
     }
 
     /// Executes a OnePassword CLI command with proper error handling.
@@ -260,7 +264,7 @@ impl OnePasswordProvider {
     /// - Authentication required
     /// - Command execution failures
     fn execute_op_command(&self, args: &[&str]) -> Result<String> {
-        let mut cmd = Command::new("op");
+        let mut cmd = Command::new(&self.op_command);
 
         // Set service account token if provided
         if let Some(token) = &self.config.service_account_token {

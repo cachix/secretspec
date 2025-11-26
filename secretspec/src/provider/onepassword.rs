@@ -181,6 +181,28 @@ impl TryFrom<Url> for OnePasswordConfig {
 
 impl OnePasswordConfig {}
 
+/// Detects if running on Windows Subsystem for Linux 2.
+///
+/// Checks if the system is running on WSL2 by reading `/proc/sys/kernel/osrelease`
+/// and looking for the `-microsoft-standard-WSL2` suffix.
+///
+/// # Returns
+///
+/// * `true` - Running on WSL2
+/// * `false` - Not running on WSL2 or unable to determine
+#[cfg(target_os = "linux")]
+fn is_wsl2() -> bool {
+    std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .ok()
+        .map(|content| content.trim().ends_with("-microsoft-standard-WSL2"))
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_wsl2() -> bool {
+    false
+}
+
 /// Provider implementation for OnePassword password manager.
 ///
 /// This provider integrates with OnePassword CLI (`op`) to store and retrieve
@@ -216,6 +238,8 @@ impl OnePasswordConfig {}
 pub struct OnePasswordProvider {
     /// Configuration for the provider including auth settings and default vault.
     config: OnePasswordConfig,
+    /// The OnePassword CLI command to use (either "op" or a custom path).
+    op_command: String,
 }
 
 crate::register_provider! {
@@ -234,7 +258,14 @@ impl OnePasswordProvider {
     ///
     /// * `config` - The configuration for the provider
     pub fn new(config: OnePasswordConfig) -> Self {
-        Self { config }
+        let op_command = std::env::var("SECRETSPEC_OPCLI_PATH").unwrap_or_else(|_| {
+            if is_wsl2() {
+                "op.exe".to_string()
+            } else {
+                "op".to_string()
+            }
+        });
+        Self { config, op_command }
     }
 
     /// Executes a OnePassword CLI command with proper error handling.
@@ -248,6 +279,7 @@ impl OnePasswordProvider {
     /// # Arguments
     ///
     /// * `args` - The command arguments to pass to `op`
+    /// * `stdin_data` - Optional data to write to stdin
     ///
     /// # Returns
     ///
@@ -259,8 +291,12 @@ impl OnePasswordProvider {
     /// - Missing OnePassword CLI installation
     /// - Authentication required
     /// - Command execution failures
-    fn execute_op_command(&self, args: &[&str]) -> Result<String> {
-        let mut cmd = Command::new("op");
+    /// - Stdin write failures
+    fn execute_op_command(&self, args: &[&str], stdin_data: Option<&str>) -> Result<String> {
+        use std::io::Write;
+        use std::process::Stdio;
+
+        let mut cmd = Command::new(&self.op_command);
 
         // Set service account token if provided
         if let Some(token) = &self.config.service_account_token {
@@ -274,14 +310,43 @@ impl OnePasswordProvider {
 
         cmd.args(args);
 
-        let output = match cmd.output() {
-            Ok(output) => output,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(SecretSpecError::ProviderOperationFailed(
-                    "OnePassword CLI (op) is not installed.\n\nTo install it:\n  - macOS: brew install 1password-cli\n  - Linux: Download from https://1password.com/downloads/command-line/\n  - Windows: Download from https://1password.com/downloads/command-line/\n  - NixOS: nix-env -iA nixpkgs.onepassword\n\nAfter installation, run 'eval $(op signin)' to authenticate.".to_string(),
-                ));
+        // Configure stdio based on whether we have stdin data
+        if stdin_data.is_some() {
+            cmd.stdin(Stdio::piped());
+            cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::piped());
+        }
+
+        let output = if let Some(data) = stdin_data {
+            // Spawn process and write to stdin
+            let mut child = match cmd.spawn() {
+                Ok(child) => child,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(SecretSpecError::ProviderOperationFailed(
+                        "OnePassword CLI (op) is not installed.\n\nTo install it:\n  - macOS: brew install 1password-cli\n  - Linux: Download from https://1password.com/downloads/command-line/\n  - Windows: Download from https://1password.com/downloads/command-line/\n  - NixOS: nix-env -iA nixpkgs.onepassword\n\nAfter installation, run 'eval $(op signin)' to authenticate.".to_string(),
+                    ));
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            // Write to stdin
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(data.as_bytes())?;
+                drop(stdin); // Close stdin
             }
-            Err(e) => return Err(e.into()),
+
+            child.wait_with_output()?
+        } else {
+            // No stdin data, use output() directly
+            match cmd.output() {
+                Ok(output) => output,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(SecretSpecError::ProviderOperationFailed(
+                        "OnePassword CLI (op) is not installed.\n\nTo install it:\n  - macOS: brew install 1password-cli\n  - Linux: Download from https://1password.com/downloads/command-line/\n  - Windows: Download from https://1password.com/downloads/command-line/\n  - NixOS: nix-env -iA nixpkgs.onepassword\n\nAfter installation, run 'eval $(op signin)' to authenticate.".to_string(),
+                    ));
+                }
+                Err(e) => return Err(e.into()),
+            }
         };
 
         if !output.status.success() {
@@ -312,7 +377,7 @@ impl OnePasswordProvider {
     /// * `Ok(false)` - User is not authenticated
     /// * `Err(_)` - Command execution failed
     fn whoami(&self) -> Result<bool> {
-        match self.execute_op_command(&["whoami"]) {
+        match self.execute_op_command(&["whoami"], None) {
             Ok(_) => Ok(true),
             Err(SecretSpecError::ProviderOperationFailed(msg))
                 if msg.contains("not currently signed in") || msg.contains("no account found") =>
@@ -493,7 +558,7 @@ impl Provider for OnePasswordProvider {
             "item", "get", &item_name, "--vault", &vault, "--format", "json",
         ];
 
-        match self.execute_op_command(&args) {
+        match self.execute_op_command(&args, None) {
             Ok(output) => {
                 let item: OnePasswordItem = serde_json::from_str(&output)?;
 
@@ -573,32 +638,15 @@ impl Provider for OnePasswordProvider {
                 &field_assignment,
             ];
 
-            self.execute_op_command(&args)?;
+            self.execute_op_command(&args, None)?;
         } else {
             // Item doesn't exist, create it
             let template = self.create_item_template(project, key, value, profile);
             let template_json = serde_json::to_string(&template)?;
 
-            // Write template to temp file
-            use std::io::Write;
-            let mut temp_file = tempfile::NamedTempFile::new()?;
-            temp_file.write_all(template_json.as_bytes())?;
-            temp_file.flush()?;
+            let args = vec!["item", "create", "--vault", &vault, "-"];
 
-            let args = vec![
-                "item",
-                "create",
-                "--vault",
-                &vault,
-                "--template",
-                temp_file.path().to_str().ok_or_else(|| {
-                    SecretSpecError::ProviderOperationFailed(
-                        "Invalid UTF-8 in temporary file path".to_string(),
-                    )
-                })?,
-            ];
-
-            self.execute_op_command(&args)?;
+            self.execute_op_command(&args, Some(&template_json))?;
         }
 
         Ok(())

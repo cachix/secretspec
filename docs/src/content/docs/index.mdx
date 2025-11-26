@@ -119,6 +119,27 @@ $ secretspec config init
 
 [Learn how to add a new provider →](/reference/adding-providers/)
 
+### Per-Secret Providers
+
+Individual secrets can specify their own providers with fallback chains:
+
+```toml
+[profiles.production.defaults]
+providers = ["vault", "keyring"]  # Default for all secrets in this profile
+
+[profiles.production]
+DATABASE_URL = { description = "Production DB" }  # Uses profile defaults
+API_KEY = { description = "API key", providers = ["env"] }  # Override: env only
+SHARED_SECRET = { description = "Shared", providers = ["team_vault", "keyring"] }  # Override
+```
+
+Provider aliases are configured in `~/.config/secretspec/config.toml`:
+
+```bash
+$ secretspec config provider add vault "onepassword://Production"
+$ secretspec config provider add team_vault "onepassword://Shared"
+```
+
 ```bash
 # Check all secrets are available and set them if not
 $ secretspec check

@@ -45,7 +45,10 @@ revision = "1.0"
 [profiles.default]
 DATABASE_URL = { description = "PostgreSQL connection string", required = true }
 REDIS_URL = { description = "Redis connection string", required = false }
+TLS_CERT = { description = "TLS certificate", as_path = true }
 ```
+
+Secrets with `as_path = true` are written to temporary files - useful for credentials that must be passed as file paths (TLS certs, service account keys).
 
 ```bash
 # Initialize secretspec.toml, possibly from `.env`

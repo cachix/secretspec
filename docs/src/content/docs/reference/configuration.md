@@ -46,6 +46,7 @@ Each secret variable is defined as a table with the following fields:
 | `required` | boolean | No* | Whether the value must be provided (default: true) |
 | `default` | string | No** | Default value if not provided |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
+| `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
 
 *If `default` is provided, `required` defaults to false
 **Only valid when `required = false`
@@ -105,6 +106,22 @@ $ secretspec config provider list
 # Remove an alias
 $ secretspec config provider remove prod_vault
 ```
+
+### as_path Option
+
+When `as_path = true`, the secret value is written to a temporary file and the file path is returned instead of the value:
+
+```toml
+[profiles.default]
+TLS_CERT = { description = "TLS certificate", as_path = true }
+GOOGLE_APPLICATION_CREDENTIALS = { description = "GCP service account", as_path = true }
+```
+
+| Context | Behavior |
+|---------|----------|
+| CLI (`get`, `check`, `run`) | Files are persisted (not deleted after command exits) |
+| Rust SDK | Files cleaned up when `ValidatedSecrets` is dropped; use `keep_temp_files()` to persist |
+| Rust SDK types | `PathBuf` or `Option<PathBuf>` instead of `String` |
 
 ## Profile Inheritance
 

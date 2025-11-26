@@ -84,3 +84,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+## Secrets as File Paths
+
+Secrets with `as_path = true` are generated as `PathBuf` instead of `String`:
+
+```toml
+# secretspec.toml
+[profiles.default]
+TLS_CERT = { description = "TLS certificate", as_path = true }
+TLS_KEY = { description = "TLS private key", as_path = true, required = false }
+```
+
+```rust
+secretspec_derive::declare_secrets!("secretspec.toml");
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let validated = Secrets::builder().check()?;
+
+    // Required as_path secrets are PathBuf
+    let cert_path: &std::path::PathBuf = &validated.secrets.tls_cert;
+
+    // Optional as_path secrets are Option<PathBuf>
+    if let Some(key_path) = &validated.secrets.tls_key {
+        println!("Key at: {}", key_path.display());
+    }
+
+    // Temporary files are cleaned up when `validated` is dropped
+    // To persist files beyond the struct's lifetime:
+    let paths = validated.keep_temp_files()?;
+
+    Ok(())
+}
+```

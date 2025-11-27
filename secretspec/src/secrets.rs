@@ -556,7 +556,7 @@ impl Secrets {
         };
 
         backend.set(&self.config.project.name, name, &value, &profile_name)?;
-        println!(
+        eprintln!(
             "{} Secret '{}' saved to {} (profile: {})",
             "✓".green(),
             name,
@@ -686,7 +686,7 @@ impl Secrets {
             Err(validation_errors) => {
                 // If we're in interactive mode and have missing required secrets, prompt for them
                 if interactive && !validation_errors.missing_required.is_empty() {
-                    println!("\nThe following required secrets are missing:");
+                    eprintln!("\nThe following required secrets are missing:");
                     for secret_name in &validation_errors.missing_required {
                         if let Some(secret_config) =
                             self.resolve_secret_config(secret_name, Some(&profile_display))
@@ -695,7 +695,7 @@ impl Secrets {
                                 .description
                                 .as_deref()
                                 .unwrap_or("No description");
-                            println!("\n{} - {}", secret_name.bold(), description);
+                            eprintln!("\n{} - {}", secret_name.bold(), description);
                             let value = if io::stdin().is_terminal() {
                                 print!(
                                     "Enter value for {} (profile: {}): ",
@@ -733,7 +733,7 @@ impl Secrets {
                                 &SecretString::new(value.into()),
                                 &profile_display,
                             )?;
-                            println!(
+                            eprintln!(
                                 "{} Secret '{}' saved to {} (profile: {})",
                                 "✓".green(),
                                 secret_name,
@@ -743,7 +743,7 @@ impl Secrets {
                         }
                     }
 
-                    println!("\nAll required secrets have been set.");
+                    eprintln!("\nAll required secrets have been set.");
 
                     // Re-validate to get the updated results
                     match self.validate()? {
@@ -794,7 +794,7 @@ impl Secrets {
     pub fn check(&self) -> Result<ValidatedSecrets> {
         let profile_display = self.resolve_profile_name(None);
 
-        println!(
+        eprintln!(
             "Checking secrets in {} (profile: {})...\n",
             self.config.project.name.bold(),
             profile_display.cyan()
@@ -829,7 +829,7 @@ impl Secrets {
         for (name, config) in profile.iter() {
             found_count += 1;
             if config.default.is_some() && default_names.contains(&name) {
-                println!(
+                eprintln!(
                     "{} {} - {} {}",
                     "○".yellow(),
                     name,
@@ -837,7 +837,7 @@ impl Secrets {
                     "(has default)".yellow()
                 );
             } else {
-                println!(
+                eprintln!(
                     "{} {} - {}",
                     "✓".green(),
                     name,
@@ -846,7 +846,7 @@ impl Secrets {
             }
         }
 
-        println!(
+        eprintln!(
             "\nSummary: {} found, {} missing",
             found_count.to_string().green(),
             0.to_string().red()
@@ -869,7 +869,7 @@ impl Secrets {
         for (name, config) in &profile {
             if errors.missing_required.contains(&name) {
                 missing_count += 1;
-                println!(
+                eprintln!(
                     "{} {} - {} {}",
                     "✗".red(),
                     name,
@@ -878,7 +878,7 @@ impl Secrets {
                 );
             } else if errors.missing_optional.contains(&name) {
                 found_count += 1;
-                println!(
+                eprintln!(
                     "{} {} - {} {}",
                     "○".blue(),
                     name,
@@ -888,7 +888,7 @@ impl Secrets {
             } else {
                 found_count += 1;
                 if default_names.contains(name) {
-                    println!(
+                    eprintln!(
                         "{} {} - {} {}",
                         "○".yellow(),
                         name,
@@ -896,7 +896,7 @@ impl Secrets {
                         "(has default)".yellow()
                     );
                 } else {
-                    println!(
+                    eprintln!(
                         "{} {} - {}",
                         "✓".green(),
                         name,
@@ -906,7 +906,7 @@ impl Secrets {
             }
         }
 
-        println!(
+        eprintln!(
             "\nSummary: {} found, {} missing",
             found_count.to_string().green(),
             missing_count.to_string().red()
@@ -950,7 +950,7 @@ impl Secrets {
         // Create the "from" provider
         let from_provider_instance = Box::<dyn ProviderTrait>::try_from(from_provider.to_string())?;
 
-        println!(
+        eprintln!(
             "Importing secrets from {} (profile: {})...\n",
             from_provider.blue(),
             profile_display.cyan()
@@ -999,7 +999,7 @@ impl Secrets {
                     // Secret exists in "from" provider, check if it exists in "to" provider
                     match to_provider.get(&self.config.project.name, &name, &profile_display)? {
                         Some(_) => {
-                            println!(
+                            eprintln!(
                                 "{} {} - {} {} (→ {})",
                                 "○".yellow(),
                                 name,
@@ -1017,7 +1017,7 @@ impl Secrets {
                                 &value,
                                 &profile_display,
                             )?;
-                            println!(
+                            eprintln!(
                                 "{} {} - {} (→ {})",
                                 "✓".green(),
                                 name,
@@ -1033,7 +1033,7 @@ impl Secrets {
                     // Check if it exists in the "to" provider
                     match to_provider.get(&self.config.project.name, &name, &profile_display)? {
                         Some(_) => {
-                            println!(
+                            eprintln!(
                                 "{} {} - {} {} (→ {})",
                                 "○".blue(),
                                 name,
@@ -1044,7 +1044,7 @@ impl Secrets {
                             already_exists += 1;
                         }
                         None => {
-                            println!(
+                            eprintln!(
                                 "{} {} - {} {}",
                                 "✗".red(),
                                 name,
@@ -1058,7 +1058,7 @@ impl Secrets {
             }
         }
 
-        println!(
+        eprintln!(
             "\nSummary: {} imported, {} already exists, {} not found in source",
             imported.to_string().green(),
             already_exists.to_string().yellow(),
@@ -1066,7 +1066,7 @@ impl Secrets {
         );
 
         if imported > 0 {
-            println!(
+            eprintln!(
                 "\n{} Successfully imported {} secrets from {}",
                 "✓".green(),
                 imported,

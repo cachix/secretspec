@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - OnePassword provider: Use stdin instead of temporary files when creating items for WSL2 compatibility (WSL paths are invalid when passed to Windows executables)
 
+### Fixed
+- Output status/progress messages to stderr instead of stdout, fixing direnv integration where stdout was evaluated as shell code
+
 ## [0.4.0] - 2025-11-24
 
 ### Added

@@ -670,7 +670,7 @@ impl Secrets {
     /// Returns an error if:
     /// - Required secrets are missing and interactive mode is disabled
     /// - Storage operations fail
-    fn ensure_secrets(
+    pub fn ensure_secrets(
         &self,
         provider_arg: Option<String>,
         profile: Option<String>,

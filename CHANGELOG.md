@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Support specifying full file paths (ending in `.toml`) in `extends` field, in addition to directory paths
+
+### Fixed
+- Display correct error message when extended config file is not found, instead of the misleading "No secretspec.toml found in current directory" error
+
 ## [0.4.1] - 2025-11-27
 
 ### Added

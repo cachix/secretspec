@@ -41,6 +41,8 @@ pub enum SecretSpecError {
     RequiredSecretMissing(String),
     #[error("No secretspec.toml found in current directory")]
     NoManifest,
+    #[error("Extended config file not found: {0}")]
+    ExtendedConfigNotFound(String),
     #[error("Project name not found in secretspec.toml")]
     NoProjectName,
     #[error("Provider operation failed: {0}")]
@@ -78,6 +80,9 @@ impl From<ParseError> for SecretSpecError {
             }
             ParseError::Validation(msg) => {
                 SecretSpecError::Io(io::Error::new(io::ErrorKind::InvalidData, msg))
+            }
+            ParseError::ExtendedConfigNotFound(path) => {
+                SecretSpecError::ExtendedConfigNotFound(path)
             }
         }
     }

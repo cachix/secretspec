@@ -171,13 +171,18 @@ impl Config {
         visited: &mut HashSet<PathBuf>,
     ) -> Result<Config, ParseError> {
         for extend_path in extends_paths {
-            let full_path = base_dir.join(extend_path).join("secretspec.toml");
+            // If path ends with .toml, use it as-is; otherwise append secretspec.toml
+            let joined_path = base_dir.join(extend_path);
+            let full_path = if extend_path.ends_with(".toml") {
+                joined_path
+            } else {
+                joined_path.join("secretspec.toml")
+            };
 
             if !full_path.exists() {
-                return Err(ParseError::Io(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("Extended config file not found: {}", full_path.display()),
-                )));
+                return Err(ParseError::ExtendedConfigNotFound(
+                    full_path.display().to_string(),
+                ));
             }
 
             let extended_config = Self::from_path_with_visited(&full_path, visited)?;
@@ -564,6 +569,8 @@ pub enum ParseError {
     CircularDependency(String),
     /// Validation error
     Validation(String),
+    /// Extended configuration file not found
+    ExtendedConfigNotFound(String),
 }
 
 impl std::fmt::Display for ParseError {
@@ -582,6 +589,9 @@ impl std::fmt::Display for ParseError {
                 write!(f, "Circular dependency detected: {}", msg)
             }
             ParseError::Validation(msg) => write!(f, "Validation error: {}", msg),
+            ParseError::ExtendedConfigNotFound(path) => {
+                write!(f, "Extended config file not found: {}", path)
+            }
         }
     }
 }

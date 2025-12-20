@@ -1023,6 +1023,55 @@ SECRET_B = { description = "Secret B", required = false, default = "prod-b" }
 }
 
 #[test]
+fn test_extends_with_file_path() {
+    // Test that extends works with full file paths (ending in .toml)
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path();
+
+    // Create shared directory with a custom-named config file
+    fs::create_dir_all(base_path.join("shared")).unwrap();
+    fs::create_dir_all(base_path.join("backend")).unwrap();
+
+    // Create shared config with a custom filename
+    let shared_config = r#"
+[project]
+name = "shared"
+revision = "1.0"
+
+[profiles.default]
+SHARED_SECRET = { description = "A shared secret", required = true }
+"#;
+    fs::write(base_path.join("shared/secretspec.toml"), shared_config).unwrap();
+
+    // Create backend config that extends using full file path
+    let backend_config = r#"
+[project]
+name = "backend"
+revision = "1.0"
+extends = ["../shared/secretspec.toml"]
+
+[profiles.default]
+BACKEND_SECRET = { description = "Backend specific secret", required = true }
+"#;
+    fs::write(base_path.join("backend/secretspec.toml"), backend_config).unwrap();
+
+    // Parse should succeed with file path extends
+    let config = Config::try_from(base_path.join("backend/secretspec.toml").as_path()).unwrap();
+
+    // Verify config merged correctly
+    assert_eq!(config.project.name, "backend");
+    assert_eq!(
+        config.project.extends,
+        Some(vec!["../shared/secretspec.toml".to_string()])
+    );
+
+    // Verify secrets from both configs are present
+    let default_profile = config.profiles.get("default").unwrap();
+    assert!(default_profile.secrets.contains_key("BACKEND_SECRET"));
+    assert!(default_profile.secrets.contains_key("SHARED_SECRET"));
+}
+
+#[test]
 fn test_self_extension() {
     let temp_dir = TempDir::new().unwrap();
     let base_path = temp_dir.path();
@@ -1191,10 +1240,10 @@ API_KEY = { description = "API key for external service", required = true }
     let result = Config::try_from(base_path.join("secretspec.toml").as_path());
     assert!(result.is_err());
     match result {
-        Err(ParseError::Io(e)) => {
-            assert_eq!(e.kind(), io::ErrorKind::NotFound);
+        Err(ParseError::ExtendedConfigNotFound(path)) => {
+            assert!(path.contains("nonexistent"));
         }
-        _ => panic!("Expected IO error for missing file"),
+        _ => panic!("Expected ExtendedConfigNotFound error for missing file"),
     }
 }
 
@@ -1221,10 +1270,10 @@ SECRET_A = { description = "Secret A", required = true }
     let result = Config::try_from(base_path.join("secretspec.toml").as_path());
     assert!(result.is_err());
     match result {
-        Err(ParseError::Io(e)) => {
-            assert_eq!(e.kind(), io::ErrorKind::NotFound);
+        Err(ParseError::ExtendedConfigNotFound(path)) => {
+            assert!(path.contains("notadir.txt"));
         }
-        _ => panic!("Expected IO NotFound error for extending to file"),
+        _ => panic!("Expected ExtendedConfigNotFound error for extending to file"),
     }
 
     // Test 2: Extend with empty string
@@ -1257,10 +1306,10 @@ SECRET_C = { description = "Secret C", required = true }
     let result3 = Config::try_from(base_path.join("secretspec3.toml").as_path());
     assert!(result3.is_err());
     match result3 {
-        Err(ParseError::Io(_e)) => {
-            // Should get NotFound error for non-existent directory
+        Err(ParseError::ExtendedConfigNotFound(path)) => {
+            assert!(path.contains("does_not_exist"));
         }
-        _ => panic!("Expected IO NotFound error for non-existent directory"),
+        _ => panic!("Expected ExtendedConfigNotFound error for non-existent directory"),
     }
 }
 

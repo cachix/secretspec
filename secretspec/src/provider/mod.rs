@@ -62,6 +62,7 @@ pub mod env;
 pub mod keyring;
 pub mod lastpass;
 pub mod onepassword;
+pub mod pass;
 #[macro_use]
 pub mod macros;
 

@@ -1,0 +1,8 @@
+[project]
+name = "test-pass"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "Database connection string", required = true }
+API_KEY = { description = "API key for external service", required = true }
+SECRET_TOKEN = { description = "Secret authentication token", required = false }

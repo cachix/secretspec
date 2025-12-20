@@ -82,6 +82,9 @@ fn test_create_from_string_with_plain_names() {
 
     let provider = Box::<dyn Provider>::try_from("lastpass").unwrap();
     assert_eq!(provider.name(), "lastpass");
+
+    let provider = Box::<dyn Provider>::try_from("pass").unwrap();
+    assert_eq!(provider.name(), "pass");
 }
 
 #[test]
@@ -165,6 +168,10 @@ fn test_documentation_examples() {
     // Test dotenv examples from provider list
     let provider = Box::<dyn Provider>::try_from("dotenv://path").unwrap();
     assert_eq!(provider.name(), "dotenv");
+
+    // Test pass examples
+    let provider = Box::<dyn Provider>::try_from("pass://").unwrap();
+    assert_eq!(provider.name(), "pass");
 }
 
 #[test]
@@ -239,6 +246,11 @@ mod integration_tests {
                 let provider = Box::<dyn Provider>::try_from(provider_spec.as_str())
                     .expect("Should create dotenv provider with path");
                 (provider, Some(temp_dir))
+            }
+            "pass" => {
+                let provider =
+                    Box::<dyn Provider>::try_from("pass").expect("Should create pass provider");
+                (provider, None)
             }
             _ => {
                 let provider = Box::<dyn Provider>::try_from(provider_name)
@@ -425,6 +437,27 @@ mod integration_tests {
         assert!(
             error_msg.contains("does not support reflection"),
             "Error message should indicate reflection is not supported"
+        );
+    }
+
+    #[test]
+    fn test_pass_provider_creation() {
+        // Test pass provider can be created from various URI formats
+        let provider = Box::<dyn Provider>::try_from("pass").unwrap();
+        assert_eq!(provider.name(), "pass");
+        assert_eq!(provider.uri(), "pass");
+
+        let provider = Box::<dyn Provider>::try_from("pass://").unwrap();
+        assert_eq!(provider.name(), "pass");
+        assert_eq!(provider.uri(), "pass");
+    }
+
+    #[test]
+    fn test_pass_provider_allows_set() {
+        let provider = Box::<dyn Provider>::try_from("pass").unwrap();
+        assert!(
+            provider.allows_set(),
+            "Pass provider should support write operations"
         );
     }
 }

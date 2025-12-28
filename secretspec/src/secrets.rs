@@ -804,16 +804,15 @@ impl Secrets {
         match self.validate()? {
             Ok(valid) => {
                 self.display_validation_success(&valid)?;
+                // All secrets present - return early without re-validating
+                Ok(valid)
             }
             Err(errors) => {
                 self.display_validation_errors(&errors)?;
+                // Missing secrets - prompt if interactive and re-validate
+                self.ensure_secrets(None, None, true)
             }
         }
-
-        // Now ensure all secrets are present (will prompt if needed)
-        let validated = self.ensure_secrets(None, None, true)?;
-
-        Ok(validated)
     }
 
     /// Display validation success results

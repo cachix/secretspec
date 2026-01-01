@@ -460,4 +460,60 @@ mod integration_tests {
             "Pass provider should support write operations"
         );
     }
+
+    #[cfg(feature = "gcsm")]
+    #[test]
+    fn test_gcsm_provider_creation() {
+        // Test GCSM provider can be created from URI format
+        let provider = Box::<dyn Provider>::try_from("gcsm://my-project").unwrap();
+        assert_eq!(provider.name(), "gcsm");
+        assert_eq!(provider.uri(), "gcsm://my-project");
+    }
+
+    #[cfg(feature = "gcsm")]
+    #[test]
+    fn test_gcsm_provider_requires_project_id() {
+        // Test that GCSM provider requires a project ID
+        let result = Box::<dyn Provider>::try_from("gcsm://");
+        assert!(result.is_err(), "GCSM provider should require project ID");
+
+        let result = Box::<dyn Provider>::try_from("gcsm");
+        assert!(result.is_err(), "GCSM provider should require project ID");
+    }
+
+    #[cfg(feature = "gcsm")]
+    #[test]
+    fn test_gcsm_provider_validates_project_id_format() {
+        // Too short (< 6 chars)
+        let result = Box::<dyn Provider>::try_from("gcsm://short");
+        assert!(result.is_err(), "Should reject project ID < 6 chars");
+
+        // Must start with lowercase letter
+        let result = Box::<dyn Provider>::try_from("gcsm://123456");
+        assert!(
+            result.is_err(),
+            "Should reject project ID starting with number"
+        );
+
+        let result = Box::<dyn Provider>::try_from("gcsm://My-Project-123");
+        assert!(result.is_err(), "Should reject project ID with uppercase");
+
+        // Cannot end with hyphen
+        let result = Box::<dyn Provider>::try_from("gcsm://my-project-");
+        assert!(
+            result.is_err(),
+            "Should reject project ID ending with hyphen"
+        );
+
+        // Invalid characters
+        let result = Box::<dyn Provider>::try_from("gcsm://my_project");
+        assert!(result.is_err(), "Should reject project ID with underscore");
+
+        // Valid project IDs
+        let provider = Box::<dyn Provider>::try_from("gcsm://my-project-123").unwrap();
+        assert_eq!(provider.name(), "gcsm");
+
+        let provider = Box::<dyn Provider>::try_from("gcsm://project123").unwrap();
+        assert_eq!(provider.name(), "gcsm");
+    }
 }

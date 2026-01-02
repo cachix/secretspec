@@ -25,3 +25,5 @@ libdbus-1-dev = { version = "*", targets = [
 # https://github.com/axodotdev/cargo-dist/issues/74
 [dist.github-custom-runners]
 aarch64-unknown-linux-gnu = "ubuntu-24.04-arm"
+aarch64-apple-darwin = "macos-latest"
+x86_64-apple-darwin = "macos-15"

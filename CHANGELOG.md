@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- CI: Updated macOS runners from deprecated macos-13 to macos-15 (Intel) and macos-latest (ARM)
+
 ## [0.5.0] - 2026-01-02
 
 ### Added

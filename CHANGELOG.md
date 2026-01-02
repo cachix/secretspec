@@ -7,8 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-01-02
+
 ### Added
+- Pass (password-store) provider for Unix password manager integration
+- `ensure_secrets()` method is now public in the Rust SDK
 - Support specifying full file paths (ending in `.toml`) in `extends` field, in addition to directory paths
+
+### Changed
+- Performance: avoid double validation in `check()` for happy path
 
 ### Fixed
 - Display correct error message when extended config file is not found, instead of the misleading "No secretspec.toml found in current directory" error

@@ -59,12 +59,13 @@ Providers support URI-based configuration (e.g., `keyring://`, `onepassword://va
 
 ### Adding Provider Documentation
 
-When adding a new provider, update these docs files:
+When adding a new provider, update these files:
 
 1. `docs/src/content/docs/providers/<provider>.md` - Create the provider's doc page
 2. `docs/astro.config.mjs` - Add to sidebar navigation under "Providers"
 3. `docs/src/content/docs/concepts/providers.md` - Add to "Available Providers" table
 4. `docs/src/content/docs/reference/providers.md` - Add provider section and update "Security Considerations" table
+5. `README.md` - Add to "Providers" list
 
 ## Configuration System
 

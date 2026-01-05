@@ -38,8 +38,10 @@ $ secretspec config init
 > onepassword: OnePassword password manager
   dotenv: Traditional .env files
   env: Read-only environment variables
+  gcsm: Google Cloud Secret Manager
   keyring: Uses system keychain (Recommended)
   lastpass: LastPass password manager
+  pass: Unix password manager (GPG)
 ? Select your default profile:
 > development
   default
@@ -114,8 +116,10 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Keyring](https://secretspec.dev/providers/keyring)** - System credential store (recommended)
 - **[.env files](https://secretspec.dev/providers/dotenv)** - Traditional dotenv files
 - **[Environment variables](https://secretspec.dev/providers/env)** - Read-only for CI/CD
+- **[Pass](https://secretspec.dev/providers/pass)** - Unix password manager with GPG encryption
 - **[OnePassword](https://secretspec.dev/providers/onepassword)** - Team secret management
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager
+- **[Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)** - GCP secret management
 
 ```bash
 $ secretspec run --provider keyring -- npm start

@@ -42,10 +42,10 @@ use url::Url;
 /// Configuration for the Google Cloud Secret Manager provider.
 ///
 /// Contains the GCP project ID where secrets are stored.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GcsmConfig {
     /// The GCP project ID (e.g., "my-gcp-project")
-    pub project_id: Option<String>,
+    pub project_id: String,
 }
 
 /// Validates a GCP project ID format.
@@ -109,17 +109,18 @@ impl TryFrom<&Url> for GcsmConfig {
         }
 
         // Extract project ID from host portion: gcsm://project-id
-        let project_id = url.host_str().map(|s| s.to_string());
-
-        if project_id.is_none() || project_id.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
-            return Err(SecretSpecError::ProviderOperationFailed(
-                "GCP project ID is required. Use format: gcsm://project-id".to_string(),
-            ));
-        }
+        let project_id = url
+            .host_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                SecretSpecError::ProviderOperationFailed(
+                    "GCP project ID is required. Use format: gcsm://project-id".to_string(),
+                )
+            })?
+            .to_string();
 
         // Validate project ID format
-        let project_id_str = project_id.as_ref().unwrap();
-        validate_gcp_project_id(project_id_str)?;
+        validate_gcp_project_id(&project_id)?;
 
         Ok(Self { project_id })
     }
@@ -253,14 +254,10 @@ impl GcsmProvider {
         key: &str,
         profile: &str,
     ) -> Result<Option<SecretString>> {
-        let gcp_project_id = self.config.project_id.as_ref().ok_or_else(|| {
-            SecretSpecError::ProviderOperationFailed("GCP project ID not configured".to_string())
-        })?;
-
         let secret_name = self.format_secret_name(project, profile, key)?;
         let secret_version_path = format!(
             "projects/{}/secrets/{}/versions/latest",
-            gcp_project_id, secret_name
+            self.config.project_id, secret_name
         );
 
         let client = self.create_client().await?;
@@ -309,17 +306,13 @@ impl GcsmProvider {
         value: &SecretString,
         profile: &str,
     ) -> Result<()> {
-        let gcp_project_id = self.config.project_id.as_ref().ok_or_else(|| {
-            SecretSpecError::ProviderOperationFailed("GCP project ID not configured".to_string())
-        })?;
-
         let secret_name = self.format_secret_name(project, profile, key)?;
         let client = self.create_client().await?;
 
         // Always try to create the secret first (idempotent - ALREADY_EXISTS is expected for existing secrets)
         let create_result = client
             .create_secret()
-            .set_parent(format!("projects/{}", gcp_project_id))
+            .set_parent(format!("projects/{}", self.config.project_id))
             .set_secret_id(&secret_name)
             .set_secret(Secret::default().set_replication(
                 Replication::default().set_automatic(replication::Automatic::default()),
@@ -343,7 +336,7 @@ impl GcsmProvider {
             .add_secret_version()
             .set_parent(format!(
                 "projects/{}/secrets/{}",
-                gcp_project_id, secret_name
+                self.config.project_id, secret_name
             ))
             .set_payload(
                 SecretPayload::default().set_data(value.expose_secret().as_bytes().to_vec()),
@@ -367,10 +360,7 @@ impl Provider for GcsmProvider {
     }
 
     fn uri(&self) -> String {
-        match &self.config.project_id {
-            Some(project_id) => format!("gcsm://{}", project_id),
-            None => "gcsm://".to_string(),
-        }
+        format!("gcsm://{}", self.config.project_id)
     }
 
     fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {

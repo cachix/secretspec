@@ -15,7 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.5.0] - 2026-01-02
 
 ### Added
-- Google Cloud Secret Manager provider (`gcsm://project-id`) with full read/write support for GCP secrets (requires `gcsm` feature flag)
 - Pass (password-store) provider for Unix password manager integration
 - `ensure_secrets()` method is now public in the Rust SDK
 - Support specifying full file paths (ending in `.toml`) in `extends` field, in addition to directory paths
@@ -25,11 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Display correct error message when extended config file is not found, instead of the misleading "No secretspec.toml found in current directory" error
-
-### Security
-- GCSM provider: Add input validation for secret name components (project, profile, key) to prevent invalid GCP secret names and potential injection issues
-- GCSM provider: Add GCP project ID format validation (6-30 chars, lowercase letters, digits, hyphens)
-- GCSM provider: Fix TOCTOU race condition in `set()` by always attempting secret creation first instead of check-then-create pattern
 
 ## [0.4.1] - 2025-11-27
 

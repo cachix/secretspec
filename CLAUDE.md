@@ -57,6 +57,15 @@ The provider system uses a trait-based architecture defined in `src/provider/mod
 
 Providers support URI-based configuration (e.g., `keyring://`, `onepassword://vault`, `dotenv://.env.production`). The provider system handles URI parsing and provider instantiation directly within each provider module.
 
+### Adding Provider Documentation
+
+When adding a new provider, update these docs files:
+
+1. `docs/src/content/docs/providers/<provider>.md` - Create the provider's doc page
+2. `docs/astro.config.mjs` - Add to sidebar navigation under "Providers"
+3. `docs/src/content/docs/concepts/providers.md` - Add to "Available Providers" table
+4. `docs/src/content/docs/reference/providers.md` - Add provider section and update "Security Considerations" table
+
 ## Configuration System
 
 ### Profile Resolution

@@ -58,6 +58,8 @@ use url::Url;
 
 pub mod dotenv;
 pub mod env;
+#[cfg(feature = "gcsm")]
+pub mod gcsm;
 #[cfg(feature = "keyring")]
 pub mod keyring;
 pub mod lastpass;

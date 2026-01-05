@@ -35,8 +35,11 @@ url.workspace = true
 whoami = { workspace = true, optional = true }
 linkme.workspace = true
 secrecy.workspace = true
+google-cloud-secretmanager-v1 = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 
 [features]
 default = ["cli", "keyring"]
 cli = []
 keyring = ["dep:keyring", "dep:whoami"]
+gcsm = ["dep:google-cloud-secretmanager-v1", "dep:tokio"]

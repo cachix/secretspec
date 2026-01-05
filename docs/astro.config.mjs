@@ -47,8 +47,13 @@ export default defineConfig({
             { label: "Keyring", slug: "providers/keyring" },
             { label: "Dotenv", slug: "providers/dotenv" },
             { label: "Environment Variables", slug: "providers/env" },
+            { label: "Pass", slug: "providers/pass" },
             { label: "LastPass", slug: "providers/lastpass" },
             { label: "1Password", slug: "providers/onepassword" },
+            {
+              label: "Google Cloud Secret Manager",
+              slug: "providers/gcsm",
+            },
           ],
         },
         {

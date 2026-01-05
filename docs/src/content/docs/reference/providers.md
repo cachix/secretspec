@@ -66,6 +66,30 @@ onepassword+token://user:op_token@SecureVault   # Service account
 **Prerequisites**: `op` CLI, authenticated with `op signin`
 **Storage**: Item name `{project}/{key}`, tags `automated`, `{project}`
 
+## Pass Provider
+
+**URI**: `pass://` - Uses Unix password manager with GPG encryption
+
+```bash
+pass://                       # Default password store
+```
+
+**Features**: Read/write, GPG encryption, profiles, local storage
+**Prerequisites**: `pass` CLI, initialized with `pass init <gpg-key-id>`
+**Storage**: Path `secretspec/{project}/{profile}/{key}`
+
+## Google Cloud Secret Manager Provider
+
+**URI**: `gcsm://PROJECT_ID` - Stores secrets in Google Cloud Secret Manager
+
+```bash
+gcsm://my-gcp-project         # GCP project ID
+```
+
+**Features**: Read/write, cloud sync, profiles, service account support
+**Prerequisites**: `gcloud` CLI, authenticated, Secret Manager API enabled, build with `--features gcsm`
+**Storage**: Secret name `secretspec-{project}-{profile}-{key}`
+
 ## Provider Selection
 
 ### Command Line
@@ -95,5 +119,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | DotEnv | ❌ Plain text | Local filesystem | ❌ No |
 | Environment | ❌ Plain text | Process memory | ❌ No |
 | Keyring | ✅ System encryption | System keychain | ❌ No |
+| Pass | ✅ GPG encryption | Local filesystem | ❌ No |
 | LastPass | ✅ End-to-end | Cloud (LastPass) | ✅ Yes |
 | OnePassword | ✅ End-to-end | Cloud (OnePassword) | ✅ Yes |
+| GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |

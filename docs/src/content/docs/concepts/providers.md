@@ -12,8 +12,10 @@ Providers are pluggable storage backends that handle the storage and retrieval o
 | **keyring** | System credential storage (macOS Keychain, Windows Credential Manager, Linux Secret Service) | ✓ | ✓ | ✓ |
 | **dotenv** | Traditional `.env` file in your project directory | ✓ | ✓ | ✗ |
 | **env** | Read-only access to existing environment variables | ✓ | ✗ | ✗ |
+| **pass** | Unix password manager with GPG encryption | ✓ | ✓ | ✓ |
 | **onepassword** | Integration with OnePassword password manager | ✓ | ✓ | ✓ |
 | **lastpass** | Integration with LastPass password manager | ✓ | ✓ | ✓ |
+| **gcsm** | Google Cloud Secret Manager (requires `--features gcsm`) | ✓ | ✓ | ✓ |
 
 ## Provider Selection
 

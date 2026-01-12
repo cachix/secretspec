@@ -348,7 +348,7 @@ impl Provider for LastPassProvider {
     /// Creates or updates a secret in LastPass at the path
     /// determined by the folder_prefix format string. The method first checks if
     /// the item exists to determine whether to use `lpass edit` (for updates)
-    /// or `lpass set` (for new items).
+    /// or `lpass add` (for new items).
     ///
     /// # Arguments
     ///
@@ -409,9 +409,9 @@ impl Provider for LastPassProvider {
                 ));
             }
         } else {
-            // Create new item using lpass set
+            // Create new item using lpass add
             let args = vec![
-                "set",
+                "add",
                 "--sync=now",
                 &item_name,
                 "--password",

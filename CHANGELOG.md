@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Google Cloud Secret Manager (GCSM) provider for GCP secret storage integration (#53)
+
 ### Fixed
 - LastPass provider: Fix creating new secrets by using correct `lpass add` command instead of non-existent `lpass set` (#54)
 

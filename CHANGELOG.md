@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- OnePassword provider: Fix duplicate item creation when existing item has no extractable value.
+  Now uses `op item list` for existence checks and updates by item ID to avoid ambiguity.
+- OnePassword provider: Handle "More than one item matches" error gracefully by falling back to ID-based lookup.
+
 ## [0.6.0] - 2026-01-12
 
 ### Added

@@ -351,7 +351,10 @@ impl OnePasswordProvider {
 
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
-            if error_msg.contains("not currently signed in") {
+            if error_msg.contains("not currently signed in")
+                || error_msg.contains("no active session")
+                || error_msg.contains("could not find session token")
+            {
                 return Err(SecretSpecError::ProviderOperationFailed(
                     "OnePassword authentication required. Please run 'eval $(op signin)' first."
                         .to_string(),
@@ -380,7 +383,7 @@ impl OnePasswordProvider {
         match self.execute_op_command(&["whoami"], None) {
             Ok(_) => Ok(true),
             Err(SecretSpecError::ProviderOperationFailed(msg))
-                if msg.contains("not currently signed in") || msg.contains("no account found") =>
+                if msg.contains("authentication required") || msg.contains("no account found") =>
             {
                 Ok(false)
             }
@@ -402,6 +405,41 @@ impl OnePasswordProvider {
             .default_vault
             .clone()
             .unwrap_or_else(|| "Private".to_string())
+    }
+
+    /// Finds an item by title in the vault and returns its ID.
+    ///
+    /// Uses `op item list` to search for items, which is more reliable than
+    /// `op item get` for existence checking because it doesn't fail when
+    /// an item exists but has no extractable value.
+    ///
+    /// # Arguments
+    ///
+    /// * `item_name` - The item title to search for
+    /// * `vault` - The vault to search in
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(id))` - Item found, returns its ID
+    /// * `Ok(None)` - Item not found
+    /// * `Err(_)` - Search failed
+    fn find_item_id(&self, item_name: &str, vault: &str) -> Result<Option<String>> {
+        let args = vec!["item", "list", "--vault", vault, "--format", "json"];
+
+        let output = self.execute_op_command(&args, None)?;
+
+        #[derive(Deserialize)]
+        struct ListItem {
+            id: String,
+            title: String,
+        }
+
+        let items: Vec<ListItem> = serde_json::from_str(&output).unwrap_or_default();
+
+        Ok(items
+            .into_iter()
+            .find(|item| item.title == item_name)
+            .map(|item| item.id))
     }
 
     /// Formats the item name for storage in OnePassword.
@@ -477,6 +515,36 @@ impl OnePasswordProvider {
             tags: vec!["automated".to_string(), project.to_string()],
         }
     }
+
+    /// Extracts the secret value from a OnePassword item JSON.
+    ///
+    /// Looks for a field labeled "value" first, then falls back to
+    /// password or concealed fields.
+    fn extract_value_from_item(&self, output: &str) -> Result<Option<SecretString>> {
+        let item: OnePasswordItem = serde_json::from_str(output)?;
+
+        // Look for the "value" field
+        for field in &item.fields {
+            if field.label.as_deref() == Some("value") {
+                return Ok(field
+                    .value
+                    .as_ref()
+                    .map(|v| SecretString::new(v.clone().into())));
+            }
+        }
+
+        // Fallback: look for password field or first concealed field
+        for field in &item.fields {
+            if field.field_type == "CONCEALED" || field.id == "password" {
+                return Ok(field
+                    .value
+                    .as_ref()
+                    .map(|v| SecretString::new(v.clone().into())));
+            }
+        }
+
+        Ok(None)
+    }
 }
 
 impl Provider for OnePasswordProvider {
@@ -524,6 +592,9 @@ impl Provider for OnePasswordProvider {
     /// configuration in the appropriate vault. The method looks for a field labeled "value"
     /// first, then falls back to password or concealed fields.
     ///
+    /// If multiple items exist with the same title, falls back to ID-based lookup
+    /// to retrieve the first matching item.
+    ///
     /// # Arguments
     ///
     /// * `project` - The project name
@@ -535,12 +606,6 @@ impl Provider for OnePasswordProvider {
     /// * `Ok(Some(value))` - The secret value if found
     /// * `Ok(None)` - No secret found with the given key
     /// * `Err(_)` - Authentication or retrieval error
-    ///
-    /// # Errors
-    ///
-    /// - Authentication required if not signed in
-    /// - Item retrieval failures
-    /// - JSON parsing errors
     fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
         // Check authentication status first
         if !self.whoami()? {
@@ -559,33 +624,25 @@ impl Provider for OnePasswordProvider {
         ];
 
         match self.execute_op_command(&args, None) {
-            Ok(output) => {
-                let item: OnePasswordItem = serde_json::from_str(&output)?;
-
-                // Look for the "value" field
-                for field in &item.fields {
-                    if field.label.as_deref() == Some("value") {
-                        return Ok(field
-                            .value
-                            .as_ref()
-                            .map(|v| SecretString::new(v.clone().into())));
-                    }
-                }
-
-                // Fallback: look for password field or first concealed field
-                for field in &item.fields {
-                    if field.field_type == "CONCEALED" || field.id == "password" {
-                        return Ok(field
-                            .value
-                            .as_ref()
-                            .map(|v| SecretString::new(v.clone().into())));
-                    }
-                }
-
-                Ok(None)
-            }
+            Ok(output) => self.extract_value_from_item(&output),
             Err(SecretSpecError::ProviderOperationFailed(msg)) if msg.contains("isn't an item") => {
                 Ok(None)
+            }
+            Err(SecretSpecError::ProviderOperationFailed(msg))
+                if msg.contains("More than one item") =>
+            {
+                // Multiple items with same title - fall back to ID-based lookup
+                if let Some(item_id) = self.find_item_id(&item_name, &vault)? {
+                    let args = vec![
+                        "item", "get", &item_id, "--vault", &vault, "--format", "json",
+                    ];
+                    match self.execute_op_command(&args, None) {
+                        Ok(output) => self.extract_value_from_item(&output),
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    Ok(None)
+                }
             }
             Err(e) => Err(e),
         }
@@ -625,14 +682,16 @@ impl Provider for OnePasswordProvider {
         let vault = self.get_vault_name(profile);
         let item_name = self.format_item_name(project, key, profile);
 
-        // First, try to update existing item
-        if let Ok(Some(_)) = self.get(project, key, profile) {
-            // Item exists, update it
+        // Check if item exists by listing items (more reliable than get which requires
+        // a readable value). This prevents creating duplicates when an item exists
+        // but has no extractable value field.
+        if let Some(item_id) = self.find_item_id(&item_name, &vault)? {
+            // Item exists, update it by ID to avoid "more than one item" ambiguity
             let field_assignment = format!("value={}", value.expose_secret());
             let args = vec![
                 "item",
                 "edit",
-                &item_name,
+                &item_id,
                 "--vault",
                 &vault,
                 &field_assignment,

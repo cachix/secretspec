@@ -1,6 +1,7 @@
 # CLAUDE.md
 
-When commiting changes, make sure to update /CHANGELOG.md with one entry (can be multi-line)
+When commiting changes related to Rust, make sure to update /CHANGELOG.md with one entry (can be multi-line).
+
 
 ## Project Overview
 

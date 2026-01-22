@@ -25,7 +25,7 @@ use std::process::Command;
 ///
 /// // Load configuration and validate secrets
 /// let mut spec = Secrets::load().unwrap();
-/// spec.check().unwrap();
+/// spec.check(false).unwrap();
 /// ```
 pub struct Secrets {
     /// The project-specific configuration
@@ -90,7 +90,7 @@ impl Secrets {
     ///
     /// let mut spec = Secrets::load().unwrap();
     /// spec.set_provider("keyring");
-    /// spec.check().unwrap();
+    /// spec.check(false).unwrap();
     /// ```
     pub fn load() -> Result<Self> {
         let project_config = Config::try_from(Path::new("secretspec.toml"))?;
@@ -118,7 +118,7 @@ impl Secrets {
     ///
     /// let mut spec = Secrets::load().unwrap();
     /// spec.set_provider("dotenv:.env.production");
-    /// spec.check().unwrap();
+    /// spec.check(false).unwrap();
     /// ```
     pub fn set_provider(&mut self, provider: impl Into<String>) {
         self.provider = Some(provider.into());
@@ -139,7 +139,7 @@ impl Secrets {
     ///
     /// let mut spec = Secrets::load().unwrap();
     /// spec.set_profile("production");
-    /// spec.check().unwrap();
+    /// spec.check(false).unwrap();
     /// ```
     pub fn set_profile(&mut self, profile: impl Into<String>) {
         self.profile = Some(profile.into());
@@ -762,26 +762,26 @@ impl Secrets {
         }
     }
 
-    /// Checks the status of all secrets and prompts for missing required ones
+    /// Checks the status of all secrets and optionally prompts for missing required ones
     ///
     /// This method displays the status of all secrets defined in the specification,
-    /// showing which are present, missing, or using defaults. It then prompts
-    /// the user to provide values for any missing required secrets.
+    /// showing which are present, missing, or using defaults. Unless `no_prompt` is set,
+    /// it then prompts the user to provide values for any missing required secrets.
     ///
     /// # Arguments
     ///
-    /// * `provider_arg` - Optional provider to use
-    /// * `profile` - Optional profile to use
+    /// * `no_prompt` - If true, don't prompt for missing secrets and return an error instead
     ///
     /// # Returns
     ///
-    /// `Ok(())` if all required secrets are present after prompting
+    /// A `ValidatedSecrets` if all required secrets are present
     ///
     /// # Errors
     ///
     /// Returns an error if:
     /// - The provider cannot be initialized
     /// - Storage operations fail
+    /// - Required secrets are missing (when `no_prompt` is true)
     ///
     /// # Example
     ///
@@ -789,9 +789,9 @@ impl Secrets {
     /// use secretspec::Secrets;
     ///
     /// let mut spec = Secrets::load().unwrap();
-    /// let validated = spec.check().unwrap();
+    /// let validated = spec.check(false).unwrap();
     /// ```
-    pub fn check(&self) -> Result<ValidatedSecrets> {
+    pub fn check(&self, no_prompt: bool) -> Result<ValidatedSecrets> {
         let profile_display = self.resolve_profile_name(None);
 
         eprintln!(
@@ -809,8 +809,8 @@ impl Secrets {
             }
             Err(errors) => {
                 self.display_validation_errors(&errors)?;
-                // Missing secrets - prompt if interactive and re-validate
-                self.ensure_secrets(None, None, true)
+                // Missing secrets - prompt if interactive (and not no_prompt) and re-validate
+                self.ensure_secrets(None, None, !no_prompt)
             }
         }
     }

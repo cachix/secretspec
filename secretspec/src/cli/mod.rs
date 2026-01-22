@@ -79,6 +79,9 @@ enum Commands {
         /// Profile to use
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
         profile: Option<String>,
+        /// Don't prompt for missing secrets (exit with error if any are missing)
+        #[arg(short = 'n', long)]
+        no_prompt: bool,
     },
     /// Init or show ~/.config/secretspec/config.toml
     Config {
@@ -541,7 +544,11 @@ pub fn main() -> Result<()> {
             Ok(())
         }
         // Verify all required secrets are available
-        Commands::Check { provider, profile } => {
+        Commands::Check {
+            provider,
+            profile,
+            no_prompt,
+        } => {
             let mut app = Secrets::load()
                 .into_diagnostic()
                 .wrap_err("Failed to load secretspec configuration")?;
@@ -552,7 +559,7 @@ pub fn main() -> Result<()> {
                 app.set_profile(p);
             }
             let mut validated = app
-                .check()
+                .check(no_prompt)
                 .into_diagnostic()
                 .wrap_err("Failed to check secrets")?;
             // Persist temp files so they outlive the command

@@ -30,7 +30,6 @@ inquire.workspace = true
 miette.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-http.workspace = true
 url.workspace = true
 whoami = { workspace = true, optional = true }
 linkme.workspace = true

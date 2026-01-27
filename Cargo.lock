@@ -1806,7 +1806,6 @@ dependencies = [
  "directories",
  "dotenvy",
  "google-cloud-secretmanager-v1",
- "http",
  "inquire",
  "keyring",
  "linkme",
@@ -1840,7 +1839,6 @@ dependencies = [
  "tempfile",
  "toml",
  "trybuild",
- "url",
 ]
 
 [[package]]
@@ -1851,7 +1849,6 @@ dependencies = [
  "secretspec",
  "secretspec-derive",
  "serde",
- "url",
 ]
 
 [[package]]

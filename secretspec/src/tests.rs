@@ -3073,8 +3073,6 @@ SPECIAL_SECRET = { description = "Special secret", required = true }
 
 #[test]
 fn test_cli_provider_alias_operations() {
-    use std::path::PathBuf;
-
     let temp_dir = TempDir::new().unwrap();
     let config_dir = temp_dir.path().join(".config");
     fs::create_dir(&config_dir).unwrap();

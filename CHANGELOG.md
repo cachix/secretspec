@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-01-27
+
 ### Added
 - CLI: Add `--no-prompt` (`-n`) flag to `secretspec check` command for non-interactive mode.
   When used, the command exits with non-zero status if secrets are missing instead of prompting for values.

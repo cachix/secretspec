@@ -7,7 +7,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 
 [workspace.dependencies]
@@ -37,8 +37,8 @@ linkme = "0.3"
 secrecy = { version = "0.10.3", features = ["serde"] }
 google-cloud-secretmanager-v1 = "1.2"
 tokio = { version = "1", features = ["rt"] }
-secretspec-derive = { version = "0.6.1", path = "./secretspec-derive" }
-secretspec = { version = "0.6.1", path = "./secretspec" }
+secretspec-derive = { version = "0.6.2", path = "./secretspec-derive" }
+secretspec = { version = "0.6.2", path = "./secretspec" }
 
 # The profile that 'dist' will build with
 [profile.dist]

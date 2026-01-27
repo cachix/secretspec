@@ -116,8 +116,9 @@ impl Provider for KeyringProvider {
     /// * `Err` - If there was an error accessing the keychain
     fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
         let service = format!("secretspec/{}/{}/{}", project, profile, key);
-
-        let entry = Entry::new(&service, &whoami::username())?;
+        let username = whoami::username()
+            .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))?;
+        let entry = Entry::new(&service, &username)?;
         match entry.get_password() {
             Ok(password) => Ok(Some(SecretString::new(password.into()))),
             Err(keyring::Error::NoEntry) => Ok(None),
@@ -146,8 +147,9 @@ impl Provider for KeyringProvider {
     /// * `Err` - If there was an error accessing the keychain
     fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
         let service = format!("secretspec/{}/{}/{}", project, profile, key);
-
-        let entry = Entry::new(&service, &whoami::username())?;
+        let username = whoami::username()
+            .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))?;
+        let entry = Entry::new(&service, &username)?;
         entry.set_password(value.expose_secret())?;
         Ok(())
     }

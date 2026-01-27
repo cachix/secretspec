@@ -1,6 +1,11 @@
 inputs:
+  git-hooks:
+    url: github:cachix/git-hooks.nix
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
   nixpkgs:
-    url: github:NixOS/nixpkgs
+    url: github:NixOS/nixpkgs/nixos-25.11
   rust-overlay:
     url: github:oxalica/rust-overlay
     inputs:

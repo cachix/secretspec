@@ -34,6 +34,7 @@ url.workspace = true
 whoami = { workspace = true, optional = true }
 linkme.workspace = true
 secrecy.workspace = true
+once_cell.workspace = true
 google-cloud-secretmanager-v1 = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- OnePassword provider: Significant performance improvement by caching authentication status
+  and using batch fetching with parallel threads. Reduces CLI calls from 2N sequential to
+  ~2 sequential + N parallel for N secrets.
+
 ## [0.6.2] - 2026-01-27
 
 ### Added

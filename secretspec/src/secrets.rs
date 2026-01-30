@@ -1140,6 +1140,9 @@ impl Secrets {
     /// This method checks all secrets defined in the current profile (and default
     /// profile if different) and returns detailed information about their status.
     ///
+    /// Uses batch fetching when possible to improve performance with providers
+    /// that have high latency (like 1Password).
+    ///
     /// # Returns
     ///
     /// A `ValidatedSecrets` containing the status of all secrets
@@ -1172,14 +1175,59 @@ impl Secrets {
         let profile_name = self.resolve_profile_name(None);
         let profile = self.resolve_profile(Some(&profile_name))?;
 
-        // Collect all secrets to check - from current profile and default profile
-        let all_secrets = profile
+        // Collect all secrets with their configs
+        let all_secrets: Vec<(String, crate::config::Secret)> = profile
             .into_iter()
-            .map(|(name, _)| name)
-            .collect::<HashSet<_>>();
+            .map(|(name, config)| (name, config))
+            .collect();
 
-        // Now check all secrets, each with their own provider(s) or fallback to default
-        for name in all_secrets {
+        // Group secrets by their provider URI for batch fetching
+        // Key: provider URI (or None for default provider), Value: list of secret names
+        let mut provider_groups: HashMap<Option<String>, Vec<String>> = HashMap::new();
+
+        for (name, _) in &all_secrets {
+            let secret_config = self
+                .resolve_secret_config(name, Some(&profile_name))
+                .expect("Secret should exist in config since we're iterating over it");
+
+            // Get the first provider URI (if any) for grouping
+            let provider_uri = if let Some(providers) = &secret_config.providers {
+                if let Some(first_alias) = providers.first() {
+                    self.resolve_provider_aliases(Some(&[first_alias.clone()]))?
+                        .and_then(|uris| uris.first().cloned())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            provider_groups
+                .entry(provider_uri)
+                .or_default()
+                .push(name.clone());
+        }
+
+        // Batch fetch from each provider group
+        let mut fetched_values: HashMap<String, SecretString> = HashMap::new();
+
+        for (provider_uri, secret_names) in provider_groups {
+            let provider = if let Some(uri) = provider_uri {
+                Box::<dyn ProviderTrait>::try_from(uri)?
+            } else {
+                self.get_provider(None)?
+            };
+
+            // Use batch fetch
+            let keys: Vec<&str> = secret_names.iter().map(|s| s.as_str()).collect();
+            let batch_results =
+                provider.get_batch(&self.config.project.name, &keys, &profile_name)?;
+
+            fetched_values.extend(batch_results);
+        }
+
+        // Process results - apply defaults, handle as_path, track missing
+        for (name, _) in all_secrets {
             let secret_config = self
                 .resolve_secret_config(&name, Some(&profile_name))
                 .expect("Secret should exist in config since we're iterating over it");
@@ -1187,18 +1235,7 @@ impl Secrets {
             let default = secret_config.default.clone();
             let as_path = secret_config.as_path.unwrap_or(false);
 
-            // Resolve per-secret provider aliases to URIs
-            let provider_uris =
-                self.resolve_provider_aliases(secret_config.providers.as_deref())?;
-
-            // Try to get the secret from configured providers with fallback
-            match self.get_secret_from_providers(
-                &self.config.project.name,
-                &name,
-                &profile_name,
-                provider_uris.as_deref(),
-                None,
-            )? {
+            match fetched_values.remove(&name) {
                 Some(value) => {
                     if as_path {
                         // Write secret to temp file and store the path
@@ -1206,11 +1243,40 @@ impl Secrets {
                         temp_files.push(temp_file);
                         secrets.insert(name.clone(), SecretString::new(path_str.into()));
                     } else {
-                        secrets.insert(name.clone(), value);
+                        secrets.insert(name, value);
                     }
                 }
                 None => {
-                    if let Some(default_value) = default {
+                    // Secret not found in batch - check if there are fallback providers
+                    let fallback_value = if let Some(providers) = &secret_config.providers {
+                        if providers.len() > 1 {
+                            // Try fallback providers (skip first, already tried in batch)
+                            let fallback_aliases = &providers[1..];
+                            let fallback_uris =
+                                self.resolve_provider_aliases(Some(fallback_aliases))?;
+                            self.get_secret_from_providers(
+                                &self.config.project.name,
+                                &name,
+                                &profile_name,
+                                fallback_uris.as_deref(),
+                                None,
+                            )?
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(value) = fallback_value {
+                        if as_path {
+                            let (temp_file, path_str) = self.write_secret_to_temp_file(&value)?;
+                            temp_files.push(temp_file);
+                            secrets.insert(name.clone(), SecretString::new(path_str.into()));
+                        } else {
+                            secrets.insert(name, value);
+                        }
+                    } else if let Some(default_value) = default {
                         if as_path {
                             // Write default value to temp file
                             let (temp_file, path_str) = self.write_secret_to_temp_file(
@@ -1224,11 +1290,11 @@ impl Secrets {
                                 SecretString::new(default_value.clone().into()),
                             );
                         }
-                        with_defaults.push((name.clone(), default_value));
+                        with_defaults.push((name, default_value));
                     } else if required {
-                        missing_required.push(name.clone());
+                        missing_required.push(name);
                     } else {
-                        missing_optional.push(name.clone());
+                        missing_optional.push(name);
                     }
                 }
             }

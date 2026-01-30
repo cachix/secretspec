@@ -270,6 +270,42 @@ pub trait Provider: Send + Sync {
             self.name()
         )))
     }
+
+    /// Retrieves multiple secrets from the provider in a single batch operation.
+    ///
+    /// This method allows providers to optimize fetching multiple secrets at once,
+    /// which can significantly improve performance for providers with high latency
+    /// per request (like cloud-based secret managers).
+    ///
+    /// # Arguments
+    ///
+    /// * `project` - The project namespace for the secrets
+    /// * `keys` - A slice of secret keys to retrieve
+    /// * `profile` - The profile context (e.g., "default", "production")
+    ///
+    /// # Returns
+    ///
+    /// A HashMap where keys are the secret names and values are the secret values.
+    /// Secrets that don't exist are not included in the result.
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation calls `get()` for each key sequentially.
+    /// Providers should override this for better performance when possible.
+    fn get_batch(
+        &self,
+        project: &str,
+        keys: &[&str],
+        profile: &str,
+    ) -> Result<HashMap<String, SecretString>> {
+        let mut results = HashMap::new();
+        for key in keys {
+            if let Some(value) = self.get(project, key, profile)? {
+                results.insert((*key).to_string(), value);
+            }
+        }
+        Ok(results)
+    }
 }
 
 impl TryFrom<String> for Box<dyn Provider> {

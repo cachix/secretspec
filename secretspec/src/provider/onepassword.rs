@@ -1,7 +1,9 @@
 use crate::provider::Provider;
 use crate::{Result, SecretSpecError};
+use once_cell::sync::OnceCell;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::process::Command;
 use url::Url;
 
@@ -240,6 +242,8 @@ pub struct OnePasswordProvider {
     config: OnePasswordConfig,
     /// The OnePassword CLI command to use (either "op" or a custom path).
     op_command: String,
+    /// Cached authentication status to avoid repeated `op whoami` calls.
+    auth_verified: OnceCell<bool>,
 }
 
 crate::register_provider! {
@@ -265,7 +269,11 @@ impl OnePasswordProvider {
                 "op".to_string()
             }
         });
-        Self { config, op_command }
+        Self {
+            config,
+            op_command,
+            auth_verified: OnceCell::new(),
+        }
     }
 
     /// Executes a OnePassword CLI command with proper error handling.
@@ -369,7 +377,7 @@ impl OnePasswordProvider {
             .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))
     }
 
-    /// Checks if the user is authenticated with OnePassword.
+    /// Checks if the user is authenticated with OnePassword (uncached).
     ///
     /// Uses the `op whoami` command to verify authentication status.
     /// This is non-intrusive and doesn't require any permissions.
@@ -388,6 +396,28 @@ impl OnePasswordProvider {
                 Ok(false)
             }
             Err(e) => Err(e),
+        }
+    }
+
+    /// Ensures the user is authenticated, caching the result for subsequent calls.
+    ///
+    /// This method only calls `op whoami` once per provider instance, significantly
+    /// improving performance when checking multiple secrets.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - User is authenticated
+    /// * `Err(_)` - User is not authenticated or command failed
+    fn ensure_authenticated(&self) -> Result<()> {
+        let is_authenticated = self.auth_verified.get_or_try_init(|| self.whoami())?;
+
+        if *is_authenticated {
+            Ok(())
+        } else {
+            Err(SecretSpecError::ProviderOperationFailed(
+                "OnePassword authentication required. Please run 'eval $(op signin)' first."
+                    .to_string(),
+            ))
         }
     }
 
@@ -607,13 +637,8 @@ impl Provider for OnePasswordProvider {
     /// * `Ok(None)` - No secret found with the given key
     /// * `Err(_)` - Authentication or retrieval error
     fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        // Check authentication status first
-        if !self.whoami()? {
-            return Err(SecretSpecError::ProviderOperationFailed(
-                "OnePassword authentication required. Please run 'eval $(op signin)' first."
-                    .to_string(),
-            ));
-        }
+        // Check authentication status first (cached)
+        self.ensure_authenticated()?;
 
         let vault = self.get_vault_name(profile);
         let item_name = self.format_item_name(project, key, profile);
@@ -671,13 +696,8 @@ impl Provider for OnePasswordProvider {
     /// - Item creation/update failures
     /// - Temporary file creation errors
     fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        // Check authentication status first
-        if !self.whoami()? {
-            return Err(SecretSpecError::ProviderOperationFailed(
-                "OnePassword authentication required. Please run 'eval $(op signin)' first."
-                    .to_string(),
-            ));
-        }
+        // Check authentication status first (cached)
+        self.ensure_authenticated()?;
 
         let vault = self.get_vault_name(profile);
         let item_name = self.format_item_name(project, key, profile);
@@ -709,6 +729,135 @@ impl Provider for OnePasswordProvider {
         }
 
         Ok(())
+    }
+
+    /// Retrieves multiple secrets from OnePassword in a single batch operation.
+    ///
+    /// This optimized implementation:
+    /// 1. Authenticates once (cached)
+    /// 2. Lists all items in the vault once to identify which secrets exist
+    /// 3. Fetches only the items that exist, using parallel threads
+    ///
+    /// This significantly improves performance compared to fetching secrets one-by-one,
+    /// especially when checking many secrets.
+    fn get_batch(
+        &self,
+        project: &str,
+        keys: &[&str],
+        profile: &str,
+    ) -> Result<HashMap<String, SecretString>> {
+        use std::thread;
+
+        if keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        // Check authentication status first (cached)
+        self.ensure_authenticated()?;
+
+        let vault = self.get_vault_name(profile);
+
+        // List all items in the vault once
+        let args = vec!["item", "list", "--vault", &vault, "--format", "json"];
+        let output = self.execute_op_command(&args, None)?;
+
+        #[derive(Deserialize)]
+        struct ListItem {
+            id: String,
+            title: String,
+        }
+
+        let items: Vec<ListItem> = serde_json::from_str(&output).unwrap_or_default();
+
+        // Build a map of item titles to IDs for quick lookup
+        let item_map: HashMap<String, String> = items
+            .into_iter()
+            .map(|item| (item.title, item.id))
+            .collect();
+
+        // Find which keys exist and need to be fetched
+        let keys_to_fetch: Vec<(&str, String)> = keys
+            .iter()
+            .filter_map(|key| {
+                let item_name = self.format_item_name(project, key, profile);
+                item_map.get(&item_name).map(|id| (*key, id.clone()))
+            })
+            .collect();
+
+        // Fetch items in parallel using threads
+        let vault_clone = vault.clone();
+        let op_command = self.op_command.clone();
+        let service_token = self.config.service_account_token.clone();
+        let account = self.config.account.clone();
+
+        let handles: Vec<_> = keys_to_fetch
+            .into_iter()
+            .map(|(key, item_id)| {
+                let vault = vault_clone.clone();
+                let op_cmd = op_command.clone();
+                let token = service_token.clone();
+                let acct = account.clone();
+                let key_owned = key.to_string();
+
+                thread::spawn(move || {
+                    let mut cmd = Command::new(&op_cmd);
+
+                    if let Some(ref t) = token {
+                        cmd.env("OP_SERVICE_ACCOUNT_TOKEN", t);
+                    }
+                    if let Some(ref a) = acct {
+                        cmd.arg("--account").arg(a);
+                    }
+
+                    cmd.args([
+                        "item", "get", &item_id, "--vault", &vault, "--format", "json",
+                    ]);
+
+                    match cmd.output() {
+                        Ok(output) if output.status.success() => {
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            // Parse the item and extract value
+                            if let Ok(item) = serde_json::from_str::<OnePasswordItem>(&stdout) {
+                                // Look for "value" field first
+                                for field in &item.fields {
+                                    if field.label.as_deref() == Some("value") {
+                                        if let Some(ref v) = field.value {
+                                            return Some((
+                                                key_owned,
+                                                SecretString::new(v.clone().into()),
+                                            ));
+                                        }
+                                    }
+                                }
+                                // Fallback: look for password/concealed field
+                                for field in &item.fields {
+                                    if field.field_type == "CONCEALED" || field.id == "password" {
+                                        if let Some(ref v) = field.value {
+                                            return Some((
+                                                key_owned,
+                                                SecretString::new(v.clone().into()),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            None
+                        }
+                        _ => None,
+                    }
+                })
+            })
+            .collect();
+
+        // Collect results from all threads
+        let mut results = HashMap::new();
+        for handle in handles {
+            if let Ok(Some((key, value))) = handle.join() {
+                results.insert(key, value);
+            }
+        }
+
+        Ok(results)
     }
 }
 

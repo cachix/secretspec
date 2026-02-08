@@ -1805,7 +1805,7 @@ dependencies = [
 
 [[package]]
 name = "secretspec"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "clap",
  "colored",
@@ -1835,7 +1835,7 @@ dependencies = [
 
 [[package]]
 name = "secretspec-derive"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "http",
  "insta",

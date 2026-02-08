@@ -47,9 +47,12 @@ Each secret variable is defined as a table with the following fields:
 | `default` | string | No** | Default value if not provided |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
+| `type` | string | No*** | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command` |
+| `generate` | boolean or table | No*** | Enable auto-generation when secret is missing |
 
 *If `default` is provided, `required` defaults to false
 **Only valid when `required = false`
+***`type` is required when `generate` is enabled; `generate` and `default` cannot both be set
 
 ## Complete Example
 
@@ -122,6 +125,45 @@ GOOGLE_APPLICATION_CREDENTIALS = { description = "GCP service account", as_path 
 | CLI (`get`, `check`, `run`) | Files are persisted (not deleted after command exits) |
 | Rust SDK | Files cleaned up when `ValidatedSecrets` is dropped; use `keep_temp_files()` to persist |
 | Rust SDK types | `PathBuf` or `Option<PathBuf>` instead of `String` |
+
+### Secret Generation
+
+When `type` and `generate` are set, missing secrets are automatically generated during `check` or `run` and stored via the configured provider:
+
+```toml
+[profiles.default]
+# Simple: generate with type defaults
+DB_PASSWORD = { description = "Database password", type = "password", generate = true }
+REQUEST_ID = { description = "Request ID prefix", type = "uuid", generate = true }
+
+# Custom options
+API_TOKEN = { description = "API token", type = "hex", generate = { bytes = 32 } }
+SESSION_KEY = { description = "Session key", type = "base64", generate = { bytes = 64 } }
+
+# Shell command
+MONGO_KEY = { description = "MongoDB keyfile", type = "command", generate = { command = "openssl rand -base64 765" } }
+
+# Type without generate: informational only, no auto-generation
+MANUAL_SECRET = { description = "Manually managed", type = "password" }
+```
+
+#### Generation Types
+
+| Type | Default Output | Options |
+|------|---------------|---------|
+| `password` | 32 alphanumeric chars | `length` (int), `charset` (`"alphanumeric"` or `"ascii"`) |
+| `hex` | 64 hex chars (32 bytes) | `bytes` (int) |
+| `base64` | 44 chars (32 bytes) | `bytes` (int) |
+| `uuid` | UUID v4 (36 chars) | none |
+| `command` | stdout of command | `command` (string, required) |
+
+#### Behavior
+
+- Generation only triggers when a secret is **missing** — existing secrets are never overwritten
+- Generated values are stored via the secret's configured provider (or the default provider)
+- Subsequent runs find the stored value and skip generation (idempotent)
+- `generate` and `default` cannot both be set on the same secret
+- `type = "command"` requires `generate = { command = "..." }` (not just `generate = true`)
 
 ## Profile Inheritance
 

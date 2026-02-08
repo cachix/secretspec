@@ -283,6 +283,14 @@ impl Secrets {
                         .or_else(|| default.providers.clone())
                         .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
                     as_path: current.as_path.or(default.as_path),
+                    secret_type: current
+                        .secret_type
+                        .clone()
+                        .or_else(|| default.secret_type.clone()),
+                    generate: current
+                        .generate
+                        .clone()
+                        .or_else(|| default.generate.clone()),
                 })
             }
             (Some(secret), None) | (None, Some(secret)) => {
@@ -301,6 +309,8 @@ impl Secrets {
                         .clone()
                         .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
                     as_path: secret.as_path,
+                    secret_type: secret.secret_type.clone(),
+                    generate: secret.generate.clone(),
                 })
             }
             (None, None) => None,
@@ -1076,6 +1086,82 @@ impl Secrets {
         Ok(())
     }
 
+    /// Resolves a writable provider for a secret.
+    ///
+    /// Uses the first provider from the secret's provider list if specified,
+    /// otherwise falls back to the default provider.
+    fn get_writable_provider_for_secret(
+        &self,
+        secret_config: &crate::config::Secret,
+    ) -> Result<Box<dyn ProviderTrait>> {
+        let backend = if let Some(provider_aliases) =
+            secret_config.providers.as_ref().and_then(|p| p.first())
+        {
+            let provider_uris = self.resolve_provider_aliases(Some(&[provider_aliases.clone()]))?;
+            let uri = provider_uris.and_then(|uris| uris.first().cloned()).ok_or(
+                SecretSpecError::ProviderNotFound(format!(
+                    "Provider alias '{}' could not be resolved",
+                    provider_aliases
+                )),
+            )?;
+            Box::<dyn ProviderTrait>::try_from(uri)?
+        } else {
+            self.get_provider(None)?
+        };
+
+        if !backend.allows_set() {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Provider '{}' is read-only and cannot store generated secrets",
+                backend.name()
+            )));
+        }
+
+        Ok(backend)
+    }
+
+    /// Attempts to generate a secret if it has generation config.
+    ///
+    /// Returns `Ok(Some(value))` if generation succeeded,
+    /// `Ok(None)` if generation is not configured,
+    /// or `Err` if generation was configured but failed.
+    fn try_generate_secret(
+        &self,
+        name: &str,
+        secret_config: &crate::config::Secret,
+        profile_name: &str,
+    ) -> Result<Option<SecretString>> {
+        let gen_config = match &secret_config.generate {
+            Some(config) if config.is_enabled() => config,
+            _ => return Ok(None),
+        };
+
+        let secret_type = match &secret_config.secret_type {
+            Some(t) => t.as_str(),
+            None => {
+                return Err(SecretSpecError::GenerationFailed(format!(
+                    "Secret '{}' has generate config but no type",
+                    name
+                )));
+            }
+        };
+
+        let value = crate::generator::generate(secret_type, gen_config)?;
+
+        // Store the generated value
+        let backend = self.get_writable_provider_for_secret(secret_config)?;
+        backend.set(&self.config.project.name, name, &value, profile_name)?;
+
+        eprintln!(
+            "{} {} - generated and saved to {} (profile: {})",
+            "✓".green(),
+            name,
+            backend.name(),
+            profile_name
+        );
+
+        Ok(Some(value))
+    }
+
     /// Writes a secret value to a temporary file and returns the file handle and path
     ///
     /// # Arguments
@@ -1275,6 +1361,17 @@ impl Secrets {
                             secrets.insert(name.clone(), SecretString::new(path_str.into()));
                         } else {
                             secrets.insert(name, value);
+                        }
+                    } else if let Some(generated) =
+                        self.try_generate_secret(&name, &secret_config, &profile_name)?
+                    {
+                        if as_path {
+                            let (temp_file, path_str) =
+                                self.write_secret_to_temp_file(&generated)?;
+                            temp_files.push(temp_file);
+                            secrets.insert(name.clone(), SecretString::new(path_str.into()));
+                        } else {
+                            secrets.insert(name, generated);
                         }
                     } else if let Some(default_value) = default {
                         if as_path {

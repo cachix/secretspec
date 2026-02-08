@@ -294,9 +294,7 @@ impl Provider for DotEnvProvider {
                 Secret {
                     description: Some(format!("{} secret", key)),
                     required: Some(true),
-                    default: None,
-                    providers: None,
-                    as_path: None,
+                    ..Default::default()
                 },
             );
         }

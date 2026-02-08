@@ -55,6 +55,8 @@ pub enum SecretSpecError {
     InvalidProfile(String),
     #[error("Validation failed: {0}")]
     ValidationFailed(ValidationErrors),
+    #[error("Secret generation failed: {0}")]
+    GenerationFailed(String),
 }
 
 /// A type alias for `Result<T, SecretSpecError>`

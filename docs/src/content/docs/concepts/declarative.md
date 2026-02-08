@@ -35,6 +35,8 @@ SECRET_NAME = {
 - `description`: Explains the secret's purpose (required)
 - `required`: Whether the secret must be provided (default: `true`)
 - `default`: Fallback value for optional secrets
+- `type`: Secret type for auto-generation (`password`, `hex`, `base64`, `uuid`, `command`)
+- `generate`: Enable auto-generation when the secret is missing (`true` or a table with options)
 
 ## Configuration Inheritance
 
@@ -88,6 +90,19 @@ extends = ["../../shared/base", "../../shared/database", "../../shared/auth"]
 - Later sources in `extends` override earlier ones
 - Each profile is merged independently
 - Paths are relative to the containing file
+
+## Secret Generation
+
+Secrets can be declared with `type` and `generate` to be auto-generated when missing. This is useful for passwords, tokens, and keys that don't need to be shared:
+
+```toml
+[profiles.default]
+DB_PASSWORD = { description = "Database password", type = "password", generate = true }
+API_TOKEN = { description = "API token", type = "hex", generate = { bytes = 32 } }
+SESSION_KEY = { description = "Session key", type = "base64", generate = { bytes = 64 } }
+```
+
+Generated values are stored via the configured provider and reused on subsequent runs. See the [configuration reference](/reference/configuration/#secret-generation) for all generation types and options.
 
 ## Best Practices
 

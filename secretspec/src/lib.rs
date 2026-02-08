@@ -43,6 +43,7 @@
 // Internal modules
 mod config;
 mod error;
+pub(crate) mod generator;
 mod secrets;
 mod validation;
 
@@ -59,9 +60,9 @@ pub use config::Resolved;
 #[doc(hidden)]
 pub use config::{Config, GlobalConfig, GlobalDefaults, Profile, ProfileDefaults, Project};
 
-// Re-export Secret for secretspec-derive
+// Re-export Secret and generation types for secretspec-derive
 #[doc(hidden)]
-pub use config::Secret;
+pub use config::{GenerateConfig, GenerateOptions, Secret};
 
 // Public API exports
 pub use error::{Result, SecretSpecError};

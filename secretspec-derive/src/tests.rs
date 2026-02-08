@@ -202,7 +202,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         valid_secrets.insert(
@@ -212,7 +212,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
 
@@ -249,7 +249,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         invalid_secrets.insert(
@@ -259,7 +259,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
 
@@ -319,7 +319,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         keyword_secrets.insert(
@@ -329,7 +329,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         keyword_secrets.insert(
@@ -339,7 +339,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
 
@@ -398,7 +398,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         duplicate_secrets.insert(
@@ -408,7 +408,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         duplicate_secrets.insert(
@@ -418,7 +418,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
 
@@ -559,7 +559,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             required: Some(true),
             default: None,
             providers: None,
-            as_path: None,
+            ..Default::default()
         };
         assert!(!is_secret_optional(&required_no_default));
 
@@ -569,7 +569,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             required: Some(true),
             default: Some("default_value".to_string()),
             providers: None,
-            as_path: None,
+            ..Default::default()
         };
         assert!(!is_secret_optional(&required_with_default));
 
@@ -579,7 +579,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             required: Some(false),
             default: None,
             providers: None,
-            as_path: None,
+            ..Default::default()
         };
         assert!(is_secret_optional(&not_required));
 
@@ -589,7 +589,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
             required: Some(false),
             default: Some("default_value".to_string()),
             providers: None,
-            as_path: None,
+            ..Default::default()
         };
         assert!(is_secret_optional(&not_required_with_default));
     }
@@ -612,7 +612,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         default_secrets.insert(
@@ -622,7 +622,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(false),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         profiles.insert(
@@ -642,7 +642,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: Some("dev-key".to_string()),
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         dev_secrets.insert(
@@ -652,7 +652,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         // Note: CACHE_URL only exists in development
@@ -663,7 +663,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         profiles.insert(
@@ -702,7 +702,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         let mut strict_dev = HashMap::new();
@@ -713,7 +713,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         strict_profiles.insert(
@@ -764,7 +764,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         default_secrets.insert(
@@ -774,7 +774,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(false),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         default_secrets.insert(
@@ -784,7 +784,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: Some("default_value".to_string()),
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         profiles.insert(
@@ -804,7 +804,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         dev_secrets.insert(
@@ -814,7 +814,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         profiles.insert(
@@ -960,7 +960,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         valid_secrets.insert(
@@ -970,7 +970,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
 
@@ -1011,7 +1011,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
         invalid_secrets.insert(
@@ -1021,7 +1021,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 required: Some(true),
                 default: None,
                 providers: None,
-                as_path: None,
+                ..Default::default()
             },
         );
 

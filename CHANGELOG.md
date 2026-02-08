@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Declarative secret generation: secrets can now be auto-generated when missing by adding
+  `type` and `generate` fields to secret config. Supported types: `password`, `hex`, `base64`,
+  `uuid`, and `command` (for arbitrary shell commands). Generation triggers during `check`/`run`
+  when a secret is missing, and the generated value is stored via the configured provider.
+
 ### Changed
 - OnePassword provider: Significant performance improvement by caching authentication status
   and using batch fetching with parallel threads. Reduces CLI calls from 2N sequential to

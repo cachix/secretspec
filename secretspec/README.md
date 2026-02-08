@@ -17,6 +17,7 @@ SecretSpec separates the declaration of what secrets an application needs from w
 - **[Multiple Provider Backends](https://secretspec.dev/concepts/providers/)**: [Keyring](https://secretspec.dev/providers/keyring), [.env](https://secretspec.dev/providers/dotenv), [OnePassword](https://secretspec.dev/providers/onepassword), [LastPass](https://secretspec.dev/providers/lastpass), and [environment variables](https://secretspec.dev/providers/env)
 - **[Type-Safe Rust SDK](https://secretspec.dev/sdk/rust/)**: Generate strongly-typed structs from your `secretspec.toml` for compile-time safety
 - **[Profile Support](https://secretspec.dev/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
+- **Secret Generation**: Auto-generate passwords, tokens, UUIDs, and more when secrets are missing — declarative "generate if absent"
 - **Configuration Inheritance**: Extend and override shared configurations using the `extends` feature
 - **Discovery**: `secretspec init` to discover secrets from existing `.env` files
 

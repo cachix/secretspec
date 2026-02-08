@@ -350,12 +350,52 @@ impl IntoIterator for Profile {
     }
 }
 
+/// Configuration for auto-generation of a secret.
+///
+/// Can be either a simple boolean (`generate = true`) or a table with
+/// type-specific options (`generate = { length = 64 }`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GenerateConfig {
+    /// Simple boolean flag to enable/disable generation with defaults
+    Bool(bool),
+    /// Detailed generation options
+    Options(GenerateOptions),
+}
+
+impl GenerateConfig {
+    /// Returns true if generation is enabled.
+    pub fn is_enabled(&self) -> bool {
+        match self {
+            GenerateConfig::Bool(b) => *b,
+            GenerateConfig::Options(_) => true,
+        }
+    }
+}
+
+/// Type-specific options for secret generation.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GenerateOptions {
+    /// Length of generated password (for `password` type)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub length: Option<usize>,
+    /// Number of random bytes (for `hex` and `base64` types)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<usize>,
+    /// Character set for password generation ("alphanumeric" or "ascii")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub charset: Option<String>,
+    /// Shell command to run (for `command` type)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
 /// Configuration for an individual secret.
 ///
 /// Defines the properties of a secret including its documentation,
 /// whether it's required, an optional default value, and optionally
 /// which providers to use for retrieving this secret (in fallback order).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Secret {
     /// Human-readable description of what this secret is used for
     pub description: Option<String>,
@@ -379,12 +419,19 @@ pub struct Secret {
     /// The temporary file will be cleaned up when the resolved secrets are dropped.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub as_path: Option<bool>,
+    /// The type of secret, used for generation (e.g., "password", "hex", "base64", "uuid", "command")
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub secret_type: Option<String>,
+    /// Auto-generation configuration. Either `true` for defaults or a table with options.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generate: Option<GenerateConfig>,
 }
 
 impl Secret {
     /// Validate the secret configuration.
     ///
-    /// Ensures that required secrets don't have default values.
+    /// Ensures that required secrets don't have default values,
+    /// and that generation config is consistent with type.
     pub fn validate(&self) -> Result<(), String> {
         if let Some(desc) = &self.description {
             if desc.is_empty() {
@@ -397,6 +444,65 @@ impl Secret {
         // If required is explicitly true and default is set, that's an error
         if self.required == Some(true) && self.default.is_some() {
             return Err("Required secrets cannot have default values".into());
+        }
+
+        // Validate generate config
+        if let Some(ref gen_config) = self.generate {
+            if gen_config.is_enabled() {
+                // generate requires type
+                if self.secret_type.is_none() {
+                    return Err(
+                        "'generate' requires 'type' to be set (e.g., type = \"password\")".into(),
+                    );
+                }
+
+                // generate + default is a conflict
+                if self.default.is_some() {
+                    return Err("'generate' and 'default' cannot both be set".into());
+                }
+
+                // type = "command" requires generate = { command = "..." }
+                if self.secret_type.as_deref() == Some("command") {
+                    match gen_config {
+                        GenerateConfig::Bool(true) => {
+                            return Err(
+                                "type = \"command\" requires generate = { command = \"...\" }"
+                                    .into(),
+                            );
+                        }
+                        GenerateConfig::Options(opts) if opts.command.is_none() => {
+                            return Err(
+                                "type = \"command\" requires generate = { command = \"...\" }"
+                                    .into(),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Validate known types
+                if let Some(ref t) = self.secret_type {
+                    match t.as_str() {
+                        "password" | "hex" | "base64" | "uuid" | "command" => {}
+                        unknown => {
+                            return Err(format!("unknown secret type '{}'", unknown));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Validate type even without generate
+        if let Some(ref t) = self.secret_type {
+            if self.generate.is_none() || self.generate.as_ref().is_some_and(|g| !g.is_enabled()) {
+                // Type is informational when not generating, but still validate known values
+                match t.as_str() {
+                    "password" | "hex" | "base64" | "uuid" | "command" => {}
+                    unknown => {
+                        return Err(format!("unknown secret type '{}'", unknown));
+                    }
+                }
+            }
         }
 
         Ok(())

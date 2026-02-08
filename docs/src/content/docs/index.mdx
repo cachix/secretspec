@@ -50,6 +50,12 @@ TLS_CERT = { description = "TLS certificate", as_path = true }
 
 Secrets with `as_path = true` are written to temporary files - useful for credentials that must be passed as file paths (TLS certs, service account keys).
 
+Secrets with `type` and `generate` are automatically created when missing — no manual setup needed for passwords, tokens, and keys:
+
+```toml
+DB_PASSWORD = { description = "Database password", type = "password", generate = true }
+```
+
 ```bash
 # Initialize secretspec.toml, possibly from `.env`
 $ secretspec init --from dotenv

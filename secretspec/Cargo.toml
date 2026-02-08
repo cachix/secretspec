@@ -37,6 +37,9 @@ secrecy.workspace = true
 once_cell.workspace = true
 google-cloud-secretmanager-v1 = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
+rand.workspace = true
+uuid.workspace = true
+data-encoding.workspace = true
 
 [features]
 default = ["cli", "keyring"]

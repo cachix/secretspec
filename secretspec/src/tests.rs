@@ -331,6 +331,7 @@ fn test_resolve_secret_config() {
             default: None,
             providers: None,
             as_path: None,
+            ..Default::default()
         },
     );
     default_secrets.insert(
@@ -341,6 +342,7 @@ fn test_resolve_secret_config() {
             default: Some("sqlite:///default.db".to_string()),
             providers: None,
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -353,6 +355,7 @@ fn test_resolve_secret_config() {
             default: Some("dev-key".to_string()),
             providers: None,
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -1374,6 +1377,7 @@ fn test_set_with_undefined_secret() {
                     default: None,
                     providers: None,
                     as_path: None,
+                    ..Default::default()
                 },
             );
             profiles.insert(
@@ -1439,6 +1443,7 @@ fn test_set_with_defined_secret() {
                     default: None,
                     providers: None,
                     as_path: None,
+                    ..Default::default()
                 },
             );
             profiles.insert(
@@ -1491,6 +1496,7 @@ fn test_set_with_readonly_provider() {
                     default: None,
                     providers: None,
                     as_path: None,
+                    ..Default::default()
                 },
             );
             profiles.insert(
@@ -1552,6 +1558,7 @@ fn test_import_between_dotenv_files() {
                     default: None,
                     providers: None,
                     as_path: None,
+                    ..Default::default()
                 },
             );
             secrets.insert(
@@ -1562,6 +1569,7 @@ fn test_import_between_dotenv_files() {
                     default: None,
                     providers: None,
                     as_path: None,
+                    ..Default::default()
                 },
             );
             secrets.insert(
@@ -1572,6 +1580,7 @@ fn test_import_between_dotenv_files() {
                     default: Some("default_value".to_string()),
                     providers: None,
                     as_path: None,
+                    ..Default::default()
                 },
             );
             secrets.insert(
@@ -1582,6 +1591,7 @@ fn test_import_between_dotenv_files() {
                     default: None,
                     providers: None,
                     as_path: None,
+                    ..Default::default()
                 },
             );
 
@@ -1685,6 +1695,7 @@ fn test_import_edge_cases() {
                     default: None,
                     providers: None,
                     as_path: None,
+                    ..Default::default()
                 },
             );
             secrets.insert(
@@ -1695,6 +1706,7 @@ fn test_import_edge_cases() {
                     default: None,
                     providers: None,
                     as_path: None,
+                    ..Default::default()
                 },
             );
             secrets.insert(
@@ -1705,6 +1717,7 @@ fn test_import_edge_cases() {
                     default: None,
                     providers: None,
                     as_path: None,
+                    ..Default::default()
                 },
             );
 
@@ -1925,6 +1938,7 @@ fn test_import_with_profiles() {
                     default: None,
                     providers: None,
                     as_path: None,
+                    ..Default::default()
                 },
             );
             dev_secrets.insert(
@@ -1935,6 +1949,7 @@ fn test_import_with_profiles() {
                     default: None,
                     providers: None,
                     as_path: None,
+                    ..Default::default()
                 },
             );
             profiles.insert(
@@ -1955,6 +1970,7 @@ fn test_import_with_profiles() {
                     default: None,
                     providers: None,
                     as_path: None,
+                    ..Default::default()
                 },
             );
             prod_secrets.insert(
@@ -1965,6 +1981,7 @@ fn test_import_with_profiles() {
                     default: None,
                     providers: None,
                     as_path: None,
+                    ..Default::default()
                 },
             );
             profiles.insert(
@@ -2089,6 +2106,7 @@ fn test_run_with_missing_required_secrets() {
             default: None,
             providers: None,
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2147,6 +2165,7 @@ fn test_get_existing_secret() {
             default: None,
             providers: None,
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2199,6 +2218,7 @@ fn test_get_secret_with_default() {
             default: Some("default_value".to_string()),
             providers: None,
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2250,6 +2270,7 @@ fn test_get_nonexistent_secret() {
             default: None,
             providers: None,
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2402,6 +2423,7 @@ fn test_per_secret_provider_configuration() {
             default: None,
             providers: Some(vec!["shared".to_string()]),
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2414,6 +2436,7 @@ fn test_per_secret_provider_configuration() {
             default: None,
             providers: None,
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2591,6 +2614,7 @@ fn test_per_secret_provider_with_fallback_chain() {
             default: None,
             providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2603,6 +2627,7 @@ fn test_per_secret_provider_with_fallback_chain() {
             default: None,
             providers: Some(vec!["fallback".to_string(), "primary".to_string()]),
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2686,6 +2711,7 @@ fn test_get_secret_with_fallback_chain() {
             default: None,
             providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2698,6 +2724,7 @@ fn test_get_secret_with_fallback_chain() {
             default: None,
             providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2781,6 +2808,7 @@ fn test_validate_with_per_secret_providers() {
             default: None,
             providers: Some(vec!["env_provider".to_string()]),
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2793,6 +2821,7 @@ fn test_validate_with_per_secret_providers() {
             default: None,
             providers: Some(vec!["keyring_provider".to_string()]),
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2805,6 +2834,7 @@ fn test_validate_with_per_secret_providers() {
             default: Some("default-config".to_string()),
             providers: None,
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2898,6 +2928,7 @@ fn test_secret_config_merges_providers_from_default() {
             default: None,
             providers: Some(vec!["shared".to_string()]),
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2912,6 +2943,7 @@ fn test_secret_config_merges_providers_from_default() {
             default: None,
             providers: None,
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -2924,6 +2956,7 @@ fn test_secret_config_merges_providers_from_default() {
             default: None,
             providers: Some(vec!["prod".to_string()]),
             as_path: None,
+            ..Default::default()
         },
     );
 
@@ -3284,4 +3317,505 @@ CERT_DATA = { description = "Certificate data", as_path = true }
 
     // Clean up manually
     fs::remove_file(&cert_path).unwrap();
+}
+
+// ========== Secret generation tests ==========
+
+#[test]
+fn test_config_parse_generate_bool() {
+    let toml_content = r#"
+[project]
+name = "test-gen"
+revision = "1.0"
+
+[profiles.default]
+DB_PASSWORD = { description = "Database password", type = "password", generate = true }
+"#;
+    let config = parse_spec_from_str(toml_content, None).unwrap();
+    let profile = config.profiles.get("default").unwrap();
+    let secret = profile.secrets.get("DB_PASSWORD").unwrap();
+    assert_eq!(secret.secret_type.as_deref(), Some("password"));
+    assert!(matches!(
+        secret.generate,
+        Some(crate::config::GenerateConfig::Bool(true))
+    ));
+}
+
+#[test]
+fn test_config_parse_generate_options() {
+    let toml_content = r#"
+[project]
+name = "test-gen"
+revision = "1.0"
+
+[profiles.default]
+API_TOKEN = { description = "API token", type = "hex", generate = { bytes = 32 } }
+"#;
+    let config = parse_spec_from_str(toml_content, None).unwrap();
+    let profile = config.profiles.get("default").unwrap();
+    let secret = profile.secrets.get("API_TOKEN").unwrap();
+    assert_eq!(secret.secret_type.as_deref(), Some("hex"));
+    match &secret.generate {
+        Some(crate::config::GenerateConfig::Options(opts)) => {
+            assert_eq!(opts.bytes, Some(32));
+        }
+        other => panic!("Expected Options, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_config_parse_generate_command() {
+    let toml_content = r#"
+[project]
+name = "test-gen"
+revision = "1.0"
+
+[profiles.default]
+MONGO_KEY = { description = "MongoDB keyfile", type = "command", generate = { command = "echo test" } }
+"#;
+    let config = parse_spec_from_str(toml_content, None).unwrap();
+    let profile = config.profiles.get("default").unwrap();
+    let secret = profile.secrets.get("MONGO_KEY").unwrap();
+    assert_eq!(secret.secret_type.as_deref(), Some("command"));
+    match &secret.generate {
+        Some(crate::config::GenerateConfig::Options(opts)) => {
+            assert_eq!(opts.command.as_deref(), Some("echo test"));
+        }
+        other => panic!("Expected Options, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_config_type_without_generate_is_valid() {
+    let toml_content = r#"
+[project]
+name = "test-gen"
+revision = "1.0"
+
+[profiles.default]
+STATIC_SECRET = { description = "Manually managed", type = "password" }
+"#;
+    let config = parse_spec_from_str(toml_content, None).unwrap();
+    let profile = config.profiles.get("default").unwrap();
+    let secret = profile.secrets.get("STATIC_SECRET").unwrap();
+    assert_eq!(secret.secret_type.as_deref(), Some("password"));
+    assert!(secret.generate.is_none());
+}
+
+#[test]
+fn test_config_generate_without_type_is_error() {
+    let toml_content = r#"
+[project]
+name = "test-gen"
+revision = "1.0"
+
+[profiles.default]
+BAD_SECRET = { description = "Missing type", generate = true }
+"#;
+    let result = parse_spec_from_str(toml_content, None);
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("requires 'type'"),
+        "Expected error about missing type, got: {}",
+        err_msg
+    );
+}
+
+#[test]
+fn test_config_generate_false_without_type_is_valid() {
+    let toml_content = r#"
+[project]
+name = "test-gen"
+revision = "1.0"
+
+[profiles.default]
+MANUAL_SECRET = { description = "No gen", generate = false }
+"#;
+    let config = parse_spec_from_str(toml_content, None).unwrap();
+    let profile = config.profiles.get("default").unwrap();
+    let secret = profile.secrets.get("MANUAL_SECRET").unwrap();
+    assert!(matches!(
+        secret.generate,
+        Some(crate::config::GenerateConfig::Bool(false))
+    ));
+}
+
+#[test]
+fn test_config_generate_and_default_is_error() {
+    let toml_content = r#"
+[project]
+name = "test-gen"
+revision = "1.0"
+
+[profiles.default]
+CONFLICT = { description = "Both", type = "password", generate = true, default = "foo" }
+"#;
+    let result = parse_spec_from_str(toml_content, None);
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("cannot both be set"),
+        "Expected conflict error, got: {}",
+        err_msg
+    );
+}
+
+#[test]
+fn test_config_command_type_generate_bool_is_error() {
+    let toml_content = r#"
+[project]
+name = "test-gen"
+revision = "1.0"
+
+[profiles.default]
+CMD_SECRET = { description = "Cmd", type = "command", generate = true }
+"#;
+    let result = parse_spec_from_str(toml_content, None);
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("command"),
+        "Expected command requirement error, got: {}",
+        err_msg
+    );
+}
+
+#[test]
+fn test_config_unknown_type_is_error() {
+    let toml_content = r#"
+[project]
+name = "test-gen"
+revision = "1.0"
+
+[profiles.default]
+BAD_TYPE = { description = "Unknown type", type = "rsa_key", generate = true }
+"#;
+    let result = parse_spec_from_str(toml_content, None);
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("unknown secret type"),
+        "Expected unknown type error, got: {}",
+        err_msg
+    );
+}
+
+#[test]
+fn test_validate_generates_missing_secret() {
+    use secrecy::ExposeSecret;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, "").unwrap();
+
+    let config_file = temp_dir.path().join("secretspec.toml");
+    let toml_content = r#"[project]
+name = "test-gen-validate"
+revision = "1.0"
+
+[profiles.default]
+DB_PASSWORD = { description = "Database password", type = "password", generate = true }
+"#;
+    fs::write(&config_file, toml_content).unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+    };
+
+    let spec = Secrets::new(config, Some(global_config), None, None);
+    let result = spec.validate().unwrap();
+    let validated = result.unwrap();
+
+    // The secret should have been generated
+    let value = validated.resolved.secrets.get("DB_PASSWORD").unwrap();
+    let s = value.expose_secret();
+    assert_eq!(s.len(), 32, "Default password length should be 32");
+    assert!(
+        s.chars().all(|c| c.is_alphanumeric()),
+        "Default password should be alphanumeric"
+    );
+}
+
+#[test]
+fn test_validate_does_not_regenerate_existing_secret() {
+    use secrecy::ExposeSecret;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, "DB_PASSWORD=existing_value").unwrap();
+
+    let config_file = temp_dir.path().join("secretspec.toml");
+    let toml_content = r#"[project]
+name = "test-gen-existing"
+revision = "1.0"
+
+[profiles.default]
+DB_PASSWORD = { description = "Database password", type = "password", generate = true }
+"#;
+    fs::write(&config_file, toml_content).unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+    };
+
+    let spec = Secrets::new(config, Some(global_config), None, None);
+    let result = spec.validate().unwrap();
+    let validated = result.unwrap();
+
+    let value = validated
+        .resolved
+        .secrets
+        .get("DB_PASSWORD")
+        .unwrap()
+        .expose_secret();
+    assert_eq!(
+        value, "existing_value",
+        "Existing secret should not be regenerated"
+    );
+}
+
+#[test]
+fn test_validate_idempotent_generation() {
+    use secrecy::ExposeSecret;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, "").unwrap();
+
+    let config_file = temp_dir.path().join("secretspec.toml");
+    let toml_content = r#"[project]
+name = "test-gen-idempotent"
+revision = "1.0"
+
+[profiles.default]
+DB_PASSWORD = { description = "Database password", type = "password", generate = true }
+"#;
+    fs::write(&config_file, toml_content).unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+    };
+
+    let spec = Secrets::new(config.clone(), Some(global_config.clone()), None, None);
+
+    // First validate generates the secret
+    let result1 = spec.validate().unwrap().unwrap();
+    let v1 = result1
+        .resolved
+        .secrets
+        .get("DB_PASSWORD")
+        .unwrap()
+        .expose_secret()
+        .to_string();
+
+    // Second validate should find the previously generated secret
+    let spec2 = Secrets::new(config, Some(global_config), None, None);
+    let result2 = spec2.validate().unwrap().unwrap();
+    let v2 = result2
+        .resolved
+        .secrets
+        .get("DB_PASSWORD")
+        .unwrap()
+        .expose_secret()
+        .to_string();
+
+    assert_eq!(v1, v2, "Second validate should return same generated value");
+}
+
+#[test]
+fn test_validate_multiple_generate_types() {
+    use secrecy::ExposeSecret;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, "").unwrap();
+
+    let config_file = temp_dir.path().join("secretspec.toml");
+    let toml_content = r#"[project]
+name = "test-gen-multi"
+revision = "1.0"
+
+[profiles.default]
+DB_PASSWORD = { description = "Password", type = "password", generate = true }
+API_TOKEN = { description = "Token", type = "hex", generate = { bytes = 16 } }
+SESSION_KEY = { description = "Session", type = "base64", generate = { bytes = 24 } }
+REQUEST_ID = { description = "ID", type = "uuid", generate = true }
+"#;
+    fs::write(&config_file, toml_content).unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+    };
+
+    let spec = Secrets::new(config, Some(global_config), None, None);
+    let validated = spec.validate().unwrap().unwrap();
+
+    // All secrets should be present
+    assert!(validated.resolved.secrets.contains_key("DB_PASSWORD"));
+    assert!(validated.resolved.secrets.contains_key("API_TOKEN"));
+    assert!(validated.resolved.secrets.contains_key("SESSION_KEY"));
+    assert!(validated.resolved.secrets.contains_key("REQUEST_ID"));
+
+    // Verify types
+    let pw = validated
+        .resolved
+        .secrets
+        .get("DB_PASSWORD")
+        .unwrap()
+        .expose_secret();
+    assert_eq!(pw.len(), 32);
+
+    let hex = validated
+        .resolved
+        .secrets
+        .get("API_TOKEN")
+        .unwrap()
+        .expose_secret();
+    assert_eq!(hex.len(), 32); // 16 bytes = 32 hex chars
+
+    let uuid = validated
+        .resolved
+        .secrets
+        .get("REQUEST_ID")
+        .unwrap()
+        .expose_secret();
+    assert_eq!(uuid.len(), 36);
+    assert!(uuid.contains('-'));
+}
+
+#[test]
+fn test_validate_generate_with_profile() {
+    use secrecy::ExposeSecret;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, "").unwrap();
+
+    let config_file = temp_dir.path().join("secretspec.toml");
+    let toml_content = r#"[project]
+name = "test-gen-profile"
+revision = "1.0"
+
+[profiles.default]
+SHARED_KEY = { description = "Shared", type = "password", generate = true }
+
+[profiles.production]
+PROD_KEY = { description = "Production key", type = "hex", generate = { bytes = 32 } }
+"#;
+    fs::write(&config_file, toml_content).unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+    };
+
+    let spec = Secrets::new(
+        config,
+        Some(global_config),
+        None,
+        Some("production".to_string()),
+    );
+    let validated = spec.validate().unwrap().unwrap();
+
+    // Both secrets should be generated
+    assert!(validated.resolved.secrets.contains_key("SHARED_KEY"));
+    assert!(validated.resolved.secrets.contains_key("PROD_KEY"));
+
+    let hex = validated
+        .resolved
+        .secrets
+        .get("PROD_KEY")
+        .unwrap()
+        .expose_secret();
+    assert_eq!(hex.len(), 64); // 32 bytes = 64 hex chars
+}
+
+#[test]
+fn test_resolve_secret_config_merges_type_and_generate() {
+    let mut profiles = HashMap::new();
+    let mut default_secrets = HashMap::new();
+    default_secrets.insert(
+        "DB_PASSWORD".to_string(),
+        Secret {
+            description: Some("Database password".to_string()),
+            required: None,
+            default: None,
+            providers: None,
+            as_path: None,
+            secret_type: Some("password".to_string()),
+            generate: Some(crate::config::GenerateConfig::Bool(true)),
+        },
+    );
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets: default_secrets,
+        },
+    );
+
+    let mut prod_secrets = HashMap::new();
+    prod_secrets.insert(
+        "DB_PASSWORD".to_string(),
+        Secret {
+            description: Some("Prod DB password".to_string()),
+            required: Some(true),
+            default: None,
+            providers: None,
+            as_path: None,
+            ..Default::default()
+        },
+    );
+    profiles.insert(
+        "production".to_string(),
+        Profile {
+            defaults: None,
+            secrets: prod_secrets,
+        },
+    );
+
+    let config = Config {
+        project: Project {
+            name: "test".to_string(),
+            revision: "1.0".to_string(),
+            extends: None,
+        },
+        profiles,
+    };
+
+    let spec = Secrets::new(config, None, Some("production".to_string()), None);
+    let resolved = spec
+        .resolve_secret_config("DB_PASSWORD", Some("production"))
+        .unwrap();
+
+    // type and generate should be inherited from default
+    assert_eq!(resolved.secret_type.as_deref(), Some("password"));
+    assert!(resolved.generate.is_some());
+    // description should come from production
+    assert_eq!(resolved.description.as_deref(), Some("Prod DB password"));
 }

@@ -93,6 +93,10 @@ extends = ["../../shared/base", "../../shared/database", "../../shared/auth"]
 
 ## Secret Generation
 
+:::note
+Secret generation is available since version 0.7.
+:::
+
 Secrets can be declared with `type` and `generate` to be auto-generated when missing. This is useful for passwords, tokens, and keys that don't need to be shared:
 
 ```toml

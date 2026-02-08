@@ -128,6 +128,10 @@ GOOGLE_APPLICATION_CREDENTIALS = { description = "GCP service account", as_path 
 
 ### Secret Generation
 
+:::note
+Secret generation is available since version 0.7.
+:::
+
 When `type` and `generate` are set, missing secrets are automatically generated during `check` or `run` and stored via the configured provider:
 
 ```toml

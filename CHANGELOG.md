@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-02-08
+
 ### Changed
 - Improved interactive prompt for missing secrets: lists all missing secrets upfront with descriptions, adds step counter (`[1/3]`), and uses `inquire::Password` for consistent masked input. Removed `rpassword` dependency.
+
+### Fixed
+- Use a fork of inquire to support setting multi-line secrets (#32)
 
 ## [0.7.0] - 2026-02-08
 

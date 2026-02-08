@@ -3,7 +3,7 @@ members = ["secretspec", "secretspec-derive", "examples/derive"]
 resolver = "2"
 
 [workspace.package]
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 
 [workspace.dependencies]
@@ -37,8 +37,8 @@ secrecy = { version = "0.10.3", features = ["serde"] }
 once_cell = "1.21"
 google-cloud-secretmanager-v1 = "1.2"
 tokio = { version = "1", features = ["rt"] }
-secretspec-derive = { version = "0.7.0", path = "./secretspec-derive" }
-secretspec = { version = "0.7.0", path = "./secretspec" }
+secretspec-derive = { version = "0.7.1", path = "./secretspec-derive" }
+secretspec = { version = "0.7.1", path = "./secretspec" }
 rand = "0.9"
 uuid = { version = "1", features = ["v4"] }
 data-encoding = "2"

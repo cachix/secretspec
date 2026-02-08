@@ -20,7 +20,7 @@ directories = "6.0"
 colored = "3.0"
 dotenvy = "0.15"
 serde-envfile = "0.3"
-inquire = "0.9"
+inquire = { git = "https://github.com/domenkozar/inquire", branch = "password-multi-line" }
 miette = { version = "7.6", features = ["fancy"] }
 serde_json = "1.0"
 tempfile = "3.0"

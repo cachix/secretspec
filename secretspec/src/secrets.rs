@@ -743,12 +743,7 @@ impl Secrets {
                         {
                             let prompt_msg =
                                 format!("[{}/{}] Enter value for {}:", i + 1, total, secret_name,);
-                            let mut prompt =
-                                inquire::Password::new(&prompt_msg).without_confirmation();
-
-                            if let Some(ref desc) = secret_config.description {
-                                prompt = prompt.with_help_message(desc);
-                            }
+                            let prompt = inquire::Password::new(&prompt_msg).without_confirmation();
 
                             let value = prompt.prompt()?;
 

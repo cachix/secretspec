@@ -159,6 +159,29 @@ The integration tests cover:
 
 Note: Some providers (like `env`) are read-only and will skip write tests.
 
+## Documentation Site (`docs/`)
+
+The docs site is an Astro Starlight site deployed to https://secretspec.dev/.
+
+### Structure
+
+- `docs/astro.config.mjs` - Sidebar navigation and site config
+- `docs/src/content/docs/` - All content pages (markdown/mdx)
+  - `index.mdx` - Home page
+  - `quick-start.mdx` - Getting started guide
+  - `concepts/` - Declarative config, profiles, providers overview
+  - `providers/` - Individual provider docs (keyring, dotenv, env, pass, lastpass, onepassword, gcsm)
+  - `sdk/` - Rust SDK docs
+  - `reference/` - Configuration, CLI, providers reference, adding providers guide
+
+### What to update
+
+- **New doc page**: Create the `.md` file and add it to the sidebar in `docs/astro.config.mjs`
+- **New CLI command**: Update `docs/src/content/docs/reference/cli.md`
+- **New config option**: Update `docs/src/content/docs/reference/configuration.md`
+- **New provider**: See [Adding Provider Documentation](#adding-provider-documentation) above
+- **New concept**: Create `docs/src/content/docs/concepts/<name>.md` and add to sidebar
+
 ## Key Files
 
 - `secretspec.toml`: Project secrets configuration

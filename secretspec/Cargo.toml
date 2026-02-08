@@ -23,7 +23,6 @@ toml.workspace = true
 thiserror.workspace = true
 directories.workspace = true
 colored.workspace = true
-rpassword.workspace = true
 dotenvy.workspace = true
 serde-envfile.workspace = true
 inquire.workspace = true

@@ -9,7 +9,7 @@ use secrecy::{ExposeSecret, SecretString};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::env;
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, IsTerminal, Read};
 use std::path::Path;
 use std::process::Command;
 
@@ -552,11 +552,11 @@ impl Secrets {
         let value = if let Some(v) = value {
             SecretString::new(v.into())
         } else if io::stdin().is_terminal() {
-            // Use rpassword for single-line input (most common case)
-            // For multiline secrets, users should pipe the content
-            let secret = rpassword::prompt_password(format!(
-                "Enter value for {name} (profile: {profile_name}): "
-            ))?;
+            let secret = inquire::Password::new(&format!(
+                "Enter value for {name} (profile: {profile_name}):"
+            ))
+            .without_confirmation()
+            .prompt()?;
             SecretString::new(secret.into())
         } else {
             // Read from stdin when input is piped
@@ -696,29 +696,61 @@ impl Secrets {
             Err(validation_errors) => {
                 // If we're in interactive mode and have missing required secrets, prompt for them
                 if interactive && !validation_errors.missing_required.is_empty() {
-                    eprintln!("\nThe following required secrets are missing:");
-                    for secret_name in &validation_errors.missing_required {
+                    if !io::stdin().is_terminal() {
+                        return Err(SecretSpecError::RequiredSecretMissing(
+                            validation_errors.missing_required.join(", "),
+                        ));
+                    }
+
+                    let missing = &validation_errors.missing_required;
+                    let total = missing.len();
+                    let default_backend = self.get_provider(provider_arg.clone())?;
+
+                    // List all missing secrets upfront
+                    eprintln!(
+                        "\n{} required {} missing in profile {} with provider {}:\n",
+                        total,
+                        if total == 1 {
+                            "secret is"
+                        } else {
+                            "secrets are"
+                        },
+                        profile_display.bold(),
+                        default_backend.name().bold(),
+                    );
+                    for secret_name in missing {
+                        let description = self
+                            .resolve_secret_config(secret_name, Some(&profile_display))
+                            .and_then(|c| c.description)
+                            .unwrap_or_default();
+                        if description.is_empty() {
+                            eprintln!("  {} {}", "-".dimmed(), secret_name.bold());
+                        } else {
+                            eprintln!(
+                                "  {} {} - {}",
+                                "-".dimmed(),
+                                secret_name.bold(),
+                                description
+                            );
+                        }
+                    }
+                    eprintln!();
+
+                    // Prompt for each missing secret
+                    for (i, secret_name) in missing.iter().enumerate() {
                         if let Some(secret_config) =
                             self.resolve_secret_config(secret_name, Some(&profile_display))
                         {
-                            let description = secret_config
-                                .description
-                                .as_deref()
-                                .unwrap_or("No description");
-                            eprintln!("\n{} - {}", secret_name.bold(), description);
-                            let value = if io::stdin().is_terminal() {
-                                print!(
-                                    "Enter value for {} (profile: {}): ",
-                                    secret_name, profile_display
-                                );
-                                io::stdout().flush()?;
-                                rpassword::read_password()?
-                            } else {
-                                // When stdin is not a terminal, we can't prompt interactively
-                                return Err(SecretSpecError::RequiredSecretMissing(
-                                    validation_errors.missing_required.join(", "),
-                                ));
-                            };
+                            let prompt_msg =
+                                format!("[{}/{}] Enter value for {}:", i + 1, total, secret_name,);
+                            let mut prompt =
+                                inquire::Password::new(&prompt_msg).without_confirmation();
+
+                            if let Some(ref desc) = secret_config.description {
+                                prompt = prompt.with_help_message(desc);
+                            }
+
+                            let value = prompt.prompt()?;
 
                             // Get the provider for this specific secret
                             // Use first provider in list if specified, otherwise use CLI provider or default

@@ -565,6 +565,12 @@ impl Secrets {
             SecretString::new(buffer.trim().to_string().into())
         };
 
+        if value.expose_secret().is_empty() {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "Secret value cannot be empty".to_string(),
+            ));
+        }
+
         backend.set(&self.config.project.name, name, &value, &profile_name)?;
         eprintln!(
             "{} Secret '{}' saved to {} (profile: {})",

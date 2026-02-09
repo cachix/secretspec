@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Support `XDG_CONFIG_HOME` on macOS by switching from `directories` to `etcetera` crate.
+  Existing macOS configs at `~/Library/Application Support/secretspec/` are automatically
+  migrated to `~/.config/secretspec/` (#28)
+
 ### Fixed
 - Reject empty values when setting a secret
 

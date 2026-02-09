@@ -573,11 +573,14 @@ impl GlobalConfig {
     ///
     /// Returns an error if the config directory cannot be determined
     pub fn path() -> Result<PathBuf, io::Error> {
-        use directories::ProjectDirs;
-        let dirs = ProjectDirs::from("", "", "secretspec").ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "Could not find config directory")
-        })?;
-        Ok(dirs.config_dir().join("config.toml"))
+        use etcetera::app_strategy::{AppStrategy, AppStrategyArgs, choose_app_strategy};
+        let strategy = choose_app_strategy(AppStrategyArgs {
+            top_level_domain: String::new(),
+            author: String::new(),
+            app_name: "secretspec".into(),
+        })
+        .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
+        Ok(strategy.config_dir().join("config.toml"))
     }
 
     /// Loads the global user configuration.
@@ -591,10 +594,14 @@ impl GlobalConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if the file exists but cannot be parsed
+    /// Returns an error if the config path cannot be checked/read or if parsing fails
     pub fn load() -> Result<Option<Self>, ParseError> {
         let config_path = Self::path().map_err(ParseError::Io)?;
-        if !config_path.exists() {
+
+        #[cfg(target_os = "macos")]
+        let config_path = Self::migrate_macos_config(&config_path).map_err(ParseError::Io)?;
+
+        if !config_path.try_exists().map_err(ParseError::Io)? {
             return Ok(None);
         }
         let content = std::fs::read_to_string(&config_path).map_err(ParseError::Io)?;
@@ -622,6 +629,97 @@ impl GlobalConfig {
         std::fs::write(&config_path, content)?;
 
         Ok(())
+    }
+
+    /// Migrate config from the old macOS location (~/Library/Application Support/secretspec/)
+    /// to the XDG location (~/.config/secretspec/).
+    ///
+    /// Returns the path that should be used for loading.
+    /// If migration fails, the legacy path is returned as a fallback when available.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the new path cannot be checked and no legacy fallback can be determined.
+    #[cfg(target_os = "macos")]
+    fn migrate_macos_config(new_path: &Path) -> Result<PathBuf, io::Error> {
+        match new_path.try_exists() {
+            Ok(true) => return Ok(new_path.to_path_buf()),
+            Ok(false) => {}
+            Err(err) => {
+                if let Ok(home) = etcetera::home_dir() {
+                    let old_path = home
+                        .join("Library/Application Support/secretspec")
+                        .join("config.toml");
+                    if old_path.exists() {
+                        return Ok(old_path);
+                    }
+                }
+                return Err(err);
+            }
+        }
+
+        let old_path = match etcetera::home_dir() {
+            Ok(home) => home
+                .join("Library/Application Support/secretspec")
+                .join("config.toml"),
+            Err(_) => return Ok(new_path.to_path_buf()),
+        };
+
+        match old_path.try_exists() {
+            Ok(true) => {}
+            Ok(false) => return Ok(new_path.to_path_buf()),
+            Err(err) => {
+                eprintln!(
+                    "Warning: failed to check legacy config path {}: {}. Continuing to use legacy path.",
+                    old_path.display(),
+                    err
+                );
+                return Ok(old_path);
+            }
+        }
+
+        // Create parent directories for the new path
+        if let Some(parent) = new_path.parent() {
+            if let Err(err) = std::fs::create_dir_all(parent) {
+                eprintln!(
+                    "Warning: failed to create config directory {} while migrating from {}: {}. Continuing to use legacy config path.",
+                    parent.display(),
+                    old_path.display(),
+                    err
+                );
+                return Ok(old_path);
+            }
+        }
+
+        // Copy old config to new location
+        if let Err(err) = std::fs::copy(&old_path, new_path) {
+            eprintln!(
+                "Warning: failed to migrate config from {} to {}: {}. Continuing to use legacy config path.",
+                old_path.display(),
+                new_path.display(),
+                err
+            );
+            return Ok(old_path);
+        }
+
+        // Rename old file to indicate it has been migrated
+        let old_backup = old_path.with_extension("toml.old");
+        if let Err(err) = std::fs::rename(&old_path, &old_backup) {
+            eprintln!(
+                "Warning: migrated config to {}, but failed to back up {} to {}: {}",
+                new_path.display(),
+                old_path.display(),
+                old_backup.display(),
+                err
+            );
+        }
+
+        eprintln!(
+            "Migrated config from {} to {}",
+            old_path.display(),
+            new_path.display()
+        );
+        Ok(new_path.to_path_buf())
     }
 }
 

@@ -9,18 +9,30 @@ use url::Url;
 ///
 /// This struct holds configuration options for the keyring provider,
 /// which stores secrets in the system's native keychain service.
-/// Currently, no additional configuration is required as the provider
-/// uses sensible defaults for all platforms.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct KeyringConfig {}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyringConfig {
+    /// Optional folder prefix format string for organizing secrets in the keyring.
+    ///
+    /// Supports placeholders: {project}, {profile}, and {key}.
+    /// Defaults to "secretspec/{project}/{profile}/{key}" if not specified.
+    pub folder_prefix: Option<String>,
+}
+
+impl Default for KeyringConfig {
+    fn default() -> Self {
+        Self {
+            folder_prefix: None,
+        }
+    }
+}
 
 impl TryFrom<&Url> for KeyringConfig {
     type Error = SecretSpecError;
 
     /// Creates a new KeyringConfig from a URL.
     ///
-    /// The URL must have the scheme "keyring" (e.g., "keyring://").
-    /// Currently, no additional parameters are supported in the URL.
+    /// The URL must have the scheme "keyring" (e.g., "keyring://" or
+    /// "keyring://secretspec/shared/{profile}/{key}").
     ///
     /// # Examples
     ///
@@ -38,11 +50,19 @@ impl TryFrom<&Url> for KeyringConfig {
             )));
         }
 
-        Ok(Self::default())
+        let mut config = Self::default();
+
+        if let Some(host) = url.host_str() {
+            let path = url.path();
+            // Percent-decode so placeholders like {profile} and {key} survive URL parsing
+            let raw = format!("{}{}", host, path);
+            let decoded = raw.replace("%7B", "{").replace("%7D", "}");
+            config.folder_prefix = Some(decoded);
+        }
+
+        Ok(config)
     }
 }
-
-impl KeyringConfig {}
 
 /// Provider for storing secrets in the system keychain.
 ///
@@ -52,13 +72,12 @@ impl KeyringConfig {}
 /// - Windows: Credential Manager
 /// - Linux: Secret Service API (via libsecret)
 ///
-/// Secrets are stored with a hierarchical key structure:
-/// `secretspec/{project}/{profile}/{key}`
+/// Secrets are stored with a hierarchical key structure using a configurable
+/// format string that defaults to: `secretspec/{project}/{profile}/{key}`.
 ///
 /// This ensures secrets are properly namespaced by project and profile,
 /// preventing conflicts between different projects or environments.
 pub struct KeyringProvider {
-    #[allow(dead_code)]
     config: KeyringConfig,
 }
 
@@ -68,7 +87,7 @@ crate::register_provider! {
     name: "keyring",
     description: "Uses system keychain (Recommended)",
     schemes: ["keyring"],
-    examples: ["keyring://"],
+    examples: ["keyring://", "keyring://secretspec/shared/{profile}/{key}"],
 }
 
 impl KeyringProvider {
@@ -84,6 +103,23 @@ impl KeyringProvider {
     pub fn new(config: KeyringConfig) -> Self {
         Self { config }
     }
+
+    /// Formats the service name for a secret in the keyring.
+    ///
+    /// Uses folder_prefix as a format string with {project}, {profile}, and {key} placeholders.
+    /// Defaults to "secretspec/{project}/{profile}/{key}" if not configured.
+    fn format_service(&self, project: &str, profile: &str, key: &str) -> String {
+        let format_string = self
+            .config
+            .folder_prefix
+            .as_deref()
+            .unwrap_or("secretspec/{project}/{profile}/{key}");
+
+        format_string
+            .replace("{project}", project)
+            .replace("{profile}", profile)
+            .replace("{key}", key)
+    }
 }
 
 impl Provider for KeyringProvider {
@@ -92,30 +128,21 @@ impl Provider for KeyringProvider {
     }
 
     fn uri(&self) -> String {
-        // Keyring can be just "keyring" or "keyring://"
-        "keyring".to_string()
+        if let Some(ref prefix) = self.config.folder_prefix {
+            format!("keyring://{}", prefix)
+        } else {
+            "keyring".to_string()
+        }
     }
 
     /// Retrieves a secret from the system keychain.
     ///
-    /// The secret is looked up using a hierarchical key structure:
-    /// `secretspec/{project}/{profile}/{key}`
+    /// The secret is looked up using a hierarchical key structure determined
+    /// by the folder_prefix format string (defaults to `secretspec/{project}/{profile}/{key}`).
     ///
     /// The current system username is used as the account identifier.
-    ///
-    /// # Arguments
-    ///
-    /// * `project` - The project name
-    /// * `key` - The secret key to retrieve
-    /// * `profile` - The profile/environment name
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Some(String))` - The secret value if found
-    /// * `Ok(None)` - If the secret doesn't exist
-    /// * `Err` - If there was an error accessing the keychain
     fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        let service = format!("secretspec/{}/{}/{}", project, profile, key);
+        let service = self.format_service(project, profile, key);
         let username = whoami::username()
             .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))?;
         let entry = Entry::new(&service, &username)?;
@@ -128,25 +155,13 @@ impl Provider for KeyringProvider {
 
     /// Stores a secret in the system keychain.
     ///
-    /// The secret is stored with a hierarchical key structure:
-    /// `secretspec/{project}/{profile}/{key}`
+    /// The secret is stored with a hierarchical key structure determined
+    /// by the folder_prefix format string (defaults to `secretspec/{project}/{profile}/{key}`).
     ///
     /// The current system username is used as the account identifier.
     /// If a secret already exists with the same key, it will be overwritten.
-    ///
-    /// # Arguments
-    ///
-    /// * `project` - The project name
-    /// * `key` - The secret key to store
-    /// * `value` - The secret value to store
-    /// * `profile` - The profile/environment name
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the secret was stored successfully
-    /// * `Err` - If there was an error accessing the keychain
     fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        let service = format!("secretspec/{}/{}/{}", project, profile, key);
+        let service = self.format_service(project, profile, key);
         let username = whoami::username()
             .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))?;
         let entry = Entry::new(&service, &username)?;

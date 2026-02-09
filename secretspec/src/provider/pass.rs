@@ -9,17 +9,31 @@ use url::Url;
 ///
 /// This struct holds configuration options for the pass provider.
 /// Pass stores secrets as GPG-encrypted files using the Unix password
-/// manager in a hierarchical structure: `secretspec/{project}/{profile}/{key}`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PassConfig {}
+/// manager in a hierarchical structure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PassConfig {
+    /// Optional folder prefix format string for organizing secrets in pass.
+    ///
+    /// Supports placeholders: {project}, {profile}, and {key}.
+    /// Defaults to "secretspec/{project}/{profile}/{key}" if not specified.
+    pub folder_prefix: Option<String>,
+}
+
+impl Default for PassConfig {
+    fn default() -> Self {
+        Self {
+            folder_prefix: None,
+        }
+    }
+}
 
 impl TryFrom<&Url> for PassConfig {
     type Error = SecretSpecError;
 
     /// Creates a PassConfig from a URL.
     ///
-    /// The URL must have the scheme "pass" (e.g., "pass://").
-    /// Currently, no additional parameters are supported in the URL.
+    /// The URL must have the scheme "pass" (e.g., "pass://" or
+    /// "pass://secretspec/shared/{profile}/{key}").
     fn try_from(url: &Url) -> std::result::Result<Self, Self::Error> {
         if url.scheme() != "pass" {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
@@ -28,7 +42,17 @@ impl TryFrom<&Url> for PassConfig {
             )));
         }
 
-        Ok(Self::default())
+        let mut config = Self::default();
+
+        if let Some(host) = url.host_str() {
+            let path = url.path();
+            // Percent-decode so placeholders like {profile} and {key} survive URL parsing
+            let raw = format!("{}{}", host, path);
+            let decoded = raw.replace("%7B", "{").replace("%7D", "}");
+            config.folder_prefix = Some(decoded);
+        }
+
+        Ok(config)
     }
 }
 
@@ -39,8 +63,6 @@ impl TryFrom<Url> for PassConfig {
         (&url).try_into()
     }
 }
-
-impl PassConfig {}
 
 /// Provider for managing secrets with pass (password-store).
 ///
@@ -61,7 +83,6 @@ impl PassConfig {}
 /// - GPG must be configured with appropriate keys
 /// - The password store must be initialized (`pass init`)
 pub struct PassProvider {
-    #[allow(dead_code)]
     config: PassConfig,
 }
 
@@ -71,7 +92,7 @@ crate::register_provider! {
     name: "pass",
     description: "Unix password manager with GPG encryption",
     schemes: ["pass"],
-    examples: ["pass://"],
+    examples: ["pass://", "pass://secretspec/shared/{profile}/{key}"],
 }
 
 impl PassProvider {
@@ -82,9 +103,19 @@ impl PassProvider {
 
     /// Formats the entry name for a secret.
     ///
-    /// Creates a hierarchical path: `secretspec/{project}/{profile}/{key}`
+    /// Uses folder_prefix as a format string with {project}, {profile}, and {key} placeholders.
+    /// Defaults to "secretspec/{project}/{profile}/{key}" if not configured.
     fn format_entry_name(&self, project: &str, profile: &str, key: &str) -> String {
-        format!("secretspec/{}/{}/{}", project, profile, key)
+        let format_string = self
+            .config
+            .folder_prefix
+            .as_deref()
+            .unwrap_or("secretspec/{project}/{profile}/{key}");
+
+        format_string
+            .replace("{project}", project)
+            .replace("{profile}", profile)
+            .replace("{key}", key)
     }
 }
 
@@ -94,7 +125,11 @@ impl Provider for PassProvider {
     }
 
     fn uri(&self) -> String {
-        "pass".to_string()
+        if let Some(ref prefix) = self.config.folder_prefix {
+            format!("pass://{}", prefix)
+        } else {
+            "pass".to_string()
+        }
     }
 
     /// Retrieves a secret from the password store.

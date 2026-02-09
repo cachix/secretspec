@@ -56,3 +56,23 @@ $ secretspec run -- npm start
 $ secretspec set API_KEY --profile production
 $ secretspec run --profile production -- npm start
 ```
+
+## Shared Secrets
+
+By default, secrets are stored under `secretspec/{project}/{profile}/{key}`, which isolates them per project. To share secrets across projects, use a custom folder prefix via the URI:
+
+```toml
+# ~/.config/secretspec/config.toml
+[providers]
+shared = "keyring://secretspec/shared/{profile}/{key}"
+```
+
+The URI supports `{project}`, `{profile}`, and `{key}` placeholders. By omitting `{project}`, multiple projects can read and write the same keyring entry:
+
+```toml
+# secretspec.toml (in project-A and project-B)
+[profiles.default]
+ARTIFACTORY_USER = { description = "Artifactory user", providers = ["shared"] }
+```
+
+Both projects will resolve `ARTIFACTORY_USER` from keyring service `secretspec/shared/default/ARTIFACTORY_USER`.

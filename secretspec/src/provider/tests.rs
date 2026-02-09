@@ -453,6 +453,35 @@ mod integration_tests {
     }
 
     #[test]
+    fn test_keyring_with_folder_prefix() {
+        let provider =
+            Box::<dyn Provider>::try_from("keyring://secretspec/shared/{profile}/{key}").unwrap();
+        assert_eq!(provider.name(), "keyring");
+        assert_eq!(
+            provider.uri(),
+            "keyring://secretspec/shared/{profile}/{key}"
+        );
+
+        // Without folder_prefix, should use default URI
+        let provider = Box::<dyn Provider>::try_from("keyring://").unwrap();
+        assert_eq!(provider.name(), "keyring");
+        assert_eq!(provider.uri(), "keyring");
+    }
+
+    #[test]
+    fn test_pass_with_folder_prefix() {
+        let provider =
+            Box::<dyn Provider>::try_from("pass://secretspec/shared/{profile}/{key}").unwrap();
+        assert_eq!(provider.name(), "pass");
+        assert_eq!(provider.uri(), "pass://secretspec/shared/{profile}/{key}");
+
+        // Without folder_prefix, should use default URI
+        let provider = Box::<dyn Provider>::try_from("pass://").unwrap();
+        assert_eq!(provider.name(), "pass");
+        assert_eq!(provider.uri(), "pass");
+    }
+
+    #[test]
     fn test_pass_provider_allows_set() {
         let provider = Box::<dyn Provider>::try_from("pass").unwrap();
         assert!(

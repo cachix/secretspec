@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Keyring and pass providers now support `folder_prefix` via URI (e.g., `keyring://secretspec/shared/{profile}/{key}`)
+  to share secrets across projects, matching the existing OnePassword and LastPass behavior
+
 ### Changed
 - Support `XDG_CONFIG_HOME` on macOS by switching from `directories` to `etcetera` crate.
   Existing macOS configs at `~/Library/Application Support/secretspec/` are automatically

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-02-24
+
 ### Added
 - Keyring and pass providers now support `folder_prefix` via URI (e.g., `keyring://secretspec/shared/{profile}/{key}`)
   to share secrets across projects, matching the existing OnePassword and LastPass behavior

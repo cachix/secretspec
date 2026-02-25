@@ -9,21 +9,13 @@ use url::Url;
 ///
 /// This struct holds configuration options for the keyring provider,
 /// which stores secrets in the system's native keychain service.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct KeyringConfig {
     /// Optional folder prefix format string for organizing secrets in the keyring.
     ///
     /// Supports placeholders: {project}, {profile}, and {key}.
     /// Defaults to "secretspec/{project}/{profile}/{key}" if not specified.
     pub folder_prefix: Option<String>,
-}
-
-impl Default for KeyringConfig {
-    fn default() -> Self {
-        Self {
-            folder_prefix: None,
-        }
-    }
 }
 
 impl TryFrom<&Url> for KeyringConfig {

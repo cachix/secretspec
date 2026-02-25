@@ -147,25 +147,25 @@ impl TryFrom<&Url> for OnePasswordConfig {
         let mut config = Self::default();
 
         // Parse URL components for account@vault format, ignoring dummy localhost
-        if let Some(host) = url.host_str() {
-            if host != "localhost" {
-                // Check if we have username (account) information
-                if !url.username().is_empty() {
-                    // Handle user:token format for service account tokens
-                    if scheme == "onepassword+token" {
-                        if let Some(password) = url.password() {
-                            config.service_account_token = Some(password.to_string());
-                        } else {
-                            config.service_account_token = Some(url.username().to_string());
-                        }
+        if let Some(host) = url.host_str()
+            && host != "localhost"
+        {
+            // Check if we have username (account) information
+            if !url.username().is_empty() {
+                // Handle user:token format for service account tokens
+                if scheme == "onepassword+token" {
+                    if let Some(password) = url.password() {
+                        config.service_account_token = Some(password.to_string());
                     } else {
-                        config.account = Some(url.username().to_string());
+                        config.service_account_token = Some(url.username().to_string());
                     }
-                    config.default_vault = Some(host.to_string());
                 } else {
-                    // No username, so the host is the vault
-                    config.default_vault = Some(host.to_string());
+                    config.account = Some(url.username().to_string());
                 }
+                config.default_vault = Some(host.to_string());
+            } else {
+                // No username, so the host is the vault
+                config.default_vault = Some(host.to_string());
             }
         }
 
@@ -820,24 +820,24 @@ impl Provider for OnePasswordProvider {
                             if let Ok(item) = serde_json::from_str::<OnePasswordItem>(&stdout) {
                                 // Look for "value" field first
                                 for field in &item.fields {
-                                    if field.label.as_deref() == Some("value") {
-                                        if let Some(ref v) = field.value {
-                                            return Some((
-                                                key_owned,
-                                                SecretString::new(v.clone().into()),
-                                            ));
-                                        }
+                                    if field.label.as_deref() == Some("value")
+                                        && let Some(ref v) = field.value
+                                    {
+                                        return Some((
+                                            key_owned,
+                                            SecretString::new(v.clone().into()),
+                                        ));
                                     }
                                 }
                                 // Fallback: look for password/concealed field
                                 for field in &item.fields {
-                                    if field.field_type == "CONCEALED" || field.id == "password" {
-                                        if let Some(ref v) = field.value {
-                                            return Some((
-                                                key_owned,
-                                                SecretString::new(v.clone().into()),
-                                            ));
-                                        }
+                                    if (field.field_type == "CONCEALED" || field.id == "password")
+                                        && let Some(ref v) = field.value
+                                    {
+                                        return Some((
+                                            key_owned,
+                                            SecretString::new(v.clone().into()),
+                                        ));
                                     }
                                 }
                             }

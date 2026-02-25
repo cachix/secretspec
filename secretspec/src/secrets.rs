@@ -209,10 +209,10 @@ impl Secrets {
             })?;
 
         // If not the default profile, also add secrets from default profile
-        if profile_name != "default" {
-            if let Some(default_profile) = self.config.profiles.get("default").cloned() {
-                profile_config.merge_with(default_profile);
-            }
+        if profile_name != "default"
+            && let Some(default_profile) = self.config.profiles.get("default").cloned()
+        {
+            profile_config.merge_with(default_profile);
         }
 
         Ok(profile_config)
@@ -529,7 +529,8 @@ impl Secrets {
             .and_then(|sc| sc.providers.as_ref())
             .and_then(|p| p.first())
         {
-            let provider_uris = self.resolve_provider_aliases(Some(&[provider_aliases.clone()]))?;
+            let provider_uris =
+                self.resolve_provider_aliases(Some(std::slice::from_ref(provider_aliases)))?;
             let uri = provider_uris.and_then(|uris| uris.first().cloned()).ok_or(
                 SecretSpecError::ProviderNotFound(format!(
                     "Provider alias '{}' could not be resolved",
@@ -629,10 +630,10 @@ impl Secrets {
                     let (temp_file, _path_str) = self.write_secret_to_temp_file(&value)?;
                     let temp_path = temp_file.into_temp_path();
                     let persisted_path = temp_path.keep().map_err(|e| {
-                        SecretSpecError::Io(io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("Failed to persist temporary file: {}", e),
-                        ))
+                        SecretSpecError::Io(io::Error::other(format!(
+                            "Failed to persist temporary file: {}",
+                            e
+                        )))
                     })?;
                     println!("{}", persisted_path.display());
                 } else {
@@ -649,10 +650,10 @@ impl Secrets {
                             .write_secret_to_temp_file(&SecretString::new(default_value.into()))?;
                         let temp_path = temp_file.into_temp_path();
                         let persisted_path = temp_path.keep().map_err(|e| {
-                            SecretSpecError::Io(io::Error::new(
-                                io::ErrorKind::Other,
-                                format!("Failed to persist temporary file: {}", e),
-                            ))
+                            SecretSpecError::Io(io::Error::other(format!(
+                                "Failed to persist temporary file: {}",
+                                e
+                            )))
                         })?;
                         println!("{}", persisted_path.display());
                     } else {
@@ -758,8 +759,9 @@ impl Secrets {
                             let backend = if let Some(provider_aliases) =
                                 secret_config.providers.as_ref().and_then(|p| p.first())
                             {
-                                let provider_uris = self
-                                    .resolve_provider_aliases(Some(&[provider_aliases.clone()]))?;
+                                let provider_uris = self.resolve_provider_aliases(Some(
+                                    std::slice::from_ref(provider_aliases),
+                                ))?;
                                 let uri = provider_uris
                                     .and_then(|uris| uris.first().cloned())
                                     .ok_or(SecretSpecError::ProviderNotFound(format!(
@@ -909,7 +911,7 @@ impl Secrets {
             .collect::<HashSet<_>>();
 
         for (name, config) in &profile {
-            if errors.missing_required.contains(&name) {
+            if errors.missing_required.contains(name) {
                 missing_count += 1;
                 eprintln!(
                     "{} {} - {} {}",
@@ -918,7 +920,7 @@ impl Secrets {
                     config.description.as_deref().unwrap_or("No description"),
                     "(required)".red()
                 );
-            } else if errors.missing_optional.contains(&name) {
+            } else if errors.missing_optional.contains(name) {
                 found_count += 1;
                 eprintln!(
                     "{} {} - {} {}",
@@ -1023,7 +1025,7 @@ impl Secrets {
                 secret_config.providers.as_ref().and_then(|p| p.first())
             {
                 let provider_uris =
-                    self.resolve_provider_aliases(Some(&[provider_aliases.clone()]))?;
+                    self.resolve_provider_aliases(Some(std::slice::from_ref(provider_aliases)))?;
                 let uri = provider_uris.and_then(|uris| uris.first().cloned()).ok_or(
                     SecretSpecError::ProviderNotFound(format!(
                         "Provider alias '{}' could not be resolved",
@@ -1130,7 +1132,8 @@ impl Secrets {
         let backend = if let Some(provider_aliases) =
             secret_config.providers.as_ref().and_then(|p| p.first())
         {
-            let provider_uris = self.resolve_provider_aliases(Some(&[provider_aliases.clone()]))?;
+            let provider_uris =
+                self.resolve_provider_aliases(Some(std::slice::from_ref(provider_aliases)))?;
             let uri = provider_uris.and_then(|uris| uris.first().cloned()).ok_or(
                 SecretSpecError::ProviderNotFound(format!(
                     "Provider alias '{}' could not be resolved",
@@ -1214,14 +1217,14 @@ impl Secrets {
     ) -> Result<(tempfile::NamedTempFile, String)> {
         use std::io::Write;
 
-        let mut temp_file = tempfile::NamedTempFile::new().map_err(|e| SecretSpecError::Io(e))?;
+        let mut temp_file = tempfile::NamedTempFile::new().map_err(SecretSpecError::Io)?;
 
         temp_file
             .write_all(secret.expose_secret().as_bytes())
-            .map_err(|e| SecretSpecError::Io(e))?;
+            .map_err(SecretSpecError::Io)?;
 
         // Flush to ensure the data is written
-        temp_file.flush().map_err(|e| SecretSpecError::Io(e))?;
+        temp_file.flush().map_err(SecretSpecError::Io)?;
 
         // Set restrictive permissions (0o400) so only the owner can read
         #[cfg(unix)]
@@ -1230,13 +1233,13 @@ impl Secrets {
             let mut perms = temp_file
                 .as_file()
                 .metadata()
-                .map_err(|e| SecretSpecError::Io(e))?
+                .map_err(SecretSpecError::Io)?
                 .permissions();
             perms.set_mode(0o400);
             temp_file
                 .as_file()
                 .set_permissions(perms)
-                .map_err(|e| SecretSpecError::Io(e))?;
+                .map_err(SecretSpecError::Io)?;
         }
 
         // Get the path as a string
@@ -1295,10 +1298,7 @@ impl Secrets {
         let profile = self.resolve_profile(Some(&profile_name))?;
 
         // Collect all secrets with their configs
-        let all_secrets: Vec<(String, crate::config::Secret)> = profile
-            .into_iter()
-            .map(|(name, config)| (name, config))
-            .collect();
+        let all_secrets: Vec<(String, crate::config::Secret)> = profile.into_iter().collect();
 
         // Group secrets by their provider URI for batch fetching
         // Key: provider URI (or None for default provider), Value: list of secret names
@@ -1312,7 +1312,7 @@ impl Secrets {
             // Get the first provider URI (if any) for grouping
             let provider_uri = if let Some(providers) = &secret_config.providers {
                 if let Some(first_alias) = providers.first() {
-                    self.resolve_provider_aliases(Some(&[first_alias.clone()]))?
+                    self.resolve_provider_aliases(Some(std::slice::from_ref(first_alias)))?
                         .and_then(|uris| uris.first().cloned())
                 } else {
                     None

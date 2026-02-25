@@ -545,10 +545,10 @@ fn is_field_optional_across_profiles(secret_name: &str, config: &Config) -> bool
 /// `true` if any profile has this secret with `as_path = true`, `false` otherwise
 fn is_field_as_path(secret_name: &str, config: &Config) -> bool {
     for profile_config in config.profiles.values() {
-        if let Some(secret_config) = profile_config.secrets.get(secret_name) {
-            if secret_config.as_path == Some(true) {
-                return true;
-            }
+        if let Some(secret_config) = profile_config.secrets.get(secret_name)
+            && secret_config.as_path == Some(true)
+        {
+            return true;
         }
     }
     false

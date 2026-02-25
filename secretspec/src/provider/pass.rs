@@ -10,21 +10,13 @@ use url::Url;
 /// This struct holds configuration options for the pass provider.
 /// Pass stores secrets as GPG-encrypted files using the Unix password
 /// manager in a hierarchical structure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PassConfig {
     /// Optional folder prefix format string for organizing secrets in pass.
     ///
     /// Supports placeholders: {project}, {profile}, and {key}.
     /// Defaults to "secretspec/{project}/{profile}/{key}" if not specified.
     pub folder_prefix: Option<String>,
-}
-
-impl Default for PassConfig {
-    fn default() -> Self {
-        Self {
-            folder_prefix: None,
-        }
-    }
 }
 
 impl TryFrom<&Url> for PassConfig {

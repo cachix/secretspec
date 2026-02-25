@@ -154,11 +154,11 @@ impl Config {
         }
 
         // Process extends if present
-        if let Some(extends_paths) = config.project.extends.clone() {
-            if let Some(base) = base_path {
-                let base_dir = base.parent().unwrap_or(Path::new("."));
-                config = Self::merge_extended_configs(config, &extends_paths, base_dir, visited)?;
-            }
+        if let Some(extends_paths) = config.project.extends.clone()
+            && let Some(base) = base_path
+        {
+            let base_dir = base.parent().unwrap_or(Path::new("."));
+            config = Self::merge_extended_configs(config, &extends_paths, base_dir, visited)?;
         }
 
         Ok(config)
@@ -447,60 +447,58 @@ impl Secret {
         }
 
         // Validate generate config
-        if let Some(ref gen_config) = self.generate {
-            if gen_config.is_enabled() {
-                // generate requires type
-                if self.secret_type.is_none() {
-                    return Err(
-                        "'generate' requires 'type' to be set (e.g., type = \"password\")".into(),
-                    );
-                }
+        if let Some(ref gen_config) = self.generate
+            && gen_config.is_enabled()
+        {
+            // generate requires type
+            if self.secret_type.is_none() {
+                return Err(
+                    "'generate' requires 'type' to be set (e.g., type = \"password\")".into(),
+                );
+            }
 
-                // generate + default is a conflict
-                if self.default.is_some() {
-                    return Err("'generate' and 'default' cannot both be set".into());
-                }
+            // generate + default is a conflict
+            if self.default.is_some() {
+                return Err("'generate' and 'default' cannot both be set".into());
+            }
 
-                // type = "command" requires generate = { command = "..." }
-                if self.secret_type.as_deref() == Some("command") {
-                    match gen_config {
-                        GenerateConfig::Bool(true) => {
-                            return Err(
-                                "type = \"command\" requires generate = { command = \"...\" }"
-                                    .into(),
-                            );
-                        }
-                        GenerateConfig::Options(opts) if opts.command.is_none() => {
-                            return Err(
-                                "type = \"command\" requires generate = { command = \"...\" }"
-                                    .into(),
-                            );
-                        }
-                        _ => {}
+            // type = "command" requires generate = { command = "..." }
+            if self.secret_type.as_deref() == Some("command") {
+                match gen_config {
+                    GenerateConfig::Bool(true) => {
+                        return Err(
+                            "type = \"command\" requires generate = { command = \"...\" }".into(),
+                        );
                     }
+                    GenerateConfig::Options(opts) if opts.command.is_none() => {
+                        return Err(
+                            "type = \"command\" requires generate = { command = \"...\" }".into(),
+                        );
+                    }
+                    _ => {}
                 }
+            }
 
-                // Validate known types
-                if let Some(ref t) = self.secret_type {
-                    match t.as_str() {
-                        "password" | "hex" | "base64" | "uuid" | "command" => {}
-                        unknown => {
-                            return Err(format!("unknown secret type '{}'", unknown));
-                        }
+            // Validate known types
+            if let Some(ref t) = self.secret_type {
+                match t.as_str() {
+                    "password" | "hex" | "base64" | "uuid" | "command" => {}
+                    unknown => {
+                        return Err(format!("unknown secret type '{}'", unknown));
                     }
                 }
             }
         }
 
         // Validate type even without generate
-        if let Some(ref t) = self.secret_type {
-            if self.generate.is_none() || self.generate.as_ref().is_some_and(|g| !g.is_enabled()) {
-                // Type is informational when not generating, but still validate known values
-                match t.as_str() {
-                    "password" | "hex" | "base64" | "uuid" | "command" => {}
-                    unknown => {
-                        return Err(format!("unknown secret type '{}'", unknown));
-                    }
+        if let Some(ref t) = self.secret_type
+            && (self.generate.is_none() || self.generate.as_ref().is_some_and(|g| !g.is_enabled()))
+        {
+            // Type is informational when not generating, but still validate known values
+            match t.as_str() {
+                "password" | "hex" | "base64" | "uuid" | "command" => {}
+                unknown => {
+                    return Err(format!("unknown secret type '{}'", unknown));
                 }
             }
         }
@@ -516,10 +514,11 @@ fn is_valid_identifier(s: &str) -> bool {
     }
 
     let mut chars = s.chars();
-    if let Some(first) = chars.next() {
-        if !first.is_alphabetic() && first != '_' {
-            return false;
-        }
+    if let Some(first) = chars.next()
+        && !first.is_alphabetic()
+        && first != '_'
+    {
+        return false;
     }
 
     chars.all(|c| c.is_alphanumeric() || c == '_')

@@ -402,15 +402,15 @@ pub fn main() -> Result<()> {
                     ProviderAction::Add { name, uri } => {
                         // Load or create config
                         let mut config =
-                            GlobalConfig::load().into_diagnostic()?.unwrap_or_else(|| {
-                                GlobalConfig {
+                            GlobalConfig::load()
+                                .into_diagnostic()?
+                                .unwrap_or(GlobalConfig {
                                     defaults: GlobalDefaults {
                                         provider: None,
                                         profile: None,
                                         providers: None,
                                     },
-                                }
-                            });
+                                });
 
                         // Initialize providers map if needed
                         if config.defaults.providers.is_none() {

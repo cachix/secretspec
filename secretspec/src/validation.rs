@@ -46,10 +46,7 @@ impl ValidatedSecrets {
         for temp_file in temp_files {
             let temp_path = temp_file.into_temp_path();
             let path = temp_path.keep().map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to persist temporary file: {}", e),
-                )
+                std::io::Error::other(format!("Failed to persist temporary file: {}", e))
             })?;
             paths.push(path);
         }

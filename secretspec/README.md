@@ -5,9 +5,11 @@
 
 # SecretSpec
 
-Declarative secrets, every environment, any provider.
+Stop committing secrets to git and putting them to .env files.
 
-SecretSpec separates the declaration of what secrets an application needs from where they are stored, enabling portable applications that work across different secret storage backends without code changes.
+Secrets end up in `.env` files that get accidentally committed, shared over Slack, or copy pasted between machines. Each developer has their own version, nobody knows which secrets are actually needed, and onboarding means asking around for values.
+
+SecretSpec fixes this by separating secret **declaration** from secret **storage**. You commit a `secretspec.toml` that declares what secrets your application needs, while the actual values live in a secure provider like your system keyring, 1Password, or any other backend. No secrets in git, no `.env` files to leak.
 
 [Documentation](https://secretspec.dev) | [Quick Start](https://secretspec.dev/quick-start) | [Announcement Blog Post](https://devenv.sh/blog/2025/07/21/announcing-secretspec-declarative-secrets-management)
 

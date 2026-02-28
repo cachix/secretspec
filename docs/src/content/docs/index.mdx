@@ -17,17 +17,17 @@ hero:
 
 import { Card, CardGrid, LinkCard, Aside } from '@astrojs/starlight/components';
 
-## Why Secrets Are Still Hard
+## Stop committing secrets to git and putting them to .env files
 
-Current secret management forces applications to answer three questions at once:
+Secrets end up in `.env` files that get accidentally committed, shared over Slack, or copy pasted between machines. Each developer has their own version, nobody knows which secrets are actually needed, and onboarding means asking around for values.
 
-- **WHAT** - Which secrets does the application need? (DATABASE_URL, API_KEY)
-- **HOW** - What are the requirements? (required vs optional, defaults, validation, environment)
-- **WHERE** - Where are these secrets stored? (environment variables, Vault, AWS Secrets Manager)
+SecretSpec fixes this by separating secret **declaration** from secret **storage**. You commit a `secretspec.toml` that declares what secrets your application needs, while the actual values live in a secure provider like your system keyring, 1Password, or any other backend. No secrets in git, no `.env` files to leak.
 
-This coupling creates vendor lock-in, runtime failures, poor developer experience, and inconsistent practices.
+SecretSpec answers three questions for every project:
 
-SecretSpec solves this by separating secret **declaration** from secret **provisioning**. Your application declares what secrets it needs in `secretspec.toml`, but the actual secret values are retrieved at runtime from your chosen provider - never stored in configuration files.
+- **WHAT** secrets does the application need?
+- **HOW** do requirements change per environment?
+- **WHERE** are the actual values stored?
 
 ## WHAT - Declaring Your Secrets
 

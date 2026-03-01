@@ -1,3 +1,4 @@
+use crate::Provider;
 use crate::config::{
     Config, GlobalConfig, GlobalDefaults, ParseError, Profile, Project, Resolved, Secret,
 };
@@ -10,6 +11,7 @@ use std::convert::TryFrom;
 use std::path::Path;
 use std::{fs, io};
 use tempfile::TempDir;
+use url::Url;
 
 // Helper function for tests that need to parse from string
 fn parse_spec_from_str(content: &str, _base_path: Option<&Path>) -> Result<Config> {
@@ -3818,4 +3820,69 @@ fn test_resolve_secret_config_merges_type_and_generate() {
     assert!(resolved.generate.is_some());
     // description should come from production
     assert_eq!(resolved.description.as_deref(), Some("Prod DB password"));
+}
+
+#[test]
+fn test_sops_provider_registration() {
+    let url = Url::parse("sops://./secrets").unwrap();
+    let provider_result: std::result::Result<Box<dyn Provider>, _> = (&url).try_into();
+    assert!(provider_result.is_ok());
+
+    let provider = provider_result.unwrap();
+    assert_eq!(provider.name(), "sops");
+    assert!(!provider.allows_set());
+}
+
+#[test]
+fn test_sops_provider_with_age_config() {
+    let url = Url::parse("sops://./secrets?age_key_file=/tmp/age_key&format=json").unwrap();
+    let provider_result: std::result::Result<Box<dyn Provider>, _> = (&url).try_into();
+    assert!(provider_result.is_ok());
+
+    let provider = provider_result.unwrap();
+    assert_eq!(provider.name(), "sops");
+}
+
+#[test]
+fn test_sops_provider_with_real_age_config() {
+    let url = Url::parse("sops://./provider/sops/test-fixtures/test-secrets.enc.json?age_key_file=./provider/sops/test-fixtures/key.txt&format=json").unwrap();
+    let provider_result: std::result::Result<Box<dyn Provider>, _> = (&url).try_into();
+    assert!(provider_result.is_ok());
+
+    let provider = provider_result.unwrap();
+    assert_eq!(provider.name(), "sops");
+}
+
+#[test]
+fn test_sops_provider_with_aws_config() {
+    let url = Url::parse(
+        "sops://./secrets?kms_arn=arn:aws:kms:us-east-1:123456789012:key/test&aws_profile=prod",
+    )
+    .unwrap();
+    let provider_result: std::result::Result<Box<dyn Provider>, _> = (&url).try_into();
+    assert!(provider_result.is_ok());
+
+    let provider = provider_result.unwrap();
+    assert_eq!(provider.name(), "sops");
+}
+
+#[test]
+fn test_sops_format_parsing() {
+    let url = Url::parse("sops://./secrets?format=json").unwrap();
+    let provider_result: std::result::Result<Box<dyn Provider>, _> = (&url).try_into();
+    assert!(provider_result.is_ok());
+}
+
+#[test]
+fn test_sops_invalid_format() {
+    let url = Url::parse("sops://./secrets?format=invalid").unwrap();
+    let provider_result: std::result::Result<Box<dyn Provider>, _> = (&url).try_into();
+    assert!(provider_result.is_err());
+}
+
+#[test]
+fn test_sops_provider_invalid_scheme() {
+    let url = Url::parse("invalid://./secrets").unwrap();
+    let provider_result: std::result::Result<Box<dyn Provider>, _> = (&url).try_into();
+    assert!(provider_result.is_err());
 }

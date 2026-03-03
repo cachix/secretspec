@@ -94,6 +94,10 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
               label: "Vault / OpenBao",
               slug: "providers/vault",
             },
+            {
+              label: "Bitwarden Secrets Manager",
+              slug: "providers/bws",
+            },
           ],
         },
         {

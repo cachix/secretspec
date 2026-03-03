@@ -685,6 +685,35 @@ mod integration_tests {
         assert!(result.is_err(), "GCSM provider should require project ID");
     }
 
+    #[cfg(feature = "bws")]
+    #[test]
+    fn test_bws_provider_creation() {
+        let provider =
+            Box::<dyn Provider>::try_from("bws://a9230ec4-5507-4870-b8b5-b3f500587e4c").unwrap();
+        assert_eq!(provider.name(), "bws");
+        assert_eq!(provider.uri(), "bws://a9230ec4-5507-4870-b8b5-b3f500587e4c");
+    }
+
+    #[cfg(feature = "bws")]
+    #[test]
+    fn test_bws_provider_requires_project_id() {
+        let result = Box::<dyn Provider>::try_from("bws://");
+        assert!(result.is_err());
+
+        let result = Box::<dyn Provider>::try_from("bws");
+        assert!(result.is_err());
+    }
+
+    #[cfg(feature = "bws")]
+    #[test]
+    fn test_bws_provider_validates_uuid_format() {
+        let result = Box::<dyn Provider>::try_from("bws://not-a-uuid");
+        assert!(result.is_err());
+
+        let result = Box::<dyn Provider>::try_from("bws://12345");
+        assert!(result.is_err());
+    }
+
     #[cfg(feature = "gcsm")]
     #[test]
     fn test_gcsm_provider_validates_project_id_format() {

@@ -35,6 +35,7 @@ trybuild = "1.0"
 insta = "1.34"
 linkme = "0.3"
 secrecy = { version = "0.10.3", features = ["serde"] }
+bitwarden = { version = "2.0.0", features = ["secrets"] }
 google-cloud-secretmanager-v1 = "1.2"
 aws-config = "1"
 aws-sdk-secretsmanager = "1"

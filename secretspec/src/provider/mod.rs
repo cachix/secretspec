@@ -148,6 +148,8 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
 
 #[cfg(feature = "awssm")]
 pub mod awssm;
+#[cfg(feature = "bws")]
+pub mod bws;
 pub mod dotenv;
 pub mod env;
 #[cfg(feature = "gcsm")]

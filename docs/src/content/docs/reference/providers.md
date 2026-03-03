@@ -121,6 +121,18 @@ vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
 **Prerequisites**: Vault/OpenBao server, `VAULT_TOKEN` env var or `~/.vault-token`, build with `--features vault`
 **Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
 
+## Bitwarden Secrets Manager Provider
+
+**URI**: `bws://PROJECT_UUID` - Stores secrets in Bitwarden Secrets Manager
+
+```bash
+bws://a9230ec4-5507-4870-b8b5-b3f500587e4c   # BWS project UUID
+```
+
+**Features**: Read/write, cloud sync, project-scoped, end-to-end encryption
+**Prerequisites**: BWS subscription, machine account access token, build with `--features bws`
+**Storage**: Flat key names in the specified BWS project
+
 ## Provider Selection
 
 ### Command Line
@@ -156,3 +168,4 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |
 | Vault/OpenBao | ✅ Vault encryption | Vault/OpenBao server | ✅ Yes |
+| BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |

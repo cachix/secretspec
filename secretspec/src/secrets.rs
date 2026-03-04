@@ -10,8 +10,22 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::env;
 use std::io::{self, IsTerminal, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Walks up from the current directory looking for `secretspec.toml`.
+fn find_config_file() -> Result<PathBuf> {
+    let mut dir = std::env::current_dir()?;
+    loop {
+        let candidate = dir.join("secretspec.toml");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+        if !dir.pop() {
+            return Err(SecretSpecError::NoManifest);
+        }
+    }
+}
 
 /// The main entry point for the secretspec library
 ///
@@ -66,11 +80,10 @@ impl Secrets {
         }
     }
 
-    /// Loads a `Secrets` using default configuration paths
+    /// Loads a `Secrets` by walking up from the current directory to find `secretspec.toml`
     ///
-    /// This method looks for:
-    /// - `secretspec.toml` in the current directory for project configuration
-    /// - User configuration in the system config directory
+    /// This method searches the current directory and all parent directories for
+    /// a `secretspec.toml` file, similar to how `cargo` and `git` find their configs.
     ///
     /// # Returns
     ///
@@ -79,7 +92,7 @@ impl Secrets {
     /// # Errors
     ///
     /// Returns an error if:
-    /// - No `secretspec.toml` file is found
+    /// - No `secretspec.toml` file is found in the current or any parent directory
     /// - Configuration files are invalid
     /// - The project revision is unsupported
     ///
@@ -93,7 +106,19 @@ impl Secrets {
     /// spec.check(false).unwrap();
     /// ```
     pub fn load() -> Result<Self> {
-        let project_config = Config::try_from(Path::new("secretspec.toml"))?;
+        let config_path = find_config_file()?;
+        Self::load_from(&config_path)
+    }
+
+    /// Loads a `Secrets` from an explicit config file path
+    ///
+    /// Use this when the path to `secretspec.toml` is known, e.g. via the `--file` flag.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the `secretspec.toml` file
+    pub fn load_from(path: &Path) -> Result<Self> {
+        let project_config = Config::try_from(path)?;
         let global_config = GlobalConfig::load()?;
         Ok(Self {
             config: project_config,

@@ -39,7 +39,7 @@ pub enum SecretSpecError {
     SecretNotFound(String),
     #[error("Secret '{0}' is required but not set")]
     RequiredSecretMissing(String),
-    #[error("No secretspec.toml found in current directory")]
+    #[error("No secretspec.toml found in current or any parent directory")]
     NoManifest,
     #[error("Extended config file not found: {0}")]
     ExtendedConfigNotFound(String),

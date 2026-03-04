@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Support running secretspec from subdirectories: the CLI now walks up the directory tree to find the nearest `secretspec.toml`, similar to `cargo` and `git`. Also adds a `-f`/`--file` flag (and `SECRETSPEC_FILE` env var) to explicitly specify the config file path (#59)
+
 ## [0.7.2] - 2026-02-24
 
 ### Added

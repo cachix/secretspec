@@ -17,6 +17,10 @@ use std::path::PathBuf;
 #[command(about = "Declarative secrets, every environment, any provider - https://secretspec.dev", long_about = None)]
 #[command(version)]
 struct Cli {
+    /// Path to secretspec.toml (default: auto-detect by walking up from current directory)
+    #[arg(short = 'f', long, global = true, env = "SECRETSPEC_FILE")]
+    file: Option<PathBuf>,
+
     /// The subcommand to execute
     #[command(subcommand)]
     command: Commands,
@@ -205,6 +209,16 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
     }
 
     Ok(output)
+}
+
+/// Loads secrets using an explicit path or auto-detection.
+fn load_secrets(file: &Option<PathBuf>) -> miette::Result<Secrets> {
+    match file {
+        Some(path) => Secrets::load_from(path),
+        None => Secrets::load(),
+    }
+    .into_diagnostic()
+    .wrap_err("Failed to load secretspec configuration")
 }
 
 /// Main entry point for the secretspec CLI application.
@@ -489,9 +503,7 @@ pub fn main() -> Result<()> {
             provider,
             profile,
         } => {
-            let mut app = Secrets::load()
-                .into_diagnostic()
-                .wrap_err("Failed to load secretspec configuration")?;
+            let mut app = load_secrets(&cli.file)?;
             if let Some(p) = provider {
                 app.set_provider(p);
             }
@@ -509,9 +521,7 @@ pub fn main() -> Result<()> {
             provider,
             profile,
         } => {
-            let mut app = Secrets::load()
-                .into_diagnostic()
-                .wrap_err("Failed to load secretspec configuration")?;
+            let mut app = load_secrets(&cli.file)?;
             if let Some(p) = provider {
                 app.set_provider(p);
             }
@@ -529,9 +539,7 @@ pub fn main() -> Result<()> {
             provider,
             profile,
         } => {
-            let mut app = Secrets::load()
-                .into_diagnostic()
-                .wrap_err("Failed to load secretspec configuration")?;
+            let mut app = load_secrets(&cli.file)?;
             if let Some(p) = provider {
                 app.set_provider(p);
             }
@@ -549,9 +557,7 @@ pub fn main() -> Result<()> {
             profile,
             no_prompt,
         } => {
-            let mut app = Secrets::load()
-                .into_diagnostic()
-                .wrap_err("Failed to load secretspec configuration")?;
+            let mut app = load_secrets(&cli.file)?;
             if let Some(p) = provider {
                 app.set_provider(p);
             }
@@ -571,9 +577,7 @@ pub fn main() -> Result<()> {
         }
         // Import secrets from one provider to another
         Commands::Import { from_provider } => {
-            let app = Secrets::load()
-                .into_diagnostic()
-                .wrap_err("Failed to load secretspec configuration")?;
+            let app = load_secrets(&cli.file)?;
             app.import(&from_provider)
                 .into_diagnostic()
                 .wrap_err("Failed to import secrets")?;

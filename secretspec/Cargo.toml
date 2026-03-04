@@ -39,6 +39,8 @@ tokio = { workspace = true, optional = true }
 rand.workspace = true
 uuid.workspace = true
 data-encoding.workspace = true
+go_interop = { workspace = true }
+saphyr.workspace = true
 
 [features]
 default = ["cli", "keyring"]

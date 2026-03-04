@@ -1,0 +1,7 @@
+[package]
+edition = "2021"
+name = "go_interop"
+version = "0.1.0"
+
+[build-dependencies]
+bindgen = "0.72.1"

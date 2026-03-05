@@ -56,6 +56,8 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use url::Url;
 
+#[cfg(feature = "awssm")]
+pub mod awssm;
 pub mod dotenv;
 pub mod env;
 #[cfg(feature = "gcsm")]

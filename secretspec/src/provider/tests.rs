@@ -490,6 +490,28 @@ mod integration_tests {
         );
     }
 
+    #[cfg(feature = "awssm")]
+    #[test]
+    fn test_awssm_provider_creation() {
+        // Test AWSSM provider can be created with a region
+        let provider = Box::<dyn Provider>::try_from("awssm://us-east-1").unwrap();
+        assert_eq!(provider.name(), "awssm");
+        assert_eq!(provider.uri(), "awssm://us-east-1");
+    }
+
+    #[cfg(feature = "awssm")]
+    #[test]
+    fn test_awssm_provider_creation_without_region() {
+        // Test AWSSM provider can be created without a region (uses SDK default)
+        let provider = Box::<dyn Provider>::try_from("awssm://").unwrap();
+        assert_eq!(provider.name(), "awssm");
+        assert_eq!(provider.uri(), "awssm");
+
+        let provider = Box::<dyn Provider>::try_from("awssm").unwrap();
+        assert_eq!(provider.name(), "awssm");
+        assert_eq!(provider.uri(), "awssm");
+    }
+
     #[cfg(feature = "gcsm")]
     #[test]
     fn test_gcsm_provider_creation() {

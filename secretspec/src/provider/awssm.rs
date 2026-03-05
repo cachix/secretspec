@@ -12,9 +12,11 @@
 //!
 //! # URI Format
 //!
-//! `awssm://region` (e.g., `awssm://us-east-1`)
+//! `awssm://[aws-profile@]region`
 //!
-//! If no region is specified, the SDK default region chain is used.
+//! - `awssm://us-east-1` — use SDK default credentials in us-east-1
+//! - `awssm://production@us-east-1` — use the "production" AWS profile in us-east-1
+//! - `awssm://` — use SDK defaults for both profile and region
 //!
 //! # Secret Naming
 //!
@@ -26,8 +28,8 @@
 //! # Set a secret
 //! secretspec set DATABASE_URL --provider awssm://us-east-1
 //!
-//! # Check secrets
-//! secretspec check --provider awssm://us-east-1
+//! # Use a specific AWS profile
+//! secretspec check --provider awssm://production@us-east-1
 //! ```
 
 use super::Provider;
@@ -43,6 +45,8 @@ use url::Url;
 pub struct AwssmConfig {
     /// The AWS region (e.g., "us-east-1"). If None, uses the SDK default.
     pub region: Option<String>,
+    /// The AWS profile name from `~/.aws/credentials`. If None, uses the SDK default chain.
+    pub aws_profile: Option<String>,
 }
 
 impl TryFrom<&Url> for AwssmConfig {
@@ -56,12 +60,25 @@ impl TryFrom<&Url> for AwssmConfig {
             )));
         }
 
+        // Parse AWS profile from username position: awssm://profile@region
+        let aws_profile = {
+            let username = url.username();
+            if username.is_empty() {
+                None
+            } else {
+                Some(username.to_string())
+            }
+        };
+
         let region = url
             .host_str()
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
 
-        Ok(Self { region })
+        Ok(Self {
+            region,
+            aws_profile,
+        })
     }
 }
 
@@ -87,7 +104,7 @@ crate::register_provider! {
     name: "awssm",
     description: "AWS Secrets Manager",
     schemes: ["awssm"],
-    examples: ["awssm://us-east-1"],
+    examples: ["awssm://us-east-1", "awssm://production@us-east-1"],
 }
 
 impl AwssmProvider {
@@ -144,6 +161,10 @@ impl AwssmProvider {
 
         if let Some(region) = &self.config.region {
             config_loader = config_loader.region(aws_config::Region::new(region.clone()));
+        }
+
+        if let Some(profile) = &self.config.aws_profile {
+            config_loader = config_loader.profile_name(profile);
         }
 
         let sdk_config = config_loader.load().await;
@@ -243,9 +264,10 @@ impl Provider for AwssmProvider {
     }
 
     fn uri(&self) -> String {
-        match &self.config.region {
-            Some(region) => format!("awssm://{}", region),
-            None => "awssm".to_string(),
+        match (&self.config.aws_profile, &self.config.region) {
+            (Some(profile), Some(region)) => format!("awssm://{}@{}", profile, region),
+            (None, Some(region)) => format!("awssm://{}", region),
+            (_, None) => "awssm".to_string(),
         }
     }
 

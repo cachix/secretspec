@@ -92,11 +92,12 @@ gcsm://my-gcp-project         # GCP project ID
 
 ## AWS Secrets Manager Provider
 
-**URI**: `awssm://REGION` - Stores secrets in AWS Secrets Manager
+**URI**: `awssm://[profile@]REGION` - Stores secrets in AWS Secrets Manager
 
 ```bash
 awssm://us-east-1             # Specific AWS region
-awssm://                      # SDK default region
+awssm://production@us-east-1  # Specific AWS profile and region
+awssm://                      # SDK default region and credentials
 ```
 
 **Features**: Read/write, cloud sync, profiles, IAM/SSO authentication

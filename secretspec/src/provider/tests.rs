@@ -512,6 +512,20 @@ mod integration_tests {
         assert_eq!(provider.uri(), "awssm");
     }
 
+    #[cfg(feature = "awssm")]
+    #[test]
+    fn test_awssm_provider_with_aws_profile() {
+        // Test AWSSM provider with AWS profile: awssm://profile@region
+        let provider = Box::<dyn Provider>::try_from("awssm://production@us-east-1").unwrap();
+        assert_eq!(provider.name(), "awssm");
+        assert_eq!(provider.uri(), "awssm://production@us-east-1");
+
+        // Different profile
+        let provider = Box::<dyn Provider>::try_from("awssm://staging@eu-west-1").unwrap();
+        assert_eq!(provider.name(), "awssm");
+        assert_eq!(provider.uri(), "awssm://staging@eu-west-1");
+    }
+
     #[cfg(feature = "gcsm")]
     #[test]
     fn test_gcsm_provider_creation() {

@@ -16,27 +16,28 @@ The AWS Secrets Manager provider integrates with AWS for centralized secret mana
 ### URI Format
 
 ```
-awssm://REGION
+awssm://[AWS_PROFILE@]REGION
 ```
 
 - `REGION`: AWS region (e.g., `us-east-1`). If omitted, the SDK default region chain is used.
+- `AWS_PROFILE`: Optional AWS profile from `~/.aws/credentials`. If omitted, the SDK default credential chain is used.
 
 ### Examples
 
 ```bash
-# Set a secret
+# Set a secret (SDK default credentials)
 $ secretspec set DATABASE_URL --provider awssm://us-east-1
+
+# Use a specific AWS profile
+$ secretspec check --provider awssm://production@us-east-1
 
 # Get a secret
 $ secretspec get DATABASE_URL --provider awssm://us-east-1
 
-# Check secrets
-$ secretspec check --provider awssm://us-east-1
-
 # Run with secrets
 $ secretspec run --provider awssm://us-east-1 -- npm start
 
-# Use SDK default region
+# Use SDK defaults for both profile and region
 $ secretspec set DATABASE_URL --provider awssm
 ```
 

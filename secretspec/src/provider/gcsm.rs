@@ -36,7 +36,6 @@ use google_cloud_secretmanager_v1::client::SecretManagerService;
 use google_cloud_secretmanager_v1::model::{Replication, Secret, SecretPayload, replication};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::future::Future;
 use url::Url;
 
 /// Configuration for the Google Cloud Secret Manager provider.
@@ -220,21 +219,6 @@ impl GcsmProvider {
         s.contains("ALREADY_EXISTS") || s.contains("alreadyExists")
     }
 
-    /// Executes an async future in a blocking context.
-    ///
-    /// If already inside a tokio runtime, uses `block_in_place` with the
-    /// existing runtime handle. Otherwise, creates a new runtime.
-    fn block_on<F: Future>(&self, future: F) -> F::Output {
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
-            Err(_) => tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create tokio runtime")
-                .block_on(future),
-        }
-    }
-
     /// Creates a SecretManagerService client.
     async fn create_client(&self) -> Result<SecretManagerService> {
         SecretManagerService::builder().build().await.map_err(|e| {
@@ -366,11 +350,11 @@ impl Provider for GcsmProvider {
     }
 
     fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        self.block_on(self.get_secret_async(project, key, profile))
+        super::block_on(self.get_secret_async(project, key, profile))
     }
 
     fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        self.block_on(self.set_secret_async(project, key, value, profile))
+        super::block_on(self.set_secret_async(project, key, value, profile))
     }
 
     fn allows_set(&self) -> bool {

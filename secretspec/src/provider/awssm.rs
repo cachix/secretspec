@@ -37,7 +37,6 @@ use crate::{Result, SecretSpecError};
 use aws_sdk_secretsmanager::Client;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::future::Future;
 use url::Url;
 
 /// Configuration for the AWS Secrets Manager provider.
@@ -144,21 +143,6 @@ impl AwssmProvider {
         }
 
         Ok(secret_name)
-    }
-
-    /// Executes an async future in a blocking context.
-    ///
-    /// If already inside a tokio runtime, uses `block_in_place` with the
-    /// existing runtime handle. Otherwise, creates a new runtime.
-    fn block_on<F: Future>(&self, future: F) -> F::Output {
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
-            Err(_) => tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create tokio runtime")
-                .block_on(future),
-        }
     }
 
     /// Creates an AWS Secrets Manager client.
@@ -278,11 +262,11 @@ impl Provider for AwssmProvider {
     }
 
     fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        self.block_on(self.get_secret_async(project, key, profile))
+        super::block_on(self.get_secret_async(project, key, profile))
     }
 
     fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        self.block_on(self.set_secret_async(project, key, value, profile))
+        super::block_on(self.set_secret_async(project, key, value, profile))
     }
 
     fn allows_set(&self) -> bool {

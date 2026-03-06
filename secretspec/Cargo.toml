@@ -35,6 +35,8 @@ linkme.workspace = true
 secrecy.workspace = true
 once_cell.workspace = true
 google-cloud-secretmanager-v1 = { workspace = true, optional = true }
+aws-config = { workspace = true, optional = true }
+aws-sdk-secretsmanager = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 rand.workspace = true
 uuid.workspace = true
@@ -45,3 +47,4 @@ default = ["cli", "keyring"]
 cli = []
 keyring = ["dep:keyring", "dep:whoami"]
 gcsm = ["dep:google-cloud-secretmanager-v1", "dep:tokio"]
+awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "dep:tokio"]

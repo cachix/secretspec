@@ -123,6 +123,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[OnePassword](https://secretspec.dev/providers/onepassword)** - Team secret management
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager
 - **[Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)** - GCP secret management
+- **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
 
 ```bash
 $ secretspec run --provider keyring -- npm start

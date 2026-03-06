@@ -222,15 +222,17 @@ impl GcsmProvider {
 
     /// Executes an async future in a blocking context.
     ///
-    /// Creates a new tokio runtime for each operation. While this has some
-    /// overhead, it ensures compatibility with SecretSpec's synchronous
-    /// Provider trait.
+    /// If already inside a tokio runtime, uses `block_in_place` with the
+    /// existing runtime handle. Otherwise, creates a new runtime.
     fn block_on<F: Future>(&self, future: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create tokio runtime")
-            .block_on(future)
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+            Err(_) => tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create tokio runtime")
+                .block_on(future),
+        }
     }
 
     /// Creates a SecretManagerService client.

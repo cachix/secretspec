@@ -16,7 +16,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
 ## Features
 
 - **[Declarative Configuration](https://secretspec.dev/reference/configuration/)**: Define your secrets in `secretspec.toml` with descriptions and requirements
-- **[Multiple Provider Backends](https://secretspec.dev/concepts/providers/)**: [Keyring](https://secretspec.dev/providers/keyring), [.env](https://secretspec.dev/providers/dotenv), [OnePassword](https://secretspec.dev/providers/onepassword), [LastPass](https://secretspec.dev/providers/lastpass), and [environment variables](https://secretspec.dev/providers/env)
+- **[Multiple Provider Backends](https://secretspec.dev/concepts/providers/)**: [Keyring](https://secretspec.dev/providers/keyring), [.env](https://secretspec.dev/providers/dotenv), [OnePassword](https://secretspec.dev/providers/onepassword), [LastPass](https://secretspec.dev/providers/lastpass), [environment variables](https://secretspec.dev/providers/env), and [Vault/OpenBao](https://secretspec.dev/providers/vault)
 - **[Type-Safe Rust SDK](https://secretspec.dev/sdk/rust/)**: Generate strongly-typed structs from your `secretspec.toml` for compile-time safety
 - **[Profile Support](https://secretspec.dev/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
 - **Secret Generation**: Auto-generate passwords, tokens, UUIDs, and more when secrets are missing — declarative "generate if absent"
@@ -124,6 +124,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager
 - **[Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)** - GCP secret management
 - **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
+- **[Vault / OpenBao](https://secretspec.dev/providers/vault)** - HashiCorp Vault and OpenBao KV engine
 
 ```bash
 $ secretspec run --provider keyring -- npm start

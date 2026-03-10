@@ -104,6 +104,23 @@ awssm://                      # SDK default region and credentials
 **Prerequisites**: AWS credentials configured, build with `--features awssm`
 **Storage**: Secret name `secretspec/{project}/{profile}/{key}`
 
+## Vault / OpenBao Provider
+
+**URI**: `vault://[namespace@]host[:port][/mount]` or `openbao://[namespace@]host[:port][/mount]` - Stores secrets in HashiCorp Vault or OpenBao KV engine
+
+```bash
+vault://vault.example.com:8200/secret       # KV v2 at "secret" mount
+vault://vault.example.com:8200              # Default "secret" mount
+vault://ns1@vault.example.com:8200/secret   # With namespace
+openbao://bao.internal:8200/secret          # OpenBao server
+vault://127.0.0.1:8200/secret?kv=1         # KV v1 engine
+vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
+```
+
+**Features**: Read/write, KV v1 and v2, namespaces, OpenBao compatible
+**Prerequisites**: Vault/OpenBao server, `VAULT_TOKEN` env var or `~/.vault-token`, build with `--features vault`
+**Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
+
 ## Provider Selection
 
 ### Command Line
@@ -138,3 +155,4 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | OnePassword | ✅ End-to-end | Cloud (OnePassword) | ✅ Yes |
 | GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |
+| Vault/OpenBao | ✅ Vault encryption | Vault/OpenBao server | ✅ Yes |

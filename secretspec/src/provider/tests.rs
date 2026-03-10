@@ -252,6 +252,20 @@ mod integration_tests {
                     Box::<dyn Provider>::try_from("pass").expect("Should create pass provider");
                 (provider, None)
             }
+            #[cfg(feature = "vault")]
+            // "vault" tests KV v2 (default), "vault-kv1" tests KV v1.
+            // Set VAULT_TOKEN and run a dev server (bao server -dev).
+            // For KV v1: bao secrets enable -path=kv1 -version=1 kv
+            "vault" | "vault-kv1" => {
+                let provider_spec = if provider_name == "vault-kv1" {
+                    "vault://127.0.0.1:8200/kv1?tls=false&kv=1"
+                } else {
+                    "vault://127.0.0.1:8200?tls=false"
+                };
+                let provider = Box::<dyn Provider>::try_from(provider_spec)
+                    .expect("Should create vault provider");
+                (provider, None)
+            }
             _ => {
                 let provider = Box::<dyn Provider>::try_from(provider_name)
                     .expect(&format!("{} provider should exist", provider_name));
@@ -524,6 +538,86 @@ mod integration_tests {
         let provider = Box::<dyn Provider>::try_from("awssm://staging@eu-west-1").unwrap();
         assert_eq!(provider.name(), "awssm");
         assert_eq!(provider.uri(), "awssm://staging@eu-west-1");
+    }
+
+    #[cfg(feature = "vault")]
+    #[test]
+    fn test_vault_provider_creation() {
+        // Test Vault provider with host, port, and mount
+        let provider =
+            Box::<dyn Provider>::try_from("vault://vault.example.com:8200/secret").unwrap();
+        assert_eq!(provider.name(), "vault");
+    }
+
+    #[cfg(feature = "vault")]
+    #[test]
+    fn test_vault_provider_default_mount() {
+        // Test Vault provider without explicit mount (defaults to "secret")
+        let provider = Box::<dyn Provider>::try_from("vault://vault.example.com:8200").unwrap();
+        assert_eq!(provider.name(), "vault");
+    }
+
+    #[cfg(feature = "vault")]
+    #[test]
+    fn test_vault_provider_custom_mount() {
+        // Test Vault provider with a custom KV mount
+        let provider =
+            Box::<dyn Provider>::try_from("vault://vault.example.com:8200/custom-kv").unwrap();
+        assert_eq!(provider.name(), "vault");
+    }
+
+    #[cfg(feature = "vault")]
+    #[test]
+    fn test_vault_provider_kv_v1() {
+        // Test Vault provider with KV v1 via query parameter
+        let provider =
+            Box::<dyn Provider>::try_from("vault://vault.example.com:8200/secret?kv=1").unwrap();
+        assert_eq!(provider.name(), "vault");
+    }
+
+    #[cfg(feature = "vault")]
+    #[test]
+    fn test_vault_provider_with_namespace() {
+        // Test Vault provider with namespace in username position
+        let provider =
+            Box::<dyn Provider>::try_from("vault://ns1@vault.example.com:8200/secret").unwrap();
+        assert_eq!(provider.name(), "vault");
+    }
+
+    #[cfg(feature = "vault")]
+    #[test]
+    fn test_vault_provider_tls_false() {
+        // Test Vault provider with TLS disabled (for dev mode)
+        let provider =
+            Box::<dyn Provider>::try_from("vault://127.0.0.1:8200/secret?tls=false").unwrap();
+        assert_eq!(provider.name(), "vault");
+    }
+
+    #[cfg(feature = "vault")]
+    #[test]
+    fn test_openbao_scheme() {
+        // Test OpenBao URI scheme
+        let provider = Box::<dyn Provider>::try_from("openbao://bao.internal:8200/secret").unwrap();
+        assert_eq!(provider.name(), "vault");
+    }
+
+    #[cfg(feature = "vault")]
+    #[test]
+    fn test_vault_provider_requires_address() {
+        // Test that Vault provider requires an address when VAULT_ADDR is not set
+        let had_vault_addr = std::env::var("VAULT_ADDR").ok();
+        unsafe {
+            std::env::remove_var("VAULT_ADDR");
+        }
+
+        let result = Box::<dyn Provider>::try_from("vault://");
+        assert!(result.is_err(), "Vault provider should require an address");
+
+        if let Some(addr) = had_vault_addr {
+            unsafe {
+                std::env::set_var("VAULT_ADDR", addr);
+            }
+        }
     }
 
     #[cfg(feature = "gcsm")]

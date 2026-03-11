@@ -2467,6 +2467,7 @@ dependencies = [
  "miette",
  "once_cell",
  "rand",
+ "reqwest",
  "secrecy",
  "serde",
  "serde-envfile",

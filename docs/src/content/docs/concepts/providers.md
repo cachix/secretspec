@@ -17,6 +17,7 @@ Providers are pluggable storage backends that handle the storage and retrieval o
 | **lastpass** | Integration with LastPass password manager | ✓ | ✓ | ✓ |
 | **gcsm** | Google Cloud Secret Manager (requires `--features gcsm`) | ✓ | ✓ | ✓ |
 | **awssm** | AWS Secrets Manager (requires `--features awssm`) | ✓ | ✓ | ✓ |
+| **vault** | HashiCorp Vault / OpenBao (requires `--features vault`) | ✓ | ✓ | ✓ |
 
 ## Provider Selection
 

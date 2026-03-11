@@ -38,6 +38,7 @@ google-cloud-secretmanager-v1 = { workspace = true, optional = true }
 aws-config = { workspace = true, optional = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
 tokio.workspace = true
+reqwest = { workspace = true, optional = true }
 rand.workspace = true
 uuid.workspace = true
 data-encoding.workspace = true
@@ -48,3 +49,4 @@ cli = []
 keyring = ["dep:keyring", "dep:whoami"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]
 awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
+vault = ["dep:reqwest"]

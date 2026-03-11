@@ -84,6 +84,10 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
               label: "AWS Secrets Manager",
               slug: "providers/awssm",
             },
+            {
+              label: "Vault / OpenBao",
+              slug: "providers/vault",
+            },
           ],
         },
         {

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `rsa` secret generation type: generates RSA private keys in PKCS1 PEM format,
+  defaults to 2048 bits, configurable via `generate = { bits = 4096 }`
+
 ### Fixed
 - Check provider authentication (e.g. OnePassword, LastPass) before prompting
   user for secrets, via a `PreflightGuard` that runs the check exactly once

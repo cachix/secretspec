@@ -39,6 +39,7 @@ aws-sdk-secretsmanager = { workspace = true, optional = true }
 tokio.workspace = true
 reqwest = { workspace = true, optional = true }
 rand.workspace = true
+rsa.workspace = true
 uuid.workspace = true
 data-encoding.workspace = true
 

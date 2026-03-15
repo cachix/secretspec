@@ -42,6 +42,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 secretspec-derive = { version = "0.8.0", path = "./secretspec-derive" }
 secretspec = { version = "0.8.0", path = "./secretspec" }
 rand = "0.9"
+rsa = { version = "0.9", features = ["pem"] }
 uuid = { version = "1", features = ["v4"] }
 data-encoding = "2"
 

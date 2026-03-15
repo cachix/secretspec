@@ -1,12 +1,14 @@
 //! Secret value generation
 //!
 //! This module provides generation of secret values based on type and configuration.
-//! Supported types: password, hex, base64, uuid, command.
+//! Supported types: password, hex, base64, uuid, command, rsa.
 
 use crate::SecretSpecError;
 use crate::config::GenerateConfig;
 use data_encoding::{BASE64, HEXLOWER};
 use rand::Rng;
+use rsa::RsaPrivateKey;
+use rsa::pkcs1::EncodeRsaPrivateKey;
 use secrecy::SecretString;
 
 /// Generate a secret value based on the secret type and generation config.
@@ -17,6 +19,7 @@ pub fn generate(secret_type: &str, config: &GenerateConfig) -> crate::Result<Sec
         "base64" => generate_base64(config),
         "uuid" => generate_uuid(),
         "command" => generate_from_command(config),
+        "rsa" => generate_rsa(config),
         unknown => Err(SecretSpecError::GenerationFailed(format!(
             "unknown secret type '{}'",
             unknown
@@ -96,6 +99,25 @@ fn generate_base64(config: &GenerateConfig) -> crate::Result<SecretString> {
 fn generate_uuid() -> crate::Result<SecretString> {
     let id = uuid::Uuid::new_v4().to_string();
     Ok(SecretString::new(id.into()))
+}
+
+fn generate_rsa(config: &GenerateConfig) -> crate::Result<SecretString> {
+    let bits = match config {
+        GenerateConfig::Bool(_) => 2048,
+        GenerateConfig::Options(opts) => opts.bits.unwrap_or(2048),
+    };
+
+    let private_key = RsaPrivateKey::new(&mut rsa::rand_core::OsRng, bits).map_err(|e| {
+        SecretSpecError::GenerationFailed(format!("failed to generate RSA key: {}", e))
+    })?;
+
+    let pem = private_key
+        .to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
+        .map_err(|e| {
+            SecretSpecError::GenerationFailed(format!("failed to encode RSA key as PEM: {}", e))
+        })?;
+
+    Ok(SecretString::new(pem.to_string().into()))
 }
 
 fn generate_from_command(config: &GenerateConfig) -> crate::Result<SecretString> {
@@ -339,6 +361,34 @@ mod tests {
     fn test_generate_command_bool_config_fails() {
         let result = generate("command", &GenerateConfig::Bool(true));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_generate_rsa_default() {
+        let value = generate("rsa", &GenerateConfig::Bool(true)).unwrap();
+        let s = value.expose_secret();
+        assert!(s.starts_with("-----BEGIN RSA PRIVATE KEY-----"));
+        assert!(s.trim().ends_with("-----END RSA PRIVATE KEY-----"));
+    }
+
+    #[test]
+    fn test_generate_rsa_custom_bits() {
+        let config = GenerateConfig::Options(GenerateOptions {
+            bits: Some(4096),
+            ..Default::default()
+        });
+        let value = generate("rsa", &config).unwrap();
+        let s = value.expose_secret();
+        assert!(s.starts_with("-----BEGIN RSA PRIVATE KEY-----"));
+        // 4096-bit key PEM is longer than 2048-bit
+        assert!(s.len() > 1700);
+    }
+
+    #[test]
+    fn test_generate_rsa_uniqueness() {
+        let v1 = generate("rsa", &GenerateConfig::Bool(true)).unwrap();
+        let v2 = generate("rsa", &GenerateConfig::Bool(true)).unwrap();
+        assert_ne!(v1.expose_secret(), v2.expose_secret());
     }
 
     #[test]

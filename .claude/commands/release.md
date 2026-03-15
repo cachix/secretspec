@@ -8,4 +8,4 @@ description: release secretspec crates
 - cargo build
 - commit
 - add a git tag
-- git push && git push --tags
+- git push && git push origin vX.X.X

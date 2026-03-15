@@ -47,7 +47,7 @@ Each secret variable is defined as a table with the following fields:
 | `default` | string | No** | Default value if not provided |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
-| `type` | string | No*** | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command` |
+| `type` | string | No*** | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
 | `generate` | boolean or table | No*** | Enable auto-generation when secret is missing |
 
 *If `default` is provided, `required` defaults to false
@@ -147,6 +147,9 @@ SESSION_KEY = { description = "Session key", type = "base64", generate = { bytes
 # Shell command
 MONGO_KEY = { description = "MongoDB keyfile", type = "command", generate = { command = "openssl rand -base64 765" } }
 
+# RSA private key (PKCS1 PEM)
+JWT_SIGNING_KEY = { description = "JWT signing key", type = "rsa_private_key", generate = true }
+
 # Type without generate: informational only, no auto-generation
 MANUAL_SECRET = { description = "Manually managed", type = "password" }
 ```
@@ -160,6 +163,7 @@ MANUAL_SECRET = { description = "Manually managed", type = "password" }
 | `base64` | 44 chars (32 bytes) | `bytes` (int) |
 | `uuid` | UUID v4 (36 chars) | none |
 | `command` | stdout of command | `command` (string, required) |
+| `rsa_private_key` | 2048-bit RSA private key (PKCS1 PEM) | `bits` (int) |
 
 #### Behavior
 

@@ -422,7 +422,7 @@ pub struct Secret {
     /// The temporary file will be cleaned up when the resolved secrets are dropped.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub as_path: Option<bool>,
-    /// The type of secret, used for generation (e.g., "password", "hex", "base64", "uuid", "command", "rsa")
+    /// The type of secret, used for generation (e.g., "password", "hex", "base64", "uuid", "command", "rsa_private_key")
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub secret_type: Option<String>,
     /// Auto-generation configuration. Either `true` for defaults or a table with options.
@@ -485,7 +485,7 @@ impl Secret {
             // Validate known types
             if let Some(ref t) = self.secret_type {
                 match t.as_str() {
-                    "password" | "hex" | "base64" | "uuid" | "command" | "rsa" => {}
+                    "password" | "hex" | "base64" | "uuid" | "command" | "rsa_private_key" => {}
                     unknown => {
                         return Err(format!("unknown secret type '{}'", unknown));
                     }
@@ -499,7 +499,7 @@ impl Secret {
         {
             // Type is informational when not generating, but still validate known values
             match t.as_str() {
-                "password" | "hex" | "base64" | "uuid" | "command" | "rsa" => {}
+                "password" | "hex" | "base64" | "uuid" | "command" | "rsa_private_key" => {}
                 unknown => {
                     return Err(format!("unknown secret type '{}'", unknown));
                 }

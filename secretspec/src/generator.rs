@@ -1,7 +1,7 @@
 //! Secret value generation
 //!
 //! This module provides generation of secret values based on type and configuration.
-//! Supported types: password, hex, base64, uuid, command, rsa.
+//! Supported types: password, hex, base64, uuid, command, rsa_private_key.
 
 use crate::SecretSpecError;
 use crate::config::GenerateConfig;
@@ -19,7 +19,7 @@ pub fn generate(secret_type: &str, config: &GenerateConfig) -> crate::Result<Sec
         "base64" => generate_base64(config),
         "uuid" => generate_uuid(),
         "command" => generate_from_command(config),
-        "rsa" => generate_rsa(config),
+        "rsa_private_key" => generate_rsa(config),
         unknown => Err(SecretSpecError::GenerationFailed(format!(
             "unknown secret type '{}'",
             unknown
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_generate_rsa_default() {
-        let value = generate("rsa", &GenerateConfig::Bool(true)).unwrap();
+        let value = generate("rsa_private_key", &GenerateConfig::Bool(true)).unwrap();
         let s = value.expose_secret();
         assert!(s.starts_with("-----BEGIN RSA PRIVATE KEY-----"));
         assert!(s.trim().ends_with("-----END RSA PRIVATE KEY-----"));
@@ -377,7 +377,7 @@ mod tests {
             bits: Some(4096),
             ..Default::default()
         });
-        let value = generate("rsa", &config).unwrap();
+        let value = generate("rsa_private_key", &config).unwrap();
         let s = value.expose_secret();
         assert!(s.starts_with("-----BEGIN RSA PRIVATE KEY-----"));
         // 4096-bit key PEM is longer than 2048-bit
@@ -386,8 +386,8 @@ mod tests {
 
     #[test]
     fn test_generate_rsa_uniqueness() {
-        let v1 = generate("rsa", &GenerateConfig::Bool(true)).unwrap();
-        let v2 = generate("rsa", &GenerateConfig::Bool(true)).unwrap();
+        let v1 = generate("rsa_private_key", &GenerateConfig::Bool(true)).unwrap();
+        let v2 = generate("rsa_private_key", &GenerateConfig::Bool(true)).unwrap();
         assert_ne!(v1.expose_secret(), v2.expose_secret());
     }
 

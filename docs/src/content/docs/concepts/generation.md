@@ -28,6 +28,7 @@ REQUEST_ID = { description = "Request ID prefix", type = "uuid", generate = true
 | `base64` | 44 chars (32 bytes) | `bytes` (int) |
 | `uuid` | UUID v4 (36 chars) | none |
 | `command` | stdout of command | `command` (string, required) |
+| `rsa_private_key` | 2048-bit RSA private key (PKCS1 PEM) | `bits` (int) |
 
 ### Command type
 
@@ -59,6 +60,12 @@ ADMIN_PASSWORD = { description = "Admin password", type = "password", generate =
 
 # 64-byte key encoded as base64
 ENCRYPTION_KEY = { description = "Encryption key", type = "base64", generate = { bytes = 64 } }
+
+# RSA private key (default 2048-bit)
+JWT_SIGNING_KEY = { description = "JWT signing key", type = "rsa_private_key", generate = true }
+
+# RSA private key with custom key size
+TLS_KEY = { description = "TLS private key", type = "rsa_private_key", generate = { bits = 4096 } }
 
 # Informational type only, no generation
 EXTERNAL_API_KEY = { description = "Provided by vendor", type = "password" }

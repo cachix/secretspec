@@ -79,24 +79,7 @@ SENTRY_DSN = { description = "Error tracking", providers = ["shared_vault", "key
 
 ### Profile-Level Default Providers
 
-To avoid repetition when multiple secrets share the same providers, you can define default providers at the profile level using `profiles.<name>.defaults`:
-
-```toml
-[profiles.production.defaults]
-providers = ["prod_vault", "keyring"]
-
-[profiles.production]
-DATABASE_URL = { description = "Production DB" }
-API_KEY = { description = "API key from env", providers = ["env"] }
-SENTRY_DSN = { description = "Error tracking" }
-```
-
-In this example:
-- `DATABASE_URL` uses the profile default: `["prod_vault", "keyring"]`
-- `API_KEY` overrides with: `["env"]`
-- `SENTRY_DSN` uses the profile default: `["prod_vault", "keyring"]`
-
-Profile defaults apply to all secrets in that profile unless explicitly overridden with a secret-level `providers` field.
+You can also set default providers for an entire profile using `profiles.<name>.defaults`. See [Profile-Level Defaults](/concepts/profiles/#profile-level-defaults) for details.
 
 Provider aliases are defined in your user configuration file (`~/.config/secretspec/config.toml`):
 
@@ -142,6 +125,6 @@ $ secretspec config provider remove prod_vault
 
 ## Next Steps
 
-- Learn about specific providers in the [Providers](/providers/keyring/) section
-- Understand how providers work with [Profiles](/concepts/profiles/)
-- Explore [Configuration Inheritance](/concepts/inheritance/) for complex setups
+- Browse individual provider docs in the [Providers](/providers/keyring/) section
+- Learn how [Profiles](/concepts/profiles/) control per-environment behavior
+- Share secret definitions across projects with [Configuration Inheritance](/concepts/inheritance/)

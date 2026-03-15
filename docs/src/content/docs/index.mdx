@@ -10,6 +10,9 @@ hero:
       link: /quick-start/
       icon: right-arrow
       variant: primary
+    - text: Documentation
+      link: /concepts/overview/
+      icon: open-book
     - text: View on GitHub
       link: https://github.com/cachix/secretspec
       icon: external
@@ -28,6 +31,8 @@ SecretSpec answers three questions for every project:
 - **WHAT** secrets does the application need?
 - **HOW** do requirements change per environment?
 - **WHERE** are the actual values stored?
+
+[Read the concepts overview →](/concepts/overview/)
 
 ## WHAT - Declaring Your Secrets
 
@@ -120,8 +125,12 @@ $ secretspec config init
 - [**Keyring**](/providers/keyring/) - System credential store (Keychain on macOS, Credential Manager on Windows, Secret Service on Linux)
 - [**Dotenv**](/providers/dotenv/) - Traditional .env files for local development
 - [**Environment**](/providers/env/) - Read-only access to environment variables for CI/CD
+- [**Pass**](/providers/pass/) - Unix password manager with GPG encryption
 - [**OnePassword**](/providers/onepassword/) - Team-based password management
 - [**LastPass**](/providers/lastpass/) - Cloud-based password manager
+- [**Google Cloud Secret Manager**](/providers/gcsm/) - GCP managed secrets
+- [**AWS Secrets Manager**](/providers/awssm/) - AWS managed secrets
+- [**Vault / OpenBao**](/providers/vault/) - HashiCorp Vault and OpenBao
 
 [Learn how to add a new provider →](/reference/adding-providers/)
 

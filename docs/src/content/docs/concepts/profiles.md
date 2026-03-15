@@ -76,15 +76,12 @@ SENTRY_DSN = { description = "Error tracking" }
 
 Profile defaults apply to all secrets in that profile unless explicitly overridden. The precedence order is:
 
-1. **Secret-level configuration** (highest priority) - explicit settings in the secret definition
-2. **Profile defaults** - from `profiles.<name>.defaults`
-3. **Profile inheritance** - inherited from default profile
-4. **Global defaults** (lowest priority) - from CLI, environment, or global config
+1. **Secret-level configuration** (highest priority) -- explicit settings in the secret definition
+2. **Profile defaults** -- from `profiles.<name>.defaults`
+3. **Profile inheritance** -- inherited from default profile
+4. **Global defaults** (lowest priority) -- from CLI, environment, or global config
 
-This is particularly useful for:
-- **Providers**: Define common provider chains once instead of repeating for each secret
-- **Requirements**: Set all production secrets to required at the profile level
-- **Defaults**: Provide sensible defaults for development profiles
+This is particularly useful for setting common [providers](/concepts/providers/#per-secret-provider-configuration), requirements, or defaults across all secrets in a profile.
 
 ## Practical Example
 

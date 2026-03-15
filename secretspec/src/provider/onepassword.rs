@@ -1,6 +1,5 @@
 use crate::provider::Provider;
 use crate::{Result, SecretSpecError};
-use once_cell::sync::OnceCell;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -242,8 +241,6 @@ pub struct OnePasswordProvider {
     config: OnePasswordConfig,
     /// The OnePassword CLI command to use (either "op" or a custom path).
     op_command: String,
-    /// Cached authentication status to avoid repeated `op whoami` calls.
-    auth_verified: OnceCell<bool>,
 }
 
 crate::register_provider! {
@@ -253,6 +250,7 @@ crate::register_provider! {
     description: "OnePassword password manager",
     schemes: ["onepassword", "onepassword+token"],
     examples: ["onepassword://vault", "onepassword://work@Production", "onepassword+token://vault"],
+    preflight: check_auth,
 }
 
 impl OnePasswordProvider {
@@ -269,11 +267,7 @@ impl OnePasswordProvider {
                 "op".to_string()
             }
         });
-        Self {
-            config,
-            op_command,
-            auth_verified: OnceCell::new(),
-        }
+        Self { config, op_command }
     }
 
     /// Executes a OnePassword CLI command with proper error handling.
@@ -396,28 +390,6 @@ impl OnePasswordProvider {
                 Ok(false)
             }
             Err(e) => Err(e),
-        }
-    }
-
-    /// Ensures the user is authenticated, caching the result for subsequent calls.
-    ///
-    /// This method only calls `op whoami` once per provider instance, significantly
-    /// improving performance when checking multiple secrets.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - User is authenticated
-    /// * `Err(_)` - User is not authenticated or command failed
-    fn ensure_authenticated(&self) -> Result<()> {
-        let is_authenticated = self.auth_verified.get_or_try_init(|| self.whoami())?;
-
-        if *is_authenticated {
-            Ok(())
-        } else {
-            Err(SecretSpecError::ProviderOperationFailed(
-                "OnePassword authentication required. Please run 'eval $(op signin)' first."
-                    .to_string(),
-            ))
         }
     }
 
@@ -577,6 +549,21 @@ impl OnePasswordProvider {
     }
 }
 
+impl OnePasswordProvider {
+    /// Checks that the user is authenticated with OnePassword.
+    /// Called by the preflight guard before any provider operations.
+    pub(crate) fn check_auth(&self) -> Result<()> {
+        if self.whoami()? {
+            Ok(())
+        } else {
+            Err(SecretSpecError::ProviderOperationFailed(
+                "OnePassword authentication required. Please run 'eval $(op signin)' first."
+                    .to_string(),
+            ))
+        }
+    }
+}
+
 impl Provider for OnePasswordProvider {
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
@@ -637,9 +624,6 @@ impl Provider for OnePasswordProvider {
     /// * `Ok(None)` - No secret found with the given key
     /// * `Err(_)` - Authentication or retrieval error
     fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        // Check authentication status first (cached)
-        self.ensure_authenticated()?;
-
         let vault = self.get_vault_name(profile);
         let item_name = self.format_item_name(project, key, profile);
 
@@ -696,9 +680,6 @@ impl Provider for OnePasswordProvider {
     /// - Item creation/update failures
     /// - Temporary file creation errors
     fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        // Check authentication status first (cached)
-        self.ensure_authenticated()?;
-
         let vault = self.get_vault_name(profile);
         let item_name = self.format_item_name(project, key, profile);
 
@@ -751,9 +732,6 @@ impl Provider for OnePasswordProvider {
         if keys.is_empty() {
             return Ok(HashMap::new());
         }
-
-        // Check authentication status first (cached)
-        self.ensure_authenticated()?;
 
         let vault = self.get_vault_name(profile);
 

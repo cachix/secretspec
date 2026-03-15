@@ -54,6 +54,7 @@ use crate::{Result, SecretSpecError};
 use secrecy::SecretString;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::sync::OnceLock;
 use url::Url;
 
 /// Executes an async future in a blocking context.
@@ -328,6 +329,113 @@ pub trait Provider: Send + Sync {
     }
 }
 
+impl<T: Provider> Provider for std::sync::Arc<T> {
+    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
+        (**self).get(project, key, profile)
+    }
+    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
+        (**self).set(project, key, value, profile)
+    }
+    fn allows_set(&self) -> bool {
+        (**self).allows_set()
+    }
+    fn name(&self) -> &'static str {
+        (**self).name()
+    }
+    fn uri(&self) -> String {
+        (**self).uri()
+    }
+    fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
+        (**self).reflect()
+    }
+    fn get_batch(
+        &self,
+        project: &str,
+        keys: &[&str],
+        profile: &str,
+    ) -> Result<HashMap<String, SecretString>> {
+        (**self).get_batch(project, keys, profile)
+    }
+}
+
+/// Return type from provider factories that pairs a provider with an
+/// optional preflight check (e.g. authentication verification).
+pub(crate) struct ProviderWithPreflight {
+    pub provider: Box<dyn Provider>,
+    pub preflight: Option<Box<dyn Fn() -> Result<()> + Send + Sync>>,
+}
+
+/// Wrapper that runs a preflight check exactly once before any provider
+/// operation, caching the result for all subsequent calls.
+struct PreflightGuard {
+    inner: Box<dyn Provider>,
+    preflight: Option<Box<dyn Fn() -> Result<()> + Send + Sync>>,
+    result: OnceLock<std::result::Result<(), String>>,
+}
+
+impl PreflightGuard {
+    fn new(pwp: ProviderWithPreflight) -> Self {
+        Self {
+            inner: pwp.provider,
+            preflight: pwp.preflight,
+            result: OnceLock::new(),
+        }
+    }
+
+    fn check(&self) -> Result<()> {
+        let result = self.result.get_or_init(|| {
+            if let Some(f) = &self.preflight {
+                f().map_err(|e| e.to_string())
+            } else {
+                Ok(())
+            }
+        });
+        match result {
+            Ok(()) => Ok(()),
+            Err(msg) => Err(SecretSpecError::ProviderOperationFailed(msg.clone())),
+        }
+    }
+}
+
+impl Provider for PreflightGuard {
+    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
+        self.check()?;
+        self.inner.get(project, key, profile)
+    }
+
+    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
+        self.check()?;
+        self.inner.set(project, key, value, profile)
+    }
+
+    fn allows_set(&self) -> bool {
+        self.inner.allows_set()
+    }
+
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn uri(&self) -> String {
+        self.inner.uri()
+    }
+
+    fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
+        self.check()?;
+        self.inner.reflect()
+    }
+
+    fn get_batch(
+        &self,
+        project: &str,
+        keys: &[&str],
+        profile: &str,
+    ) -> Result<HashMap<String, SecretString>> {
+        self.check()?;
+        self.inner.get_batch(project, keys, profile)
+    }
+}
+
 impl TryFrom<String> for Box<dyn Provider> {
     type Error = SecretSpecError;
 
@@ -437,7 +545,11 @@ impl TryFrom<&Url> for Box<dyn Provider> {
             .find(|reg| reg.schemes.contains(&scheme))
             .ok_or_else(|| SecretSpecError::ProviderNotFound(scheme.to_string()))?;
 
-        // Use the factory function to create the provider
-        (registration.factory)(url)
+        let pwp = (registration.factory)(url)?;
+        if pwp.preflight.is_some() {
+            Ok(Box::new(PreflightGuard::new(pwp)))
+        } else {
+            Ok(pwp.provider)
+        }
     }
 }

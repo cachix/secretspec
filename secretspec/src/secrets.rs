@@ -1016,7 +1016,7 @@ impl Secrets {
         // Resolve profile (checks env var, then global config, then defaults to "default")
         let profile_display = self.resolve_profile_name(None);
 
-        // Create the "from" provider
+        // Create the "from" provider and check availability
         let from_provider_instance = Box::<dyn ProviderTrait>::try_from(from_provider.to_string())?;
 
         eprintln!(
@@ -1362,7 +1362,6 @@ impl Secrets {
                 self.get_provider(None)?
             };
 
-            // Use batch fetch
             let keys: Vec<&str> = secret_names.iter().map(|s| s.as_str()).collect();
             let batch_results =
                 provider.get_batch(&self.config.project.name, &keys, &profile_name)?;

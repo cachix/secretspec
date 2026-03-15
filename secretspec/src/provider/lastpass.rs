@@ -137,6 +137,7 @@ crate::register_provider! {
     description: "LastPass password manager",
     schemes: ["lastpass"],
     examples: ["lastpass://", "lastpass://Shared-SecretSpec"],
+    preflight: check_auth,
 }
 
 impl LastPassProvider {
@@ -229,29 +230,6 @@ impl LastPassProvider {
             .replace("{key}", key)
     }
 
-    /// Verifies that the user is logged in to LastPass.
-    ///
-    /// This method checks the login status and returns a helpful error message
-    /// if the user needs to authenticate.
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(())` if logged in, or an error with instructions on how to log in.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the user is not logged in to LastPass.
-    fn check_if_logged_in(&self) -> Result<()> {
-        // Check if we're logged in first
-        if !self.check_login_status()? {
-            return Err(SecretSpecError::ProviderOperationFailed(
-                "LastPass authentication required. Please run 'lpass login <your-email>' first."
-                    .to_string(),
-            ));
-        }
-        Ok(())
-    }
-
     /// Checks the current LastPass login status.
     ///
     /// Executes `lpass status` to determine if the user is currently logged in.
@@ -271,6 +249,18 @@ impl LastPassProvider {
             }
             Err(e) => Err(e),
         }
+    }
+
+    /// Checks that the user is logged in to LastPass.
+    /// Called by the preflight guard before any provider operations.
+    pub(crate) fn check_auth(&self) -> Result<()> {
+        if !self.check_login_status()? {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "LastPass authentication required. Please run 'lpass login <your-email>' first."
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -321,8 +311,6 @@ impl Provider for LastPassProvider {
     /// - Returns an error if not logged in to LastPass
     /// - Returns an error if the LastPass CLI fails
     fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        self.check_if_logged_in()?;
-
         let item_name = self.format_item_name(project, key, profile);
 
         match self.execute_lpass_command(&["show", "--sync=now", "--password", &item_name]) {
@@ -372,8 +360,6 @@ impl Provider for LastPassProvider {
     /// GUI prompts. The secret value is passed via stdin to avoid exposing
     /// it in the process list.
     fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        self.check_if_logged_in()?;
-
         let item_name = self.format_item_name(project, key, profile);
 
         // Check if item exists

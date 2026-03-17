@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- AWS Secrets Manager (`awssm`) provider: batch fetching via `BatchGetSecretValue` API,
+  reducing N sequential API calls to ceil(N/20) batched calls. For 30 secrets this means
+  2 API calls instead of 30. **Note:** requires the `secretsmanager:BatchGetSecretValue`
+  IAM permission in addition to existing permissions.
+
 ## [0.8.1] - 2026-03-15
 
 ### Added

@@ -80,6 +80,7 @@ AWS Secrets Manager uses the standard AWS SDK credential chain:
       "Effect": "Allow",
       "Action": [
         "secretsmanager:GetSecretValue",
+        "secretsmanager:BatchGetSecretValue",
         "secretsmanager:CreateSecret",
         "secretsmanager:PutSecretValue"
       ],
@@ -88,6 +89,10 @@ AWS Secrets Manager uses the standard AWS SDK credential chain:
   ]
 }
 ```
+
+:::note
+The `BatchGetSecretValue` permission is required for batch fetching, which is used automatically during `check` and `run` commands to reduce API calls. If your IAM policy was created before this feature, you may need to add this permission.
+:::
 
 ### CI/CD
 

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- All provider features (`gcsm`, `awssm`, `vault`) are now enabled by default
 - AWS Secrets Manager (`awssm`) provider: batch fetching via `BatchGetSecretValue` API,
   reducing N sequential API calls to ceil(N/20) batched calls. For 30 secrets this means
   2 API calls instead of 30. **Note:** requires the `secretsmanager:BatchGetSecretValue`

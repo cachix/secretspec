@@ -44,7 +44,7 @@ uuid.workspace = true
 data-encoding.workspace = true
 
 [features]
-default = ["cli", "keyring"]
+default = ["cli", "keyring", "gcsm", "awssm", "vault"]
 cli = []
 keyring = ["dep:keyring", "dep:whoami"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]

@@ -506,6 +506,51 @@ mod integration_tests {
 
     #[cfg(feature = "awssm")]
     #[test]
+    fn test_awssm_batch_get() {
+        let providers = get_test_providers();
+        if !providers.contains(&"awssm".to_string()) {
+            return;
+        }
+
+        let (provider, _temp_dir) = create_provider_with_temp_path("awssm");
+        let project_name = generate_test_project_name();
+        let profile = "default";
+
+        // Set up test secrets
+        let test_secrets = vec![
+            ("BATCH_TEST_1", "value1"),
+            ("BATCH_TEST_2", "value2"),
+            ("BATCH_TEST_3", "value3"),
+        ];
+        for (key, value) in &test_secrets {
+            provider
+                .set(
+                    &project_name,
+                    key,
+                    &SecretString::new(value.to_string().into()),
+                    profile,
+                )
+                .unwrap();
+        }
+
+        // Batch get including a key that doesn't exist
+        let keys = vec![
+            "BATCH_TEST_1",
+            "BATCH_TEST_2",
+            "BATCH_TEST_3",
+            "NONEXISTENT",
+        ];
+        let result = provider.get_batch(&project_name, &keys, profile).unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result["BATCH_TEST_1"].expose_secret(), "value1");
+        assert_eq!(result["BATCH_TEST_2"].expose_secret(), "value2");
+        assert_eq!(result["BATCH_TEST_3"].expose_secret(), "value3");
+        assert!(!result.contains_key("NONEXISTENT"));
+    }
+
+    #[cfg(feature = "awssm")]
+    #[test]
     fn test_awssm_provider_creation() {
         // Test AWSSM provider can be created with a region
         let provider = Box::<dyn Provider>::try_from("awssm://us-east-1").unwrap();

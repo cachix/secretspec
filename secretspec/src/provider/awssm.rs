@@ -37,7 +37,11 @@ use crate::{Result, SecretSpecError};
 use aws_sdk_secretsmanager::Client;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use url::Url;
+
+/// Maximum number of secrets per BatchGetSecretValue API call.
+const AWS_BATCH_GET_MAX_SECRETS: usize = 20;
 
 /// Configuration for the AWS Secrets Manager provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +202,77 @@ impl AwssmProvider {
         }
     }
 
+    /// Builds the full AWS secret names and a reverse map back to the original keys.
+    fn build_batch_request_names(
+        project: &str,
+        keys: &[&str],
+        profile: &str,
+    ) -> Result<(Vec<String>, HashMap<String, String>)> {
+        let mut secret_names = Vec::with_capacity(keys.len());
+        let mut name_to_key = HashMap::with_capacity(keys.len());
+        for key in keys {
+            let name = Self::format_secret_name(project, profile, key)?;
+            name_to_key.insert(name.clone(), key.to_string());
+            secret_names.push(name);
+        }
+        Ok((secret_names, name_to_key))
+    }
+
+    /// Fetches multiple secrets in batches of 20 using the BatchGetSecretValue API.
+    async fn get_batch_async(
+        &self,
+        project: &str,
+        keys: &[&str],
+        profile: &str,
+    ) -> Result<HashMap<String, SecretString>> {
+        if keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let client = self.create_client().await?;
+        let (secret_names, name_to_key) = Self::build_batch_request_names(project, keys, profile)?;
+        let mut results = HashMap::new();
+
+        for chunk in secret_names.chunks(AWS_BATCH_GET_MAX_SECRETS) {
+            let mut request = client.batch_get_secret_value();
+            for name in chunk {
+                request = request.secret_id_list(name.clone());
+            }
+
+            let response = request.send().await.map_err(|e| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "BatchGetSecretValue failed: {}",
+                    e.into_service_error()
+                ))
+            })?;
+
+            // Process successful values
+            for secret in response.secret_values() {
+                if let (Some(name), Some(value)) = (secret.name(), secret.secret_string())
+                    && let Some(key) = name_to_key.get(name)
+                {
+                    results.insert(key.clone(), SecretString::new(value.to_string().into()));
+                }
+            }
+
+            // Handle per-secret errors
+            for error in response.errors() {
+                let error_code = error.error_code().unwrap_or("Unknown");
+                if error_code != "ResourceNotFoundException" {
+                    let secret_id = error.secret_id().unwrap_or("unknown");
+                    let message = error.message().unwrap_or("no message");
+                    return Err(SecretSpecError::ProviderOperationFailed(format!(
+                        "Failed to get secret '{}': {} - {}",
+                        secret_id, error_code, message
+                    )));
+                }
+                // ResourceNotFoundException: secret not present, omit from results
+            }
+        }
+
+        Ok(results)
+    }
+
     /// Creates or updates a secret in AWS Secrets Manager.
     async fn set_secret_async(
         &self,
@@ -271,5 +346,86 @@ impl Provider for AwssmProvider {
 
     fn allows_set(&self) -> bool {
         true
+    }
+
+    fn get_batch(
+        &self,
+        project: &str,
+        keys: &[&str],
+        profile: &str,
+    ) -> Result<HashMap<String, SecretString>> {
+        super::block_on(self.get_batch_async(project, keys, profile))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_secret_name() {
+        let name = AwssmProvider::format_secret_name("myapp", "prod", "DB_URL").unwrap();
+        assert_eq!(name, "secretspec/myapp/prod/DB_URL");
+    }
+
+    #[test]
+    fn test_format_secret_name_too_long() {
+        let long_key = "A".repeat(500);
+        let result = AwssmProvider::format_secret_name("myapp", "prod", &long_key);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_format_secret_name_empty_inputs() {
+        assert!(AwssmProvider::format_secret_name("", "prod", "KEY").is_err());
+        assert!(AwssmProvider::format_secret_name("proj", "", "KEY").is_err());
+        assert!(AwssmProvider::format_secret_name("proj", "prod", "").is_err());
+    }
+
+    #[test]
+    fn test_build_batch_request_names() {
+        let keys: Vec<&str> = vec!["A", "B", "C"];
+        let (secret_names, name_to_key) =
+            AwssmProvider::build_batch_request_names("proj", &keys, "default").unwrap();
+
+        assert_eq!(secret_names.len(), 3);
+        assert_eq!(name_to_key.len(), 3);
+        assert_eq!(secret_names[0], "secretspec/proj/default/A");
+        assert_eq!(name_to_key["secretspec/proj/default/A"], "A");
+        assert_eq!(name_to_key["secretspec/proj/default/B"], "B");
+        assert_eq!(name_to_key["secretspec/proj/default/C"], "C");
+    }
+
+    #[test]
+    fn test_build_batch_request_names_empty() {
+        let keys: Vec<&str> = vec![];
+        let (secret_names, name_to_key) =
+            AwssmProvider::build_batch_request_names("proj", &keys, "default").unwrap();
+        assert!(secret_names.is_empty());
+        assert!(name_to_key.is_empty());
+    }
+
+    #[test]
+    fn test_build_batch_request_names_chunking() {
+        let keys: Vec<String> = (0..45).map(|i| format!("SECRET_{}", i)).collect();
+        let key_refs: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
+
+        let (secret_names, name_to_key) =
+            AwssmProvider::build_batch_request_names("proj", &key_refs, "default").unwrap();
+
+        assert_eq!(secret_names.len(), 45);
+        assert_eq!(name_to_key.len(), 45);
+
+        let chunks: Vec<&[String]> = secret_names.chunks(AWS_BATCH_GET_MAX_SECRETS).collect();
+        assert_eq!(chunks.len(), 3); // 20 + 20 + 5
+        assert_eq!(chunks[0].len(), 20);
+        assert_eq!(chunks[1].len(), 20);
+        assert_eq!(chunks[2].len(), 5);
+
+        // Verify reverse mapping is correct for all keys
+        for key in &key_refs {
+            let name = AwssmProvider::format_secret_name("proj", "default", key).unwrap();
+            assert_eq!(name_to_key[&name], *key);
+        }
     }
 }

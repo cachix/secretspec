@@ -3,7 +3,7 @@ members = ["secretspec", "secretspec-derive", "examples/derive"]
 resolver = "2"
 
 [workspace.package]
-version = "0.8.1"
+version = "0.8.2"
 edition = "2024"
 
 [workspace.dependencies]
@@ -39,8 +39,8 @@ aws-config = "1"
 aws-sdk-secretsmanager = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
-secretspec-derive = { version = "0.8.1", path = "./secretspec-derive" }
-secretspec = { version = "0.8.1", path = "./secretspec" }
+secretspec-derive = { version = "0.8.2", path = "./secretspec-derive" }
+secretspec = { version = "0.8.2", path = "./secretspec" }
 rand = "0.9"
 rsa = { version = "0.9", features = ["pem"] }
 uuid = { version = "1", features = ["v4"] }

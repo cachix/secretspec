@@ -18,6 +18,7 @@ Providers are pluggable storage backends that handle the storage and retrieval o
 | **gcsm** | Google Cloud Secret Manager (requires `--features gcsm`) | ✓ | ✓ | ✓ |
 | **awssm** | AWS Secrets Manager (requires `--features awssm`) | ✓ | ✓ | ✓ |
 | **vault** | HashiCorp Vault / OpenBao (requires `--features vault`) | ✓ | ✓ | ✓ |
+| **bws** | Bitwarden Secrets Manager (requires `--features bws`) | ✓ | ✓ | ✓ |
 
 ## Provider Selection
 

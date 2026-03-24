@@ -35,6 +35,7 @@ whoami = { workspace = true, optional = true }
 linkme.workspace = true
 secrecy.workspace = true
 bitwarden = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
 google-cloud-secretmanager-v1 = { workspace = true, optional = true }
 aws-config = { workspace = true, optional = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
@@ -52,4 +53,4 @@ keyring = ["dep:keyring", "dep:whoami"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]
 awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
 vault = ["dep:reqwest"]
-bws = ["dep:bitwarden"]
+bws = ["dep:bitwarden", "dep:rustls"]

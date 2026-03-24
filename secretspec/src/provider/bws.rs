@@ -151,6 +151,11 @@ impl BwsProvider {
             ));
         }
 
+        // The bitwarden crate uses rustls for TLS but doesn't install a crypto
+        // provider. Install the aws-lc-rs provider (already a transitive dependency)
+        // before creating the client. ok() ignores if already installed.
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
         let client = Client::new(None);
 
         client

@@ -51,11 +51,84 @@
 //! ```
 
 use crate::{Result, SecretSpecError};
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, percent_encode};
 use secrecy::SecretString;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::OnceLock;
 use url::Url;
+
+/// Characters that are invalid in URI hosts but might appear in provider config
+/// values like vault names (e.g., 1Password vault "Home Lab").
+/// Structural URI delimiters (@, /, :, ?, #) are intentionally excluded so they
+/// are preserved during encoding.
+pub(crate) const URI_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'<')
+    .add(b'>')
+    .add(b'[')
+    .add(b']')
+    .add(b'|')
+    .add(b'^')
+    .add(b'\\');
+
+/// A URL wrapper that automatically percent-decodes all accessors.
+///
+/// Providers receive `&ProviderUrl` instead of `&Url`, ensuring they always
+/// get decoded values (e.g., `"Home Lab"` instead of `"Home%20Lab"`).
+///
+/// **Limitation:** Structural URI delimiters (`@`, `/`, `:`, `?`, `#`) are
+/// never encoded, so they cannot appear literally in provider config values
+/// like vault or folder names. For example, a vault named `"My@Vault"` would
+/// be misinterpreted as a username/host separator.
+pub(crate) struct ProviderUrl(Url);
+
+impl ProviderUrl {
+    pub fn new(url: Url) -> Self {
+        Self(url)
+    }
+
+    pub fn scheme(&self) -> &str {
+        self.0.scheme()
+    }
+
+    pub fn host(&self) -> Option<String> {
+        self.0
+            .host_str()
+            .map(|h| percent_decode_str(h).decode_utf8_lossy().into_owned())
+    }
+
+    pub fn username(&self) -> String {
+        percent_decode_str(self.0.username())
+            .decode_utf8_lossy()
+            .into_owned()
+    }
+
+    pub fn password(&self) -> Option<String> {
+        self.0
+            .password()
+            .map(|p| percent_decode_str(p).decode_utf8_lossy().into_owned())
+    }
+
+    pub fn path(&self) -> String {
+        percent_decode_str(self.0.path())
+            .decode_utf8_lossy()
+            .into_owned()
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        self.0.port()
+    }
+
+    pub fn query_pairs(&self) -> url::form_urlencoded::Parse<'_> {
+        self.0.query_pairs()
+    }
+
+    /// Percent-encode a value for use in a URI (e.g., in `uri()` methods).
+    pub fn encode(value: &str) -> String {
+        percent_encode(value.as_bytes(), URI_ENCODE_SET).to_string()
+    }
+}
 
 /// Executes an async future in a blocking context.
 ///
@@ -522,6 +595,18 @@ impl TryFrom<&str> for Box<dyn Provider> {
             s => format!("{}://{}", scheme, s),
         };
 
+        // Percent-encode characters that are invalid in URIs but might appear in
+        // provider config values (e.g., spaces in 1Password vault names like "Home Lab")
+        let url_string = {
+            let scheme_end = url_string.find("://").unwrap() + 3;
+            let (prefix, rest) = url_string.split_at(scheme_end);
+            format!(
+                "{}{}",
+                prefix,
+                percent_encode(rest.as_bytes(), URI_ENCODE_SET)
+            )
+        };
+
         let proper_url = Url::parse(&url_string).map_err(|e| {
             SecretSpecError::ProviderOperationFailed(format!(
                 "Invalid provider specification '{}': {}",
@@ -529,7 +614,7 @@ impl TryFrom<&str> for Box<dyn Provider> {
             ))
         })?;
 
-        Self::try_from(&proper_url)
+        provider_from_url(&ProviderUrl::new(proper_url))
     }
 }
 
@@ -537,19 +622,23 @@ impl TryFrom<&Url> for Box<dyn Provider> {
     type Error = SecretSpecError;
 
     fn try_from(url: &Url) -> Result<Self> {
-        let scheme = url.scheme();
+        provider_from_url(&ProviderUrl::new(url.clone()))
+    }
+}
 
-        // Find the provider registration for this scheme
-        let registration = PROVIDER_REGISTRY
-            .iter()
-            .find(|reg| reg.schemes.contains(&scheme))
-            .ok_or_else(|| SecretSpecError::ProviderNotFound(scheme.to_string()))?;
+fn provider_from_url(url: &ProviderUrl) -> Result<Box<dyn Provider>> {
+    let scheme = url.scheme();
 
-        let pwp = (registration.factory)(url)?;
-        if pwp.preflight.is_some() {
-            Ok(Box::new(PreflightGuard::new(pwp)))
-        } else {
-            Ok(pwp.provider)
-        }
+    // Find the provider registration for this scheme
+    let registration = PROVIDER_REGISTRY
+        .iter()
+        .find(|reg| reg.schemes.contains(&scheme))
+        .ok_or_else(|| SecretSpecError::ProviderNotFound(scheme.to_string()))?;
+
+    let pwp = (registration.factory)(url)?;
+    if pwp.preflight.is_some() {
+        Ok(Box::new(PreflightGuard::new(pwp)))
+    } else {
+        Ok(pwp.provider)
     }
 }

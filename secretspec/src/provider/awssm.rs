@@ -32,13 +32,12 @@
 //! secretspec check --provider awssm://production@us-east-1
 //! ```
 
-use super::Provider;
+use super::{Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use aws_sdk_secretsmanager::Client;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use url::Url;
 
 /// Maximum number of secrets per BatchGetSecretValue API call.
 const AWS_BATCH_GET_MAX_SECRETS: usize = 20;
@@ -52,10 +51,10 @@ pub struct AwssmConfig {
     pub aws_profile: Option<String>,
 }
 
-impl TryFrom<&Url> for AwssmConfig {
+impl TryFrom<&ProviderUrl> for AwssmConfig {
     type Error = SecretSpecError;
 
-    fn try_from(url: &Url) -> std::result::Result<Self, Self::Error> {
+    fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
         if url.scheme() != "awssm" {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "Invalid scheme '{}' for awssm provider. Expected 'awssm'.",
@@ -69,27 +68,16 @@ impl TryFrom<&Url> for AwssmConfig {
             if username.is_empty() {
                 None
             } else {
-                Some(username.to_string())
+                Some(username)
             }
         };
 
-        let region = url
-            .host_str()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+        let region = url.host().filter(|s| !s.is_empty());
 
         Ok(Self {
             region,
             aws_profile,
         })
-    }
-}
-
-impl TryFrom<Url> for AwssmConfig {
-    type Error = SecretSpecError;
-
-    fn try_from(url: Url) -> std::result::Result<Self, Self::Error> {
-        (&url).try_into()
     }
 }
 

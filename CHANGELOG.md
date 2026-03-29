@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Provider URIs now support spaces and special characters in names
+  (e.g., `onepassword://Home Lab`). All providers receive automatically
+  percent-decoded values via a new `ProviderUrl` wrapper type.
+
 ## [0.8.2] - 2026-03-19
 
 ### Changed

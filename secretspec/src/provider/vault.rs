@@ -38,12 +38,11 @@
 //! secretspec check --provider vault://team-a@vault.example.com:8200/secret
 //! ```
 
-use super::Provider;
+use super::{Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use reqwest::header::{HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use url::Url;
 
 /// KV secrets engine version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,10 +83,10 @@ impl Default for VaultConfig {
     }
 }
 
-impl TryFrom<&Url> for VaultConfig {
+impl TryFrom<&ProviderUrl> for VaultConfig {
     type Error = SecretSpecError;
 
-    fn try_from(url: &Url) -> std::result::Result<Self, Self::Error> {
+    fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
         let scheme = url.scheme();
         if scheme != "vault" && scheme != "openbao" {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
@@ -106,7 +105,7 @@ impl TryFrom<&Url> for VaultConfig {
         let http_scheme = if use_tls { "https" } else { "http" };
 
         // Resolve endpoint: from URI host or VAULT_ADDR env var
-        let endpoint = match url.host_str().filter(|s| !s.is_empty()) {
+        let endpoint = match url.host().filter(|s| !s.is_empty()) {
             Some(host) => {
                 if let Some(port) = url.port() {
                     format!("{}://{}:{}", http_scheme, host, port)
@@ -128,8 +127,8 @@ impl TryFrom<&Url> for VaultConfig {
         };
 
         // Mount path from URL path (strip leading slash, default to "secret")
-        let mount = url
-            .path()
+        let path = url.path();
+        let mount = path
             .trim_start_matches('/')
             .split('/')
             .next()
@@ -151,7 +150,7 @@ impl TryFrom<&Url> for VaultConfig {
         let namespace = {
             let username = url.username();
             if !username.is_empty() {
-                Some(username.to_string())
+                Some(username)
             } else {
                 std::env::var("VAULT_NAMESPACE")
                     .ok()
@@ -165,14 +164,6 @@ impl TryFrom<&Url> for VaultConfig {
             kv_version,
             namespace,
         })
-    }
-}
-
-impl TryFrom<Url> for VaultConfig {
-    type Error = SecretSpecError;
-
-    fn try_from(url: Url) -> std::result::Result<Self, Self::Error> {
-        (&url).try_into()
     }
 }
 

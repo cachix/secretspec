@@ -1,9 +1,8 @@
-use super::Provider;
+use super::{Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use keyring::Entry;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use url::Url;
 
 /// Configuration for the keyring provider.
 ///
@@ -18,23 +17,14 @@ pub struct KeyringConfig {
     pub folder_prefix: Option<String>,
 }
 
-impl TryFrom<&Url> for KeyringConfig {
+impl TryFrom<&ProviderUrl> for KeyringConfig {
     type Error = SecretSpecError;
 
     /// Creates a new KeyringConfig from a URL.
     ///
     /// The URL must have the scheme "keyring" (e.g., "keyring://" or
     /// "keyring://secretspec/shared/{profile}/{key}").
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// # use url::Url;
-    /// # use secretspec::provider::keyring::KeyringConfig;
-    /// let url = Url::parse("keyring://").unwrap();
-    /// let config: KeyringConfig = (&url).try_into().unwrap();
-    /// ```
-    fn try_from(url: &Url) -> std::result::Result<Self, Self::Error> {
+    fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
         if url.scheme() != "keyring" {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "Invalid scheme '{}' for keyring provider",
@@ -44,12 +34,9 @@ impl TryFrom<&Url> for KeyringConfig {
 
         let mut config = Self::default();
 
-        if let Some(host) = url.host_str() {
+        if let Some(host) = url.host() {
             let path = url.path();
-            // Percent-decode so placeholders like {profile} and {key} survive URL parsing
-            let raw = format!("{}{}", host, path);
-            let decoded = raw.replace("%7B", "{").replace("%7D", "}");
-            config.folder_prefix = Some(decoded);
+            config.folder_prefix = Some(format!("{}{}", host, path));
         }
 
         Ok(config)
@@ -121,7 +108,7 @@ impl Provider for KeyringProvider {
 
     fn uri(&self) -> String {
         if let Some(ref prefix) = self.config.folder_prefix {
-            format!("keyring://{}", prefix)
+            format!("keyring://{}", ProviderUrl::encode(prefix))
         } else {
             "keyring".to_string()
         }

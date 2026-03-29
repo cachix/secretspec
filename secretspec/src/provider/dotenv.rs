@@ -1,11 +1,10 @@
-use super::Provider;
+use super::{Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use url::Url;
 
 /// Configuration for the dotenv provider.
 ///
@@ -43,7 +42,7 @@ impl Default for DotEnvConfig {
     }
 }
 
-impl TryFrom<&Url> for DotEnvConfig {
+impl TryFrom<&ProviderUrl> for DotEnvConfig {
     type Error = SecretSpecError;
 
     /// Creates a DotEnvConfig from a URL.
@@ -56,18 +55,7 @@ impl TryFrom<&Url> for DotEnvConfig {
     /// - `dotenv:///absolute/path` - Absolute path
     /// - `dotenv://.env` - Relative path (authority as filename)
     /// - `dotenv://` - Uses default `.env` in current directory
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use url::Url;
-    /// use secretspec::provider::dotenv::DotEnvConfig;
-    ///
-    /// let url = Url::parse("dotenv:///.env.production").unwrap();
-    /// let config: DotEnvConfig = (&url).try_into().unwrap();
-    /// assert_eq!(config.path.to_str().unwrap(), "/.env.production");
-    /// ```
-    fn try_from(url: &Url) -> std::result::Result<Self, Self::Error> {
+    fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
         if url.scheme() != "dotenv" {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "Invalid scheme '{}' for dotenv provider",
@@ -75,26 +63,16 @@ impl TryFrom<&Url> for DotEnvConfig {
             )));
         }
 
-        // For dotenv URLs:
-        // - dotenv:///absolute/path -> url.path() = "/absolute/path"
-        // - dotenv://.env -> url.host_str() = ".env", url.path() = ""
-        // - dotenv:// -> url.host_str() = None, url.path() = ""
-
-        let path = if url.path() != "" && url.path() != "/" {
-            // Check if this is an absolute path (starts with /) or has a host
-            if let Some(host) = url.host_str() {
-                // Case like dotenv://config/.env.local -> host="config", path="/.env.local"
-                // We want "config/.env.local"
-                format!("{}{}", host, url.path())
+        let path_str = url.path();
+        let path = if path_str != "" && path_str != "/" {
+            if let Some(host) = url.host() {
+                format!("{}{}", host, path_str)
             } else {
-                // Absolute path from dotenv:///path
-                url.path().to_string()
+                path_str
             }
-        } else if let Some(host) = url.host_str() {
-            // Relative path from dotenv://filename
-            host.to_string()
+        } else if let Some(host) = url.host() {
+            host
         } else {
-            // Default case dotenv://
             ".env".to_string()
         };
 
@@ -169,13 +147,8 @@ impl Provider for DotEnvProvider {
         let path_str = self.config.path.display().to_string();
 
         if path_str == ".env" {
-            // Default case - just return "dotenv"
             "dotenv".to_string()
-        } else if path_str.starts_with('/') {
-            // Absolute path
-            format!("dotenv:{}", path_str)
         } else {
-            // Relative path
             format!("dotenv:{}", path_str)
         }
     }
@@ -309,28 +282,30 @@ mod tests {
 
     #[test]
     fn test_dotenv_url_parsing() {
+        use url::Url;
+
         // Test with absolute path using three slashes - this is the main syntax we want to support
-        let url = Url::parse("dotenv:///tmp/test/.env").unwrap();
+        let url = ProviderUrl::new(Url::parse("dotenv:///tmp/test/.env").unwrap());
         let config: DotEnvConfig = (&url).try_into().unwrap();
         assert_eq!(config.path.to_str().unwrap(), "/tmp/test/.env");
 
         // Test with relative path using two slashes - authority as filename
-        let url = Url::parse("dotenv://.env").unwrap();
+        let url = ProviderUrl::new(Url::parse("dotenv://.env").unwrap());
         let config: DotEnvConfig = (&url).try_into().unwrap();
         assert_eq!(config.path.to_str().unwrap(), ".env");
 
         // Test with relative path in subdirectory
-        let url = Url::parse("dotenv://config/.env.local").unwrap();
+        let url = ProviderUrl::new(Url::parse("dotenv://config/.env.local").unwrap());
         let config: DotEnvConfig = (&url).try_into().unwrap();
         assert_eq!(config.path.to_str().unwrap(), "config/.env.local");
 
         // Test with default (empty after //)
-        let url = Url::parse("dotenv://").unwrap();
+        let url = ProviderUrl::new(Url::parse("dotenv://").unwrap());
         let config: DotEnvConfig = (&url).try_into().unwrap();
         assert_eq!(config.path.to_str().unwrap(), ".env");
 
         // Test with relative path - host part becomes first part of path
-        let url = Url::parse("dotenv://foobar/custom/path/.env").unwrap();
+        let url = ProviderUrl::new(Url::parse("dotenv://foobar/custom/path/.env").unwrap());
         let config: DotEnvConfig = (&url).try_into().unwrap();
         assert_eq!(config.path.to_str().unwrap(), "foobar/custom/path/.env");
     }

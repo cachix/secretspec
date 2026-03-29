@@ -1,9 +1,8 @@
-use super::Provider;
+use super::{Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::env;
-use url::Url;
 
 /// Configuration for the environment variables provider.
 ///
@@ -20,7 +19,7 @@ use url::Url;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EnvConfig {}
 
-impl TryFrom<&Url> for EnvConfig {
+impl TryFrom<&ProviderUrl> for EnvConfig {
     type Error = SecretSpecError;
 
     /// Creates an `EnvConfig` from a URL.
@@ -37,7 +36,7 @@ impl TryFrom<&Url> for EnvConfig {
     /// let url = Url::parse("env://").unwrap();
     /// let config: EnvConfig = (&url).try_into().unwrap();
     /// ```
-    fn try_from(url: &Url) -> std::result::Result<Self, Self::Error> {
+    fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
         if url.scheme() != "env" {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "Invalid scheme '{}' for env provider",

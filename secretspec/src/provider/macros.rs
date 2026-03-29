@@ -1,4 +1,4 @@
-use super::{ProviderInfo, ProviderWithPreflight};
+use super::{ProviderInfo, ProviderUrl, ProviderWithPreflight};
 use crate::Result;
 
 /// Internal registration structure used by the macro.
@@ -6,7 +6,7 @@ use crate::Result;
 pub struct ProviderRegistration {
     pub info: ProviderInfo,
     pub schemes: &'static [&'static str],
-    pub factory: fn(&url::Url) -> Result<ProviderWithPreflight>,
+    pub factory: fn(&ProviderUrl) -> Result<ProviderWithPreflight>,
 }
 
 /// Distributed slice that collects all provider registrations.

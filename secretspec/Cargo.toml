@@ -30,6 +30,7 @@ miette.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 url.workspace = true
+percent-encoding.workspace = true
 whoami = { workspace = true, optional = true }
 linkme.workspace = true
 secrecy.workspace = true

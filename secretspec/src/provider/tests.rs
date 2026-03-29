@@ -213,6 +213,44 @@ fn test_url_parsing_behavior() {
     assert_eq!(url.path(), "/to/.env");
 }
 
+#[test]
+fn test_onepassword_vault_name_with_spaces() {
+    // Vault names can contain spaces (e.g., "Home Lab")
+    // Users should be able to write them with percent-encoding
+    let provider = Box::<dyn Provider>::try_from("onepassword://Home%20Lab").unwrap();
+    assert_eq!(provider.name(), "onepassword");
+    assert_eq!(provider.uri(), "onepassword://Home%20Lab");
+
+    // Users should also be able to write them with raw spaces
+    let provider = Box::<dyn Provider>::try_from("onepassword://Home Lab").unwrap();
+    assert_eq!(provider.name(), "onepassword");
+    assert_eq!(provider.uri(), "onepassword://Home%20Lab");
+
+    // With account@vault format
+    let provider = Box::<dyn Provider>::try_from("onepassword://work@Home Lab").unwrap();
+    assert_eq!(provider.name(), "onepassword");
+    assert_eq!(provider.uri(), "onepassword://work@Home%20Lab");
+}
+
+#[test]
+fn test_provider_names_with_special_characters() {
+    // Pass provider with spaces in folder prefix
+    let provider = Box::<dyn Provider>::try_from("pass://My Secrets/app").unwrap();
+    assert_eq!(provider.name(), "pass");
+
+    // Keyring provider with spaces in folder prefix
+    let provider = Box::<dyn Provider>::try_from("keyring://My App/{profile}/{key}").unwrap();
+    assert_eq!(provider.name(), "keyring");
+
+    // LastPass provider with spaces in folder name
+    let provider = Box::<dyn Provider>::try_from("lastpass://Shared Items/dev").unwrap();
+    assert_eq!(provider.name(), "lastpass");
+
+    // Pre-encoded values should also work
+    let provider = Box::<dyn Provider>::try_from("pass://My%20Secrets/app").unwrap();
+    assert_eq!(provider.name(), "pass");
+}
+
 // Integration tests for all providers
 #[cfg(test)]
 mod integration_tests {

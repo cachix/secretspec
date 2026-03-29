@@ -1,10 +1,9 @@
-use crate::provider::Provider;
+use crate::provider::{Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::process::{Command, Stdio};
-use url::Url;
 
 /// Configuration for the LastPass provider.
 ///
@@ -42,7 +41,7 @@ impl Default for LastPassConfig {
     }
 }
 
-impl TryFrom<&Url> for LastPassConfig {
+impl TryFrom<&ProviderUrl> for LastPassConfig {
     type Error = SecretSpecError;
 
     /// Creates a LastPassConfig from a URL.
@@ -50,35 +49,7 @@ impl TryFrom<&Url> for LastPassConfig {
     /// Parses a URL in the format `lastpass://[folder]` where the folder
     /// component is optional. The folder can be specified either as the
     /// authority or the path component of the URL.
-    ///
-    /// # Arguments
-    ///
-    /// * `url` - A URL with the `lastpass` scheme
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing the parsed configuration or an error
-    /// if the URL scheme is not `lastpass`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use url::Url;
-    /// use secretspec::provider::lastpass::LastPassConfig;
-    ///
-    /// // URL without folder
-    /// let url = Url::parse("lastpass://").unwrap();
-    /// let config: LastPassConfig = (&url).try_into().unwrap();
-    ///
-    /// // URL with folder as authority
-    /// let url = Url::parse("lastpass://my-folder").unwrap();
-    /// let config: LastPassConfig = (&url).try_into().unwrap();
-    ///
-    /// // URL with folder as path
-    /// let url = Url::parse("lastpass:///my-folder").unwrap();
-    /// let config: LastPassConfig = (&url).try_into().unwrap();
-    /// ```
-    fn try_from(url: &Url) -> std::result::Result<Self, Self::Error> {
+    fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
         if url.scheme() != "lastpass" {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "Invalid scheme '{}' for lastpass provider",
@@ -88,8 +59,8 @@ impl TryFrom<&Url> for LastPassConfig {
 
         let mut config = Self::default();
 
-        if let Some(host) = url.host_str() {
-            config.folder_prefix = Some(host.to_string() + url.path());
+        if let Some(host) = url.host() {
+            config.folder_prefix = Some(format!("{}{}", host, url.path()));
         }
 
         Ok(config)
@@ -278,7 +249,7 @@ impl Provider for LastPassProvider {
                 if folder.is_empty() || folder == "Shared" {
                     "lastpass".to_string()
                 } else {
-                    format!("lastpass://{}", folder)
+                    format!("lastpass://{}", ProviderUrl::encode(folder))
                 }
             } else {
                 "lastpass".to_string()

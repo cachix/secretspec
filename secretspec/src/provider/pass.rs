@@ -1,9 +1,8 @@
-use super::Provider;
+use super::{Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
-use url::Url;
 
 /// Configuration for the pass (password-store) provider.
 ///
@@ -19,14 +18,14 @@ pub struct PassConfig {
     pub folder_prefix: Option<String>,
 }
 
-impl TryFrom<&Url> for PassConfig {
+impl TryFrom<&ProviderUrl> for PassConfig {
     type Error = SecretSpecError;
 
     /// Creates a PassConfig from a URL.
     ///
     /// The URL must have the scheme "pass" (e.g., "pass://" or
     /// "pass://secretspec/shared/{profile}/{key}").
-    fn try_from(url: &Url) -> std::result::Result<Self, Self::Error> {
+    fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
         if url.scheme() != "pass" {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "Invalid scheme '{}' for pass provider",
@@ -36,23 +35,12 @@ impl TryFrom<&Url> for PassConfig {
 
         let mut config = Self::default();
 
-        if let Some(host) = url.host_str() {
+        if let Some(host) = url.host() {
             let path = url.path();
-            // Percent-decode so placeholders like {profile} and {key} survive URL parsing
-            let raw = format!("{}{}", host, path);
-            let decoded = raw.replace("%7B", "{").replace("%7D", "}");
-            config.folder_prefix = Some(decoded);
+            config.folder_prefix = Some(format!("{}{}", host, path));
         }
 
         Ok(config)
-    }
-}
-
-impl TryFrom<Url> for PassConfig {
-    type Error = SecretSpecError;
-
-    fn try_from(url: Url) -> std::result::Result<Self, Self::Error> {
-        (&url).try_into()
     }
 }
 
@@ -118,7 +106,7 @@ impl Provider for PassProvider {
 
     fn uri(&self) -> String {
         if let Some(ref prefix) = self.config.folder_prefix {
-            format!("pass://{}", prefix)
+            format!("pass://{}", ProviderUrl::encode(prefix))
         } else {
             "pass".to_string()
         }

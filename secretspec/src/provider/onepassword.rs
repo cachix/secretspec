@@ -1,10 +1,9 @@
-use crate::provider::Provider;
+use crate::provider::{Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Command;
-use url::Url;
 
 /// Represents a OnePassword item retrieved from the CLI.
 ///
@@ -122,10 +121,10 @@ pub struct OnePasswordConfig {
     pub folder_prefix: Option<String>,
 }
 
-impl TryFrom<&Url> for OnePasswordConfig {
+impl TryFrom<&ProviderUrl> for OnePasswordConfig {
     type Error = SecretSpecError;
 
-    fn try_from(url: &Url) -> std::result::Result<Self, Self::Error> {
+    fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
         let scheme = url.scheme();
 
         match scheme {
@@ -146,41 +145,33 @@ impl TryFrom<&Url> for OnePasswordConfig {
         let mut config = Self::default();
 
         // Parse URL components for account@vault format, ignoring dummy localhost
-        if let Some(host) = url.host_str()
+        if let Some(host) = url.host()
             && host != "localhost"
         {
+            let username = url.username();
+
             // Check if we have username (account) information
-            if !url.username().is_empty() {
+            if !username.is_empty() {
                 // Handle user:token format for service account tokens
                 if scheme == "onepassword+token" {
                     if let Some(password) = url.password() {
-                        config.service_account_token = Some(password.to_string());
+                        config.service_account_token = Some(password);
                     } else {
-                        config.service_account_token = Some(url.username().to_string());
+                        config.service_account_token = Some(username);
                     }
                 } else {
-                    config.account = Some(url.username().to_string());
+                    config.account = Some(username);
                 }
-                config.default_vault = Some(host.to_string());
+                config.default_vault = Some(host);
             } else {
                 // No username, so the host is the vault
-                config.default_vault = Some(host.to_string());
+                config.default_vault = Some(host);
             }
         }
 
         Ok(config)
     }
 }
-
-impl TryFrom<Url> for OnePasswordConfig {
-    type Error = SecretSpecError;
-
-    fn try_from(url: Url) -> std::result::Result<Self, Self::Error> {
-        (&url).try_into()
-    }
-}
-
-impl OnePasswordConfig {}
 
 /// Detects if running on Windows Subsystem for Linux 2.
 ///
@@ -586,17 +577,17 @@ impl Provider for OnePasswordProvider {
         if self.config.service_account_token.is_some() {
             // Just indicate token auth is being used without exposing the token
             if let Some(ref vault) = self.config.default_vault {
-                uri.push_str(vault);
+                uri.push_str(&ProviderUrl::encode(vault));
             }
         } else {
             // Regular auth: account@vault format
             if let Some(ref account) = self.config.account {
-                uri.push_str(account);
+                uri.push_str(&ProviderUrl::encode(account));
                 uri.push('@');
             }
 
             if let Some(ref vault) = self.config.default_vault {
-                uri.push_str(vault);
+                uri.push_str(&ProviderUrl::encode(vault));
             }
         }
 

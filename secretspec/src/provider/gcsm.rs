@@ -30,13 +30,12 @@
 //! secretspec check --provider gcsm://my-gcp-project
 //! ```
 
-use super::Provider;
+use super::{Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use google_cloud_secretmanager_v1::client::SecretManagerService;
 use google_cloud_secretmanager_v1::model::{Replication, Secret, SecretPayload, replication};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use url::Url;
 
 /// Configuration for the Google Cloud Secret Manager provider.
 ///
@@ -96,10 +95,10 @@ fn validate_gcp_project_id(project_id: &str) -> std::result::Result<(), SecretSp
     Ok(())
 }
 
-impl TryFrom<&Url> for GcsmConfig {
+impl TryFrom<&ProviderUrl> for GcsmConfig {
     type Error = SecretSpecError;
 
-    fn try_from(url: &Url) -> std::result::Result<Self, Self::Error> {
+    fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
         if url.scheme() != "gcsm" {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "Invalid scheme '{}' for gcsm provider. Expected 'gcsm'.",
@@ -108,28 +107,16 @@ impl TryFrom<&Url> for GcsmConfig {
         }
 
         // Extract project ID from host portion: gcsm://project-id
-        let project_id = url
-            .host_str()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| {
-                SecretSpecError::ProviderOperationFailed(
-                    "GCP project ID is required. Use format: gcsm://project-id".to_string(),
-                )
-            })?
-            .to_string();
+        let project_id = url.host().filter(|s| !s.is_empty()).ok_or_else(|| {
+            SecretSpecError::ProviderOperationFailed(
+                "GCP project ID is required. Use format: gcsm://project-id".to_string(),
+            )
+        })?;
 
         // Validate project ID format
         validate_gcp_project_id(&project_id)?;
 
         Ok(Self { project_id })
-    }
-}
-
-impl TryFrom<Url> for GcsmConfig {
-    type Error = SecretSpecError;
-
-    fn try_from(url: Url) -> std::result::Result<Self, Self::Error> {
-        (&url).try_into()
     }
 }
 

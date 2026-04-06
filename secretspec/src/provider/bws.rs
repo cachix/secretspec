@@ -441,4 +441,25 @@ mod tests {
         assert_eq!(provider.uri(), "bws://a9230ec4-5507-4870-b8b5-b3f500587e4c");
         assert!(provider.allows_set());
     }
+
+    #[test]
+    fn test_bws_access_token_missing_produces_clear_error() {
+        if std::env::var("BWS_ACCESS_TOKEN").is_ok() {
+            return;
+        }
+
+        let config = BwsConfig {
+            project_id: uuid::Uuid::parse_str("a9230ec4-5507-4870-b8b5-b3f500587e4c").unwrap(),
+        };
+        let provider = BwsProvider::new(config);
+
+        let result = provider.get("test_project", "TEST_KEY", "default");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("BWS_ACCESS_TOKEN"),
+            "Error should mention BWS_ACCESS_TOKEN, got: {}",
+            err_msg
+        );
+    }
 }

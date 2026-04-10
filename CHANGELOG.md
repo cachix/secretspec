@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - BWS (Bitwarden Secrets Manager) provider with async SDK integration, secret caching, and full read-write support (requires `--features bws`)
 
+### Changed
+- `secretspec-derive` now depends on `secretspec` with `default-features = false`, avoiding pulling in CLI and provider features when only the derive macro is used.
+
 ## [0.8.2] - 2026-03-19
 
 ### Changed

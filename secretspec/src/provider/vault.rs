@@ -5,21 +5,30 @@
 //!
 //! # Authentication
 //!
-//! Uses token-based authentication. The token is resolved from:
-//! - `VAULT_TOKEN` environment variable
-//! - Token file at `~/.vault-token`
+//! Supports two authentication methods, selected via the `auth` query parameter:
+//!
+//! - Token (default) -- uses `VAULT_TOKEN` environment variable or `~/.vault-token` file
+//! - AppRole (`?auth=approle`) -- uses `VAULT_ROLE_ID` and `VAULT_SECRET_ID` environment
+//!   variables to perform an AppRole login
 //!
 //! # URI Format
 //!
-//! `vault://[namespace@]host[:port][/mount][?kv=1]`
-//! `openbao://[namespace@]host[:port][/mount][?kv=1]`
+//! `vault://[namespace@]host[:port][/mount][?key=value&...]`
+//! `openbao://[namespace@]host[:port][/mount][?key=value&...]`
 //!
-//! - `vault://vault.example.com:8200/secret` — KV v2 at "secret" mount
-//! - `vault://vault.example.com:8200` — default "secret" mount, KV v2
-//! - `vault://ns1@vault.example.com:8200/secret` — with Vault namespace
-//! - `openbao://bao.internal:8200/secret` — OpenBao server
-//! - `vault://127.0.0.1:8200/secret?kv=1` — KV v1 engine
-//! - `vault://vault.example.com:8200/secret?tls=false` — disable TLS (dev mode)
+//! Query parameters:
+//! - `auth` -- authentication method: `token` (default) or `approle`
+//! - `kv` -- KV engine version: `1` or `2` (default)
+//! - `tls` -- enable TLS: `true` (default) or `false`
+//!
+//! # Examples
+//!
+//! - `vault://vault.example.com:8200/secret` -- KV v2, token auth
+//! - `vault://vault.example.com:8200/secret?auth=approle` -- AppRole auth
+//! - `vault://ns1@vault.example.com:8200/secret` -- with Vault namespace
+//! - `openbao://bao.internal:8200/secret` -- OpenBao server
+//! - `vault://127.0.0.1:8200/secret?kv=1` -- KV v1 engine
+//! - `vault://vault.example.com:8200/secret?tls=false` -- disable TLS (dev mode)
 //!
 //! When no host is provided, falls back to the `VAULT_ADDR` environment variable.
 //!
@@ -59,6 +68,16 @@ impl Default for KvVersion {
     }
 }
 
+/// Authentication method for the Vault / OpenBao provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AuthMethod {
+    /// Token-based authentication via `VAULT_TOKEN` or `~/.vault-token`.
+    #[default]
+    Token,
+    /// AppRole authentication via `VAULT_ROLE_ID` and `VAULT_SECRET_ID`.
+    AppRole,
+}
+
 /// Configuration for the Vault / OpenBao provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultConfig {
@@ -70,6 +89,8 @@ pub struct VaultConfig {
     pub kv_version: KvVersion,
     /// Optional Vault namespace.
     pub namespace: Option<String>,
+    /// Authentication method (default: Token).
+    pub auth: AuthMethod,
 }
 
 impl Default for VaultConfig {
@@ -79,6 +100,7 @@ impl Default for VaultConfig {
             mount: "secret".to_string(),
             kv_version: KvVersion::default(),
             namespace: None,
+            auth: AuthMethod::default(),
         }
     }
 }
@@ -158,11 +180,26 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
             }
         };
 
+        let auth = url
+            .query_pairs()
+            .find(|(k, _)| k == "auth")
+            .map(|(_, v)| match v.as_ref() {
+                "approle" => Ok(AuthMethod::AppRole),
+                "token" => Ok(AuthMethod::Token),
+                other => Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "Unknown auth method '{}'. Expected 'token' or 'approle'.",
+                    other
+                ))),
+            })
+            .transpose()?
+            .unwrap_or_default();
+
         Ok(Self {
             endpoint,
             mount,
             kv_version,
             namespace,
+            auth,
         })
     }
 }
@@ -213,20 +250,22 @@ impl VaultProvider {
         Ok(format!("secretspec/{}/{}/{}", project, profile, key))
     }
 
-    /// Resolves the Vault token from available sources.
-    ///
-    /// Resolution order:
-    /// 1. `VAULT_TOKEN` environment variable
-    /// 2. `~/.vault-token` file
-    fn resolve_token() -> Result<SecretString> {
-        // 1. VAULT_TOKEN environment variable
+    /// Resolves the Vault token using the configured authentication method.
+    fn resolve_token(&self) -> Result<SecretString> {
+        match self.config.auth {
+            AuthMethod::Token => Self::resolve_token_auth(),
+            AuthMethod::AppRole => super::block_on(self.resolve_approle_auth()),
+        }
+    }
+
+    /// Resolves a token via static token sources.
+    fn resolve_token_auth() -> Result<SecretString> {
         if let Ok(token) = std::env::var("VAULT_TOKEN") {
             if !token.is_empty() {
                 return Ok(SecretString::new(token.into()));
             }
         }
 
-        // 2. ~/.vault-token file
         let token_path = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
             .map(|home| std::path::PathBuf::from(home).join(".vault-token"));
@@ -245,6 +284,58 @@ impl VaultProvider {
              or create a ~/.vault-token file."
                 .to_string(),
         ))
+    }
+
+    /// Authenticates via AppRole and returns a client token.
+    async fn resolve_approle_auth(&self) -> Result<SecretString> {
+        let role_id = std::env::var("VAULT_ROLE_ID").map_err(|_| {
+            SecretSpecError::ProviderOperationFailed(
+                "VAULT_ROLE_ID environment variable is required for AppRole authentication."
+                    .to_string(),
+            )
+        })?;
+
+        let secret_id = std::env::var("VAULT_SECRET_ID").map_err(|_| {
+            SecretSpecError::ProviderOperationFailed(
+                "VAULT_SECRET_ID environment variable is required for AppRole authentication."
+                    .to_string(),
+            )
+        })?;
+
+        let url = format!("{}/v1/auth/approle/login", self.config.endpoint);
+        let body = serde_json::json!({
+            "role_id": role_id,
+            "secret_id": secret_id,
+        });
+
+        let client = reqwest::Client::new();
+        let response = client.post(&url).json(&body).send().await.map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!("AppRole login failed: {}", e))
+        })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "AppRole login returned HTTP {}: {}",
+                status, body
+            )));
+        }
+
+        let resp: serde_json::Value = response.json().await.map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to parse AppRole login response: {}",
+                e
+            ))
+        })?;
+
+        let token = resp["auth"]["client_token"].as_str().ok_or_else(|| {
+            SecretSpecError::ProviderOperationFailed(
+                "AppRole login response missing auth.client_token".to_string(),
+            )
+        })?;
+
+        Ok(SecretString::new(token.to_string().into()))
     }
 
     /// Builds the common HTTP headers for Vault API requests.
@@ -293,7 +384,7 @@ impl VaultProvider {
     ) -> Result<Option<SecretString>> {
         let secret_path = Self::format_secret_path(project, profile, key)?;
         let url = self.build_url(&secret_path);
-        let token = Self::resolve_token()?;
+        let token = self.resolve_token()?;
         let headers = Self::build_headers(&token, &self.config.namespace)?;
 
         let client = reqwest::Client::new();
@@ -358,7 +449,7 @@ impl VaultProvider {
     ) -> Result<()> {
         let secret_path = Self::format_secret_path(project, profile, key)?;
         let url = self.build_url(&secret_path);
-        let token = Self::resolve_token()?;
+        let token = self.resolve_token()?;
         let headers = Self::build_headers(&token, &self.config.namespace)?;
 
         let body = match self.config.kv_version {

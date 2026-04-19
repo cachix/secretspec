@@ -228,9 +228,19 @@ impl Secrets {
             .config
             .profiles
             .get(&profile_name)
+            .or_else(|| self.config.profiles.get("default"))
             .cloned()
             .ok_or_else(|| {
-                SecretSpecError::SecretNotFound(format!("Profile '{}' not found", profile_name))
+                SecretSpecError::SecretNotFound(format!(
+                    "Profile '{}' is not defined in secretspec.toml. Available profiles: {}",
+                    profile_name,
+                    self.config
+                        .profiles
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
             })?;
 
         // If not the default profile, also add secrets from default profile
@@ -474,12 +484,24 @@ impl Secrets {
                     None => continue, // Try next provider
                 }
             }
-            // Not found in any provider, return None
+            // Fall back to the default profile if the requested profile had no match
+            if profile_name != "default" {
+                for uri in uris {
+                    let provider = Box::<dyn ProviderTrait>::try_from(uri.clone())?;
+                    if let Some(value) = provider.get(project_name, secret_name, "default")? {
+                        return Ok(Some(value));
+                    }
+                }
+            }
             Ok(None)
         } else {
             // No per-secret providers, use default provider
             let backend = self.get_provider(default_provider_arg)?;
-            backend.get(project_name, secret_name, profile_name)
+            let result = backend.get(project_name, secret_name, profile_name)?;
+            if result.is_some() || profile_name == "default" {
+                return Ok(result);
+            }
+            backend.get(project_name, secret_name, "default")
         }
     }
 
@@ -1367,6 +1389,19 @@ impl Secrets {
                 provider.get_batch(&self.config.project.name, &keys, &profile_name)?;
 
             fetched_values.extend(batch_results);
+
+            if profile_name != "default" {
+                let missing: Vec<&str> = keys
+                    .iter()
+                    .filter(|k| !fetched_values.contains_key(**k))
+                    .copied()
+                    .collect();
+                if !missing.is_empty() {
+                    let fallback_results =
+                        provider.get_batch(&self.config.project.name, &missing, "default")?;
+                    fetched_values.extend(fallback_results);
+                }
+            }
         }
 
         // Process results - apply defaults, handle as_path, track missing

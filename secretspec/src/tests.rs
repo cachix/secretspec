@@ -3819,3 +3819,46 @@ fn test_resolve_secret_config_merges_type_and_generate() {
     // description should come from production
     assert_eq!(resolved.description.as_deref(), Some("Prod DB password"));
 }
+
+#[test]
+fn test_undefined_profile_falls_back_to_default() {
+    let mut default_secrets = HashMap::new();
+    default_secrets.insert(
+        "API_KEY".to_string(),
+        Secret {
+            description: Some("API key".to_string()),
+            required: Some(true),
+            ..Default::default()
+        },
+    );
+
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets: default_secrets,
+        },
+    );
+
+    let config = Config {
+        project: Project {
+            name: "test".to_string(),
+            revision: "1.0".to_string(),
+            extends: None,
+        },
+        profiles,
+    };
+
+    let spec = Secrets::new(config, None, None, None);
+    let result = spec.resolve_profile(Some("prod"));
+    assert!(
+        result.is_ok(),
+        "undefined profile should fall back to default"
+    );
+    let profile = result.unwrap();
+    assert!(
+        profile.secrets.contains_key("API_KEY"),
+        "fallback profile should contain default secrets"
+    );
+}

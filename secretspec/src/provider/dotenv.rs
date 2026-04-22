@@ -353,4 +353,38 @@ mod tests {
         let secrets = provider.reflect().unwrap();
         assert!(secrets.is_empty());
     }
+
+    // Regression test for https://github.com/cachix/secretspec/issues/74:
+    // setting a secret on a file that already holds a JSON-shaped value used to
+    // corrupt the existing value because the serializer did not escape quotes.
+    #[test]
+    fn test_set_preserves_existing_quoted_json_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_file = dir.path().join(".env");
+        fs::write(&env_file, "FOO=\"{\\\"bar\\\":\\\"baz\\\"}\"\n").unwrap();
+
+        let provider = DotEnvProvider::new(DotEnvConfig {
+            path: env_file.clone(),
+        });
+
+        provider
+            .set(
+                "proj",
+                "BAR",
+                &SecretString::new("foobar".into()),
+                "default",
+            )
+            .unwrap();
+
+        let foo = provider.get("proj", "FOO", "default").unwrap();
+        assert_eq!(
+            foo.map(|s| s.expose_secret().to_string()),
+            Some(r#"{"bar":"baz"}"#.to_string()),
+        );
+        let bar = provider.get("proj", "BAR", "default").unwrap();
+        assert_eq!(
+            bar.map(|s| s.expose_secret().to_string()),
+            Some("foobar".to_string()),
+        );
+    }
 }

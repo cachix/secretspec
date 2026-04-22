@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Provider URIs now support spaces and special characters in names
   (e.g., `onepassword://Home Lab`). All providers receive automatically
   percent-decoded values via a new `ProviderUrl` wrapper type.
+- dotenv provider: setting a secret no longer corrupts neighboring values
+  that contain double quotes, backslashes, dollar signs, or newlines
+  (e.g. JSON values). The underlying `serde-envfile` serializer did not
+  escape these characters; fix is pinned via a fork until
+  [lucagoslar/serde-envfile#6](https://github.com/lucagoslar/serde-envfile/pull/6)
+  lands upstream. Fixes [#74](https://github.com/cachix/secretspec/issues/74).
 
 ### Added
 - BWS (Bitwarden Secrets Manager) provider with async SDK integration, secret caching, and full read-write support (requires `--features bws`)

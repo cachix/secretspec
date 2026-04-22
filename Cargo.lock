@@ -3902,8 +3902,7 @@ dependencies = [
 [[package]]
 name = "serde-envfile"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891532ca829b3211b301e61c7bad9001b077de1c2da350240c492e684e60bd6d"
+source = "git+https://github.com/cachix/serde-envfile.git?branch=fix-serialize-str-escape#af85840c30147680414b0fac9b4583f47e0c1e39"
 dependencies = [
  "cfg-if",
  "dotenvy",

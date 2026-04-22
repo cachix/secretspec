@@ -19,7 +19,9 @@ thiserror = "2.0"
 etcetera = "0.11"
 colored = "3.0"
 dotenvy = "0.15"
-serde-envfile = "0.3"
+# Pinned to fork until lucagoslar/serde-envfile#6 is released upstream.
+# Fixes escaping of quotes, backslashes, dollars, and newlines in values.
+serde-envfile = { git = "https://github.com/cachix/serde-envfile.git", branch = "fix-serialize-str-escape" }
 inquire = { version = "0.9.4", features = ["experimental-multiline-input"] }
 miette = { version = "7.6", features = ["fancy"] }
 serde_json = "1.0"

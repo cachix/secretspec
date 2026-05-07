@@ -3880,3 +3880,144 @@ fn test_resolve_secret_config_merges_type_and_generate() {
     // description should come from production
     assert_eq!(resolved.description.as_deref(), Some("Prod DB password"));
 }
+
+/// Builds a project + global config matching the scenario in
+/// https://github.com/cachix/secretspec/issues/81: profile defaults declare a
+/// `providers = ["personal", "team"]` chain whose aliases resolve to dotenv files,
+/// and the secret has no per-secret `providers` override.
+fn build_chain_scenario(
+    temp_dir: &TempDir,
+) -> (Config, GlobalConfig, std::path::PathBuf, std::path::PathBuf) {
+    let personal_path = temp_dir.path().join(".env.personal");
+    let team_path = temp_dir.path().join(".env.team");
+    fs::write(&personal_path, "").unwrap();
+    fs::write(&team_path, "").unwrap();
+
+    let config = Config {
+        project: Project {
+            name: "test_project".to_string(),
+            revision: "1.0".to_string(),
+            extends: None,
+        },
+        profiles: {
+            let mut profiles = HashMap::new();
+            let mut secrets = HashMap::new();
+            secrets.insert(
+                "MY_SECRET".to_string(),
+                Secret {
+                    description: Some("test secret".to_string()),
+                    required: Some(true),
+                    ..Default::default()
+                },
+            );
+            profiles.insert(
+                "development".to_string(),
+                Profile {
+                    defaults: Some(crate::config::ProfileDefaults {
+                        required: None,
+                        default: None,
+                        providers: Some(vec!["personal".to_string(), "team".to_string()]),
+                    }),
+                    secrets,
+                },
+            );
+            profiles
+        },
+    };
+
+    let mut providers_map = HashMap::new();
+    providers_map.insert(
+        "personal".to_string(),
+        format!("dotenv://{}", personal_path.display()),
+    );
+    providers_map.insert(
+        "team".to_string(),
+        format!("dotenv://{}", team_path.display()),
+    );
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some("keyring".to_string()),
+            profile: Some("development".to_string()),
+            providers: Some(providers_map),
+        },
+    };
+
+    (config, global_config, personal_path, team_path)
+}
+
+fn read_env_var(path: &std::path::Path, key: &str) -> Option<String> {
+    dotenvy::from_path_iter(path)
+        .ok()?
+        .filter_map(|res| res.ok())
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v)
+}
+
+/// Regression test for issue #81: `set --provider <alias>` must override the
+/// per-secret/profile providers chain, writing only to the chosen provider.
+#[test]
+fn test_set_provider_override_wins_over_chain() {
+    let temp_dir = TempDir::new().unwrap();
+    let (config, global_config, personal_path, team_path) = build_chain_scenario(&temp_dir);
+
+    // Builder-set provider mirrors `--provider team` from the CLI. Use the alias
+    // name; the override resolver must look it up in the global providers map.
+    let spec = Secrets::new(config, Some(global_config), Some("team".to_string()), None);
+    spec.set("MY_SECRET", Some("override_value".to_string()))
+        .expect("set should succeed");
+
+    assert_eq!(
+        read_env_var(&team_path, "MY_SECRET").as_deref(),
+        Some("override_value"),
+        "secret should be written to the overridden provider"
+    );
+    assert!(
+        read_env_var(&personal_path, "MY_SECRET").is_none(),
+        "secret must not leak into the first-in-chain provider when overridden"
+    );
+}
+
+/// Without an override, `set` still writes to the first provider in the chain
+/// (the documented convention). This guards against the override fix accidentally
+/// shifting the no-flag default.
+#[test]
+fn test_set_without_override_uses_chain_first() {
+    let temp_dir = TempDir::new().unwrap();
+    let (config, global_config, personal_path, team_path) = build_chain_scenario(&temp_dir);
+
+    let spec = Secrets::new(config, Some(global_config), None, None);
+    spec.set("MY_SECRET", Some("chain_value".to_string()))
+        .expect("set should succeed");
+
+    assert_eq!(
+        read_env_var(&personal_path, "MY_SECRET").as_deref(),
+        Some("chain_value"),
+        "without override, set writes to the first alias in the chain"
+    );
+    assert!(
+        read_env_var(&team_path, "MY_SECRET").is_none(),
+        "team provider must remain untouched"
+    );
+}
+
+/// `get` with an explicit override must read only from that provider, never
+/// falling back through the chain.
+#[test]
+fn test_resolve_read_provider_uris_override_skips_chain() {
+    let temp_dir = TempDir::new().unwrap();
+    let (config, global_config, _, team_path) = build_chain_scenario(&temp_dir);
+
+    let spec = Secrets::new(config, Some(global_config), Some("team".to_string()), None);
+    let secret_config = spec.resolve_secret_config("MY_SECRET", None).unwrap();
+    let uris = spec
+        .resolve_read_provider_uris(&secret_config, None)
+        .expect("override resolution should succeed")
+        .expect("override should produce a URI list");
+
+    assert_eq!(
+        uris.len(),
+        1,
+        "override must collapse the chain to a single URI"
+    );
+    assert_eq!(uris[0], format!("dotenv://{}", team_path.display()));
+}

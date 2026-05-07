@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   escape these characters; fix is pinned via a fork until
   [lucagoslar/serde-envfile#6](https://github.com/lucagoslar/serde-envfile/pull/6)
   lands upstream. Fixes [#74](https://github.com/cachix/secretspec/issues/74).
+- `--provider` (and `SECRETSPEC_PROVIDER`) is now honored on every command
+  even when a `providers = [...]` chain is configured for the secret or
+  profile. Previously `set`, `get`, `check`, `import`, and `run` silently
+  used the first provider in the chain and ignored the explicit override,
+  making `secretspec set --provider <alias>` a no-op against the requested
+  target. The flag now consistently takes precedence: `set`/`import`/
+  generation write only to the chosen provider, and `get`/`validate` read
+  only from it (no chain fallback). Provider aliases declared in
+  `~/.config/secretspec/config.toml` can now be passed directly to
+  `--provider`. Fixes [#81](https://github.com/cachix/secretspec/issues/81).
 
 ### Added
 - BWS (Bitwarden Secrets Manager) provider with async SDK integration, secret caching, and full read-write support (requires `--features bws`)

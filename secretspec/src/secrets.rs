@@ -400,6 +400,74 @@ impl Secrets {
         Ok(None)
     }
 
+    /// Returns the explicit provider override resolved to a URI, if one is set.
+    ///
+    /// Sources, in priority order:
+    /// 1. `override_arg` — caller-supplied (e.g. an SDK method's `provider_arg`)
+    /// 2. `SECRETSPEC_PROVIDER` env var
+    /// 3. Builder-set provider (`set_provider`)
+    ///
+    /// If the resolved spec matches an alias in the global config providers map,
+    /// the alias is resolved to its URI; otherwise the spec is returned as-is.
+    pub(crate) fn resolve_provider_override(&self, override_arg: Option<&str>) -> Option<String> {
+        let spec = override_arg
+            .map(|s| s.to_string())
+            .or_else(|| env::var("SECRETSPEC_PROVIDER").ok())
+            .or_else(|| self.provider.clone())?;
+        let resolved = self
+            .global_config
+            .as_ref()
+            .and_then(|gc| gc.defaults.providers.as_ref())
+            .and_then(|m| m.get(&spec).cloned())
+            .unwrap_or(spec);
+        Some(resolved)
+    }
+
+    /// Resolves the write target for a secret.
+    ///
+    /// Resolution order:
+    /// 1. Explicit override (`--provider` flag, `SECRETSPEC_PROVIDER`, or builder)
+    /// 2. First entry of the secret's `providers` chain
+    /// 3. Default provider from global config
+    pub(crate) fn resolve_write_provider(
+        &self,
+        secret_config: &crate::config::Secret,
+        override_arg: Option<&str>,
+    ) -> Result<Box<dyn ProviderTrait>> {
+        if let Some(uri) = self.resolve_provider_override(override_arg) {
+            return Box::<dyn ProviderTrait>::try_from(uri);
+        }
+        if let Some(alias) = secret_config.providers.as_ref().and_then(|p| p.first()) {
+            let provider_uris = self.resolve_provider_aliases(Some(std::slice::from_ref(alias)))?;
+            let uri = provider_uris
+                .and_then(|uris| uris.into_iter().next())
+                .ok_or_else(|| {
+                    SecretSpecError::ProviderNotFound(format!(
+                        "Provider alias '{}' could not be resolved",
+                        alias
+                    ))
+                })?;
+            return Box::<dyn ProviderTrait>::try_from(uri);
+        }
+        self.get_provider(None)
+    }
+
+    /// Resolves the read provider chain for a secret.
+    ///
+    /// If an explicit override is set, returns just that single URI (no chain fallback).
+    /// Otherwise, resolves the secret's `providers` chain to URIs, or returns `None`
+    /// to indicate the default provider should be used.
+    pub(crate) fn resolve_read_provider_uris(
+        &self,
+        secret_config: &crate::config::Secret,
+        override_arg: Option<&str>,
+    ) -> Result<Option<Vec<String>>> {
+        if let Some(uri) = self.resolve_provider_override(override_arg) {
+            return Ok(Some(vec![uri]));
+        }
+        self.resolve_provider_aliases(secret_config.providers.as_deref())
+    }
+
     /// Gets the provider instance to use for secret operations
     ///
     /// Provider resolution order:
@@ -530,44 +598,27 @@ impl Secrets {
         })?;
 
         // Check if the secret exists in the profile or is inherited from default
-        let secret_config = self.resolve_secret_config(name, None);
-        if secret_config.is_none() {
-            // Collect available secrets from both current profile and default
-            let profile = self.resolve_profile(Some(&profile_name))?;
-            let mut available_secrets = profile
-                .into_iter()
-                .map(|(name, _)| name)
-                .collect::<Vec<_>>();
-            available_secrets.sort();
+        let secret_config = match self.resolve_secret_config(name, None) {
+            Some(sc) => sc,
+            None => {
+                let profile = self.resolve_profile(Some(&profile_name))?;
+                let mut available_secrets = profile
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>();
+                available_secrets.sort();
 
-            return Err(SecretSpecError::SecretNotFound(format!(
-                "Secret '{}' is not defined in profile '{}'. Available secrets: {}",
-                name,
-                profile_name,
-                available_secrets.join(", ")
-            )));
-        }
-
-        // Resolve provider: use first provider in list if specified, otherwise use default
-        let backend = if let Some(provider_aliases) = secret_config
-            .as_ref()
-            .and_then(|sc| sc.providers.as_ref())
-            .and_then(|p| p.first())
-        {
-            let provider_uris =
-                self.resolve_provider_aliases(Some(std::slice::from_ref(provider_aliases)))?;
-            let uri = provider_uris.and_then(|uris| uris.first().cloned()).ok_or(
-                SecretSpecError::ProviderNotFound(format!(
-                    "Provider alias '{}' could not be resolved",
-                    provider_aliases
-                )),
-            )?;
-            Box::<dyn ProviderTrait>::try_from(uri)?
-        } else {
-            self.get_provider(None)?
+                return Err(SecretSpecError::SecretNotFound(format!(
+                    "Secret '{}' is not defined in profile '{}'. Available secrets: {}",
+                    name,
+                    profile_name,
+                    available_secrets.join(", ")
+                )));
+            }
         };
 
-        // Check if the provider supports setting values
+        let backend = self.resolve_write_provider(&secret_config, None)?;
+
         if !backend.allows_set() {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "Provider '{}' is read-only and does not support setting values",
@@ -638,10 +689,8 @@ impl Secrets {
         let default = secret_config.default.clone();
         let as_path = secret_config.as_path.unwrap_or(false);
 
-        // Resolve per-secret provider aliases to URIs
-        let provider_uris = self.resolve_provider_aliases(secret_config.providers.as_deref())?;
+        let provider_uris = self.resolve_read_provider_uris(&secret_config, None)?;
 
-        // Try to get the secret from configured providers with fallback
         match self.get_secret_from_providers(
             &self.config.project.name,
             name,
@@ -779,24 +828,8 @@ impl Secrets {
 
                             let value = prompt.prompt()?;
 
-                            // Get the provider for this specific secret
-                            // Use first provider in list if specified, otherwise use CLI provider or default
-                            let backend = if let Some(provider_aliases) =
-                                secret_config.providers.as_ref().and_then(|p| p.first())
-                            {
-                                let provider_uris = self.resolve_provider_aliases(Some(
-                                    std::slice::from_ref(provider_aliases),
-                                ))?;
-                                let uri = provider_uris
-                                    .and_then(|uris| uris.first().cloned())
-                                    .ok_or(SecretSpecError::ProviderNotFound(format!(
-                                        "Provider alias '{}' could not be resolved",
-                                        provider_aliases
-                                    )))?;
-                                Box::<dyn ProviderTrait>::try_from(uri)?
-                            } else {
-                                self.get_provider(provider_arg.clone())?
-                            };
+                            let backend = self
+                                .resolve_write_provider(&secret_config, provider_arg.as_deref())?;
                             backend.set(
                                 &self.config.project.name,
                                 secret_name,
@@ -1040,27 +1073,11 @@ impl Secrets {
 
         // Process each secret using proper profile resolution
         for (name, config) in profile.into_iter() {
-            // Get the target provider for this secret
             let secret_config = self
                 .resolve_secret_config(&name, Some(&profile_display))
                 .expect("Secret should exist since we're iterating over it");
 
-            // Use first provider in list if specified, otherwise use default
-            let to_provider = if let Some(provider_aliases) =
-                secret_config.providers.as_ref().and_then(|p| p.first())
-            {
-                let provider_uris =
-                    self.resolve_provider_aliases(Some(std::slice::from_ref(provider_aliases)))?;
-                let uri = provider_uris.and_then(|uris| uris.first().cloned()).ok_or(
-                    SecretSpecError::ProviderNotFound(format!(
-                        "Provider alias '{}' could not be resolved",
-                        provider_aliases
-                    )),
-                )?;
-                Box::<dyn ProviderTrait>::try_from(uri)?
-            } else {
-                self.get_provider(None)?
-            };
+            let to_provider = self.resolve_write_provider(&secret_config, None)?;
 
             // First check if the secret exists in the "from" provider
             match from_provider_instance.get(&self.config.project.name, &name, &profile_display)? {
@@ -1154,21 +1171,7 @@ impl Secrets {
         &self,
         secret_config: &crate::config::Secret,
     ) -> Result<Box<dyn ProviderTrait>> {
-        let backend = if let Some(provider_aliases) =
-            secret_config.providers.as_ref().and_then(|p| p.first())
-        {
-            let provider_uris =
-                self.resolve_provider_aliases(Some(std::slice::from_ref(provider_aliases)))?;
-            let uri = provider_uris.and_then(|uris| uris.first().cloned()).ok_or(
-                SecretSpecError::ProviderNotFound(format!(
-                    "Provider alias '{}' could not be resolved",
-                    provider_aliases
-                )),
-            )?;
-            Box::<dyn ProviderTrait>::try_from(uri)?
-        } else {
-            self.get_provider(None)?
-        };
+        let backend = self.resolve_write_provider(secret_config, None)?;
 
         if !backend.allows_set() {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
@@ -1322,11 +1325,10 @@ impl Secrets {
         let profile_name = self.resolve_profile_name(None);
         let profile = self.resolve_profile(Some(&profile_name))?;
 
-        // Collect all secrets with their configs
         let all_secrets: Vec<(String, crate::config::Secret)> = profile.into_iter().collect();
 
-        // Group secrets by their provider URI for batch fetching
-        // Key: provider URI (or None for default provider), Value: list of secret names
+        let override_uri = self.resolve_provider_override(None);
+
         let mut provider_groups: HashMap<Option<String>, Vec<String>> = HashMap::new();
 
         for (name, _) in &all_secrets {
@@ -1334,16 +1336,12 @@ impl Secrets {
                 .resolve_secret_config(name, Some(&profile_name))
                 .expect("Secret should exist in config since we're iterating over it");
 
-            // Get the first provider URI (if any) for grouping
-            let provider_uri = if let Some(providers) = &secret_config.providers {
-                if let Some(first_alias) = providers.first() {
-                    self.resolve_provider_aliases(Some(std::slice::from_ref(first_alias)))?
-                        .and_then(|uris| uris.first().cloned())
-                } else {
-                    None
-                }
-            } else {
-                None
+            let provider_uri = match (&override_uri, secret_config.providers.as_deref()) {
+                (Some(uri), _) => Some(uri.clone()),
+                (None, Some([first_alias, ..])) => self
+                    .resolve_provider_aliases(Some(std::slice::from_ref(first_alias)))?
+                    .and_then(|uris| uris.into_iter().next()),
+                _ => None,
             };
 
             provider_groups
@@ -1390,26 +1388,22 @@ impl Secrets {
                     }
                 }
                 None => {
-                    // Secret not found in batch - check if there are fallback providers
-                    let fallback_value = if let Some(providers) = &secret_config.providers {
-                        if providers.len() > 1 {
-                            // Try fallback providers (skip first, already tried in batch)
-                            let fallback_aliases = &providers[1..];
-                            let fallback_uris =
-                                self.resolve_provider_aliases(Some(fallback_aliases))?;
-                            self.get_secret_from_providers(
-                                &self.config.project.name,
-                                &name,
-                                &profile_name,
-                                fallback_uris.as_deref(),
-                                None,
-                            )?
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
+                    // An explicit override collapses the chain to one provider, so no fallback.
+                    let fallback_value =
+                        match (override_uri.as_ref(), secret_config.providers.as_deref()) {
+                            (None, Some(providers)) if providers.len() > 1 => {
+                                let fallback_uris =
+                                    self.resolve_provider_aliases(Some(&providers[1..]))?;
+                                self.get_secret_from_providers(
+                                    &self.config.project.name,
+                                    &name,
+                                    &profile_name,
+                                    fallback_uris.as_deref(),
+                                    None,
+                                )?
+                            }
+                            _ => None,
+                        };
 
                     if let Some(value) = fallback_value {
                         if as_path {

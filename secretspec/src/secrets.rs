@@ -424,20 +424,24 @@ impl Secrets {
         Ok(None)
     }
 
+    /// Returns the explicit provider spec from caller arg, builder, or env, in
+    /// that priority order.
+    ///
+    /// Used as the shared head of provider resolution so the precedence between
+    /// the `--provider` flag (forwarded via `set_provider`) and the
+    /// `SECRETSPEC_PROVIDER` env var stays consistent across resolvers.
+    fn explicit_provider_spec(&self, override_arg: Option<String>) -> Option<String> {
+        override_arg
+            .or_else(|| self.provider.clone())
+            .or_else(|| env::var("SECRETSPEC_PROVIDER").ok())
+    }
+
     /// Returns the explicit provider override resolved to a URI, if one is set.
     ///
-    /// Sources, in priority order:
-    /// 1. `override_arg` — caller-supplied (e.g. an SDK method's `provider_arg`)
-    /// 2. `SECRETSPEC_PROVIDER` env var
-    /// 3. Builder-set provider (`set_provider`)
-    ///
-    /// If the resolved spec matches an alias in the global config providers map,
-    /// the alias is resolved to its URI; otherwise the spec is returned as-is.
+    /// Resolves the explicit spec via [`Self::explicit_provider_spec`], then
+    /// expands any matching alias from the global config providers map.
     pub(crate) fn resolve_provider_override(&self, override_arg: Option<&str>) -> Option<String> {
-        let spec = override_arg
-            .map(|s| s.to_string())
-            .or_else(|| env::var("SECRETSPEC_PROVIDER").ok())
-            .or_else(|| self.provider.clone())?;
+        let spec = self.explicit_provider_spec(override_arg.map(|s| s.to_string()))?;
         let resolved = self
             .global_config
             .as_ref()
@@ -496,7 +500,7 @@ impl Secrets {
     ///
     /// Provider resolution order:
     /// 1. Provided provider argument
-    /// 2. Provider set via builder
+    /// 2. Provider set via builder (used by the CLI to forward `--provider`)
     /// 3. Environment variable (SECRETSPEC_PROVIDER)
     /// 4. Global configuration default provider
     /// 5. Error if no provider is configured
@@ -518,9 +522,8 @@ impl Secrets {
         &self,
         provider_arg: Option<String>,
     ) -> Result<Box<dyn ProviderTrait>> {
-        let provider_spec = provider_arg
-            .or_else(|| env::var("SECRETSPEC_PROVIDER").ok())
-            .or_else(|| self.provider.clone())
+        let provider_spec = self
+            .explicit_provider_spec(provider_arg)
             .or_else(|| {
                 self.global_config
                     .as_ref()

@@ -175,6 +175,31 @@ check_success "Init from dotenv provider (bare name)"
 grep -q "DEFAULT_KEY" secretspec.toml
 check_success "Init found default .env file"
 
+# Test: --provider CLI flag overrides SECRETSPEC_PROVIDER env var (regression for #77)
+cat > secretspec.toml << EOF
+[project]
+name = "test-app"
+revision = "1.0"
+
+[profiles.default]
+OVERRIDE_SECRET = { description = "Secret used to test provider precedence" }
+EOF
+
+# SECRETSPEC_PROVIDER=dotenv is already exported above. Stash a value there
+# and a different value in the process env, then ensure --provider env reads
+# the env provider rather than dotenv.
+echo "from_dotenv" | secretspec set OVERRIDE_SECRET
+check_success "Stash value in dotenv provider"
+
+VALUE=$(OVERRIDE_SECRET=from_env_provider secretspec get --provider env OVERRIDE_SECRET)
+[ "$VALUE" = "from_env_provider" ]
+check_success "--provider flag overrides SECRETSPEC_PROVIDER env var"
+
+# Sanity check: without --provider, SECRETSPEC_PROVIDER (dotenv) is still used
+VALUE=$(secretspec get OVERRIDE_SECRET)
+[ "$VALUE" = "from_dotenv" ]
+check_success "SECRETSPEC_PROVIDER is still honored when --provider is absent"
+
 # Test 12: Default value handling
 cat > secretspec.toml << EOF
 [project]

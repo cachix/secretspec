@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- The `--provider` CLI flag now correctly takes precedence over the
+  `SECRETSPEC_PROVIDER` environment variable. Previously the env var was
+  consulted before the value forwarded from `--provider` (via `set_provider`),
+  so users could not temporarily override the provider on the command line
+  while the env var was set. Fixes
+  [#77](https://github.com/cachix/secretspec/issues/77).
 - Per-secret `providers = [...]` chains now behave as a true fallback chain
   when an upstream provider errors (e.g. a 403 from a vault the current user
   cannot access). Previously the first provider's error short-circuited the

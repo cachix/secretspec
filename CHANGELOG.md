@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-05-07
+
 ### Changed
 - Dropped the `serde-envfile` dependency in favor of a small in-tree
   `.env` serializer. The previous git-pinned fork blocked publishing to

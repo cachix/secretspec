@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-07
+
 ### Fixed
 - The `--provider` CLI flag now correctly takes precedence over the
   `SECRETSPEC_PROVIDER` environment variable. Previously the env var was

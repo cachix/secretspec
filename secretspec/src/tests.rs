@@ -3319,6 +3319,67 @@ CERT_DATA = { description = "Certificate data", as_path = true }
     fs::remove_file(&cert_path).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn test_run_cleans_up_as_path_temp_files() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let secret_value = "secret-cert-content";
+
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, format!("CERT_DATA={}", secret_value)).unwrap();
+
+    let config_file = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &config_file,
+        r#"[project]
+name = "test-run-cleanup"
+revision = "1.0"
+
+[profiles.default]
+CERT_DATA = { description = "Certificate data", as_path = true }
+"#,
+    )
+    .unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+    };
+    let spec = Secrets::new(config, Some(global_config), None, None);
+
+    // Have the child write the path it received back to disk so the parent
+    // can inspect it after run_command returns.
+    let captured_path_file = temp_dir.path().join("captured-path");
+    let exit_code = spec
+        .run_command(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "printf '%s' \"$CERT_DATA\" > {}",
+                captured_path_file.display()
+            ),
+        ])
+        .unwrap();
+    assert_eq!(exit_code, 0);
+
+    let captured_path = fs::read_to_string(&captured_path_file).unwrap();
+    assert!(
+        !captured_path.is_empty(),
+        "child should have observed the temp file path via $CERT_DATA"
+    );
+    assert!(
+        !std::path::Path::new(&captured_path).exists(),
+        "as_path temp file at {} should be removed once `run` returns",
+        captured_path
+    );
+}
+
 // ========== Secret generation tests ==========
 
 #[test]

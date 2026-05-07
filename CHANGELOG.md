@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- `secretspec run` now removes the temporary files it creates for
+  `as_path = true` secrets after the child process exits. Previously the
+  files were leaked under `/tmp` because `std::process::exit` skipped the
+  destructors that own them. Fixes
+  [#71](https://github.com/cachix/secretspec/issues/71).
 - Provider URIs now support spaces and special characters in names
   (e.g., `onepassword://Home Lab`). All providers receive automatically
   percent-decoded values via a new `ProviderUrl` wrapper type.

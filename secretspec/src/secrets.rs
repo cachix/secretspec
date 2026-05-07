@@ -1508,6 +1508,16 @@ impl Secrets {
     /// spec.run(vec!["npm".to_string(), "start".to_string()]).unwrap();
     /// ```
     pub fn run(&self, command: Vec<String>) -> Result<()> {
+        let exit_code = self.run_command(command)?;
+        std::process::exit(exit_code);
+    }
+
+    /// Runs a command with secrets injected and returns its exit code.
+    ///
+    /// Splitting this out from [`Self::run`] ensures that any temporary files
+    /// backing `as_path` secrets are dropped (and removed from disk) before
+    /// `std::process::exit` is called — `exit` does not run destructors.
+    pub(crate) fn run_command(&self, command: Vec<String>) -> Result<i32> {
         if command.is_empty() {
             return Err(SecretSpecError::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -1515,13 +1525,14 @@ impl Secrets {
             )));
         }
 
-        // Ensure all secrets are available (will error out if missing)
+        // Ensure all secrets are available (will error out if missing).
+        // `validation_result` owns the temp files for `as_path` secrets and
+        // must stay alive until the child process has terminated.
         let validation_result = self.ensure_secrets(None, None, false)?;
 
         let mut env_vars = env::vars().collect::<HashMap<_, _>>();
-        // Convert SecretString values to regular strings for environment variables
-        for (key, secret) in validation_result.resolved.secrets {
-            env_vars.insert(key, secret.expose_secret().to_string());
+        for (key, secret) in &validation_result.resolved.secrets {
+            env_vars.insert(key.clone(), secret.expose_secret().to_string());
         }
 
         let mut cmd = Command::new(&command[0]);
@@ -1529,6 +1540,6 @@ impl Secrets {
         cmd.envs(&env_vars);
 
         let status = cmd.status()?;
-        std::process::exit(status.code().unwrap_or(1));
+        Ok(status.code().unwrap_or(1))
     }
 }

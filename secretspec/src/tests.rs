@@ -2785,6 +2785,143 @@ fn test_get_secret_with_fallback_chain() {
     }
 }
 
+/// When the primary provider in a chain errors (e.g. authentication failure),
+/// validation should fall back to the next provider rather than propagating
+/// the error. Simulated here by pointing the primary dotenv at a directory,
+/// which causes `from_path_iter` to fail on read.
+#[test]
+fn test_validate_falls_back_on_primary_provider_error() {
+    let temp_dir = TempDir::new().unwrap();
+    let primary_dir = temp_dir.path().join("broken");
+    fs::create_dir(&primary_dir).unwrap();
+    let fallback_file = temp_dir.path().join(".env.fallback");
+    fs::write(&fallback_file, "API_KEY=from-fallback\n").unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "API_KEY".to_string(),
+        Secret {
+            description: Some("API Key".to_string()),
+            required: Some(true),
+            default: None,
+            providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
+            as_path: None,
+            ..Default::default()
+        },
+    );
+
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
+
+    let config = Config {
+        project: Project {
+            name: "test_error_fallback".to_string(),
+            revision: "1.0".to_string(),
+            extends: None,
+        },
+        profiles,
+    };
+
+    let mut providers_map = HashMap::new();
+    providers_map.insert(
+        "primary".to_string(),
+        format!("dotenv://{}", primary_dir.display()),
+    );
+    providers_map.insert(
+        "fallback".to_string(),
+        format!("dotenv://{}", fallback_file.display()),
+    );
+
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some("keyring".to_string()),
+            profile: None,
+            providers: Some(providers_map),
+        },
+    };
+
+    let spec = Secrets::new(config, Some(global_config), None, None);
+
+    match spec
+        .validate()
+        .expect("validate should not propagate primary failure")
+    {
+        Ok(valid) => {
+            let api_key = valid.resolved.secrets.get("API_KEY").unwrap();
+            assert_eq!(api_key.expose_secret(), "from-fallback");
+        }
+        Err(e) => panic!("Expected fallback to succeed, got: {:?}", e),
+    }
+}
+
+/// When every provider in the chain errors, the last error should surface
+/// rather than masking the failure as a missing secret.
+#[test]
+fn test_validate_surfaces_error_when_all_providers_fail() {
+    let temp_dir = TempDir::new().unwrap();
+    let broken_a = temp_dir.path().join("broken-a");
+    let broken_b = temp_dir.path().join("broken-b");
+    fs::create_dir(&broken_a).unwrap();
+    fs::create_dir(&broken_b).unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "API_KEY".to_string(),
+        Secret {
+            description: Some("API Key".to_string()),
+            required: Some(true),
+            default: None,
+            providers: Some(vec!["a".to_string(), "b".to_string()]),
+            as_path: None,
+            ..Default::default()
+        },
+    );
+
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
+
+    let config = Config {
+        project: Project {
+            name: "test_all_fail".to_string(),
+            revision: "1.0".to_string(),
+            extends: None,
+        },
+        profiles,
+    };
+
+    let mut providers_map = HashMap::new();
+    providers_map.insert("a".to_string(), format!("dotenv://{}", broken_a.display()));
+    providers_map.insert("b".to_string(), format!("dotenv://{}", broken_b.display()));
+
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some("keyring".to_string()),
+            profile: None,
+            providers: Some(providers_map),
+        },
+    };
+
+    let spec = Secrets::new(config, Some(global_config), None, None);
+
+    let result = spec.validate();
+    assert!(
+        result.is_err(),
+        "Expected error when every provider in the chain fails"
+    );
+}
+
 #[test]
 fn test_validate_with_per_secret_providers() {
     let temp_dir = TempDir::new().unwrap();

@@ -13,6 +13,30 @@ use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Emits a warning when a provider in a fallback chain fails so the user
+/// can see why a particular link was skipped, without aborting the chain.
+fn warn_provider_failure(uri: &str, secret_name: &str, err: &SecretSpecError) {
+    eprintln!(
+        "{} provider {} failed for {}: {}; trying next provider in chain",
+        "warning:".yellow(),
+        uri.bold(),
+        secret_name.bold(),
+        err
+    );
+}
+
+/// Emits a warning when the primary provider for a batch fetch fails (either
+/// during construction or during `get_batch`); affected secrets will still be
+/// retried via their per-secret fallback chain below.
+fn warn_primary_provider_failure(uri: Option<&str>, err: &SecretSpecError) {
+    eprintln!(
+        "{} primary provider {} failed: {}; will try fallback chain for affected secrets",
+        "warning:".yellow(),
+        uri.unwrap_or("<default>").bold(),
+        err
+    );
+}
+
 /// Walks up from the current directory looking for `secretspec.toml`.
 fn find_config_file() -> Result<PathBuf> {
     let mut dir = std::env::current_dir()?;
@@ -511,7 +535,13 @@ impl Secrets {
 
     /// Gets a secret from a list of providers with fallback.
     ///
-    /// Tries each provider in order until one has the secret.
+    /// Tries each provider in order until one has the secret. Errors from a
+    /// provider (e.g. authentication failure, network error) are treated like
+    /// "not found" so the chain continues; a warning is emitted and the next
+    /// provider is tried. If every provider errored without any reporting a
+    /// healthy "not found", the last error is returned so the user sees why
+    /// the secret could not be retrieved.
+    ///
     /// If no provider URIs are specified, falls back to the global provider.
     ///
     /// # Arguments
@@ -535,15 +565,36 @@ impl Secrets {
     ) -> Result<Option<SecretString>> {
         // If provider URIs are specified, try them in order
         if let Some(uris) = provider_uris {
+            let mut last_error: Option<SecretSpecError> = None;
+            let mut any_healthy = false;
             for uri in uris {
-                let provider = Box::<dyn ProviderTrait>::try_from(uri.clone())?;
-                match provider.get(project_name, secret_name, profile_name)? {
-                    Some(value) => return Ok(Some(value)),
-                    None => continue, // Try next provider
+                let provider = match Box::<dyn ProviderTrait>::try_from(uri.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn_provider_failure(uri, secret_name, &e);
+                        last_error = Some(e);
+                        continue;
+                    }
+                };
+                match provider.get(project_name, secret_name, profile_name) {
+                    Ok(Some(value)) => return Ok(Some(value)),
+                    Ok(None) => {
+                        any_healthy = true;
+                        continue;
+                    }
+                    Err(e) => {
+                        warn_provider_failure(uri, secret_name, &e);
+                        last_error = Some(e);
+                        continue;
+                    }
                 }
             }
-            // Not found in any provider, return None
-            Ok(None)
+            // Surface the last error only if no provider in the chain returned
+            // a healthy "not found" — otherwise the secret is genuinely missing.
+            match last_error {
+                Some(e) if !any_healthy => Err(e),
+                _ => Ok(None),
+            }
         } else {
             // No per-secret providers, use default provider
             let backend = self.get_provider(default_provider_arg)?;
@@ -1330,6 +1381,7 @@ impl Secrets {
         let override_uri = self.resolve_provider_override(None);
 
         let mut provider_groups: HashMap<Option<String>, Vec<String>> = HashMap::new();
+        let mut secret_primary_uris: HashMap<String, Option<String>> = HashMap::new();
 
         for (name, _) in &all_secrets {
             let secret_config = self
@@ -1344,27 +1396,45 @@ impl Secrets {
                 _ => None,
             };
 
+            secret_primary_uris.insert(name.clone(), provider_uri.clone());
             provider_groups
                 .entry(provider_uri)
                 .or_default()
                 .push(name.clone());
         }
 
-        // Batch fetch from each provider group
+        // Batch fetch from each provider group. A failure here (e.g. an
+        // unauthenticated vault) does not abort validation: secrets that
+        // declare a fallback chain are retried per-secret below. Secrets in
+        // the failed group with no fallback to try will surface the original
+        // error instead of being silently reported as missing.
         let mut fetched_values: HashMap<String, SecretString> = HashMap::new();
+        let mut failed_primary_uris: HashMap<Option<String>, SecretSpecError> = HashMap::new();
 
         for (provider_uri, secret_names) in provider_groups {
-            let provider = if let Some(uri) = provider_uri {
-                Box::<dyn ProviderTrait>::try_from(uri)?
+            let provider_result = if let Some(uri) = provider_uri.clone() {
+                Box::<dyn ProviderTrait>::try_from(uri)
             } else {
-                self.get_provider(None)?
+                self.get_provider(None)
+            };
+
+            let provider = match provider_result {
+                Ok(p) => p,
+                Err(e) => {
+                    warn_primary_provider_failure(provider_uri.as_deref(), &e);
+                    failed_primary_uris.insert(provider_uri, e);
+                    continue;
+                }
             };
 
             let keys: Vec<&str> = secret_names.iter().map(|s| s.as_str()).collect();
-            let batch_results =
-                provider.get_batch(&self.config.project.name, &keys, &profile_name)?;
-
-            fetched_values.extend(batch_results);
+            match provider.get_batch(&self.config.project.name, &keys, &profile_name) {
+                Ok(batch_results) => fetched_values.extend(batch_results),
+                Err(e) => {
+                    warn_primary_provider_failure(provider_uri.as_deref(), &e);
+                    failed_primary_uris.insert(provider_uri, e);
+                }
+            }
         }
 
         // Process results - apply defaults, handle as_path, track missing
@@ -1388,6 +1458,9 @@ impl Secrets {
                     }
                 }
                 None => {
+                    let primary_uri = &secret_primary_uris[&name];
+                    let primary_failed = failed_primary_uris.contains_key(primary_uri);
+
                     // An explicit override collapses the chain to one provider, so no fallback.
                     let fallback_value =
                         match (override_uri.as_ref(), secret_config.providers.as_deref()) {
@@ -1401,6 +1474,13 @@ impl Secrets {
                                     fallback_uris.as_deref(),
                                     None,
                                 )?
+                            }
+                            // No alternative chain to try and the primary failed: surface the
+                            // original error rather than reporting the secret as merely missing.
+                            _ if primary_failed => {
+                                return Err(failed_primary_uris
+                                    .remove(primary_uri)
+                                    .expect("primary_failed implies entry present"));
                             }
                             _ => None,
                         };

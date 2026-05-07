@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Per-secret `providers = [...]` chains now behave as a true fallback chain
+  when an upstream provider errors (e.g. a 403 from a vault the current user
+  cannot access). Previously the first provider's error short-circuited the
+  whole operation; now the error is logged as a warning and the next provider
+  in the chain is tried. The original error is only surfaced if every
+  provider in the chain failed (so genuine outages still bubble up), or if
+  the secret has no alternative to fall back to. Fixes
+  [#83](https://github.com/cachix/secretspec/issues/83).
 - `secretspec run` now removes the temporary files it creates for
   `as_path = true` secrets after the child process exits. Previously the
   files were leaked under `/tmp` because `std::process::exit` skipped the

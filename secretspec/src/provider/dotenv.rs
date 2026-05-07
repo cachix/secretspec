@@ -2,9 +2,36 @@ use super::{Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::PathBuf;
+
+/// Serializes a map of env vars into `.env` file content.
+///
+/// Each entry is emitted as `KEY="value"` with the escapes that
+/// [`dotenvy`] understands inside double-quoted values: `\\`, `\"`,
+/// `\$` (suppresses variable substitution), and `\n` (literal
+/// newlines folded onto a single line). Keys are sorted for stable
+/// output.
+fn serialize_dotenv(vars: &HashMap<String, String>) -> String {
+    let sorted: BTreeMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let mut out = String::new();
+    for (key, value) in sorted {
+        out.push_str(key);
+        out.push_str("=\"");
+        for ch in value.chars() {
+            match ch {
+                '\\' => out.push_str("\\\\"),
+                '"' => out.push_str("\\\""),
+                '$' => out.push_str("\\$"),
+                '\n' => out.push_str("\\n"),
+                c => out.push(c),
+            }
+        }
+        out.push_str("\"\n");
+    }
+    out
+}
 
 /// Configuration for the dotenv provider.
 ///
@@ -86,7 +113,7 @@ impl TryFrom<&ProviderUrl> for DotEnvConfig {
 ///
 /// The DotEnvProvider implements the Provider trait to enable reading
 /// and writing secrets from/to .env files. It uses the dotenvy crate
-/// for parsing and serde-envfile for serialization to ensure proper
+/// for parsing and a small local serializer for writing, with proper
 /// handling of special characters and escaping.
 ///
 /// # Features
@@ -213,7 +240,7 @@ impl Provider for DotEnvProvider {
     ///
     /// 1. Loads existing variables using dotenvy to preserve them
     /// 2. Updates or adds the new key-value pair
-    /// 3. Serializes back using serde-envfile for proper escaping
+    /// 3. Serializes back with `serialize_dotenv` for proper escaping
     fn set(&self, _project: &str, key: &str, value: &SecretString, _profile: &str) -> Result<()> {
         // Load existing vars using dotenvy
         let mut vars = HashMap::new();
@@ -228,14 +255,7 @@ impl Provider for DotEnvProvider {
         // Update the value
         vars.insert(key.to_string(), value.expose_secret().to_string());
 
-        // Save back to file using serde-envfile for proper escaping
-        let content = serde_envfile::to_string(&vars).map_err(|e| {
-            SecretSpecError::ProviderOperationFailed(format!(
-                "Failed to serialize .env file: {}",
-                e
-            ))
-        })?;
-
+        let content = serialize_dotenv(&vars);
         fs::write(&self.config.path, content)?;
         Ok(())
     }
@@ -352,6 +372,76 @@ mod tests {
 
         let secrets = provider.reflect().unwrap();
         assert!(secrets.is_empty());
+    }
+
+    #[test]
+    fn test_serialize_dotenv_escapes() {
+        let mut vars = HashMap::new();
+        vars.insert("PLAIN".to_string(), "hello".to_string());
+        vars.insert("QUOTES".to_string(), r#"{"a":"b"}"#.to_string());
+        vars.insert("BACKSLASH".to_string(), r"C:\path\to".to_string());
+        vars.insert("DOLLAR".to_string(), "$VAR".to_string());
+        vars.insert("NEWLINE".to_string(), "line1\nline2".to_string());
+
+        let out = serialize_dotenv(&vars);
+        // Sorted by key, double-quoted, with escapes applied.
+        assert_eq!(
+            out,
+            concat!(
+                "BACKSLASH=\"C:\\\\path\\\\to\"\n",
+                "DOLLAR=\"\\$VAR\"\n",
+                "NEWLINE=\"line1\\nline2\"\n",
+                "PLAIN=\"hello\"\n",
+                "QUOTES=\"{\\\"a\\\":\\\"b\\\"}\"\n",
+            )
+        );
+    }
+
+    #[test]
+    fn test_set_roundtrips_special_characters() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_file = dir.path().join(".env");
+        let provider = DotEnvProvider::new(DotEnvConfig {
+            path: env_file.clone(),
+        });
+
+        // Each entry exercises a different class of input the previous
+        // serde-envfile bug or dotenvy's parser cared about.
+        let cases = [
+            ("PLAIN", "hello world"),
+            ("QUOTES", r#"{"a":"b"}"#),
+            ("LEADING_QUOTE", r#""leading"#),
+            ("TRAILING_QUOTE", r#"trailing""#),
+            ("BACKSLASH", r"C:\path\to"),
+            ("BACKSLASH_BEFORE_QUOTE", r#"a\"b"#),
+            ("BACKSLASH_BEFORE_DOLLAR", r"a\$b"),
+            ("DOLLAR_VAR", "literal $VAR not expanded"),
+            ("DOLLAR_BRACED", "literal ${VAR} not expanded"),
+            ("DOLLAR_ONLY", "$"),
+            ("HASH", "value with # not a comment"),
+            ("SINGLE_QUOTE", "it's literal"),
+            ("EQUALS", "k=v=more"),
+            ("NEWLINE", "line1\nline2"),
+            ("MIXED", "a\\b\"c$d\ne"),
+            ("UNICODE", "café — 🚀"),
+            ("WHITESPACE_EDGES", "  spaced  "),
+            ("EMPTY", ""),
+        ];
+
+        for (k, v) in cases {
+            provider
+                .set("proj", k, &SecretString::new(v.into()), "default")
+                .unwrap();
+        }
+
+        for (k, v) in cases {
+            let got = provider.get("proj", k, "default").unwrap();
+            assert_eq!(
+                got.map(|s| s.expose_secret().to_string()),
+                Some(v.to_string()),
+                "round-trip failed for {k}",
+            );
+        }
     }
 
     // Regression test for https://github.com/cachix/secretspec/issues/74:

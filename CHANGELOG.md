@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Dropped the `serde-envfile` dependency in favor of a small in-tree
+  `.env` serializer. The previous git-pinned fork blocked publishing to
+  crates.io; the new serializer applies the same escapes (backslash,
+  double quote, dollar, newline) that the fork added and emits keys in
+  sorted order for stable diffs.
+
 ## [0.9.0] - 2026-05-07
 
 ### Fixed

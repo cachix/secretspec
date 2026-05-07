@@ -24,7 +24,6 @@ thiserror.workspace = true
 etcetera.workspace = true
 colored.workspace = true
 dotenvy.workspace = true
-serde-envfile.workspace = true
 inquire.workspace = true
 miette.workspace = true
 serde_json.workspace = true

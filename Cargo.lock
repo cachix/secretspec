@@ -1600,15 +1600,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
-name = "envy"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f47e0157f2cb54f5ae1bd371b30a2ae4311e1c028f575cd4e81de7353215965"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3808,7 +3799,6 @@ dependencies = [
  "rustls 0.23.37",
  "secrecy",
  "serde",
- "serde-envfile",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
@@ -3897,18 +3887,6 @@ checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
  "serde_derive",
-]
-
-[[package]]
-name = "serde-envfile"
-version = "0.3.0"
-source = "git+https://github.com/cachix/serde-envfile.git?branch=fix-serialize-str-escape#af85840c30147680414b0fac9b4583f47e0c1e39"
-dependencies = [
- "cfg-if",
- "dotenvy",
- "envy",
- "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]

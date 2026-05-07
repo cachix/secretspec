@@ -8,7 +8,7 @@ The Vault provider integrates with HashiCorp Vault and OpenBao for centralized s
 ## Prerequisites
 
 - A running Vault or OpenBao server
-- A valid authentication token (`VAULT_TOKEN` env var or `~/.vault-token` file)
+- Authentication credentials (see [Authentication](#authentication))
 - KV secrets engine enabled (v1 or v2)
 - Build with `--features vault`
 
@@ -17,13 +17,14 @@ The Vault provider integrates with HashiCorp Vault and OpenBao for centralized s
 ### URI Format
 
 ```
-vault://[namespace@]host[:port][/mount][?kv=1&tls=false]
-openbao://[namespace@]host[:port][/mount][?kv=1&tls=false]
+vault://[namespace@]host[:port][/mount][?key=value&...]
+openbao://[namespace@]host[:port][/mount][?key=value&...]
 ```
 
 - `host[:port]`: Vault server address (falls back to `VAULT_ADDR` env var)
 - `mount`: KV engine mount path (default: `secret`)
 - `namespace@`: Optional Vault namespace (also reads `VAULT_NAMESPACE` env var)
+- `?auth=approle`: Use AppRole authentication (default: `token`)
 - `?kv=1`: Use KV v1 engine (default: v2)
 - `?tls=false`: Disable TLS (for development servers)
 
@@ -101,21 +102,23 @@ $ secretspec check --provider "vault://127.0.0.1:8200/secret?tls=false"
 
 ### Authentication
 
-The provider reads the Vault token from:
+The authentication method is selected via the `auth` query parameter.
 
-1. `VAULT_TOKEN` environment variable
-2. `~/.vault-token` file
+#### Token (default)
+
+Reads the token from `VAULT_TOKEN` environment variable or `~/.vault-token` file.
 
 ```bash
-# Set token via environment
-$ export VAULT_TOKEN=hvs.your-token-here
-$ secretspec run --provider vault://vault.example.com:8200 -- npm start
+export VAULT_TOKEN=hvs.your-token-here
+secretspec run --provider vault://vault.example.com:8200 -- npm start
 ```
 
-### CI/CD
+#### AppRole
+
+Authenticates using `VAULT_ROLE_ID` and `VAULT_SECRET_ID` environment variables. Useful for CI/CD pipelines and deployment platforms where a static token is not appropriate.
 
 ```bash
-# Set VAULT_TOKEN from your CI secret store
-$ export VAULT_TOKEN=$CI_VAULT_TOKEN
-$ secretspec run --provider vault://vault.example.com:8200/secret -- deploy
+export VAULT_ROLE_ID=your-role-id
+export VAULT_SECRET_ID=your-secret-id
+secretspec run --provider "vault://vault.example.com:8200/secret?auth=approle" -- deploy
 ```

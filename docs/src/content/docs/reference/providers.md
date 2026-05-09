@@ -78,6 +78,20 @@ pass://                       # Default password store
 **Prerequisites**: `pass` CLI, initialized with `pass init <gpg-key-id>`
 **Storage**: Path `secretspec/{project}/{profile}/{key}`
 
+## Proton Pass Provider
+
+**URI**: `protonpass://[vault[/title-template]]` - Stores secrets in Proton Pass via the official `pass-cli`
+
+```bash
+protonpass://                                      # Default vault ("secretspec")
+protonpass://Work                                  # Specific vault
+protonpass://Work/{project}/{profile}/{key}        # Custom vault and title template
+```
+
+**Features**: Read/write, end-to-end encryption, cloud sync, vault organisation, PAT-based CI auth
+**Prerequisites**: `pass-cli`, authenticated with `pass-cli login` (or `pass-cli login --pat $PAT` for CI)
+**Storage**: Note item titled `{project}/{profile}/{key}` inside the configured vault
+
 ## Google Cloud Secret Manager Provider
 
 **URI**: `gcsm://PROJECT_ID` - Stores secrets in Google Cloud Secret Manager
@@ -163,6 +177,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Environment | ❌ Plain text | Process memory | ❌ No |
 | Keyring | ✅ System encryption | System keychain | ❌ No |
 | Pass | ✅ GPG encryption | Local filesystem | ❌ No |
+| Proton Pass | ✅ End-to-end | Cloud (Proton) | ✅ Yes |
 | LastPass | ✅ End-to-end | Cloud (LastPass) | ✅ Yes |
 | OnePassword | ✅ End-to-end | Cloud (OnePassword) | ✅ Yes |
 | GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |

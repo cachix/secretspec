@@ -13,6 +13,7 @@ Providers are pluggable storage backends that handle the storage and retrieval o
 | **dotenv** | Traditional `.env` file in your project directory | ✓ | ✓ | ✗ |
 | **env** | Read-only access to existing environment variables | ✓ | ✗ | ✗ |
 | **pass** | Unix password manager with GPG encryption | ✓ | ✓ | ✓ |
+| **protonpass** | Integration with Proton password manager | ✓ | ✓ | ✓ |
 | **onepassword** | Integration with OnePassword password manager | ✓ | ✓ | ✓ |
 | **lastpass** | Integration with LastPass password manager | ✓ | ✓ | ✓ |
 | **gcsm** | Google Cloud Secret Manager (requires `--features gcsm`) | ✓ | ✓ | ✓ |

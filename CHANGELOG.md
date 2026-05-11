@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-11
+
 ### Fixed
 - `secretspec check`: optional secrets that aren't set no longer render with a
   green `✓` and aren't counted as "found" in the trailing summary. They now

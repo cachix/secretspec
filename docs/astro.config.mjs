@@ -29,7 +29,7 @@ API_KEY = { description = "External API key" }
 
 ## Providers
 
-Secrets can be stored in: keyring (default), dotenv files, environment variables, 1Password, LastPass, Pass, Google Cloud Secret Manager, AWS Secrets Manager, or HashiCorp Vault / OpenBao.`,
+Secrets can be stored in: keyring (default), dotenv files, environment variables, 1Password, LastPass, Pass, Proton Pass, Google Cloud Secret Manager, AWS Secrets Manager, or HashiCorp Vault / OpenBao.`,
         }),
       ],
       title: "SecretSpec",
@@ -80,6 +80,7 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
             { label: "Dotenv", slug: "providers/dotenv" },
             { label: "Environment Variables", slug: "providers/env" },
             { label: "Pass", slug: "providers/pass" },
+            { label: "Proton Pass", slug: "providers/protonpass" },
             { label: "LastPass", slug: "providers/lastpass" },
             { label: "1Password", slug: "providers/onepassword" },
             {

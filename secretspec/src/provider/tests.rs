@@ -85,6 +85,9 @@ fn test_create_from_string_with_plain_names() {
 
     let provider = Box::<dyn Provider>::try_from("pass").unwrap();
     assert_eq!(provider.name(), "pass");
+
+    let provider = Box::<dyn Provider>::try_from("protonpass").unwrap();
+    assert_eq!(provider.name(), "protonpass");
 }
 
 #[test]
@@ -539,6 +542,38 @@ mod integration_tests {
         assert!(
             provider.allows_set(),
             "Pass provider should support write operations"
+        );
+    }
+
+    #[test]
+    fn test_protonpass_provider_creation() {
+        let provider = Box::<dyn Provider>::try_from("protonpass").unwrap();
+        assert_eq!(provider.name(), "protonpass");
+        assert_eq!(provider.uri(), "protonpass");
+
+        let provider = Box::<dyn Provider>::try_from("protonpass://").unwrap();
+        assert_eq!(provider.name(), "protonpass");
+        assert_eq!(provider.uri(), "protonpass");
+
+        let provider = Box::<dyn Provider>::try_from("protonpass://Work").unwrap();
+        assert_eq!(provider.name(), "protonpass");
+        assert_eq!(provider.uri(), "protonpass://Work");
+
+        let provider =
+            Box::<dyn Provider>::try_from("protonpass://Work/{project}/{profile}/{key}").unwrap();
+        assert_eq!(provider.name(), "protonpass");
+        assert_eq!(
+            provider.uri(),
+            "protonpass://Work/{project}/{profile}/{key}"
+        );
+    }
+
+    #[test]
+    fn test_protonpass_provider_allows_set() {
+        let provider = Box::<dyn Provider>::try_from("protonpass").unwrap();
+        assert!(
+            provider.allows_set(),
+            "ProtonPass provider should support write operations"
         );
     }
 

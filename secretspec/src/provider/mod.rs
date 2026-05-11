@@ -159,6 +159,7 @@ pub mod keyring;
 pub mod lastpass;
 pub mod onepassword;
 pub mod pass;
+pub mod protonpass;
 #[cfg(feature = "vault")]
 pub mod vault;
 #[macro_use]

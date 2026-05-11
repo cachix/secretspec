@@ -402,16 +402,19 @@ impl OnePasswordProvider {
 
     /// Checks if the user is authenticated with OnePassword (uncached).
     ///
-    /// Uses the `op whoami` command to verify authentication status.
-    /// This is non-intrusive and doesn't require any permissions.
+    /// Uses `op vault list` rather than `op whoami` because the latter only
+    /// reports the state of an explicit `op signin` session and reports
+    /// `account is not signed in` under desktop-app delegated sessions even
+    /// when secret reads via `op item ...` work fine. `op vault list` actually
+    /// exercises the access path used for real operations.
     ///
     /// # Returns
     ///
     /// * `Ok(true)` - User is authenticated
     /// * `Ok(false)` - User is not authenticated
     /// * `Err(_)` - Command execution failed
-    fn whoami(&self) -> Result<bool> {
-        match self.execute_op_command(&["whoami"], None) {
+    fn is_authenticated(&self) -> Result<bool> {
+        match self.execute_op_command(&["vault", "list", "--format", "json"], None) {
             Ok(_) => Ok(true),
             Err(SecretSpecError::ProviderOperationFailed(msg))
                 if msg.contains("authentication required") || msg.contains("no account found") =>
@@ -582,7 +585,7 @@ impl OnePasswordProvider {
     /// Checks that the user is authenticated with OnePassword.
     /// Called by the preflight guard before any provider operations.
     pub(crate) fn check_auth(&self) -> Result<()> {
-        if self.whoami()? {
+        if self.is_authenticated()? {
             Ok(())
         } else {
             Err(SecretSpecError::ProviderOperationFailed(

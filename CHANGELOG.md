@@ -8,12 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- OnePassword provider: `OP_SESSION_*` environment variables (left over from
-  `eval $(op signin)`) are now stripped before spawning `op`. When those
-  tokens expired, `op` refused to fall back to the desktop app's biometric
-  flow and surfaced `account is not signed in`, even though desktop
-  integration was enabled. With the env vars removed, the desktop app
-  handles unlock automatically and no manual re-signin is needed. Auth
+- OnePassword provider: the auth preflight now probes `op vault list` instead
+  of `op whoami`. Under the 1Password desktop app's delegated-session
+  integration, `op whoami` reports `account is not signed in` even when
+  `op item get` / `op vault list` work fine — so every secret read or write
+  failed at preflight with a misleading "not signed in" error. `op vault
+  list` exercises the actual access path and succeeds when the desktop app
+  can serve secrets. Additionally, `OP_SESSION_*` environment variables
+  (left over from `eval $(op signin)`) are now stripped before spawning
+  `op` so a stale shell session can't shadow the desktop integration. Auth
   failure and install hints now point users at desktop integration as the
   primary local-dev path. Fixes
   [#80](https://github.com/cachix/secretspec/issues/80).

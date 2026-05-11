@@ -23,10 +23,11 @@ In the 1Password desktop app, open **Settings → Developer** and enable
 (Touch ID / Windows Hello / system password) — no shell session
 needed and nothing expires from under you.
 
-`secretspec` strips any `OP_SESSION_*` environment variables from
-spawned `op` processes, so a stale `eval $(op signin)` session in
-your shell won't shadow the desktop integration and produce
-`account is not signed in` errors.
+Under desktop integration, `op whoami` reports `account is not signed
+in` even when secret access works, so `secretspec` probes auth via
+`op vault list` instead. It also strips any `OP_SESSION_*` environment
+variables from spawned `op` processes, so a stale `eval $(op signin)`
+session in your shell can't shadow the desktop integration.
 
 #### Linux note
 

@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- OnePassword provider: `OP_SESSION_*` environment variables (left over from
+  `eval $(op signin)`) are now stripped before spawning `op`. When those
+  tokens expired, `op` refused to fall back to the desktop app's biometric
+  flow and surfaced `account is not signed in`, even though desktop
+  integration was enabled. With the env vars removed, the desktop app
+  handles unlock automatically and no manual re-signin is needed. Auth
+  failure and install hints now point users at desktop integration as the
+  primary local-dev path. Fixes
+  [#80](https://github.com/cachix/secretspec/issues/80).
 - Vault / OpenBao provider: HTTPS requests now trust certificates from the
   operating system trust store (and honor `SSL_CERT_FILE` / `SSL_CERT_DIR`),
   so servers fronted by a private / internal CA work without modification.

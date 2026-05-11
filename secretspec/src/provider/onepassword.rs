@@ -195,6 +195,38 @@ fn is_wsl2() -> bool {
     false
 }
 
+/// Removes any `OP_SESSION_*` env vars from a spawned `op` invocation.
+///
+/// `op` treats `OP_SESSION_<account>` as the authoritative session and will not
+/// fall back to the desktop app's biometric flow when those tokens expire,
+/// returning `"account is not signed in"` instead. Stripping them lets the
+/// desktop integration (Settings → Developer → Integrate with 1Password CLI)
+/// handle unlock automatically. See
+/// <https://github.com/cachix/secretspec/issues/80>.
+const OP_NOT_INSTALLED_HELP: &str = "OnePassword CLI (op) is not installed.\n\n\
+    To install it:\n  \
+    - macOS: brew install 1password-cli\n  \
+    - Linux: Download from https://1password.com/downloads/command-line/\n  \
+    - Windows: Download from https://1password.com/downloads/command-line/\n  \
+    - NixOS: nix-env -iA nixpkgs.onepassword\n\n\
+    Then enable desktop integration in the 1Password app under\n  \
+    Settings → Developer → \"Integrate with 1Password CLI\".";
+
+const AUTH_REQUIRED_HELP: &str = "OnePassword authentication required.\n\n\
+    Recommended: enable desktop integration in the 1Password app under\n  \
+    Settings → Developer → \"Integrate with 1Password CLI\", then unlock the app.\n\n\
+    Alternatives:\n  \
+    - Service account (CI): set OP_SERVICE_ACCOUNT_TOKEN or use the onepassword+token:// scheme\n  \
+    - Manual signin: run 'eval $(op signin)' (session expires after 30 minutes of inactivity)";
+
+fn strip_op_session_env(cmd: &mut Command) {
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("OP_SESSION_") {
+            cmd.env_remove(&key);
+        }
+    }
+}
+
 /// Provider implementation for OnePassword password manager.
 ///
 /// This provider integrates with OnePassword CLI (`op`) to store and retrieve
@@ -203,10 +235,16 @@ fn is_wsl2() -> bool {
 ///
 /// # Authentication
 ///
-/// The provider supports two authentication methods:
+/// The provider supports three authentication methods, in order of preference:
 ///
-/// 1. **Interactive Authentication**: Users run `eval $(op signin)` before using secretspec
+/// 1. **Desktop app integration** (recommended for local dev): enable
+///    Settings → Developer → "Integrate with 1Password CLI" in the desktop app.
+///    `op` calls are unlocked via biometrics with no shell session needed.
 /// 2. **Service Account Tokens**: For CI/CD, configure a token in the config
+///    or set `OP_SERVICE_ACCOUNT_TOKEN`.
+/// 3. **Manual signin** (legacy): run `eval $(op signin)`. The provider strips
+///    `OP_SESSION_*` env vars before spawning `op` so that expired session
+///    tokens fall back to desktop integration instead of erroring.
 ///
 /// # Storage Structure
 ///
@@ -219,8 +257,7 @@ fn is_wsl2() -> bool {
 /// # Example Usage
 ///
 /// ```ignore
-/// # Interactive auth
-/// eval $(op signin)
+/// # Desktop integration (recommended): enable in 1Password app, then:
 /// secretspec set MY_SECRET --provider onepassword://Development
 ///
 /// # Service account token
@@ -290,6 +327,7 @@ impl OnePasswordProvider {
         use std::process::Stdio;
 
         let mut cmd = Command::new(&self.op_command);
+        strip_op_session_env(&mut cmd);
 
         // Set service account token if provided
         if let Some(token) = &self.config.service_account_token {
@@ -316,7 +354,7 @@ impl OnePasswordProvider {
                 Ok(child) => child,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     return Err(SecretSpecError::ProviderOperationFailed(
-                        "OnePassword CLI (op) is not installed.\n\nTo install it:\n  - macOS: brew install 1password-cli\n  - Linux: Download from https://1password.com/downloads/command-line/\n  - Windows: Download from https://1password.com/downloads/command-line/\n  - NixOS: nix-env -iA nixpkgs.onepassword\n\nAfter installation, run 'eval $(op signin)' to authenticate.".to_string(),
+                        OP_NOT_INSTALLED_HELP.to_string(),
                     ));
                 }
                 Err(e) => return Err(e.into()),
@@ -335,7 +373,7 @@ impl OnePasswordProvider {
                 Ok(output) => output,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     return Err(SecretSpecError::ProviderOperationFailed(
-                        "OnePassword CLI (op) is not installed.\n\nTo install it:\n  - macOS: brew install 1password-cli\n  - Linux: Download from https://1password.com/downloads/command-line/\n  - Windows: Download from https://1password.com/downloads/command-line/\n  - NixOS: nix-env -iA nixpkgs.onepassword\n\nAfter installation, run 'eval $(op signin)' to authenticate.".to_string(),
+                        OP_NOT_INSTALLED_HELP.to_string(),
                     ));
                 }
                 Err(e) => return Err(e.into()),
@@ -347,10 +385,10 @@ impl OnePasswordProvider {
             if error_msg.contains("not currently signed in")
                 || error_msg.contains("no active session")
                 || error_msg.contains("could not find session token")
+                || error_msg.contains("account is not signed in")
             {
                 return Err(SecretSpecError::ProviderOperationFailed(
-                    "OnePassword authentication required. Please run 'eval $(op signin)' first."
-                        .to_string(),
+                    AUTH_REQUIRED_HELP.to_string(),
                 ));
             }
             return Err(SecretSpecError::ProviderOperationFailed(
@@ -548,8 +586,7 @@ impl OnePasswordProvider {
             Ok(())
         } else {
             Err(SecretSpecError::ProviderOperationFailed(
-                "OnePassword authentication required. Please run 'eval $(op signin)' first."
-                    .to_string(),
+                AUTH_REQUIRED_HELP.to_string(),
             ))
         }
     }
@@ -770,6 +807,7 @@ impl Provider for OnePasswordProvider {
 
                 thread::spawn(move || {
                     let mut cmd = Command::new(&op_cmd);
+                    strip_op_session_env(&mut cmd);
 
                     if let Some(ref t) = token {
                         cmd.env("OP_SERVICE_ACCOUNT_TOKEN", t);

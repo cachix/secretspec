@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Proton Pass provider that stores secrets in a Proton Pass vault via the
+  `proton-pass` CLI. Configured as `protonpass://<vault>`; items are
+  organized per project / profile and read / write both go through the
+  CLI.
+
 ### Fixed
 - OnePassword provider: the auth preflight now probes `op vault list` instead
   of `op whoami`. Under the 1Password desktop app's delegated-session

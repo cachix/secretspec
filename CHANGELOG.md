@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-11
+
 ### Added
 - Proton Pass provider that stores secrets in a Proton Pass vault via the
   `proton-pass` CLI. Configured as `protonpass://<vault>`; items are

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Vault / OpenBao provider: HTTPS requests now trust certificates from the
+  operating system trust store (and honor `SSL_CERT_FILE` / `SSL_CERT_DIR`),
+  so servers fronted by a private / internal CA work without modification.
+  Previously the bundled `webpki-roots` set was the only trust anchor and any
+  non-public CA produced `Failed to connect to Vault ... error sending
+  request`. Switches the `reqwest` workspace dependency from `rustls-tls` to
+  `rustls-tls-native-roots`. Fixes
+  [#85](https://github.com/cachix/secretspec/issues/85).
+
 ## [0.9.1] - 2026-05-07
 
 ### Changed

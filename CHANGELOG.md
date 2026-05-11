@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `secretspec check`: optional secrets that aren't set no longer render with a
+  green `✓` and aren't counted as "found" in the trailing summary. They now
+  display with the same blue `○ (optional)` styling already used in the
+  missing-required path, and the summary appends `, N optional` whenever
+  optional secrets are absent (e.g. `Summary: 4 found, 0 missing, 1 optional`).
+  If every optional secret is set, the summary line stays in its previous
+  `X found, Y missing` form. Fixes
+  [#72](https://github.com/cachix/secretspec/issues/72).
+
 ## [0.10.0] - 2026-05-11
 
 ### Added

@@ -4158,3 +4158,104 @@ fn test_resolve_read_provider_uris_override_skips_chain() {
     );
     assert_eq!(uris[0], format!("dotenv://{}", team_path.display()));
 }
+
+/// Strip ANSI escape sequences so summary assertions don't depend on whether
+/// the `colored` crate decides to emit them (TTY detection differs between
+/// local runs and CI).
+fn strip_ansi(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'm' {
+                i += 1;
+            }
+            if i < bytes.len() {
+                i += 1;
+            }
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Regression for https://github.com/cachix/secretspec/issues/72: when every
+/// optional secret is set, the summary line keeps its previous two-segment
+/// form so we don't churn output for the common case.
+#[test]
+fn test_format_summary_omits_optional_when_none_missing() {
+    let line = Secrets::format_summary(5, 0, 0);
+    assert_eq!(strip_ansi(&line), "Summary: 5 found, 0 missing");
+}
+
+/// Regression for https://github.com/cachix/secretspec/issues/72: missing
+/// optional secrets must surface in the summary as a third segment rather
+/// than being silently absorbed into "found".
+#[test]
+fn test_format_summary_appends_optional_when_some_missing() {
+    let line = Secrets::format_summary(4, 0, 1);
+    assert_eq!(strip_ansi(&line), "Summary: 4 found, 0 missing, 1 optional");
+
+    let mixed = Secrets::format_summary(2, 3, 4);
+    assert_eq!(
+        strip_ansi(&mixed),
+        "Summary: 2 found, 3 missing, 4 optional"
+    );
+}
+
+/// End-to-end check for https://github.com/cachix/secretspec/issues/72:
+/// an optional secret that has no value in the backing provider must land in
+/// `missing_optional` instead of being treated as found. The display layer
+/// relies on this — without it, `secretspec check` would still print a green
+/// checkmark for optional-but-unset secrets and undercount them in the
+/// summary, which was the original user-visible bug.
+#[test]
+fn test_validate_marks_unset_optional_secret_as_missing_optional() {
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, "REQUIRED_PRESENT=value\n").unwrap();
+
+    let config_file = temp_dir.path().join("secretspec.toml");
+    let toml_content = r#"[project]
+name = "issue72"
+revision = "1.0"
+
+[profiles.default]
+REQUIRED_PRESENT = { description = "required, present" }
+OPTIONAL_MISSING = { description = "optional, not set", required = false }
+"#;
+    fs::write(&config_file, toml_content).unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+    };
+
+    let spec = Secrets::new(config, Some(global_config), None, None);
+    let validated = spec
+        .validate()
+        .unwrap()
+        .expect("no required secrets are missing, so validation should succeed");
+
+    assert!(
+        validated.resolved.secrets.contains_key("REQUIRED_PRESENT"),
+        "required secret should be resolved"
+    );
+    assert!(
+        !validated.resolved.secrets.contains_key("OPTIONAL_MISSING"),
+        "unset optional secret must not appear in resolved secrets"
+    );
+    assert_eq!(
+        validated.missing_optional,
+        vec!["OPTIONAL_MISSING".to_string()],
+        "unset optional secret must be reported in missing_optional"
+    );
+}

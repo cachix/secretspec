@@ -976,15 +976,26 @@ impl Secrets {
     fn display_validation_success(&self, valid: &ValidatedSecrets) -> Result<()> {
         let profile = self.resolve_profile(Some(&valid.resolved.profile))?;
         let mut found_count = 0;
+        let mut optional_count = 0;
         let default_names = valid
             .with_defaults
             .iter()
             .map(|(name, _)| name)
             .collect::<HashSet<_>>();
+        let missing_optional: HashSet<&String> = valid.missing_optional.iter().collect();
 
         for (name, config) in profile.iter() {
-            found_count += 1;
-            if config.default.is_some() && default_names.contains(&name) {
+            if missing_optional.contains(&name) {
+                optional_count += 1;
+                eprintln!(
+                    "{} {} - {} {}",
+                    "○".blue(),
+                    name,
+                    config.description.as_deref().unwrap_or("No description"),
+                    "(optional)".blue()
+                );
+            } else if config.default.is_some() && default_names.contains(&name) {
+                found_count += 1;
                 eprintln!(
                     "{} {} - {} {}",
                     "○".yellow(),
@@ -993,6 +1004,7 @@ impl Secrets {
                     "(has default)".yellow()
                 );
             } else {
+                found_count += 1;
                 eprintln!(
                     "{} {} - {}",
                     "✓".green(),
@@ -1002,11 +1014,7 @@ impl Secrets {
             }
         }
 
-        eprintln!(
-            "\nSummary: {} found, {} missing",
-            found_count.to_string().green(),
-            0.to_string().red()
-        );
+        eprintln!("\n{}", Self::format_summary(found_count, 0, optional_count));
 
         Ok(())
     }
@@ -1016,6 +1024,7 @@ impl Secrets {
         let profile = self.resolve_profile(Some(&errors.profile))?;
         let mut found_count = 0;
         let mut missing_count = 0;
+        let mut optional_count = 0;
         let default_names = errors
             .with_defaults
             .iter()
@@ -1033,7 +1042,7 @@ impl Secrets {
                     "(required)".red()
                 );
             } else if errors.missing_optional.contains(name) {
-                found_count += 1;
+                optional_count += 1;
                 eprintln!(
                     "{} {} - {} {}",
                     "○".blue(),
@@ -1063,12 +1072,32 @@ impl Secrets {
         }
 
         eprintln!(
-            "\nSummary: {} found, {} missing",
-            found_count.to_string().green(),
-            missing_count.to_string().red()
+            "\n{}",
+            Self::format_summary(found_count, missing_count, optional_count)
         );
 
         Ok(())
+    }
+
+    /// Build the trailing "Summary: X found, Y missing[, Z optional]" line.
+    /// The `optional` segment is appended only when at least one optional
+    /// secret is unset, so the all-set output keeps its previous two-segment
+    /// form.
+    pub(crate) fn format_summary(found: usize, missing: usize, optional: usize) -> String {
+        if optional > 0 {
+            format!(
+                "Summary: {} found, {} missing, {} optional",
+                found.to_string().green(),
+                missing.to_string().red(),
+                optional.to_string().blue()
+            )
+        } else {
+            format!(
+                "Summary: {} found, {} missing",
+                found.to_string().green(),
+                missing.to_string().red()
+            )
+        }
     }
 
     /// Imports secrets from one provider to another

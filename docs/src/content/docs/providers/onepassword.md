@@ -9,7 +9,48 @@ The OnePassword provider integrates with OnePassword for team-based secret manag
 
 - OnePassword CLI (`op`)
 - OnePassword account
-- Signed in via `op signin`
+- Authenticated (see [Authentication](#authentication) below)
+
+## Authentication
+
+`secretspec` supports three ways to authenticate against 1Password.
+
+### Desktop app integration (recommended for local dev)
+
+In the 1Password desktop app, open **Settings → Developer** and enable
+**"Integrate with 1Password CLI"**. Once enabled, `op` calls made by
+`secretspec` are unlocked through the desktop app via biometrics
+(Touch ID / Windows Hello / system password) — no shell session
+needed and nothing expires from under you.
+
+Under desktop integration, `op whoami` reports `account is not signed
+in` even when secret access works, so `secretspec` probes auth via
+`op vault list` instead. It also strips any `OP_SESSION_*` environment
+variables from spawned `op` processes, so a stale `eval $(op signin)`
+session in your shell can't shadow the desktop integration.
+
+#### Linux note
+
+On Linux, the desktop integration requires the `op` binary to be in
+the `onepassword-cli` group with the setgid bit set — the desktop
+app verifies the caller's GID over its unlock socket. On NixOS this
+is handled automatically by `programs._1password.enable = true`. A
+plain `pkgs._1password-cli` install (e.g. via `nix-env` or Home
+Manager only) does **not** carry the setgid bit and desktop
+integration will fail; use the NixOS module, or fall back to a
+service account token for headless setups.
+
+### Service account tokens (recommended for CI/CD)
+
+Set `OP_SERVICE_ACCOUNT_TOKEN` in the environment, or use the
+`onepassword+token://` URI scheme. See the [CI/CD section](#cicd-with-service-accounts)
+below.
+
+### Manual signin (legacy)
+
+Run `eval $(op signin)` to set per-shell `OP_SESSION_*` tokens. These
+expire after 30 minutes of inactivity; if they expire mid-session,
+`secretspec` falls back to desktop integration when available.
 
 ## Configuration
 

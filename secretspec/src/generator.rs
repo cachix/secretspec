@@ -338,8 +338,11 @@ mod tests {
 
     #[test]
     fn test_generate_command_empty_output() {
+        // `echo -n ''` is not POSIX-portable: macOS /bin/sh prints "-n"
+        // literally instead of suppressing the newline. Use `printf ''`
+        // which produces zero bytes on every platform.
         let config = GenerateConfig::Options(GenerateOptions {
-            command: Some("echo -n ''".to_string()),
+            command: Some("printf ''".to_string()),
             ..Default::default()
         });
         let result = generate("command", &config);

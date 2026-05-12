@@ -38,13 +38,17 @@ Next steps:
 # 2. Set up provider backend
 $ secretspec config init
 ? Select your preferred provider backend:
-> onepassword: OnePassword password manager
+> keyring: Uses system keychain (Recommended)
+  onepassword: OnePassword password manager
   dotenv: Traditional .env files
   env: Read-only environment variables
-  gcsm: Google Cloud Secret Manager
-  keyring: Uses system keychain (Recommended)
+  pass: Unix password manager with GPG encryption
+  protonpass: Proton Pass via official pass-cli
   lastpass: LastPass password manager
-  pass: Unix password manager (GPG)
+  gcsm: Google Cloud Secret Manager
+  awssm: AWS Secrets Manager
+  vault: HashiCorp Vault / OpenBao secret management
+  bws: Bitwarden Secrets Manager
 ? Select your default profile:
 > development
   default

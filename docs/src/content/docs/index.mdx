@@ -113,7 +113,13 @@ $ secretspec config init
   onepassword: OnePassword password manager
   dotenv: Traditional .env files
   env: Read-only environment variables
+  pass: Unix password manager with GPG encryption
+  protonpass: Proton Pass via official pass-cli
   lastpass: LastPass password manager
+  gcsm: Google Cloud Secret Manager
+  awssm: AWS Secrets Manager
+  vault: HashiCorp Vault / OpenBao secret management
+  bws: Bitwarden Secrets Manager
 ? Select your default profile:
 > development
   default
@@ -126,11 +132,13 @@ $ secretspec config init
 - [**Dotenv**](/providers/dotenv/) - Traditional .env files for local development
 - [**Environment**](/providers/env/) - Read-only access to environment variables for CI/CD
 - [**Pass**](/providers/pass/) - Unix password manager with GPG encryption
+- [**Proton Pass**](/providers/protonpass/) - End-to-end encrypted via Proton's official pass-cli
 - [**OnePassword**](/providers/onepassword/) - Team-based password management
 - [**LastPass**](/providers/lastpass/) - Cloud-based password manager
 - [**Google Cloud Secret Manager**](/providers/gcsm/) - GCP managed secrets
 - [**AWS Secrets Manager**](/providers/awssm/) - AWS managed secrets
 - [**Vault / OpenBao**](/providers/vault/) - HashiCorp Vault and OpenBao
+- [**Bitwarden Secrets Manager**](/providers/bws/) - Bitwarden Secrets Manager integration
 
 [Learn how to add a new provider →](/reference/adding-providers/)
 

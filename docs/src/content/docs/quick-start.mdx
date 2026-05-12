@@ -89,11 +89,17 @@ Configure your preferred secrets storage backend:
 ```bash
 $ secretspec config init
 ? Select your preferred provider backend:
-> onepassword: OnePassword password manager
+> keyring: Uses system keychain (Recommended)
+  onepassword: OnePassword password manager
   dotenv: Traditional .env files
   env: Read-only environment variables
-  keyring: Uses system keychain (Recommended)
+  pass: Unix password manager with GPG encryption
+  protonpass: Proton Pass via official pass-cli
   lastpass: LastPass password manager
+  gcsm: Google Cloud Secret Manager
+  awssm: AWS Secrets Manager
+  vault: HashiCorp Vault / OpenBao secret management
+  bws: Bitwarden Secrets Manager
 ? Select your default profile:
 > development
   default

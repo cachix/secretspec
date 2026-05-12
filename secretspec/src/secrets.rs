@@ -235,6 +235,21 @@ impl Secrets {
             .unwrap_or_else(|| "default".to_string())
     }
 
+    /// Returns the named profile or an `InvalidProfile` error listing the profiles
+    /// defined in `secretspec.toml`.
+    fn require_profile(&self, profile_name: &str) -> Result<&Profile> {
+        self.config.profiles.get(profile_name).ok_or_else(|| {
+            let mut available: Vec<&str> =
+                self.config.profiles.keys().map(String::as_str).collect();
+            available.sort();
+            SecretSpecError::InvalidProfile(format!(
+                "'{}' is not defined in secretspec.toml. Available profiles: {}",
+                profile_name,
+                available.join(", ")
+            ))
+        })
+    }
+
     /// Resolves the full profile configuration, merging with default profile if needed
     ///
     /// # Arguments
@@ -248,14 +263,7 @@ impl Secrets {
         let profile_name = profile
             .map(str::to_string)
             .unwrap_or_else(|| self.resolve_profile_name(None));
-        let mut profile_config = self
-            .config
-            .profiles
-            .get(&profile_name)
-            .cloned()
-            .ok_or_else(|| {
-                SecretSpecError::SecretNotFound(format!("Profile '{}' not found", profile_name))
-            })?;
+        let mut profile_config = self.require_profile(&profile_name)?.clone();
 
         // If not the default profile, also add secrets from default profile
         if profile_name != "default"
@@ -638,18 +646,7 @@ impl Secrets {
     pub fn set(&self, name: &str, value: Option<String>) -> Result<()> {
         // Check if the secret exists in the spec
         let profile_name = self.resolve_profile_name(None);
-        let _profile_config = self.config.profiles.get(&profile_name).ok_or_else(|| {
-            SecretSpecError::SecretNotFound(format!(
-                "Profile '{}' is not defined in secretspec.toml. Available profiles: {}",
-                profile_name,
-                self.config
-                    .profiles
-                    .keys()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))
-        })?;
+        self.require_profile(&profile_name)?;
 
         // Check if the secret exists in the profile or is inherited from default
         let secret_config = match self.resolve_secret_config(name, None) {
@@ -1140,11 +1137,6 @@ impl Secrets {
             from_provider.blue(),
             profile_display.cyan()
         );
-
-        // Get the profile configuration
-        let _profile_config = self.config.profiles.get(&profile_display).ok_or_else(|| {
-            SecretSpecError::SecretNotFound(format!("Profile '{}' not found", profile_display))
-        })?;
 
         let mut imported = 0;
         let mut already_exists = 0;

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Profile-not-found errors no longer surface as the confusing
+  `Secret 'Profile 'X' not found' not found`. They now use the dedicated
+  `InvalidProfile` variant and include the list of profiles defined in
+  `secretspec.toml`, e.g.
+  `Invalid profile: 'production' is not defined in secretspec.toml. Available profiles: default, dev`.
+  Affects `check`, `run`, `get`, `set`, and `import`. Surfaced via
+  [#79](https://github.com/cachix/secretspec/issues/79).
+
 ## [0.10.1] - 2026-05-11
 
 ### Fixed

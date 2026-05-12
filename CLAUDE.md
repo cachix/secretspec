@@ -60,13 +60,15 @@ Providers support URI-based configuration (e.g., `keyring://`, `onepassword://va
 
 ### Adding Provider Documentation
 
-When adding a new provider, update these files:
+When adding a new provider, update **every** location below — provider names appear in several listings that drift out of sync if any are missed:
 
 1. `docs/src/content/docs/providers/<provider>.md` - Create the provider's doc page
-2. `docs/astro.config.mjs` - Add to sidebar navigation under "Providers"
-3. `docs/src/content/docs/concepts/providers.md` - Add to "Available Providers" table
-4. `docs/src/content/docs/reference/providers.md` - Add provider section and update "Security Considerations" table
-5. `README.md` - Add to "Providers" list
+2. `docs/astro.config.mjs` - Add to sidebar navigation under "Providers" **and** to the providers sentence in the `starlightLlmsTxt` description block
+3. `docs/src/content/docs/concepts/providers.md` - Add a row to the "Available Providers" table
+4. `docs/src/content/docs/reference/providers.md` - Add a provider section **and** a row in the "Security Considerations" table
+5. `docs/src/content/docs/index.mdx` - Add to the "Supported providers" bullet list **and** to the `secretspec config init` example output (use the description string from the provider's `register_provider!` macro)
+6. `docs/src/content/docs/quick-start.mdx` - Update the `secretspec config init` example output to include the new provider
+7. `README.md` (symlink to `secretspec/README.md`) - Add to the "Providers" bullet list **and** to the `secretspec config init` example output
 
 ## Configuration System
 
@@ -170,7 +172,7 @@ The docs site is an Astro Starlight site deployed to https://secretspec.dev/.
   - `index.mdx` - Home page
   - `quick-start.mdx` - Getting started guide
   - `concepts/` - Declarative config, profiles, providers overview
-  - `providers/` - Individual provider docs (keyring, dotenv, env, pass, lastpass, onepassword, gcsm)
+  - `providers/` - Individual provider docs (one `.md` per registered provider; see [Adding Provider Documentation](#adding-provider-documentation) when adding a new one)
   - `sdk/` - Rust SDK docs
   - `reference/` - Configuration, CLI, providers reference, adding providers guide
 

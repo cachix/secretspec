@@ -374,62 +374,76 @@ impl Secrets {
         }
     }
 
-    /// Resolves a list of provider aliases to their URIs using the global config providers map.
-    ///
-    /// Returns a list of provider URIs in the same order. Used for fallback chain resolution.
-    ///
-    /// # Arguments
-    ///
-    /// * `provider_aliases` - Optional list of provider aliases to resolve
-    ///
-    /// # Returns
-    ///
-    /// A list of provider URIs in the same order, or None if no aliases were provided
+    /// Provider-alias maps in lookup order: project `secretspec.toml` first,
+    /// then user-global config. Project entries win on conflict so teams can
+    /// pin shareable mappings in version control while still allowing per-user
+    /// overrides via the global config.
+    fn provider_alias_sources(&self) -> impl Iterator<Item = &HashMap<String, String>> {
+        self.config.providers.iter().chain(
+            self.global_config
+                .as_ref()
+                .and_then(|gc| gc.defaults.providers.as_ref()),
+        )
+    }
+
+    /// Resolves a single provider alias to its URI, walking
+    /// [`Self::provider_alias_sources`] in order.
+    fn lookup_provider_alias(&self, alias: &str) -> Option<String> {
+        self.provider_alias_sources()
+            .find_map(|m| m.get(alias))
+            .cloned()
+    }
+
+    /// Returns the union of alias names known across all sources, sorted.
+    fn known_provider_aliases(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .provider_alias_sources()
+            .flat_map(|m| m.keys().cloned())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Resolves a list of provider aliases to their URIs, preserving order.
+    /// Used for fallback chain resolution; each alias is looked up via
+    /// [`Self::lookup_provider_alias`].
     ///
     /// # Errors
     ///
-    /// Returns an error if any alias is not found in the providers map.
+    /// Returns an error if any alias is not defined in either the project or global config.
     pub(crate) fn resolve_provider_aliases(
         &self,
         provider_aliases: Option<&[String]>,
     ) -> Result<Option<Vec<String>>> {
-        if let Some(aliases) = provider_aliases {
-            let mut uris = Vec::new();
+        let Some(aliases) = provider_aliases else {
+            return Ok(None);
+        };
 
-            for alias in aliases {
-                // If a per-secret provider alias is specified, resolve it from the global config
-                if let Some(global_config) = &self.global_config {
-                    if let Some(providers_map) = &global_config.defaults.providers {
-                        if let Some(uri) = providers_map.get(alias) {
-                            uris.push(uri.clone());
-                        } else {
-                            return Err(SecretSpecError::ProviderNotFound(format!(
-                                "Provider alias '{}' is not defined in the global config. Available aliases: {}",
-                                alias,
-                                providers_map
-                                    .keys()
-                                    .map(|s| s.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            )));
-                        }
-                    } else {
-                        return Err(SecretSpecError::ProviderNotFound(format!(
-                            "Provider alias '{}' specified but no providers are configured in global config",
+        let mut uris = Vec::with_capacity(aliases.len());
+        for alias in aliases {
+            match self.lookup_provider_alias(alias) {
+                Some(uri) => uris.push(uri),
+                None => {
+                    let known = self.known_provider_aliases();
+                    let msg = if known.is_empty() {
+                        format!(
+                            "Provider alias '{}' is not defined. Declare it in [providers] in secretspec.toml or in the global config.",
                             alias
-                        )));
-                    }
-                } else {
-                    return Err(SecretSpecError::ProviderNotFound(format!(
-                        "Provider alias '{}' specified but no global config is loaded",
-                        alias
-                    )));
+                        )
+                    } else {
+                        format!(
+                            "Provider alias '{}' is not defined. Available aliases: {}",
+                            alias,
+                            known.join(", ")
+                        )
+                    };
+                    return Err(SecretSpecError::ProviderNotFound(msg));
                 }
             }
-
-            return Ok(Some(uris));
         }
-        Ok(None)
+        Ok(Some(uris))
     }
 
     /// Returns the explicit provider spec from caller arg, builder, or env, in
@@ -447,16 +461,10 @@ impl Secrets {
     /// Returns the explicit provider override resolved to a URI, if one is set.
     ///
     /// Resolves the explicit spec via [`Self::explicit_provider_spec`], then
-    /// expands any matching alias from the global config providers map.
+    /// expands any matching alias via [`Self::lookup_provider_alias`].
     pub(crate) fn resolve_provider_override(&self, override_arg: Option<&str>) -> Option<String> {
         let spec = self.explicit_provider_spec(override_arg.map(|s| s.to_string()))?;
-        let resolved = self
-            .global_config
-            .as_ref()
-            .and_then(|gc| gc.defaults.providers.as_ref())
-            .and_then(|m| m.get(&spec).cloned())
-            .unwrap_or(spec);
-        Some(resolved)
+        Some(self.lookup_provider_alias(&spec).unwrap_or(spec))
     }
 
     /// Resolves the write target for a secret.
@@ -537,11 +545,40 @@ impl Secrets {
                     .as_ref()
                     .and_then(|gc| gc.defaults.provider.clone())
             })
+            .map(|spec| self.lookup_provider_alias(&spec).unwrap_or(spec))
             .ok_or(SecretSpecError::NoProviderConfigured)?;
 
         let provider = Box::<dyn ProviderTrait>::try_from(provider_spec)?;
 
         Ok(provider)
+    }
+
+    /// Returns a provider URI for validation result metadata without forcing a
+    /// user-global default when every secret used an explicit or per-secret provider.
+    fn validation_report_provider_uri(
+        &self,
+        override_uri: Option<&str>,
+        secret_primary_uris: &HashMap<String, Option<String>>,
+    ) -> Result<String> {
+        if let Some(uri) = override_uri {
+            return Ok(uri.to_string());
+        }
+
+        if secret_primary_uris.values().any(Option::is_none) {
+            return self.get_provider(None).map(|provider| provider.uri());
+        }
+
+        let mut provider_uris: Vec<&String> = secret_primary_uris
+            .values()
+            .filter_map(Option::as_ref)
+            .collect();
+        provider_uris.sort();
+
+        if let Some(uri) = provider_uris.first() {
+            return Ok((*uri).clone());
+        }
+
+        self.get_provider(None).map(|provider| provider.uri())
     }
 
     /// Gets a secret from a list of providers with fallback.
@@ -1552,8 +1589,8 @@ impl Secrets {
             }
         }
 
-        // Use default provider for error reporting
-        let primary_provider = self.get_provider(None)?;
+        let report_provider_uri =
+            self.validation_report_provider_uri(override_uri.as_deref(), &secret_primary_uris)?;
 
         // Check if there are any missing required secrets
         if !missing_required.is_empty() {
@@ -1561,12 +1598,12 @@ impl Secrets {
                 missing_required,
                 missing_optional,
                 with_defaults,
-                primary_provider.uri(),
+                report_provider_uri,
                 profile_name.to_string(),
             )))
         } else {
             Ok(Ok(ValidatedSecrets {
-                resolved: Resolved::new(secrets, primary_provider.uri(), profile_name.to_string()),
+                resolved: Resolved::new(secrets, report_provider_uri, profile_name.to_string()),
                 missing_optional,
                 with_defaults,
                 temp_files,

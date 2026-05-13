@@ -232,6 +232,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 extends: None,
             },
             profiles: valid_profiles,
+            providers: None,
         };
 
         validate_rust_identifiers(&valid_config, &mut errors);
@@ -279,6 +280,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 extends: None,
             },
             profiles: invalid_profiles,
+            providers: None,
         };
 
         errors.clear();
@@ -359,6 +361,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 extends: None,
             },
             profiles: keyword_profiles,
+            providers: None,
         };
 
         validate_rust_identifiers(&keyword_config, &mut errors);
@@ -438,6 +441,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 extends: None,
             },
             profiles: duplicate_profiles,
+            providers: None,
         };
 
         validate_rust_identifiers(&duplicate_config, &mut errors);
@@ -492,6 +496,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 extends: None,
             },
             profiles: valid_profiles,
+            providers: None,
         };
 
         validate_profile_identifiers(&valid_config, &mut errors);
@@ -524,6 +529,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 extends: None,
             },
             profiles: invalid_profiles,
+            providers: None,
         };
 
         errors.clear();
@@ -681,6 +687,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 extends: None,
             },
             profiles,
+            providers: None,
         };
 
         // API_KEY is NOT optional (required in all profiles, default doesn't make it optional)
@@ -738,6 +745,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 extends: None,
             },
             profiles: strict_profiles,
+            providers: None,
         };
 
         // ALWAYS_REQUIRED should not be optional
@@ -832,6 +840,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 extends: None,
             },
             profiles,
+            providers: None,
         };
 
         let field_info = analyze_field_types(&config);
@@ -997,6 +1006,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 extends: None,
             },
             profiles: valid_profiles,
+            providers: None,
         };
 
         let result = validate_config_for_codegen(&valid_config);
@@ -1041,6 +1051,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
                 extends: None,
             },
             profiles: invalid_profiles,
+            providers: None,
         };
 
         let result = validate_config_for_codegen(&invalid_config);

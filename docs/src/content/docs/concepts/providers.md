@@ -83,15 +83,29 @@ SENTRY_DSN = { description = "Error tracking", providers = ["shared_vault", "key
 
 You can also set default providers for an entire profile using `profiles.<name>.defaults`. See [Profile-Level Defaults](/concepts/profiles/#profile-level-defaults) for details.
 
-Provider aliases are defined in your user configuration file (`~/.config/secretspec/config.toml`):
+Provider aliases can be defined in two places:
 
-```toml
-[defaults]
-provider = "keyring"
+- **Project-level** — a top-level `[providers]` table in `secretspec.toml`. Check this into version control so the whole team and CI runners share the same mapping.
+- **User-level** — a `[defaults.providers]` table in `~/.config/secretspec/config.toml` for personal overrides.
 
+On name conflicts the project-level alias wins, so a stale user config cannot silently shadow the team's mapping.
+
+```toml title="secretspec.toml"
 [providers]
 prod_vault = "onepassword://vault/Production"
 shared_vault = "onepassword://vault/Shared"
+keyring = "keyring://"
+env = "env://"
+```
+
+```toml title="~/.config/secretspec/config.toml"
+[defaults]
+provider = "keyring"
+
+[defaults.providers]
+prod_vault = "onepassword://vault/Production"
+shared_vault = "onepassword://vault/Shared"
+keyring = "keyring://"
 env = "env://"
 ```
 
@@ -112,7 +126,7 @@ This enables complex workflows:
 
 ### Managing Provider Aliases
 
-Use CLI commands to manage provider aliases:
+Use CLI commands to manage user-level provider aliases in `~/.config/secretspec/config.toml`:
 
 ```bash
 # Add a provider alias
@@ -124,6 +138,8 @@ $ secretspec config provider list
 # Remove an alias
 $ secretspec config provider remove prod_vault
 ```
+
+These commands operate on the user-level config only. To change project-level aliases, edit the `[providers]` table in `secretspec.toml` directly.
 
 ## Next Steps
 

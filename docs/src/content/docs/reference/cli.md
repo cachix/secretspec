@@ -55,7 +55,9 @@ Profile:  development
 ```
 
 ### config provider add
-Add a provider alias to your configuration.
+Add a provider alias to your user-level configuration (`~/.config/secretspec/config.toml`).
+
+To share aliases with your team, declare them in a top-level `[providers]` table in `secretspec.toml` instead — they take precedence over user-level aliases on name conflict.
 
 ```bash
 secretspec config provider add <ALIAS> <URI>
@@ -75,7 +77,7 @@ $ secretspec config provider add shared "onepassword://vault/Shared"
 ```
 
 ### config provider list
-List all configured provider aliases.
+List all configured user-level provider aliases. Project-level aliases declared in `secretspec.toml` are not shown by this command.
 
 ```bash
 secretspec config provider list
@@ -90,7 +92,7 @@ env         → env://
 ```
 
 ### config provider remove
-Remove a provider alias from your configuration.
+Remove a provider alias from your user-level configuration. To remove a project-level alias, edit the `[providers]` table in `secretspec.toml` directly.
 
 ```bash
 secretspec config provider remove <ALIAS>

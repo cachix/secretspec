@@ -39,6 +39,7 @@ fn test_new_with_project_config() {
             extends: None,
         },
         profiles: HashMap::new(),
+        providers: None,
     };
 
     let spec = Secrets::new(config, None, None, None);
@@ -100,6 +101,7 @@ fn test_new_with_default_overrides() {
             extends: None,
         },
         profiles: HashMap::new(),
+        providers: None,
     };
 
     // Create a global config with specific defaults
@@ -251,6 +253,7 @@ fn test_secretspec_new() {
             extends: None,
         },
         profiles: HashMap::new(),
+        providers: None,
     };
 
     let global_config = GlobalConfig {
@@ -291,6 +294,7 @@ fn test_resolve_profile() {
                 extends: None,
             },
             profiles: HashMap::new(),
+            providers: None,
         },
         Some(global_config),
         None,
@@ -312,6 +316,7 @@ fn test_resolve_profile() {
                 extends: None,
             },
             profiles: HashMap::new(),
+            providers: None,
         },
         None,
         None,
@@ -383,6 +388,7 @@ fn test_resolve_secret_config() {
                 extends: None,
             },
             profiles,
+            providers: None,
         },
         None,
         None,
@@ -423,6 +429,7 @@ fn test_get_provider_error_cases() {
                 extends: None,
             },
             profiles: HashMap::new(),
+            providers: None,
         },
         None,
         None,
@@ -452,6 +459,7 @@ fn test_get_provider_with_global_config() {
                 extends: None,
             },
             profiles: HashMap::new(),
+            providers: None,
         },
         Some(global_config),
         None,
@@ -1389,6 +1397,7 @@ fn test_set_with_undefined_secret() {
             );
             profiles
         },
+        providers: None,
     };
 
     let global_config = GlobalConfig {
@@ -1455,6 +1464,7 @@ fn test_set_with_defined_secret() {
             );
             profiles
         },
+        providers: None,
     };
 
     let global_config = GlobalConfig {
@@ -1508,6 +1518,7 @@ fn test_set_with_readonly_provider() {
             );
             profiles
         },
+        providers: None,
     };
 
     let global_config = GlobalConfig {
@@ -1604,6 +1615,7 @@ fn test_import_between_dotenv_files() {
             );
             profiles
         },
+        providers: None,
     };
 
     // Create source .env file
@@ -1730,6 +1742,7 @@ fn test_import_edge_cases() {
             );
             profiles
         },
+        providers: None,
     };
 
     // Create source .env file with edge case values
@@ -1994,6 +2007,7 @@ fn test_import_with_profiles() {
 
             profiles
         },
+        providers: None,
     };
 
     // Create source .env file with all secrets
@@ -2066,6 +2080,7 @@ fn test_run_with_empty_command() {
                 extends: None,
             },
             profiles: HashMap::new(),
+            providers: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -2127,6 +2142,7 @@ fn test_run_with_missing_required_secrets() {
                 extends: None,
             },
             profiles,
+            providers: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -2186,6 +2202,7 @@ fn test_get_existing_secret() {
                 extends: None,
             },
             profiles,
+            providers: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -2239,6 +2256,7 @@ fn test_get_secret_with_default() {
                 extends: None,
             },
             profiles,
+            providers: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -2291,6 +2309,7 @@ fn test_get_nonexistent_secret() {
                 extends: None,
             },
             profiles,
+            providers: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -2456,6 +2475,7 @@ fn test_per_secret_provider_configuration() {
             extends: None,
         },
         profiles,
+        providers: None,
     };
 
     // Create global config with provider aliases
@@ -2510,6 +2530,7 @@ fn test_provider_alias_resolution() {
                 extends: None,
             },
             profiles: HashMap::new(),
+            providers: None,
         },
         Some(global_config),
         None,
@@ -2574,6 +2595,7 @@ fn test_provider_alias_not_found() {
                 extends: None,
             },
             profiles: HashMap::new(),
+            providers: None,
         },
         Some(global_config),
         None,
@@ -2647,6 +2669,7 @@ fn test_per_secret_provider_with_fallback_chain() {
             extends: None,
         },
         profiles,
+        providers: None,
     };
 
     let mut providers_map = HashMap::new();
@@ -2744,6 +2767,7 @@ fn test_get_secret_with_fallback_chain() {
             extends: None,
         },
         profiles,
+        providers: None,
     };
 
     let mut providers_map = HashMap::new();
@@ -2826,6 +2850,7 @@ fn test_validate_falls_back_on_primary_provider_error() {
             extends: None,
         },
         profiles,
+        providers: None,
     };
 
     let mut providers_map = HashMap::new();
@@ -2899,6 +2924,7 @@ fn test_validate_surfaces_error_when_all_providers_fail() {
             extends: None,
         },
         profiles,
+        providers: None,
     };
 
     let mut providers_map = HashMap::new();
@@ -2991,6 +3017,7 @@ fn test_validate_with_per_secret_providers() {
             extends: None,
         },
         profiles,
+        providers: None,
     };
 
     let mut providers_map = HashMap::new();
@@ -3120,6 +3147,7 @@ fn test_secret_config_merges_providers_from_default() {
             extends: None,
         },
         profiles,
+        providers: None,
     };
 
     let spec = Secrets::new(config, None, None, None);
@@ -4004,6 +4032,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
             extends: None,
         },
         profiles,
+        providers: None,
     };
 
     let spec = Secrets::new(config, None, Some("production".to_string()), None);
@@ -4060,6 +4089,7 @@ fn build_chain_scenario(
             );
             profiles
         },
+        providers: None,
     };
 
     let mut providers_map = HashMap::new();
@@ -4257,5 +4287,317 @@ OPTIONAL_MISSING = { description = "optional, not set", required = false }
         validated.missing_optional,
         vec!["OPTIONAL_MISSING".to_string()],
         "unset optional secret must be reported in missing_optional"
+    );
+}
+
+fn aliases_map(aliases: &[(&str, &str)]) -> HashMap<String, String> {
+    aliases
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+fn config_with_project_aliases(aliases: &[(&str, &str)]) -> Config {
+    Config {
+        project: Project {
+            name: "alias-test".to_string(),
+            revision: "1.0".to_string(),
+            extends: None,
+        },
+        profiles: HashMap::new(),
+        providers: Some(aliases_map(aliases)),
+    }
+}
+
+fn global_config_with_aliases(aliases: &[(&str, &str)]) -> GlobalConfig {
+    GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: None,
+            profile: None,
+            providers: Some(aliases_map(aliases)),
+        },
+    }
+}
+
+fn config_with_project_alias_secret(
+    alias: &str,
+    uri: &str,
+    secret_providers: Option<Vec<String>>,
+) -> Config {
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "API_KEY".to_string(),
+        Secret {
+            description: Some("API key".to_string()),
+            required: Some(true),
+            providers: secret_providers,
+            ..Default::default()
+        },
+    );
+
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
+
+    Config {
+        project: Project {
+            name: "alias-validation".to_string(),
+            revision: "1.0".to_string(),
+            extends: None,
+        },
+        profiles,
+        providers: Some(aliases_map(&[(alias, uri)])),
+    }
+}
+
+#[test]
+fn test_project_providers_resolve_without_global_config() {
+    let config = config_with_project_aliases(&[("op_infra", "onepassword://Infra")]);
+    let spec = Secrets::new(config, None, None, None);
+
+    let resolved = spec
+        .resolve_provider_aliases(Some(&["op_infra".to_string()]))
+        .expect("project alias should resolve")
+        .expect("resolved list should be present");
+
+    assert_eq!(resolved, vec!["onepassword://Infra".to_string()]);
+}
+
+#[test]
+fn test_project_providers_take_precedence_over_global() {
+    let config = config_with_project_aliases(&[("shared", "dotenv://.env.team")]);
+    let global = global_config_with_aliases(&[("shared", "dotenv://.env.user")]);
+    let spec = Secrets::new(config, Some(global), None, None);
+
+    let resolved = spec
+        .resolve_provider_aliases(Some(&["shared".to_string()]))
+        .expect("alias should resolve")
+        .expect("resolved list should be present");
+
+    assert_eq!(
+        resolved,
+        vec!["dotenv://.env.team".to_string()],
+        "project alias must win on conflict with global"
+    );
+}
+
+#[test]
+fn test_unknown_alias_error_lists_both_sources() {
+    let config = config_with_project_aliases(&[("project_only", "dotenv://.env.team")]);
+    let global = global_config_with_aliases(&[("global_only", "dotenv://.env.user")]);
+    let spec = Secrets::new(config, Some(global), None, None);
+
+    let err = spec
+        .resolve_provider_aliases(Some(&["does_not_exist".to_string()]))
+        .expect_err("missing alias must error");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("project_only") && msg.contains("global_only"),
+        "error should list aliases from both project and global config, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn test_extends_carries_project_providers() {
+    let temp_dir = TempDir::new().unwrap();
+    let base = temp_dir.path();
+    fs::create_dir_all(base.join("shared")).unwrap();
+    fs::create_dir_all(base.join("app")).unwrap();
+
+    fs::write(
+        base.join("shared/secretspec.toml"),
+        r#"
+[project]
+name = "shared"
+revision = "1.0"
+
+[providers]
+op_infra = "onepassword://Shared"
+op_overridden = "onepassword://OldVault"
+
+[profiles.default]
+SHARED_SECRET = { description = "Shared", required = true }
+"#,
+    )
+    .unwrap();
+
+    fs::write(
+        base.join("app/secretspec.toml"),
+        r#"
+[project]
+name = "app"
+revision = "1.0"
+extends = ["../shared"]
+
+[providers]
+op_overridden = "onepassword://NewVault"
+
+[profiles.default]
+APP_SECRET = { description = "App", required = true }
+"#,
+    )
+    .unwrap();
+
+    let config = Config::try_from(base.join("app/secretspec.toml").as_path()).unwrap();
+    let providers = config
+        .providers
+        .as_ref()
+        .expect("merged config should carry [providers]");
+
+    assert_eq!(
+        providers.get("op_infra").map(String::as_str),
+        Some("onepassword://Shared"),
+        "alias defined only in extended config should be inherited"
+    );
+    assert_eq!(
+        providers.get("op_overridden").map(String::as_str),
+        Some("onepassword://NewVault"),
+        "alias defined in both should resolve to the current (extending) config's value"
+    );
+}
+
+#[test]
+fn test_provider_override_expands_project_alias() {
+    let config = config_with_project_aliases(&[("op_infra", "onepassword://Infra")]);
+    let spec = Secrets::new(config, None, None, Some("default".to_string()));
+    // builder-style override (mirrors `--provider <alias>`)
+    let mut spec = spec;
+    spec.set_provider("op_infra");
+
+    let resolved = spec
+        .resolve_provider_override(None)
+        .expect("override should resolve to a URI");
+
+    assert_eq!(resolved, "onepassword://Infra");
+}
+
+#[test]
+fn test_global_alias_still_resolves_when_project_providers_present() {
+    // Project map defines `local`; we look up `team`, which only exists in
+    // global. Walks past the project source into the global one.
+    let config = config_with_project_aliases(&[("local", "dotenv://.env.local")]);
+    let global = global_config_with_aliases(&[("team", "onepassword://Team")]);
+    let spec = Secrets::new(config, Some(global), None, None);
+
+    let resolved = spec
+        .resolve_provider_aliases(Some(&["team".to_string()]))
+        .expect("global alias should resolve when project map exists but doesn't define it")
+        .expect("resolved list should be present");
+
+    assert_eq!(resolved, vec!["onepassword://Team".to_string()]);
+}
+
+#[test]
+fn test_fallback_chain_resolves_aliases_from_mixed_sources() {
+    // Chain mixes a project-only alias and a global-only alias; order in the
+    // chain is preserved and each is resolved from whichever source defines it.
+    let config = config_with_project_aliases(&[("project_vault", "onepassword://Team")]);
+    let global = global_config_with_aliases(&[("user_dotenv", "dotenv://.env.user")]);
+    let spec = Secrets::new(config, Some(global), None, None);
+
+    let resolved = spec
+        .resolve_provider_aliases(Some(&[
+            "project_vault".to_string(),
+            "user_dotenv".to_string(),
+        ]))
+        .expect("mixed-source chain should resolve")
+        .expect("resolved list should be present");
+
+    assert_eq!(
+        resolved,
+        vec![
+            "onepassword://Team".to_string(),
+            "dotenv://.env.user".to_string(),
+        ],
+        "chain order must be preserved across sources"
+    );
+}
+
+#[test]
+fn test_provider_override_resolves_global_alias_when_project_providers_present() {
+    // `--provider <alias>` path must consult the same source order as the
+    // per-secret chain; a global-only alias resolves even when a project
+    // providers map is set.
+    let config = config_with_project_aliases(&[("local", "dotenv://.env.local")]);
+    let global = global_config_with_aliases(&[("team", "onepassword://Team")]);
+    let mut spec = Secrets::new(config, Some(global), None, None);
+    spec.set_provider("team");
+
+    let resolved = spec
+        .resolve_provider_override(None)
+        .expect("override should resolve to a URI");
+
+    assert_eq!(resolved, "onepassword://Team");
+}
+
+#[test]
+fn test_validate_project_provider_chain_without_global_default() {
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env.project");
+    fs::write(&env_file, "API_KEY=from-project\n").unwrap();
+    let uri = format!("dotenv://{}", env_file.display());
+
+    let config = config_with_project_alias_secret(
+        "project_env",
+        &uri,
+        Some(vec!["project_env".to_string()]),
+    );
+    let spec = Secrets::new(config, None, None, None);
+
+    let validated = spec
+        .validate()
+        .expect("project provider alias should not require a global provider")
+        .expect("secret should resolve from project provider alias");
+
+    assert_eq!(
+        validated
+            .resolved
+            .secrets
+            .get("API_KEY")
+            .unwrap()
+            .expose_secret(),
+        "from-project"
+    );
+    assert_eq!(
+        validated.resolved.provider, uri,
+        "validation metadata should report the resolved project provider URI"
+    );
+}
+
+#[test]
+fn test_validate_provider_override_project_alias_without_global_default() {
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env.override");
+    fs::write(&env_file, "API_KEY=from-override\n").unwrap();
+    let uri = format!("dotenv://{}", env_file.display());
+
+    let config = config_with_project_alias_secret("project_env", &uri, None);
+    let mut spec = Secrets::new(config, None, None, None);
+    spec.set_provider("project_env");
+
+    let validated = spec
+        .validate()
+        .expect("override alias should not be reparsed as a provider scheme")
+        .expect("secret should resolve from explicit project alias");
+
+    assert_eq!(
+        validated
+            .resolved
+            .secrets
+            .get("API_KEY")
+            .unwrap()
+            .expose_secret(),
+        "from-override"
+    );
+    assert_eq!(
+        validated.resolved.provider, uri,
+        "validation metadata should report the resolved override URI"
     );
 }

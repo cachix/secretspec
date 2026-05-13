@@ -80,7 +80,8 @@ When adding a new provider, update **every** location below — provider names a
 
 ### Provider Resolution
 1. **Per-secret providers** (with fallback chain): specified in `secretspec.toml` as `providers: [alias1, alias2, ...]`
-   - Aliases resolved against `~/.config/secretspec/config.toml` providers map
+   - Aliases resolved against the project `[providers]` table in `secretspec.toml` first, then the `[defaults.providers]` table in `~/.config/secretspec/config.toml`
+   - Project-level aliases win on conflict
    - Tries each provider in order until secret is found
 2. CLI flag (`--provider`)
 3. Environment variable (`SECRETSPEC_PROVIDER`)
@@ -97,26 +98,36 @@ API_KEY = { description = "API Key", providers = ["shared"] }
 GITHUB_TOKEN = { description = "GitHub token from env", providers = ["env"] }
 ```
 
-Provider aliases are defined in `~/.config/secretspec/config.toml`:
+Provider aliases can be checked into the project in `secretspec.toml` so every team member and CI runner sees them automatically:
+```toml
+[providers]
+prod_vault = "onepassword://vault/Production"
+shared = "onepassword://vault/Shared"
+keyring = "keyring://"
+env = "env://"
+```
+
+They can also be defined per-user in `~/.config/secretspec/config.toml` (project entries win on conflict):
 ```toml
 [defaults]
 provider = "keyring"
 
-[providers]
+[defaults.providers]
 prod_vault = "onepassword://vault/Production"
 shared = "onepassword://vault/Shared"
+keyring = "keyring://"
 env = "env://"
 ```
 
-Or managed via CLI:
+Manage the user-level map via CLI (project-level aliases are hand-edited in `secretspec.toml`):
 ```bash
-# Add provider alias
+# Add provider alias to user config
 secretspec config provider add prod_vault "onepassword://vault/Production"
 
-# List all aliases
+# List user-level aliases
 secretspec config provider list
 
-# Remove alias
+# Remove a user-level alias
 secretspec config provider remove prod_vault
 ```
 

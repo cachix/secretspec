@@ -63,6 +63,13 @@ name = "web-api"
 revision = "1.0"
 extends = ["../shared/secretspec.toml"]  # Optional inheritance
 
+# Provider aliases used by profile provider chains
+[providers]
+prod_vault = "onepassword://vault/Production"
+shared_vault = "onepassword://vault/Shared"
+keyring = "keyring://"
+env = "env://"
+
 # Default profile - always loaded first
 [profiles.default]
 APP_NAME = { description = "Application name", required = false, default = "MyApp" }
@@ -85,30 +92,49 @@ REDIS_URL = { description = "Redis cache connection", required = true }
 
 ### Provider Aliases
 
-When using per-secret provider configuration, provider aliases must be defined in your user configuration file at `~/.config/secretspec/config.toml`:
+Provider aliases may be declared in two places:
 
-```toml
-[defaults]
-provider = "keyring"
+1. **In `secretspec.toml`** — a top-level `[providers]` table. Check this into version control so every team member and CI runner sees the same mapping out of the box.
+2. **In `~/.config/secretspec/config.toml`** — a per-user `[defaults.providers]` table for personal overrides.
 
+On conflict the project-level alias wins, so a stale local config cannot silently shadow the team's mapping.
+
+```toml title="secretspec.toml"
 [providers]
 prod_vault = "onepassword://vault/Production"
 shared_vault = "onepassword://vault/Shared"
+keyring = "keyring://"
+env = "env://"
+
+[profiles.production]
+DATABASE_URL = { description = "Production DB", providers = ["prod_vault", "keyring"] }
+```
+
+```toml title="~/.config/secretspec/config.toml"
+[defaults]
+provider = "keyring"
+
+[defaults.providers]
+prod_vault = "onepassword://vault/Production"
+shared_vault = "onepassword://vault/Shared"
+keyring = "keyring://"
 env = "env://"
 ```
 
-Manage provider aliases using CLI commands:
+Manage user-level aliases via CLI:
 
 ```bash
-# Add a provider alias
+# Add a provider alias to your user config
 $ secretspec config provider add prod_vault "onepassword://vault/Production"
 
-# List all aliases
+# List all aliases known to your user config
 $ secretspec config provider list
 
-# Remove an alias
+# Remove an alias from your user config
 $ secretspec config provider remove prod_vault
 ```
+
+The CLI commands operate on the user-global config only — edit `secretspec.toml` by hand to change project-level aliases.
 
 ### as_path Option
 

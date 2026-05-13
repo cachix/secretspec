@@ -27,14 +27,22 @@ $ sudo pacman -S gnome-keyring
 
 ## Configuration
 
-```toml
-# secretspec.toml
-[project]
-name = "myapp"
+### URI Format
 
-[[providers]]
-type = "keyring"
-uri = "keyring://"
+```
+keyring://[folder_prefix]
+```
+
+- `folder_prefix`: Optional path prefix supporting `{project}`, `{profile}`, and `{key}` placeholders. Defaults to `secretspec/{project}/{profile}/{key}`.
+
+### Examples
+
+```bash
+# Use default keyring storage
+$ secretspec set DATABASE_URL --provider keyring
+
+# Custom folder prefix (e.g., to share secrets across projects — see below)
+$ secretspec set DATABASE_URL --provider "keyring://shared/{profile}/{key}"
 ```
 
 ## Usage
@@ -63,7 +71,7 @@ By default, secrets are stored under `secretspec/{project}/{profile}/{key}`, whi
 
 ```toml
 # ~/.config/secretspec/config.toml
-[providers]
+[defaults.providers]
 shared = "keyring://secretspec/shared/{profile}/{key}"
 ```
 

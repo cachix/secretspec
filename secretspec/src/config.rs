@@ -50,6 +50,13 @@ pub struct Config {
     pub project: Project,
     /// Map of profile names to their configurations (e.g., "default", "production", "staging")
     pub profiles: HashMap<String, Profile>,
+    /// Project-level provider aliases that map alias names to provider URIs.
+    ///
+    /// Take precedence over aliases in the user-global config
+    /// (`~/.config/secretspec/config.toml`), so teams can check vault mappings
+    /// into version control instead of replicating them on every machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub providers: Option<HashMap<String, String>>,
 }
 
 impl Config {
@@ -111,6 +118,14 @@ impl Config {
                 None => {
                     self.profiles.insert(profile_name, profile_config);
                 }
+            }
+        }
+
+        // Merge provider aliases - current entries win.
+        if let Some(other_providers) = other.providers {
+            let merged = self.providers.get_or_insert_with(HashMap::new);
+            for (alias, uri) in other_providers {
+                merged.entry(alias).or_insert(uri);
             }
         }
     }
@@ -551,9 +566,9 @@ pub struct GlobalDefaults {
     pub profile: Option<String>,
     /// Named provider aliases that map alias names to provider URIs.
     /// Used by per-secret provider configuration to avoid storing sensitive
-    /// provider details in secretspec.toml. Example:
+    /// provider details in secretspec.toml. Example user config:
     /// ```toml
-    /// [providers]
+    /// [defaults.providers]
     /// shared = "onepassword://vault/Shared"
     /// local = "dotenv://.env.local"
     /// ```

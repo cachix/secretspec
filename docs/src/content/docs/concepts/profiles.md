@@ -64,6 +64,10 @@ When using profiles, inheritance works as follows:
 To reduce repetition when multiple secrets in a profile share the same settings, use the `profiles.<name>.defaults` section:
 
 ```toml
+[providers]
+prod_vault = "onepassword://vault/Production"
+keyring = "keyring://"
+
 [profiles.production.defaults]
 providers = ["prod_vault", "keyring"]
 required = true

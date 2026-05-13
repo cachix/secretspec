@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Provider aliases can now be declared at the project level in a top-level
+  `[providers]` table of `secretspec.toml`. Aliases declared there are visible
+  to per-secret `providers = [...]` lists and to `--provider`/`SECRETSPEC_PROVIDER`,
+  and are merged with the existing user-level `[defaults.providers]` map in
+  `~/.config/secretspec/config.toml`. On name conflicts the project entry wins,
+  so a team's checked-in mapping cannot be silently shadowed by a stale local
+  config. Closes [#79](https://github.com/cachix/secretspec/issues/79) and
+  addresses the "share aliases via VCS" half of
+  [#90](https://github.com/cachix/secretspec/issues/90).
+
 ### Fixed
 - Profile-not-found errors no longer surface as the confusing
   `Secret 'Profile 'X' not found' not found`. They now use the dedicated

@@ -288,6 +288,7 @@ pub fn main() -> Result<()> {
                     extends: None,
                 },
                 profiles,
+                providers: None,
             };
             let mut content = generate_toml_with_comments(&project_config).into_diagnostic()?;
 

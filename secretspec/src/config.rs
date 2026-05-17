@@ -40,6 +40,145 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+// ── Provider config & references ────────────────────────────────────────────
+
+/// A single entry in `[providers]`.
+///
+/// TOML deserialization is [`serde::untagged`], so:
+///
+/// | TOML                                      | Rust variant                            |
+/// |-------------------------------------------|-----------------------------------------|
+/// | `keyring = "keyring://"`               | `ProviderConfig::Alias("keyring://")`  |
+/// | `[providers.op]\nuri = "…"`            | `ProviderConfig::Structured { … }`      |
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProviderConfig {
+    /// Legacy / simple alias — just a URI string.
+    Alias(String),
+    /// Structured provider with optional dependency declarations.
+    Structured(ProviderConfigStructured),
+}
+
+impl ProviderConfig {
+    /// Returns the provider URI regardless of variant.
+    pub fn uri(&self) -> &str {
+        match self {
+            ProviderConfig::Alias(uri) => uri.as_str(),
+            ProviderConfig::Structured(s) => s.uri.as_str(),
+        }
+    }
+
+    /// Returns a reference to the requirements map, if structured.
+    pub fn requires(&self) -> Option<&HashMap<String, ProviderRequirement>> {
+        match self {
+            ProviderConfig::Alias(_) => None,
+            ProviderConfig::Structured(s) if s.requires.is_empty() => None,
+            ProviderConfig::Structured(s) => Some(&s.requires),
+        }
+    }
+}
+
+/// Structured provider configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderConfigStructured {
+    /// The provider URI (required).
+    pub uri: String,
+    /// Required secrets that must be resolved before this provider is usable.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub requires: HashMap<String, ProviderRequirement>,
+}
+
+/// A single dependency declaration under `[providers.<name>.requires]`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderRequirement {
+    /// The SecretSpec secret name that provides the value
+    /// (e.g. `OP_SERVICE_ACCOUNT_TOKEN`).
+    pub secret: String,
+}
+
+/// A single entry in a secret's `providers` list.
+///
+/// TOML deserialization is [`serde::untagged`]:
+///
+/// | TOML                                                       | Rust variant                       |
+/// |------------------------------------------------------------|------------------------------------|
+/// | `"env"`                                                 | `ProviderRef::Alias("env")`       |
+/// | `{ provider = "op", path = ["GH"], key = "t" }`    | `ProviderRef::Detail { … }`         |
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProviderRef {
+    /// Simple alias reference (backward compat).
+    Alias(String),
+    /// Detailed provider reference with relative location.
+    Detail(ProviderRefDetail),
+}
+
+impl ProviderRef {
+    /// Returns the provider alias name regardless of variant.
+    pub fn provider_alias(&self) -> &str {
+        match self {
+            ProviderRef::Alias(name) => name.as_str(),
+            ProviderRef::Detail(d) => d.provider.as_str(),
+        }
+    }
+}
+
+impl From<String> for ProviderRef {
+    fn from(s: String) -> Self {
+        ProviderRef::Alias(s)
+    }
+}
+
+impl<'a> From<&'a str> for ProviderRef {
+    fn from(s: &'a str) -> Self {
+        ProviderRef::Alias(s.to_string())
+    }
+}
+
+/// Detailed provider reference with relative location within the provider.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderRefDetail {
+    /// The provider alias name (resolved against `[providers]`).
+    pub provider: String,
+    /// Optional path segments within the provider's store
+    /// (e.g. section name, folder).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<Vec<String>>,
+    /// Optional key within that path.
+    /// Defaults to the SecretSpec secret name when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+}
+
+/// Carries provider-relative location hints for secret lookups.
+///
+/// Created from a [`ProviderRef::Detail`] during resolution.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SecretRequest {
+    /// Path segments within the provider (e.g. `["GitHub"]`).
+    pub path: Option<Vec<String>>,
+    /// Key at that path. Defaults to the secret name.
+    pub key: Option<String>,
+}
+
+impl SecretRequest {
+    /// Create a [`SecretRequest`] from a [`ProviderRef`].
+    ///
+    /// For [`ProviderRef::Alias`] this returns a default (empty) request.
+    /// For [`ProviderRef::Detail`] it copies `path` and `key`.
+    pub fn from_provider_ref(r: &ProviderRef) -> Self {
+        match r {
+            ProviderRef::Alias(_) => Self::default(),
+            ProviderRef::Detail(d) => Self {
+                path: d.path.clone(),
+                key: d.key.clone(),
+            },
+        }
+    }
+}
+
+// ── Main config types ──────────────────────────────────────────────────────
+
 /// The root configuration structure for a SecretSpec project.
 ///
 /// This is the top-level type that represents the entire `secretspec.toml` file.
@@ -55,8 +194,10 @@ pub struct Config {
     /// Take precedence over aliases in the user-global config
     /// (`~/.config/secretspec/config.toml`), so teams can check vault mappings
     /// into version control instead of replicating them on every machine.
+    /// Can be a simple alias (`"keyring://"`) or a structured table with
+    /// dependency declarations (`{ uri = "…", requires = { … } }`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub providers: Option<HashMap<String, String>>,
+    pub providers: Option<HashMap<String, ProviderConfig>>,
 }
 
 impl Config {
@@ -121,11 +262,11 @@ impl Config {
             }
         }
 
-        // Merge provider aliases - current entries win.
+        // Merge provider aliases — current entries win.
         if let Some(other_providers) = other.providers {
             let merged = self.providers.get_or_insert_with(HashMap::new);
-            for (alias, uri) in other_providers {
-                merged.entry(alias).or_insert(uri);
+            for (alias, config) in other_providers {
+                merged.entry(alias).or_insert(config);
             }
         }
     }
@@ -424,13 +565,15 @@ pub struct Secret {
     /// Optional default value if the secret is not provided
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
-    /// Optional list of provider aliases for retrieving this secret.
+    /// Optional list of provider references for retrieving this secret.
     /// Providers are tried in order until one has the secret.
     /// If not specified, uses the profile defaults.providers or global provider.
-    /// Each alias is resolved against the providers map in GlobalConfig.
-    /// Example: providers = ["keyring", "env"] will try keyring first, then env.
+    /// Each entry is resolved against the providers map in the project/global config.
+    ///
+    /// Accepts both simple alias strings (`"keyring"`) and detailed references
+    /// (`{ provider = "op", path = ["GitHub"], key = "token" }`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub providers: Option<Vec<String>>,
+    pub providers: Option<Vec<ProviderRef>>,
     /// Whether to write the secret value to a temporary file and return the path.
     /// If true, the secret will be written to a temporary file and the field
     /// will contain the path to that file instead of the secret value.

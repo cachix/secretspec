@@ -1,6 +1,6 @@
 //! Core secrets management functionality
 
-use crate::config::{Config, GlobalConfig, Profile, Resolved};
+use crate::config::{Config, GlobalConfig, Profile, ProviderRef, Resolved, SecretRequest};
 use crate::error::{Result, SecretSpecError};
 use crate::provider::Provider as ProviderTrait;
 use crate::validation::{ValidatedSecrets, ValidationErrors};
@@ -338,7 +338,7 @@ impl Secrets {
                         .providers
                         .clone()
                         .or_else(|| default.providers.clone())
-                        .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
+                        .or_else(|| current_defaults.and_then(|d| d.providers.clone().map(|v| v.into_iter().map(ProviderRef::from).collect()))),
                     as_path: current.as_path.or(default.as_path),
                     secret_type: current
                         .secret_type
@@ -364,7 +364,7 @@ impl Secrets {
                     providers: secret
                         .providers
                         .clone()
-                        .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
+                        .or_else(|| current_defaults.and_then(|d| d.providers.clone().map(|v| v.into_iter().map(ProviderRef::from).collect()))),
                     as_path: secret.as_path,
                     secret_type: secret.secret_type.clone(),
                     generate: secret.generate.clone(),
@@ -374,31 +374,125 @@ impl Secrets {
         }
     }
 
-    /// Provider-alias maps in lookup order: project `secretspec.toml` first,
-    /// then user-global config. Project entries win on conflict so teams can
-    /// pin shareable mappings in version control while still allowing per-user
-    /// overrides via the global config.
-    fn provider_alias_sources(&self) -> impl Iterator<Item = &HashMap<String, String>> {
-        self.config.providers.iter().chain(
-            self.global_config
-                .as_ref()
-                .and_then(|gc| gc.defaults.providers.as_ref()),
-        )
+    /// Look up a provider alias to its URI, checking the project `[providers]`
+    /// first (which now uses [`ProviderConfig`]) then the user-global config.
+    fn lookup_provider_alias(&self, alias: &str) -> Option<String> {
+        // Project-level config (can be ProviderConfig::Alias or Structured).
+        if let Some(config) = self.config.providers.as_ref().and_then(|m| m.get(alias)) {
+            return Some(config.uri().to_string());
+        }
+        // User-global config (still HashMap<String, String>).
+        self.global_config
+            .as_ref()
+            .and_then(|gc| gc.defaults.providers.as_ref())
+            .and_then(|m| m.get(alias))
+            .cloned()
     }
 
-    /// Resolves a single provider alias to its URI, walking
-    /// [`Self::provider_alias_sources`] in order.
-    fn lookup_provider_alias(&self, alias: &str) -> Option<String> {
-        self.provider_alias_sources()
-            .find_map(|m| m.get(alias))
-            .cloned()
+    /// Resolves required secrets for a provider with `requires` declarations.
+    ///
+    /// Returns a map from requirement key (e.g. `"service_token"`) to the
+    /// resolved secret value.  Uses only bootstrap providers (those without
+    /// their own `requires`) to avoid circular dependency problems.
+    ///
+    /// Returns `Ok(HashMap)` on success, or an error if a required secret
+    /// cannot be resolved.
+    pub(crate) fn resolve_provider_requirements(
+        &self,
+        alias: &str,
+        profile_name: &str,
+    ) -> Result<HashMap<String, SecretString>> {
+        let config = self
+            .config
+            .providers
+            .as_ref()
+            .and_then(|m| m.get(alias));
+
+        let requirements = match config {
+            Some(crate::config::ProviderConfig::Structured(s)) => &s.requires,
+            _ => return Ok(HashMap::new()),
+        };
+
+        if requirements.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let mut resolved = HashMap::new();
+
+        for (req_key, requirement) in requirements {
+            let secret_name = &requirement.secret;
+
+            // Look up the required secret using only bootstrap providers.
+            // We resolve the secret config but restrict to providers that have
+            // no `requires` of their own (bootstrap providers).
+            let secret_config = self
+                .resolve_secret_config(secret_name, Some(profile_name))
+                .ok_or_else(|| {
+                    SecretSpecError::SecretNotFound(
+                        format!(
+                            "Provider '{}' requires secret '{}' but it is not defined in secretspec.toml",
+                            alias, secret_name
+                        )
+                    )
+                })?;
+
+            let provider_entries = self.resolve_read_provider_uris(&secret_config, None)?;
+            let project_name = &self.config.project.name;
+
+            let value = match provider_entries {
+                Some(entries) if !entries.is_empty() => {
+                    match self.get_secret_from_providers(
+                        project_name,
+                        secret_name,
+                        profile_name,
+                        Some(&entries),
+                        None,
+                    )? {
+                        Some(v) => v,
+                        None => {
+                            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                                "Provider '{}' requires secret '{}' but it was not found",
+                                alias, secret_name
+                            )));
+                        }
+                    }
+                }
+                _ => {
+                    // Use default provider.
+                    let provider = self.get_provider(None)?;
+                    match provider.get(project_name, secret_name, profile_name)? {
+                        Some(v) => v,
+                        None => {
+                            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                                "Provider '{}' requires secret '{}' but it was not found",
+                                alias, secret_name
+                            )));
+                        }
+                    }
+                }
+            };
+
+            resolved.insert(req_key.clone(), value);
+        }
+
+        Ok(resolved)
     }
 
     /// Returns the union of alias names known across all sources, sorted.
     fn known_provider_aliases(&self) -> Vec<String> {
         let mut names: Vec<String> = self
-            .provider_alias_sources()
-            .flat_map(|m| m.keys().cloned())
+            .config
+            .providers
+            .iter()
+            .flat_map(|m| m.keys())
+            .chain(
+                self.global_config
+                    .as_ref()
+                    .and_then(|gc| gc.defaults.providers.as_ref())
+                    .into_iter()
+                    .flat_map(|m| m.keys()),
+            )
+            .cloned()
             .collect::<HashSet<_>>()
             .into_iter()
             .collect();
@@ -406,13 +500,58 @@ impl Secrets {
         names
     }
 
-    /// Resolves a list of provider aliases to their URIs, preserving order.
-    /// Used for fallback chain resolution; each alias is looked up via
-    /// [`Self::lookup_provider_alias`].
+    /// Resolves a list of [`ProviderRef`]s to (URI, SecretRequest) pairs, preserving order.
+    ///
+    /// Each [`ProviderRef`] contributes its resolved URI and any location hints
+    /// (path, key) from [`ProviderRefDetail`].  Bare alias refs produce a default
+    /// [`SecretRequest`].
     ///
     /// # Errors
     ///
-    /// Returns an error if any alias is not defined in either the project or global config.
+    /// Returns an error if any provider alias is not defined in either the
+    /// project or global config.
+    pub(crate) fn resolve_provider_ref_uris(
+        &self,
+        provider_refs: Option<&[ProviderRef]>,
+    ) -> Result<Option<Vec<(String, SecretRequest)>>> {
+        let Some(refs) = provider_refs else {
+            return Ok(None);
+        };
+        let mut entries = Vec::with_capacity(refs.len());
+        for r in refs {
+            let alias = r.provider_alias();
+            match self.lookup_provider_alias(alias) {
+                Some(uri) => {
+                    let request = SecretRequest::from_provider_ref(r);
+                    entries.push((uri, request));
+                }
+                None => {
+                    let known = self.known_provider_aliases();
+                    let msg = if known.is_empty() {
+                        format!(
+                            "Provider alias '{}' is not defined. Declare it in [providers] in secretspec.toml or in the global config.",
+                            alias
+                        )
+                    } else {
+                        format!(
+                            "Provider alias '{}' is not defined. Available aliases: {}",
+                            alias,
+                            known.join(", ")
+                        )
+                    };
+                    return Err(SecretSpecError::ProviderNotFound(msg));
+                }
+            }
+        }
+        Ok(Some(entries))
+    }
+
+    /// Resolves a list of provider aliases (from profile defaults) to URIs.
+    /// Preserves order. Each alias is looked up via [`Self::lookup_provider_alias`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any alias is not defined.
     pub(crate) fn resolve_provider_aliases(
         &self,
         provider_aliases: Option<&[String]>,
@@ -420,7 +559,6 @@ impl Secrets {
         let Some(aliases) = provider_aliases else {
             return Ok(None);
         };
-
         let mut uris = Vec::with_capacity(aliases.len());
         for alias in aliases {
             match self.lookup_provider_alias(alias) {
@@ -481,8 +619,9 @@ impl Secrets {
         if let Some(uri) = self.resolve_provider_override(override_arg) {
             return Box::<dyn ProviderTrait>::try_from(uri);
         }
-        if let Some(alias) = secret_config.providers.as_ref().and_then(|p| p.first()) {
-            let provider_uris = self.resolve_provider_aliases(Some(std::slice::from_ref(alias)))?;
+        if let Some(first_ref) = secret_config.providers.as_ref().and_then(|p| p.first()) {
+            let alias = first_ref.provider_alias().to_string();
+            let provider_uris = self.resolve_provider_aliases(Some(std::slice::from_ref(&alias)))?;
             let uri = provider_uris
                 .and_then(|uris| uris.into_iter().next())
                 .ok_or_else(|| {
@@ -505,11 +644,11 @@ impl Secrets {
         &self,
         secret_config: &crate::config::Secret,
         override_arg: Option<&str>,
-    ) -> Result<Option<Vec<String>>> {
+    ) -> Result<Option<Vec<(String, SecretRequest)>>> {
         if let Some(uri) = self.resolve_provider_override(override_arg) {
-            return Ok(Some(vec![uri]));
+            return Ok(Some(vec![(uri, SecretRequest::default())]));
         }
-        self.resolve_provider_aliases(secret_config.providers.as_deref())
+        self.resolve_provider_ref_uris(secret_config.providers.as_deref())
     }
 
     /// Gets the provider instance to use for secret operations
@@ -608,14 +747,14 @@ impl Secrets {
         project_name: &str,
         secret_name: &str,
         profile_name: &str,
-        provider_uris: Option<&[String]>,
+        provider_entries: Option<&[(String, SecretRequest)]>,
         default_provider_arg: Option<String>,
     ) -> Result<Option<SecretString>> {
-        // If provider URIs are specified, try them in order
-        if let Some(uris) = provider_uris {
+        // If provider entries are specified, try them in order
+        if let Some(entries) = provider_entries {
             let mut last_error: Option<SecretSpecError> = None;
             let mut any_healthy = false;
-            for uri in uris {
+            for (uri, request) in entries {
                 let provider = match Box::<dyn ProviderTrait>::try_from(uri.clone()) {
                     Ok(p) => p,
                     Err(e) => {
@@ -624,7 +763,7 @@ impl Secrets {
                         continue;
                     }
                 };
-                match provider.get(project_name, secret_name, profile_name) {
+                match provider.get_with_request(project_name, secret_name, profile_name, request) {
                     Ok(Some(value)) => return Ok(Some(value)),
                     Ok(None) => {
                         any_healthy = true;
@@ -1451,9 +1590,9 @@ impl Secrets {
 
             let provider_uri = match (&override_uri, secret_config.providers.as_deref()) {
                 (Some(uri), _) => Some(uri.clone()),
-                (None, Some([first_alias, ..])) => self
-                    .resolve_provider_aliases(Some(std::slice::from_ref(first_alias)))?
-                    .and_then(|uris| uris.into_iter().next()),
+                (None, Some([first_ref, ..])) => self
+                    .resolve_provider_ref_uris(Some(std::slice::from_ref(first_ref)))?
+                    .and_then(|entries| entries.into_iter().next().map(|(uri, _)| uri)),
                 _ => None,
             };
 
@@ -1526,13 +1665,13 @@ impl Secrets {
                     let fallback_value =
                         match (override_uri.as_ref(), secret_config.providers.as_deref()) {
                             (None, Some(providers)) if providers.len() > 1 => {
-                                let fallback_uris =
-                                    self.resolve_provider_aliases(Some(&providers[1..]))?;
+                                let fallback_entries =
+                                    self.resolve_provider_ref_uris(Some(&providers[1..]))?;
                                 self.get_secret_from_providers(
                                     &self.config.project.name,
                                     &name,
                                     &profile_name,
-                                    fallback_uris.as_deref(),
+                                    fallback_entries.as_deref(),
                                     None,
                                 )?
                             }

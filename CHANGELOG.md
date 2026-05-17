@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Motivation
+
+Currently, SecretSpec stores every secret as a separate 1Password item
+(`secretspec/{project}/{profile}/{KEY}`). This creates item sprawl — a
+project with 20 secrets creates 20 items, making the vault noisy and the
+structure harder to reason about.
+
+This release adds two related features:
+
+1. **Provider-relative secret locations** — multiple secrets can live inside a
+   single provider "root" (one 1Password item per project/profile, with
+   sections for different services and fields for individual keys).
+2. **Provider dependency declarations** — providers that need auth tokens (like
+   1Password service accounts) can declare those requirements in the config,
+   making dependencies explicit rather than relying on ambient environment
+   variables.
+
+Both features are purely additive at the TOML level — every existing
+`secretspec.toml` file parses identically after this change.
+
+### Added
+
+- **Provider-relative secret locations.** Secrets in `providers` lists now
+  accept detailed references with optional `path` and `key` fields:
+
 ### Internal
 - Expanded test coverage for previously untested logic: CLI argument parsing
   and `init` TOML generation, the config/secret validation guards
@@ -31,6 +56,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--from`; `-f` is reserved for the global `--file` option. The duplicate
   short flag made `secretspec init` panic in debug builds and was ambiguous in
   release builds.
+  ```toml
+  GITHUB_TOKEN = {
+    description = "GitHub token",
+    providers = [
+      { provider = "op-dev", path = ["GitHub"], key = "token" }
+    ]
+  }
+  ```
+  A single 1Password item (title `secretspec/{project}/{profile}`) can now
+  serve many secrets at different paths within it. `key` defaults to the
+  SecretSpec secret name when omitted. Bare strings (`["env"]`) continue to
+  work as before — they deserialize as `ProviderRef::Alias` transparently.
+
+- **Structured provider configs.** `[providers]` entries can now be tables
+  with an optional `requires` section to declare auth dependencies:
+  ```toml
+  [providers.op-dev]
+  uri = "onepassword://Development"
+  [providers.op-dev.requires]
+  service_token = { secret = "OP_SERVICE_ACCOUNT_TOKEN" }
+  ```
+  This makes a provider's auth requirements explicit in the config rather
+  than relying on an ambient `OP_SERVICE_ACCOUNT_TOKEN` env var that may or
+  may not be set. The required secret is itself a normal SecretSpec secret
+  that can come from any provider (keyring, env, dotenv, etc.). Plain string
+  aliases (`keyring = "keyring://"`) remain fully supported.
+
+- **`Provider::get_with_request`.** New default trait method that receives a
+  `SecretRequest` (carrying `path` and `key`). The default implementation
+  delegates to `get()`, so existing providers don't need changes. The
+  1Password provider overrides this to navigate to the correct section and
+  field within a shared project item.
+
+- **`Secrets::resolve_provider_requirements`.** Resolves the `requires`
+  declarations for a provider alias, looking up each required secret through
+  the normal resolution pipeline and returning the resolved values.
+
+- **New public types:** `ProviderConfig`, `ProviderRef`, `ProviderRefDetail`,
+  `SecretRequest`, `ProviderRequirement`, `ProviderConfigStructured`. All
+  exported from the crate root — additive only.
+
+### Changed
+
+- **Breaking (serde):** `Secret.providers` is now `Option<Vec<ProviderRef>>`
+  instead of `Option<Vec<String>>` for structured references.
+  Backward-compatible at the TOML level (bare strings deserialize as
+  `ProviderRef::Alias`).
+- **Breaking (serde):** `Config.providers` is now
+  `Option<HashMap<String, ProviderConfig>>` instead of
+  `Option<HashMap<String, String>>` to support structured provider entries.
+  TOML backwards compatibility is preserved via `#[serde(untagged)]`.
+- **Breaking (Rust API):** Code that constructs `Config` or `Secret` structs
+  directly (not via TOML deserialization) must wrap provider values in the
+  new enum types:
+  ```rust
+  // Before (no longer compiles)
+  Secret { providers: Some(vec!["keyring".into()]), .. }
+  Config { providers: Some(HashMap::from([("k".into(), "keyring://".into())])), .. }
+
+  // After
+  Secret { providers: Some(vec![ProviderRef::from("keyring")]), .. }
+  Config { providers: Some(HashMap::from([("k".into(), ProviderConfig::Alias("keyring://".into()))])), .. }
+  ```
+  This only affects the Rust SDK; TOML files, profile-level `providers`
+  (`Vec<String>`), and user-global `[defaults.providers]`
+  (`HashMap<String, String>`) are unchanged.
+
+### Backward Compatibility
+
+- **TOML files:** fully backward compatible. `[providers]` bare strings
+  (`keyring = "keyring://"`) → `ProviderConfig::Alias`. Per-secret list
+  entries (`["env"]`) → `ProviderRef::Alias`. Roundtrip through
+  serialize → deserialize is lossless.
+- **Provider trait:** `get_with_request` is a defaulted method (delegates
+  to `get`). No changes required in existing provider implementations.
+- **Profile/global config:** `ProfileDefaults.providers` stays
+  `Vec<String>`; `GlobalDefaults.providers` stays `HashMap<String, String>`.
+- **Public API:** new types (`ProviderConfig`, `ProviderRef`,
+  `ProviderRefDetail`, `SecretRequest`, `ProviderRequirement`,
+  `ProviderConfigStructured`) are additive only. No existing public types
+  or methods were removed or renamed.
+
+### Fixed
+- Profile-not-found errors no longer surface as the confusing
+  `Secret 'Profile 'X' not found' not found`. They now use the dedicated
+  `InvalidProfile` variant and include the list of profiles defined in
+  `secretspec.toml`, e.g.
+  `Invalid profile: 'production' is not defined in secretspec.toml. Available profiles: default, dev`.
+  Affects `check`, `run`, `get`, `set`, and `import`. Surfaced via
+  [#79](https://github.com/cachix/secretspec/issues/79).
 
 ## [0.11.0] - 2026-05-22
 

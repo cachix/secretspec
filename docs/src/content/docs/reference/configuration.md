@@ -45,7 +45,7 @@ Each secret variable is defined as a table with the following fields:
 | `description` | string | Yes | Human-readable description of the secret |
 | `required` | boolean | No* | Whether the value must be provided (default: true) |
 | `default` | string | No** | Default value if not provided |
-| `providers` | array[string] | No | List of provider aliases to use in fallback order |
+| `providers` | array[string or table] | No | List of provider references (see [Provider References](#provider-references)) |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
 | `type` | string | No*** | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
 | `generate` | boolean or table | No*** | Enable auto-generation when secret is missing |
@@ -135,6 +135,64 @@ $ secretspec config provider remove prod_vault
 ```
 
 The CLI commands operate on the user-global config only — edit `secretspec.toml` by hand to change project-level aliases.
+
+### Provider References with Path and Key
+
+Per-secret `providers` entries can be either simple alias strings or detailed
+reference tables that include a provider-relative `path` and `key`:
+
+```toml
+[profiles.default]
+# Simple alias — backward compatible.
+DATABASE_URL = { description = "Dev DB", providers = ["env"] }
+
+# Detailed provider ref with path and key.
+GITHUB_TOKEN = {
+  description = "GitHub personal access token",
+  providers = [
+    { provider = "op-dev", path = ["GitHub"], key = "token" }
+  ]
+}
+
+# Mixed aliases and details in one chain.
+API_KEY = {
+  description = "External API key",
+  providers = ["keyring", { provider = "op-dev", path = ["APIs"] }]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `provider` | string | Yes | The provider alias name |
+| `path` | array[string] | No | Location path within the provider (e.g. a 1Password section name) |
+| `key` | string | No | Field key at that path; defaults to the SecretSpec secret name |
+
+### Structured Provider Configs with Dependencies
+
+Project-level `[providers]` entries can also be tables with an optional
+`requires` section to declare that a provider depends on another secret
+for authentication:
+
+```toml
+[providers]
+keyring = "keyring://"              # Simple alias — backward compatible
+
+[providers.op-dev]
+uri = "onepassword://Development"
+[providers.op-dev.requires]
+service_token = { secret = "OP_SERVICE_ACCOUNT_TOKEN" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `uri` | string | Yes | The provider URI |
+| `requires` | table | No | Secrets this provider needs for authentication |
+
+Each entry under `requires` has:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `secret` | string | Yes | The SecretSpec secret name that provides the value |
 
 ### as_path Option
 

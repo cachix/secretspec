@@ -50,6 +50,7 @@
 //! }
 //! ```
 
+use crate::config::SecretRequest;
 use crate::{Result, SecretSpecError};
 use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, percent_encode};
 use secrecy::SecretString;
@@ -403,6 +404,21 @@ pub trait Provider: Send + Sync {
         }
         Ok(results)
     }
+
+    /// Look up a single secret with an optional provider-relative location.
+    ///
+    /// The default implementation delegates to [`get`](Provider::get),
+    /// ignoring the `request`. Providers that support path/key navigation
+    /// (e.g. OnePassword with section/field lookup) should override this.
+    fn get_with_request(
+        &self,
+        project: &str,
+        key: &str,
+        profile: &str,
+        _request: &SecretRequest,
+    ) -> Result<Option<SecretString>> {
+        self.get(project, key, profile)
+    }
 }
 
 impl<T: Provider> Provider for std::sync::Arc<T> {
@@ -431,6 +447,16 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
         profile: &str,
     ) -> Result<HashMap<String, SecretString>> {
         (**self).get_batch(project, keys, profile)
+    }
+
+    fn get_with_request(
+        &self,
+        project: &str,
+        key: &str,
+        profile: &str,
+        request: &SecretRequest,
+    ) -> Result<Option<SecretString>> {
+        (**self).get_with_request(project, key, profile, request)
     }
 }
 
@@ -509,6 +535,17 @@ impl Provider for PreflightGuard {
     ) -> Result<HashMap<String, SecretString>> {
         self.check()?;
         self.inner.get_batch(project, keys, profile)
+    }
+
+    fn get_with_request(
+        &self,
+        project: &str,
+        key: &str,
+        profile: &str,
+        request: &SecretRequest,
+    ) -> Result<Option<SecretString>> {
+        self.check()?;
+        self.inner.get_with_request(project, key, profile, request)
     }
 }
 

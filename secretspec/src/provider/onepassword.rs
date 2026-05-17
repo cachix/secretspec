@@ -1,4 +1,5 @@
 use crate::provider::{Provider, ProviderUrl};
+use crate::config::SecretRequest;
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -10,10 +11,10 @@ use std::process::Command;
 /// This struct deserializes the JSON output from the `op item get` command
 /// and contains an array of fields that hold the actual secret data.
 #[derive(Debug, Deserialize)]
-struct OnePasswordItem {
+pub(crate) struct OnePasswordItem {
     /// Collection of fields within the OnePassword item.
     /// Each field represents a piece of data stored in the item.
-    fields: Vec<OnePasswordField>,
+    pub(crate) fields: Vec<OnePasswordField>,
 }
 
 /// Represents a single field within a OnePassword item.
@@ -22,7 +23,7 @@ struct OnePasswordItem {
 /// or concealed values. The field's label is used to identify specific
 /// data within an item.
 #[derive(Debug, Deserialize)]
-struct OnePasswordField {
+pub(crate) struct OnePasswordField {
     /// Unique identifier for the field within the item.
     id: String,
     /// The type of field (e.g., "STRING", "CONCEALED", "PASSWORD").
@@ -30,10 +31,19 @@ struct OnePasswordField {
     field_type: String,
     /// Optional human-readable label for the field.
     /// Used to identify fields like "value", "password", etc.
-    label: Option<String>,
+    pub(crate) label: Option<String>,
+    /// Optional section the field belongs to (e.g. "GitHub").
+    pub(crate) section: Option<OnePasswordSection>,
     /// The actual value stored in the field.
     /// May be None for certain field types.
-    value: Option<String>,
+    pub(crate) value: Option<String>,
+}
+
+/// A section within a OnePassword item.
+#[derive(Debug, Deserialize)]
+pub(crate) struct OnePasswordSection {
+    /// Optional label for the section (e.g. "GitHub").
+    pub(crate) label: Option<String>,
 }
 
 /// Template for creating new OnePassword items via the CLI.
@@ -686,6 +696,80 @@ impl Provider for OnePasswordProvider {
             }
             Err(e) => Err(e),
         }
+    }
+
+    fn get_with_request(
+        &self,
+        project: &str,
+        key: &str,
+        profile: &str,
+        request: &SecretRequest,
+    ) -> Result<Option<SecretString>> {
+        // If no path, delegate to base `get` (one item per secret).
+        let Some(path_segments) = &request.path else {
+            return self.get(project, key, profile);
+        };
+        if path_segments.is_empty() {
+            return self.get(project, key, profile);
+        }
+
+        // Shared-item lookup: item title = secretspec/{project}/{profile}
+        // (all secrets for this project/profile live in one shared item).
+        let vault = self.get_vault_name(profile);
+        let folder_prefix = self
+            .config
+            .folder_prefix
+            .as_deref()
+            .unwrap_or("secretspec/{project}/{profile}/{key}");
+        let item_name = folder_prefix
+            .replace("{project}", project)
+            .replace("{profile}", profile)
+            .replace("/{key}", "");
+
+        // The key to look for: request.key if set, otherwise the secret name.
+        let field_key = request.key.as_deref().unwrap_or(key);
+        // The section to match (first path segment).
+        let section_name = &path_segments[0];
+
+        let args = vec![
+            "item", "get", &item_name,
+            "--vault", &vault,
+            "--format", "json",
+        ];
+
+        let output = match self.execute_op_command(&args, None) {
+            Ok(output) => output,
+            Err(SecretSpecError::ProviderOperationFailed(msg))
+                if msg.contains("isn't an item") =>
+            {
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
+
+        // Parse the item.
+        let item: OnePasswordItem = match serde_json::from_str(&output) {
+            Ok(item) => item,
+            Err(e) => {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to parse OnePassword item JSON: {e}"
+                )));
+            }
+        };
+
+        // Find field matching section name and field key.
+        for field in &item.fields {
+            let section_match = field.section.as_ref().and_then(|s| s.label.as_deref())
+                == Some(section_name);
+            let label_match = field.label.as_deref() == Some(field_key);
+            if section_match && label_match {
+                if let Some(ref value) = field.value {
+                    return Ok(Some(SecretString::new(value.clone().into())));
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Stores or updates a secret in OnePassword.

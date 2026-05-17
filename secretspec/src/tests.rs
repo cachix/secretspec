@@ -1,5 +1,6 @@
 use crate::config::{
-    Config, GlobalConfig, GlobalDefaults, ParseError, Profile, Project, Resolved, Secret,
+    Config, GlobalConfig, GlobalDefaults, ParseError, Profile, Project, ProviderConfig,
+    ProviderConfigStructured, ProviderRef, ProviderRefDetail, ProviderRequirement, Resolved, Secret, SecretRequest,
 };
 use crate::error::{Result, SecretSpecError};
 use crate::secrets::Secrets;
@@ -10,6 +11,7 @@ use std::convert::TryFrom;
 use std::path::Path;
 use std::{fs, io};
 use tempfile::TempDir;
+use serde::{Deserialize, Serialize};
 
 // Helper function for tests that need to parse from string
 fn parse_spec_from_str(content: &str, _base_path: Option<&Path>) -> Result<Config> {
@@ -2440,7 +2442,7 @@ fn test_per_secret_provider_configuration() {
             description: Some("API Key from shared provider".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec!["shared".to_string()]),
+            providers: Some(vec![ProviderRef::from("shared")]),
             as_path: None,
             ..Default::default()
         },
@@ -2496,7 +2498,7 @@ fn test_per_secret_provider_configuration() {
     let api_key_config = spec
         .resolve_secret_config("API_KEY", Some("default"))
         .unwrap();
-    assert_eq!(api_key_config.providers, Some(vec!["shared".to_string()]));
+    assert_eq!(api_key_config.providers, Some(vec![ProviderRef::from("shared")]));
 
     // Verify DATABASE_URL has no providers (uses default)
     let db_config = spec
@@ -2634,7 +2636,7 @@ fn test_per_secret_provider_with_fallback_chain() {
             description: Some("Database URL".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
+            providers: Some(vec![ProviderRef::from("primary"), ProviderRef::from("fallback")]),
             as_path: None,
             ..Default::default()
         },
@@ -2647,7 +2649,7 @@ fn test_per_secret_provider_with_fallback_chain() {
             description: Some("API Key".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec!["fallback".to_string(), "primary".to_string()]),
+            providers: Some(vec![ProviderRef::from("fallback"), ProviderRef::from("primary")]),
             as_path: None,
             ..Default::default()
         },
@@ -2698,7 +2700,7 @@ fn test_per_secret_provider_with_fallback_chain() {
         .unwrap();
     assert_eq!(
         db_config.providers,
-        Some(vec!["primary".to_string(), "fallback".to_string()])
+        Some(vec![ProviderRef::from("primary"), ProviderRef::from("fallback")])
     );
 
     // Verify API_KEY config has providers in reverse order
@@ -2707,7 +2709,7 @@ fn test_per_secret_provider_with_fallback_chain() {
         .unwrap();
     assert_eq!(
         api_config.providers,
-        Some(vec!["fallback".to_string(), "primary".to_string()])
+        Some(vec![ProviderRef::from("fallback"), ProviderRef::from("primary")])
     );
 }
 
@@ -2732,7 +2734,7 @@ fn test_get_secret_with_fallback_chain() {
             description: Some("API Key from fallback".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
+            providers: Some(vec![ProviderRef::from("primary"), ProviderRef::from("fallback")]),
             as_path: None,
             ..Default::default()
         },
@@ -2745,7 +2747,7 @@ fn test_get_secret_with_fallback_chain() {
             description: Some("Database URL from primary".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
+            providers: Some(vec![ProviderRef::from("primary"), ProviderRef::from("fallback")]),
             as_path: None,
             ..Default::default()
         },
@@ -2828,7 +2830,7 @@ fn test_validate_falls_back_on_primary_provider_error() {
             description: Some("API Key".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
+            providers: Some(vec![ProviderRef::from("primary"), ProviderRef::from("fallback")]),
             as_path: None,
             ..Default::default()
         },
@@ -2902,7 +2904,7 @@ fn test_validate_surfaces_error_when_all_providers_fail() {
             description: Some("API Key".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec!["a".to_string(), "b".to_string()]),
+            providers: Some(vec![ProviderRef::from("a"), ProviderRef::from("b")]),
             as_path: None,
             ..Default::default()
         },
@@ -2969,7 +2971,7 @@ fn test_validate_with_per_secret_providers() {
             description: Some("API Key".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec!["env_provider".to_string()]),
+            providers: Some(vec![ProviderRef::from("env_provider")]),
             as_path: None,
             ..Default::default()
         },
@@ -2982,7 +2984,7 @@ fn test_validate_with_per_secret_providers() {
             description: Some("Database URL".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec!["keyring_provider".to_string()]),
+            providers: Some(vec![ProviderRef::from("keyring_provider")]),
             as_path: None,
             ..Default::default()
         },
@@ -3090,7 +3092,7 @@ fn test_secret_config_merges_providers_from_default() {
             description: Some("API Key from default".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec!["shared".to_string()]),
+            providers: Some(vec![ProviderRef::from("shared")]),
             as_path: None,
             ..Default::default()
         },
@@ -3118,7 +3120,7 @@ fn test_secret_config_merges_providers_from_default() {
             description: Some("Database URL".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec!["prod".to_string()]),
+            providers: Some(vec![ProviderRef::from("prod")]),
             as_path: None,
             ..Default::default()
         },
@@ -3158,7 +3160,7 @@ fn test_secret_config_merges_providers_from_default() {
         .unwrap();
     assert_eq!(
         api_key_config.providers,
-        Some(vec!["shared".to_string()]),
+        Some(vec![ProviderRef::from("shared")]),
         "API_KEY should inherit providers from default profile"
     );
 
@@ -3168,7 +3170,7 @@ fn test_secret_config_merges_providers_from_default() {
         .unwrap();
     assert_eq!(
         db_config.providers,
-        Some(vec!["prod".to_string()]),
+        Some(vec![ProviderRef::from("prod")]),
         "DATABASE_URL should use its own providers"
     );
 }
@@ -3211,7 +3213,7 @@ SPECIAL_SECRET = { description = "Special secret", required = true }
         .unwrap();
     assert_eq!(
         db_prod.providers,
-        Some(vec!["prod_vault".to_string(), "keyring".to_string()]),
+        Some(vec![ProviderRef::from("prod_vault"), ProviderRef::from("keyring")]),
         "DATABASE_URL should inherit production profile defaults"
     );
 
@@ -3220,7 +3222,7 @@ SPECIAL_SECRET = { description = "Special secret", required = true }
         .unwrap();
     assert_eq!(
         api_prod.providers,
-        Some(vec!["prod_vault".to_string(), "keyring".to_string()]),
+        Some(vec![ProviderRef::from("prod_vault"), ProviderRef::from("keyring")]),
         "API_KEY should inherit production profile defaults"
     );
 
@@ -3229,7 +3231,7 @@ SPECIAL_SECRET = { description = "Special secret", required = true }
         .unwrap();
     assert_eq!(
         secret_prod.providers,
-        Some(vec!["env".to_string()]),
+        Some(vec![ProviderRef::from("env")]),
         "SECRET_KEY should override with its own providers"
     );
 
@@ -4186,7 +4188,7 @@ fn test_resolve_read_provider_uris_override_skips_chain() {
         1,
         "override must collapse the chain to a single URI"
     );
-    assert_eq!(uris[0], format!("dotenv://{}", team_path.display()));
+    assert_eq!(uris[0].0, format!("dotenv://{}", team_path.display()));
 }
 
 /// Strip ANSI escape sequences so summary assertions don't depend on whether
@@ -4297,6 +4299,13 @@ fn aliases_map(aliases: &[(&str, &str)]) -> HashMap<String, String> {
         .collect()
 }
 
+fn provider_config_map(aliases: &[(&str, &str)]) -> HashMap<String, ProviderConfig> {
+    aliases
+        .iter()
+        .map(|(k, v)| (k.to_string(), ProviderConfig::Alias(v.to_string())))
+        .collect()
+}
+
 fn config_with_project_aliases(aliases: &[(&str, &str)]) -> Config {
     Config {
         project: Project {
@@ -4305,7 +4314,7 @@ fn config_with_project_aliases(aliases: &[(&str, &str)]) -> Config {
             extends: None,
         },
         profiles: HashMap::new(),
-        providers: Some(aliases_map(aliases)),
+        providers: Some(provider_config_map(aliases)),
     }
 }
 
@@ -4322,7 +4331,7 @@ fn global_config_with_aliases(aliases: &[(&str, &str)]) -> GlobalConfig {
 fn config_with_project_alias_secret(
     alias: &str,
     uri: &str,
-    secret_providers: Option<Vec<String>>,
+    secret_providers: Option<Vec<ProviderRef>>,
 ) -> Config {
     let mut secrets = HashMap::new();
     secrets.insert(
@@ -4351,7 +4360,7 @@ fn config_with_project_alias_secret(
             extends: None,
         },
         profiles,
-        providers: Some(aliases_map(&[(alias, uri)])),
+        providers: Some(provider_config_map(&[(alias, uri)])),
     }
 }
 
@@ -4452,12 +4461,12 @@ APP_SECRET = { description = "App", required = true }
         .expect("merged config should carry [providers]");
 
     assert_eq!(
-        providers.get("op_infra").map(String::as_str),
+        providers.get("op_infra").map(|c| c.uri()),
         Some("onepassword://Shared"),
         "alias defined only in extended config should be inherited"
     );
     assert_eq!(
-        providers.get("op_overridden").map(String::as_str),
+        providers.get("op_overridden").map(|c| c.uri()),
         Some("onepassword://NewVault"),
         "alias defined in both should resolve to the current (extending) config's value"
     );
@@ -4547,7 +4556,7 @@ fn test_validate_project_provider_chain_without_global_default() {
     let config = config_with_project_alias_secret(
         "project_env",
         &uri,
-        Some(vec!["project_env".to_string()]),
+        Some(vec![ProviderRef::from("project_env")]),
     );
     let spec = Secrets::new(config, None, None, None);
 
@@ -4722,4 +4731,640 @@ fn test_resolve_profile_unknown_returns_invalid_profile() {
         }
         other => panic!("expected InvalidProfile, got {other:?}"),
     }
+}
+
+// ── ProviderRef serde roundtrip tests ──────────────────────────────────────
+
+#[test]
+fn test_provider_ref_deserializes_alias_and_detail() {
+    // String alias → ProviderRef::Alias
+    let toml_str = r#"providers = ["keyring", "dotenv"]"#;
+    #[derive(Debug, Deserialize)]
+    struct Wrapper {
+        providers: Vec<ProviderRef>,
+    }
+    let w: Wrapper = toml::from_str(toml_str).unwrap();
+    assert_eq!(w.providers.len(), 2);
+    assert_eq!(w.providers[0], ProviderRef::Alias("keyring".into()));
+    assert_eq!(w.providers[1], ProviderRef::Alias("dotenv".into()));
+
+    // Detailed ref → ProviderRef::Detail with all fields
+    let toml_str = r#"providers = [{ provider = "op", path = ["GH", "Team"], key = "token" }]"#;
+    let w: Wrapper = toml::from_str(toml_str).unwrap();
+    assert_eq!(w.providers.len(), 1);
+    assert_eq!(
+        w.providers[0],
+        ProviderRef::Detail(ProviderRefDetail {
+            provider: "op".into(),
+            path: Some(vec!["GH".into(), "Team".into()]),
+            key: Some("token".into()),
+        })
+    );
+
+    // Detailed ref with only provider (no path/key)
+    let toml_str = r#"providers = [{ provider = "env" }]"#;
+    let w: Wrapper = toml::from_str(toml_str).unwrap();
+    assert_eq!(w.providers.len(), 1);
+    assert_eq!(
+        w.providers[0],
+        ProviderRef::Detail(ProviderRefDetail {
+            provider: "env".into(),
+            path: None,
+            key: None,
+        })
+    );
+
+    // Mixed array: alias + detail
+    let toml_str = r#"providers = ["keyring", { provider = "op", key = "tok" }]"#;
+    let w: Wrapper = toml::from_str(toml_str).unwrap();
+    assert_eq!(w.providers.len(), 2);
+    assert_eq!(w.providers[0], ProviderRef::Alias("keyring".into()));
+    assert_eq!(
+        w.providers[1],
+        ProviderRef::Detail(ProviderRefDetail {
+            provider: "op".into(),
+            path: None,
+            key: Some("tok".into()),
+        })
+    );
+}
+
+#[test]
+fn test_provider_ref_serde_roundtrip() {
+    // TOML doesn't serialize top-level scalars — wrap in a Vec through Config.
+    #[derive(Debug, Deserialize, Serialize)]
+    struct TestSecret {
+        providers: Vec<ProviderRef>,
+    }
+
+    let refs = vec![
+        ProviderRef::Alias("keyring".into()),
+        ProviderRef::Detail(ProviderRefDetail {
+            provider: "op".into(),
+            path: Some(vec!["Infra".into()]),
+            key: Some("api_key".into()),
+        }),
+        ProviderRef::Detail(ProviderRefDetail {
+            provider: "env".into(),
+            path: None,
+            key: None,
+        }),
+    ];
+
+    let wrapper = TestSecret { providers: refs.clone() };
+    let serialized = toml::to_string(&wrapper).unwrap();
+    let deserialized: TestSecret = toml::from_str(&serialized).unwrap();
+    assert_eq!(refs, deserialized.providers, "Full roundtrip failed");
+}
+
+#[test]
+fn test_provider_ref_from_string_and_str() {
+    // From<String>
+    let r: ProviderRef = ProviderRef::from("env".to_string());
+    assert_eq!(r, ProviderRef::Alias("env".into()));
+
+    // From<&str>
+    let r: ProviderRef = ProviderRef::from("1pass");
+    assert_eq!(r, ProviderRef::Alias("1pass".into()));
+}
+
+#[test]
+fn test_provider_ref_provider_alias() {
+    assert_eq!(
+        ProviderRef::Alias("my_alias".into()).provider_alias(),
+        "my_alias"
+    );
+    assert_eq!(
+        ProviderRef::Detail(ProviderRefDetail {
+            provider: "op_vault".into(),
+            path: Some(vec!["Section".into()]),
+            key: Some("key_name".into()),
+        })
+        .provider_alias(),
+        "op_vault"
+    );
+}
+
+// ── Structured ProviderConfig deserialization ──────────────────────────────
+
+#[test]
+fn test_provider_config_deserializes_alias_and_structured() {
+    // Simple alias string
+    let toml_str = r#"keyring = "keyring://""#;
+    #[derive(Debug, Deserialize)]
+    struct Wrapper {
+        #[serde(flatten)]
+        map: HashMap<String, ProviderConfig>,
+    }
+    let w: Wrapper = toml::from_str(toml_str).unwrap();
+    assert_eq!(w.map.len(), 1);
+    assert_eq!(
+        w.map.get("keyring").unwrap(),
+        &ProviderConfig::Alias("keyring://".into())
+    );
+
+    // Structured with requires
+    let toml_str = r#"
+[providers]
+op = { uri = "onepassword://Team", requires = { OP_TOKEN = { secret = "OP_SERVICE_ACCOUNT_TOKEN" } } }
+"#;
+    #[derive(Debug, Deserialize)]
+    struct ConfigWrapper {
+        providers: HashMap<String, ProviderConfig>,
+    }
+    let cw: ConfigWrapper = toml::from_str(toml_str).unwrap();
+    assert_eq!(cw.providers.len(), 1);
+    match cw.providers.get("op").unwrap() {
+        ProviderConfig::Structured(s) => {
+            assert_eq!(s.uri, "onepassword://Team");
+            assert_eq!(s.requires.len(), 1);
+            let req = s.requires.get("OP_TOKEN").unwrap();
+            assert_eq!(req.secret, "OP_SERVICE_ACCOUNT_TOKEN");
+        }
+        _ => panic!("expected Structured variant"),
+    }
+
+    // Structured without requires
+    let toml_str = r#"
+[providers]
+env = { uri = "env://" }
+"#;
+    let cw: ConfigWrapper = toml::from_str(toml_str).unwrap();
+    assert_eq!(cw.providers.len(), 1);
+    match cw.providers.get("env").unwrap() {
+        ProviderConfig::Structured(s) => {
+            assert_eq!(s.uri, "env://");
+            assert!(s.requires.is_empty());
+        }
+        _ => panic!("expected Structured variant"),
+    }
+}
+
+#[test]
+fn test_provider_config_uri_and_requires() {
+    let alias = ProviderConfig::Alias("dotenv://.env".into());
+    assert_eq!(alias.uri(), "dotenv://.env");
+    assert!(alias.requires().is_none());
+
+    let structured = ProviderConfig::Structured(ProviderConfigStructured {
+        uri: "op://vault".into(),
+        requires: HashMap::new(),
+    });
+    assert_eq!(structured.uri(), "op://vault");
+    assert!(structured.requires().is_none()); // empty map → None
+
+    let mut reqs = HashMap::new();
+    reqs.insert(
+        "REQ".into(),
+        ProviderRequirement {
+            secret: "SOME_SECRET".into(),
+        },
+    );
+    let structured_with_reqs = ProviderConfig::Structured(ProviderConfigStructured {
+        uri: "op://vault".into(),
+        requires: reqs,
+    });
+    assert_eq!(structured_with_reqs.uri(), "op://vault");
+    let reqs_ref = structured_with_reqs.requires().unwrap();
+    assert_eq!(reqs_ref.len(), 1);
+    assert_eq!(
+        reqs_ref.get("REQ").unwrap().secret,
+        "SOME_SECRET"
+    );
+}
+
+// ── SecretRequest from ProviderRef ────────────────────────────────────────
+
+#[test]
+fn test_secret_request_from_provider_ref_alias_gives_default() {
+    let r = ProviderRef::Alias("anything".into());
+    let sr = SecretRequest::from_provider_ref(&r);
+    assert_eq!(sr, SecretRequest::default());
+    assert!(sr.path.is_none());
+    assert!(sr.key.is_none());
+}
+
+#[test]
+fn test_secret_request_from_provider_ref_detail_copies_fields() {
+    let r = ProviderRef::Detail(ProviderRefDetail {
+        provider: "op".into(),
+        path: Some(vec!["Section".into(), "Sub".into()]),
+        key: Some("my_key".into()),
+    });
+    let sr = SecretRequest::from_provider_ref(&r);
+    assert_eq!(sr.path, Some(vec!["Section".into(), "Sub".into()]));
+    assert_eq!(sr.key, Some("my_key".into()));
+
+    // Detail with no path/key → both None
+    let r = ProviderRef::Detail(ProviderRefDetail {
+        provider: "env".into(),
+        path: None,
+        key: None,
+    });
+    let sr = SecretRequest::from_provider_ref(&r);
+    assert_eq!(sr, SecretRequest::default());
+}
+
+#[test]
+fn test_secret_request_default_is_all_none() {
+    let sr = SecretRequest::default();
+    assert!(sr.path.is_none());
+    assert!(sr.key.is_none());
+}
+
+// ── Provider requirement resolution ────────────────────────────────────────
+
+#[test]
+fn test_resolve_provider_requirements_empty_for_alias() {
+    // Provider with Alias variant — resolve_provider_requirements returns empty.
+    let config = Config {
+        project: Project {
+            name: "req-test".into(),
+            revision: "1.0".into(),
+            extends: None,
+        },
+        profiles: HashMap::new(),
+        providers: Some({
+            let mut m = HashMap::new();
+            m.insert("my_alias".into(), ProviderConfig::Alias("keyring://".into()));
+            m
+        }),
+    };
+    let spec = Secrets::new(config, None, None, None);
+    let result = spec
+        .resolve_provider_requirements("my_alias", "default")
+        .expect("should not error");
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_resolve_provider_requirements_empty_for_structured_no_requires() {
+    // Structured provider with empty requires → returns empty.
+    let config = Config {
+        project: Project {
+            name: "req-test".into(),
+            revision: "1.0".into(),
+            extends: None,
+        },
+        profiles: HashMap::new(),
+        providers: Some({
+            let mut m = HashMap::new();
+            m.insert(
+                "structured".into(),
+                ProviderConfig::Structured(ProviderConfigStructured {
+                    uri: "env://".into(),
+                    requires: HashMap::new(),
+                }),
+            );
+            m
+        }),
+    };
+    let spec = Secrets::new(config, None, None, None);
+    let result = spec
+        .resolve_provider_requirements("structured", "default")
+        .expect("should not error");
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_resolve_provider_requirements_empty_for_missing_alias() {
+    // Alias not in providers map — returns empty (falls through to None/None).
+    let config = Config {
+        project: Project {
+            name: "req-test".into(),
+            revision: "1.0".into(),
+            extends: None,
+        },
+        profiles: HashMap::new(),
+        providers: Some({
+            let mut m = HashMap::new();
+            m.insert("known".into(), ProviderConfig::Alias("keyring://".into()));
+            m
+        }),
+    };
+    let spec = Secrets::new(config, None, None, None);
+    let result = spec
+        .resolve_provider_requirements("unknown", "default")
+        .expect("should not error");
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_resolve_provider_requirements_errors_when_secret_not_defined() {
+    // Structured provider that requires a secret not in secretspec → error.
+    let mut reqs = HashMap::new();
+    reqs.insert(
+        "DEP".into(),
+        ProviderRequirement {
+            secret: "MISSING_SECRET".into(),
+        },
+    );
+    let config = Config {
+        project: Project {
+            name: "req-test".into(),
+            revision: "1.0".into(),
+            extends: None,
+        },
+        profiles: HashMap::new(),
+        providers: Some({
+            let mut m = HashMap::new();
+            m.insert(
+                "needs_secret".into(),
+                ProviderConfig::Structured(ProviderConfigStructured {
+                    uri: "op://vault".into(),
+                    requires: reqs,
+                }),
+            );
+            m
+        }),
+    };
+    let spec = Secrets::new(config, None, None, None);
+    let err = spec
+        .resolve_provider_requirements("needs_secret", "default")
+        .expect_err("should fail because required secret is not defined");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("MISSING_SECRET"),
+        "error should mention the missing secret, got: {}",
+        msg
+    );
+    assert!(
+        msg.contains("needs_secret"),
+        "error should mention the provider alias, got: {}",
+        msg
+    );
+}
+
+// ── SecretRequest serialization ────────────────────────────────────────────
+
+#[test]
+fn test_secret_request_serde_roundtrip() {
+    // Default (all None).
+    let req = SecretRequest::default();
+    let json = serde_json::to_string(&req).unwrap();
+    let round: SecretRequest = serde_json::from_str(&json).unwrap();
+    assert_eq!(round.path, None);
+    assert_eq!(round.key, None);
+
+    // Path only.
+    let req = SecretRequest {
+        path: Some(vec!["GitHub".into(), "APIs".into()]),
+        key: None,
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    let round: SecretRequest = serde_json::from_str(&json).unwrap();
+    assert_eq!(round.path, Some(vec!["GitHub".into(), "APIs".into()]));
+    assert_eq!(round.key, None);
+
+    // Key only.
+    let req = SecretRequest {
+        path: None,
+        key: Some("token".into()),
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    let round: SecretRequest = serde_json::from_str(&json).unwrap();
+    assert_eq!(round.path, None);
+    assert_eq!(round.key, Some("token".into()));
+
+    // Both path and key.
+    let req = SecretRequest {
+        path: Some(vec!["GitHub".into()]),
+        key: Some("token".into()),
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    let round: SecretRequest = serde_json::from_str(&json).unwrap();
+    assert_eq!(round.path, Some(vec!["GitHub".into()]));
+    assert_eq!(round.key, Some("token".into()));
+}
+
+// ── OnePassword section/field deserialization ──────────────────────────────
+
+#[test]
+fn test_onepassword_item_with_section_deserialization() {
+    let json = r#"{
+        "fields": [
+            {
+                "id": "s1",
+                "type": "STRING",
+                "label": null,
+                "value": null
+            },
+            {
+                "id": "f1",
+                "type": "STRING",
+                "label": "token",
+                "value": "ghp_abc123",
+                "section": { "label": "GitHub" }
+            },
+            {
+                "id": "f2",
+                "type": "CONCEALED",
+                "label": "api_key",
+                "value": "sk-12345",
+                "section": { "label": "APIs" }
+            }
+        ]
+    }"#;
+
+    use crate::provider::onepassword::OnePasswordItem;
+    let item: OnePasswordItem = serde_json::from_str(json).unwrap();
+    assert_eq!(item.fields.len(), 3);
+
+    assert!(item.fields[0].section.is_none());
+    assert!(item.fields[0].label.is_none());
+
+    let section = item.fields[1].section.as_ref().unwrap();
+    assert_eq!(section.label.as_deref(), Some("GitHub"));
+    assert_eq!(item.fields[1].label.as_deref(), Some("token"));
+    assert_eq!(item.fields[1].value.as_deref(), Some("ghp_abc123"));
+
+    let section = item.fields[2].section.as_ref().unwrap();
+    assert_eq!(section.label.as_deref(), Some("APIs"));
+    assert_eq!(item.fields[2].label.as_deref(), Some("api_key"));
+    assert_eq!(item.fields[2].value.as_deref(), Some("sk-12345"));
+}
+
+#[test]
+fn test_onepassword_item_without_sections() {
+    let json = r#"{
+        "fields": [
+            {
+                "id": "f1",
+                "type": "STRING",
+                "label": "value",
+                "value": "secret123"
+            }
+        ]
+    }"#;
+
+    use crate::provider::onepassword::OnePasswordItem;
+    let item: OnePasswordItem = serde_json::from_str(json).unwrap();
+    assert_eq!(item.fields.len(), 1);
+    assert!(item.fields[0].section.is_none());
+    assert_eq!(item.fields[0].label.as_deref(), Some("value"));
+    assert_eq!(item.fields[0].value.as_deref(), Some("secret123"));
+}
+
+// ── Provider trait get_with_request default ────────────────────────────────
+
+#[test]
+fn test_get_with_request_default_delegates_to_get() {
+    use crate::provider::Provider as _;
+    use crate::SecretRequest;
+    use secrecy::SecretString;
+
+    struct SpyProvider {
+        get_calls: std::sync::Mutex<Vec<(String, String, String)>>,
+    }
+
+    impl SpyProvider {
+        fn new() -> Self {
+            Self { get_calls: std::sync::Mutex::new(Vec::new()) }
+        }
+    }
+
+    impl crate::provider::Provider for SpyProvider {
+        fn get(&self, project: &str, key: &str, profile: &str) -> crate::Result<Option<SecretString>> {
+            self.get_calls.lock().unwrap().push((project.into(), key.into(), profile.into()));
+            Ok(Some(SecretString::new("dummy".into())))
+        }
+        fn set(&self, _: &str, _: &str, _: &SecretString, _: &str) -> crate::Result<()> {
+            Err(crate::SecretSpecError::ProviderOperationFailed("nope".into()))
+        }
+        fn allows_set(&self) -> bool { false }
+        fn name(&self) -> &'static str { "spy" }
+        fn uri(&self) -> String { "spy://".into() }
+    }
+
+    let spy = SpyProvider::new();
+    let request = SecretRequest { path: Some(vec!["Section".into()]), key: Some("field".into()) };
+    let result = spy.get_with_request("proj", "MY_KEY", "default", &request).unwrap();
+    assert_eq!(result.unwrap().expose_secret(), "dummy");
+
+    let calls = spy.get_calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0], ("proj".into(), "MY_KEY".into(), "default".into()), "delegated with original key, not request key");
+}
+
+// ── ProviderRequirement serde roundtrip ────────────────────────────────────
+
+#[test]
+fn test_provider_requirement_serde() {
+    let req = ProviderRequirement { secret: "OP_TOKEN".into() };
+    let json = serde_json::to_string(&req).unwrap();
+    let round: ProviderRequirement = serde_json::from_str(&json).unwrap();
+    assert_eq!(round.secret, "OP_TOKEN");
+
+    let parsed: ProviderRequirement = toml::from_str("secret = \"MY_SECRET\"\n").unwrap();
+    assert_eq!(parsed.secret, "MY_SECRET");
+}
+
+// ── ProviderConfigStructured serde edge cases ───────────────────────────────
+
+#[test]
+fn test_provider_config_structured_multiple_requires() {
+    let toml_str = r#"
+uri = "onepassword://vault"
+
+[requires]
+t1 = { secret = "A" }
+t2 = { secret = "B" }
+"#;
+    let config: ProviderConfigStructured = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.uri, "onepassword://vault");
+    assert_eq!(config.requires.len(), 2);
+    assert_eq!(config.requires["t1"].secret, "A");
+    assert_eq!(config.requires["t2"].secret, "B");
+}
+
+#[test]
+fn test_provider_config_structured_empty_requires_serialization() {
+    let config = ProviderConfigStructured { uri: "keyring://".into(), requires: HashMap::new() };
+    let json = serde_json::to_string(&config).unwrap();
+    assert!(!json.contains("requires"), "empty requires skipped in serialization");
+
+    let round: ProviderConfigStructured = serde_json::from_str(&json).unwrap();
+    assert_eq!(round.uri, "keyring://");
+    assert!(round.requires.is_empty());
+}
+
+// ── ProviderRef serde: path-only detail ────────────────────────────────────
+
+#[test]
+fn test_provider_ref_detail_path_only() {
+    let toml_str = r#"provider = "op"
+path = ["GitHub", "APIs"]
+"#;
+    let ref_: ProviderRef = toml::from_str(toml_str).unwrap();
+    match ref_ {
+        ProviderRef::Detail(d) => {
+            assert_eq!(d.provider, "op");
+            assert_eq!(d.path, Some(vec!["GitHub".into(), "APIs".into()]));
+            assert_eq!(d.key, None);
+        }
+        _ => panic!("expected Detail"),
+    }
+}
+
+#[test]
+fn test_provider_ref_detail_key_only() {
+    let toml_str = r#"provider = "op"
+key = "custom_token"
+"#;
+    let ref_: ProviderRef = toml::from_str(toml_str).unwrap();
+    match ref_ {
+        ProviderRef::Detail(d) => {
+            assert_eq!(d.provider, "op");
+            assert_eq!(d.path, None);
+            assert_eq!(d.key, Some("custom_token".into()));
+        }
+        _ => panic!("expected Detail"),
+    }
+}
+
+// ── resolve_provider_requirements: empty entries fallback ──────────────────
+
+#[test]
+fn test_resolve_provider_requirements_falls_back_to_default_provider() {
+    let temp_dir = TempDir::new().unwrap();
+    std::env::set_current_dir(temp_dir.path()).unwrap();
+
+    std::fs::write(
+        temp_dir.path().join("secretspec.toml"),
+        r#"
+[project]
+name = "test-proj"
+revision = "1.0"
+
+[providers]
+test = "env://"
+
+[providers.needs-tok]
+uri = "onepassword://"
+requires = { st = { secret = "OP_TOKEN" } }
+
+[profiles.default]
+OP_TOKEN = { description = "Auth token", required = true }
+"#,
+    )
+    .unwrap();
+
+    // Provide the token via env so the default provider can find it.
+    unsafe { std::env::set_var("OP_TOKEN", "ghp_test_value") };
+
+    let config_home = temp_dir.path().join(".config");
+    std::fs::create_dir_all(config_home.join("secretspec")).unwrap();
+    std::fs::write(
+        config_home.join("secretspec").join("config.toml"),
+        "[defaults]\nprovider = \"env\"\n",
+    )
+    .unwrap();
+    unsafe { std::env::set_var("XDG_CONFIG_HOME", &config_home) };
+    // Also unset HOME so etcetera doesn't prefer it over XDG_CONFIG_HOME.
+    unsafe { std::env::remove_var("HOME") };
+
+    let secrets = Secrets::load().unwrap();
+    let result = secrets.resolve_provider_requirements("needs-tok", "default");
+    let resolved = result.expect("should resolve requirement when env var is set");
+    assert!(!resolved.is_empty(), "should have resolved values");
 }

@@ -59,6 +59,9 @@ pub use config::Resolved;
 // Re-export config types for CLI usage only - these are marked #[doc(hidden)]
 #[doc(hidden)]
 pub use config::{Config, GlobalConfig, GlobalDefaults, Profile, ProfileDefaults, Project};
+pub use config::{
+    ProviderConfig, ProviderConfigStructured, ProviderRef, ProviderRefDetail, SecretRequest,
+};
 
 // Re-export Secret and generation types for secretspec-derive
 #[doc(hidden)]

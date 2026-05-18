@@ -5368,3 +5368,117 @@ OP_TOKEN = { description = "Auth token", required = true }
     let resolved = result.expect("should resolve requirement when env var is set");
     assert!(!resolved.is_empty(), "should have resolved values");
 }
+
+// ── OnePasswordEnv provider config parsing ─────────────────────────────────
+
+#[test]
+fn test_onepassword_env_config_desktop_auth() {
+    use crate::provider::onepassword_env::OnePasswordEnvConfig;
+    use crate::provider::ProviderUrl;
+    use url::Url;
+
+    let url = ProviderUrl::new(
+        Url::parse("onepassword+env://blgexucrwfr2dtsxe2q4uu7dp4").unwrap()
+    );
+    let config = OnePasswordEnvConfig::try_from(&url).unwrap();
+    assert_eq!(config.environment_id, "blgexucrwfr2dtsxe2q4uu7dp4");
+    assert!(config.account.is_none());
+    assert!(config.service_account_token.is_none());
+}
+
+#[test]
+fn test_onepassword_env_config_desktop_with_account() {
+    use crate::provider::onepassword_env::OnePasswordEnvConfig;
+    use crate::provider::ProviderUrl;
+    use url::Url;
+
+    let url = ProviderUrl::new(
+        Url::parse("onepassword+env://work@blgexucrwfr2dtsxe2q4uu7dp4").unwrap()
+    );
+    let config = OnePasswordEnvConfig::try_from(&url).unwrap();
+    assert_eq!(config.environment_id, "blgexucrwfr2dtsxe2q4uu7dp4");
+    assert_eq!(config.account.as_deref(), Some("work"));
+    assert!(config.service_account_token.is_none());
+}
+
+#[test]
+fn test_onepassword_env_config_token_in_url() {
+    use crate::provider::onepassword_env::OnePasswordEnvConfig;
+    use crate::provider::ProviderUrl;
+    use url::Url;
+
+    let url = ProviderUrl::new(
+        Url::parse("onepassword+env+token://ops_abc123@xyz789").unwrap()
+    );
+    let config = OnePasswordEnvConfig::try_from(&url).unwrap();
+    assert_eq!(config.environment_id, "xyz789");
+    assert!(config.account.is_none());
+    assert_eq!(config.service_account_token.as_deref(), Some("ops_abc123"));
+}
+
+#[test]
+fn test_onepassword_env_config_token_as_username() {
+    use crate::provider::onepassword_env::OnePasswordEnvConfig;
+    use crate::provider::ProviderUrl;
+    use url::Url;
+
+    let url = ProviderUrl::new(
+        Url::parse("onepassword+env+token://ops_token_only@env-id").unwrap()
+    );
+    let config = OnePasswordEnvConfig::try_from(&url).unwrap();
+    assert_eq!(config.environment_id, "env-id");
+    assert_eq!(config.service_account_token.as_deref(), Some("ops_token_only"));
+}
+
+#[test]
+fn test_onepassword_env_config_rejects_invalid_scheme() {
+    use crate::provider::onepassword_env::OnePasswordEnvConfig;
+    use crate::provider::ProviderUrl;
+    use url::Url;
+
+    let url = ProviderUrl::new(Url::parse("onepassword://vault").unwrap());
+    let result = OnePasswordEnvConfig::try_from(&url);
+    assert!(result.is_err());
+    let msg = format!("{}", result.unwrap_err());
+    assert!(msg.contains("Invalid scheme"), "got: {msg}");
+}
+
+#[test]
+fn test_onepassword_env_config_missing_environment_id() {
+    use crate::provider::onepassword_env::OnePasswordEnvConfig;
+    use crate::provider::ProviderUrl;
+    use url::Url;
+
+    let url = ProviderUrl::new(Url::parse("onepassword+env://").unwrap());
+    let result = OnePasswordEnvConfig::try_from(&url);
+    assert!(result.is_err());
+    let msg = format!("{}", result.unwrap_err());
+    assert!(msg.contains("environment ID"), "got: {msg}");
+}
+
+#[test]
+fn test_onepassword_env_provider_read_only() {
+    use crate::provider::onepassword_env::{OnePasswordEnvConfig, OnePasswordEnvProvider};
+    use crate::provider::Provider;
+
+    let config = OnePasswordEnvConfig {
+        environment_id: "test-env-id".into(),
+        ..Default::default()
+    };
+    let provider = OnePasswordEnvProvider::new(config);
+    assert!(!provider.allows_set());
+}
+
+#[test]
+fn test_onepassword_env_provider_registered() {
+    let infos = crate::provider::providers();
+    let env_provider = infos
+        .iter()
+        .find(|p| p.name == "onepassword-env")
+        .expect("onepassword-env provider should be registered");
+    assert_eq!(env_provider.name, "onepassword-env");
+    assert!(
+        env_provider.description.contains("1Password Environments"),
+        "description should mention Environments"
+    );
+}

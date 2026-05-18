@@ -229,7 +229,7 @@ const AUTH_REQUIRED_HELP: &str = "OnePassword authentication required.\n\n\
     - Service account (CI): set OP_SERVICE_ACCOUNT_TOKEN or use the onepassword+token:// scheme\n  \
     - Manual signin: run 'eval $(op signin)' (session expires after 30 minutes of inactivity)";
 
-fn strip_op_session_env(cmd: &mut Command) {
+pub(crate) fn strip_op_session_env(cmd: &mut Command) {
     for (key, _) in std::env::vars_os() {
         if key.to_string_lossy().starts_with("OP_SESSION_") {
             cmd.env_remove(&key);

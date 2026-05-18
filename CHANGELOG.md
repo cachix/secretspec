@@ -96,6 +96,17 @@ Both features are purely additive at the TOML level — every existing
 - **New public types:** `ProviderConfig`, `ProviderRef`, `ProviderRefDetail`,
   `SecretRequest`, `ProviderRequirement`, `ProviderConfigStructured`. All
   exported from the crate root — additive only.
+- **1Password Environments provider.** New `onepassword+env` provider for
+  [1Password Environments](https://www.1password.dev/environments) (beta):
+  ```toml
+  [providers]
+  prod-env = "onepassword+env://blgexucrwfr2dtsxe2q4uu7dp4"
+  ci-env   = "onepassword+env+token://ops_abc123@xyz789"
+  ```
+  Uses `op environment read` to fetch all variables in one call — simpler
+  and faster than the item-based provider. Read-only. Supports desktop app
+  auth (`onepassword+env://`) and service account tokens
+  (`onepassword+env+token://`). Requires 1Password CLI 2.33.0-beta.02+.
 
 ### Changed
 

@@ -146,7 +146,85 @@ API_KEY = {
 }
 ```
 
-### 3. Provider dependencies for 1Password service accounts
+### 3. Mapping a 1Password item path
+
+Given the 1Password reference `op://Development/dotfiles/GitHub/GITHUB_TOKEN`:
+
+| Component | Value |
+|-----------|-------|
+| Vault | `Development` |
+| Item | `dotfiles` |
+| Section | `GitHub` |
+| Field | `GITHUB_TOKEN` |
+
+There are several ways to represent this in `secretspec.toml`:
+
+**A) Provider alias targets the item, key defaults to secret name:**
+
+```toml
+[project]
+name = "myapp"
+revision = "1.0"
+
+[providers]
+dotfiles = "onepassword://Development/dotfiles"
+
+[profiles.default]
+GITHUB_TOKEN = {
+  description = "GitHub personal access token",
+  providers = [{ provider = "dotfiles", path = ["GitHub"] }]
+  # key defaults to "GITHUB_TOKEN" (the secret name)
+}
+```
+
+**B) Explicit key for clarity when field names differ:**
+
+```toml
+[profiles.default]
+GITHUB_TOKEN = {
+  description = "GitHub personal access token",
+  providers = [{
+    provider = "dotfiles",
+    path = ["GitHub"],
+    key = "GITHUB_TOKEN"  # explicit — matches the 1Password field
+  }]
+}
+DOCKER_PASSWORD = {
+  description = "Docker Hub password",
+  providers = [{
+    provider = "dotfiles",
+    path = ["Docker"],
+    key = "password"  # SecretSpec name differs from 1Password field
+  }]
+}
+```
+
+**C) Vault-level alias, item in path for multiple items:**
+
+```toml
+[providers]
+op-dev = "onepassword://Development"
+
+[profiles.default]
+GITHUB_TOKEN = {
+  description = "GitHub token from dotfiles item",
+  providers = [{
+    provider = "op-dev",
+    path = ["dotfiles", "GitHub"],
+    key = "token"
+  }]
+}
+SSH_KEY = {
+  description = "SSH key from servers item",
+  providers = [{
+    provider = "op-dev",
+    path = ["servers", "SSH"],
+    key = "private_key"
+  }]
+}
+```
+
+### 4. Provider dependencies for 1Password service accounts
 
 Declare that a provider depends on a service account token, which itself is a SecretSpec secret:
 
@@ -187,7 +265,7 @@ as = "OP_TOKEN"  # exports as OP_TOKEN instead of OP_SERVICE_ACCOUNT_TOKEN
 
 The `OP_SERVICE_ACCOUNT_TOKEN` secret is resolved first (from keyring), then the `op-prod` provider can authenticate.
 
-### 4. Profile-specific provider aliases (dev vs. prod vaults)
+### 5. Profile-specific provider aliases (dev vs. prod vaults)
 
 Different profiles point at different 1Password vaults:
 
@@ -203,7 +281,7 @@ DATABASE_URL = { description = "Dev DB", providers = ["op-dev"] }
 DATABASE_URL = { description = "Production DB", providers = ["op-prod"] }
 ```
 
-### 5. Cross-project shared config with inheritance
+### 6. Cross-project shared config with inheritance
 
 A team-wide `secretspec.toml` defines provider aliases, inherited by individual projects:
 
@@ -225,7 +303,7 @@ extends = ["../team-shared"]
 DATABASE_URL = { description = "Dev DB", providers = ["op-core", "keyring"] }
 ```
 
-### 6. 1Password Environments provider (beta)
+### 7. 1Password Environments provider (beta)
 
 Use the new `onepassword+env://` scheme for the beta Environments feature:
 
@@ -250,7 +328,7 @@ API_KEY      = { description = "CI API key", providers = ["ci-env"] }
 > 1Password does not currently support editing environments through the CLI.
 > Variables must be managed directly in the 1Password app.
 
-### 7. Mixed item-based and environment-based providers
+### 8. Mixed item-based and environment-based providers
 
 Use item-based for secrets that need complex structure, environments for simple key-value:
 
@@ -270,7 +348,7 @@ LOG_LEVEL   = { description = "Log level", providers = ["env-vars"] }
 NODE_ENV    = { description = "Node env", providers = ["env-vars", "env"] }
 ```
 
-### 8. Self-documenting secret with path-only (key defaults to secret name)
+### 9. Self-documenting secret with path-only (key defaults to secret name)
 
 When `key` is omitted, it defaults to the SecretSpec secret name:
 
@@ -283,7 +361,7 @@ GOOGLE_APPLICATION_CREDENTIALS = {
 }
 ```
 
-### 9. Multiple requirements on one provider
+### 10. Multiple requirements on one provider
 
 A provider can declare multiple dependencies:
 
@@ -299,7 +377,7 @@ OP_SERVICE_ACCOUNT_TOKEN = { description = "OP token", providers = ["keyring"] }
 SOME_API_KEY = { description = "API key for auth", providers = ["env"] }
 ```
 
-### 10. Full CI setup with environments + token
+### 11. Full CI setup with environments + token
 
 Automated CI using environments with service account tokens stored in keyring:
 

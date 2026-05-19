@@ -5,6 +5,7 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::process::Command;
+use std::sync::Mutex;
 
 /// Configuration for the OnePassword Environments provider.
 ///
@@ -116,10 +117,17 @@ crate::register_provider! {
 /// Provider for 1Password Environments.
 ///
 /// Calls `op environment read <id>` and parses the `KEY=value` output.
+///
+/// **Caching:** 1Password Environments always returns all variables at once
+/// (there is no per-key CLI command). To avoid calling `op` for every
+/// `get()` / `get_batch()`, the provider caches the full environment on
+/// first access and reuses it for the lifetime of the provider instance.
 /// Supports both desktop app auth and service account tokens.
 pub struct OnePasswordEnvProvider {
     config: OnePasswordEnvConfig,
     op_command: String,
+    /// Lazy cache of all environment variables, populated on first access.
+    cache: Mutex<Option<HashMap<String, SecretString>>>,
 }
 
 impl OnePasswordEnvProvider {
@@ -127,11 +135,39 @@ impl OnePasswordEnvProvider {
         let op_command = std::env::var("SECRETSPEC_OPCLI_PATH").unwrap_or_else(|_| {
             "op".to_string()
         });
-        Self { config, op_command }
+        Self { config, op_command, cache: Mutex::new(None) }
+    }
+
+    /// Returns the cached variables, populating the cache on first call.
+    fn cached_variables(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, Option<HashMap<String, SecretString>>>> {
+        let mut guard = self
+            .cache
+            .lock()
+            .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))?;
+
+        if guard.is_none() {
+            let output = self.fetch_environment()?;
+            let mut vars = HashMap::new();
+            for line in output.lines() {
+                if let Some((k, v)) = line.split_once('=') {
+                    vars.insert(
+                        k.to_string(),
+                        SecretString::new(v.to_string().into()),
+                    );
+                }
+            }
+            *guard = Some(vars);
+        }
+
+        Ok(guard)
     }
 
     /// Runs `op environment read <id>` and returns the raw stdout.
-    fn read_environment(&self) -> Result<String> {
+    ///
+    /// Called once by [`cached_variables`]; subsequent lookups use the cache.
+    fn fetch_environment(&self) -> Result<String> {
         let mut cmd = Command::new(&self.op_command);
         strip_op_session_env(&mut cmd);
 
@@ -190,15 +226,9 @@ impl Provider for OnePasswordEnvProvider {
         key: &str,
         _profile: &str,
     ) -> Result<Option<SecretString>> {
-        let output = self.read_environment()?;
-        for line in output.lines() {
-            if let Some((k, v)) = line.split_once('=') {
-                if k == key {
-                    return Ok(Some(SecretString::new(v.to_string().into())));
-                }
-            }
-        }
-        Ok(None)
+        let guard = self.cached_variables()?;
+        let vars = guard.as_ref().expect("cache was just populated");
+        Ok(vars.get(key).cloned())
     }
 
     fn set(
@@ -243,16 +273,14 @@ impl Provider for OnePasswordEnvProvider {
         keys: &[&str],
         _profile: &str,
     ) -> Result<HashMap<String, SecretString>> {
-        let output = self.read_environment()?;
+        let guard = self.cached_variables()?;
+        let vars = guard.as_ref().expect("cache was just populated");
         let key_set: HashSet<&str> = keys.iter().copied().collect();
-        let mut results = HashMap::new();
-        for line in output.lines() {
-            if let Some((k, v)) = line.split_once('=') {
-                if key_set.contains(k) {
-                    results.insert(k.to_string(), SecretString::new(v.to_string().into()));
-                }
-            }
-        }
+        let results = vars
+            .iter()
+            .filter(|(k, _)| key_set.contains(k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         Ok(results)
     }
 }

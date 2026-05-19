@@ -61,6 +61,8 @@ All use `#[serde(untagged)]` — backward compatible. String → `Alias`, table 
 - `onepassword+env://` scheme: desktop app auth
 - `onepassword+env+token://` scheme: service account token auth
 - Uses `op environment read <id>` — single call fetches all variables
+- **Cached** — the full environment is fetched once and cached for the provider lifetime;
+  subsequent `get()`/`get_batch()` calls use the in-memory cache
 - Read-only (variables managed in 1Password desktop app)
 - ~220 lines — significantly simpler than the item-based provider
 
@@ -77,7 +79,7 @@ All use `#[serde(untagged)]` — backward compatible. String → `Alias`, table 
 - OnePasswordEnv provider impl (5)
 - Various edge cases (7)
 
-247 total, 0 failures.
+250 total, 0 failures.
 
 ### Docs
 

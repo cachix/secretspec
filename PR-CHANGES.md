@@ -176,6 +176,15 @@ DATABASE_URL = { description = "Production DB", providers = ["op-prod"] }
 API_KEY      = { description = "Prod API key", providers = ["op-prod"] }
 ```
 
+The `depends_on` entries accept an optional `as` field to rename the injected
+environment variable. When `as` is omitted, it defaults to the secret name:
+
+```toml
+[[providers.op-prod.depends_on]]
+secret = "OP_SERVICE_ACCOUNT_TOKEN"
+as = "OP_TOKEN"  # exports as OP_TOKEN instead of OP_SERVICE_ACCOUNT_TOKEN
+```
+
 The `OP_SERVICE_ACCOUNT_TOKEN` secret is resolved first (from keyring), then the `op-prod` provider can authenticate.
 
 ### 4. Profile-specific provider aliases (dev vs. prod vaults)
@@ -235,6 +244,11 @@ DATABASE_URL = { description = "Dev DB", providers = ["dev-env"] }
 DATABASE_URL = { description = "CI DB", providers = ["ci-env"] }
 API_KEY      = { description = "CI API key", providers = ["ci-env"] }
 ```
+
+> **Note:** 1Password Environments are read-only via `op environment read`.
+> You cannot set or update environment variables from SecretSpec because
+> 1Password does not currently support editing environments through the CLI.
+> Variables must be managed directly in the 1Password app.
 
 ### 7. Mixed item-based and environment-based providers
 

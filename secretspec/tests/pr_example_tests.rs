@@ -498,3 +498,78 @@ DATABASE_URL = { description = "DB", providers = ["op-prod", "keyring"] }
         _ => panic!("expected Structured"),
     }
 }
+
+// ── depends_on with `as` field (env-var renaming) ───────────────────
+
+#[test]
+fn depends_on_with_as_field() {
+    // Verify that `as` in TOML correctly sets as_name
+    let config = write_and_parse(r#"
+[project]
+name = "rename-test"
+revision = "1.0"
+
+[providers]
+env = "env://"
+
+[providers.op-renamed]
+uri = "onepassword://Production"
+[[providers.op-renamed.depends_on]]
+secret = "OP_SERVICE_ACCOUNT_TOKEN"
+as = "OP_TOKEN"
+
+[profiles.default]
+OP_SERVICE_ACCOUNT_TOKEN = { description = "Token", providers = ["env"] }
+"#);
+
+    let providers = config.providers.as_ref().unwrap();
+    match providers.get("op-renamed").unwrap() {
+        ProviderConfig::Structured(s) => {
+            assert_eq!(s.depends_on.len(), 1);
+            assert_eq!(s.depends_on[0].secret, "OP_SERVICE_ACCOUNT_TOKEN");
+            assert_eq!(s.depends_on[0].as_name.as_deref(), Some("OP_TOKEN"));
+            assert_eq!(s.depends_on[0].effective_as(), "OP_TOKEN");
+        }
+        _ => panic!("expected Structured"),
+    }
+}
+
+#[test]
+fn depends_on_with_multiple_dependencies_and_as() {
+    let config = write_and_parse(r#"
+[project]
+name = "multi-dep-as"
+revision = "1.0"
+
+[providers]
+keyring = "keyring://"
+
+[providers.op-multi]
+uri = "onepassword://Team"
+[[providers.op-multi.depends_on]]
+secret = "OP_TOKEN"
+[[providers.op-multi.depends_on]]
+secret = "ANOTHER_SECRET"
+as = "DIFFERENT_ENV"
+
+[profiles.default]
+OP_TOKEN = { description = "OP token", providers = ["keyring"] }
+ANOTHER_SECRET = { description = "Another", providers = ["keyring"] }
+"#);
+
+    let providers = config.providers.as_ref().unwrap();
+    match providers.get("op-multi").unwrap() {
+        ProviderConfig::Structured(s) => {
+            assert_eq!(s.depends_on.len(), 2);
+            // First dependency: no `as`, uses secret name
+            assert_eq!(s.depends_on[0].secret, "OP_TOKEN");
+            assert_eq!(s.depends_on[0].effective_as(), "OP_TOKEN");
+            assert!(s.depends_on[0].as_name.is_none());
+            // Second dependency: has `as`
+            assert_eq!(s.depends_on[1].secret, "ANOTHER_SECRET");
+            assert_eq!(s.depends_on[1].effective_as(), "DIFFERENT_ENV");
+            assert_eq!(s.depends_on[1].as_name.as_deref(), Some("DIFFERENT_ENV"));
+        }
+        _ => panic!("expected Structured"),
+    }
+}

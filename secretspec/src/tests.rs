@@ -5482,3 +5482,82 @@ fn test_onepassword_env_provider_registered() {
         "description should mention Environments"
     );
 }
+
+#[test]
+fn test_onepassword_env_provider_uri_formatting() {
+    use crate::provider::onepassword_env::{OnePasswordEnvConfig, OnePasswordEnvProvider};
+    use crate::provider::Provider;
+
+    // Desktop auth, no account
+    let config = OnePasswordEnvConfig {
+        environment_id: "env-id-123".into(),
+        ..Default::default()
+    };
+    let provider = OnePasswordEnvProvider::new(config);
+    assert_eq!(provider.uri(), "onepassword+env://env-id-123");
+
+    // Desktop auth with account
+    let config = OnePasswordEnvConfig {
+        environment_id: "env-id-123".into(),
+        account: Some("work".into()),
+        ..Default::default()
+    };
+    let provider = OnePasswordEnvProvider::new(config);
+    assert_eq!(provider.uri(), "onepassword+env://work@env-id-123");
+
+    // Token auth
+    let config = OnePasswordEnvConfig {
+        environment_id: "env-id-123".into(),
+        service_account_token: Some("ops_token".into()),
+        ..Default::default()
+    };
+    let provider = OnePasswordEnvProvider::new(config);
+    assert_eq!(provider.uri(), "onepassword+env+token://env-id-123");
+
+    // Token auth with account (token is separate from account in the uri method)
+    let config = OnePasswordEnvConfig {
+        environment_id: "env-id-123".into(),
+        service_account_token: Some("ops_token".into()),
+        account: Some("work".into()),
+        ..Default::default()
+    };
+    let provider = OnePasswordEnvProvider::new(config);
+    assert_eq!(provider.uri(), "onepassword+env+token://work@env-id-123");
+}
+
+#[test]
+fn test_onepassword_env_provider_name_and_set() {
+    use crate::provider::onepassword_env::{OnePasswordEnvConfig, OnePasswordEnvProvider};
+    use crate::provider::Provider;
+
+    let config = OnePasswordEnvConfig {
+        environment_id: "test".into(),
+        ..Default::default()
+    };
+    let provider = OnePasswordEnvProvider::new(config);
+
+    assert_eq!(provider.name(), "onepassword-env");
+    assert!(!provider.allows_set());
+
+    let result = provider.set(
+        "proj", "KEY",
+        &secrecy::SecretString::new("val".into()),
+        "default",
+    );
+    assert!(result.is_err());
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("read-only"),
+        "set error should mention read-only, got: {msg}"
+    );
+}
+
+#[test]
+fn test_onepassword_env_config_default() {
+    use crate::provider::onepassword_env::OnePasswordEnvConfig;
+
+    let config = OnePasswordEnvConfig::default();
+    assert!(config.account.is_none());
+    assert!(config.environment_id.is_empty());
+    assert!(config.service_account_token.is_none());
+}

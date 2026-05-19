@@ -1,6 +1,6 @@
 //! Core secrets management functionality
 
-use crate::config::{Config, GlobalConfig, Profile, ProviderRef, Resolved, SecretRequest};
+use crate::config::{Config, GlobalConfig, Profile, ProviderDependency, ProviderRef, Resolved, SecretRequest};
 use crate::error::{Result, SecretSpecError};
 use crate::provider::Provider as ProviderTrait;
 use crate::validation::{ValidatedSecrets, ValidationErrors};
@@ -401,26 +401,26 @@ impl Secrets {
         &self,
         alias: &str,
         profile_name: &str,
-    ) -> Result<HashMap<String, SecretString>> {
+    ) -> Result<Vec<(ProviderDependency, SecretString)>> {
         let config = self
             .config
             .providers
             .as_ref()
             .and_then(|m| m.get(alias));
 
-        let requirements = match config {
-            Some(crate::config::ProviderConfig::Structured(s)) => &s.requires,
-            _ => return Ok(HashMap::new()),
+        let dependencies = match config {
+            Some(crate::config::ProviderConfig::Structured(s)) => &s.depends_on,
+            _ => return Ok(Vec::new()),
         };
 
-        if requirements.is_empty() {
-            return Ok(HashMap::new());
+        if dependencies.is_empty() {
+            return Ok(Vec::new());
         }
 
-        let mut resolved = HashMap::new();
+        let mut resolved = Vec::new();
 
-        for (req_key, requirement) in requirements {
-            let secret_name = &requirement.secret;
+        for dep in dependencies {
+            let secret_name = &dep.secret;
 
             // Look up the required secret using only bootstrap providers.
             // We resolve the secret config but restrict to providers that have
@@ -472,7 +472,7 @@ impl Secrets {
                 }
             };
 
-            resolved.insert(req_key.clone(), value);
+            resolved.push((dep.clone(), value));
         }
 
         Ok(resolved)

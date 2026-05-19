@@ -170,7 +170,7 @@ API_KEY = {
 ### Structured Provider Configs with Dependencies
 
 Project-level `[providers]` entries can also be tables with an optional
-`requires` section to declare that a provider depends on another secret
+`depends_on` section to declare that a provider depends on another secret
 for authentication:
 
 ```toml
@@ -179,16 +179,16 @@ keyring = "keyring://"              # Simple alias — backward compatible
 
 [providers.op-dev]
 uri = "onepassword://Development"
-[providers.op-dev.requires]
+[[providers.op-dev.depends_on]]
 service_token = { secret = "OP_SERVICE_ACCOUNT_TOKEN" }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `uri` | string | Yes | The provider URI |
-| `requires` | table | No | Secrets this provider needs for authentication |
+| `depends_on` | table | No | Secrets this provider needs for authentication |
 
-Each entry under `requires` has:
+Each entry under `depends_on` has:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|

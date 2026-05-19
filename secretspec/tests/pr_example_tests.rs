@@ -96,8 +96,8 @@ env     = "env://"
 
 [providers.ci-env]
 uri = "onepassword+env+token://abc123def456"
-[providers.ci-env.requires]
-auth_token = { secret = "OP_SERVICE_ACCOUNT_TOKEN" }
+[[providers.ci-env.depends_on]]
+secret = "OP_SERVICE_ACCOUNT_TOKEN"
 
 [profiles.default]
 OP_SERVICE_ACCOUNT_TOKEN = { description = "1Password CI service account token", required = true, providers = ["keyring", "env"] }
@@ -119,7 +119,7 @@ NPM_TOKEN     = { description = "NPM publish token", providers = ["ci-env"] }
     match providers.get("ci-env").unwrap() {
         ProviderConfig::Structured(s) => {
             assert_eq!(s.uri, "onepassword+env+token://abc123def456");
-            assert_eq!(s.requires.get("auth_token").unwrap().secret, "OP_SERVICE_ACCOUNT_TOKEN");
+            assert_eq!(s.depends_on[0].secret, "OP_SERVICE_ACCOUNT_TOKEN");
         }
         other => panic!("expected Structured, got {:?}", other),
     }
@@ -170,8 +170,8 @@ revision = "1.0"
 keyring = "keyring://"
 [providers.op-prod]
 uri = "onepassword://Production"
-[providers.op-prod.requires]
-service_token = { secret = "OP_SERVICE_ACCOUNT_TOKEN" }
+[[providers.op-prod.depends_on]]
+secret = "OP_SERVICE_ACCOUNT_TOKEN"
 [profiles.default]
 OP_SERVICE_ACCOUNT_TOKEN = { description = "1Password token", required = true, providers = ["keyring"] }
 [profiles.production]
@@ -241,9 +241,10 @@ name = "myapp"
 revision = "1.0"
 [providers.op-multi]
 uri = "onepassword://Team"
-[providers.op-multi.requires]
-service_token = { secret = "OP_SERVICE_ACCOUNT_TOKEN" }
-api_key       = { secret = "SOME_API_KEY" }
+[[providers.op-multi.depends_on]]
+secret = "OP_SERVICE_ACCOUNT_TOKEN"
+[[providers.op-multi.depends_on]]
+secret = "SOME_API_KEY"
 [profiles.default]
 OP_SERVICE_ACCOUNT_TOKEN = { description = "OP token", providers = ["keyring"] }
 SOME_API_KEY = { description = "API key", providers = ["env"] }
@@ -366,13 +367,13 @@ fn provider_config_serde_roundtrip() {
     assert_eq!(serde_json::to_string(&pc).unwrap(), json);
 
     // Structured with requires
-    let json = r#"{"uri":"onepassword://Prod","requires":{"token":{"secret":"SECRET_NAME"}}}"#;
+    let json = r#"{"uri":"onepassword://Prod","depends_on":[{"secret":"SECRET_NAME"}]}"#;
     let pc: ProviderConfig = serde_json::from_str(json).unwrap();
     let serialized = serde_json::to_string(&pc).unwrap();
     match &pc {
         ProviderConfig::Structured(s) => {
             assert_eq!(s.uri, "onepassword://Prod");
-            assert_eq!(s.requires.get("token").unwrap().secret, "SECRET_NAME");
+            assert_eq!(s.depends_on[0].secret, "SECRET_NAME");
         }
         _ => panic!("expected Structured"),
     }
@@ -385,7 +386,7 @@ fn provider_config_serde_roundtrip() {
     match &pc {
         ProviderConfig::Structured(s) => {
             assert_eq!(s.uri, "onepassword://Prod");
-            assert!(s.requires.is_empty());
+            assert!(s.depends_on.is_empty());
         }
         _ => panic!("expected Structured"),
     }
@@ -480,8 +481,8 @@ keyring = "keyring://"
 env     = "env://"
 [providers.op-prod]
 uri = "onepassword://Production"
-[providers.op-prod.requires]
-service_token = { secret = "OP_TOKEN" }
+[[providers.op-prod.depends_on]]
+secret = "OP_TOKEN"
 [profiles.default]
 DATABASE_URL = { description = "DB", providers = ["op-prod", "keyring"] }
 "#);
@@ -492,7 +493,7 @@ DATABASE_URL = { description = "DB", providers = ["op-prod", "keyring"] }
     match providers.get("op-prod").unwrap() {
         ProviderConfig::Structured(s) => {
             assert_eq!(s.uri, "onepassword://Production");
-            assert_eq!(s.requires.get("service_token").unwrap().secret, "OP_TOKEN");
+            assert_eq!(s.depends_on[0].secret, "OP_TOKEN");
         }
         _ => panic!("expected Structured"),
     }

@@ -1,6 +1,6 @@
 use crate::config::{
     Config, GlobalConfig, GlobalDefaults, ParseError, Profile, Project, ProviderConfig,
-    ProviderConfigStructured, ProviderRef, ProviderRefDetail, ProviderRequirement, Resolved, Secret, SecretRequest,
+    ProviderConfigStructured, ProviderDependency, ProviderRef, ProviderRefDetail, Resolved, Secret, SecretRequest,
 };
 use crate::error::{Result, SecretSpecError};
 use crate::secrets::Secrets;
@@ -4866,7 +4866,7 @@ fn test_provider_config_deserializes_alias_and_structured() {
     // Structured with requires
     let toml_str = r#"
 [providers]
-op = { uri = "onepassword://Team", requires = { OP_TOKEN = { secret = "OP_SERVICE_ACCOUNT_TOKEN" } } }
+op = { uri = "onepassword://Team", depends_on = [{ secret = "OP_SERVICE_ACCOUNT_TOKEN" }] }
 "#;
     #[derive(Debug, Deserialize)]
     struct ConfigWrapper {
@@ -4877,9 +4877,10 @@ op = { uri = "onepassword://Team", requires = { OP_TOKEN = { secret = "OP_SERVIC
     match cw.providers.get("op").unwrap() {
         ProviderConfig::Structured(s) => {
             assert_eq!(s.uri, "onepassword://Team");
-            assert_eq!(s.requires.len(), 1);
-            let req = s.requires.get("OP_TOKEN").unwrap();
+            assert_eq!(s.depends_on.len(), 1);
+            let req = &s.depends_on[0];
             assert_eq!(req.secret, "OP_SERVICE_ACCOUNT_TOKEN");
+            assert_eq!(req.as_name.as_deref(), None);
         }
         _ => panic!("expected Structured variant"),
     }
@@ -4894,7 +4895,7 @@ env = { uri = "env://" }
     match cw.providers.get("env").unwrap() {
         ProviderConfig::Structured(s) => {
             assert_eq!(s.uri, "env://");
-            assert!(s.requires.is_empty());
+            assert!(s.depends_on.is_empty());
         }
         _ => panic!("expected Structured variant"),
     }
@@ -4904,31 +4905,31 @@ env = { uri = "env://" }
 fn test_provider_config_uri_and_requires() {
     let alias = ProviderConfig::Alias("dotenv://.env".into());
     assert_eq!(alias.uri(), "dotenv://.env");
-    assert!(alias.requires().is_none());
+    assert!(alias.depends_on().is_none());
 
     let structured = ProviderConfig::Structured(ProviderConfigStructured {
         uri: "op://vault".into(),
-        requires: HashMap::new(),
+        depends_on: Vec::new(),
     });
     assert_eq!(structured.uri(), "op://vault");
-    assert!(structured.requires().is_none()); // empty map → None
+    assert!(structured.depends_on().is_none()); // empty map → None
 
-    let mut reqs = HashMap::new();
-    reqs.insert(
-        "REQ".into(),
-        ProviderRequirement {
+    let mut deps: Vec<ProviderDependency> = Vec::new();
+    deps.push(
+        
+        ProviderDependency { as_name: None, 
             secret: "SOME_SECRET".into(),
         },
     );
     let structured_with_reqs = ProviderConfig::Structured(ProviderConfigStructured {
         uri: "op://vault".into(),
-        requires: reqs,
+        depends_on: deps,
     });
     assert_eq!(structured_with_reqs.uri(), "op://vault");
-    let reqs_ref = structured_with_reqs.requires().unwrap();
-    assert_eq!(reqs_ref.len(), 1);
+    let deps_ref = structured_with_reqs.depends_on().unwrap();
+    assert_eq!(deps_ref.len(), 1);
     assert_eq!(
-        reqs_ref.get("REQ").unwrap().secret,
+        deps_ref[0].secret,
         "SOME_SECRET"
     );
 }
@@ -5013,7 +5014,7 @@ fn test_resolve_provider_requirements_empty_for_structured_no_requires() {
                 "structured".into(),
                 ProviderConfig::Structured(ProviderConfigStructured {
                     uri: "env://".into(),
-                    requires: HashMap::new(),
+                    depends_on: Vec::new(),
                 }),
             );
             m
@@ -5052,10 +5053,10 @@ fn test_resolve_provider_requirements_empty_for_missing_alias() {
 #[test]
 fn test_resolve_provider_requirements_errors_when_secret_not_defined() {
     // Structured provider that requires a secret not in secretspec → error.
-    let mut reqs = HashMap::new();
-    reqs.insert(
-        "DEP".into(),
-        ProviderRequirement {
+    let mut deps: Vec<ProviderDependency> = Vec::new();
+    deps.push(
+        ProviderDependency {
+            as_name: None,
             secret: "MISSING_SECRET".into(),
         },
     );
@@ -5072,7 +5073,7 @@ fn test_resolve_provider_requirements_errors_when_secret_not_defined() {
                 "needs_secret".into(),
                 ProviderConfig::Structured(ProviderConfigStructured {
                     uri: "op://vault".into(),
-                    requires: reqs,
+                    depends_on: deps,
                 }),
             );
             m
@@ -5246,17 +5247,36 @@ fn test_get_with_request_default_delegates_to_get() {
     assert_eq!(calls[0], ("proj".into(), "MY_KEY".into(), "default".into()), "delegated with original key, not request key");
 }
 
-// ── ProviderRequirement serde roundtrip ────────────────────────────────────
+// ── ProviderDependency serde roundtrip ────────────────────────────────────
 
 #[test]
 fn test_provider_requirement_serde() {
-    let req = ProviderRequirement { secret: "OP_TOKEN".into() };
+    let req = ProviderDependency { as_name: None,  secret: "OP_TOKEN".into() };
+    assert_eq!(req.effective_as(), "OP_TOKEN");
     let json = serde_json::to_string(&req).unwrap();
-    let round: ProviderRequirement = serde_json::from_str(&json).unwrap();
+    let round: ProviderDependency = serde_json::from_str(&json).unwrap();
     assert_eq!(round.secret, "OP_TOKEN");
 
-    let parsed: ProviderRequirement = toml::from_str("secret = \"MY_SECRET\"\n").unwrap();
+    let parsed: ProviderDependency = toml::from_str("secret = \"MY_SECRET\"\n").unwrap();
     assert_eq!(parsed.secret, "MY_SECRET");
+    assert_eq!(parsed.effective_as(), "MY_SECRET");
+}
+
+#[test]
+fn test_provider_dependency_effective_as_defaults() {
+    // Without `as` → defaults to secret name
+    let dep = ProviderDependency {
+        secret: "MY_SECRET".into(),
+        as_name: None,
+    };
+    assert_eq!(dep.effective_as(), "MY_SECRET");
+
+    // With `as` → uses explicit name
+    let dep = ProviderDependency {
+        secret: "MY_SECRET".into(),
+        as_name: Some("RENAMED".into()),
+    };
+    assert_eq!(dep.effective_as(), "RENAMED");
 }
 
 // ── ProviderConfigStructured serde edge cases ───────────────────────────────
@@ -5266,26 +5286,28 @@ fn test_provider_config_structured_multiple_requires() {
     let toml_str = r#"
 uri = "onepassword://vault"
 
-[requires]
-t1 = { secret = "A" }
-t2 = { secret = "B" }
+[[depends_on]]
+secret = "A"
+
+[[depends_on]]
+secret = "B"
 "#;
     let config: ProviderConfigStructured = toml::from_str(toml_str).unwrap();
     assert_eq!(config.uri, "onepassword://vault");
-    assert_eq!(config.requires.len(), 2);
-    assert_eq!(config.requires["t1"].secret, "A");
-    assert_eq!(config.requires["t2"].secret, "B");
+    assert_eq!(config.depends_on.len(), 2);
+    assert_eq!(config.depends_on[0].secret, "A");
+    assert_eq!(config.depends_on[1].secret, "B");
 }
 
 #[test]
 fn test_provider_config_structured_empty_requires_serialization() {
-    let config = ProviderConfigStructured { uri: "keyring://".into(), requires: HashMap::new() };
+    let config = ProviderConfigStructured { uri: "keyring://".into(), depends_on: Vec::new() };
     let json = serde_json::to_string(&config).unwrap();
     assert!(!json.contains("requires"), "empty requires skipped in serialization");
 
     let round: ProviderConfigStructured = serde_json::from_str(&json).unwrap();
     assert_eq!(round.uri, "keyring://");
-    assert!(round.requires.is_empty());
+    assert!(round.depends_on.is_empty());
 }
 
 // ── ProviderRef serde: path-only detail ────────────────────────────────────
@@ -5341,7 +5363,7 @@ test = "env://"
 
 [providers.needs-tok]
 uri = "onepassword://"
-requires = { st = { secret = "OP_TOKEN" } }
+depends_on = [{ secret = "OP_TOKEN" }]
 
 [profiles.default]
 OP_TOKEN = { description = "Auth token", required = true }

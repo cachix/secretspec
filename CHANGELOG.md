@@ -70,11 +70,11 @@ Both features are purely additive at the TOML level — every existing
   work as before — they deserialize as `ProviderRef::Alias` transparently.
 
 - **Structured provider configs.** `[providers]` entries can now be tables
-  with an optional `requires` section to declare auth dependencies:
+  with an optional `depends_on` section to declare auth dependencies:
   ```toml
   [providers.op-dev]
   uri = "onepassword://Development"
-  [providers.op-dev.requires]
+  [[providers.op-dev.depends_on]]
   service_token = { secret = "OP_SERVICE_ACCOUNT_TOKEN" }
   ```
   This makes a provider's auth requirements explicit in the config rather
@@ -94,7 +94,7 @@ Both features are purely additive at the TOML level — every existing
   the normal resolution pipeline and returning the resolved values.
 
 - **New public types:** `ProviderConfig`, `ProviderRef`, `ProviderRefDetail`,
-  `SecretRequest`, `ProviderRequirement`, `ProviderConfigStructured`. All
+  `SecretRequest`, `ProviderDependency`, `ProviderConfigStructured`. All
   exported from the crate root — additive only.
 - **1Password Environments provider.** New `onepassword+env` provider for
   [1Password Environments](https://www.1password.dev/environments) (beta):
@@ -145,7 +145,7 @@ Both features are purely additive at the TOML level — every existing
 - **Profile/global config:** `ProfileDefaults.providers` stays
   `Vec<String>`; `GlobalDefaults.providers` stays `HashMap<String, String>`.
 - **Public API:** new types (`ProviderConfig`, `ProviderRef`,
-  `ProviderRefDetail`, `SecretRequest`, `ProviderRequirement`,
+  `ProviderRefDetail`, `SecretRequest`, `ProviderDependency`,
   `ProviderConfigStructured`) are additive only. No existing public types
   or methods were removed or renamed.
 

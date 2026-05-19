@@ -68,12 +68,12 @@ impl ProviderConfig {
         }
     }
 
-    /// Returns a reference to the requirements map, if structured.
-    pub fn requires(&self) -> Option<&HashMap<String, ProviderRequirement>> {
+    /// Returns a reference to the dependency list, if structured.
+    pub fn depends_on(&self) -> Option<&[ProviderDependency]> {
         match self {
             ProviderConfig::Alias(_) => None,
-            ProviderConfig::Structured(s) if s.requires.is_empty() => None,
-            ProviderConfig::Structured(s) => Some(&s.requires),
+            ProviderConfig::Structured(s) if s.depends_on.is_empty() => None,
+            ProviderConfig::Structured(s) => Some(&s.depends_on),
         }
     }
 }
@@ -84,16 +84,30 @@ pub struct ProviderConfigStructured {
     /// The provider URI (required).
     pub uri: String,
     /// Required secrets that must be resolved before this provider is usable.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub requires: HashMap<String, ProviderRequirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<ProviderDependency>,
 }
 
-/// A single dependency declaration under `[providers.<name>.requires]`.
+/// A single dependency declaration under `[[providers.<name>.depends_on]]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ProviderRequirement {
+pub struct ProviderDependency {
     /// The SecretSpec secret name that provides the value
     /// (e.g. `OP_SERVICE_ACCOUNT_TOKEN`).
     pub secret: String,
+    /// Environment variable name to inject the resolved value as.
+    /// Defaults to the secret name when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "as")]
+    pub as_name: Option<String>,
+}
+
+impl ProviderDependency {
+    /// Returns the effective env-var name for this dependency.
+    ///
+    /// When `as` is set, returns that value. Otherwise defaults to the
+    /// [`secret`](Self::secret) name.
+    pub fn effective_as(&self) -> &str {
+        self.as_name.as_deref().unwrap_or(&self.secret)
+    }
 }
 
 /// A single entry in a secret's `providers` list.

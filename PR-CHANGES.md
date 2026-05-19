@@ -29,9 +29,9 @@ All changes are purely additive at the TOML level — every existing `secretspec
 
 | Type | Purpose |
 |------|---------|
-| `ProviderConfig` | `[providers]` entry: bare string or structured `{ uri, requires }` |
-| `ProviderConfigStructured` | Table with `uri` + optional `requires` HashMap |
-| `ProviderRequirement` | Dependency: `{ secret = "SECRET_NAME" }` |
+| `ProviderConfig` | `[providers]` entry: bare string or structured `{ uri, depends_on }` |
+| `ProviderConfigStructured` | Table with `uri` + optional `depends_on` array |
+| `ProviderDependency` | Dependency: `{ secret = "SECRET_NAME" }` with optional `as = "ENV_VAR"` (defaults to `secret`) |
 | `ProviderRef` | Per-secret provider ref: bare string or detailed `{ provider, path, key }` |
 | `ProviderRefDetail` | Location info: `provider` + optional `path` + optional `key` |
 | `SecretRequest` | Runtime hints: `path` (section) + `key` (field), defaults to secret name |
@@ -42,7 +42,7 @@ All use `#[serde(untagged)]` — backward compatible. String → `Alias`, table 
 
 - `resolve_provider_ref_uris` returns `Vec<(uri, SecretRequest)>` — carries location hints through resolution
 - `get_secret_from_providers` uses `get_with_request` for request-aware lookups
-- `resolve_provider_requirements` resolves `[providers.<name>.requires]` secrets
+- `resolve_provider_requirements` resolves `[[providers.<name>.depends_on]]` secrets
 - Full fallback chain support for structured refs
 
 ### Provider Trait (`secretspec/src/provider/mod.rs`)
@@ -160,8 +160,8 @@ keyring = "keyring://"
 
 [providers.op-prod]
 uri = "onepassword://Production"
-[providers.op-prod.requires]
-service_token = { secret = "OP_SERVICE_ACCOUNT_TOKEN" }
+[[providers.op-prod.depends_on]]
+secret = "OP_SERVICE_ACCOUNT_TOKEN"
 
 [profiles.default]
 # The service account token itself — stored in the local keyring
@@ -276,9 +276,9 @@ A provider can declare multiple dependencies:
 ```toml
 [providers.op-multi]
 uri = "onepassword://Team"
-[providers.op-multi.requires]
-service_token = { secret = "OP_SERVICE_ACCOUNT_TOKEN" }
-api_key       = { secret = "SOME_API_KEY" }
+[[providers.op-multi.depends_on]]
+secret = "OP_SERVICE_ACCOUNT_TOKEN"
+secret = "SOME_API_KEY"
 
 [profiles.default]
 OP_SERVICE_ACCOUNT_TOKEN = { description = "OP token", providers = ["keyring"] }
@@ -300,8 +300,8 @@ env     = "env://"
 
 [providers.ci-env]
 uri = "onepassword+env+token://abc123def456"
-[providers.ci-env.requires]
-auth_token = { secret = "OP_SERVICE_ACCOUNT_TOKEN" }
+[[providers.ci-env.depends_on]]
+secret = "OP_SERVICE_ACCOUNT_TOKEN"
 
 [profiles.default]
 OP_SERVICE_ACCOUNT_TOKEN = {

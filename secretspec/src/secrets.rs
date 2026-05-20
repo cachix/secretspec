@@ -34,6 +34,12 @@ fn redact_provider_uri(uri: &str) -> String {
 /// can see why a particular link was skipped, without aborting the chain.
 fn warn_provider_failure(uri: &str, secret_name: &str, err: &SecretSpecError) {
     let uri = redact_provider_uri(uri);
+    tracing::warn!(
+        provider = %uri,
+        secret = %secret_name,
+        error = %err,
+        "provider failed while resolving secret"
+    );
     eprintln!(
         "{} provider {} failed for {}: {}; trying next provider in chain",
         "warning:".yellow(),
@@ -48,7 +54,7 @@ fn warn_provider_failure(uri: &str, secret_name: &str, err: &SecretSpecError) {
 /// retried via their per-secret fallback chain below.
 fn warn_primary_provider_failure(uri: Option<&str>, err: &SecretSpecError) {
     let uri = uri.map(redact_provider_uri).unwrap_or_else(|| "<default>".to_string());
-    tracing::debug!(provider = %uri, error = %err, "primary batch provider failed");
+    tracing::warn!(provider = %uri, error = %err, "primary batch provider failed");
     eprintln!(
         "{} primary provider {} failed: {}; will try fallback chain for affected secrets",
         "warning:".yellow(),

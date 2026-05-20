@@ -240,6 +240,13 @@ const AUTH_REQUIRED_HELP: &str = "OnePassword authentication required.\n\n\
     - Service account (CI): set OP_SERVICE_ACCOUNT_TOKEN or use the onepassword+token:// scheme\n  \
     - Manual signin: run 'eval $(op signin)' (session expires after 30 minutes of inactivity)";
 
+fn is_auth_error(error_msg: &str) -> bool {
+    error_msg.contains("not currently signed in")
+        || error_msg.contains("no active session")
+        || error_msg.contains("could not find session token")
+        || error_msg.contains("account is not signed in")
+}
+
 pub(crate) fn strip_op_session_env(cmd: &mut Command) {
     for (key, _) in std::env::vars_os() {
         if key.to_string_lossy().starts_with("OP_SESSION_") {
@@ -425,21 +432,23 @@ impl OnePasswordProvider {
 
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
-            tracing::debug!(
+            if is_auth_error(&error_msg) {
+                tracing::error!(
+                    status = ?output.status.code(),
+                    stderr = %error_msg,
+                    args = ?args,
+                    "1Password CLI command failed due to authentication"
+                );
+                return Err(SecretSpecError::ProviderOperationFailed(
+                    AUTH_REQUIRED_HELP.to_string(),
+                ));
+            }
+            tracing::warn!(
                 status = ?output.status.code(),
                 stderr = %error_msg,
                 args = ?args,
                 "1Password CLI command failed"
             );
-            if error_msg.contains("not currently signed in")
-                || error_msg.contains("no active session")
-                || error_msg.contains("could not find session token")
-                || error_msg.contains("account is not signed in")
-            {
-                return Err(SecretSpecError::ProviderOperationFailed(
-                    AUTH_REQUIRED_HELP.to_string(),
-                ));
-            }
             return Err(SecretSpecError::ProviderOperationFailed(
                 error_msg.to_string(),
             ));
@@ -821,7 +830,7 @@ impl Provider for OnePasswordProvider {
             }
         }
 
-        tracing::debug!(
+        tracing::warn!(
             item = %item_name,
             vault = %vault,
             section = ?section_name,

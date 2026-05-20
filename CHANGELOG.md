@@ -174,6 +174,9 @@ Both features are purely additive at the TOML level — every existing
   `secretspec/{project}/{profile}` item.
 - Added verbose provider/1Password lookup tracing via `-v`/`--verbose`, `-vv`,
   or `RUST_LOG=verbose` to make provider selection and `op` CLI failures visible.
+- 1Password tracing now emits failed `op` commands and missing requested fields
+  at warning level, and authentication failures at error level, instead of
+  reporting every diagnostic as debug.
 - Profile-not-found errors no longer surface as the confusing
   `Secret 'Profile 'X' not found' not found`. They now use the dedicated
   `InvalidProfile` variant and include the list of profiles defined in

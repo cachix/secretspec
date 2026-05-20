@@ -1,4 +1,6 @@
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 use tempfile::TempDir;
@@ -90,6 +92,147 @@ detail_env = "dotenv://{}"
     assert!(
         !stderr.contains("required"),
         "resolved object-form provider refs must not be reported missing\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn onepassword_auth_failures_are_error_logs() {
+    let temp_dir = TempDir::new().expect("create temp test directory");
+    let op = temp_dir.path().join("op");
+    let secretspec_file = temp_dir.path().join("secretspec.toml");
+
+    fs::write(
+        &op,
+        r#"#!/usr/bin/env sh
+printf '%s\n' 'not currently signed in' >&2
+exit 1
+"#,
+    )
+    .expect("write fake op command");
+    let mut permissions = fs::metadata(&op)
+        .expect("stat fake op command")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&op, permissions).expect("make fake op executable");
+
+    fs::write(
+        &secretspec_file,
+        r#"
+[project]
+name = "onepassword-error-log-test"
+revision = "1.0"
+
+[providers]
+op = "onepassword://Development"
+
+[profiles.default]
+TOKEN = { description = "Token", required = true, providers = [{ provider = "op", path = ["dotfiles", "auth"], key = "TOKEN" }] }
+"#,
+    )
+    .expect("write secretspec config");
+
+    let path = format!(
+        "{}:{}",
+        temp_dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_secretspec"))
+        .arg("-f")
+        .arg(&secretspec_file)
+        .arg("check")
+        .arg("--no-prompt")
+        .env("PATH", path)
+        .env("RUST_LOG", "verbose")
+        .env("HOME", temp_dir.path())
+        .env("NO_COLOR", "1")
+        .env_remove("OP_SERVICE_ACCOUNT_TOKEN")
+        .env_remove("SECRETSPEC_PROVIDER")
+        .env_remove("SECRETSPEC_PROFILE")
+        .output()
+        .expect("run secretspec check");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "check should fail when 1Password auth fails\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("ERROR")
+            && stderr.contains("1Password CLI command failed due to authentication"),
+        "auth failures should be logged at error level\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn onepassword_lookup_failures_are_warning_logs() {
+    let temp_dir = TempDir::new().expect("create temp test directory");
+    let op = temp_dir.path().join("op");
+    let secretspec_file = temp_dir.path().join("secretspec.toml");
+
+    fs::write(
+        &op,
+        r#"#!/usr/bin/env sh
+printf '%s\n' "item isn't in vault" >&2
+exit 1
+"#,
+    )
+    .expect("write fake op command");
+    let mut permissions = fs::metadata(&op)
+        .expect("stat fake op command")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&op, permissions).expect("make fake op executable");
+
+    fs::write(
+        &secretspec_file,
+        r#"
+[project]
+name = "onepassword-warning-log-test"
+revision = "1.0"
+
+[providers]
+op = "onepassword://Development"
+
+[profiles.default]
+TOKEN = { description = "Token", required = true, providers = [{ provider = "op", path = ["dotfiles", "auth"], key = "TOKEN" }] }
+"#,
+    )
+    .expect("write secretspec config");
+
+    let path = format!(
+        "{}:{}",
+        temp_dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_secretspec"))
+        .arg("-f")
+        .arg(&secretspec_file)
+        .arg("check")
+        .arg("--no-prompt")
+        .env("PATH", path)
+        .env("RUST_LOG", "verbose")
+        .env("HOME", temp_dir.path())
+        .env("NO_COLOR", "1")
+        .env_remove("OP_SERVICE_ACCOUNT_TOKEN")
+        .env_remove("SECRETSPEC_PROVIDER")
+        .env_remove("SECRETSPEC_PROFILE")
+        .output()
+        .expect("run secretspec check");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "check should fail when the required secret is missing\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("WARN") && stderr.contains("1Password CLI command failed"),
+        "lookup failures should be logged at warning level\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("1Password CLI command failed due to authentication"),
+        "non-auth lookup failures should not be classified as auth errors\nstderr:\n{stderr}"
     );
 }
 

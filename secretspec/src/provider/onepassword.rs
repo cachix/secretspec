@@ -179,6 +179,17 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
             }
         }
 
+        let uri_path = url.path();
+        let uri_path = uri_path.trim_matches('/');
+        if !uri_path.is_empty() {
+            let folder_prefix = if uri_path.contains("{key}") {
+                uri_path.to_string()
+            } else {
+                format!("{}/{{key}}", uri_path.trim_end_matches('/'))
+            };
+            config.folder_prefix = Some(folder_prefix);
+        }
+
         Ok(config)
     }
 }
@@ -342,6 +353,17 @@ impl OnePasswordProvider {
         use std::io::Write;
         use std::process::Stdio;
 
+        tracing::debug!(
+            command = %self.op_command,
+            args = ?args,
+            has_stdin = stdin_data.is_some(),
+            has_service_token = self.config.service_account_token.is_some()
+                || self.dependency_env.contains_key("OP_SERVICE_ACCOUNT_TOKEN"),
+            account = ?self.config.account,
+            vault = ?self.config.default_vault,
+            "executing 1Password CLI command"
+        );
+
         let mut cmd = Command::new(&self.op_command);
         strip_op_session_env(&mut cmd);
 
@@ -403,6 +425,12 @@ impl OnePasswordProvider {
 
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
+            tracing::debug!(
+                status = ?output.status.code(),
+                stderr = %error_msg,
+                args = ?args,
+                "1Password CLI command failed"
+            );
             if error_msg.contains("not currently signed in")
                 || error_msg.contains("no active session")
                 || error_msg.contains("could not find session token")
@@ -756,6 +784,14 @@ impl Provider for OnePasswordProvider {
         // The section to match (first path segment).
         let section_name = &path_segments[0];
 
+        tracing::debug!(
+            item = %item_name,
+            vault = %vault,
+            section = %section_name,
+            field = %field_key,
+            "reading 1Password field via provider-relative request"
+        );
+
         let args = vec![
             "item", "get", &item_name,
             "--vault", &vault,
@@ -794,6 +830,13 @@ impl Provider for OnePasswordProvider {
             }
         }
 
+        tracing::debug!(
+            item = %item_name,
+            vault = %vault,
+            section = %section_name,
+            field = %field_key,
+            "1Password item did not contain requested section/field"
+        );
         Ok(None)
     }
 
@@ -1188,6 +1231,9 @@ case "$1 $2" in
       *STORED_ITEM*)
         printf '%s\n' '{{"fields":[{{"id":"value","type":"STRING","label":"value","value":"from-stored-item"}}]}}'
         ;;
+      dotfiles)
+        printf '%s\n' '{{"fields":[{{"id":"github","type":"CONCEALED","label":"GITHUB_TOKEN","section":{{"label":"forges"}},"value":"from-dotfiles-item"}}]}}'
+        ;;
       *)
         printf '%s\n' "isn't an item" >&2
         exit 1
@@ -1211,9 +1257,17 @@ esac
         script
     }
 
+    fn init_test_tracing() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(std::io::sink)
+            .try_init();
+    }
+
     #[test]
     #[cfg(unix)]
     fn onepassword_get_with_request_uses_key_hint_when_path_is_absent_or_empty() {
+        init_test_tracing();
         let temp_dir = tempfile::TempDir::new().expect("create temp dir");
         let log = temp_dir.path().join("calls.log");
         let op = write_fake_op(&temp_dir, &log);
@@ -1250,5 +1304,72 @@ esac
             !calls.contains("SECRET_NAME"),
             "request.key should replace the SecretSpec variable name for item lookup\n{calls}"
         );
+
+        let missing_value = provider
+            .get("proj", "MISSING_ITEM", "default")
+            .expect("missing item should not be a hard error");
+        assert!(missing_value.is_none());
+    }
+
+    #[test]
+    fn onepassword_uri_path_becomes_provider_relative_item_root() {
+        let provider_url = ProviderUrl::new(
+            url::Url::parse("onepassword+token://Development/dotfiles").unwrap(),
+        );
+        let config = OnePasswordConfig::try_from(&provider_url).unwrap();
+
+        assert_eq!(config.default_vault.as_deref(), Some("Development"));
+        assert_eq!(config.folder_prefix.as_deref(), Some("dotfiles/{key}"));
+        assert_eq!(config.service_account_token, None);
+
+        let provider_url = ProviderUrl::new(
+            url::Url::parse("onepassword://Development/secretspec/{project}/{profile}/{key}")
+                .unwrap(),
+        );
+        let config = OnePasswordConfig::try_from(&provider_url).unwrap();
+        assert_eq!(
+            config.folder_prefix.as_deref(),
+            Some("secretspec/{project}/{profile}/{key}")
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn onepassword_get_with_request_uses_uri_path_as_item_name() {
+        init_test_tracing();
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let log = temp_dir.path().join("calls.log");
+        let op = write_fake_op(&temp_dir, &log);
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig {
+            default_vault: Some("Development".to_string()),
+            folder_prefix: Some("dotfiles/{key}".to_string()),
+            ..OnePasswordConfig::default()
+        });
+        provider.op_command = op.display().to_string();
+
+        let request = SecretRequest {
+            path: Some(vec!["forges".to_string()]),
+            key: None,
+        };
+        let value = provider
+            .get_with_request("dotfiles", "GITHUB_TOKEN", "default", &request)
+            .expect("read provider-relative field")
+            .expect("value from fake op");
+
+        assert_eq!(value.expose_secret(), "from-dotfiles-item");
+        let calls = fs::read_to_string(log).expect("read fake op call log");
+        assert!(
+            calls.contains("item get dotfiles --vault Development"),
+            "expected URI path to select the shared 1Password item\n{calls}"
+        );
+
+        let missing_request = SecretRequest {
+            path: Some(vec!["packages".to_string()]),
+            key: Some("CARGO_REGISTRY_TOKEN".to_string()),
+        };
+        let missing_value = provider
+            .get_with_request("dotfiles", "CARGO_REGISTRY_TOKEN", "default", &missing_request)
+            .expect("missing section/field should not be a hard error");
+        assert!(missing_value.is_none());
     }
 }

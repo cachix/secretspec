@@ -7,6 +7,7 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use tracing_subscriber::EnvFilter;
 
 /// Main CLI structure for the secretspec application.
 ///
@@ -20,6 +21,10 @@ struct Cli {
     /// Path to secretspec.toml (default: auto-detect by walking up from current directory)
     #[arg(short = 'f', long, global = true, env = "SECRETSPEC_FILE")]
     file: Option<PathBuf>,
+
+    /// Increase diagnostic logging (-v/--verbose for debug, -vv/--verbose --verbose for trace). Can also use RUST_LOG=debug/trace.
+    #[arg(short = 'v', long, global = true, action = clap::ArgAction::Count)]
+    verbose: u8,
 
     /// The subcommand to execute
     #[command(subcommand)]
@@ -269,9 +274,33 @@ fn load_secrets(file: &Option<PathBuf>) -> miette::Result<Secrets> {
 ///
 /// * `Ok(())` - If the command executed successfully
 /// * `Err` - If any error occurred during execution
+fn init_tracing(verbosity: u8) {
+    let env_filter = std::env::var("RUST_LOG")
+        .or_else(|_| std::env::var("rust_log"))
+        .ok()
+        .map(|value| match value.to_ascii_lowercase().as_str() {
+            "verbose" => "secretspec=trace".to_string(),
+            "quiet" => "off".to_string(),
+            _ => value,
+        })
+        .unwrap_or_else(|| match verbosity {
+            0 => "secretspec=off".to_string(),
+            1 => "secretspec=debug".to_string(),
+            _ => "secretspec=trace".to_string(),
+        });
+
+    let filter = EnvFilter::try_new(&env_filter).unwrap_or_else(|_| EnvFilter::new("secretspec=trace"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .compact()
+        .try_init();
+}
+
 #[doc(hidden)]
 pub fn main() -> Result<()> {
     let cli = Cli::parse();
+    init_tracing(cli.verbose);
 
     match cli.command {
         // Initialize a new secretspec.toml configuration file

@@ -15,9 +15,25 @@ use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+fn redact_provider_uri(uri: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(uri) else {
+        return uri.to_string();
+    };
+
+    if !parsed.username().is_empty() {
+        let _ = parsed.set_username("<redacted>");
+    }
+    if parsed.password().is_some() {
+        let _ = parsed.set_password(Some("<redacted>"));
+    }
+
+    parsed.to_string()
+}
+
 /// Emits a warning when a provider in a fallback chain fails so the user
 /// can see why a particular link was skipped, without aborting the chain.
 fn warn_provider_failure(uri: &str, secret_name: &str, err: &SecretSpecError) {
+    let uri = redact_provider_uri(uri);
     eprintln!(
         "{} provider {} failed for {}: {}; trying next provider in chain",
         "warning:".yellow(),
@@ -31,10 +47,12 @@ fn warn_provider_failure(uri: &str, secret_name: &str, err: &SecretSpecError) {
 /// during construction or during `get_batch`); affected secrets will still be
 /// retried via their per-secret fallback chain below.
 fn warn_primary_provider_failure(uri: Option<&str>, err: &SecretSpecError) {
+    let uri = uri.map(redact_provider_uri).unwrap_or_else(|| "<default>".to_string());
+    tracing::debug!(provider = %uri, error = %err, "primary batch provider failed");
     eprintln!(
         "{} primary provider {} failed: {}; will try fallback chain for affected secrets",
         "warning:".yellow(),
-        uri.unwrap_or("<default>").bold(),
+        uri.bold(),
         err
     );
 }
@@ -554,6 +572,13 @@ impl Secrets {
             match self.lookup_provider_alias(alias) {
                 Some(uri) => {
                     let request = SecretRequest::from_provider_ref(r);
+                    tracing::debug!(
+                        alias = %alias,
+                        provider = %redact_provider_uri(&uri),
+                        path = ?request.path,
+                        key = ?request.key,
+                        "resolved provider reference"
+                    );
                     entries.push((uri, request));
                 }
                 None => {
@@ -788,6 +813,14 @@ impl Secrets {
             let mut last_error: Option<SecretSpecError> = None;
             let mut any_healthy = false;
             for (uri, request) in entries {
+                tracing::debug!(
+                    provider = %redact_provider_uri(uri),
+                    secret = %secret_name,
+                    profile = %profile_name,
+                    path = ?request.path,
+                    key = ?request.key,
+                    "attempting provider lookup"
+                );
                 let provider = match self.provider_from_uri(uri.clone(), profile_name) {
                     Ok(p) => p,
                     Err(e) => {
@@ -797,7 +830,10 @@ impl Secrets {
                     }
                 };
                 match provider.get_with_request(project_name, secret_name, profile_name, request) {
-                    Ok(Some(value)) => return Ok(Some(value)),
+                    Ok(Some(value)) => {
+                        tracing::debug!(provider = %redact_provider_uri(uri), secret = %secret_name, "provider lookup found secret");
+                        return Ok(Some(value));
+                    }
                     Ok(None) => {
                         any_healthy = true;
                         continue;
@@ -1997,5 +2033,25 @@ impl Secrets {
 
         let status = cmd.status()?;
         Ok(status.code().unwrap_or(1))
+    }
+}
+
+#[cfg(test)]
+mod provider_uri_redaction_tests {
+    use super::redact_provider_uri;
+
+    #[test]
+    fn provider_uri_redaction_handles_plain_invalid_and_credentials() {
+        assert_eq!(redact_provider_uri("keyring://"), "keyring://");
+        assert_eq!(redact_provider_uri("not a uri"), "not a uri");
+
+        let redacted = redact_provider_uri("onepassword+token://secret-token@Development/dotfiles");
+        assert!(!redacted.contains("secret-token"));
+        assert!(redacted.contains("redacted"));
+
+        let redacted = redact_provider_uri("https://user:pass@example.com/path");
+        assert!(!redacted.contains("user"));
+        assert!(!redacted.contains("pass"));
+        assert!(redacted.contains("redacted"));
     }
 }

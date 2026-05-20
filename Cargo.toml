@@ -48,6 +48,8 @@ rand = "0.9"
 rsa = { version = "0.9", features = ["pem"] }
 uuid = { version = "1", features = ["v4"] }
 data-encoding = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # The profile that 'dist' will build with
 [profile.dist]

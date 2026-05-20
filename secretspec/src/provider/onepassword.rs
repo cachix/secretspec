@@ -728,12 +728,14 @@ impl Provider for OnePasswordProvider {
         profile: &str,
         request: &SecretRequest,
     ) -> Result<Option<SecretString>> {
-        // If no path, delegate to base `get` (one item per secret).
+        // If no path, delegate to base `get` (one item per secret), honoring
+        // an alternate storage key when the provider ref supplied one.
+        let storage_key = request.key.as_deref().unwrap_or(key);
         let Some(path_segments) = &request.path else {
-            return self.get(project, key, profile);
+            return self.get(project, storage_key, profile);
         };
         if path_segments.is_empty() {
-            return self.get(project, key, profile);
+            return self.get(project, storage_key, profile);
         }
 
         // Shared-item lookup: item title = secretspec/{project}/{profile}
@@ -1161,5 +1163,92 @@ printf '{{"fields":[{{"id":"value","type":"CONCEALED","label":"value","value":"%
 
         assert_eq!(value.expose_secret(), "uri-token");
         assert_eq!(fs::read_to_string(log).unwrap(), "uri-token\n");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use secrecy::ExposeSecret;
+    use std::fs;
+
+    #[cfg(unix)]
+    fn write_fake_op(temp_dir: &tempfile::TempDir, log: &std::path::Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = temp_dir.path().join("op");
+        fs::write(
+            &script,
+            format!(
+                r#"#!/usr/bin/env sh
+printf '%s\n' "$*" >> '{}'
+case "$1 $2" in
+  "item get")
+    case "$3" in
+      *STORED_ITEM*)
+        printf '%s\n' '{{"fields":[{{"id":"value","type":"STRING","label":"value","value":"from-stored-item"}}]}}'
+        ;;
+      *)
+        printf '%s\n' "isn't an item" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    printf '%s\n' '[]'
+    ;;
+esac
+"#,
+                log.display()
+            ),
+        )
+        .expect("write fake op script");
+        let mut permissions = fs::metadata(&script)
+            .expect("stat fake op script")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).expect("make fake op executable");
+        script
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn onepassword_get_with_request_uses_key_hint_when_path_is_absent_or_empty() {
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let log = temp_dir.path().join("calls.log");
+        let op = write_fake_op(&temp_dir, &log);
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig::default());
+        provider.op_command = op.display().to_string();
+
+        let no_path_request = SecretRequest {
+            path: None,
+            key: Some("STORED_ITEM".to_string()),
+        };
+        let empty_path_request = SecretRequest {
+            path: Some(Vec::new()),
+            key: Some("STORED_ITEM".to_string()),
+        };
+
+        let no_path_value = provider
+            .get_with_request("proj", "SECRET_NAME", "default", &no_path_request)
+            .expect("read with key hint and no path")
+            .expect("value from fake op");
+        let empty_path_value = provider
+            .get_with_request("proj", "SECRET_NAME", "default", &empty_path_request)
+            .expect("read with key hint and empty path")
+            .expect("value from fake op");
+
+        assert_eq!(no_path_value.expose_secret(), "from-stored-item");
+        assert_eq!(empty_path_value.expose_secret(), "from-stored-item");
+
+        let calls = fs::read_to_string(log).expect("read fake op call log");
+        assert!(
+            calls.lines().all(|line| line.contains("STORED_ITEM")),
+            "expected OnePassword item lookups to use request.key, not the SecretSpec name\n{calls}"
+        );
+        assert!(
+            !calls.contains("SECRET_NAME"),
+            "request.key should replace the SecretSpec variable name for item lookup\n{calls}"
+        );
     }
 }

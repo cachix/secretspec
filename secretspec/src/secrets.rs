@@ -1619,25 +1619,48 @@ impl Secrets {
 
         let mut provider_groups: HashMap<Option<String>, Vec<String>> = HashMap::new();
         let mut secret_primary_uris: HashMap<String, Option<String>> = HashMap::new();
+        let mut fetched_values: HashMap<String, SecretString> = HashMap::new();
 
         for (name, _) in &all_secrets {
             let secret_config = self
                 .resolve_secret_config(name, Some(&profile_name))
                 .expect("Secret should exist in config since we're iterating over it");
 
-            let provider_uri = match (&override_uri, secret_config.providers.as_deref()) {
-                (Some(uri), _) => Some(uri.clone()),
+            let primary_entry = match (&override_uri, secret_config.providers.as_deref()) {
+                (Some(uri), _) => Some((uri.clone(), SecretRequest::default())),
                 (None, Some([first_ref, ..])) => self
                     .resolve_provider_ref_uris(Some(std::slice::from_ref(first_ref)))?
-                    .and_then(|entries| entries.into_iter().next().map(|(uri, _)| uri)),
+                    .and_then(|entries| entries.into_iter().next()),
                 _ => None,
             };
+            let provider_uri = primary_entry.as_ref().map(|(uri, _)| uri.clone());
 
             secret_primary_uris.insert(name.clone(), provider_uri.clone());
-            provider_groups
-                .entry(provider_uri)
-                .or_default()
-                .push(name.clone());
+
+            let can_batch = primary_entry
+                .as_ref()
+                .map(|(_, request)| request == &SecretRequest::default())
+                .unwrap_or(true);
+
+            if can_batch {
+                provider_groups
+                    .entry(provider_uri)
+                    .or_default()
+                    .push(name.clone());
+                continue;
+            }
+
+            let provider_entries = self.resolve_provider_ref_uris(secret_config.providers.as_deref())?;
+
+            if let Some(value) = self.get_secret_from_providers(
+                &self.config.project.name,
+                name,
+                &profile_name,
+                provider_entries.as_deref(),
+                None,
+            )? {
+                fetched_values.insert(name.clone(), value);
+            }
         }
 
         // Batch fetch from each provider group. A failure here (e.g. an
@@ -1645,7 +1668,6 @@ impl Secrets {
         // declare a fallback chain are retried per-secret below. Secrets in
         // the failed group with no fallback to try will surface the original
         // error instead of being silently reported as missing.
-        let mut fetched_values: HashMap<String, SecretString> = HashMap::new();
         let mut failed_primary_uris: HashMap<Option<String>, SecretSpecError> = HashMap::new();
 
         for (provider_uri, secret_names) in provider_groups {

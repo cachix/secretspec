@@ -4581,6 +4581,40 @@ fn test_validate_project_provider_chain_without_global_default() {
 }
 
 #[test]
+fn test_validate_detail_provider_uses_request_key_during_check() {
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env.detail");
+    fs::write(&env_file, "STORED_API_KEY=from-detail\n").unwrap();
+    let uri = format!("dotenv://{}", env_file.display());
+
+    let config = config_with_project_alias_secret(
+        "project_env",
+        &uri,
+        Some(vec![ProviderRef::Detail(ProviderRefDetail {
+            provider: "project_env".to_string(),
+            path: None,
+            key: Some("STORED_API_KEY".to_string()),
+        })]),
+    );
+    let spec = Secrets::new(config, None, None, None);
+
+    let validated = spec
+        .validate()
+        .expect("detail provider refs should resolve during validation")
+        .expect("secret should resolve using the provider-ref key hint");
+
+    assert_eq!(
+        validated
+            .resolved
+            .secrets
+            .get("API_KEY")
+            .unwrap()
+            .expose_secret(),
+        "from-detail"
+    );
+}
+
+#[test]
 fn test_validate_provider_override_project_alias_without_global_default() {
     let temp_dir = TempDir::new().unwrap();
     let env_file = temp_dir.path().join(".env.override");
@@ -5209,7 +5243,7 @@ fn test_onepassword_item_without_sections() {
 // ── Provider trait get_with_request default ────────────────────────────────
 
 #[test]
-fn test_get_with_request_default_delegates_to_get() {
+fn test_get_with_request_default_delegates_to_get_with_request_key() {
     use crate::provider::Provider as _;
     use crate::SecretRequest;
     use secrecy::SecretString;
@@ -5244,7 +5278,7 @@ fn test_get_with_request_default_delegates_to_get() {
 
     let calls = spy.get_calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0], ("proj".into(), "MY_KEY".into(), "default".into()), "delegated with original key, not request key");
+    assert_eq!(calls[0], ("proj".into(), "field".into(), "default".into()), "delegated using request key hint");
 }
 
 // ── ProviderDependency serde roundtrip ────────────────────────────────────

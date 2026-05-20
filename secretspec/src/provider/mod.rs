@@ -422,17 +422,19 @@ pub trait Provider: Send + Sync {
 
     /// Look up a single secret with an optional provider-relative location.
     ///
-    /// The default implementation delegates to [`get`](Provider::get),
-    /// ignoring the `request`. Providers that support path/key navigation
-    /// (e.g. OnePassword with section/field lookup) should override this.
+    /// The default implementation delegates to [`get`](Provider::get), using
+    /// `request.key` as an alternate storage key when present. Providers that
+    /// support richer path navigation (e.g. OnePassword with section/field
+    /// lookup) should override this.
     fn get_with_request(
         &self,
         project: &str,
         key: &str,
         profile: &str,
-        _request: &SecretRequest,
+        request: &SecretRequest,
     ) -> Result<Option<SecretString>> {
-        self.get(project, key, profile)
+        let storage_key = request.key.as_deref().unwrap_or(key);
+        self.get(project, storage_key, profile)
     }
 }
 

@@ -154,11 +154,15 @@ Both features are purely additive at the TOML level — every existing
   or methods were removed or renamed.
 
 ### Fixed
+
 - Provider `depends_on` secrets are now injected into provider instances before
   use. The 1Password item and Environments providers pass
   `OP_SERVICE_ACCOUNT_TOKEN` directly to each `op` child command, avoiding
   process-global environment mutation while still supporting repeated command
   invocations and preflight checks.
+- `secretspec check` now resolves object-form per-secret provider refs with
+  `path`/`key` hints during validation instead of batching them by provider URI
+  and checking the SecretSpec variable name.
 - Profile-not-found errors no longer surface as the confusing
   `Secret 'Profile 'X' not found' not found`. They now use the dedicated
   `InvalidProfile` variant and include the list of profiles defined in

@@ -1,17 +1,18 @@
 use crate::config::{
     Config, GlobalConfig, GlobalDefaults, ParseError, Profile, Project, ProviderConfig,
-    ProviderConfigStructured, ProviderDependency, ProviderRef, ProviderRefDetail, Resolved, Secret, SecretRequest,
+    ProviderConfigStructured, ProviderDependency, ProviderRef, ProviderRefDetail, Resolved, Secret,
+    SecretRequest,
 };
 use crate::error::{Result, SecretSpecError};
 use crate::secrets::Secrets;
 use crate::validation::{ValidatedSecrets, ValidationErrors};
 use secrecy::ExposeSecret;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::path::Path;
 use std::{fs, io};
 use tempfile::TempDir;
-use serde::{Deserialize, Serialize};
 
 // Helper function for tests that need to parse from string
 fn parse_spec_from_str(content: &str, _base_path: Option<&Path>) -> Result<Config> {
@@ -42,6 +43,7 @@ fn test_new_with_project_config() {
         },
         profiles: HashMap::new(),
         providers: None,
+        groups: None,
     };
 
     let spec = Secrets::new(config, None, None, None);
@@ -104,6 +106,7 @@ fn test_new_with_default_overrides() {
         },
         profiles: HashMap::new(),
         providers: None,
+        groups: None,
     };
 
     // Create a global config with specific defaults
@@ -256,6 +259,7 @@ fn test_secretspec_new() {
         },
         profiles: HashMap::new(),
         providers: None,
+        groups: None,
     };
 
     let global_config = GlobalConfig {
@@ -297,6 +301,7 @@ fn test_resolve_profile() {
             },
             profiles: HashMap::new(),
             providers: None,
+            groups: None,
         },
         Some(global_config),
         None,
@@ -319,6 +324,7 @@ fn test_resolve_profile() {
             },
             profiles: HashMap::new(),
             providers: None,
+            groups: None,
         },
         None,
         None,
@@ -337,6 +343,7 @@ fn test_resolve_secret_config() {
             required: Some(true),
             default: None,
             providers: None,
+            groups: None,
             as_path: None,
             ..Default::default()
         },
@@ -348,6 +355,7 @@ fn test_resolve_secret_config() {
             required: Some(false),
             default: Some("sqlite:///default.db".to_string()),
             providers: None,
+            groups: None,
             as_path: None,
             ..Default::default()
         },
@@ -361,6 +369,7 @@ fn test_resolve_secret_config() {
             required: Some(false),
             default: Some("dev-key".to_string()),
             providers: None,
+            groups: None,
             as_path: None,
             ..Default::default()
         },
@@ -391,6 +400,7 @@ fn test_resolve_secret_config() {
             },
             profiles,
             providers: None,
+            groups: None,
         },
         None,
         None,
@@ -432,6 +442,7 @@ fn test_get_provider_error_cases() {
             },
             profiles: HashMap::new(),
             providers: None,
+            groups: None,
         },
         None,
         None,
@@ -462,6 +473,7 @@ fn test_get_provider_with_global_config() {
             },
             profiles: HashMap::new(),
             providers: None,
+            groups: None,
         },
         Some(global_config),
         None,
@@ -1400,6 +1412,7 @@ fn test_set_with_undefined_secret() {
             profiles
         },
         providers: None,
+        groups: None,
     };
 
     let global_config = GlobalConfig {
@@ -1467,6 +1480,7 @@ fn test_set_with_defined_secret() {
             profiles
         },
         providers: None,
+        groups: None,
     };
 
     let global_config = GlobalConfig {
@@ -1521,6 +1535,7 @@ fn test_set_with_readonly_provider() {
             profiles
         },
         providers: None,
+        groups: None,
     };
 
     let global_config = GlobalConfig {
@@ -1618,6 +1633,7 @@ fn test_import_between_dotenv_files() {
             profiles
         },
         providers: None,
+        groups: None,
     };
 
     // Create source .env file
@@ -1745,6 +1761,7 @@ fn test_import_edge_cases() {
             profiles
         },
         providers: None,
+        groups: None,
     };
 
     // Create source .env file with edge case values
@@ -2010,6 +2027,7 @@ fn test_import_with_profiles() {
             profiles
         },
         providers: None,
+        groups: None,
     };
 
     // Create source .env file with all secrets
@@ -2083,6 +2101,7 @@ fn test_run_with_empty_command() {
             },
             profiles: HashMap::new(),
             providers: None,
+            groups: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -2122,6 +2141,7 @@ fn test_run_with_missing_required_secrets() {
             required: Some(true),
             default: None,
             providers: None,
+            groups: None,
             as_path: None,
             ..Default::default()
         },
@@ -2145,6 +2165,7 @@ fn test_run_with_missing_required_secrets() {
             },
             profiles,
             providers: None,
+            groups: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -2182,6 +2203,7 @@ fn test_get_existing_secret() {
             required: Some(true),
             default: None,
             providers: None,
+            groups: None,
             as_path: None,
             ..Default::default()
         },
@@ -2205,6 +2227,7 @@ fn test_get_existing_secret() {
             },
             profiles,
             providers: None,
+            groups: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -2236,6 +2259,7 @@ fn test_get_secret_with_default() {
             required: Some(false),
             default: Some("default_value".to_string()),
             providers: None,
+            groups: None,
             as_path: None,
             ..Default::default()
         },
@@ -2259,6 +2283,7 @@ fn test_get_secret_with_default() {
             },
             profiles,
             providers: None,
+            groups: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -2289,6 +2314,7 @@ fn test_get_nonexistent_secret() {
             required: Some(true),
             default: None,
             providers: None,
+            groups: None,
             as_path: None,
             ..Default::default()
         },
@@ -2312,6 +2338,7 @@ fn test_get_nonexistent_secret() {
             },
             profiles,
             providers: None,
+            groups: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -2456,6 +2483,7 @@ fn test_per_secret_provider_configuration() {
             required: Some(true),
             default: None,
             providers: None,
+            groups: None,
             as_path: None,
             ..Default::default()
         },
@@ -2478,6 +2506,7 @@ fn test_per_secret_provider_configuration() {
         },
         profiles,
         providers: None,
+        groups: None,
     };
 
     // Create global config with provider aliases
@@ -2498,7 +2527,10 @@ fn test_per_secret_provider_configuration() {
     let api_key_config = spec
         .resolve_secret_config("API_KEY", Some("default"))
         .unwrap();
-    assert_eq!(api_key_config.providers, Some(vec![ProviderRef::from("shared")]));
+    assert_eq!(
+        api_key_config.providers,
+        Some(vec![ProviderRef::from("shared")])
+    );
 
     // Verify DATABASE_URL has no providers (uses default)
     let db_config = spec
@@ -2533,6 +2565,7 @@ fn test_provider_alias_resolution() {
             },
             profiles: HashMap::new(),
             providers: None,
+            groups: None,
         },
         Some(global_config),
         None,
@@ -2598,6 +2631,7 @@ fn test_provider_alias_not_found() {
             },
             profiles: HashMap::new(),
             providers: None,
+            groups: None,
         },
         Some(global_config),
         None,
@@ -2636,7 +2670,10 @@ fn test_per_secret_provider_with_fallback_chain() {
             description: Some("Database URL".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec![ProviderRef::from("primary"), ProviderRef::from("fallback")]),
+            providers: Some(vec![
+                ProviderRef::from("primary"),
+                ProviderRef::from("fallback"),
+            ]),
             as_path: None,
             ..Default::default()
         },
@@ -2649,7 +2686,10 @@ fn test_per_secret_provider_with_fallback_chain() {
             description: Some("API Key".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec![ProviderRef::from("fallback"), ProviderRef::from("primary")]),
+            providers: Some(vec![
+                ProviderRef::from("fallback"),
+                ProviderRef::from("primary"),
+            ]),
             as_path: None,
             ..Default::default()
         },
@@ -2672,6 +2712,7 @@ fn test_per_secret_provider_with_fallback_chain() {
         },
         profiles,
         providers: None,
+        groups: None,
     };
 
     let mut providers_map = HashMap::new();
@@ -2700,7 +2741,10 @@ fn test_per_secret_provider_with_fallback_chain() {
         .unwrap();
     assert_eq!(
         db_config.providers,
-        Some(vec![ProviderRef::from("primary"), ProviderRef::from("fallback")])
+        Some(vec![
+            ProviderRef::from("primary"),
+            ProviderRef::from("fallback")
+        ])
     );
 
     // Verify API_KEY config has providers in reverse order
@@ -2709,7 +2753,10 @@ fn test_per_secret_provider_with_fallback_chain() {
         .unwrap();
     assert_eq!(
         api_config.providers,
-        Some(vec![ProviderRef::from("fallback"), ProviderRef::from("primary")])
+        Some(vec![
+            ProviderRef::from("fallback"),
+            ProviderRef::from("primary")
+        ])
     );
 }
 
@@ -2734,7 +2781,10 @@ fn test_get_secret_with_fallback_chain() {
             description: Some("API Key from fallback".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec![ProviderRef::from("primary"), ProviderRef::from("fallback")]),
+            providers: Some(vec![
+                ProviderRef::from("primary"),
+                ProviderRef::from("fallback"),
+            ]),
             as_path: None,
             ..Default::default()
         },
@@ -2747,7 +2797,10 @@ fn test_get_secret_with_fallback_chain() {
             description: Some("Database URL from primary".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec![ProviderRef::from("primary"), ProviderRef::from("fallback")]),
+            providers: Some(vec![
+                ProviderRef::from("primary"),
+                ProviderRef::from("fallback"),
+            ]),
             as_path: None,
             ..Default::default()
         },
@@ -2770,6 +2823,7 @@ fn test_get_secret_with_fallback_chain() {
         },
         profiles,
         providers: None,
+        groups: None,
     };
 
     let mut providers_map = HashMap::new();
@@ -2830,7 +2884,10 @@ fn test_validate_falls_back_on_primary_provider_error() {
             description: Some("API Key".to_string()),
             required: Some(true),
             default: None,
-            providers: Some(vec![ProviderRef::from("primary"), ProviderRef::from("fallback")]),
+            providers: Some(vec![
+                ProviderRef::from("primary"),
+                ProviderRef::from("fallback"),
+            ]),
             as_path: None,
             ..Default::default()
         },
@@ -2853,6 +2910,7 @@ fn test_validate_falls_back_on_primary_provider_error() {
         },
         profiles,
         providers: None,
+        groups: None,
     };
 
     let mut providers_map = HashMap::new();
@@ -2927,6 +2985,7 @@ fn test_validate_surfaces_error_when_all_providers_fail() {
         },
         profiles,
         providers: None,
+        groups: None,
     };
 
     let mut providers_map = HashMap::new();
@@ -2998,6 +3057,7 @@ fn test_validate_with_per_secret_providers() {
             required: Some(false),
             default: Some("default-config".to_string()),
             providers: None,
+            groups: None,
             as_path: None,
             ..Default::default()
         },
@@ -3020,6 +3080,7 @@ fn test_validate_with_per_secret_providers() {
         },
         profiles,
         providers: None,
+        groups: None,
     };
 
     let mut providers_map = HashMap::new();
@@ -3108,6 +3169,7 @@ fn test_secret_config_merges_providers_from_default() {
             required: Some(true),
             default: None,
             providers: None,
+            groups: None,
             as_path: None,
             ..Default::default()
         },
@@ -3150,6 +3212,7 @@ fn test_secret_config_merges_providers_from_default() {
         },
         profiles,
         providers: None,
+        groups: None,
     };
 
     let spec = Secrets::new(config, None, None, None);
@@ -3213,7 +3276,10 @@ SPECIAL_SECRET = { description = "Special secret", required = true }
         .unwrap();
     assert_eq!(
         db_prod.providers,
-        Some(vec![ProviderRef::from("prod_vault"), ProviderRef::from("keyring")]),
+        Some(vec![
+            ProviderRef::from("prod_vault"),
+            ProviderRef::from("keyring")
+        ]),
         "DATABASE_URL should inherit production profile defaults"
     );
 
@@ -3222,7 +3288,10 @@ SPECIAL_SECRET = { description = "Special secret", required = true }
         .unwrap();
     assert_eq!(
         api_prod.providers,
-        Some(vec![ProviderRef::from("prod_vault"), ProviderRef::from("keyring")]),
+        Some(vec![
+            ProviderRef::from("prod_vault"),
+            ProviderRef::from("keyring")
+        ]),
         "API_KEY should inherit production profile defaults"
     );
 
@@ -3994,6 +4063,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
             required: None,
             default: None,
             providers: None,
+            groups: None,
             as_path: None,
             secret_type: Some("password".to_string()),
             generate: Some(crate::config::GenerateConfig::Bool(true)),
@@ -4015,6 +4085,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
             required: Some(true),
             default: None,
             providers: None,
+            groups: None,
             as_path: None,
             ..Default::default()
         },
@@ -4035,6 +4106,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
         },
         profiles,
         providers: None,
+        groups: None,
     };
 
     let spec = Secrets::new(config, None, Some("production".to_string()), None);
@@ -4092,6 +4164,7 @@ fn build_chain_scenario(
             profiles
         },
         providers: None,
+        groups: None,
     };
 
     let mut providers_map = HashMap::new();
@@ -4315,6 +4388,7 @@ fn config_with_project_aliases(aliases: &[(&str, &str)]) -> Config {
         },
         profiles: HashMap::new(),
         providers: Some(provider_config_map(aliases)),
+        groups: None,
     }
 }
 
@@ -4361,6 +4435,7 @@ fn config_with_project_alias_secret(
         },
         profiles,
         providers: Some(provider_config_map(&[(alias, uri)])),
+        groups: None,
     }
 }
 
@@ -4845,7 +4920,9 @@ fn test_provider_ref_serde_roundtrip() {
         }),
     ];
 
-    let wrapper = TestSecret { providers: refs.clone() };
+    let wrapper = TestSecret {
+        providers: refs.clone(),
+    };
     let serialized = toml::to_string(&wrapper).unwrap();
     let deserialized: TestSecret = toml::from_str(&serialized).unwrap();
     assert_eq!(refs, deserialized.providers, "Full roundtrip failed");
@@ -4949,12 +5026,10 @@ fn test_provider_config_uri_and_requires() {
     assert!(structured.depends_on().is_none()); // empty map → None
 
     let mut deps: Vec<ProviderDependency> = Vec::new();
-    deps.push(
-        
-        ProviderDependency { as_name: None, 
-            secret: "SOME_SECRET".into(),
-        },
-    );
+    deps.push(ProviderDependency {
+        as_name: None,
+        secret: "SOME_SECRET".into(),
+    });
     let structured_with_reqs = ProviderConfig::Structured(ProviderConfigStructured {
         uri: "op://vault".into(),
         depends_on: deps,
@@ -4962,10 +5037,7 @@ fn test_provider_config_uri_and_requires() {
     assert_eq!(structured_with_reqs.uri(), "op://vault");
     let deps_ref = structured_with_reqs.depends_on().unwrap();
     assert_eq!(deps_ref.len(), 1);
-    assert_eq!(
-        deps_ref[0].secret,
-        "SOME_SECRET"
-    );
+    assert_eq!(deps_ref[0].secret, "SOME_SECRET");
 }
 
 // ── SecretRequest from ProviderRef ────────────────────────────────────────
@@ -5021,9 +5093,13 @@ fn test_resolve_provider_requirements_empty_for_alias() {
         profiles: HashMap::new(),
         providers: Some({
             let mut m = HashMap::new();
-            m.insert("my_alias".into(), ProviderConfig::Alias("keyring://".into()));
+            m.insert(
+                "my_alias".into(),
+                ProviderConfig::Alias("keyring://".into()),
+            );
             m
         }),
+        groups: None,
     };
     let spec = Secrets::new(config, None, None, None);
     let result = spec
@@ -5053,6 +5129,7 @@ fn test_resolve_provider_requirements_empty_for_structured_no_requires() {
             );
             m
         }),
+        groups: None,
     };
     let spec = Secrets::new(config, None, None, None);
     let result = spec
@@ -5076,6 +5153,7 @@ fn test_resolve_provider_requirements_empty_for_missing_alias() {
             m.insert("known".into(), ProviderConfig::Alias("keyring://".into()));
             m
         }),
+        groups: None,
     };
     let spec = Secrets::new(config, None, None, None);
     let result = spec
@@ -5088,12 +5166,10 @@ fn test_resolve_provider_requirements_empty_for_missing_alias() {
 fn test_resolve_provider_requirements_errors_when_secret_not_defined() {
     // Structured provider that requires a secret not in secretspec → error.
     let mut deps: Vec<ProviderDependency> = Vec::new();
-    deps.push(
-        ProviderDependency {
-            as_name: None,
-            secret: "MISSING_SECRET".into(),
-        },
-    );
+    deps.push(ProviderDependency {
+        as_name: None,
+        secret: "MISSING_SECRET".into(),
+    });
     let config = Config {
         project: Project {
             name: "req-test".into(),
@@ -5112,6 +5188,7 @@ fn test_resolve_provider_requirements_errors_when_secret_not_defined() {
             );
             m
         }),
+        groups: None,
     };
     let spec = Secrets::new(config, None, None, None);
     let err = spec
@@ -5244,8 +5321,8 @@ fn test_onepassword_item_without_sections() {
 
 #[test]
 fn test_get_with_request_default_delegates_to_get_with_request_key() {
-    use crate::provider::Provider as _;
     use crate::SecretRequest;
+    use crate::provider::Provider as _;
     use secrecy::SecretString;
 
     struct SpyProvider {
@@ -5254,38 +5331,68 @@ fn test_get_with_request_default_delegates_to_get_with_request_key() {
 
     impl SpyProvider {
         fn new() -> Self {
-            Self { get_calls: std::sync::Mutex::new(Vec::new()) }
+            Self {
+                get_calls: std::sync::Mutex::new(Vec::new()),
+            }
         }
     }
 
     impl crate::provider::Provider for SpyProvider {
-        fn get(&self, project: &str, key: &str, profile: &str) -> crate::Result<Option<SecretString>> {
-            self.get_calls.lock().unwrap().push((project.into(), key.into(), profile.into()));
+        fn get(
+            &self,
+            project: &str,
+            key: &str,
+            profile: &str,
+        ) -> crate::Result<Option<SecretString>> {
+            self.get_calls
+                .lock()
+                .unwrap()
+                .push((project.into(), key.into(), profile.into()));
             Ok(Some(SecretString::new("dummy".into())))
         }
         fn set(&self, _: &str, _: &str, _: &SecretString, _: &str) -> crate::Result<()> {
-            Err(crate::SecretSpecError::ProviderOperationFailed("nope".into()))
+            Err(crate::SecretSpecError::ProviderOperationFailed(
+                "nope".into(),
+            ))
         }
-        fn allows_set(&self) -> bool { false }
-        fn name(&self) -> &'static str { "spy" }
-        fn uri(&self) -> String { "spy://".into() }
+        fn allows_set(&self) -> bool {
+            false
+        }
+        fn name(&self) -> &'static str {
+            "spy"
+        }
+        fn uri(&self) -> String {
+            "spy://".into()
+        }
     }
 
     let spy = SpyProvider::new();
-    let request = SecretRequest { path: Some(vec!["Section".into()]), key: Some("field".into()) };
-    let result = spy.get_with_request("proj", "MY_KEY", "default", &request).unwrap();
+    let request = SecretRequest {
+        path: Some(vec!["Section".into()]),
+        key: Some("field".into()),
+    };
+    let result = spy
+        .get_with_request("proj", "MY_KEY", "default", &request)
+        .unwrap();
     assert_eq!(result.unwrap().expose_secret(), "dummy");
 
     let calls = spy.get_calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0], ("proj".into(), "field".into(), "default".into()), "delegated using request key hint");
+    assert_eq!(
+        calls[0],
+        ("proj".into(), "field".into(), "default".into()),
+        "delegated using request key hint"
+    );
 }
 
 // ── ProviderDependency serde roundtrip ────────────────────────────────────
 
 #[test]
 fn test_provider_requirement_serde() {
-    let req = ProviderDependency { as_name: None,  secret: "OP_TOKEN".into() };
+    let req = ProviderDependency {
+        as_name: None,
+        secret: "OP_TOKEN".into(),
+    };
     assert_eq!(req.effective_as(), "OP_TOKEN");
     let json = serde_json::to_string(&req).unwrap();
     let round: ProviderDependency = serde_json::from_str(&json).unwrap();
@@ -5335,9 +5442,15 @@ secret = "B"
 
 #[test]
 fn test_provider_config_structured_empty_requires_serialization() {
-    let config = ProviderConfigStructured { uri: "keyring://".into(), depends_on: Vec::new() };
+    let config = ProviderConfigStructured {
+        uri: "keyring://".into(),
+        depends_on: Vec::new(),
+    };
     let json = serde_json::to_string(&config).unwrap();
-    assert!(!json.contains("requires"), "empty requires skipped in serialization");
+    assert!(
+        !json.contains("requires"),
+        "empty requires skipped in serialization"
+    );
 
     let round: ProviderConfigStructured = serde_json::from_str(&json).unwrap();
     assert_eq!(round.uri, "keyring://");
@@ -5383,6 +5496,7 @@ key = "custom_token"
 #[test]
 fn test_resolve_provider_requirements_falls_back_to_default_provider() {
     let temp_dir = TempDir::new().unwrap();
+    let original_dir = std::env::current_dir().unwrap();
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
     std::fs::write(
@@ -5421,6 +5535,8 @@ OP_TOKEN = { description = "Auth token", required = true }
 
     let secrets = Secrets::load().unwrap();
     let result = secrets.resolve_provider_requirements("needs-tok", "default");
+    std::env::set_current_dir(original_dir).unwrap();
+
     let resolved = result.expect("should resolve requirement when env var is set");
     assert!(!resolved.is_empty(), "should have resolved values");
 }
@@ -5429,13 +5545,11 @@ OP_TOKEN = { description = "Auth token", required = true }
 
 #[test]
 fn test_onepassword_env_config_desktop_auth() {
-    use crate::provider::onepassword_env::OnePasswordEnvConfig;
     use crate::provider::ProviderUrl;
+    use crate::provider::onepassword_env::OnePasswordEnvConfig;
     use url::Url;
 
-    let url = ProviderUrl::new(
-        Url::parse("onepassword+env://blgexucrwfr2dtsxe2q4uu7dp4").unwrap()
-    );
+    let url = ProviderUrl::new(Url::parse("onepassword+env://blgexucrwfr2dtsxe2q4uu7dp4").unwrap());
     let config = OnePasswordEnvConfig::try_from(&url).unwrap();
     assert_eq!(config.environment_id, "blgexucrwfr2dtsxe2q4uu7dp4");
     assert!(config.account.is_none());
@@ -5444,13 +5558,12 @@ fn test_onepassword_env_config_desktop_auth() {
 
 #[test]
 fn test_onepassword_env_config_desktop_with_account() {
-    use crate::provider::onepassword_env::OnePasswordEnvConfig;
     use crate::provider::ProviderUrl;
+    use crate::provider::onepassword_env::OnePasswordEnvConfig;
     use url::Url;
 
-    let url = ProviderUrl::new(
-        Url::parse("onepassword+env://work@blgexucrwfr2dtsxe2q4uu7dp4").unwrap()
-    );
+    let url =
+        ProviderUrl::new(Url::parse("onepassword+env://work@blgexucrwfr2dtsxe2q4uu7dp4").unwrap());
     let config = OnePasswordEnvConfig::try_from(&url).unwrap();
     assert_eq!(config.environment_id, "blgexucrwfr2dtsxe2q4uu7dp4");
     assert_eq!(config.account.as_deref(), Some("work"));
@@ -5459,13 +5572,11 @@ fn test_onepassword_env_config_desktop_with_account() {
 
 #[test]
 fn test_onepassword_env_config_token_in_url() {
-    use crate::provider::onepassword_env::OnePasswordEnvConfig;
     use crate::provider::ProviderUrl;
+    use crate::provider::onepassword_env::OnePasswordEnvConfig;
     use url::Url;
 
-    let url = ProviderUrl::new(
-        Url::parse("onepassword+env+token://ops_abc123@xyz789").unwrap()
-    );
+    let url = ProviderUrl::new(Url::parse("onepassword+env+token://ops_abc123@xyz789").unwrap());
     let config = OnePasswordEnvConfig::try_from(&url).unwrap();
     assert_eq!(config.environment_id, "xyz789");
     assert!(config.account.is_none());
@@ -5474,22 +5585,24 @@ fn test_onepassword_env_config_token_in_url() {
 
 #[test]
 fn test_onepassword_env_config_token_as_username() {
-    use crate::provider::onepassword_env::OnePasswordEnvConfig;
     use crate::provider::ProviderUrl;
+    use crate::provider::onepassword_env::OnePasswordEnvConfig;
     use url::Url;
 
-    let url = ProviderUrl::new(
-        Url::parse("onepassword+env+token://ops_token_only@env-id").unwrap()
-    );
+    let url =
+        ProviderUrl::new(Url::parse("onepassword+env+token://ops_token_only@env-id").unwrap());
     let config = OnePasswordEnvConfig::try_from(&url).unwrap();
     assert_eq!(config.environment_id, "env-id");
-    assert_eq!(config.service_account_token.as_deref(), Some("ops_token_only"));
+    assert_eq!(
+        config.service_account_token.as_deref(),
+        Some("ops_token_only")
+    );
 }
 
 #[test]
 fn test_onepassword_env_config_rejects_invalid_scheme() {
-    use crate::provider::onepassword_env::OnePasswordEnvConfig;
     use crate::provider::ProviderUrl;
+    use crate::provider::onepassword_env::OnePasswordEnvConfig;
     use url::Url;
 
     let url = ProviderUrl::new(Url::parse("onepassword://vault").unwrap());
@@ -5501,8 +5614,8 @@ fn test_onepassword_env_config_rejects_invalid_scheme() {
 
 #[test]
 fn test_onepassword_env_config_missing_environment_id() {
-    use crate::provider::onepassword_env::OnePasswordEnvConfig;
     use crate::provider::ProviderUrl;
+    use crate::provider::onepassword_env::OnePasswordEnvConfig;
     use url::Url;
 
     let url = ProviderUrl::new(Url::parse("onepassword+env://").unwrap());
@@ -5514,8 +5627,8 @@ fn test_onepassword_env_config_missing_environment_id() {
 
 #[test]
 fn test_onepassword_env_provider_read_only() {
-    use crate::provider::onepassword_env::{OnePasswordEnvConfig, OnePasswordEnvProvider};
     use crate::provider::Provider;
+    use crate::provider::onepassword_env::{OnePasswordEnvConfig, OnePasswordEnvProvider};
 
     let config = OnePasswordEnvConfig {
         environment_id: "test-env-id".into(),
@@ -5541,8 +5654,8 @@ fn test_onepassword_env_provider_registered() {
 
 #[test]
 fn test_onepassword_env_provider_uri_formatting() {
-    use crate::provider::onepassword_env::{OnePasswordEnvConfig, OnePasswordEnvProvider};
     use crate::provider::Provider;
+    use crate::provider::onepassword_env::{OnePasswordEnvConfig, OnePasswordEnvProvider};
 
     // Desktop auth, no account
     let config = OnePasswordEnvConfig {
@@ -5583,8 +5696,8 @@ fn test_onepassword_env_provider_uri_formatting() {
 
 #[test]
 fn test_onepassword_env_provider_name_and_set() {
-    use crate::provider::onepassword_env::{OnePasswordEnvConfig, OnePasswordEnvProvider};
     use crate::provider::Provider;
+    use crate::provider::onepassword_env::{OnePasswordEnvConfig, OnePasswordEnvProvider};
 
     let config = OnePasswordEnvConfig {
         environment_id: "test".into(),
@@ -5596,7 +5709,8 @@ fn test_onepassword_env_provider_name_and_set() {
     assert!(!provider.allows_set());
 
     let result = provider.set(
-        "proj", "KEY",
+        "proj",
+        "KEY",
         &secrecy::SecretString::new("val".into()),
         "default",
     );
@@ -5642,7 +5756,9 @@ mod provider_dependency_injection_pipeline_tests {
 
     impl PipelineDependencyProvider {
         fn new(_config: PipelineDependencyConfig) -> Self {
-            Self { dependencies: Vec::new() }
+            Self {
+                dependencies: Vec::new(),
+            }
         }
     }
 
@@ -5678,12 +5794,7 @@ mod provider_dependency_injection_pipeline_tests {
             "pipeline-dependency-test://".to_string()
         }
 
-        fn get(
-            &self,
-            _project: &str,
-            _key: &str,
-            _profile: &str,
-        ) -> Result<Option<SecretString>> {
+        fn get(&self, _project: &str, _key: &str, _profile: &str) -> Result<Option<SecretString>> {
             let rendered = self
                 .dependencies
                 .iter()
@@ -5742,7 +5853,57 @@ SOURCE_TOKEN = {{ providers = ["source"] }}
         assert_eq!(resolved.expose_secret(), "RENAMED_TOKEN=resolved-token");
         assert_eq!(
             CAPTURED_DEPENDENCIES.lock().unwrap().as_slice(),
-            &[vec![("RENAMED_TOKEN".to_string(), "resolved-token".to_string())]]
+            &[vec![(
+                "RENAMED_TOKEN".to_string(),
+                "resolved-token".to_string()
+            )]]
         );
     }
+}
+
+#[test]
+fn test_ensure_secrets_public_wrapper_delegates_to_unfiltered_validation() {
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "TOKEN".to_string(),
+        Secret {
+            description: Some("token".to_string()),
+            default: Some("value".to_string()),
+            ..Default::default()
+        },
+    );
+
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
+
+    let spec = Secrets::new(
+        Config {
+            project: Project {
+                name: "ensure-wrapper".to_string(),
+                revision: "1.0".to_string(),
+                extends: None,
+            },
+            profiles,
+            providers: None,
+            groups: None,
+        },
+        Some(GlobalConfig {
+            defaults: GlobalDefaults {
+                provider: Some("env".to_string()),
+                profile: None,
+                providers: None,
+            },
+        }),
+        None,
+        None,
+    );
+
+    let validated = spec.ensure_secrets(None, None, false).unwrap();
+    assert_eq!(validated.resolved.secrets["TOKEN"].expose_secret(), "value");
 }

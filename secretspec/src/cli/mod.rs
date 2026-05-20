@@ -73,6 +73,12 @@ enum Commands {
         /// Profile to use
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
         profile: Option<String>,
+        /// Secret names to inject. Can be repeated or comma-separated.
+        #[arg(long = "include")]
+        include: Vec<String>,
+        /// Secret groups to inject. Can be repeated or comma-separated.
+        #[arg(long = "group")]
+        group: Vec<String>,
         /// Command and arguments to run
         #[arg(trailing_var_arg = true)]
         command: Vec<String>,
@@ -322,6 +328,7 @@ pub fn main() -> Result<()> {
                 },
                 profiles,
                 providers: None,
+                groups: None,
             };
             let mut content = generate_toml_with_comments(&project_config).into_diagnostic()?;
 
@@ -572,6 +579,8 @@ pub fn main() -> Result<()> {
             command,
             provider,
             profile,
+            include,
+            group,
         } => {
             let mut app = load_secrets(&cli.file)?;
             if let Some(p) = provider {
@@ -580,7 +589,7 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
-            app.run(command)
+            app.run_filtered(command, &include, &group)
                 .into_diagnostic()
                 .wrap_err("Failed to run command")?;
             Ok(())

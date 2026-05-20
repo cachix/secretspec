@@ -171,6 +171,8 @@ secretspec run [OPTIONS] -- <COMMAND>
 **Options:**
 - `-p, --provider <PROVIDER>` - Provider backend to use
 - `-P, --profile <PROFILE>` - Profile to use
+- `--include <SECRET>` - Only inject named secrets. Repeatable and comma-aware.
+- `--group <GROUP>` - Only inject secrets in declared groups. Repeatable and comma-aware.
 
 **Examples:**
 ```bash
@@ -180,6 +182,12 @@ $ secretspec run --profile production -- npm run deploy
 # Verify secrets are injected
 $ secretspec run -- env | grep DATABASE_URL
 DATABASE_URL=postgresql://localhost/mydb
+
+# Run with only selected secrets injected
+$ secretspec run --include DATABASE_URL --include API_KEY -- npm test
+
+# Run with all secrets in the "web" group injected
+$ secretspec run --group web -- npm start
 ```
 
 :::note[Shell Variable Expansion]

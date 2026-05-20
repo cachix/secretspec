@@ -209,12 +209,19 @@ pub struct Config {
     /// (`~/.config/secretspec/config.toml`), so teams can check vault mappings
     /// into version control instead of replicating them on every machine.
     /// Can be a simple alias (`"keyring://"`) or a structured table with
-    /// dependency declarations (`{ uri = "…", requires = { … } }`).
+    /// dependency declarations (`{ uri = "…", depends_on = [ … ] }`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub providers: Option<HashMap<String, ProviderConfig>>,
+    /// Declared secret groups. Secrets may only reference groups declared here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groups: Option<HashMap<String, String>>,
 }
 
 impl Config {
+    pub(crate) fn declared_groups(&self) -> Option<&HashMap<String, String>> {
+        self.groups.as_ref()
+    }
+
     /// Validate the configuration.
     ///
     /// Ensures that:
@@ -244,6 +251,28 @@ impl Config {
             profile.validate().map_err(|e| {
                 ParseError::Validation(format!("Profile '{}': {}", profile_name, e))
             })?;
+
+            for (secret_name, secret) in &profile.secrets {
+                if let Some(groups) = &secret.groups {
+                    let declared = self.declared_groups().ok_or_else(|| {
+                        ParseError::Validation(format!(
+                            "Secret '{}.{}' references groups but no top-level [groups] table is declared",
+                            profile_name, secret_name
+                        ))
+                    })?;
+
+                    for group in groups {
+                        if declared.contains_key(group) {
+                            continue;
+                        }
+
+                        return Err(ParseError::Validation(format!(
+                            "Secret '{}.{}' references undeclared group '{}'",
+                            profile_name, secret_name, group
+                        )));
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -281,6 +310,14 @@ impl Config {
             let merged = self.providers.get_or_insert_with(HashMap::new);
             for (alias, config) in other_providers {
                 merged.entry(alias).or_insert(config);
+            }
+        }
+
+        // Merge group declarations — current entries win.
+        if let Some(other_groups) = other.groups {
+            let merged = self.groups.get_or_insert_with(HashMap::new);
+            for (name, description) in other_groups {
+                merged.entry(name).or_insert(description);
             }
         }
     }
@@ -579,6 +616,10 @@ pub struct Secret {
     /// Optional default value if the secret is not provided
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+    /// Optional list of group names this secret belongs to.
+    /// Groups must be declared in the top-level `[groups]` table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<String>>,
     /// Optional list of provider references for retrieving this secret.
     /// Providers are tried in order until one has the secret.
     /// If not specified, uses the profile defaults.providers or global provider.

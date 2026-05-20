@@ -29,6 +29,8 @@ Both features are purely additive at the TOML level — every existing
 
 ### Added
 
+- **Filtered `secretspec run` injection.** `secretspec run` now accepts repeatable, comma-aware `--include <SECRET>` and `--group <GROUP>` filters so commands can receive only the selected secrets. Group filters use declared top-level `[groups]`; profile-specific `groups = [...]` replaces inherited default groups when set, and filtered runs only validate/resolve selected secrets plus any provider dependencies they require.
+
 - **Provider-relative secret locations.** Secrets in `providers` lists now
   accept detailed references with optional `path` and `key` fields:
 

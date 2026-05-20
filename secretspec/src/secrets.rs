@@ -1,8 +1,10 @@
 //! Core secrets management functionality
 
-use crate::config::{Config, GlobalConfig, Profile, ProviderDependency, ProviderRef, Resolved, SecretRequest};
+use crate::config::{
+    Config, GlobalConfig, Profile, ProviderDependency, ProviderRef, Resolved, SecretRequest,
+};
 use crate::error::{Result, SecretSpecError};
-use crate::provider::{provider_from_spec_with_dependencies, Provider as ProviderTrait};
+use crate::provider::{Provider as ProviderTrait, provider_from_spec_with_dependencies};
 use crate::validation::{ValidatedSecrets, ValidationErrors};
 use colored::Colorize;
 use secrecy::{ExposeSecret, SecretString};
@@ -334,6 +336,7 @@ impl Secrets {
                         .clone()
                         .or_else(|| default.default.clone())
                         .or_else(|| current_defaults.and_then(|d| d.default.clone())),
+                    groups: current.groups.clone().or_else(|| default.groups.clone()),
                     providers: current
                         .providers
                         .clone()
@@ -361,6 +364,7 @@ impl Secrets {
                         .default
                         .clone()
                         .or_else(|| current_defaults.and_then(|d| d.default.clone())),
+                    groups: secret.groups.clone(),
                     providers: secret
                         .providers
                         .clone()
@@ -413,11 +417,7 @@ impl Secrets {
         provider_from_spec_with_dependencies(&uri, &dependencies)
     }
 
-    fn provider_from_uri(
-        &self,
-        uri: String,
-        profile_name: &str,
-    ) -> Result<Box<dyn ProviderTrait>> {
+    fn provider_from_uri(&self, uri: String, profile_name: &str) -> Result<Box<dyn ProviderTrait>> {
         match self.alias_for_provider_uri(&uri) {
             Some(alias) => self.provider_from_alias(&alias, uri, profile_name),
             None => Box::<dyn ProviderTrait>::try_from(uri),
@@ -437,11 +437,7 @@ impl Secrets {
         alias: &str,
         profile_name: &str,
     ) -> Result<Vec<(ProviderDependency, SecretString)>> {
-        let config = self
-            .config
-            .providers
-            .as_ref()
-            .and_then(|m| m.get(alias));
+        let config = self.config.providers.as_ref().and_then(|m| m.get(alias));
 
         let dependencies = match config {
             Some(crate::config::ProviderConfig::Structured(s)) => &s.depends_on,
@@ -658,7 +654,8 @@ impl Secrets {
         }
         if let Some(first_ref) = secret_config.providers.as_ref().and_then(|p| p.first()) {
             let alias = first_ref.provider_alias().to_string();
-            let provider_uris = self.resolve_provider_aliases(Some(std::slice::from_ref(&alias)))?;
+            let provider_uris =
+                self.resolve_provider_aliases(Some(std::slice::from_ref(&alias)))?;
             let uri = provider_uris
                 .and_then(|uris| uris.into_iter().next())
                 .ok_or_else(|| {
@@ -1030,10 +1027,20 @@ impl Secrets {
         profile: Option<String>,
         interactive: bool,
     ) -> Result<ValidatedSecrets> {
+        self.ensure_secrets_selected(provider_arg, profile, interactive, None)
+    }
+
+    fn ensure_secrets_selected(
+        &self,
+        provider_arg: Option<String>,
+        profile: Option<String>,
+        interactive: bool,
+        selected_names: Option<&HashSet<String>>,
+    ) -> Result<ValidatedSecrets> {
         let profile_display = self.resolve_profile_name(profile.as_deref());
 
         // First validate to see what's missing
-        let validation_result = self.validate()?;
+        let validation_result = self.validate_selected(selected_names)?;
 
         match validation_result {
             Ok(valid_secrets) => Ok(valid_secrets),
@@ -1604,6 +1611,13 @@ impl Secrets {
     /// }
     /// ```
     pub fn validate(&self) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
+        self.validate_selected(None)
+    }
+
+    fn validate_selected(
+        &self,
+        selected_names: Option<&HashSet<String>>,
+    ) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
         let mut secrets: HashMap<String, SecretString> = HashMap::new();
         let mut missing_required = Vec::new();
         let mut missing_optional = Vec::new();
@@ -1613,7 +1627,10 @@ impl Secrets {
         let profile_name = self.resolve_profile_name(None);
         let profile = self.resolve_profile(Some(&profile_name))?;
 
-        let all_secrets: Vec<(String, crate::config::Secret)> = profile.into_iter().collect();
+        let all_secrets: Vec<(String, crate::config::Secret)> = profile
+            .into_iter()
+            .filter(|(name, _)| selected_names.is_none_or(|selected| selected.contains(name)))
+            .collect();
 
         let override_uri = self.resolve_provider_override(None);
 
@@ -1809,6 +1826,84 @@ impl Secrets {
         }
     }
 
+    fn split_filter_values(values: &[String]) -> Vec<String> {
+        values
+            .iter()
+            .flat_map(|value| value.split(','))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn invalid_input(message: impl Into<String>) -> SecretSpecError {
+        SecretSpecError::Io(io::Error::new(io::ErrorKind::InvalidInput, message.into()))
+    }
+
+    fn selected_secret_names(
+        &self,
+        includes: &[String],
+        groups: &[String],
+    ) -> Result<Option<HashSet<String>>> {
+        let include_names = Self::split_filter_values(includes);
+        let group_names = Self::split_filter_values(groups);
+
+        if include_names.is_empty() && group_names.is_empty() {
+            return Ok(None);
+        }
+
+        let profile_name = self.resolve_profile_name(None);
+        let profile = self.resolve_profile(Some(&profile_name))?;
+        let mut selected = HashSet::new();
+
+        for name in include_names {
+            if !profile.secrets.contains_key(&name) {
+                return Err(Self::invalid_input(format!(
+                    "Included secret '{}' is not defined in profile '{}'",
+                    name, profile_name
+                )));
+            }
+            selected.insert(name);
+        }
+
+        for group in group_names {
+            if !self
+                .config
+                .declared_groups()
+                .is_some_and(|declared| declared.contains_key(&group))
+            {
+                return Err(Self::invalid_input(format!(
+                    "Group '{}' is not declared in the top-level [groups] table",
+                    group
+                )));
+            }
+
+            let mut matched = false;
+            for (name, secret) in &profile.secrets {
+                let effective = self
+                    .resolve_secret_config(name, Some(&profile_name))
+                    .unwrap_or_else(|| secret.clone());
+                if effective
+                    .groups
+                    .as_ref()
+                    .is_some_and(|groups| groups.iter().any(|candidate| candidate == &group))
+                {
+                    matched = true;
+                    selected.insert(name.clone());
+                }
+            }
+
+            if !matched {
+                return Err(Self::invalid_input(format!(
+                    "Group '{}' does not match any secrets in profile '{}'",
+                    group, profile_name
+                )));
+            }
+        }
+
+        Ok(Some(selected))
+    }
+
     /// Runs a command with secrets injected as environment variables
     ///
     /// This method validates that all required secrets are present, then runs
@@ -1845,12 +1940,40 @@ impl Secrets {
         std::process::exit(exit_code);
     }
 
+    pub fn run_filtered(
+        &self,
+        command: Vec<String>,
+        includes: &[String],
+        groups: &[String],
+    ) -> Result<()> {
+        let exit_code = self.run_command_filtered(command, includes, groups)?;
+        std::process::exit(exit_code);
+    }
+
     /// Runs a command with secrets injected and returns its exit code.
     ///
     /// Splitting this out from [`Self::run`] ensures that any temporary files
     /// backing `as_path` secrets are dropped (and removed from disk) before
     /// `std::process::exit` is called — `exit` does not run destructors.
     pub(crate) fn run_command(&self, command: Vec<String>) -> Result<i32> {
+        self.run_command_with_selection(command, None)
+    }
+
+    pub(crate) fn run_command_filtered(
+        &self,
+        command: Vec<String>,
+        includes: &[String],
+        groups: &[String],
+    ) -> Result<i32> {
+        let selected = self.selected_secret_names(includes, groups)?;
+        self.run_command_with_selection(command, selected.as_ref())
+    }
+
+    fn run_command_with_selection(
+        &self,
+        command: Vec<String>,
+        selected_names: Option<&HashSet<String>>,
+    ) -> Result<i32> {
         if command.is_empty() {
             return Err(SecretSpecError::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -1861,7 +1984,7 @@ impl Secrets {
         // Ensure all secrets are available (will error out if missing).
         // `validation_result` owns the temp files for `as_path` secrets and
         // must stay alive until the child process has terminated.
-        let validation_result = self.ensure_secrets(None, None, false)?;
+        let validation_result = self.ensure_secrets_selected(None, None, false, selected_names)?;
 
         let mut env_vars = env::vars().collect::<HashMap<_, _>>();
         for (key, secret) in &validation_result.resolved.secrets {

@@ -46,6 +46,7 @@ Each secret variable is defined as a table with the following fields:
 | `required` | boolean | No* | Whether the value must be provided (default: true) |
 | `default` | string | No** | Default value if not provided |
 | `providers` | array[string or table] | No | List of provider references (see [Provider References](#provider-references)) |
+| `groups` | array[string] | No | Declared groups this secret belongs to (see [Secret Groups](#secret-groups)) |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
 | `type` | string | No*** | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
 | `generate` | boolean or table | No*** | Enable auto-generation when secret is missing |
@@ -63,6 +64,11 @@ name = "web-api"
 revision = "1.0"
 extends = ["../shared/secretspec.toml"]  # Optional inheritance
 
+# Groups used by filtered `secretspec run --group ...`
+[groups]
+web = "Secrets needed by the web app"
+worker = "Secrets needed by background workers"
+
 # Provider aliases used by profile provider chains
 [providers]
 prod_vault = "onepassword://vault/Production"
@@ -74,7 +80,7 @@ env = "env://"
 [profiles.default]
 APP_NAME = { description = "Application name", required = false, default = "MyApp" }
 LOG_LEVEL = { description = "Log verbosity", required = false, default = "info" }
-GITHUB_TOKEN = { description = "GitHub token", required = true, providers = ["env"] }
+GITHUB_TOKEN = { description = "GitHub token", required = true, groups = ["web", "worker"], providers = ["env"] }
 
 # Development profile - extends default
 [profiles.development]
@@ -135,6 +141,28 @@ $ secretspec config provider remove prod_vault
 ```
 
 The CLI commands operate on the user-global config only — edit `secretspec.toml` by hand to change project-level aliases.
+
+### Secret Groups
+
+Declare allowed groups in a top-level `[groups]` table, then attach secrets with `groups = [...]`:
+
+```toml
+[groups]
+web = "Secrets needed by the web application"
+worker = "Secrets needed by background workers"
+
+[profiles.default]
+DATABASE_URL = { description = "Database URL", groups = ["web", "worker"] }
+STRIPE_KEY = { description = "Stripe API key", groups = ["web"] }
+```
+
+Groups power filtered runs:
+
+```bash
+secretspec run --group web -- npm start
+```
+
+Secrets may only reference declared groups. When a profile overrides a secret, omitted `groups` inherit from `[profiles.default]`; explicitly setting `groups = [...]` replaces the default groups rather than merging them.
 
 ### Provider References with Path and Key
 

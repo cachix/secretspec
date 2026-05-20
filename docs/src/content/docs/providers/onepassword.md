@@ -64,7 +64,32 @@ onepassword+token://[token@]vault[/path]
 - `account`: Optional account shorthand
 - `vault`: Target vault name (defaults to "Private")
 - `token`: Service account token
-- `path`: Reserved for future use
+- `path`: Optional provider-relative item root used by object-form provider refs
+
+### Provider-relative paths
+
+For object-form provider refs, `path` is interpreted relative to the 1Password vault:
+
+```toml
+[providers]
+op = "onepassword://Development"
+
+[profiles.default.GITHUB_TOKEN]
+providers = [{ provider = "op", path = ["dotfiles", "forges"] }]
+```
+
+The first path segment (`dotfiles`) is the 1Password item title. The optional
+second segment (`forges`) is the section label inside that item. The field label
+is the SecretSpec secret name (`GITHUB_TOKEN`) unless the ref supplies an explicit
+`key`.
+
+```toml
+[profiles.default.CRATES_TOKEN]
+providers = [{ provider = "op", path = ["dotfiles", "registries"], key = "CARGO_REGISTRY_TOKEN" }]
+```
+
+If an item, section, or field is missing, SecretSpec treats that provider as not
+having the secret and continues to any fallback providers.
 
 ### Examples
 

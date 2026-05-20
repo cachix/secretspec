@@ -1,5 +1,5 @@
-use crate::provider::{Provider, ProviderUrl};
 use crate::config::SecretRequest;
+use crate::provider::{Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -766,43 +766,32 @@ impl Provider for OnePasswordProvider {
             return self.get(project, storage_key, profile);
         }
 
-        // Shared-item lookup: item title = secretspec/{project}/{profile}
-        // (all secrets for this project/profile live in one shared item).
+        // Provider-relative lookup for a shared OnePassword item. The first
+        // path segment is the item title, and the optional second segment is
+        // the section label inside that item:
+        // `{ provider = "op", path = ["dotfiles", "forges"] }`.
         let vault = self.get_vault_name(profile);
-        let folder_prefix = self
-            .config
-            .folder_prefix
-            .as_deref()
-            .unwrap_or("secretspec/{project}/{profile}/{key}");
-        let item_name = folder_prefix
-            .replace("{project}", project)
-            .replace("{profile}", profile)
-            .replace("/{key}", "");
+        let item_name = path_segments[0].as_str();
 
         // The key to look for: request.key if set, otherwise the secret name.
         let field_key = request.key.as_deref().unwrap_or(key);
-        // The section to match (first path segment).
-        let section_name = &path_segments[0];
+        let section_name = path_segments.get(1).map(String::as_str);
 
         tracing::debug!(
             item = %item_name,
             vault = %vault,
-            section = %section_name,
+            section = ?section_name,
             field = %field_key,
             "reading 1Password field via provider-relative request"
         );
 
         let args = vec![
-            "item", "get", &item_name,
-            "--vault", &vault,
-            "--format", "json",
+            "item", "get", item_name, "--vault", &vault, "--format", "json",
         ];
 
         let output = match self.execute_op_command(&args, None) {
             Ok(output) => output,
-            Err(SecretSpecError::ProviderOperationFailed(msg))
-                if msg.contains("isn't an item") =>
-            {
+            Err(SecretSpecError::ProviderOperationFailed(msg)) if msg.contains("isn't an item") => {
                 return Ok(None);
             }
             Err(e) => return Err(e),
@@ -820,10 +809,12 @@ impl Provider for OnePasswordProvider {
 
         // Find field matching section name and field key.
         for field in &item.fields {
-            let section_match = field.section.as_ref().and_then(|s| s.label.as_deref())
-                == Some(section_name);
+            let section_match = section_name.is_none_or(|section_name| {
+                field.section.as_ref().and_then(|s| s.label.as_deref()) == Some(section_name)
+            });
             let label_match = field.label.as_deref() == Some(field_key);
-            if section_match && label_match
+            if section_match
+                && label_match
                 && let Some(ref value) = field.value
             {
                 return Ok(Some(SecretString::new(value.clone().into())));
@@ -833,7 +824,7 @@ impl Provider for OnePasswordProvider {
         tracing::debug!(
             item = %item_name,
             vault = %vault,
-            section = %section_name,
+            section = ?section_name,
             field = %field_key,
             "1Password item did not contain requested section/field"
         );
@@ -1171,8 +1162,14 @@ printf '{{"fields":[{{"id":"value","type":"CONCEALED","label":"value","value":"%
             ])
             .unwrap();
 
-        let first = provider.get("project", "API_KEY", "default").unwrap().unwrap();
-        let second = provider.get("project", "API_KEY", "default").unwrap().unwrap();
+        let first = provider
+            .get("project", "API_KEY", "default")
+            .unwrap()
+            .unwrap();
+        let second = provider
+            .get("project", "API_KEY", "default")
+            .unwrap()
+            .unwrap();
 
         assert_eq!(first.expose_secret(), "dependency-token");
         assert_eq!(second.expose_secret(), "dependency-token");
@@ -1202,7 +1199,10 @@ printf '{{"fields":[{{"id":"value","type":"CONCEALED","label":"value","value":"%
             )])
             .unwrap();
 
-        let value = provider.get("project", "API_KEY", "default").unwrap().unwrap();
+        let value = provider
+            .get("project", "API_KEY", "default")
+            .unwrap()
+            .unwrap();
 
         assert_eq!(value.expose_secret(), "uri-token");
         assert_eq!(fs::read_to_string(log).unwrap(), "uri-token\n");
@@ -1313,9 +1313,8 @@ esac
 
     #[test]
     fn onepassword_uri_path_becomes_provider_relative_item_root() {
-        let provider_url = ProviderUrl::new(
-            url::Url::parse("onepassword+token://Development/dotfiles").unwrap(),
-        );
+        let provider_url =
+            ProviderUrl::new(url::Url::parse("onepassword+token://Development/dotfiles").unwrap());
         let config = OnePasswordConfig::try_from(&provider_url).unwrap();
 
         assert_eq!(config.default_vault.as_deref(), Some("Development"));
@@ -1335,20 +1334,19 @@ esac
 
     #[test]
     #[cfg(unix)]
-    fn onepassword_get_with_request_uses_uri_path_as_item_name() {
+    fn onepassword_get_with_request_uses_path_item_and_section() {
         init_test_tracing();
         let temp_dir = tempfile::TempDir::new().expect("create temp dir");
         let log = temp_dir.path().join("calls.log");
         let op = write_fake_op(&temp_dir, &log);
         let mut provider = OnePasswordProvider::new(OnePasswordConfig {
             default_vault: Some("Development".to_string()),
-            folder_prefix: Some("dotfiles/{key}".to_string()),
             ..OnePasswordConfig::default()
         });
         provider.op_command = op.display().to_string();
 
         let request = SecretRequest {
-            path: Some(vec!["forges".to_string()]),
+            path: Some(vec!["dotfiles".to_string(), "forges".to_string()]),
             key: None,
         };
         let value = provider
@@ -1360,16 +1358,30 @@ esac
         let calls = fs::read_to_string(log).expect("read fake op call log");
         assert!(
             calls.contains("item get dotfiles --vault Development"),
-            "expected URI path to select the shared 1Password item\n{calls}"
+            "expected path[0] to select the shared 1Password item\n{calls}"
         );
 
         let missing_request = SecretRequest {
-            path: Some(vec!["packages".to_string()]),
+            path: Some(vec!["dotfiles".to_string(), "packages".to_string()]),
             key: Some("CARGO_REGISTRY_TOKEN".to_string()),
         };
         let missing_value = provider
-            .get_with_request("dotfiles", "CARGO_REGISTRY_TOKEN", "default", &missing_request)
+            .get_with_request(
+                "dotfiles",
+                "CARGO_REGISTRY_TOKEN",
+                "default",
+                &missing_request,
+            )
             .expect("missing section/field should not be a hard error");
         assert!(missing_value.is_none());
+
+        let missing_item_request = SecretRequest {
+            path: Some(vec!["missing-item".to_string(), "forges".to_string()]),
+            key: Some("GITHUB_TOKEN".to_string()),
+        };
+        let missing_item_value = provider
+            .get_with_request("dotfiles", "GITHUB_TOKEN", "default", &missing_item_request)
+            .expect("missing item should not be a hard error");
+        assert!(missing_item_value.is_none());
     }
 }

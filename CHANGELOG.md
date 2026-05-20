@@ -165,6 +165,9 @@ Both features are purely additive at the TOML level — every existing
 - `secretspec check` now resolves object-form per-secret provider refs with
   `path`/`key` hints during validation instead of batching them by provider URI
   and checking the SecretSpec variable name.
+- 1Password object-form provider refs now treat `path = ["item", "section"]`
+  as a lookup for `section` inside the shared item `item`, matching provider-relative
+  paths used by checked-in `secretspec.toml` files.
 - 1Password provider URI paths such as `onepassword+token://Development/dotfiles`
   now act as provider-relative item roots, so `{ provider = "op-token", path = ["forges"] }`
   reads section `forges` from item `dotfiles` instead of the default

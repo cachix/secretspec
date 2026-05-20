@@ -43,7 +43,7 @@ service account token for headless setups.
 ### Service account tokens (recommended for CI/CD)
 
 Set `OP_SERVICE_ACCOUNT_TOKEN` in the environment, or use the
-`onepassword+token://` URI scheme. See the [CI/CD section](#cicd-with-service-accounts)
+`onepassword+token://` / `op+token://` URI schemes. See the [CI/CD section](#cicd-with-service-accounts)
 below.
 
 ### Manual signin (legacy)
@@ -59,16 +59,20 @@ expire after 30 minutes of inactivity; if they expire mid-session,
 ```
 onepassword://[account@]vault[/path]
 onepassword+token://[token@]vault[/path]
+op://vault[/item[/section...]]
+op+token://[token@]vault[/item[/section...]]
 ```
 
-- `account`: Optional account shorthand
+- `onepassword://` / `onepassword+token://`: legacy SecretSpec-owned storage. Secrets are stored in items named from the provider path/folder prefix, defaulting to `secretspec/{project}/{profile}/{key}`.
+- `op://` / `op+token://`: native 1Password references. The URI path is a native 1Password item/section prefix, and object-form provider refs append their `path` plus the secret name or `key` as the field label.
+- `account`: Optional account shorthand for `onepassword://` URIs
 - `vault`: Target vault name (defaults to "Private")
 - `token`: Service account token
-- `path`: Optional provider-relative item root used by object-form provider refs
+- `path`: Optional provider-relative path used by object-form provider refs
 
-### Provider-relative paths
+### Provider-relative paths with legacy `onepassword://`
 
-For object-form provider refs, `path` is interpreted relative to the 1Password vault:
+For object-form provider refs on `onepassword://`, `path` is interpreted relative to the 1Password vault:
 
 ```toml
 [providers]
@@ -90,6 +94,27 @@ providers = [{ provider = "op", path = ["dotfiles", "registries"], key = "CARGO_
 
 If an item, section, or field is missing, SecretSpec treats that provider as not
 having the secret and continues to any fallback providers.
+
+### Native 1Password references with `op://`
+
+Use `op://` (or `op+token://` for service-account auth) when you want SecretSpec to use 1Password's native secret-reference shape:
+
+```toml
+[providers]
+op = "op://Development/dotfiles"
+
+[profiles.default.GITHUB_TOKEN]
+providers = [{ provider = "op", path = ["forges"] }]
+```
+
+This reads `op://Development/dotfiles/forges/GITHUB_TOKEN` with `op read`. The provider URI contributes the vault and base item (`Development/dotfiles`), the object-form `path` contributes the section (`forges`), and the secret name contributes the field label (`GITHUB_TOKEN`). Use `key` to point a SecretSpec variable at a differently named 1Password field:
+
+```toml
+[profiles.default.CRATES_TOKEN]
+providers = [{ provider = "op", path = ["registries"], key = "CARGO_REGISTRY_TOKEN" }]
+```
+
+`secretspec set` can update an existing native 1Password reference. It first verifies that the reference exists; it will not create a new native item/section/field for `op://` providers.
 
 ### Examples
 

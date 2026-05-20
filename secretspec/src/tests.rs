@@ -5907,3 +5907,174 @@ fn test_ensure_secrets_public_wrapper_delegates_to_unfiltered_validation() {
     let validated = spec.ensure_secrets(None, None, false).unwrap();
     assert_eq!(validated.resolved.secrets["TOKEN"].expose_secret(), "value");
 }
+
+#[test]
+fn test_set_uses_first_per_secret_provider_alias() {
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, "").unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "API_KEY".to_string(),
+        Secret {
+            description: Some("API key".to_string()),
+            required: Some(true),
+            providers: Some(vec![ProviderRef::Detail(ProviderRefDetail {
+                provider: "writer".to_string(),
+                path: Some(vec!["ignored-by-dotenv".to_string()]),
+                key: Some("STORED_API_KEY".to_string()),
+            })]),
+            ..Default::default()
+        },
+    );
+
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
+
+    let mut providers = HashMap::new();
+    providers.insert(
+        "writer".to_string(),
+        format!("dotenv://{}", env_file.display()),
+    );
+
+    let spec = Secrets::new(
+        Config {
+            project: Project {
+                name: "set-provider-ref".to_string(),
+                revision: "1.0".to_string(),
+                extends: None,
+            },
+            profiles,
+            providers: None,
+            groups: None,
+        },
+        Some(GlobalConfig {
+            defaults: GlobalDefaults {
+                provider: Some("env".to_string()),
+                profile: None,
+                providers: Some(providers),
+            },
+        }),
+        None,
+        None,
+    );
+
+    spec.set("API_KEY", Some("secret-value".to_string()))
+        .expect("set should use the per-secret provider alias");
+
+    let contents = fs::read_to_string(env_file).unwrap();
+    assert!(contents.lines().any(|line| line == "STORED_API_KEY=\"secret-value\""), "{contents:?}");
+    assert!(!contents.lines().any(|line| line == "API_KEY=\"secret-value\""), "{contents:?}");
+}
+
+#[test]
+fn test_set_reports_missing_per_secret_provider_alias() {
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "API_KEY".to_string(),
+        Secret {
+            description: Some("API key".to_string()),
+            required: Some(true),
+            providers: Some(vec![ProviderRef::from("missing")]),
+            ..Default::default()
+        },
+    );
+
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
+
+    let spec = Secrets::new(
+        Config {
+            project: Project {
+                name: "set-missing-provider-ref".to_string(),
+                revision: "1.0".to_string(),
+                extends: None,
+            },
+            profiles,
+            providers: None,
+            groups: None,
+        },
+        None,
+        None,
+        None,
+    );
+
+    let err = spec
+        .set("API_KEY", Some("secret-value".to_string()))
+        .expect_err("missing per-secret provider alias should be reported");
+    assert!(matches!(err, SecretSpecError::ProviderNotFound(_)));
+    assert!(err.to_string().contains("missing"));
+}
+
+#[test]
+fn test_set_propagates_per_secret_provider_write_error() {
+    let temp_dir = TempDir::new().unwrap();
+    let dotenv_dir = temp_dir.path().join("not-a-dotenv-file");
+    fs::create_dir(&dotenv_dir).unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "API_KEY".to_string(),
+        Secret {
+            description: Some("API key".to_string()),
+            required: Some(true),
+            providers: Some(vec![ProviderRef::from("writer")]),
+            ..Default::default()
+        },
+    );
+
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
+
+    let mut providers = HashMap::new();
+    providers.insert(
+        "writer".to_string(),
+        format!("dotenv://{}", dotenv_dir.display()),
+    );
+
+    let spec = Secrets::new(
+        Config {
+            project: Project {
+                name: "set-provider-write-error".to_string(),
+                revision: "1.0".to_string(),
+                extends: None,
+            },
+            profiles,
+            providers: None,
+            groups: None,
+        },
+        Some(GlobalConfig {
+            defaults: GlobalDefaults {
+                provider: Some("env".to_string()),
+                profile: None,
+                providers: Some(providers),
+            },
+        }),
+        None,
+        None,
+    );
+
+    let err = spec
+        .set("API_KEY", Some("secret-value".to_string()))
+        .expect_err("dotenv provider should reject directory write target");
+    assert!(err.to_string().contains("Is a directory") || err.to_string().contains("directory"));
+}

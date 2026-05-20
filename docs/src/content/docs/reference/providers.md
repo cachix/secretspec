@@ -54,17 +54,19 @@ lastpass://localhost         # Root (no folder)
 
 ## OnePassword Provider
 
-**URI**: `onepassword://[account@]vault` or `onepassword+token://user:token@vault`
+**URI**: `onepassword://[account@]vault`, `onepassword+token://user:token@vault`, `op://vault/item`, or `op+token://user:token@vault/item`
 
 ```bash
-onepassword://MyVault                           # Default account
+onepassword://MyVault                           # SecretSpec-owned storage
 onepassword://work@CompanyVault                 # Specific account
 onepassword+token://user:op_token@SecureVault   # Service account
+op://Development/dotfiles/forges                # Native 1Password reference prefix
+op+token://user:op_token@Development/dotfiles   # Native reference with service account
 ```
 
-**Features**: Read/write, cloud sync, profiles via vaults, service accounts
-**Prerequisites**: `op` CLI, authenticated with `op signin`
-**Storage**: Item name `{project}/{key}`, tags `automated`, `{project}`
+**Features**: Read/write, cloud sync, profiles via vaults, service accounts, native `op://` references
+**Prerequisites**: `op` CLI, authenticated with `op signin` or a service account token
+**Storage**: `onepassword://` uses SecretSpec-owned items; `op://` reads native 1Password references and can edit existing fields
 
 ## Pass Provider
 

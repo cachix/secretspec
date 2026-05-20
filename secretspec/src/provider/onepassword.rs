@@ -124,11 +124,17 @@ pub struct OnePasswordConfig {
     /// environment variable to authenticate without user interaction.
     /// Ideal for CI/CD environments.
     pub service_account_token: Option<String>,
-    /// Optional folder prefix format string for organizing secrets in OnePassword.
+    /// Optional folder prefix format string for organizing SecretSpec-owned secrets in OnePassword.
     ///
     /// Supports placeholders: {project}, {profile}, and {key}.
     /// Defaults to "secretspec/{project}/{profile}/{key}" if not specified.
     pub folder_prefix: Option<String>,
+    /// Whether this provider uses native 1Password secret references (`op://`).
+    #[serde(default)]
+    pub native_references: bool,
+    /// Base path segments for native 1Password references after the vault name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_base_path: Vec<String>,
 }
 
 impl TryFrom<&ProviderUrl> for OnePasswordConfig {
@@ -143,7 +149,7 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
                     "Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault/path)".to_string()
                 ));
             }
-            "onepassword" | "onepassword+token" => {}
+            "onepassword" | "onepassword+token" | "op" | "op+token" => {}
             _ => {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
                     "Invalid scheme '{}' for OnePassword provider",
@@ -152,7 +158,10 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
             }
         }
 
-        let mut config = Self::default();
+        let mut config = Self {
+            native_references: matches!(scheme, "op" | "op+token"),
+            ..Self::default()
+        };
 
         // Parse URL components for account@vault format, ignoring dummy localhost
         if let Some(host) = url.host()
@@ -163,7 +172,7 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
             // Check if we have username (account) information
             if !username.is_empty() {
                 // Handle user:token format for service account tokens
-                if scheme == "onepassword+token" {
+                if scheme == "onepassword+token" || scheme == "op+token" {
                     if let Some(password) = url.password() {
                         config.service_account_token = Some(password);
                     } else {
@@ -182,12 +191,20 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
         let uri_path = url.path();
         let uri_path = uri_path.trim_matches('/');
         if !uri_path.is_empty() {
-            let folder_prefix = if uri_path.contains("{key}") {
-                uri_path.to_string()
+            if config.native_references {
+                config.reference_base_path = uri_path
+                    .split('/')
+                    .filter(|segment| !segment.is_empty())
+                    .map(str::to_string)
+                    .collect();
             } else {
-                format!("{}/{{key}}", uri_path.trim_end_matches('/'))
-            };
-            config.folder_prefix = Some(folder_prefix);
+                let folder_prefix = if uri_path.contains("{key}") {
+                    uri_path.to_string()
+                } else {
+                    format!("{}/{{key}}", uri_path.trim_end_matches('/'))
+                };
+                config.folder_prefix = Some(folder_prefix);
+            }
         }
 
         Ok(config)
@@ -237,7 +254,7 @@ const AUTH_REQUIRED_HELP: &str = "OnePassword authentication required.\n\n\
     Recommended: enable desktop integration in the 1Password app under\n  \
     Settings → Developer → \"Integrate with 1Password CLI\", then unlock the app.\n\n\
     Alternatives:\n  \
-    - Service account (CI): set OP_SERVICE_ACCOUNT_TOKEN or use the onepassword+token:// scheme\n  \
+    - Service account (CI): set OP_SERVICE_ACCOUNT_TOKEN or use the onepassword+token:// or op+token:// scheme\n  \
     - Manual signin: run 'eval $(op signin)' (session expires after 30 minutes of inactivity)";
 
 fn is_auth_error(error_msg: &str) -> bool {
@@ -306,8 +323,14 @@ crate::register_provider! {
     config: OnePasswordConfig,
     name: "onepassword",
     description: "OnePassword password manager",
-    schemes: ["onepassword", "onepassword+token"],
-    examples: ["onepassword://vault", "onepassword://work@Production", "onepassword+token://vault"],
+    schemes: ["onepassword", "onepassword+token", "op", "op+token"],
+    examples: [
+        "onepassword://vault",
+        "onepassword://work@Production",
+        "onepassword+token://vault",
+        "op://vault/item/section",
+        "op+token://vault/item",
+    ],
     preflight: check_auth,
 }
 
@@ -651,6 +674,114 @@ impl OnePasswordProvider {
             ))
         }
     }
+
+    fn native_reference_parts(&self, key: &str, request: Option<&SecretRequest>) -> Vec<String> {
+        let mut parts = self.config.reference_base_path.clone();
+        if let Some(request) = request {
+            if let Some(path) = &request.path {
+                parts.extend(path.iter().cloned());
+            }
+            parts.push(request.key.as_deref().unwrap_or(key).to_string());
+        } else {
+            parts.push(key.to_string());
+        }
+        parts
+    }
+
+    fn native_reference(&self, profile: &str, parts: &[String]) -> String {
+        let mut reference = format!(
+            "op://{}",
+            ProviderUrl::encode(&self.get_vault_name(profile))
+        );
+        for part in parts {
+            reference.push('/');
+            reference.push_str(&ProviderUrl::encode(part));
+        }
+        reference
+    }
+
+    fn native_item_and_assignment(
+        &self,
+        key: &str,
+        value: &SecretString,
+        request: Option<&SecretRequest>,
+    ) -> Result<(String, String)> {
+        let parts = self.native_reference_parts(key, request);
+        if parts.len() < 2 {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "Native 1Password provider requires an item path before the field name".into(),
+            ));
+        }
+
+        let item = parts[0].clone();
+        let field = parts.last().expect("parts length checked");
+        let assignment_name = if parts.len() > 2 {
+            format!("{}.{}", parts[1..parts.len() - 1].join("."), field)
+        } else {
+            field.clone()
+        };
+        Ok((
+            item,
+            format!("{}[concealed]={}", assignment_name, value.expose_secret()),
+        ))
+    }
+
+    fn native_missing_message(message: &str) -> bool {
+        message.contains("isn't an item")
+            || message.contains("isn't a field")
+            || message.contains("couldn't find")
+            || message.contains("not found")
+    }
+
+    fn read_native_reference(
+        &self,
+        key: &str,
+        profile: &str,
+        request: Option<&SecretRequest>,
+    ) -> Result<Option<SecretString>> {
+        let parts = self.native_reference_parts(key, request);
+        if parts.len() < 2 {
+            return Ok(None);
+        }
+        let reference = self.native_reference(profile, &parts);
+        let args = vec!["read", reference.as_str()];
+        match self.execute_op_command(&args, None) {
+            Ok(output) => Ok(Some(SecretString::new(
+                output.trim_end_matches(['\r', '\n']).to_string().into(),
+            ))),
+            Err(SecretSpecError::ProviderOperationFailed(msg))
+                if Self::native_missing_message(&msg) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn set_native_reference(
+        &self,
+        key: &str,
+        value: &SecretString,
+        profile: &str,
+        request: Option<&SecretRequest>,
+    ) -> Result<()> {
+        let vault = self.get_vault_name(profile);
+        if self.read_native_reference(key, profile, request)?.is_none() {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "Cannot set native 1Password reference because it does not exist".into(),
+            ));
+        }
+        let (item, assignment) = self.native_item_and_assignment(key, value, request)?;
+        let edit_args = vec![
+            "item",
+            "edit",
+            item.as_str(),
+            "--vault",
+            vault.as_str(),
+            assignment.as_str(),
+        ];
+        self.execute_op_command(&edit_args, None).map(|_| ())
+    }
 }
 
 impl Provider for OnePasswordProvider {
@@ -672,12 +803,17 @@ impl Provider for OnePasswordProvider {
 
     fn uri(&self) -> String {
         // Reconstruct the URI from the config
-        // Format: onepassword://[account@]vault or onepassword+token://[token@]vault
+        // Format: onepassword://[account@]vault, onepassword+token://[token@]vault,
+        // op://vault[/item], or op+token://[token@]vault[/item]
 
-        let scheme = if self.config.service_account_token.is_some() {
-            "onepassword+token"
-        } else {
-            "onepassword"
+        let scheme = match (
+            self.config.native_references,
+            self.config.service_account_token.is_some(),
+        ) {
+            (true, true) => "op+token",
+            (true, false) => "op",
+            (false, true) => "onepassword+token",
+            (false, false) => "onepassword",
         };
 
         let mut uri = format!("{}://", scheme);
@@ -698,6 +834,13 @@ impl Provider for OnePasswordProvider {
 
             if let Some(ref vault) = self.config.default_vault {
                 uri.push_str(&ProviderUrl::encode(vault));
+            }
+        }
+
+        if self.config.native_references {
+            for segment in &self.config.reference_base_path {
+                uri.push('/');
+                uri.push_str(&ProviderUrl::encode(segment));
             }
         }
 
@@ -725,6 +868,10 @@ impl Provider for OnePasswordProvider {
     /// * `Ok(None)` - No secret found with the given key
     /// * `Err(_)` - Authentication or retrieval error
     fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
+        if self.config.native_references {
+            return self.read_native_reference(key, profile, None);
+        }
+
         let vault = self.get_vault_name(profile);
         let item_name = self.format_item_name(project, key, profile);
 
@@ -765,6 +912,10 @@ impl Provider for OnePasswordProvider {
         profile: &str,
         request: &SecretRequest,
     ) -> Result<Option<SecretString>> {
+        if self.config.native_references {
+            return self.read_native_reference(key, profile, Some(request));
+        }
+
         // If no path, delegate to base `get` (one item per secret), honoring
         // an alternate storage key when the provider ref supplied one.
         let storage_key = request.key.as_deref().unwrap_or(key);
@@ -863,6 +1014,10 @@ impl Provider for OnePasswordProvider {
     /// - Item creation/update failures
     /// - Temporary file creation errors
     fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
+        if self.config.native_references {
+            return self.set_native_reference(key, value, profile, None);
+        }
+
         let vault = self.get_vault_name(profile);
         let item_name = self.format_item_name(project, key, profile);
 
@@ -895,6 +1050,22 @@ impl Provider for OnePasswordProvider {
         Ok(())
     }
 
+    fn set_with_request(
+        &self,
+        _project: &str,
+        key: &str,
+        value: &SecretString,
+        profile: &str,
+        request: &SecretRequest,
+    ) -> Result<()> {
+        if self.config.native_references {
+            return self.set_native_reference(key, value, profile, Some(request));
+        }
+
+        let storage_key = request.key.as_deref().unwrap_or(key);
+        self.set(_project, storage_key, value, profile)
+    }
+
     /// Retrieves multiple secrets from OnePassword in a single batch operation.
     ///
     /// This optimized implementation:
@@ -914,6 +1085,15 @@ impl Provider for OnePasswordProvider {
 
         if keys.is_empty() {
             return Ok(HashMap::new());
+        }
+        if self.config.native_references {
+            let mut results = HashMap::new();
+            for key in keys {
+                if let Some(value) = self.read_native_reference(key, profile, None)? {
+                    results.insert((*key).to_string(), value);
+                }
+            }
+            return Ok(results);
         }
 
         let vault = self.get_vault_name(profile);
@@ -1233,8 +1413,33 @@ mod tests {
             &script,
             format!(
                 r#"#!/usr/bin/env sh
-printf '%s\n' "$*" >> '{}'
+printf '%s\n' "$*" >> '{0}'
 case "$1 $2" in
+  read*)
+    case "$2" in
+      op://Development/dotfiles/forges/GITHUB_TOKEN)
+        printf '%s\n' 'native-github-token'
+        ;;
+      op://Development/dotfiles/GITHUB_TOKEN)
+        printf '%s\n' 'native-root-github-token'
+        ;;
+      op://Development/dotfiles/error/GITHUB_TOKEN)
+        printf '%s\n' 'permission denied' >&2
+        exit 1
+        ;;
+      *)
+        printf '%s\n' 'not found' >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  "item edit")
+    printf '%s\n' 'edited'
+    ;;
+  "item create")
+    cat >> '{0}'
+    printf '%s\n' 'created'
+    ;;
   "item get")
     case "$3" in
       *STORED_ITEM*)
@@ -1338,6 +1543,342 @@ esac
         assert_eq!(
             config.folder_prefix.as_deref(),
             Some("secretspec/{project}/{profile}/{key}")
+        );
+    }
+
+    #[test]
+    fn op_uri_path_becomes_native_reference_base_path() {
+        let provider_url =
+            ProviderUrl::new(url::Url::parse("op+token://Development/dotfiles").unwrap());
+        let config = OnePasswordConfig::try_from(&provider_url).unwrap();
+        let provider = OnePasswordProvider::new(config.clone());
+
+        assert!(config.native_references);
+        assert_eq!(config.default_vault.as_deref(), Some("Development"));
+        assert_eq!(config.reference_base_path, vec!["dotfiles"]);
+        assert_eq!(config.folder_prefix, None);
+        assert_eq!(provider.uri(), "op://Development/dotfiles");
+
+        let op_token_provider = OnePasswordProvider::new(OnePasswordConfig {
+            default_vault: Some("Development".to_string()),
+            service_account_token: Some("token".to_string()),
+            native_references: true,
+            reference_base_path: vec!["dotfiles".to_string()],
+            ..OnePasswordConfig::default()
+        });
+        assert_eq!(op_token_provider.uri(), "op+token://Development/dotfiles");
+
+        let legacy_token_provider = OnePasswordProvider::new(OnePasswordConfig {
+            default_vault: Some("Development".to_string()),
+            service_account_token: Some("token".to_string()),
+            ..OnePasswordConfig::default()
+        });
+        assert_eq!(legacy_token_provider.uri(), "onepassword+token://Development");
+
+        let legacy_url =
+            ProviderUrl::new(url::Url::parse("onepassword://Development/dotfiles").unwrap());
+        let legacy_config = OnePasswordConfig::try_from(&legacy_url).unwrap();
+        assert!(!legacy_config.native_references);
+        assert_eq!(
+            legacy_config.folder_prefix.as_deref(),
+            Some("dotfiles/{key}")
+        );
+        assert!(legacy_config.reference_base_path.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn op_command_auth_failure_returns_helpful_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let op = temp_dir.path().join("op-auth-fails");
+        fs::write(
+            &op,
+            "#!/usr/bin/env sh\nprintf '%s\\n' 'not currently signed in' >&2\nexit 1\n",
+        )
+        .expect("write fake op");
+        let mut permissions = fs::metadata(&op).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&op, permissions).expect("chmod fake op");
+
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig::default());
+        provider.op_command = op.display().to_string();
+
+        let err = provider
+            .execute_op_command(&["item", "list"], None)
+            .expect_err("auth failures should be rewritten");
+        assert!(err.to_string().contains("OnePassword authentication required"), "{err}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn op_get_without_request_reads_native_reference_from_uri_base() {
+        init_test_tracing();
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let log = temp_dir.path().join("calls.log");
+        let op = write_fake_op(&temp_dir, &log);
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig {
+            default_vault: Some("Development".to_string()),
+            native_references: true,
+            reference_base_path: vec!["dotfiles".to_string()],
+            ..OnePasswordConfig::default()
+        });
+        provider.op_command = op.display().to_string();
+
+        let value = provider
+            .get("dotfiles", "GITHUB_TOKEN", "default")
+            .expect("read native reference")
+            .expect("value from fake op");
+        assert_eq!(value.expose_secret(), "native-root-github-token");
+
+        provider
+            .set(
+                "dotfiles",
+                "GITHUB_TOKEN",
+                &SecretString::new("new-token".into()),
+                "default",
+            )
+            .expect("edit native reference without request");
+
+        let batch = provider
+            .get_batch("dotfiles", &["GITHUB_TOKEN", "MISSING"], "default")
+            .expect("batch native reads");
+        assert_eq!(batch["GITHUB_TOKEN"].expose_secret(), "native-root-github-token");
+        assert!(!batch.contains_key("MISSING"));
+
+        let calls = fs::read_to_string(log).expect("read fake op call log");
+        assert!(calls.contains("read op://Development/dotfiles/GITHUB_TOKEN"));
+        assert!(calls.contains("item edit dotfiles --vault Development GITHUB_TOKEN[concealed]=new-token"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn op_get_without_item_path_returns_none_and_set_errors() {
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig {
+            default_vault: Some("Development".to_string()),
+            native_references: true,
+            ..OnePasswordConfig::default()
+        });
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let log = temp_dir.path().join("calls.log");
+        let op = write_fake_op(&temp_dir, &log);
+        provider.op_command = op.display().to_string();
+
+        let value = provider
+            .get("dotfiles", "GITHUB_TOKEN", "default")
+            .expect("short native reference should not hard fail");
+        assert!(value.is_none());
+
+        let err = provider
+            .native_item_and_assignment(
+                "GITHUB_TOKEN",
+                &SecretString::new("new-token".into()),
+                None,
+            )
+            .expect_err("native set needs an item path");
+        assert!(err.to_string().contains("requires an item path"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn op_get_with_request_propagates_non_missing_errors() {
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let log = temp_dir.path().join("calls.log");
+        let op = write_fake_op(&temp_dir, &log);
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig {
+            default_vault: Some("Development".to_string()),
+            native_references: true,
+            reference_base_path: vec!["dotfiles".to_string()],
+            ..OnePasswordConfig::default()
+        });
+        provider.op_command = op.display().to_string();
+
+        let request = SecretRequest {
+            path: Some(vec!["error".to_string()]),
+            key: None,
+        };
+        let err = provider
+            .get_with_request("dotfiles", "GITHUB_TOKEN", "default", &request)
+            .expect_err("permission errors should propagate");
+        assert!(err.to_string().contains("permission denied"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn onepassword_set_with_request_uses_key_hint_for_legacy_storage() {
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let log = temp_dir.path().join("calls.log");
+        let op = write_fake_op(&temp_dir, &log);
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig {
+            default_vault: Some("Development".to_string()),
+            ..OnePasswordConfig::default()
+        });
+        provider.op_command = op.display().to_string();
+
+        let request = SecretRequest {
+            path: None,
+            key: Some("STORED_ITEM".to_string()),
+        };
+        provider
+            .set_with_request(
+                "dotfiles",
+                "SECRET_NAME",
+                &SecretString::new("new-token".into()),
+                "default",
+                &request,
+            )
+            .expect("legacy set with key hint");
+
+        let calls = fs::read_to_string(log).expect("read fake op call log");
+        assert!(calls.contains("STORED_ITEM"));
+        assert!(!calls.contains("SECRET_NAME"));
+
+        let batch = provider
+            .get_batch("dotfiles", &["STORED_ITEM"], "default")
+            .expect("legacy get_batch should still run through item listing");
+        assert!(batch.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn op_set_with_request_uses_field_without_section_when_path_is_item_only() {
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let log = temp_dir.path().join("calls.log");
+        let op = write_fake_op(&temp_dir, &log);
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig {
+            default_vault: Some("Development".to_string()),
+            native_references: true,
+            ..OnePasswordConfig::default()
+        });
+        provider.op_command = op.display().to_string();
+
+        let request = SecretRequest {
+            path: Some(vec!["dotfiles".to_string()]),
+            key: None,
+        };
+        provider
+            .set_with_request(
+                "dotfiles",
+                "GITHUB_TOKEN",
+                &SecretString::new("new-token".into()),
+                "default",
+                &request,
+            )
+            .expect("edit native field without section");
+
+        let calls = fs::read_to_string(log).expect("read fake op call log");
+        assert!(calls.contains("item edit dotfiles --vault Development GITHUB_TOKEN[concealed]=new-token"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn op_get_with_request_reads_native_reference() {
+        init_test_tracing();
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let log = temp_dir.path().join("calls.log");
+        let op = write_fake_op(&temp_dir, &log);
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig {
+            default_vault: Some("Development".to_string()),
+            native_references: true,
+            reference_base_path: vec!["dotfiles".to_string()],
+            ..OnePasswordConfig::default()
+        });
+        provider.op_command = op.display().to_string();
+
+        let request = SecretRequest {
+            path: Some(vec!["forges".to_string()]),
+            key: None,
+        };
+        let value = provider
+            .get_with_request("dotfiles", "GITHUB_TOKEN", "default", &request)
+            .expect("read native reference")
+            .expect("value from fake op");
+
+        assert_eq!(value.expose_secret(), "native-github-token");
+        let calls = fs::read_to_string(log).expect("read fake op call log");
+        assert!(
+            calls.contains("read op://Development/dotfiles/forges/GITHUB_TOKEN"),
+            "expected native op read reference\n{calls}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn op_set_with_request_edits_existing_native_reference() {
+        init_test_tracing();
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let log = temp_dir.path().join("calls.log");
+        let op = write_fake_op(&temp_dir, &log);
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig {
+            default_vault: Some("Development".to_string()),
+            native_references: true,
+            reference_base_path: vec!["dotfiles".to_string()],
+            ..OnePasswordConfig::default()
+        });
+        provider.op_command = op.display().to_string();
+
+        let request = SecretRequest {
+            path: Some(vec!["forges".to_string()]),
+            key: None,
+        };
+        provider
+            .set_with_request(
+                "dotfiles",
+                "GITHUB_TOKEN",
+                &SecretString::new("new-token".into()),
+                "default",
+                &request,
+            )
+            .expect("edit existing native reference");
+
+        let calls = fs::read_to_string(log).expect("read fake op call log");
+        assert!(
+            calls.contains("read op://Development/dotfiles/forges/GITHUB_TOKEN"),
+            "expected existence check before editing\n{calls}"
+        );
+        assert!(
+            calls.contains(
+                "item edit dotfiles --vault Development forges.GITHUB_TOKEN[concealed]=new-token"
+            ),
+            "expected native item edit for existing field\n{calls}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn op_set_with_request_rejects_missing_native_reference() {
+        init_test_tracing();
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let log = temp_dir.path().join("calls.log");
+        let op = write_fake_op(&temp_dir, &log);
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig {
+            default_vault: Some("Development".to_string()),
+            native_references: true,
+            reference_base_path: vec!["dotfiles".to_string()],
+            ..OnePasswordConfig::default()
+        });
+        provider.op_command = op.display().to_string();
+
+        let request = SecretRequest {
+            path: Some(vec!["missing".to_string()]),
+            key: None,
+        };
+        let err = provider
+            .set_with_request(
+                "dotfiles",
+                "GITHUB_TOKEN",
+                &SecretString::new("new-token".into()),
+                "default",
+                &request,
+            )
+            .expect_err("missing native reference should not be created");
+
+        assert!(err.to_string().contains("does not exist"));
+        let calls = fs::read_to_string(log).expect("read fake op call log");
+        assert!(
+            !calls.contains("item edit"),
+            "missing native references should not be created or edited\n{calls}"
         );
     }
 

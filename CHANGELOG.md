@@ -29,6 +29,8 @@ Both features are purely additive at the TOML level — every existing
 
 ### Added
 
+- **Native 1Password reference schemes.** Added `op://` and `op+token://` provider URI schemes for native 1Password references such as `op://Development/dotfiles/forges/GITHUB_TOKEN`, while preserving `onepassword://` and `onepassword+token://` as legacy SecretSpec-owned storage. Native references are read with `op read`; `secretspec set` can edit existing native references but will not create missing native items, sections, or fields.
+
 - **Filtered `secretspec run` injection.** `secretspec run` now accepts repeatable, comma-aware `--include <SECRET>` and `--group <GROUP>` filters so commands can receive only the selected secrets. Group filters use declared top-level `[groups]`; profile-specific `groups = [...]` replaces inherited default groups when set, and filtered runs only validate/resolve selected secrets plus any provider dependencies they require.
 
 - **Provider-relative secret locations.** Secrets in `providers` lists now

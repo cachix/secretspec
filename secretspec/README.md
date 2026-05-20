@@ -125,7 +125,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Environment variables](https://secretspec.dev/providers/env)** - Read-only for CI/CD
 - **[Pass](https://secretspec.dev/providers/pass)** - Unix password manager with GPG encryption
 - **[Proton Pass](https://secretspec.dev/providers/protonpass)** - End-to-end encrypted via Proton's official pass-cli
-- **[OnePassword](https://secretspec.dev/providers/onepassword)** - Team secret management
+- **[OnePassword](https://secretspec.dev/providers/onepassword)** - Team secret management; `onepassword://` keeps SecretSpec-owned storage while `op://` opts into native 1Password references
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager
 - **[Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)** - GCP secret management
 - **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
@@ -135,6 +135,12 @@ SecretSpec supports multiple storage backends for secrets:
 ```bash
 $ secretspec run --provider keyring -- npm start
 $ secretspec run --provider dotenv -- npm start
+
+# Legacy SecretSpec-owned 1Password storage
+$ secretspec run --provider onepassword://Development -- npm start
+
+# Native 1Password references, e.g. op://Development/dotfiles/forges/GITHUB_TOKEN
+$ secretspec run --provider op://Development/dotfiles -- npm start
 
 # Configure default provider
 $ secretspec config init

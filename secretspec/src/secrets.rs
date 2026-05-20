@@ -919,7 +919,32 @@ impl Secrets {
             }
         };
 
-        let backend = self.resolve_write_provider(&secret_config, None)?;
+        let (backend, write_request) = if self.resolve_provider_override(None).is_none() {
+            if let Some(first_ref) = secret_config.providers.as_ref().and_then(|p| p.first()) {
+                let alias = first_ref.provider_alias().to_string();
+                let provider_uris = self
+                    .resolve_provider_aliases(Some(std::slice::from_ref(&alias)))?
+                    .expect("provider aliases are supplied");
+                let uri = provider_uris
+                    .into_iter()
+                    .next()
+                    .expect("provider alias resolution returns one URI per alias");
+                (
+                    self.provider_from_alias(&alias, uri, &profile_name)?,
+                    SecretRequest::from_provider_ref(first_ref),
+                )
+            } else {
+                (
+                    self.resolve_write_provider(&secret_config, None)?,
+                    SecretRequest::default(),
+                )
+            }
+        } else {
+            (
+                self.resolve_write_provider(&secret_config, None)?,
+                SecretRequest::default(),
+            )
+        };
 
         if !backend.allows_set() {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
@@ -950,7 +975,13 @@ impl Secrets {
             ));
         }
 
-        backend.set(&self.config.project.name, name, &value, &profile_name)?;
+        backend.set_with_request(
+            &self.config.project.name,
+            name,
+            &value,
+            &profile_name,
+            &write_request,
+        )?;
         eprintln!(
             "{} Secret '{}' saved to {} (profile: {})",
             "✓".green(),

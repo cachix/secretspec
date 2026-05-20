@@ -63,6 +63,8 @@ You can use provider URIs for more specific configuration:
 ```bash
 # Use a specific OnePassword vault
 $ secretspec run --provider "onepassword://Personal/Development" -- npm start
+# Native 1Password references are opt-in with op://
+$ secretspec run --provider "op://Development/dotfiles" -- npm start
 
 # Use a specific dotenv file
 $ secretspec run --provider "dotenv:/home/user/work/.env" -- npm test

@@ -310,6 +310,19 @@ pub trait Provider: Send + Sync {
     /// ```
     fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()>;
 
+    /// Stores a secret value using provider-relative request hints.
+    fn set_with_request(
+        &self,
+        project: &str,
+        key: &str,
+        value: &SecretString,
+        profile: &str,
+        request: &crate::config::SecretRequest,
+    ) -> Result<()> {
+        let storage_key = request.key.as_deref().unwrap_or(key);
+        self.set(project, storage_key, value, profile)
+    }
+
     /// Applies resolved provider dependency secrets before the provider is used.
     ///
     /// The default implementation ignores dependency secrets. Providers that

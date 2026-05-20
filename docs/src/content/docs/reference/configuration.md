@@ -195,6 +195,17 @@ API_KEY = {
 | `path` | array[string] | No | Location path within the provider (e.g. a 1Password section name) |
 | `key` | string | No | Field key at that path; defaults to the SecretSpec secret name |
 
+For 1Password, `onepassword://` keeps the original SecretSpec-owned storage behavior. Use `op://` when the provider ref should compose a native 1Password reference:
+
+```toml
+[providers]
+op = "op://Development/dotfiles"
+
+[profiles.default.GITHUB_TOKEN]
+providers = [{ provider = "op", path = ["forges"] }]
+# Reads op://Development/dotfiles/forges/GITHUB_TOKEN
+```
+
 ### Structured Provider Configs with Dependencies
 
 Project-level `[providers]` entries can also be tables with an optional

@@ -88,6 +88,10 @@ Both features are purely additive at the TOML level — every existing
   delegates to `get()`, so existing providers don't need changes. The
   1Password provider overrides this to navigate to the correct section and
   field within a shared project item.
+- **`Provider::configure_dependency_secrets`.** New default trait method for
+  providers to receive resolved `depends_on` secrets in provider-local state.
+  Command-line providers pass supported values directly to child commands with
+  `Command::env(...)` instead of mutating the SecretSpec process environment.
 
 - **`Secrets::resolve_provider_requirements`.** Resolves the `requires`
   declarations for a provider alias, looking up each required secret through
@@ -150,6 +154,11 @@ Both features are purely additive at the TOML level — every existing
   or methods were removed or renamed.
 
 ### Fixed
+- Provider `depends_on` secrets are now injected into provider instances before
+  use. The 1Password item and Environments providers pass
+  `OP_SERVICE_ACCOUNT_TOKEN` directly to each `op` child command, avoiding
+  process-global environment mutation while still supporting repeated command
+  invocations and preflight checks.
 - Profile-not-found errors no longer surface as the confusing
   `Secret 'Profile 'X' not found' not found`. They now use the dedicated
   `InvalidProfile` variant and include the list of profiles defined in

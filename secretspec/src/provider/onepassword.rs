@@ -279,6 +279,8 @@ pub struct OnePasswordProvider {
     config: OnePasswordConfig,
     /// The OnePassword CLI command to use (either "op" or a custom path).
     op_command: String,
+    /// Provider-local dependency secrets that are passed to the `op` child process.
+    dependency_env: HashMap<String, SecretString>,
 }
 
 crate::register_provider! {
@@ -305,7 +307,11 @@ impl OnePasswordProvider {
                 "op".to_string()
             }
         });
-        Self { config, op_command }
+        Self {
+            config,
+            op_command,
+            dependency_env: HashMap::new(),
+        }
     }
 
     /// Executes a OnePassword CLI command with proper error handling.
@@ -339,9 +345,14 @@ impl OnePasswordProvider {
         let mut cmd = Command::new(&self.op_command);
         strip_op_session_env(&mut cmd);
 
-        // Set service account token if provided
+        // Set service account token directly on the child command. Prefer an
+        // explicit token from the provider URI, then fall back to a resolved
+        // provider dependency. This avoids mutating the process-global
+        // environment while still giving `op` the credentials it needs.
         if let Some(token) = &self.config.service_account_token {
             cmd.env("OP_SERVICE_ACCOUNT_TOKEN", token);
+        } else if let Some(token) = self.dependency_env.get("OP_SERVICE_ACCOUNT_TOKEN") {
+            cmd.env("OP_SERVICE_ACCOUNT_TOKEN", token.expose_secret());
         }
 
         // Add account if specified
@@ -606,6 +617,18 @@ impl OnePasswordProvider {
 }
 
 impl Provider for OnePasswordProvider {
+    fn configure_dependency_secrets(
+        &mut self,
+        dependencies: &[(String, SecretString)],
+    ) -> Result<()> {
+        for (name, value) in dependencies {
+            if name == "OP_SERVICE_ACCOUNT_TOKEN" {
+                self.dependency_env.insert(name.clone(), value.clone());
+            }
+        }
+        Ok(())
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
@@ -762,10 +785,10 @@ impl Provider for OnePasswordProvider {
             let section_match = field.section.as_ref().and_then(|s| s.label.as_deref())
                 == Some(section_name);
             let label_match = field.label.as_deref() == Some(field_key);
-            if section_match && label_match {
-                if let Some(ref value) = field.value {
-                    return Ok(Some(SecretString::new(value.clone().into())));
-                }
+            if section_match && label_match
+                && let Some(ref value) = field.value
+            {
+                return Ok(Some(SecretString::new(value.clone().into())));
             }
         }
 
@@ -1058,5 +1081,85 @@ mod tests {
         let uri = provider.uri();
         assert_eq!(uri, "onepassword+token://Private");
         assert!(!uri.contains("ops_secret_tok"));
+
+#[cfg(all(test, unix))]
+mod dependency_env_tests {
+    use super::*;
+    use secrecy::ExposeSecret;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn write_op_stub(script: &std::path::Path, log: &std::path::Path) {
+        let script_body = format!(
+            r#"#!/bin/sh
+printf '%s\n' "$OP_SERVICE_ACCOUNT_TOKEN" >> '{}'
+printf '{{"fields":[{{"id":"value","type":"CONCEALED","label":"value","value":"%s"}}]}}\n' "$OP_SERVICE_ACCOUNT_TOKEN"
+"#,
+            log.display()
+        );
+        fs::write(script, script_body).unwrap();
+        let mut permissions = fs::metadata(script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(script, permissions).unwrap();
+    }
+
+    #[test]
+    fn dependency_token_is_command_scoped_for_every_op_invocation() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let script = temp.path().join("op-stub");
+        let log = temp.path().join("calls.log");
+        write_op_stub(&script, &log);
+
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig {
+            service_account_token: None,
+            default_vault: Some("Development".into()),
+            ..OnePasswordConfig::default()
+        });
+        provider.op_command = script.display().to_string();
+        provider
+            .configure_dependency_secrets(&[
+                ("IGNORED".into(), SecretString::new("ignored".into())),
+                (
+                    "OP_SERVICE_ACCOUNT_TOKEN".into(),
+                    SecretString::new("dependency-token".into()),
+                ),
+            ])
+            .unwrap();
+
+        let first = provider.get("project", "API_KEY", "default").unwrap().unwrap();
+        let second = provider.get("project", "API_KEY", "default").unwrap().unwrap();
+
+        assert_eq!(first.expose_secret(), "dependency-token");
+        assert_eq!(second.expose_secret(), "dependency-token");
+        assert_eq!(
+            fs::read_to_string(log).unwrap(),
+            "dependency-token\ndependency-token\n"
+        );
+    }
+
+    #[test]
+    fn explicit_uri_token_takes_precedence_over_dependency_token() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let script = temp.path().join("op-stub");
+        let log = temp.path().join("calls.log");
+        write_op_stub(&script, &log);
+
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig {
+            service_account_token: Some("uri-token".into()),
+            default_vault: Some("Development".into()),
+            ..OnePasswordConfig::default()
+        });
+        provider.op_command = script.display().to_string();
+        provider
+            .configure_dependency_secrets(&[(
+                "OP_SERVICE_ACCOUNT_TOKEN".into(),
+                SecretString::new("dependency-token".into()),
+            )])
+            .unwrap();
+
+        let value = provider.get("project", "API_KEY", "default").unwrap().unwrap();
+
+        assert_eq!(value.expose_secret(), "uri-token");
+        assert_eq!(fs::read_to_string(log).unwrap(), "uri-token\n");
     }
 }

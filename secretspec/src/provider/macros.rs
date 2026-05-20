@@ -1,12 +1,16 @@
 use super::{ProviderInfo, ProviderUrl, ProviderWithPreflight};
 use crate::Result;
 
+/// Factory function stored in the provider registry.
+pub type ProviderFactory =
+    fn(&ProviderUrl, &[(String, secrecy::SecretString)]) -> Result<ProviderWithPreflight>;
+
 /// Internal registration structure used by the macro.
 #[doc(hidden)]
 pub struct ProviderRegistration {
     pub info: ProviderInfo,
     pub schemes: &'static [&'static str],
-    pub factory: fn(&ProviderUrl) -> Result<ProviderWithPreflight>,
+    pub factory: ProviderFactory,
 }
 
 /// Distributed slice that collects all provider registrations.
@@ -113,9 +117,13 @@ macro_rules! register_provider {
                     examples: &[$($example,)*],
                 },
                 schemes: &[$($scheme,)*],
-                factory: |url| {
+                factory: |url, dependencies| {
                     let config = <$config_type>::try_from(url)?;
-                    let provider = <$struct_name>::new(config);
+                    let mut provider = <$struct_name>::new(config);
+                    $crate::provider::Provider::configure_dependency_secrets(
+                        &mut provider,
+                        dependencies,
+                    )?;
                     let wrap: fn($struct_name) -> $crate::Result<$crate::provider::ProviderWithPreflight> = $wrap;
                     wrap(provider)
                 },

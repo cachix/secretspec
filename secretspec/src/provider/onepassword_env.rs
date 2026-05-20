@@ -1,7 +1,7 @@
 use crate::provider::onepassword::strip_op_session_env;
 use crate::provider::{Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::process::Command;
@@ -61,10 +61,10 @@ impl TryFrom<&ProviderUrl> for OnePasswordEnvConfig {
         let mut config = Self::default();
 
         // The host is the environment ID.
-        if let Some(host) = url.host() {
-            if host != "localhost" {
-                config.environment_id = host.to_string();
-            }
+        if let Some(host) = url.host()
+            && host != "localhost"
+        {
+            config.environment_id = host.to_string();
         }
 
         if config.environment_id.is_empty() {
@@ -126,6 +126,8 @@ crate::register_provider! {
 pub struct OnePasswordEnvProvider {
     config: OnePasswordEnvConfig,
     op_command: String,
+    /// Provider-local dependency secrets that are passed to the `op` child process.
+    dependency_env: HashMap<String, SecretString>,
     /// Lazy cache of all environment variables, populated on first access.
     cache: Mutex<Option<HashMap<String, SecretString>>>,
 }
@@ -135,7 +137,12 @@ impl OnePasswordEnvProvider {
         let op_command = std::env::var("SECRETSPEC_OPCLI_PATH").unwrap_or_else(|_| {
             "op".to_string()
         });
-        Self { config, op_command, cache: Mutex::new(None) }
+        Self {
+            config,
+            op_command,
+            dependency_env: HashMap::new(),
+            cache: Mutex::new(None),
+        }
     }
 
     /// Returns the cached variables, populating the cache on first call.
@@ -173,6 +180,8 @@ impl OnePasswordEnvProvider {
 
         if let Some(ref token) = self.config.service_account_token {
             cmd.env("OP_SERVICE_ACCOUNT_TOKEN", token);
+        } else if let Some(token) = self.dependency_env.get("OP_SERVICE_ACCOUNT_TOKEN") {
+            cmd.env("OP_SERVICE_ACCOUNT_TOKEN", token.expose_secret());
         }
         if let Some(ref account) = self.config.account {
             cmd.arg("--account").arg(account);
@@ -220,6 +229,18 @@ impl OnePasswordEnvProvider {
 }
 
 impl Provider for OnePasswordEnvProvider {
+    fn configure_dependency_secrets(
+        &mut self,
+        dependencies: &[(String, SecretString)],
+    ) -> Result<()> {
+        for (name, value) in dependencies {
+            if name == "OP_SERVICE_ACCOUNT_TOKEN" {
+                self.dependency_env.insert(name.clone(), value.clone());
+            }
+        }
+        Ok(())
+    }
+
     fn get(
         &self,
         _project: &str,
@@ -250,7 +271,7 @@ impl Provider for OnePasswordEnvProvider {
     }
 
     fn name(&self) -> &'static str {
-        "onepassword-env"
+        Self::PROVIDER_NAME
     }
 
     fn uri(&self) -> String {
@@ -282,5 +303,84 @@ impl Provider for OnePasswordEnvProvider {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         Ok(results)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod dependency_env_tests {
+    use super::*;
+    use secrecy::ExposeSecret;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn write_op_env_stub(script: &std::path::Path, log: &std::path::Path) {
+        let script_body = format!(
+            r#"#!/bin/sh
+printf '%s\n' "$OP_SERVICE_ACCOUNT_TOKEN" >> '{}'
+printf 'API_KEY=%s\nOTHER=value\n' "$OP_SERVICE_ACCOUNT_TOKEN"
+"#,
+            log.display()
+        );
+        fs::write(script, script_body).unwrap();
+        let mut permissions = fs::metadata(script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(script, permissions).unwrap();
+    }
+
+    #[test]
+    fn dependency_token_is_command_scoped_when_fetching_environment() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let script = temp.path().join("op-env-stub");
+        let log = temp.path().join("calls.log");
+        write_op_env_stub(&script, &log);
+
+        let mut provider = OnePasswordEnvProvider::new(OnePasswordEnvConfig {
+            environment_id: "env-id".into(),
+            service_account_token: None,
+            ..OnePasswordEnvConfig::default()
+        });
+        provider.op_command = script.display().to_string();
+        provider
+            .configure_dependency_secrets(&[
+                ("IGNORED".into(), SecretString::new("ignored".into())),
+                (
+                    "OP_SERVICE_ACCOUNT_TOKEN".into(),
+                    SecretString::new("dependency-token".into()),
+                ),
+            ])
+            .unwrap();
+
+        let first = provider.get("project", "API_KEY", "default").unwrap().unwrap();
+        let second = provider.get("project", "API_KEY", "default").unwrap().unwrap();
+
+        assert_eq!(first.expose_secret(), "dependency-token");
+        assert_eq!(second.expose_secret(), "dependency-token");
+        assert_eq!(fs::read_to_string(log).unwrap(), "dependency-token\n");
+    }
+
+    #[test]
+    fn explicit_env_uri_token_takes_precedence_over_dependency_token() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let script = temp.path().join("op-env-stub");
+        let log = temp.path().join("calls.log");
+        write_op_env_stub(&script, &log);
+
+        let mut provider = OnePasswordEnvProvider::new(OnePasswordEnvConfig {
+            environment_id: "env-id".into(),
+            service_account_token: Some("uri-token".into()),
+            ..OnePasswordEnvConfig::default()
+        });
+        provider.op_command = script.display().to_string();
+        provider
+            .configure_dependency_secrets(&[(
+                "OP_SERVICE_ACCOUNT_TOKEN".into(),
+                SecretString::new("dependency-token".into()),
+            )])
+            .unwrap();
+
+        let value = provider.get("project", "API_KEY", "default").unwrap().unwrap();
+
+        assert_eq!(value.expose_secret(), "uri-token");
+        assert_eq!(fs::read_to_string(log).unwrap(), "uri-token\n");
     }
 }

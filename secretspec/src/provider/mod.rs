@@ -310,6 +310,20 @@ pub trait Provider: Send + Sync {
     /// ```
     fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()>;
 
+    /// Applies resolved provider dependency secrets before the provider is used.
+    ///
+    /// The default implementation ignores dependency secrets. Providers that
+    /// need scoped authentication material should copy only the dependencies
+    /// they understand into provider-local state and pass them directly to
+    /// child commands or SDK clients, rather than mutating process-global
+    /// environment variables.
+    fn configure_dependency_secrets(
+        &mut self,
+        _dependencies: &[(String, SecretString)],
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Returns whether this provider supports setting values.
     ///
     /// By default, providers are assumed to support writing. Read-only providers
@@ -655,7 +669,7 @@ impl TryFrom<&str> for Box<dyn Provider> {
             ))
         })?;
 
-        provider_from_url(&ProviderUrl::new(proper_url))
+        provider_from_url_with_dependencies(&ProviderUrl::new(proper_url), &[])
     }
 }
 
@@ -663,11 +677,71 @@ impl TryFrom<&Url> for Box<dyn Provider> {
     type Error = SecretSpecError;
 
     fn try_from(url: &Url) -> Result<Self> {
-        provider_from_url(&ProviderUrl::new(url.clone()))
+        provider_from_url_with_dependencies(&ProviderUrl::new(url.clone()), &[])
     }
 }
 
-fn provider_from_url(url: &ProviderUrl) -> Result<Box<dyn Provider>> {
+pub(crate) fn provider_from_spec_with_dependencies(
+    s: &str,
+    dependencies: &[(String, SecretString)],
+) -> Result<Box<dyn Provider>> {
+    let (scheme, rest) = if let Some(pos) = s.find(':') {
+        let scheme = &s[..pos];
+        let rest = &s[pos + 1..];
+        (scheme, rest)
+    } else {
+        (s, "")
+    };
+
+    if scheme == "1password" {
+        return Err(SecretSpecError::ProviderOperationFailed(
+            "Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault/path)"
+                .to_string(),
+        ));
+    }
+
+    let is_valid_scheme = PROVIDER_REGISTRY
+        .iter()
+        .any(|reg| reg.schemes.contains(&scheme));
+
+    if !is_valid_scheme {
+        if PROVIDER_REGISTRY.iter().any(|reg| reg.info.name == scheme) {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Provider '{}' exists but URI parsing failed",
+                scheme
+            )));
+        } else {
+            return Err(SecretSpecError::ProviderNotFound(scheme.to_string()));
+        }
+    }
+
+    let url_string = match rest {
+        "" | ":" => format!("{}://", scheme),
+        s if s.starts_with("//") => format!("{}:{}", scheme, s),
+        s if s.starts_with('/') => format!("{}://{}", scheme, s),
+        s => format!("{}://{}", scheme, s),
+    };
+
+    let url_string = {
+        let scheme_end = url_string.find("://").unwrap() + 3;
+        let (prefix, rest) = url_string.split_at(scheme_end);
+        format!("{}{}", prefix, percent_encode(rest.as_bytes(), URI_ENCODE_SET))
+    };
+
+    let proper_url = Url::parse(&url_string).map_err(|e| {
+        SecretSpecError::ProviderOperationFailed(format!(
+            "Invalid provider specification '{}': {}",
+            s, e
+        ))
+    })?;
+
+    provider_from_url_with_dependencies(&ProviderUrl::new(proper_url), dependencies)
+}
+
+fn provider_from_url_with_dependencies(
+    url: &ProviderUrl,
+    dependencies: &[(String, SecretString)],
+) -> Result<Box<dyn Provider>> {
     let scheme = url.scheme();
 
     // Find the provider registration for this scheme
@@ -676,7 +750,7 @@ fn provider_from_url(url: &ProviderUrl) -> Result<Box<dyn Provider>> {
         .find(|reg| reg.schemes.contains(&scheme))
         .ok_or_else(|| SecretSpecError::ProviderNotFound(scheme.to_string()))?;
 
-    let pwp = (registration.factory)(url)?;
+    let pwp = (registration.factory)(url, dependencies)?;
     if pwp.preflight.is_some() {
         Ok(Box::new(PreflightGuard::new(pwp)))
     } else {
@@ -759,6 +833,106 @@ mod url_tests {
         assert_eq!(
             without.display_with_examples(),
             "env: Environment variables"
+        );
+    }
+}
+
+mod dependency_factory_tests {
+    use super::*;
+    use secrecy::ExposeSecret;
+    use std::sync::Mutex;
+
+    static CAPTURED_DEPENDENCIES: Mutex<Vec<Vec<(String, String)>>> = Mutex::new(Vec::new());
+
+    struct DependencyTestConfig;
+
+    impl TryFrom<&ProviderUrl> for DependencyTestConfig {
+        type Error = SecretSpecError;
+
+        fn try_from(_url: &ProviderUrl) -> Result<Self> {
+            Ok(Self)
+        }
+    }
+
+    struct DependencyTestProvider;
+
+    impl DependencyTestProvider {
+        fn new(_config: DependencyTestConfig) -> Self {
+            Self
+        }
+    }
+
+    crate::register_provider! {
+        struct: DependencyTestProvider,
+        config: DependencyTestConfig,
+        name: "dependency-test",
+        description: "Dependency injection test provider",
+        schemes: ["dependency-test"],
+        examples: ["dependency-test://"],
+    }
+
+    impl Provider for DependencyTestProvider {
+        fn configure_dependency_secrets(
+            &mut self,
+            dependencies: &[(String, SecretString)],
+        ) -> Result<()> {
+            CAPTURED_DEPENDENCIES.lock().unwrap().push(
+                dependencies
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.expose_secret().to_string()))
+                    .collect(),
+            );
+            Ok(())
+        }
+
+        fn name(&self) -> &'static str {
+            Self::PROVIDER_NAME
+        }
+
+        fn uri(&self) -> String {
+            "dependency-test://".to_string()
+        }
+
+        fn get(
+            &self,
+            _project: &str,
+            _key: &str,
+            _profile: &str,
+        ) -> Result<Option<SecretString>> {
+            Ok(None)
+        }
+
+        fn set(
+            &self,
+            _project: &str,
+            _key: &str,
+            _value: &SecretString,
+            _profile: &str,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn provider_factory_passes_dependencies_to_provider_before_use() {
+        CAPTURED_DEPENDENCIES.lock().unwrap().clear();
+
+        let provider = provider_from_spec_with_dependencies(
+            "dependency-test://",
+            &[
+                ("FIRST".into(), SecretString::new("one".into())),
+                ("SECOND".into(), SecretString::new("two".into())),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(provider.name(), "dependency-test");
+        assert_eq!(
+            CAPTURED_DEPENDENCIES.lock().unwrap().as_slice(),
+            &[vec![
+                ("FIRST".to_string(), "one".to_string()),
+                ("SECOND".to_string(), "two".to_string()),
+            ]]
         );
     }
 }

@@ -5583,3 +5583,132 @@ fn test_onepassword_env_config_default() {
     assert!(config.environment_id.is_empty());
     assert!(config.service_account_token.is_none());
 }
+
+mod provider_dependency_injection_pipeline_tests {
+    use super::*;
+    use crate::provider::{Provider, ProviderUrl};
+    use secrecy::SecretString;
+    use std::sync::Mutex;
+
+    static CAPTURED_DEPENDENCIES: Mutex<Vec<Vec<(String, String)>>> = Mutex::new(Vec::new());
+
+    struct PipelineDependencyConfig;
+
+    impl TryFrom<&ProviderUrl> for PipelineDependencyConfig {
+        type Error = SecretSpecError;
+
+        fn try_from(_url: &ProviderUrl) -> Result<Self> {
+            Ok(Self)
+        }
+    }
+
+    struct PipelineDependencyProvider {
+        dependencies: Vec<(String, SecretString)>,
+    }
+
+    impl PipelineDependencyProvider {
+        fn new(_config: PipelineDependencyConfig) -> Self {
+            Self { dependencies: Vec::new() }
+        }
+    }
+
+    crate::register_provider! {
+        struct: PipelineDependencyProvider,
+        config: PipelineDependencyConfig,
+        name: "pipeline-dependency-test",
+        description: "Pipeline dependency injection test provider",
+        schemes: ["pipeline-dependency-test"],
+        examples: ["pipeline-dependency-test://"],
+    }
+
+    impl Provider for PipelineDependencyProvider {
+        fn configure_dependency_secrets(
+            &mut self,
+            dependencies: &[(String, SecretString)],
+        ) -> Result<()> {
+            self.dependencies = dependencies.to_vec();
+            CAPTURED_DEPENDENCIES.lock().unwrap().push(
+                dependencies
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.expose_secret().to_string()))
+                    .collect(),
+            );
+            Ok(())
+        }
+
+        fn name(&self) -> &'static str {
+            Self::PROVIDER_NAME
+        }
+
+        fn uri(&self) -> String {
+            "pipeline-dependency-test://".to_string()
+        }
+
+        fn get(
+            &self,
+            _project: &str,
+            _key: &str,
+            _profile: &str,
+        ) -> Result<Option<SecretString>> {
+            let rendered = self
+                .dependencies
+                .iter()
+                .map(|(name, value)| format!("{}={}", name, value.expose_secret()))
+                .collect::<Vec<_>>()
+                .join(";");
+            Ok(Some(SecretString::new(rendered.into())))
+        }
+
+        fn set(
+            &self,
+            _project: &str,
+            _key: &str,
+            _value: &SecretString,
+            _profile: &str,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn per_secret_provider_depends_on_is_resolved_renamed_and_injected() {
+        CAPTURED_DEPENDENCIES.lock().unwrap().clear();
+        let temp = TempDir::new().unwrap();
+        let env_file = temp.path().join(".env");
+        fs::write(&env_file, "SOURCE_TOKEN=resolved-token\n").unwrap();
+
+        let config: Config = toml::from_str(&format!(
+            r#"
+[project]
+name = "pipeline-test"
+revision = "1"
+
+[providers]
+source = "dotenv://{}"
+needs_dep = {{ uri = "pipeline-dependency-test://", depends_on = [{{ secret = "SOURCE_TOKEN", as = "RENAMED_TOKEN" }}] }}
+
+[profiles.default]
+APP_SECRET = {{ providers = ["needs_dep"] }}
+SOURCE_TOKEN = {{ providers = ["source"] }}
+"#,
+            env_file.display()
+        ))
+        .unwrap();
+
+        let secrets = Secrets::new(config, None, None, None);
+        let resolved = secrets
+            .validate()
+            .unwrap()
+            .unwrap()
+            .resolved
+            .secrets
+            .remove("APP_SECRET")
+            .unwrap();
+
+        assert_eq!(resolved.expose_secret(), "RENAMED_TOKEN=resolved-token");
+        assert_eq!(
+            CAPTURED_DEPENDENCIES.lock().unwrap().as_slice(),
+            &[vec![("RENAMED_TOKEN".to_string(), "resolved-token".to_string())]]
+        );
+    }
+}

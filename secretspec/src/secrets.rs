@@ -2,7 +2,7 @@
 
 use crate::config::{Config, GlobalConfig, Profile, ProviderDependency, ProviderRef, Resolved, SecretRequest};
 use crate::error::{Result, SecretSpecError};
-use crate::provider::Provider as ProviderTrait;
+use crate::provider::{provider_from_spec_with_dependencies, Provider as ProviderTrait};
 use crate::validation::{ValidatedSecrets, ValidationErrors};
 use colored::Colorize;
 use secrecy::{ExposeSecret, SecretString};
@@ -389,6 +389,41 @@ impl Secrets {
             .cloned()
     }
 
+    fn alias_for_provider_uri(&self, uri: &str) -> Option<String> {
+        self.config.providers.as_ref().and_then(|providers| {
+            providers
+                .iter()
+                .find(|(_, config)| config.uri() == uri)
+                .map(|(alias, _)| alias.clone())
+        })
+    }
+
+    fn provider_from_alias(
+        &self,
+        alias: &str,
+        uri: String,
+        profile_name: &str,
+    ) -> Result<Box<dyn ProviderTrait>> {
+        let dependencies = self.resolve_provider_requirements(alias, profile_name)?;
+        let dependencies = dependencies
+            .into_iter()
+            .map(|(dep, value)| (dep.effective_as().to_string(), value))
+            .collect::<Vec<_>>();
+
+        provider_from_spec_with_dependencies(&uri, &dependencies)
+    }
+
+    fn provider_from_uri(
+        &self,
+        uri: String,
+        profile_name: &str,
+    ) -> Result<Box<dyn ProviderTrait>> {
+        match self.alias_for_provider_uri(&uri) {
+            Some(alias) => self.provider_from_alias(&alias, uri, profile_name),
+            None => Box::<dyn ProviderTrait>::try_from(uri),
+        }
+    }
+
     /// Resolves required secrets for a provider with `requires` declarations.
     ///
     /// Returns a map from requirement key (e.g. `"service_token"`) to the
@@ -616,8 +651,10 @@ impl Secrets {
         secret_config: &crate::config::Secret,
         override_arg: Option<&str>,
     ) -> Result<Box<dyn ProviderTrait>> {
+        let profile_name = self.resolve_profile_name(None);
+
         if let Some(uri) = self.resolve_provider_override(override_arg) {
-            return Box::<dyn ProviderTrait>::try_from(uri);
+            return self.provider_from_uri(uri, &profile_name);
         }
         if let Some(first_ref) = secret_config.providers.as_ref().and_then(|p| p.first()) {
             let alias = first_ref.provider_alias().to_string();
@@ -630,7 +667,7 @@ impl Secrets {
                         alias
                     ))
                 })?;
-            return Box::<dyn ProviderTrait>::try_from(uri);
+            return self.provider_from_alias(&alias, uri, &profile_name);
         }
         self.get_provider(None)
     }
@@ -687,9 +724,8 @@ impl Secrets {
             .map(|spec| self.lookup_provider_alias(&spec).unwrap_or(spec))
             .ok_or(SecretSpecError::NoProviderConfigured)?;
 
-        let provider = Box::<dyn ProviderTrait>::try_from(provider_spec)?;
-
-        Ok(provider)
+        let profile_name = self.resolve_profile_name(None);
+        self.provider_from_uri(provider_spec, &profile_name)
     }
 
     /// Returns a provider URI for validation result metadata without forcing a
@@ -755,7 +791,7 @@ impl Secrets {
             let mut last_error: Option<SecretSpecError> = None;
             let mut any_healthy = false;
             for (uri, request) in entries {
-                let provider = match Box::<dyn ProviderTrait>::try_from(uri.clone()) {
+                let provider = match self.provider_from_uri(uri.clone(), profile_name) {
                     Ok(p) => p,
                     Err(e) => {
                         warn_provider_failure(uri, secret_name, &e);
@@ -1306,7 +1342,8 @@ impl Secrets {
         let profile_display = self.resolve_profile_name(None);
 
         // Create the "from" provider and check availability
-        let from_provider_instance = Box::<dyn ProviderTrait>::try_from(from_provider.to_string())?;
+        let from_provider_instance =
+            self.provider_from_uri(from_provider.to_string(), &profile_display)?;
 
         eprintln!(
             "Importing secrets from {} (profile: {})...\n",
@@ -1613,7 +1650,7 @@ impl Secrets {
 
         for (provider_uri, secret_names) in provider_groups {
             let provider_result = if let Some(uri) = provider_uri.clone() {
-                Box::<dyn ProviderTrait>::try_from(uri)
+                self.provider_from_uri(uri, &profile_name)
             } else {
                 self.get_provider(None)
             };

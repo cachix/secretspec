@@ -116,6 +116,7 @@ impl BwsProvider {
     }
 
     /// Strips the BWS access token from error messages to avoid leaking credentials.
+    #[allow(clippy::collapsible_if)]
     fn sanitize_error(message: &str) -> String {
         if let Ok(token) = std::env::var("BWS_ACCESS_TOKEN") {
             if !token.is_empty() {

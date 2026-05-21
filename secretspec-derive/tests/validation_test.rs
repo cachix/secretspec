@@ -34,7 +34,6 @@ mod test_valid {
 
     #[test]
     fn test_basic_compiles() {
-        // If we get here, the macro validated successfully
-        assert!(true);
+        // If this test runs, the macro validated successfully.
     }
 }

@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+mod unit_tests {
     use crate::capitalize_first;
     use secretspec::Config;
 
@@ -91,7 +91,7 @@ SOMETIMES_REQUIRED = { description = "Sometimes required secret", required = fal
         // Simulate the logic from the macro - check if secret is optional across all profiles
         let mut is_ever_optional = false;
 
-        for (_profile_name, profile_config) in &config.profiles {
+        for profile_config in config.profiles.values() {
             if let Some(secret_config) = profile_config.secrets.get("SOMETIMES_REQUIRED") {
                 if secret_config.required != Some(true) || secret_config.default.is_some() {
                     is_ever_optional = true;

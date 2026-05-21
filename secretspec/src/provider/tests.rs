@@ -309,7 +309,7 @@ mod integration_tests {
             }
             _ => {
                 let provider = Box::<dyn Provider>::try_from(provider_name)
-                    .expect(&format!("{} provider should exist", provider_name));
+                    .unwrap_or_else(|_| panic!("{} provider should exist", provider_name));
                 (provider, None)
             }
         }
@@ -340,18 +340,16 @@ mod integration_tests {
             // Provider claims to support set, so it should work
             provider
                 .set(&project_name, "TEST_PASSWORD", &test_value, "default")
-                .expect(&format!(
-                    "[{}] Provider claims to support set but failed",
-                    provider_name
-                ));
+                .unwrap_or_else(|_| {
+                    panic!("[{}] Provider claims to support set but failed", provider_name)
+                });
 
             // Verify we can retrieve it
             let retrieved = provider
                 .get(&project_name, "TEST_PASSWORD", "default")
-                .expect(&format!(
-                    "[{}] Should not error when getting after set",
-                    provider_name
-                ));
+                .unwrap_or_else(|_| {
+                    panic!("[{}] Should not error when getting after set", provider_name)
+                });
 
             match retrieved {
                 Some(value) => {
@@ -458,15 +456,15 @@ mod integration_tests {
 
         // Verify isolation between profiles
         for i in 0..profiles.len() {
-            for j in 0..profiles.len() {
+            for (j, profile) in profiles.iter().enumerate() {
                 let result = provider
-                    .get(&project_name, test_key, profiles[j])
+                    .get(&project_name, test_key, profile)
                     .expect("Should not error");
 
                 if i == j {
                     assert!(result.is_some(), "Should find value in same profile");
                 } else {
-                    let expected_value = format!("key_for_{}", profiles[j]);
+                    let expected_value = format!("key_for_{}", profile);
                     assert_eq!(
                         result.map(|s| s.expose_secret().to_string()),
                         Some(expected_value),

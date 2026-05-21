@@ -298,6 +298,7 @@ fn init_tracing(verbosity: u8) {
 }
 
 #[doc(hidden)]
+#[allow(clippy::unnecessary_sort_by)]
 pub fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose);

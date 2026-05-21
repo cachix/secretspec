@@ -26,7 +26,7 @@ fn parse_spec_from_str(content: &str, _base_path: Option<&Path>) -> Result<Confi
         ));
     }
 
-    config.validate().map_err(|e| SecretSpecError::from(e))?;
+    config.validate().map_err(SecretSpecError::from)?;
 
     Ok(config)
 }
@@ -1692,11 +1692,11 @@ fn test_import_between_dotenv_files() {
 
     // SECRET_THREE and SECRET_FOUR should not be in the file
     assert!(
-        vars.get("SECRET_THREE").is_none(),
+        !vars.contains_key("SECRET_THREE"),
         "SECRET_THREE should not be imported (not in source)"
     );
     assert!(
-        vars.get("SECRET_FOUR").is_none(),
+        !vars.contains_key("SECRET_FOUR"),
         "SECRET_FOUR should not be imported (not in source)"
     );
 }
@@ -2081,7 +2081,7 @@ fn test_import_with_profiles() {
         "Shared secret should be imported for development profile"
     );
     assert!(
-        vars.get("PROD_SECRET").is_none(),
+        !vars.contains_key("PROD_SECRET"),
         "Production secret should not be imported when using development profile"
     );
 }
@@ -5025,11 +5025,10 @@ fn test_provider_config_uri_and_requires() {
     assert_eq!(structured.uri(), "op://vault");
     assert!(structured.depends_on().is_none()); // empty map → None
 
-    let mut deps: Vec<ProviderDependency> = Vec::new();
-    deps.push(ProviderDependency {
+    let deps: Vec<ProviderDependency> = vec![ProviderDependency {
         as_name: None,
         secret: "SOME_SECRET".into(),
-    });
+    }];
     let structured_with_reqs = ProviderConfig::Structured(ProviderConfigStructured {
         uri: "op://vault".into(),
         depends_on: deps,
@@ -5165,11 +5164,10 @@ fn test_resolve_provider_requirements_empty_for_missing_alias() {
 #[test]
 fn test_resolve_provider_requirements_errors_when_secret_not_defined() {
     // Structured provider that requires a secret not in secretspec → error.
-    let mut deps: Vec<ProviderDependency> = Vec::new();
-    deps.push(ProviderDependency {
+    let deps: Vec<ProviderDependency> = vec![ProviderDependency {
         as_name: None,
         secret: "MISSING_SECRET".into(),
-    });
+    }];
     let config = Config {
         project: Project {
             name: "req-test".into(),
@@ -5688,7 +5686,6 @@ fn test_onepassword_env_provider_uri_formatting() {
         environment_id: "env-id-123".into(),
         service_account_token: Some("ops_token".into()),
         account: Some("work".into()),
-        ..Default::default()
     };
     let provider = OnePasswordEnvProvider::new(config);
     assert_eq!(provider.uri(), "onepassword+env+token://work@env-id-123");

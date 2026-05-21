@@ -55,18 +55,15 @@ use serde::{Deserialize, Serialize};
 
 /// KV secrets engine version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum KvVersion {
     /// KV version 1 (no versioning).
     V1,
     /// KV version 2 (versioned, default).
+    #[default]
     V2,
 }
 
-impl Default for KvVersion {
-    fn default() -> Self {
-        KvVersion::V2
-    }
-}
 
 /// Authentication method for the Vault / OpenBao provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -259,6 +256,7 @@ impl VaultProvider {
     }
 
     /// Resolves a token via static token sources.
+    #[allow(clippy::collapsible_if)]
     fn resolve_token_auth() -> Result<SecretString> {
         if let Ok(token) = std::env::var("VAULT_TOKEN") {
             if !token.is_empty() {

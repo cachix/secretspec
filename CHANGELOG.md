@@ -118,6 +118,7 @@ Both features are purely additive at the TOML level — every existing
 
 ### Changed
 
+- Native `op://` / `op+token://` batch reads now fetch references with bounded parallelism, sharing the 1Password provider's batch worker path while keeping legacy `onepassword://` storage semantics unchanged.
 - **Breaking (serde):** `Secret.providers` is now `Option<Vec<ProviderRef>>`
   instead of `Option<Vec<String>>` for structured references.
   Backward-compatible at the TOML level (bare strings deserialize as

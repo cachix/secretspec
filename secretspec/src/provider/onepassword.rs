@@ -6,6 +6,49 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Command;
 
+const ONEPASSWORD_BATCH_PARALLELISM: usize = 8;
+
+fn collect_bounded_parallel<T, R, F>(
+    jobs: Vec<T>,
+    max_parallel: usize,
+    panic_message: &'static str,
+    run: F,
+) -> Vec<Result<R>>
+where
+    T: Send,
+    R: Send,
+    F: Fn(T) -> R + Sync,
+{
+    let max_parallel = max_parallel.max(1);
+    let mut results = Vec::with_capacity(jobs.len());
+
+    std::thread::scope(|scope| {
+        let mut jobs = jobs.into_iter();
+        loop {
+            let handles: Vec<_> = jobs
+                .by_ref()
+                .take(max_parallel)
+                .map(|job| {
+                    let run = &run;
+                    scope.spawn(move || run(job))
+                })
+                .collect();
+
+            if handles.is_empty() {
+                break;
+            }
+
+            results.extend(handles.into_iter().map(|handle| {
+                handle
+                    .join()
+                    .map_err(|_| SecretSpecError::ProviderOperationFailed(panic_message.into()))
+            }));
+        }
+    });
+
+    results
+}
+
 /// Represents a OnePassword item retrieved from the CLI.
 ///
 /// This struct deserializes the JSON output from the `op item get` command
@@ -1081,16 +1124,27 @@ impl Provider for OnePasswordProvider {
         keys: &[&str],
         profile: &str,
     ) -> Result<HashMap<String, SecretString>> {
-        use std::thread;
-
         if keys.is_empty() {
             return Ok(HashMap::new());
         }
         if self.config.native_references {
+            let jobs: Vec<&str> = keys.to_vec();
             let mut results = HashMap::new();
-            for key in keys {
-                if let Some(value) = self.read_native_reference(key, profile, None)? {
-                    results.insert((*key).to_string(), value);
+            for outcome in collect_bounded_parallel(
+                jobs,
+                ONEPASSWORD_BATCH_PARALLELISM,
+                "Native 1Password batch read worker panicked",
+                |key| {
+                    self.read_native_reference(key, profile, None)
+                        .map(|value| value.map(|value| (key.to_string(), value)))
+                },
+            ) {
+                match outcome {
+                    Ok(Ok(Some((key, value)))) => {
+                        results.insert(key, value);
+                    }
+                    Ok(Ok(None)) => {}
+                    Ok(Err(e)) | Err(e) => return Err(e),
                 }
             }
             return Ok(results);
@@ -1125,76 +1179,36 @@ impl Provider for OnePasswordProvider {
             })
             .collect();
 
-        // Fetch items in parallel using threads
-        let vault_clone = vault.clone();
-        let op_command = self.op_command.clone();
-        let service_token = self.config.service_account_token.clone();
-        let account = self.config.account.clone();
+        // Fetch items in bounded parallel chunks.
+        let outcomes = collect_bounded_parallel(
+            keys_to_fetch,
+            ONEPASSWORD_BATCH_PARALLELISM,
+            "1Password batch read worker panicked",
+            |(key, item_id)| {
+                let args = vec![
+                    "item",
+                    "get",
+                    &item_id,
+                    "--vault",
+                    &vault,
+                    "--format",
+                    "json",
+                ];
 
-        let handles: Vec<_> = keys_to_fetch
-            .into_iter()
-            .map(|(key, item_id)| {
-                let vault = vault_clone.clone();
-                let op_cmd = op_command.clone();
-                let token = service_token.clone();
-                let acct = account.clone();
-                let key_owned = key.to_string();
+                match self.execute_op_command(&args, None) {
+                    Ok(output) => self
+                        .extract_value_from_item(&output)
+                        .ok()
+                        .flatten()
+                        .map(|value| (key.to_string(), value)),
+                    Err(_) => None,
+                }
+            },
+        );
 
-                thread::spawn(move || {
-                    let mut cmd = Command::new(&op_cmd);
-                    strip_op_session_env(&mut cmd);
-
-                    if let Some(ref t) = token {
-                        cmd.env("OP_SERVICE_ACCOUNT_TOKEN", t);
-                    }
-                    if let Some(ref a) = acct {
-                        cmd.arg("--account").arg(a);
-                    }
-
-                    cmd.args([
-                        "item", "get", &item_id, "--vault", &vault, "--format", "json",
-                    ]);
-
-                    match cmd.output() {
-                        Ok(output) if output.status.success() => {
-                            let stdout = String::from_utf8_lossy(&output.stdout);
-                            // Parse the item and extract value
-                            if let Ok(item) = serde_json::from_str::<OnePasswordItem>(&stdout) {
-                                // Look for "value" field first
-                                for field in &item.fields {
-                                    if field.label.as_deref() == Some("value")
-                                        && let Some(ref v) = field.value
-                                    {
-                                        return Some((
-                                            key_owned,
-                                            SecretString::new(v.clone().into()),
-                                        ));
-                                    }
-                                }
-                                // Fallback: look for password/concealed field
-                                for field in &item.fields {
-                                    if (field.field_type == "CONCEALED" || field.id == "password")
-                                        && let Some(ref v) = field.value
-                                    {
-                                        return Some((
-                                            key_owned,
-                                            SecretString::new(v.clone().into()),
-                                        ));
-                                    }
-                                }
-                            }
-                            None
-                        }
-                        _ => None,
-                    }
-                })
-            })
-            .collect();
-
-        // Collect results from all threads
         let mut results = HashMap::new();
-        for handle in handles {
-            if let Ok(Some((key, value))) = handle.join() {
+        for outcome in outcomes {
+            if let Ok(Some((key, value))) = outcome {
                 results.insert(key, value);
             }
         }
@@ -1440,8 +1454,14 @@ case "$1 $2" in
     cat >> '{0}'
     printf '%s\n' 'created'
     ;;
+  "item list")
+    printf '%s\n' '[{{"id":"id-stored-item","title":"secretspec/proj/default/STORED_ITEM"}},{{"id":"id-broken","title":"secretspec/proj/default/BROKEN"}}]'
+    ;;
   "item get")
     case "$3" in
+      id-stored-item)
+        printf '%s\n' '{{"fields":[{{"id":"value","type":"STRING","label":"value","value":"from-batch-item"}}]}}'
+        ;;
       *STORED_ITEM*)
         printf '%s\n' '{{"fields":[{{"id":"value","type":"STRING","label":"value","value":"from-stored-item"}}]}}'
         ;;
@@ -1476,6 +1496,69 @@ esac
             .with_max_level(tracing::Level::DEBUG)
             .with_writer(std::io::sink)
             .try_init();
+    }
+
+    #[test]
+    fn collect_bounded_parallel_maps_worker_panics_to_provider_errors() {
+        let panic_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcomes = collect_bounded_parallel(vec![1, 2], 1, "worker failed", |job| {
+            if job == 2 {
+                panic!("boom");
+            }
+            job
+        });
+        std::panic::set_hook(panic_hook);
+
+        assert_eq!(outcomes[0].as_ref().copied().unwrap(), 1);
+        let err = outcomes[1].as_ref().expect_err("panic maps to error");
+        assert!(err.to_string().contains("worker failed"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn onepassword_get_batch_fetches_legacy_items_with_bounded_workers() {
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let log = temp_dir.path().join("calls.log");
+        let op = write_fake_op(&temp_dir, &log);
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig {
+            default_vault: Some("Development".to_string()),
+            ..OnePasswordConfig::default()
+        });
+        provider.op_command = op.display().to_string();
+
+        let batch = provider
+            .get_batch("proj", &["STORED_ITEM", "BROKEN", "MISSING"], "default")
+            .expect("batch legacy reads");
+
+        assert_eq!(batch["STORED_ITEM"].expose_secret(), "from-batch-item");
+        assert!(!batch.contains_key("BROKEN"));
+        assert!(!batch.contains_key("MISSING"));
+
+        let calls = fs::read_to_string(log).expect("read fake op call log");
+        assert!(calls.contains("item list --vault Development --format json"));
+        assert!(calls.contains("item get id-stored-item --vault Development --format json"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn op_get_batch_propagates_native_reference_errors() {
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let log = temp_dir.path().join("calls.log");
+        let op = write_fake_op(&temp_dir, &log);
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig {
+            default_vault: Some("Development".to_string()),
+            native_references: true,
+            reference_base_path: vec!["dotfiles".to_string(), "error".to_string()],
+            ..OnePasswordConfig::default()
+        });
+        provider.op_command = op.display().to_string();
+
+        let err = provider
+            .get_batch("dotfiles", &["GITHUB_TOKEN"], "default")
+            .expect_err("native batch read should propagate non-missing errors");
+
+        assert!(err.to_string().contains("permission denied"), "{err}");
     }
 
     #[test]

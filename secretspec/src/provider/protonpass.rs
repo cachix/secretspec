@@ -310,6 +310,7 @@ impl Provider for ProtonPassProvider {
         Ok(())
     }
 
+    #[allow(clippy::collapsible_if)]
     fn get_batch(
         &self,
         project: &str,

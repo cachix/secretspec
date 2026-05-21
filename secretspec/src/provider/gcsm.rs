@@ -55,7 +55,7 @@ pub struct GcsmConfig {
 /// - Not end with a hyphen
 fn validate_gcp_project_id(project_id: &str) -> std::result::Result<(), SecretSpecError> {
     let len = project_id.len();
-    if len < 6 || len > 30 {
+    if !(6..=30).contains(&len) {
         return Err(SecretSpecError::ProviderOperationFailed(format!(
             "GCP project ID must be 6-30 characters, got {}",
             len
@@ -272,6 +272,7 @@ impl GcsmProvider {
     ///
     /// Always attempts to create the secret first (idempotent operation), then adds a new version.
     /// This avoids TOCTOU race conditions by not checking existence before creation.
+    #[allow(clippy::collapsible_if)]
     async fn set_secret_async(
         &self,
         project: &str,

@@ -787,6 +787,7 @@ impl GlobalConfig {
     /// # Errors
     ///
     /// Returns an error if the config directory cannot be determined
+    #[allow(clippy::collapsible_if)]
     pub fn path() -> Result<PathBuf, io::Error> {
         use etcetera::app_strategy::{AppStrategy, AppStrategyArgs, choose_app_strategy};
         let strategy = choose_app_strategy(AppStrategyArgs {
@@ -894,6 +895,7 @@ impl GlobalConfig {
         }
 
         // Create parent directories for the new path
+        #[allow(clippy::collapsible_if)]
         if let Some(parent) = new_path.parent() {
             if let Err(err) = std::fs::create_dir_all(parent) {
                 eprintln!(

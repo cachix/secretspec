@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-22
+
 ### Added
 - AWS Secrets Manager (`awssm`) provider: support for a `?prefix=` query
   parameter in the provider URI (e.g., `awssm://us-east-1?prefix=myteam`).

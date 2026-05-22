@@ -12,15 +12,19 @@
 //!
 //! # URI Format
 //!
-//! `awssm://[aws-profile@]region`
+//! `awssm://[aws-profile@]region[?prefix=PREFIX]`
 //!
 //! - `awssm://us-east-1` — use SDK default credentials in us-east-1
 //! - `awssm://production@us-east-1` — use the "production" AWS profile in us-east-1
+//! - `awssm://us-east-1?prefix=myteam` — prefix all secret names with `myteam/`
 //! - `awssm://` — use SDK defaults for both profile and region
 //!
 //! # Secret Naming
 //!
-//! Secrets are stored with the naming pattern: `secretspec/{project}/{profile}/{key}`
+//! Secrets are stored with the naming pattern: `[prefix/]secretspec/{project}/{profile}/{key}`
+//!
+//! When a `prefix` query parameter is set, it is prepended to the secret name,
+//! allowing IAM policies to scope access (e.g. `arn:aws:secretsmanager:*:*:secret:myteam/*`).
 //!
 //! # Example
 //!
@@ -49,6 +53,10 @@ pub struct AwssmConfig {
     pub region: Option<String>,
     /// The AWS profile name from `~/.aws/credentials`. If None, uses the SDK default chain.
     pub aws_profile: Option<String>,
+    /// Optional prefix prepended to all secret names (e.g., "myteam" →
+    /// `myteam/secretspec/{project}/{profile}/{key}`).
+    /// Useful for scoping IAM policies by prefix.
+    pub prefix: Option<String>,
 }
 
 impl TryFrom<&ProviderUrl> for AwssmConfig {
@@ -74,9 +82,16 @@ impl TryFrom<&ProviderUrl> for AwssmConfig {
 
         let region = url.host().filter(|s| !s.is_empty());
 
+        let prefix = url
+            .query_pairs()
+            .find(|(k, _)| k == "prefix")
+            .map(|(_, v)| v.into_owned())
+            .filter(|v| !v.is_empty());
+
         Ok(Self {
             region,
             aws_profile,
+            prefix,
         })
     }
 }
@@ -95,7 +110,7 @@ crate::register_provider! {
     name: "awssm",
     description: "AWS Secrets Manager",
     schemes: ["awssm"],
-    examples: ["awssm://us-east-1", "awssm://production@us-east-1"],
+    examples: ["awssm://us-east-1", "awssm://production@us-east-1", "awssm://us-east-1?prefix=myteam"],
 }
 
 impl AwssmProvider {
@@ -106,8 +121,13 @@ impl AwssmProvider {
 
     /// Formats the secret name for AWS Secrets Manager.
     ///
-    /// Uses the pattern: `secretspec/{project}/{profile}/{key}`
-    fn format_secret_name(project: &str, profile: &str, key: &str) -> Result<String> {
+    /// Uses the pattern: `[prefix/]secretspec/{project}/{profile}/{key}`
+    fn format_secret_name(
+        prefix: Option<&str>,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<String> {
         if project.is_empty() {
             return Err(SecretSpecError::ProviderOperationFailed(
                 "project cannot be empty".to_string(),
@@ -124,7 +144,10 @@ impl AwssmProvider {
             ));
         }
 
-        let secret_name = format!("secretspec/{}/{}/{}", project, profile, key);
+        let secret_name = match prefix {
+            Some(p) => format!("{}/secretspec/{}/{}/{}", p, project, profile, key),
+            None => format!("secretspec/{}/{}/{}", project, profile, key),
+        };
 
         // AWS secret names can be up to 512 characters
         if secret_name.len() > 512 {
@@ -160,7 +183,8 @@ impl AwssmProvider {
         key: &str,
         profile: &str,
     ) -> Result<Option<SecretString>> {
-        let secret_name = Self::format_secret_name(project, profile, key)?;
+        let secret_name =
+            Self::format_secret_name(self.config.prefix.as_deref(), project, profile, key)?;
         let client = self.create_client().await?;
 
         match client
@@ -192,6 +216,7 @@ impl AwssmProvider {
 
     /// Builds the full AWS secret names and a reverse map back to the original keys.
     fn build_batch_request_names(
+        prefix: Option<&str>,
         project: &str,
         keys: &[&str],
         profile: &str,
@@ -199,7 +224,7 @@ impl AwssmProvider {
         let mut secret_names = Vec::with_capacity(keys.len());
         let mut name_to_key = HashMap::with_capacity(keys.len());
         for key in keys {
-            let name = Self::format_secret_name(project, profile, key)?;
+            let name = Self::format_secret_name(prefix, project, profile, key)?;
             name_to_key.insert(name.clone(), key.to_string());
             secret_names.push(name);
         }
@@ -218,7 +243,8 @@ impl AwssmProvider {
         }
 
         let client = self.create_client().await?;
-        let (secret_names, name_to_key) = Self::build_batch_request_names(project, keys, profile)?;
+        let (secret_names, name_to_key) =
+            Self::build_batch_request_names(self.config.prefix.as_deref(), project, keys, profile)?;
         let mut results = HashMap::new();
 
         for chunk in secret_names.chunks(AWS_BATCH_GET_MAX_SECRETS) {
@@ -269,7 +295,8 @@ impl AwssmProvider {
         value: &SecretString,
         profile: &str,
     ) -> Result<()> {
-        let secret_name = Self::format_secret_name(project, profile, key)?;
+        let secret_name =
+            Self::format_secret_name(self.config.prefix.as_deref(), project, profile, key)?;
         let client = self.create_client().await?;
 
         // Try to create the secret first
@@ -317,10 +344,17 @@ impl Provider for AwssmProvider {
     }
 
     fn uri(&self) -> String {
-        match (&self.config.aws_profile, &self.config.region) {
+        let base = match (&self.config.aws_profile, &self.config.region) {
             (Some(profile), Some(region)) => format!("awssm://{}@{}", profile, region),
             (None, Some(region)) => format!("awssm://{}", region),
             (_, None) => "awssm".to_string(),
+        };
+        match &self.config.prefix {
+            Some(prefix) => {
+                let sep = if base.contains("://") { "?" } else { "://?" };
+                format!("{}{}prefix={}", base, sep, ProviderUrl::encode(prefix))
+            }
+            None => base,
         }
     }
 
@@ -352,29 +386,43 @@ mod tests {
 
     #[test]
     fn test_format_secret_name() {
-        let name = AwssmProvider::format_secret_name("myapp", "prod", "DB_URL").unwrap();
+        let name = AwssmProvider::format_secret_name(None, "myapp", "prod", "DB_URL").unwrap();
         assert_eq!(name, "secretspec/myapp/prod/DB_URL");
+    }
+
+    #[test]
+    fn test_format_secret_name_with_prefix() {
+        let name =
+            AwssmProvider::format_secret_name(Some("myteam"), "myapp", "prod", "DB_URL").unwrap();
+        assert_eq!(name, "myteam/secretspec/myapp/prod/DB_URL");
+    }
+
+    #[test]
+    fn test_format_secret_name_with_nested_prefix() {
+        let name =
+            AwssmProvider::format_secret_name(Some("org/team"), "myapp", "prod", "DB_URL").unwrap();
+        assert_eq!(name, "org/team/secretspec/myapp/prod/DB_URL");
     }
 
     #[test]
     fn test_format_secret_name_too_long() {
         let long_key = "A".repeat(500);
-        let result = AwssmProvider::format_secret_name("myapp", "prod", &long_key);
+        let result = AwssmProvider::format_secret_name(None, "myapp", "prod", &long_key);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_format_secret_name_empty_inputs() {
-        assert!(AwssmProvider::format_secret_name("", "prod", "KEY").is_err());
-        assert!(AwssmProvider::format_secret_name("proj", "", "KEY").is_err());
-        assert!(AwssmProvider::format_secret_name("proj", "prod", "").is_err());
+        assert!(AwssmProvider::format_secret_name(None, "", "prod", "KEY").is_err());
+        assert!(AwssmProvider::format_secret_name(None, "proj", "", "KEY").is_err());
+        assert!(AwssmProvider::format_secret_name(None, "proj", "prod", "").is_err());
     }
 
     #[test]
     fn test_build_batch_request_names() {
         let keys: Vec<&str> = vec!["A", "B", "C"];
         let (secret_names, name_to_key) =
-            AwssmProvider::build_batch_request_names("proj", &keys, "default").unwrap();
+            AwssmProvider::build_batch_request_names(None, "proj", &keys, "default").unwrap();
 
         assert_eq!(secret_names.len(), 3);
         assert_eq!(name_to_key.len(), 3);
@@ -385,10 +433,22 @@ mod tests {
     }
 
     #[test]
+    fn test_build_batch_request_names_with_prefix() {
+        let keys: Vec<&str> = vec!["A", "B"];
+        let (secret_names, name_to_key) =
+            AwssmProvider::build_batch_request_names(Some("myteam"), "proj", &keys, "default")
+                .unwrap();
+
+        assert_eq!(secret_names.len(), 2);
+        assert_eq!(secret_names[0], "myteam/secretspec/proj/default/A");
+        assert_eq!(name_to_key["myteam/secretspec/proj/default/A"], "A");
+    }
+
+    #[test]
     fn test_build_batch_request_names_empty() {
         let keys: Vec<&str> = vec![];
         let (secret_names, name_to_key) =
-            AwssmProvider::build_batch_request_names("proj", &keys, "default").unwrap();
+            AwssmProvider::build_batch_request_names(None, "proj", &keys, "default").unwrap();
         assert!(secret_names.is_empty());
         assert!(name_to_key.is_empty());
     }
@@ -399,7 +459,7 @@ mod tests {
         let key_refs: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
 
         let (secret_names, name_to_key) =
-            AwssmProvider::build_batch_request_names("proj", &key_refs, "default").unwrap();
+            AwssmProvider::build_batch_request_names(None, "proj", &key_refs, "default").unwrap();
 
         assert_eq!(secret_names.len(), 45);
         assert_eq!(name_to_key.len(), 45);
@@ -412,7 +472,7 @@ mod tests {
 
         // Verify reverse mapping is correct for all keys
         for key in &key_refs {
-            let name = AwssmProvider::format_secret_name("proj", "default", key).unwrap();
+            let name = AwssmProvider::format_secret_name(None, "proj", "default", key).unwrap();
             assert_eq!(name_to_key[&name], *key);
         }
     }

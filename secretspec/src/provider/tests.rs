@@ -658,6 +658,31 @@ mod integration_tests {
         assert_eq!(provider.uri(), "awssm://staging@eu-west-1");
     }
 
+    #[cfg(feature = "awssm")]
+    #[test]
+    fn test_awssm_provider_with_prefix() {
+        let provider = Box::<dyn Provider>::try_from("awssm://us-east-1?prefix=myteam").unwrap();
+        assert_eq!(provider.name(), "awssm");
+        assert_eq!(provider.uri(), "awssm://us-east-1?prefix=myteam");
+    }
+
+    #[cfg(feature = "awssm")]
+    #[test]
+    fn test_awssm_provider_with_prefix_and_profile() {
+        let provider =
+            Box::<dyn Provider>::try_from("awssm://production@us-east-1?prefix=myteam").unwrap();
+        assert_eq!(provider.name(), "awssm");
+        assert_eq!(provider.uri(), "awssm://production@us-east-1?prefix=myteam");
+    }
+
+    #[cfg(feature = "awssm")]
+    #[test]
+    fn test_awssm_provider_with_prefix_no_region() {
+        let provider = Box::<dyn Provider>::try_from("awssm://?prefix=myteam").unwrap();
+        assert_eq!(provider.name(), "awssm");
+        assert_eq!(provider.uri(), "awssm://?prefix=myteam");
+    }
+
     #[cfg(feature = "vault")]
     #[test]
     fn test_vault_provider_creation() {

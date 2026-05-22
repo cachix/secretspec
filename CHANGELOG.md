@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- AWS Secrets Manager (`awssm`) provider: support for a `?prefix=` query
+  parameter in the provider URI (e.g., `awssm://us-east-1?prefix=myteam`).
+  The prefix is prepended to all secret names
+  (`myteam/secretspec/{project}/{profile}/{key}`). Closes
+  [#92](https://github.com/cachix/secretspec/issues/92).
 - Provider aliases can now be declared at the project level in a top-level
   `[providers]` table of `secretspec.toml`. Aliases declared there are visible
   to per-secret `providers = [...]` lists and to `--provider`/`SECRETSPEC_PROVIDER`,

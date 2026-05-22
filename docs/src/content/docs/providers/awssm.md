@@ -16,11 +16,12 @@ The AWS Secrets Manager provider integrates with AWS for centralized secret mana
 ### URI Format
 
 ```
-awssm://[AWS_PROFILE@]REGION
+awssm://[AWS_PROFILE@]REGION[?prefix=PREFIX]
 ```
 
 - `REGION`: AWS region (e.g., `us-east-1`). If omitted, the SDK default region chain is used.
 - `AWS_PROFILE`: Optional AWS profile from `~/.aws/credentials`. If omitted, the SDK default credential chain is used.
+- `PREFIX`: Optional root prefix prepended to all secret names. Useful when IAM policies scope access by prefix (e.g., only allow `myteam/*`).
 
 ### Examples
 
@@ -30,6 +31,9 @@ $ secretspec set DATABASE_URL --provider awssm://us-east-1
 
 # Use a specific AWS profile
 $ secretspec check --provider awssm://production@us-east-1
+
+# Use a prefix to scope secrets under "myteam/"
+$ secretspec set DATABASE_URL --provider "awssm://us-east-1?prefix=myteam"
 
 # Get a secret
 $ secretspec get DATABASE_URL --provider awssm://us-east-1
@@ -57,9 +61,11 @@ $ secretspec import dotenv://.env
 
 ### Secret Naming
 
-Secrets are stored as: `secretspec/{project}/{profile}/{key}`
+Secrets are stored as: `[prefix/]secretspec/{project}/{profile}/{key}`
 
 Example: `secretspec/myapp/production/DATABASE_URL`
+
+With `?prefix=myteam`: `myteam/secretspec/myapp/production/DATABASE_URL`
 
 ### Authentication
 
@@ -88,6 +94,12 @@ AWS Secrets Manager uses the standard AWS SDK credential chain:
     }
   ]
 }
+```
+
+If you use a prefix (e.g., `?prefix=myteam`), adjust the resource ARN accordingly:
+
+```
+arn:aws:secretsmanager:*:*:secret:myteam/secretspec/*
 ```
 
 :::note

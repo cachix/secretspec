@@ -119,6 +119,10 @@ Both features are purely additive at the TOML level — every existing
 ### Changed
 
 - Native `op://` / `op+token://` batch reads now fetch references with bounded parallelism, sharing the 1Password provider's batch worker path while keeping legacy `onepassword://` storage semantics unchanged.
+- Reduced release CLI binary size by stripping symbols in the `dist` profile, using fat LTO
+  with a single codegen unit, and replacing `tracing-subscriber` with a small stderr
+  subscriber that preserves `-v`/`--verbose`, `RUST_LOG=verbose`, `RUST_LOG=quiet`, and
+  simple `RUST_LOG` level/target filters.
 - **Breaking (serde):** `Secret.providers` is now `Option<Vec<ProviderRef>>`
   instead of `Option<Vec<String>>` for structured references.
   Backward-compatible at the TOML level (bare strings deserialize as

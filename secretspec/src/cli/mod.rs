@@ -7,7 +7,9 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use tracing_subscriber::EnvFilter;
+use tracing::field::{Field, Visit};
+use tracing::span::{Attributes, Id, Record};
+use tracing::{Event, Level, Metadata, Subscriber};
 
 /// Main CLI structure for the secretspec application.
 ///
@@ -265,38 +267,330 @@ fn load_secrets(file: &Option<PathBuf>) -> miette::Result<Secrets> {
     .wrap_err("Failed to load secretspec configuration")
 }
 
+/// A lightweight log level used by the CLI's stderr tracing subscriber.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
+enum LogLevel {
+    Off,
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "off" | "quiet" => Some(Self::Off),
+            "error" => Some(Self::Error),
+            "warn" | "warning" => Some(Self::Warn),
+            "info" => Some(Self::Info),
+            "debug" => Some(Self::Debug),
+            "trace" | "verbose" => Some(Self::Trace),
+            _ => None,
+        }
+    }
+
+    fn from_tracing(level: &Level) -> Self {
+        match *level {
+            Level::ERROR => Self::Error,
+            Level::WARN => Self::Warn,
+            Level::INFO => Self::Info,
+            Level::DEBUG => Self::Debug,
+            Level::TRACE => Self::Trace,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "OFF",
+            Self::Error => "ERROR",
+            Self::Warn => "WARN",
+            Self::Info => "INFO",
+            Self::Debug => "DEBUG",
+            Self::Trace => "TRACE",
+        }
+    }
+}
+
+struct LogDirective {
+    target: Option<String>,
+    level: LogLevel,
+}
+
+impl LogDirective {
+    fn matches(&self, target: &str) -> bool {
+        self.target
+            .as_deref()
+            .is_none_or(|directive_target| target.starts_with(directive_target))
+    }
+
+    fn target_len(&self) -> usize {
+        self.target.as_deref().map_or(0, str::len)
+    }
+}
+
+struct StderrLogger {
+    directives: Vec<LogDirective>,
+}
+
+impl StderrLogger {
+    fn for_verbosity(verbosity: u8) -> Self {
+        let level = match verbosity {
+            0 => LogLevel::Off,
+            1 => LogLevel::Debug,
+            _ => LogLevel::Trace,
+        };
+
+        Self::for_secretspec(level)
+    }
+
+    fn from_env(value: &str) -> Self {
+        let normalized = value.trim().to_ascii_lowercase();
+        if normalized == "verbose" {
+            return Self::for_secretspec(LogLevel::Trace);
+        }
+        if normalized == "quiet" {
+            return Self::global(LogLevel::Off);
+        }
+
+        let directives: Vec<_> = value
+            .split(',')
+            .filter_map(|directive| parse_log_directive(directive.trim()))
+            .collect();
+
+        if directives.is_empty() {
+            Self::for_secretspec(LogLevel::Trace)
+        } else {
+            Self { directives }
+        }
+    }
+
+    fn global(level: LogLevel) -> Self {
+        Self {
+            directives: vec![LogDirective {
+                target: None,
+                level,
+            }],
+        }
+    }
+
+    fn for_secretspec(level: LogLevel) -> Self {
+        Self {
+            directives: vec![LogDirective {
+                target: Some("secretspec".to_string()),
+                level,
+            }],
+        }
+    }
+
+    fn max_level_for(&self, target: &str) -> LogLevel {
+        self.directives
+            .iter()
+            .filter(|directive| directive.matches(target))
+            .max_by_key(|directive| directive.target_len())
+            .map_or(LogLevel::Off, |directive| directive.level)
+    }
+}
+
+impl Subscriber for StderrLogger {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        LogLevel::from_tracing(metadata.level()) <= self.max_level_for(metadata.target())
+    }
+
+    fn new_span(&self, _span: &Attributes<'_>) -> Id {
+        Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+    fn event(&self, event: &Event<'_>) {
+        let mut visitor = LogVisitor::default();
+        event.record(&mut visitor);
+
+        let level = LogLevel::from_tracing(event.metadata().level()).as_str();
+        let target = event.metadata().target();
+        let message = visitor.message.unwrap_or_default();
+
+        if visitor.fields.is_empty() {
+            eprintln!("{level} {target}: {message}");
+        } else if message.is_empty() {
+            eprintln!("{level} {target}: {}", visitor.fields.join(" "));
+        } else {
+            eprintln!("{level} {target}: {message} {}", visitor.fields.join(" "));
+        }
+    }
+
+    fn enter(&self, _span: &Id) {}
+
+    fn exit(&self, _span: &Id) {}
+}
+
+#[derive(Default)]
+struct LogVisitor {
+    message: Option<String>,
+    fields: Vec<String>,
+}
+
+impl Visit for LogVisitor {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.record_field(field, format_args!("{value:?}"));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.record_field(field, format_args!("{value}"));
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.record_field(field, format_args!("{value}"));
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.record_field(field, format_args!("{value}"));
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.record_field(field, format_args!("{value}"));
+    }
+}
+
+impl LogVisitor {
+    fn record_field(&mut self, field: &Field, value: std::fmt::Arguments<'_>) {
+        let value = value.to_string();
+        if field.name() == "message" {
+            self.message = Some(value);
+        } else {
+            self.fields.push(format!("{}={value}", field.name()));
+        }
+    }
+}
+
+fn parse_log_directive(value: &str) -> Option<LogDirective> {
+    let (target, level) = value
+        .split_once('=')
+        .map_or((None, value), |(target, level)| (Some(target.trim()), level));
+    let level = LogLevel::from_name(level)?;
+    let target = target.filter(|target| !target.is_empty()).map(str::to_string);
+
+    Some(LogDirective { target, level })
+}
+
+fn init_tracing(verbosity: u8) {
+    let logger = std::env::var("RUST_LOG")
+        .or_else(|_| std::env::var("rust_log"))
+        .ok()
+        .map_or_else(
+            || StderrLogger::for_verbosity(verbosity),
+            |value| StderrLogger::from_env(&value),
+        );
+
+    let _ = tracing::subscriber::set_global_default(logger);
+}
+
+#[cfg(test)]
+mod logging_tests {
+    use super::*;
+
+    #[test]
+    fn log_levels_parse_and_render_all_supported_inputs() {
+        let cases = [
+            ("off", Some(LogLevel::Off), "OFF"),
+            ("quiet", Some(LogLevel::Off), "OFF"),
+            ("error", Some(LogLevel::Error), "ERROR"),
+            ("warn", Some(LogLevel::Warn), "WARN"),
+            ("warning", Some(LogLevel::Warn), "WARN"),
+            ("info", Some(LogLevel::Info), "INFO"),
+            ("debug", Some(LogLevel::Debug), "DEBUG"),
+            ("trace", Some(LogLevel::Trace), "TRACE"),
+            ("verbose", Some(LogLevel::Trace), "TRACE"),
+            ("unknown", None, ""),
+        ];
+
+        for (name, expected, rendered) in cases {
+            let parsed = LogLevel::from_name(name);
+            assert_eq!(parsed, expected);
+            if let Some(level) = parsed {
+                assert_eq!(level.as_str(), rendered);
+            }
+        }
+
+        assert_eq!(LogLevel::from_tracing(&Level::ERROR), LogLevel::Error);
+        assert_eq!(LogLevel::from_tracing(&Level::WARN), LogLevel::Warn);
+        assert_eq!(LogLevel::from_tracing(&Level::INFO), LogLevel::Info);
+        assert_eq!(LogLevel::from_tracing(&Level::DEBUG), LogLevel::Debug);
+        assert_eq!(LogLevel::from_tracing(&Level::TRACE), LogLevel::Trace);
+    }
+
+    #[test]
+    fn log_directives_match_targets_and_select_most_specific_level() {
+        let global = parse_log_directive("debug").expect("global directive parses");
+        assert!(global.matches("anything"));
+        assert_eq!(global.target_len(), 0);
+        assert_eq!(global.level, LogLevel::Debug);
+
+        let empty_target = parse_log_directive("=info").expect("empty target becomes global");
+        assert!(empty_target.matches("secretspec"));
+        assert_eq!(empty_target.target_len(), 0);
+        assert_eq!(empty_target.level, LogLevel::Info);
+
+        let targeted = parse_log_directive("secretspec::provider=warn").expect("targeted directive parses");
+        assert!(targeted.matches("secretspec::provider::onepassword"));
+        assert!(!targeted.matches("secretspec::secrets"));
+        assert_eq!(targeted.target_len(), "secretspec::provider".len());
+        assert_eq!(targeted.level, LogLevel::Warn);
+        assert!(parse_log_directive("secretspec=nope").is_none());
+
+        let logger = StderrLogger::from_env("secretspec=debug,secretspec::provider=trace,other=error");
+        assert_eq!(logger.max_level_for("secretspec::secrets"), LogLevel::Debug);
+        assert_eq!(logger.max_level_for("secretspec::provider::onepassword"), LogLevel::Trace);
+        assert_eq!(logger.max_level_for("other::module"), LogLevel::Error);
+        assert_eq!(logger.max_level_for("unmatched"), LogLevel::Off);
+    }
+
+    #[test]
+    fn stderr_logger_maps_cli_and_environment_filters() {
+        assert_eq!(StderrLogger::for_verbosity(0).max_level_for("secretspec"), LogLevel::Off);
+        assert_eq!(StderrLogger::for_verbosity(1).max_level_for("secretspec"), LogLevel::Debug);
+        assert_eq!(StderrLogger::for_verbosity(2).max_level_for("secretspec"), LogLevel::Trace);
+        assert_eq!(StderrLogger::from_env("verbose").max_level_for("secretspec"), LogLevel::Trace);
+        assert_eq!(StderrLogger::from_env("quiet").max_level_for("anything"), LogLevel::Off);
+        assert_eq!(StderrLogger::from_env("not-a-filter").max_level_for("secretspec"), LogLevel::Trace);
+    }
+
+    #[test]
+    fn stderr_logger_records_events_and_span_callbacks() {
+        tracing::subscriber::with_default(StderrLogger::global(LogLevel::Trace), || {
+            tracing::info!("message only");
+            tracing::info!(answer = 42_u64);
+            tracing::info!(
+                signed = -1_i64,
+                unsigned = 7_u64,
+                flag = true,
+                text = "value",
+                debug = ?vec![1, 2],
+                "message with fields"
+            );
+
+            let span = tracing::span!(Level::INFO, "covered_span", field = 1_i64);
+            span.record("field", 2_i64);
+            let parent = tracing::span!(Level::INFO, "covered_parent");
+            span.follows_from(&parent);
+            let _entered = span.enter();
+        });
+    }
+}
+
 /// Main entry point for the secretspec CLI application.
 ///
-/// Parses command-line arguments and executes the appropriate command.
-/// All commands are delegated to the SecretSpec library for processing.
+/// Parses command-line arguments and executes the appropriate command. All commands are delegated to
+/// the SecretSpec library for processing.
 ///
 /// # Returns
 ///
 /// * `Ok(())` - If the command executed successfully
 /// * `Err` - If any error occurred during execution
-fn init_tracing(verbosity: u8) {
-    let env_filter = std::env::var("RUST_LOG")
-        .or_else(|_| std::env::var("rust_log"))
-        .ok()
-        .map(|value| match value.to_ascii_lowercase().as_str() {
-            "verbose" => "secretspec=trace".to_string(),
-            "quiet" => "off".to_string(),
-            _ => value,
-        })
-        .unwrap_or_else(|| match verbosity {
-            0 => "secretspec=off".to_string(),
-            1 => "secretspec=debug".to_string(),
-            _ => "secretspec=trace".to_string(),
-        });
-
-    let filter = EnvFilter::try_new(&env_filter).unwrap_or_else(|_| EnvFilter::new("secretspec=trace"));
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .compact()
-        .try_init();
-}
-
 #[doc(hidden)]
 #[allow(clippy::unnecessary_sort_by)]
 pub fn main() -> Result<()> {

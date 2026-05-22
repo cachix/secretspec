@@ -1491,12 +1491,7 @@ esac
         script
     }
 
-    fn init_test_tracing() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_writer(std::io::sink)
-            .try_init();
-    }
+    fn init_test_tracing() {}
 
     #[test]
     fn collect_bounded_parallel_maps_worker_panics_to_provider_errors() {

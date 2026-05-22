@@ -237,6 +237,71 @@ TOKEN = { description = "Token", required = true, providers = [{ provider = "op"
 }
 
 #[test]
+fn lightweight_logging_honors_verbosity_and_rust_log_filters() {
+    let temp_dir = TempDir::new().expect("create temp test directory");
+    let secretspec_file = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &secretspec_file,
+        r#"
+[project]
+name = "lightweight-logging-test"
+revision = "1.0"
+
+[providers]
+env = "env://"
+
+[profiles.default]
+TOKEN = { description = "Token", required = true, providers = ["env"] }
+"#,
+    )
+    .expect("write secretspec config");
+
+    let cases = [
+        (vec!["-v"], None, true),
+        (Vec::new(), Some("secretspec=debug"), true),
+        (Vec::new(), Some("quiet"), false),
+        (Vec::new(), None, false),
+    ];
+
+    for (verbosity_args, rust_log, should_log_debug) in cases {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_secretspec"));
+        command.arg("-f").arg(&secretspec_file);
+        for arg in verbosity_args {
+            command.arg(arg);
+        }
+        command
+            .arg("check")
+            .arg("--no-prompt")
+            .env("HOME", temp_dir.path())
+            .env("NO_COLOR", "1")
+            .env("TOKEN", "value")
+            .env_remove("SECRETSPEC_PROVIDER")
+            .env_remove("SECRETSPEC_PROFILE");
+
+        match rust_log {
+            Some(value) => {
+                command.env("RUST_LOG", value);
+            }
+            None => {
+                command.env_remove("RUST_LOG");
+            }
+        }
+
+        let output = command.output().expect("run secretspec check");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "check should succeed\nstderr:\n{stderr}"
+        );
+        assert_eq!(
+            stderr.contains("resolved provider reference"),
+            should_log_debug,
+            "debug provider logs should match filter expectation\nstderr:\n{stderr}"
+        );
+    }
+}
+
+#[test]
 fn verbose_filter_inputs_are_accepted_by_cli() {
     let temp_dir = TempDir::new().expect("create temp test directory");
     let secretspec_file = temp_dir.path().join("secretspec.toml");

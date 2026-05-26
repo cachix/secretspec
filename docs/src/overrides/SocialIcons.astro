@@ -1,5 +1,6 @@
 ---
-import Default from '@astrojs/starlight/components/SocialIcons.astro';
+import { Icon } from '@astrojs/starlight/components';
+import config from 'virtual:starlight/user-config';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -16,6 +17,60 @@ try {
 } catch {
   // Cargo.toml missing or unreadable — degrade to no pill rather than fail the build.
 }
+
+// Best-effort: fetch the GitHub star count at build time.
+//
+// Strategy:
+//   1. Authenticated fetch if GITHUB_TOKEN is set (CI path).
+//   2. Unauthenticated fetch (60/hr per IP — fine for fresh CI runners,
+//      typically rate-limited on dev machines).
+//   3. Fallback to the `gh` CLI so local dev works without setting a token.
+//
+// Any failure degrades silently to no pill — builds must never fail on this.
+let stars: number | null = null;
+
+async function fetchStars(): Promise<number | null> {
+  const headers: Record<string, string> = { 'User-Agent': 'secretspec-docs-build' };
+  if (process.env.GITHUB_TOKEN) headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+  try {
+    const res = await fetch('https://api.github.com/repos/cachix/secretspec', { headers });
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    return typeof data?.stargazers_count === 'number' ? data.stargazers_count : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchStarsViaGh(): Promise<number | null> {
+  try {
+    const { execSync } = await import('node:child_process');
+    const out = execSync('gh api repos/cachix/secretspec --jq .stargazers_count', {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+    }).trim();
+    const n = parseInt(out, 10);
+    return Number.isFinite(n) ? n : null;
+  } catch (err) {
+    console.warn('[docs] gh stars fallback failed:', (err as Error).message);
+    return null;
+  }
+}
+
+stars = await fetchStars();
+if (stars === null) stars = await fetchStarsViaGh();
+
+function formatStars(n: number): string {
+  if (n >= 10000) return (n / 1000).toFixed(0) + 'k';
+  if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+  return String(n);
+}
+
+// The GitHub-mark + star-count pill replaces the standalone GitHub icon, so
+// only render non-GitHub social links here.
+// Order: [version pill] [GH mark + stars] [other socials].
+const otherLinks = (config.social || []).filter((l) => l.icon !== 'github');
 ---
 
 {version && (
@@ -27,7 +82,21 @@ try {
     v{version}
   </a>
 )}
-<Default {...Astro.props} />
+{stars !== null && (
+  <a
+    class="release-pill stars-pill"
+    href="https://github.com/cachix/secretspec"
+    aria-label={`${stars} GitHub stars`}
+  >
+    <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+    {formatStars(stars)}
+  </a>
+)}
+{otherLinks.map((link) => (
+  <a href={link.href} rel="me" class="sl-flex social-link" aria-label={link.label}>
+    <Icon name={link.icon} />
+  </a>
+))}
 
 <style>
   .release-pill {
@@ -49,6 +118,20 @@ try {
   .release-pill:hover {
     border-color: var(--sl-color-text-accent);
     color: var(--sl-color-text-accent);
+  }
+  .stars-pill {
+    gap: 0.25rem;
+  }
+  .stars-pill svg {
+    flex-shrink: 0;
+  }
+  .social-link {
+    color: var(--sl-color-text-accent);
+    padding: 0.5em;
+    margin: -0.5em;
+  }
+  .social-link:hover {
+    opacity: 0.66;
   }
   /* Mobile menu wraps SocialIcons in `.social-icons` (no `sl-flex` modifier)
      and uses :empty to hide the row when no social links are configured. The

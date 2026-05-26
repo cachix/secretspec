@@ -10,7 +10,13 @@ export default defineConfig({
     starlight({
       plugins: [
         starlightLlmsTxt({
-          description: `SecretSpec is a declarative secrets manager for development workflows. Define secrets in \`secretspec.toml\`, then use the CLI to manage them.
+          description: `SecretSpec is a declarative secrets manager for development workflows. It separates secret **declaration** from secret **storage**: commit a \`secretspec.toml\` that declares what secrets your application needs, while the actual values live in a secure provider (system keyring, 1Password, Vault, etc.).
+
+SecretSpec answers three questions for every project:
+
+- **WHAT** secrets does the application need?
+- **HOW** do requirements change per environment (via profiles)?
+- **WHERE** are the actual values stored (via providers)?
 
 ## Quick Start
 
@@ -22,9 +28,42 @@ export default defineConfig({
 ## Configuration Example
 
 \`\`\`toml
+[project]
+name = "my-app"
+revision = "1.0"
+
 [profiles.default]
-DATABASE_URL = { description = "PostgreSQL connection string" }
-API_KEY = { description = "External API key" }
+DATABASE_URL = { description = "PostgreSQL connection string", required = true }
+REDIS_URL    = { description = "Redis cache" }
+TLS_CERT     = { description = "TLS cert", as_path = true }
+DB_PASSWORD  = { description = "DB password", type = "password", generate = true }
+
+[profiles.development]
+DATABASE_URL = { default = "postgresql://localhost/dev" }
+\`\`\`
+
+## Type-safe Rust SDK
+
+\`\`\`rust
+secretspec_derive::declare_secrets!("secretspec.toml");
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let secrets = Secrets::builder()
+        .with_provider("keyring")
+        .with_profile(Profile::Production)
+        .load()?;
+    println!("{}", secrets.secrets.database_url);
+    secrets.secrets.set_as_env_vars();
+    Ok(())
+}
+\`\`\`
+
+## Migration
+
+Move every secret between providers without changing application code:
+
+\`\`\`bash
+$ secretspec import dotenv://.env.production
 \`\`\`
 
 ## Providers
@@ -33,6 +72,10 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
         }),
       ],
       title: "SecretSpec",
+      components: {
+        Hero: "./src/overrides/Hero.astro",
+        SocialIcons: "./src/overrides/SocialIcons.astro",
+      },
       logo: {
         src: "./src/assets/logo.png",
         replacesTitle: true,
@@ -50,7 +93,7 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
           href: "https://discord.gg/naMgvexb6q",
         },
       ],
-      customCss: ["./src/styles/custom.css"],
+      customCss: ["./src/styles/custom.css", "./src/styles/landing.css"],
       sidebar: [
         {
           label: "Getting Started",

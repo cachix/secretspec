@@ -66,7 +66,7 @@ When adding a new provider, update **every** location below — provider names a
 2. `docs/astro.config.mjs` - Add to sidebar navigation under "Providers" **and** to the providers sentence in the `starlightLlmsTxt` description block
 3. `docs/src/content/docs/concepts/providers.md` - Add a row to the "Available Providers" table
 4. `docs/src/content/docs/reference/providers.md` - Add a provider section **and** a row in the "Security Considerations" table
-5. `docs/src/content/docs/index.mdx` - Add to the "Supported providers" bullet list **and** to the `secretspec config init` example output (use the description string from the provider's `register_provider!` macro)
+5. `docs/src/pages/index.astro` - Add to the `providerIcons` array (top of file) **and** to the `secretspec config init` mini-terminal in the hero
 6. `docs/src/content/docs/quick-start.mdx` - Update the `secretspec config init` example output to include the new provider
 7. `README.md` (symlink to `secretspec/README.md`) - Add to the "Providers" bullet list **and** to the `secretspec config init` example output
 
@@ -179,8 +179,8 @@ The docs site is an Astro Starlight site deployed to https://secretspec.dev/.
 ### Structure
 
 - `docs/astro.config.mjs` - Sidebar navigation and site config
-- `docs/src/content/docs/` - All content pages (markdown/mdx)
-  - `index.mdx` - Home page
+- `docs/src/pages/index.astro` - Home page (custom landing layout, not in the content collection)
+- `docs/src/content/docs/` - All other content pages (markdown/mdx)
   - `quick-start.mdx` - Getting started guide
   - `concepts/` - Declarative config, profiles, providers overview
   - `providers/` - Individual provider docs (one `.md` per registered provider; see [Adding Provider Documentation](#adding-provider-documentation) when adding a new one)

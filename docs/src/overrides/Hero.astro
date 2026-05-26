@@ -1,0 +1,6 @@
+---
+import Default from '@astrojs/starlight/components/Hero.astro';
+
+const isLandingRoute = Astro.url.pathname === '/' || Astro.url.pathname === '';
+---
+{isLandingRoute ? null : <Default {...Astro.props}><slot /></Default>}

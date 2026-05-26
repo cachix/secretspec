@@ -1,0 +1,60 @@
+---
+import Default from '@astrojs/starlight/components/SocialIcons.astro';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+// Best-effort: read the workspace version at build time. Anchor to the
+// [workspace.package] section and stop at the next TOML header so we never
+// match a dependency's `version = "..."` pin.
+let version: string | null = null;
+try {
+  const cargoTomlPath = fileURLToPath(new URL('../../../Cargo.toml', import.meta.url));
+  const cargoToml = readFileSync(cargoTomlPath, 'utf-8');
+  const section = cargoToml.match(/\[workspace\.package\]([^\[]*)/);
+  const versionMatch = section?.[1].match(/^\s*version\s*=\s*["']([^"']+)["']/m);
+  version = versionMatch?.[1] ?? null;
+} catch {
+  // Cargo.toml missing or unreadable — degrade to no pill rather than fail the build.
+}
+---
+
+{version && (
+  <a
+    class="release-pill"
+    href={`https://github.com/cachix/secretspec/releases/tag/v${version}`}
+    aria-label={`Latest release: v${version}`}
+  >
+    v{version}
+  </a>
+)}
+<Default {...Astro.props} />
+
+<style>
+  .release-pill {
+    display: inline-flex;
+    align-items: center;
+    font-family: var(--sl-font-mono, monospace);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.2rem 0.55rem;
+    margin-right: 0.5rem;
+    border-radius: 999px;
+    border: 1px solid var(--sl-color-hairline);
+    background: var(--sl-color-bg-nav);
+    color: var(--sl-color-text);
+    text-decoration: none;
+    transition: border-color 0.15s, color 0.15s;
+    line-height: 1.4;
+  }
+  .release-pill:hover {
+    border-color: var(--sl-color-text-accent);
+    color: var(--sl-color-text-accent);
+  }
+  /* Mobile menu wraps SocialIcons in `.social-icons` (no `sl-flex` modifier)
+     and uses :empty to hide the row when no social links are configured. The
+     header wrapper is `.social-icons.sl-flex`. Suppress the pill in the mobile
+     wrapper only, so empty-state collapse still works there. */
+  :global(.social-icons:not(.sl-flex)) .release-pill {
+    display: none;
+  }
+</style>

@@ -155,6 +155,10 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
             { label: "CLI Commands", slug: "reference/cli" },
             { label: "Providers", slug: "reference/providers" },
             { label: "Adding Providers", slug: "reference/adding-providers" },
+            {
+              label: "Provider Protocol (draft)",
+              slug: "reference/provider-protocol",
+            },
           ],
         },
       ],

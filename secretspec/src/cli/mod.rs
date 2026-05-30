@@ -36,7 +36,9 @@ enum Commands {
     Init {
         /// Provider URL to import from (e.g., dotenv://.env, dotenv://.env.production)
         /// Currently only dotenv provider is supported.
-        #[arg(short, long, default_value = "dotenv://.env")]
+        ///
+        /// Note: no short flag here — `-f` is the global `--file` option.
+        #[arg(long, default_value = "dotenv://.env")]
         from: String,
     },
     /// Set a secret value
@@ -156,10 +158,14 @@ fn get_example_toml() -> &'static str {
 "#
 }
 
-/// Generates a TOML string from a ProjectConfig with helpful comments
+/// Generates a `secretspec.toml` document from a [`Config`] with helpful comments.
 ///
-/// This function serializes a `ProjectConfig` to TOML format while adding
-/// instructional comments to help users understand the configuration options.
+/// String values and keys are serialized through `toml_edit`, so anything that
+/// needs quoting or escaping (a description containing a double-quote, a secret
+/// name containing a dot, a control character, ...) is emitted as valid,
+/// round-trippable TOML rather than hand-interpolated. Secrets are written as
+/// inline tables and profiles/secrets are sorted for deterministic output, while
+/// instructional comments are preserved for users editing the file by hand.
 ///
 /// # Arguments
 ///
@@ -173,42 +179,69 @@ fn get_example_toml() -> &'static str {
 ///
 /// Returns an error if the configuration cannot be serialized
 fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
-    let mut output = String::new();
+    use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value};
 
-    // Project section
-    output.push_str("[project]\n");
-    output.push_str(&format!("name = \"{}\"\n", config.project.name));
-    output.push_str(&format!("revision = \"{}\"\n", config.project.revision));
+    let mut doc = DocumentMut::new();
 
-    // Add extends comment and field if needed
-    output.push_str("# Extend configurations from subdirectories\n");
-    output.push_str("# extends = [ \"subdir1\", \"subdir2\" ]\n");
-
-    // Profile sections
-    for (profile_name, profile_config) in &config.profiles {
-        output.push_str(&format!("\n[profiles.{}]\n", profile_name));
-
-        for (secret_name, secret_config) in &profile_config.secrets {
-            output.push_str(&format!(
-                "{} = {{ description = \"{}\"",
-                secret_name,
-                secret_config.description.as_deref().unwrap_or(""),
-            ));
-
-            // Only include required if it's explicitly set
-            if let Some(required) = secret_config.required {
-                output.push_str(&format!(", required = {}", required));
-            }
-
-            if let Some(default) = &secret_config.default {
-                output.push_str(&format!(", default = \"{}\"", default));
-            }
-
-            output.push_str(" }\n");
+    // [project]
+    let mut project = Table::new();
+    project.insert("name", toml_edit::value(config.project.name.as_str()));
+    project.insert(
+        "revision",
+        toml_edit::value(config.project.revision.as_str()),
+    );
+    if let Some(extends) = &config.project.extends {
+        let mut arr = Array::new();
+        for entry in extends {
+            arr.push(entry.as_str());
         }
+        project.insert("extends", toml_edit::value(arr));
     }
+    doc.insert("project", Item::Table(project));
 
-    Ok(output)
+    // [profiles.<name>] tables, each secret an inline table. Sorted so the output
+    // is deterministic regardless of the source HashMap ordering.
+    let mut profiles = Table::new();
+    profiles.set_implicit(true);
+
+    let mut profile_names: Vec<&String> = config.profiles.keys().collect();
+    profile_names.sort();
+
+    for (index, profile_name) in profile_names.iter().enumerate() {
+        let profile_config = &config.profiles[*profile_name];
+        let mut profile_table = Table::new();
+
+        let mut secret_names: Vec<&String> = profile_config.secrets.keys().collect();
+        secret_names.sort();
+        for secret_name in secret_names {
+            let secret_config = &profile_config.secrets[secret_name];
+            let mut inline = InlineTable::new();
+            inline.insert(
+                "description",
+                Value::from(secret_config.description.as_deref().unwrap_or("")),
+            );
+            if let Some(required) = secret_config.required {
+                inline.insert("required", Value::from(required));
+            }
+            if let Some(default) = &secret_config.default {
+                inline.insert("default", Value::from(default.as_str()));
+            }
+            profile_table.insert(secret_name, toml_edit::value(inline));
+        }
+
+        // Surface the `extends` option as a comment before the first profile,
+        // unless the project already declares an explicit `extends`.
+        if index == 0 && config.project.extends.is_none() {
+            profile_table.decor_mut().set_prefix(
+                "\n# Extend configurations from subdirectories\n# extends = [ \"subdir1\", \"subdir2\" ]\n\n",
+            );
+        }
+
+        profiles.insert(profile_name.as_str(), Item::Table(profile_table));
+    }
+    doc.insert("profiles", Item::Table(profiles));
+
+    Ok(doc.to_string())
 }
 
 /// Loads secrets using an explicit path or auto-detection.
@@ -583,6 +616,203 @@ pub fn main() -> Result<()> {
                 .into_diagnostic()
                 .wrap_err("Failed to import secrets")?;
             Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Secret;
+
+    /// Builds a Config with a single secret named `S` under the `default` profile.
+    fn config_with_secret(secret: Secret) -> Config {
+        let mut secrets = HashMap::new();
+        secrets.insert("S".to_string(), secret);
+        Config {
+            project: Project {
+                name: "myproj".to_string(),
+                revision: "1.0".to_string(),
+                extends: None,
+            },
+            profiles: HashMap::from([(
+                "default".to_string(),
+                Profile {
+                    defaults: None,
+                    secrets,
+                },
+            )]),
+            providers: None,
+        }
+    }
+
+    #[test]
+    fn generate_toml_quotes_dotted_secret_name_and_round_trips() {
+        // dotenvy accepts keys containing dots (e.g. `FOO.BAR`). A bare TOML key
+        // `FOO.BAR` would be parsed as a *dotted* (nested) key, silently losing
+        // the secret; toml_edit quotes it so the name round-trips intact.
+        let mut secrets = HashMap::new();
+        secrets.insert(
+            "FOO.BAR".to_string(),
+            Secret {
+                description: Some("dotted".to_string()),
+                ..Default::default()
+            },
+        );
+        let mut config = config_with_secret(Secret::default());
+        config.profiles.get_mut("default").unwrap().secrets = secrets;
+
+        let generated = generate_toml_with_comments(&config).unwrap();
+        assert!(
+            generated.contains("\"FOO.BAR\" = {"),
+            "key must be quoted, got: {generated}"
+        );
+        let parsed: Config = toml::from_str(&generated).expect("must round-trip");
+        assert!(parsed.profiles["default"].secrets.contains_key("FOO.BAR"));
+    }
+
+    #[test]
+    fn generate_toml_emits_and_round_trips_extends() {
+        let mut config = config_with_secret(Secret {
+            description: Some("desc".to_string()),
+            ..Default::default()
+        });
+        config.project.extends = Some(vec!["../shared".to_string()]);
+
+        let generated = generate_toml_with_comments(&config).unwrap();
+        let parsed: Config = toml::from_str(&generated).expect("must round-trip");
+        assert_eq!(
+            parsed.project.extends.as_deref(),
+            Some(["../shared".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn generate_toml_round_trips_control_character() {
+        // U+007F (DEL) must be escaped: TOML forbids it unescaped in a basic
+        // string. toml_edit handles it; a raw byte would fail to re-parse.
+        let config = config_with_secret(Secret {
+            description: Some("a\u{7f}b".to_string()),
+            ..Default::default()
+        });
+        let generated = generate_toml_with_comments(&config).unwrap();
+        let parsed: Config = toml::from_str(&generated).expect("must round-trip");
+        assert_eq!(
+            parsed.profiles["default"].secrets["S"]
+                .description
+                .as_deref(),
+            Some("a\u{7f}b")
+        );
+    }
+
+    #[test]
+    fn generate_toml_round_trips_values_with_special_chars() {
+        // Description and default contain quotes, a backslash and a newline; the
+        // project name contains a quote. Before escaping was added these produced
+        // malformed TOML that failed to parse back.
+        let config = Config {
+            project: Project {
+                name: "weird \"name\"".to_string(),
+                revision: "1.0".to_string(),
+                extends: None,
+            },
+            profiles: HashMap::from([(
+                "default".to_string(),
+                Profile {
+                    defaults: None,
+                    secrets: HashMap::from([(
+                        "DATABASE_URL".to_string(),
+                        Secret {
+                            description: Some("he said \"hi\"\nthen left\\".to_string()),
+                            default: Some("a\"b\\c".to_string()),
+                            ..Default::default()
+                        },
+                    )]),
+                },
+            )]),
+            providers: None,
+        };
+
+        let generated = generate_toml_with_comments(&config).unwrap();
+        let parsed: Config =
+            toml::from_str(&generated).expect("generated TOML must be valid and re-parseable");
+
+        assert_eq!(parsed.project.name, "weird \"name\"");
+        let secret = &parsed.profiles["default"].secrets["DATABASE_URL"];
+        assert_eq!(
+            secret.description.as_deref(),
+            Some("he said \"hi\"\nthen left\\")
+        );
+        assert_eq!(secret.default.as_deref(), Some("a\"b\\c"));
+    }
+
+    #[test]
+    fn generate_toml_none_branch_emits_empty_description_and_omits_fields() {
+        let out = generate_toml_with_comments(&config_with_secret(Secret::default())).unwrap();
+        assert!(out.contains("S = { description = \"\" }"), "got: {out}");
+        assert!(!out.contains("required = "));
+        assert!(!out.contains("default = "));
+    }
+
+    #[test]
+    fn generate_toml_some_branch_emits_required_and_default() {
+        let secret = Secret {
+            description: Some("desc".to_string()),
+            required: Some(false),
+            default: Some("v".to_string()),
+            ..Default::default()
+        };
+        let out = generate_toml_with_comments(&config_with_secret(secret)).unwrap();
+        assert!(out.contains(", required = false"), "got: {out}");
+        assert!(out.contains(", default = \"v\""), "got: {out}");
+    }
+
+    #[test]
+    fn generated_config_with_example_template_is_valid_toml() {
+        let mut out = generate_toml_with_comments(&config_with_secret(Secret {
+            description: Some("desc".to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        out.push_str(get_example_toml());
+        // The appended example only adds commented secrets, so it must remain
+        // syntactically valid TOML.
+        toml::from_str::<Config>(&out).expect("init output template must be valid TOML");
+    }
+
+    #[test]
+    fn cli_command_definition_is_valid() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn init_defaults_from_to_dotenv() {
+        let cli = Cli::try_parse_from(["secretspec", "init"]).unwrap();
+        match cli.command {
+            Commands::Init { from } => assert_eq!(from, "dotenv://.env"),
+            _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
+    fn run_captures_trailing_args() {
+        let cli =
+            Cli::try_parse_from(["secretspec", "run", "--", "npm", "start", "--flag"]).unwrap();
+        match cli.command {
+            Commands::Run { command, .. } => {
+                assert_eq!(command, vec!["npm", "start", "--flag"]);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn check_parses_no_prompt_short_flag() {
+        let cli = Cli::try_parse_from(["secretspec", "check", "-n"]).unwrap();
+        match cli.command {
+            Commands::Check { no_prompt, .. } => assert!(no_prompt),
+            _ => panic!("expected Check command"),
         }
     }
 }

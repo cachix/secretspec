@@ -15,7 +15,7 @@ secretspec init [OPTIONS]
 ```
 
 **Options:**
-- `-f, --from <PATH>` - Path to .env file to import from (default: `.env`)
+- `--from <PATH>` - Path to .env file to import from (default: `.env`)
 
 **Example:**
 ```bash

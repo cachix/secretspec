@@ -10,8 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Internal
 - Expanded test coverage for previously untested logic: CLI argument parsing
   and `init` TOML generation, the config/secret validation guards
-  (`Config::validate`, `Secret::validate`, identifier checks), and the
-  `ValidationErrors` display/`has_errors` behavior.
+  (`Config::validate`, `Secret::validate`, identifier checks), the
+  `ValidationErrors` display/`has_errors` behavior, `ProviderUrl`
+  encode/decode and `ProviderInfo` display, and the no-network parsing and
+  path-building logic of the keyring, pass, and OnePassword providers
+  (`TryFrom<&ProviderUrl>`, path/item-name builders, and `uri()` round-trips).
 
 ### Fixed
 - `secretspec init` now serializes the generated `secretspec.toml` with

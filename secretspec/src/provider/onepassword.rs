@@ -879,3 +879,100 @@ impl Default for OnePasswordProvider {
         Self::new(OnePasswordConfig::default())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use url::Url;
+
+    fn config(s: &str) -> OnePasswordConfig {
+        OnePasswordConfig::try_from(&ProviderUrl::new(Url::parse(s).unwrap())).unwrap()
+    }
+
+    #[test]
+    fn try_from_parses_account_and_vault() {
+        let c = config("onepassword://work@Production");
+        assert_eq!(c.account.as_deref(), Some("work"));
+        assert_eq!(c.default_vault.as_deref(), Some("Production"));
+        assert_eq!(c.service_account_token, None);
+    }
+
+    #[test]
+    fn try_from_parses_vault_only() {
+        let c = config("onepassword://Production");
+        assert_eq!(c.account, None);
+        assert_eq!(c.default_vault.as_deref(), Some("Production"));
+    }
+
+    #[test]
+    fn try_from_token_scheme_captures_token_from_username() {
+        let c = config("onepassword+token://ops_tok@Private");
+        assert_eq!(c.service_account_token.as_deref(), Some("ops_tok"));
+        assert_eq!(c.default_vault.as_deref(), Some("Private"));
+        assert_eq!(c.account, None);
+    }
+
+    #[test]
+    fn try_from_token_scheme_captures_token_from_password() {
+        let c = config("onepassword+token://acct:ops_tok@Private");
+        assert_eq!(c.service_account_token.as_deref(), Some("ops_tok"));
+    }
+
+    #[test]
+    fn try_from_ignores_localhost_host() {
+        let c = config("onepassword://localhost");
+        assert_eq!(c.default_vault, None);
+        assert_eq!(c.account, None);
+    }
+
+    // Note: the `"1password"` guard arm in `try_from` is effectively unreachable
+    // via ProviderUrl, because `Url::parse` rejects schemes that start with a
+    // digit (RFC 3986). It therefore cannot be exercised through a real URL.
+
+    #[test]
+    fn try_from_rejects_unknown_scheme() {
+        let err =
+            OnePasswordConfig::try_from(&ProviderUrl::new(Url::parse("keyring://vault").unwrap()))
+                .unwrap_err();
+        assert!(err.to_string().contains("Invalid scheme"));
+    }
+
+    #[test]
+    fn get_vault_name_defaults_to_private() {
+        let default = OnePasswordProvider::new(OnePasswordConfig::default());
+        assert_eq!(default.get_vault_name("any"), "Private");
+
+        let configured = OnePasswordProvider::new(config("onepassword://Production"));
+        assert_eq!(configured.get_vault_name("any"), "Production");
+    }
+
+    #[test]
+    fn format_item_name_default_and_custom() {
+        let default = OnePasswordProvider::new(OnePasswordConfig::default());
+        assert_eq!(
+            default.format_item_name("proj", "KEY", "prod"),
+            "secretspec/proj/prod/KEY"
+        );
+
+        let custom = OnePasswordProvider::new(OnePasswordConfig {
+            folder_prefix: Some("{project}-{key}".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(custom.format_item_name("proj", "KEY", "prod"), "proj-KEY");
+    }
+
+    #[test]
+    fn uri_for_account_round_trips() {
+        let provider = OnePasswordProvider::new(config("onepassword://work@Production"));
+        assert_eq!(provider.uri(), "onepassword://work@Production");
+    }
+
+    #[test]
+    fn uri_for_token_does_not_leak_secret() {
+        let provider =
+            OnePasswordProvider::new(config("onepassword+token://ops_secret_tok@Private"));
+        let uri = provider.uri();
+        assert_eq!(uri, "onepassword+token://Private");
+        assert!(!uri.contains("ops_secret_tok"));
+    }
+}

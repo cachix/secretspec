@@ -111,3 +111,43 @@ impl fmt::Display for ValidationErrors {
 }
 
 impl std::error::Error for ValidationErrors {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn errors(missing_required: Vec<&str>) -> ValidationErrors {
+        ValidationErrors::new(
+            missing_required.into_iter().map(String::from).collect(),
+            vec![],
+            vec![],
+            "keyring".to_string(),
+            "default".to_string(),
+        )
+    }
+
+    #[test]
+    fn has_errors_true_only_when_required_missing() {
+        assert!(errors(vec!["A", "B"]).has_errors());
+        assert!(!errors(vec![]).has_errors());
+
+        // Missing optional / defaults alone are not errors.
+        let only_optional = ValidationErrors::new(
+            vec![],
+            vec!["OPT".to_string()],
+            vec![("X".to_string(), "v".to_string())],
+            "keyring".to_string(),
+            "default".to_string(),
+        );
+        assert!(!only_optional.has_errors());
+    }
+
+    #[test]
+    fn display_lists_missing_required_or_is_empty() {
+        assert_eq!(
+            errors(vec!["A", "B"]).to_string(),
+            "Missing required secrets: A, B"
+        );
+        assert_eq!(errors(vec![]).to_string(), "");
+    }
+}

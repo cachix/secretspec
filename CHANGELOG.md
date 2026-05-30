@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Internal
+- Expanded test coverage for previously untested logic: CLI argument parsing
+  and `init` TOML generation, the config/secret validation guards
+  (`Config::validate`, `Secret::validate`, identifier checks), and the
+  `ValidationErrors` display/`has_errors` behavior.
+
 ### Fixed
 - `secretspec init` now serializes the generated `secretspec.toml` with
   `toml_edit` instead of hand-interpolating strings. This fixes several cases

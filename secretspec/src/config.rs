@@ -838,3 +838,162 @@ impl From<toml::de::Error> for ParseError {
         ParseError::Toml(e)
     }
 }
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    fn secret(description: Option<&str>) -> Secret {
+        Secret {
+            description: description.map(String::from),
+            ..Default::default()
+        }
+    }
+
+    fn config_with(name: &str, profiles: Vec<(&str, Vec<(&str, Secret)>)>) -> Config {
+        let profiles = profiles
+            .into_iter()
+            .map(|(pname, secrets)| {
+                let secrets = secrets
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect();
+                (
+                    pname.to_string(),
+                    Profile {
+                        defaults: None,
+                        secrets,
+                    },
+                )
+            })
+            .collect();
+        Config {
+            project: Project {
+                name: name.to_string(),
+                revision: "1.0".to_string(),
+                extends: None,
+            },
+            profiles,
+            providers: None,
+        }
+    }
+
+    #[test]
+    fn is_valid_identifier_accepts_and_rejects() {
+        for ok in ["ok", "_ok", "VALID_NAME9", "a"] {
+            assert!(is_valid_identifier(ok), "expected valid: {ok}");
+        }
+        for bad in ["", "1abc", "a-b", "has space", "a.b"] {
+            assert!(!is_valid_identifier(bad), "expected invalid: {bad}");
+        }
+    }
+
+    #[test]
+    fn config_validate_rejects_empty_name() {
+        let err = config_with("", vec![("default", vec![("A", secret(Some("d")))])])
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, ParseError::Validation(_)));
+        assert!(err.to_string().contains("name cannot be empty"));
+    }
+
+    #[test]
+    fn config_validate_rejects_no_profiles() {
+        let err = config_with("proj", vec![]).validate().unwrap_err();
+        assert!(err.to_string().contains("At least one profile"));
+    }
+
+    #[test]
+    fn config_validate_rejects_empty_profile() {
+        let err = config_with("proj", vec![("default", vec![])])
+            .validate()
+            .unwrap_err();
+        assert!(err.to_string().contains("at least one secret"));
+    }
+
+    #[test]
+    fn config_validate_rejects_invalid_secret_name() {
+        let err = config_with("proj", vec![("default", vec![("1BAD", secret(Some("d")))])])
+            .validate()
+            .unwrap_err();
+        assert!(err.to_string().contains("Invalid secret name"));
+    }
+
+    #[test]
+    fn config_validate_accepts_valid_config() {
+        assert!(
+            config_with(
+                "proj",
+                vec![("default", vec![("API_KEY", secret(Some("d")))])]
+            )
+            .validate()
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn secret_validate_requires_nonempty_description() {
+        assert_eq!(secret(None).validate().unwrap_err(), "missing description");
+        assert_eq!(
+            secret(Some("")).validate().unwrap_err(),
+            "description cannot be empty"
+        );
+    }
+
+    #[test]
+    fn secret_validate_rejects_required_with_default() {
+        let s = Secret {
+            description: Some("d".to_string()),
+            required: Some(true),
+            default: Some("v".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            s.validate()
+                .unwrap_err()
+                .contains("Required secrets cannot have default")
+        );
+    }
+
+    #[test]
+    fn secret_validate_generate_requires_type() {
+        let s = Secret {
+            description: Some("d".to_string()),
+            generate: Some(GenerateConfig::Bool(true)),
+            ..Default::default()
+        };
+        assert!(s.validate().unwrap_err().contains("requires 'type'"));
+    }
+
+    #[test]
+    fn secret_validate_rejects_unknown_type() {
+        let s = Secret {
+            description: Some("d".to_string()),
+            secret_type: Some("banana".to_string()),
+            ..Default::default()
+        };
+        assert!(s.validate().unwrap_err().contains("unknown secret type"));
+    }
+
+    #[test]
+    fn secret_validate_command_type_requires_command() {
+        let s = Secret {
+            description: Some("d".to_string()),
+            secret_type: Some("command".to_string()),
+            generate: Some(GenerateConfig::Bool(true)),
+            ..Default::default()
+        };
+        assert!(
+            s.validate()
+                .unwrap_err()
+                .contains("requires generate = { command")
+        );
+    }
+
+    #[test]
+    fn generate_config_is_enabled() {
+        assert!(!GenerateConfig::Bool(false).is_enabled());
+        assert!(GenerateConfig::Bool(true).is_enabled());
+        assert!(GenerateConfig::Options(GenerateOptions::default()).is_enabled());
+    }
+}

@@ -4601,3 +4601,125 @@ fn test_validate_provider_override_project_alias_without_global_default() {
         "validation metadata should report the resolved override URI"
     );
 }
+
+/// Builds a Secrets backed by a dotenv provider over a temp `.env` file.
+///
+/// The caller must keep `temp_dir` alive for as long as the returned Secrets
+/// is used, since the `.env` file lives inside it.
+fn dotenv_spec(
+    env_contents: &str,
+    profiles: HashMap<String, Profile>,
+    temp_dir: &TempDir,
+) -> Secrets {
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, env_contents).unwrap();
+    Secrets::new(
+        Config {
+            project: Project {
+                name: "test".to_string(),
+                revision: "1.0".to_string(),
+                extends: None,
+            },
+            profiles,
+            providers: None,
+        },
+        Some(GlobalConfig {
+            defaults: GlobalDefaults {
+                provider: Some(format!("dotenv://{}", env_file.display())),
+                profile: None,
+                providers: None,
+            },
+        }),
+        None,
+        None,
+    )
+}
+
+fn required_secret_profile(name: &str) -> HashMap<String, Profile> {
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        name.to_string(),
+        Secret {
+            description: Some("A required secret".to_string()),
+            required: Some(true),
+            ..Default::default()
+        },
+    );
+    HashMap::from([(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    )])
+}
+
+#[test]
+fn test_check_returns_ok_when_required_present() {
+    let temp_dir = TempDir::new().unwrap();
+    let spec = dotenv_spec(
+        "REQUIRED=value\n",
+        required_secret_profile("REQUIRED"),
+        &temp_dir,
+    );
+
+    let validated = spec.check(true).expect("check should succeed");
+    assert!(validated.resolved.secrets.contains_key("REQUIRED"));
+}
+
+#[test]
+fn test_check_no_prompt_errors_when_required_missing() {
+    let temp_dir = TempDir::new().unwrap();
+    // Empty .env -> the required secret is missing.
+    let spec = dotenv_spec("", required_secret_profile("REQUIRED"), &temp_dir);
+
+    assert!(
+        matches!(
+            spec.check(true),
+            Err(SecretSpecError::RequiredSecretMissing(_))
+        ),
+        "expected RequiredSecretMissing when a required secret is absent"
+    );
+}
+
+#[test]
+fn test_run_command_returns_child_exit_code() {
+    let temp_dir = TempDir::new().unwrap();
+    // An empty (but present) default profile -> ensure_secrets passes and the
+    // child's exit code is propagated verbatim.
+    let empty_default = HashMap::from([(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets: HashMap::new(),
+        },
+    )]);
+    let spec = dotenv_spec("", empty_default, &temp_dir);
+
+    assert_eq!(
+        spec.run_command(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "exit 3".to_string()
+        ])
+        .unwrap(),
+        3
+    );
+    assert_eq!(spec.run_command(vec!["true".to_string()]).unwrap(), 0);
+    assert_eq!(spec.run_command(vec!["false".to_string()]).unwrap(), 1);
+}
+
+#[test]
+fn test_resolve_profile_unknown_returns_invalid_profile() {
+    let temp_dir = TempDir::new().unwrap();
+    let spec = dotenv_spec("", required_secret_profile("REQUIRED"), &temp_dir);
+
+    let result = spec.resolve_profile(Some("nonexistent"));
+    match result {
+        Err(SecretSpecError::InvalidProfile(msg)) => {
+            assert!(msg.contains("nonexistent"));
+            assert!(msg.contains("Available profiles"));
+        }
+        other => panic!("expected InvalidProfile, got {other:?}"),
+    }
+}

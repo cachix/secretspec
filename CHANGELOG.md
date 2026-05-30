@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ValidationErrors` display/`has_errors` behavior, `ProviderUrl`
   encode/decode and `ProviderInfo` display, and the no-network parsing and
   path-building logic of the keyring, pass, and OnePassword providers
-  (`TryFrom<&ProviderUrl>`, path/item-name builders, and `uri()` round-trips).
+  (`TryFrom<&ProviderUrl>`, path/item-name builders, and `uri()` round-trips),
+  and the `Secrets` public surface (`check()` present/missing paths,
+  `run_command` child exit-code propagation, and the `InvalidProfile` error).
 
 ### Fixed
 - `secretspec init` now serializes the generated `secretspec.toml` with

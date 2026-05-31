@@ -645,3 +645,82 @@ fn provider_from_url(url: &ProviderUrl) -> Result<Box<dyn Provider>> {
         Ok(pwp.provider)
     }
 }
+
+#[cfg(test)]
+mod url_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use url::Url;
+
+    fn url(s: &str) -> ProviderUrl {
+        ProviderUrl::new(Url::parse(s).unwrap())
+    }
+
+    #[test]
+    fn host_and_path_are_percent_decoded() {
+        let u = url("keyring://Home%20Lab/My%20Path");
+        assert_eq!(u.host().as_deref(), Some("Home Lab"));
+        assert_eq!(u.path(), "/My Path");
+    }
+
+    #[test]
+    fn username_and_password_are_percent_decoded() {
+        let u = url("onepassword://work%40acct:tok%20en@Vault");
+        assert_eq!(u.username(), "work@acct");
+        assert_eq!(u.password().as_deref(), Some("tok en"));
+        assert_eq!(u.host().as_deref(), Some("Vault"));
+    }
+
+    #[test]
+    fn missing_password_and_port_are_none() {
+        let u = url("keyring://host");
+        assert_eq!(u.password(), None);
+        assert_eq!(u.port(), None);
+        assert_eq!(u.username(), "");
+    }
+
+    #[test]
+    fn port_is_parsed_when_present() {
+        assert_eq!(url("https://example.com:8200/").port(), Some(8200));
+    }
+
+    #[test]
+    fn query_pairs_are_decoded() {
+        let u = url("keyring://h/p?prefix=a%20b&kv=v2");
+        let pairs: HashMap<String, String> = u
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        assert_eq!(pairs.get("prefix").map(String::as_str), Some("a b"));
+        assert_eq!(pairs.get("kv").map(String::as_str), Some("v2"));
+    }
+
+    #[test]
+    fn encode_escapes_spaces_but_keeps_plain() {
+        assert_eq!(ProviderUrl::encode("plain"), "plain");
+        assert_eq!(ProviderUrl::encode("Home Lab"), "Home%20Lab");
+    }
+
+    #[test]
+    fn provider_info_display_with_and_without_examples() {
+        let with = ProviderInfo {
+            name: "onepassword",
+            description: "OnePassword",
+            examples: &["onepassword://vault", "onepassword://work@Production"],
+        };
+        assert_eq!(
+            with.display_with_examples(),
+            "onepassword: OnePassword (e.g., onepassword://vault, onepassword://work@Production)"
+        );
+
+        let without = ProviderInfo {
+            name: "env",
+            description: "Environment variables",
+            examples: &[],
+        };
+        assert_eq!(
+            without.display_with_examples(),
+            "env: Environment variables"
+        );
+    }
+}

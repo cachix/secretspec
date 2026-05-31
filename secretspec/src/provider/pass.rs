@@ -231,3 +231,59 @@ impl Provider for PassProvider {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use url::Url;
+
+    fn provider_url(s: &str) -> ProviderUrl {
+        ProviderUrl::new(Url::parse(s).unwrap())
+    }
+
+    #[test]
+    fn format_entry_name_default_pattern() {
+        let provider = PassProvider::new(PassConfig::default());
+        assert_eq!(
+            provider.format_entry_name("myproj", "prod", "API_KEY"),
+            "secretspec/myproj/prod/API_KEY"
+        );
+    }
+
+    #[test]
+    fn format_entry_name_custom_prefix() {
+        let provider = PassProvider::new(PassConfig {
+            folder_prefix: Some("vault/{profile}/{key}".to_string()),
+        });
+        assert_eq!(
+            provider.format_entry_name("myproj", "prod", "API_KEY"),
+            "vault/prod/API_KEY"
+        );
+    }
+
+    #[test]
+    fn try_from_sets_folder_prefix_from_host_and_path() {
+        let config =
+            PassConfig::try_from(&provider_url("pass://secretspec/shared/{profile}/{key}"))
+                .unwrap();
+        assert_eq!(
+            config.folder_prefix.as_deref(),
+            Some("secretspec/shared/{profile}/{key}")
+        );
+    }
+
+    #[test]
+    fn try_from_rejects_wrong_scheme() {
+        let err = PassConfig::try_from(&provider_url("keyring://x")).unwrap_err();
+        assert!(err.to_string().contains("Invalid scheme"));
+    }
+
+    #[test]
+    fn uri_round_trips_default_and_prefix() {
+        assert_eq!(PassProvider::new(PassConfig::default()).uri(), "pass");
+        let provider = PassProvider::new(PassConfig {
+            folder_prefix: Some("my vault/{key}".to_string()),
+        });
+        assert_eq!(provider.uri(), "pass://my%20vault/{key}");
+    }
+}

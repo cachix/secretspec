@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Internal
+- Expanded test coverage for previously untested logic: CLI argument parsing
+  and `init` TOML generation, the config/secret validation guards
+  (`Config::validate`, `Secret::validate`, identifier checks), the
+  `ValidationErrors` display/`has_errors` behavior, `ProviderUrl`
+  encode/decode and `ProviderInfo` display, and the no-network parsing and
+  path-building logic of the keyring, pass, and OnePassword providers
+  (`TryFrom<&ProviderUrl>`, path/item-name builders, and `uri()` round-trips),
+  and the `Secrets` public surface (`check()` present/missing paths,
+  `run_command` child exit-code propagation, and the `InvalidProfile` error).
+
+### Fixed
+- `secretspec init` now serializes the generated `secretspec.toml` with
+  `toml_edit` instead of hand-interpolating strings. This fixes several cases
+  that previously produced TOML that could not be parsed back: a project name,
+  secret description, or default value containing a double-quote, backslash,
+  control character (including U+007F), or newline; a secret name containing a
+  dot (e.g. `FOO.BAR`, which dotenvy accepts and which silently collapsed to a
+  nested key); and a configured `project.extends`, which was dropped entirely.
+  Output is now also deterministically ordered.
+- `secretspec init` no longer defines a conflicting `-f` short flag for
+  `--from`; `-f` is reserved for the global `--file` option. The duplicate
+  short flag made `secretspec init` panic in debug builds and was ambiguous in
+  release builds.
+
 ## [0.11.0] - 2026-05-22
 
 ### Added

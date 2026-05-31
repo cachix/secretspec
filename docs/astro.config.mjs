@@ -3,9 +3,40 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import starlightLlmsTxt from "starlight-llms-txt";
 
+// Dev-only: `astro dev` (what `devenv up` runs) does not execute worker.js, so
+// /api/stars would 404 and the star pill would stay hidden locally. Mirror the
+// worker's GitHub proxy here so the pill populates during local development.
+// Production is unaffected — it is served by worker.js.
+const devStarsApi = {
+  name: "dev-stars-api",
+  apply: "serve",
+  enforce: "pre",
+  configureServer(server) {
+    server.middlewares.use("/api/stars", async (_req, res) => {
+      let stars = null;
+      try {
+        const r = await fetch("https://api.github.com/repos/cachix/secretspec", {
+          headers: { "User-Agent": "secretspec-docs" },
+        });
+        if (r.ok) {
+          const data = await r.json();
+          if (typeof data.stargazers_count === "number") stars = data.stargazers_count;
+        }
+      } catch {
+        // Degrade to { stars: null } — the pill simply stays hidden.
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ stars }));
+    });
+  },
+};
+
 // https://astro.build/config
 export default defineConfig({
   site: "https://secretspec.dev/",
+  vite: {
+    plugins: [devStarsApi],
+  },
   integrations: [
     starlight({
       plugins: [

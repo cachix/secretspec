@@ -121,4 +121,44 @@ const otherLinks = (config.social || []).filter((l) => l.icon !== 'github');
   :global(.social-icons:not(.sl-flex)) .release-pill {
     display: none;
   }
+
+  /* Below Starlight's 50rem breakpoint the whole header `.right-group`
+     (socials + theme + language) is hidden and socials only live in the
+     hamburger menu. Surface the GitHub stars pill + Discord icon in the
+     always-visible top bar instead, leaving the theme/language pickers in the
+     menu. `not (min-width)` is the exact complement of Starlight's
+     `min-width: 50rem` desktop rule, so neither overlaps at the boundary. */
+  @media not all and (min-width: 50rem) {
+    :global(.header .right-group) {
+      display: flex !important;
+    }
+    /* Keep only the social cluster; theme/language stay in the menu footer. */
+    :global(.header .right-group > :not(.social-icons)) {
+      display: none;
+    }
+    /* Push the logo to the left so socials + search cluster on the right. */
+    :global(.header .title-wrapper) {
+      margin-inline-end: auto;
+    }
+    /* Order the search box after the socials so it is the last icon. On pages
+       with a sidebar it also clears the fixed hamburger button (2rem + inset);
+       the landing page has no sidebar/hamburger, so it stays flush right. */
+    :global(.header > .sl-flex.print\:hidden) {
+      order: 1;
+    }
+    :global(:root[data-has-sidebar] .header > .sl-flex.print\:hidden) {
+      margin-inline-end: calc(var(--sl-menu-button-size) + 0.75rem);
+    }
+    /* The trailing divider only made sense before theme/language; drop it. */
+    :global(.header .social-icons) {
+      gap: 0.5rem;
+    }
+    :global(.header .social-icons::after) {
+      display: none;
+    }
+    /* Version pill is desktop-only; keep the top bar to stars + Discord. */
+    :global(.header .social-icons) .release-pill:not(.stars-pill) {
+      display: none;
+    }
+  }
 </style>

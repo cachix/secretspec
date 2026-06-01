@@ -45,6 +45,14 @@ Each request and each response is exactly one JSON object terminated by a single
 
 The host MUST NOT pipeline: it sends one request, waits for the matching response, then sends the next. Responses MUST appear on stdout in the same order as their requests.
 
+### 3.1 Transports
+
+The JSON contract above (handshake, capabilities, operations, errors) is transport-neutral: nothing in a request or response object depends on how the bytes are carried. **The only transport defined in v1 is local stdio** — a subprocess discovered on `$PATH` (§1) and driven over stdin/stdout (§2). A conformant v1 host and v1 plugin speak stdio.
+
+A v1 plugin reaches a remote system by acting as a **local adapter**: the plugin binary runs on the host, speaks stdio to secretspec, and is itself a network client to whatever lives across the network. This is the supported way to integrate a remote backend today and requires no protocol extension — the `opproxy://` plugin is exactly this shape (local binary, remote `op-proxy`). Because the adapter shares the host's filesystem, `config_file` (§4) and `SECRETSPEC_FILE` resolve normally.
+
+Carrying the protocol *itself* over a network transport (a socket or HTTP endpoint with no local process) is **out of scope for v1**. It would require, beyond the wire schema: a discovery mechanism that resolves a scheme to an endpoint rather than a `$PATH` binary, a framing definition for the chosen transport, a connection lifecycle replacing spawn/stdin-EOF, transport authentication and confidentiality (TLS) absent from the §8 trust model, and a substitute for `config_file` since a remote endpoint cannot read the host's filesystem path (the host would send config *contents* instead). These are deferred to a later version (see [Non-goals](#10-non-goals-v1)).
+
 ## 4. Handshake
 
 The first request in every session is `hello`. The plugin MUST NOT process any other request before responding to `hello`.
@@ -255,6 +263,7 @@ The following are intentionally out of scope and may be addressed in later versi
 
 * Streaming responses for lease refresh (see [issue #11](https://github.com/cachix/secretspec/issues/11)). A `subscribe` operation that yields multiple responses for one request is a natural v2 addition.
 * Host-initiated push (server-sent updates).
+* A network transport for the protocol itself (socket/HTTP endpoint with no local process), including its discovery, framing, and authentication. Remote backends are reached via a local adapter plugin in v1 (see [§3.1](#31-transports)).
 * Binary encodings (CBOR, msgpack). JSON is the wire format for v1.
 * Sandboxed execution. A future WASM-based transport may share this same JSON schema.
 * gRPC adapter. The JSON schema is transport-agnostic and a gRPC facade may be added later if needed; it is not part of this specification.

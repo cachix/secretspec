@@ -29,8 +29,11 @@ On spawn, the host sets the following environment variables:
 |---|---|
 | `SECRETSPEC_PROTOCOL_VERSION` | Highest protocol version the host supports (e.g., `1`) |
 | `SECRETSPEC_PROVIDER_URI` | The full URI that selected this plugin |
+| `SECRETSPEC_FILE` | Absolute path to the loaded `secretspec.toml`, or unset if none (mirrors `hello.config_file`) |
 
 No command-line arguments are passed in v1. The host MUST NOT pass secrets via `argv` or environment.
+
+A session is bound to exactly one provider URI for its entire lifetime. The host MUST NOT reuse a plugin process across different URIs. The plugin therefore MAY parse the URI (and any query parameters, e.g. `opproxy://?cache=12h`) once during `hello` and apply the result to every subsequent request in the session. The URI is sent in the `hello` request and is also available as `SECRETSPEC_PROVIDER_URI`; it is not repeated on later requests.
 
 The plugin reads newline-delimited JSON requests from stdin and writes newline-delimited JSON responses to stdout. The plugin exits on stdin EOF or after responding to a `bye` request. Stderr is free-form and the host MUST NOT parse it; plugins SHOULD use stderr for diagnostic output only and MUST NOT write secret values to stderr.
 
@@ -53,9 +56,12 @@ The first request in every session is `hello`. The plugin MUST NOT process any o
   "op": "hello",
   "protocol_version": 1,
   "uri": "opproxy://vault/Production?reason=build",
+  "config_file": "/abs/path/to/secretspec.toml",
   "context": { "reason": "building api image" }
 }
 ```
+
+`config_file` is the absolute path to the `secretspec.toml` the host loaded for this session, or `null` if the host resolved secrets without an on-disk config (e.g. a purely programmatic SDK caller). It is a first-class field rather than hidden env coupling so that plugins which derive backend references from the committed config can read it deterministically. The same value is also exported as `SECRETSPEC_FILE` for plugins that prefer to read it from the environment. A plugin that does not need the config file MUST ignore this field.
 
 **Successful response:**
 
@@ -71,6 +77,18 @@ The first request in every session is `hello`. The plugin MUST NOT process any o
 The plugin's `protocol_version` MUST be less than or equal to the host's. If the plugin cannot support the host's version, it responds with an error of kind `unsupported_version` and exits.
 
 The plugin advertises its supported operations in `capabilities`. The host MUST NOT send an operation absent from this list. `get` is mandatory; all others are optional.
+
+### 4.1 Plugin-owned extension tables
+
+Table names in `secretspec.toml` prefixed with `x-` are reserved for tool and provider extensions. The host MUST NOT interpret `x-*` tables and MUST preserve them unmodified when it rewrites the config. Plugins MAY read `x-*` tables from `config_file` to obtain per-key backend references and per-key overrides that have no representation in the core schema. A plugin SHOULD namespace its table after its own scheme, e.g. a plugin discovered as `secretspec-provider-opproxy` reads `[x-op-proxy.refs]`:
+
+```toml
+[x-op-proxy.refs]
+APP_TOKEN = "external-secret-ref-for-app-token"
+BOT_TOKEN = { ref = "external-secret-ref-for-bot-token", reason = "bot-runtime", cache = "12h" }
+```
+
+Reading extension metadata from `config_file` is the v1 mechanism for plugin-specific per-key configuration. The host does not parse or forward these tables on individual `get` / `batch_get` requests; the plugin owns and validates its own table shape.
 
 ## 5. Operations
 
@@ -199,13 +217,17 @@ Unknown `kind` values MUST be treated as `internal` by the host. Plugins MAY inc
 
 ## 7. Context
 
-The `context` map in `hello` carries per-session metadata supplied by the caller. The host populates it from:
+The `context` map in `hello` carries per-session metadata supplied by the caller. Because a session corresponds to one resolution pass, the context established at `hello` applies to every operation in that session. It is not specific to `run`: the same context flows to the backend reads behind `secretspec check`, `secretspec get`, `batch_get`, and `secretspec import`. There is no per-request context override in v1.
 
-* CLI flag: `secretspec run --context key=value ...`
+The host populates it from:
+
+* CLI flag: `secretspec run --context key=value ...` (and the equivalent flag on `check`, `get`, `import`)
 * SDK builder: `SecretSpec::builder().context("key", "value").load()?`
 * Environment: `SECRETSPEC_CONTEXT_<KEY>=value` (uppercase mapping)
 
-Plugins decide what context they require. The `opproxy` plugin, for example, requires `context.reason`. If a required context value is missing, the plugin SHOULD fail the `hello` response with an `invalid_request` error explaining what is missing, so the host can surface a clear message to the user.
+Plugins decide what context they require. The `opproxy` plugin, for example, requires `context.reason` for any backend read — including `check` and `batch_get`, not just `run`. If a required context value is missing, the plugin SHOULD fail the `hello` response with an `invalid_request` error explaining what is missing, so the host can surface a clear message to the user.
+
+To keep non-interactive commands usable against providers that require an audit reason, the host SHOULD synthesize a fallback `context.reason` when the caller supplies none, derived from the command and project — for example `secretspec:<project>:run`, `secretspec:<project>:check`, or `secretspec:<project>:<key>` for a single `get`. A caller-supplied `reason` always takes precedence over the synthesized one. Plugins remain free to reject a session whose `reason` does not meet their policy.
 
 Context values are strings. Nested objects are NOT supported in v1.
 
@@ -215,7 +237,8 @@ Context values are strings. Nested objects are NOT supported in v1.
 * Secret values pass through the plugin's process memory and stdout pipe. The host pipe is not visible to other users on the system; plugin authors are responsible for not logging values.
 * The host MUST NOT pass secrets via `argv` or environment to the plugin process. Secrets travel only on the JSON stdio channel.
 * Plugins MUST NOT write secret values to stderr.
-* The host SHOULD redact plugin output from any debug logging it produces.
+* The host MAY surface plugin stderr and the `error.message` of a failed response to the user (for diagnostics) and MAY include them in logs. Plugins MUST therefore treat both their stderr and their `error.message` strings as non-secret and MUST NOT embed secret values in either. This matters most once `set` exists, where the request itself carries a value.
+* The host SHOULD avoid including request or response values (anything from `value`, `values`, or a `set` request body) in debug logging, even when logging is otherwise verbose.
 * The plugin binary's path resolution is governed by `$PATH`. Users SHOULD audit their `$PATH` to ensure no untrusted directory precedes trusted ones.
 
 ## 9. Versioning
@@ -278,3 +301,5 @@ A conformant host:
 3. Only invokes operations the plugin advertised.
 4. Treats unknown response fields as forward-compatibility hooks (ignores them).
 5. Distinguishes "plugin not installed" from "plugin error" in user-facing messages.
+6. Provides `config_file` (and `SECRETSPEC_FILE`) and binds one session to one provider URI.
+7. Synthesizes a fallback `context.reason` for non-interactive commands when the caller supplies none.

@@ -976,6 +976,7 @@ mod tests {
                 },
             )]),
             providers: None,
+            groups: None,
         }
     }
 
@@ -1064,6 +1065,7 @@ mod tests {
                 },
             )]),
             providers: None,
+            groups: None,
         };
 
         let generated = generate_toml_with_comments(&config).unwrap();

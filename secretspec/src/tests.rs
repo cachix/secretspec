@@ -4740,6 +4740,7 @@ fn dotenv_spec(
             },
             profiles,
             providers: None,
+            groups: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {

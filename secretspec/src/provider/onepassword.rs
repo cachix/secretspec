@@ -1320,6 +1320,8 @@ mod tests {
         let uri = provider.uri();
         assert_eq!(uri, "onepassword+token://Private");
         assert!(!uri.contains("ops_secret_tok"));
+    }
+}
 
 #[cfg(all(test, unix))]
 mod dependency_env_tests {
@@ -1413,7 +1415,7 @@ printf '{{"fields":[{{"id":"value","type":"CONCEALED","label":"value","value":"%
 }
 
 #[cfg(test)]
-mod tests {
+mod native_and_batch_tests {
     use super::*;
     use secrecy::ExposeSecret;
     use std::fs;

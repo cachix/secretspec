@@ -1075,6 +1075,7 @@ mod validation_tests {
             },
             profiles,
             providers: None,
+            groups: None,
         }
     }
 

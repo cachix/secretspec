@@ -279,14 +279,15 @@ exec "\$@"
 ''');
 }
 
-String _writeArgsSnippet(String path) =>
-    '''
+String _writeArgsSnippet(String path) {
+  return '''
 ARGS_FILE=${shellQuote(path)}
 : > "\$ARGS_FILE"
 for arg do
   printf '%s\n' "\$arg" >> "\$ARGS_FILE"
 done
 ''';
+}
 
 Future<List<String>> _readRecordedArgs(File file) async {
   return const LineSplitter().convert(await file.readAsString());

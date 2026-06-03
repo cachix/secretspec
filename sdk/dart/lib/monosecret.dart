@@ -59,13 +59,10 @@ class MonosecretClient {
       for (final name in include) ...['--include', name],
       for (final group in groups) ...['--group', group],
       '--',
-      Platform.resolvedExecutable,
-      '-e',
-      'import "dart:convert"; import "dart:io"; void main() => stdout.write(jsonEncode(Platform.environment));',
+      if (Platform.isWindows) ...['cmd', '/c', 'set'] else ...['env'],
     ]);
 
-    final decoded = jsonDecode(result.stdout) as Map<String, dynamic>;
-    return decoded.map((key, value) => MapEntry(key, value.toString()));
+    return _parseEnvironment(result.stdout);
   }
 
   Future<_ProcessOutput> _run(List<String> args) async {
@@ -87,6 +84,21 @@ class MonosecretClient {
 
     return _ProcessOutput(result.stdout.toString(), result.stderr.toString());
   }
+}
+
+Map<String, String> _parseEnvironment(String stdout) {
+  final environment = <String, String>{};
+
+  for (final line in const LineSplitter().convert(stdout)) {
+    final separator = line.indexOf('=');
+    if (separator < 0) {
+      continue;
+    }
+
+    environment[line.substring(0, separator)] = line.substring(separator + 1);
+  }
+
+  return environment;
 }
 
 class MonosecretException implements Exception {

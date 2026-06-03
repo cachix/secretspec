@@ -40,6 +40,9 @@ Both features are purely additive at the TOML level — every existing
 
 ### Internal
 
+- Expanded Dart SDK coverage for CLI argument construction, environment loading,
+  process configuration, and error reporting.
+
 - Expanded test coverage for previously untested logic: CLI argument parsing
   and `init` TOML generation, the config/secret validation guards
   (`Config::validate`, `Secret::validate`, identifier checks), the

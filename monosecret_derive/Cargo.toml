@@ -13,7 +13,7 @@ workspace = true
 proc-macro = true
 
 [dependencies]
-monosecret = { version = "0.1.0", path = "../monosecret", default-features = false }
+monosecret = { version = "0.0.0", path = "../monosecret", default-features = false }
 proc-macro2.workspace = true
 quote.workspace = true
 serde.workspace = true

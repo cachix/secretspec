@@ -633,7 +633,7 @@ revision = "1.0"
 shared = "Shared inherited group"
 
 [profiles.default]
-PARENT_TOKEN = { description = "parent", groups = ["shared"], default = "parent" }
+PARENT_TOKEN = { description = "parent", groups = ["shared"], providers = ["local"], default = "parent" }
 "#,
 	)
 	.unwrap();

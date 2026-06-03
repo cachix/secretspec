@@ -242,8 +242,8 @@ in
       exec = ''
         set -euo pipefail
         mkdir -p coverage
-        cargo llvm-cov clean --workspace
-        cargo llvm-cov --all-features --workspace --lcov --output-path coverage/rust.lcov
+        rustup run nightly cargo llvm-cov clean --workspace
+        rustup run nightly cargo llvm-cov --all-features --workspace --lcov --output-path coverage/rust.lcov
       '';
       description = "Generate Rust coverage at coverage/rust.lcov with cargo-llvm-cov.";
       binary = "bash";
@@ -279,7 +279,7 @@ in
     "package:rust:check" = {
       exec = ''
         set -euo pipefail
-        cargo package --workspace --allow-dirty --locked
+        cargo package -p monosecret -p monosecret_derive --allow-dirty --locked
       '';
       description = "Run cargo package for publishable Rust crates.";
       binary = "bash";
@@ -322,7 +322,7 @@ in
         set -euo pipefail
         dprint check --allow-no-files
         taplo fmt --check
-        cargo +nightly fmt --all -- --check
+        rustup run nightly cargo fmt --all -- --check
         dart format --output=none --set-exit-if-changed sdk/dart
         nixfmt --check devenv.nix
       '';
@@ -391,7 +391,7 @@ in
         set -euo pipefail
         dprint fmt --allow-no-files
         taplo fmt
-        cargo +nightly fmt --all
+        rustup run nightly cargo fmt --all
         dart format sdk/dart
         nixfmt devenv.nix
       '';

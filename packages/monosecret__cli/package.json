@@ -1,6 +1,6 @@
 {
   "name": "@monosecret/cli",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "type": "module",
   "description": "CLI for Monosecret declarative secrets management",
   "license": "Apache-2.0",

@@ -3223,7 +3223,7 @@ dependencies = [
 
 [[package]]
 name = "monosecret"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "aws-config",
  "aws-sdk-secretsmanager",
@@ -3259,7 +3259,7 @@ dependencies = [
 
 [[package]]
 name = "monosecret_derive"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "http 1.4.1",
  "insta",
@@ -3277,7 +3277,7 @@ dependencies = [
 
 [[package]]
 name = "monosecret_derive-example"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "monosecret",
  "monosecret_derive",

@@ -29,7 +29,7 @@ Both features are purely additive at the TOML level — every existing
 
 ### Added
 
-- Rebranded the project to Monosecret, reset package versions to 0.1.0, added monochange release metadata and lint inheritance, npm packages, and a functional Dart SDK while keeping compatibility fallbacks for `secretspec.toml` and `SECRETSPEC_*`.
+- Rebranded the project to Monosecret, reset package versions to 0.0.0, added monochange release metadata and lint inheritance, npm packages, and a functional Dart SDK while keeping compatibility fallbacks for `secretspec.toml` and `SECRETSPEC_*`.
 
 - **Native 1Password reference schemes.** Added `op://` and `op+token://` provider URI schemes for native 1Password references such as `op://Development/dotfiles/forges/GITHUB_TOKEN`, while preserving `onepassword://` and `onepassword+token://` as legacy Monosecret-owned storage. Native references are read with `op read`; `monosecret set` can edit existing native references but will not create missing native items, sections, or fields.
 
@@ -41,8 +41,8 @@ Both features are purely additive at the TOML level — every existing
 ### Internal
 
 - Reworked GitHub Actions and devenv scripts around the monochange release flow,
-  shared setup, Rust binary asset publishing, package checks, and Dart SDK coverage
-  reporting.
+  shared setup, Rust binary asset publishing, package checks, changeset policy,
+  nightly Rust tooling, and Dart SDK coverage reporting.
 
 - Expanded Dart SDK coverage for CLI argument construction, environment loading,
   process configuration, and error reporting.

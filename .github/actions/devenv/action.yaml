@@ -98,6 +98,17 @@ runs:
       shell: bash
       run: devenv shell -- echo "devenv ready"
 
+    - name: install rustup nightly components
+      shell: bash
+      run: |
+        set -euo pipefail
+        devenv shell -- rustup toolchain install nightly --profile default \
+          --component cargo \
+          --component clippy \
+          --component llvm-tools-preview \
+          --component rustfmt \
+          --component rust-src
+
     - name: activate devenv environment
       if: inputs.activate == 'true'
       shell: bash

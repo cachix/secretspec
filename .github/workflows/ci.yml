@@ -46,7 +46,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: rustfmt
-        run: cargo +nightly fmt --all -- --check
+        run: rustup run nightly cargo fmt --all -- --check
         shell: devenv shell -- bash -e {0}
       - name: dprint
         run: dprint check
@@ -136,7 +136,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: cargo package dry-run
-        run: cargo package --workspace --allow-dirty --locked
+        run: cargo package -p monosecret -p monosecret_derive --allow-dirty --locked
         shell: devenv shell -- bash -e {0}
       - name: npm package dry-run
         run: |
@@ -167,7 +167,7 @@ jobs:
       - name: rust coverage
         run: |
           mkdir -p coverage
-          cargo llvm-cov --all-features --workspace --lcov --output-path coverage/rust.lcov
+          rustup run nightly cargo llvm-cov --all-features --workspace --lcov --output-path coverage/rust.lcov
         shell: devenv shell -- bash -e {0}
       - name: dart coverage
         run: |

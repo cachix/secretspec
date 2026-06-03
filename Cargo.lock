@@ -1502,6 +1502,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "detect-coding-agent"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0e5e1a8a73b51f024c547eda5583456612c1387e1df3d8e1af029d571078aaf"
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3784,6 +3790,7 @@ dependencies = [
  "clap",
  "colored",
  "data-encoding",
+ "detect-coding-agent",
  "dotenvy",
  "etcetera",
  "google-cloud-secretmanager-v1",

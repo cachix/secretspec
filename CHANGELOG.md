@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `--reason` CLI flag (and `SECRETSPEC_REASON` env var) records a human-readable
+  reason for a session's secret access, forwarded to providers that support audit
+  logging. `SECRETSPEC_REASON` is honored across the SDK/library too: it is resolved
+  by `Secrets::load`/`load_from` (so `secretspec-derive`-generated code and other
+  library callers can satisfy the `require_reason` policy and supply an audit reason
+  without code changes), and `Secrets::with_reason(...)` sets it explicitly, taking
+  precedence. Blank or whitespace-only reasons are ignored so they cannot satisfy the
+  policy. Backed by a new `Provider::set_reason` trait method (default no-op).
+- `[project] require_reason` policy in `secretspec.toml`, controlling when secret
+  access must supply an explicit reason. Accepts `"agents"` (the default — require
+  a reason only when an AI agent is detected), `true` (require it from every
+  caller), or `false` (never). Agent detection is delegated to the
+  `detect-coding-agent` crate (Claude Code, Cursor, Codex, Gemini CLI, Copilot,
+  ...), plus a `SECRETSPEC_AGENT` opt-in for harnesses it does not recognize.
+  Because the tool enforces it and it is checked into the repo, the policy applies
+  uniformly and cannot be bypassed by an individual tool's configuration. An invalid
+  `require_reason` value is rejected at config-parse time rather than silently
+  falling back to the default.
+  **Note:** the default `"agents"` means AI agents must now pass a reason out of
+  the box.
+
+### Fixed
+- Proton Pass provider now works with `pass-cli` >= 2.1.0 agent sessions. Since
+  2.1.0, audited item operations (`item view`, `item create`, `item delete`)
+  fail unless `PROTON_PASS_AGENT_REASON` is set, which made existing secrets
+  appear missing under an agent session. The provider now sets this variable on
+  every `pass-cli` invocation. The reason is resolved as `--reason`/`with_reason`,
+  then `PROTON_PASS_AGENT_REASON`, then a secretspec-versioned default
+  (`secretspec/<version> (https://secretspec.dev)`); it is ignored by older
+  releases and non-agent sessions.
+
+### Changed
+- Minimum supported Rust version raised to 1.92 (required by the
+  `detect-coding-agent` dependency). The devenv toolchain is pinned accordingly.
+
 ### Internal
 - Expanded test coverage for previously untested logic: CLI argument parsing
   and `init` TOML generation, the config/secret validation guards

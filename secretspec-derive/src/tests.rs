@@ -228,8 +228,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         let valid_config = Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: valid_profiles,
             providers: None,
@@ -276,8 +275,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         let invalid_config = Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: invalid_profiles,
             providers: None,
@@ -357,8 +355,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         let keyword_config = Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: keyword_profiles,
             providers: None,
@@ -437,8 +434,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         let duplicate_config = Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: duplicate_profiles,
             providers: None,
@@ -492,8 +488,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         let valid_config = Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: valid_profiles,
             providers: None,
@@ -525,8 +520,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         let invalid_config = Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: invalid_profiles,
             providers: None,
@@ -683,8 +677,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         let config = Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles,
             providers: None,
@@ -741,8 +734,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         let strict_config = Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: strict_profiles,
             providers: None,
@@ -836,8 +828,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         let config = Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles,
             providers: None,
@@ -1002,8 +993,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         let valid_config = Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: valid_profiles,
             providers: None,
@@ -1047,8 +1037,7 @@ HAS_DEFAULT = { description = "Secret with default", required = true, default = 
         let invalid_config = Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: invalid_profiles,
             providers: None,

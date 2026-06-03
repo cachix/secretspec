@@ -48,6 +48,7 @@ rand = "0.9"
 rsa = { version = "0.9", features = ["pem"] }
 uuid = { version = "1", features = ["v4"] }
 data-encoding = "2"
+detect-coding-agent = "0.1"
 
 # The profile that 'dist' will build with
 [profile.dist]

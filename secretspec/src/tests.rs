@@ -35,8 +35,7 @@ fn test_new_with_project_config() {
     let config = Config {
         project: Project {
             name: "test-project".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles: HashMap::new(),
         providers: None,
@@ -93,12 +92,84 @@ profile = "development"
 }
 
 #[test]
+fn require_reason_always_blocks_access_without_reason() {
+    let temp_dir = TempDir::new().unwrap();
+    let project_path = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &project_path,
+        r#"
+[project]
+name = "policy-project"
+revision = "1.0"
+require_reason = true
+
+[profiles.default]
+"#,
+    )
+    .unwrap();
+
+    // require_reason = true -> any caller (agent or not) is refused without a reason.
+    let spec = Secrets::load_from(&project_path).unwrap();
+    assert!(matches!(
+        spec.validate(),
+        Err(SecretSpecError::ReasonRequired)
+    ));
+
+    // With an explicit reason the policy is satisfied: validation proceeds past the
+    // gate. It may still fail later for environment reasons (e.g. no provider
+    // configured), so assert specifically that it is no longer the reason gate.
+    let spec = Secrets::load_from(&project_path)
+        .unwrap()
+        .with_reason("running migrations");
+    assert!(!matches!(
+        spec.validate(),
+        Err(SecretSpecError::ReasonRequired)
+    ));
+
+    // A blank/whitespace-only reason must NOT satisfy the policy: it carries no
+    // audit value, so the gate still refuses access.
+    let spec = Secrets::load_from(&project_path)
+        .unwrap()
+        .with_reason("   ");
+    assert!(matches!(
+        spec.validate(),
+        Err(SecretSpecError::ReasonRequired)
+    ));
+}
+
+#[test]
+fn require_reason_false_allows_access_without_reason() {
+    let temp_dir = TempDir::new().unwrap();
+    let project_path = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &project_path,
+        r#"
+[project]
+name = "open-project"
+revision = "1.0"
+require_reason = false
+
+[profiles.default]
+"#,
+    )
+    .unwrap();
+
+    // require_reason = false -> the reason gate never fires, even under an agent.
+    // (validate() may still fail later for environment reasons such as no provider
+    // configured, so assert specifically that it is not the ReasonRequired gate.)
+    let spec = Secrets::load_from(&project_path).unwrap();
+    assert!(!matches!(
+        spec.validate(),
+        Err(SecretSpecError::ReasonRequired)
+    ));
+}
+
+#[test]
 fn test_new_with_default_overrides() {
     let config = Config {
         project: Project {
             name: "test-project".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles: HashMap::new(),
         providers: None,
@@ -249,8 +320,7 @@ fn test_secretspec_new() {
     let config = Config {
         project: Project {
             name: "test".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles: HashMap::new(),
         providers: None,
@@ -290,8 +360,7 @@ fn test_resolve_profile() {
         Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: HashMap::new(),
             providers: None,
@@ -312,8 +381,7 @@ fn test_resolve_profile() {
         Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: HashMap::new(),
             providers: None,
@@ -384,8 +452,7 @@ fn test_resolve_secret_config() {
         Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles,
             providers: None,
@@ -425,8 +492,7 @@ fn test_get_provider_error_cases() {
         Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: HashMap::new(),
             providers: None,
@@ -455,8 +521,7 @@ fn test_get_provider_with_global_config() {
         Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: HashMap::new(),
             providers: None,
@@ -1371,8 +1436,7 @@ fn test_set_with_undefined_secret() {
     let project_config = Config {
         project: Project {
             name: "test_project".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles: {
             let mut profiles = HashMap::new();
@@ -1438,8 +1502,7 @@ fn test_set_with_defined_secret() {
     let project_config = Config {
         project: Project {
             name: "test_project".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles: {
             let mut profiles = HashMap::new();
@@ -1492,8 +1555,7 @@ fn test_set_with_readonly_provider() {
     let project_config = Config {
         project: Project {
             name: "test_project".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles: {
             let mut profiles = HashMap::new();
@@ -1553,8 +1615,7 @@ fn test_import_between_dotenv_files() {
     let project_config = Config {
         project: Project {
             name: "test_import_project".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles: {
             let mut profiles = HashMap::new();
@@ -1692,8 +1753,7 @@ fn test_import_edge_cases() {
     let project_config = Config {
         project: Project {
             name: "test_edge_cases".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles: {
             let mut profiles = HashMap::new();
@@ -1935,8 +1995,7 @@ fn test_import_with_profiles() {
     let project_config = Config {
         project: Project {
             name: "test_profiles".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles: {
             let mut profiles = HashMap::new();
@@ -2076,8 +2135,7 @@ fn test_run_with_empty_command() {
         Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: HashMap::new(),
             providers: None,
@@ -2138,8 +2196,7 @@ fn test_run_with_missing_required_secrets() {
         Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles,
             providers: None,
@@ -2198,8 +2255,7 @@ fn test_get_existing_secret() {
         Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles,
             providers: None,
@@ -2252,8 +2308,7 @@ fn test_get_secret_with_default() {
         Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles,
             providers: None,
@@ -2305,8 +2360,7 @@ fn test_get_nonexistent_secret() {
         Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles,
             providers: None,
@@ -2471,8 +2525,7 @@ fn test_per_secret_provider_configuration() {
     let config = Config {
         project: Project {
             name: "test_per_secret_provider".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles,
         providers: None,
@@ -2526,8 +2579,7 @@ fn test_provider_alias_resolution() {
         Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: HashMap::new(),
             providers: None,
@@ -2591,8 +2643,7 @@ fn test_provider_alias_not_found() {
         Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: HashMap::new(),
             providers: None,
@@ -2665,8 +2716,7 @@ fn test_per_secret_provider_with_fallback_chain() {
     let config = Config {
         project: Project {
             name: "test_fallback".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles,
         providers: None,
@@ -2763,8 +2813,7 @@ fn test_get_secret_with_fallback_chain() {
     let config = Config {
         project: Project {
             name: "test_fallback_integration".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles,
         providers: None,
@@ -2846,8 +2895,7 @@ fn test_validate_falls_back_on_primary_provider_error() {
     let config = Config {
         project: Project {
             name: "test_error_fallback".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles,
         providers: None,
@@ -2920,8 +2968,7 @@ fn test_validate_surfaces_error_when_all_providers_fail() {
     let config = Config {
         project: Project {
             name: "test_all_fail".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles,
         providers: None,
@@ -3013,8 +3060,7 @@ fn test_validate_with_per_secret_providers() {
     let config = Config {
         project: Project {
             name: "test_multi_provider".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles,
         providers: None,
@@ -3143,8 +3189,7 @@ fn test_secret_config_merges_providers_from_default() {
     let config = Config {
         project: Project {
             name: "test_merge".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles,
         providers: None,
@@ -4028,8 +4073,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
     let config = Config {
         project: Project {
             name: "test".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles,
         providers: None,
@@ -4062,8 +4106,7 @@ fn build_chain_scenario(
     let config = Config {
         project: Project {
             name: "test_project".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles: {
             let mut profiles = HashMap::new();
@@ -4301,8 +4344,7 @@ fn config_with_project_aliases(aliases: &[(&str, &str)]) -> Config {
     Config {
         project: Project {
             name: "alias-test".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles: HashMap::new(),
         providers: Some(aliases_map(aliases)),
@@ -4347,8 +4389,7 @@ fn config_with_project_alias_secret(
     Config {
         project: Project {
             name: "alias-validation".to_string(),
-            revision: "1.0".to_string(),
-            extends: None,
+            ..Default::default()
         },
         profiles,
         providers: Some(aliases_map(&[(alias, uri)])),
@@ -4617,8 +4658,7 @@ fn dotenv_spec(
         Config {
             project: Project {
                 name: "test".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles,
             providers: None,

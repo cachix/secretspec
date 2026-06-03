@@ -1,4 +1,4 @@
-{ pkgs, ... }: {
+{ pkgs, lib, ... }: {
   languages.rust.enable = true;
   languages.javascript = {
     enable = true;
@@ -11,8 +11,7 @@
   packages = [
     # keyring
     pkgs.dbus
-    # coverage testing
-    pkgs.cargo-llvm-cov
+    pkgs.pkg-config
     # formatting
     pkgs.dprint
     pkgs.taplo
@@ -20,6 +19,9 @@
     pkgs.dart
     # installers
     pkgs.cargo-dist
+  ] ++ lib.optionals pkgs.stdenv.isLinux [
+    # coverage testing
+    pkgs.cargo-llvm-cov
   ];
 
   git-hooks.hooks = {

@@ -59,6 +59,8 @@ Both features are purely additive at the TOML level — every existing
 
 ### Fixed
 
+- Fixed CI by running Dart steps from the repository root under `devenv shell`, disabling nightly-only coverage cfg for Rust dependency coverage, and applying rustfmt output.
+
 - `monosecret init` now serializes the generated `monosecret.toml` with
   `toml_edit` instead of hand-interpolating strings. This fixes several cases
   that previously produced TOML that could not be parsed back: a project name,

@@ -22,24 +22,20 @@ pub fn generate(secret_type: &str, config: &GenerateConfig) -> crate::Result<Sec
 		"uuid" => generate_uuid(),
 		"command" => generate_from_command(config),
 		"rsa_private_key" => generate_rsa(config),
-		unknown => {
-			Err(MonosecretError::GenerationFailed(format!(
-				"unknown secret type '{}'",
-				unknown
-			)))
-		}
+		unknown => Err(MonosecretError::GenerationFailed(format!(
+			"unknown secret type '{}'",
+			unknown
+		))),
 	}
 }
 
 fn generate_password(config: &GenerateConfig) -> crate::Result<SecretString> {
 	let (length, charset_name) = match config {
 		GenerateConfig::Bool(_) => (32, "alphanumeric"),
-		GenerateConfig::Options(opts) => {
-			(
-				opts.length.unwrap_or(32),
-				opts.charset.as_deref().unwrap_or("alphanumeric"),
-			)
-		}
+		GenerateConfig::Options(opts) => (
+			opts.length.unwrap_or(32),
+			opts.charset.as_deref().unwrap_or("alphanumeric"),
+		),
 	};
 
 	let charset: Vec<u8> = match charset_name {
@@ -133,13 +129,11 @@ fn generate_from_command(config: &GenerateConfig) -> crate::Result<SecretString>
 				"type = \"command\" requires generate = { command = \"...\" }".to_string(),
 			));
 		}
-		GenerateConfig::Options(opts) => {
-			opts.command.as_deref().ok_or_else(|| {
-				MonosecretError::GenerationFailed(
-					"type = \"command\" requires generate = { command = \"...\" }".to_string(),
-				)
-			})?
-		}
+		GenerateConfig::Options(opts) => opts.command.as_deref().ok_or_else(|| {
+			MonosecretError::GenerationFailed(
+				"type = \"command\" requires generate = { command = \"...\" }".to_string(),
+			)
+		})?,
 	};
 
 	let output = std::process::Command::new("sh")

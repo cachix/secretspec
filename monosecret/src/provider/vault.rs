@@ -136,19 +136,17 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
 					format!("{}://{}", http_scheme, host)
 				}
 			}
-			None => {
-				std::env::var("VAULT_ADDR")
-					.ok()
-					.filter(|s| !s.is_empty())
-					.ok_or_else(|| {
-						MonosecretError::ProviderOperationFailed(
-							"No Vault address provided. Either specify a host in the URI \
+			None => std::env::var("VAULT_ADDR")
+				.ok()
+				.filter(|s| !s.is_empty())
+				.ok_or_else(|| {
+					MonosecretError::ProviderOperationFailed(
+						"No Vault address provided. Either specify a host in the URI \
                          (e.g., vault://vault.example.com:8200) or set the VAULT_ADDR \
                          environment variable."
-								.to_string(),
-						)
-					})?
-			}
+							.to_string(),
+					)
+				})?,
 		};
 
 		// Mount path from URL path (strip leading slash, default to "secret")
@@ -165,11 +163,9 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
 		let kv_version = url
 			.query_pairs()
 			.find(|(k, _)| k == "kv")
-			.map(|(_, v)| {
-				match v.as_ref() {
-					"1" | "v1" => KvVersion::V1,
-					_ => KvVersion::V2,
-				}
+			.map(|(_, v)| match v.as_ref() {
+				"1" | "v1" => KvVersion::V1,
+				_ => KvVersion::V2,
 			})
 			.unwrap_or_default();
 
@@ -188,17 +184,13 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
 		let auth = url
 			.query_pairs()
 			.find(|(k, _)| k == "auth")
-			.map(|(_, v)| {
-				match v.as_ref() {
-					"approle" => Ok(AuthMethod::AppRole),
-					"token" => Ok(AuthMethod::Token),
-					other => {
-						Err(MonosecretError::ProviderOperationFailed(format!(
-							"Unknown auth method '{}'. Expected 'token' or 'approle'.",
-							other
-						)))
-					}
-				}
+			.map(|(_, v)| match v.as_ref() {
+				"approle" => Ok(AuthMethod::AppRole),
+				"token" => Ok(AuthMethod::Token),
+				other => Err(MonosecretError::ProviderOperationFailed(format!(
+					"Unknown auth method '{}'. Expected 'token' or 'approle'.",
+					other
+				))),
 			})
 			.transpose()?
 			.unwrap_or_default();
@@ -424,29 +416,25 @@ impl VaultProvider {
 				})?;
 
 				let value = match self.config.kv_version {
-					KvVersion::V2 => {
-						body.get("data")
-							.and_then(|d| d.get("data"))
-							.and_then(|d| d.get("value"))
-							.and_then(|v| v.as_str())
-					}
-					KvVersion::V1 => {
-						body.get("data")
-							.and_then(|d| d.get("value"))
-							.and_then(|v| v.as_str())
-					}
+					KvVersion::V2 => body
+						.get("data")
+						.and_then(|d| d.get("data"))
+						.and_then(|d| d.get("value"))
+						.and_then(|v| v.as_str()),
+					KvVersion::V1 => body
+						.get("data")
+						.and_then(|d| d.get("value"))
+						.and_then(|v| v.as_str()),
 				};
 
 				Ok(value.map(|v| SecretString::new(v.to_string().into())))
 			}
 			404 => Ok(None),
-			403 => {
-				Err(MonosecretError::ProviderOperationFailed(
-					"Vault authentication failed (403 Forbidden). \
+			403 => Err(MonosecretError::ProviderOperationFailed(
+				"Vault authentication failed (403 Forbidden). \
                  Check your VAULT_TOKEN and ensure it has the required permissions."
-						.to_string(),
-				))
-			}
+					.to_string(),
+			)),
 			status => {
 				let body = response.text().await.unwrap_or_default();
 				Err(MonosecretError::ProviderOperationFailed(format!(
@@ -495,13 +483,11 @@ impl VaultProvider {
 
 		match response.status().as_u16() {
 			200 | 204 => Ok(()),
-			403 => {
-				Err(MonosecretError::ProviderOperationFailed(
-					"Vault authentication failed (403 Forbidden). \
+			403 => Err(MonosecretError::ProviderOperationFailed(
+				"Vault authentication failed (403 Forbidden). \
                  Check your VAULT_TOKEN and ensure it has write permissions."
-						.to_string(),
-				))
-			}
+					.to_string(),
+			)),
 			status => {
 				let body = response.text().await.unwrap_or_default();
 				Err(MonosecretError::ProviderOperationFailed(format!(

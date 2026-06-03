@@ -188,12 +188,10 @@ impl SecretRequest {
 	pub fn from_provider_ref(r: &ProviderRef) -> Self {
 		match r {
 			ProviderRef::Alias(_) => Self::default(),
-			ProviderRef::Detail(d) => {
-				Self {
-					path: d.path.clone(),
-					key: d.key.clone(),
-				}
-			}
+			ProviderRef::Detail(d) => Self {
+				path: d.path.clone(),
+				key: d.key.clone(),
+			},
 		}
 	}
 }
@@ -909,10 +907,9 @@ impl GlobalConfig {
 		}
 
 		let old_path = match etcetera::home_dir() {
-			Ok(home) => {
-				home.join("Library/Application Support/monosecret")
-					.join("config.toml")
-			}
+			Ok(home) => home
+				.join("Library/Application Support/monosecret")
+				.join("config.toml"),
 			Err(_) => return Ok(new_path.to_path_buf()),
 		};
 

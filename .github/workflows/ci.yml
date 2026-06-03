@@ -61,8 +61,7 @@ jobs:
         run: cargo clippy --all-targets --all-features --locked
         shell: devenv shell -- bash -e {0}
       - name: dart analyze
-        run: dart analyze
-        working-directory: sdk/dart
+        run: cd sdk/dart && dart analyze
         shell: devenv shell -- bash -e {0}
       - name: validate monochange configuration
         run: monochange step:validate
@@ -89,8 +88,7 @@ jobs:
         run: cargo test --all --all-features --locked
         shell: devenv shell -- bash -e {0}
       - name: dart tests
-        run: dart test
-        working-directory: sdk/dart
+        run: cd sdk/dart && dart test
         shell: devenv shell -- bash -e {0}
 
   build:
@@ -144,8 +142,7 @@ jobs:
           npm --prefix packages/monosecret__skill pack --dry-run
         shell: devenv shell -- bash -e {0}
       - name: dart publish dry-run
-        run: dart pub publish --dry-run
-        working-directory: sdk/dart
+        run: cd sdk/dart && dart pub publish --dry-run
         shell: devenv shell -- bash -e {0}
 
   coverage:
@@ -167,10 +164,11 @@ jobs:
       - name: rust coverage
         run: |
           mkdir -p coverage
-          rustup run nightly cargo llvm-cov --all-features --workspace --lcov --output-path coverage/rust.lcov
+          rustup run nightly cargo llvm-cov --all-features --workspace --lcov --no-cfg-coverage-nightly --output-path coverage/rust.lcov
         shell: devenv shell -- bash -e {0}
       - name: dart coverage
         run: |
+          cd sdk/dart
           dart pub global activate coverage
           dart test --coverage=coverage
           dart pub global run coverage:format_coverage \
@@ -179,7 +177,6 @@ jobs:
             --out=coverage/lcov.info \
             --packages=.dart_tool/package_config.json \
             --report-on=lib
-        working-directory: sdk/dart
         shell: devenv shell -- bash -e {0}
       - name: upload coverage artifact
         uses: actions/upload-artifact@v4

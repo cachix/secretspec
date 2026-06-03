@@ -797,11 +797,9 @@ impl OnePasswordProvider {
 		let reference = self.native_reference(profile, &parts);
 		let args = vec!["read", reference.as_str()];
 		match self.execute_op_command(&args, None) {
-			Ok(output) => {
-				Ok(Some(SecretString::new(
-					output.trim_end_matches(['\r', '\n']).to_string().into(),
-				)))
-			}
+			Ok(output) => Ok(Some(SecretString::new(
+				output.trim_end_matches(['\r', '\n']).to_string().into(),
+			))),
 			Err(MonosecretError::ProviderOperationFailed(msg))
 				if Self::native_missing_message(&msg) =>
 			{
@@ -1200,12 +1198,11 @@ impl Provider for OnePasswordProvider {
 				];
 
 				match self.execute_op_command(&args, None) {
-					Ok(output) => {
-						self.extract_value_from_item(&output)
-							.ok()
-							.flatten()
-							.map(|value| (key.to_string(), value))
-					}
+					Ok(output) => self
+						.extract_value_from_item(&output)
+						.ok()
+						.flatten()
+						.map(|value| (key.to_string(), value)),
 					Err(_) => None,
 				}
 			},

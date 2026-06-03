@@ -104,6 +104,22 @@ in
   '';
 
   scripts = {
+    "dartfmt" = {
+      exec = ''
+        set -euo pipefail
+        file="$1"
+        shift || true
+        dir="$(dirname "$file")"
+        base="$(basename "$file")"
+        (
+          cd "$dir"
+          dart format -o show "$base" "$@" | sed '$d'
+        )
+      '';
+      description = "Format a Dart file for dprint's exec plugin.";
+      binary = "bash";
+    };
+
     "install:all" = {
       exec = ''
         set -euo pipefail

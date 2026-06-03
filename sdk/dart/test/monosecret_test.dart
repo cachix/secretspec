@@ -149,19 +149,21 @@ printf 'secret-value  \n\n'
       },
     );
 
-    test('parses environment lines and preserves equals signs in values',
-        () async {
-      final cli = await _fakeCli('''
+    test(
+      'parses environment lines and preserves equals signs in values',
+      () async {
+        final cli = await _fakeCli('''
 #!/usr/bin/env sh
 printf 'DATABASE_URL=postgres://localhost/app\nTOKEN=value=with=equals\nIGNORED_LINE\n'
 ''');
-      final client = MonosecretClient(executable: cli.path);
+        final client = MonosecretClient(executable: cli.path);
 
-      expect(await client.loadEnvironment(), {
-        'DATABASE_URL': 'postgres://localhost/app',
-        'TOKEN': 'value=with=equals',
-      });
-    });
+        expect(await client.loadEnvironment(), {
+          'DATABASE_URL': 'postgres://localhost/app',
+          'TOKEN': 'value=with=equals',
+        });
+      },
+    );
   });
 
   group('process configuration', () {
@@ -277,7 +279,8 @@ exec "\$@"
 ''');
 }
 
-String _writeArgsSnippet(String path) => '''
+String _writeArgsSnippet(String path) =>
+    '''
 ARGS_FILE=${shellQuote(path)}
 : > "\$ARGS_FILE"
 for arg do

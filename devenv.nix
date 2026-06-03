@@ -165,6 +165,7 @@ in
     "build:all" = {
       exec = ''
         set -euo pipefail
+        export PATH="${config.env.DEVENV_PROFILE}/bin:$PATH"
         cargo build --workspace --all-features --locked
         build:node
       '';
@@ -191,6 +192,7 @@ in
     "test:all" = {
       exec = ''
         set -euo pipefail
+        export PATH="${config.env.DEVENV_PROFILE}/bin:$PATH"
         test:rust
         test:dart
       '';
@@ -229,6 +231,7 @@ in
     "coverage:all" = {
       exec = ''
         set -euo pipefail
+        export PATH="${config.env.DEVENV_PROFILE}/bin:$PATH"
         coverage:rust
         coverage:dart
       '';
@@ -265,6 +268,7 @@ in
     "package:check" = {
       exec = ''
         set -euo pipefail
+        export PATH="${config.env.DEVENV_PROFILE}/bin:$PATH"
         package:rust:check
         package:node:check
         package:dart:check
@@ -302,6 +306,7 @@ in
     "lint:all" = {
       exec = ''
         set -euo pipefail
+        export PATH="${config.env.DEVENV_PROFILE}/bin:$PATH"
         lint:format
         lint:clippy
         lint:dart
@@ -371,6 +376,7 @@ in
     "fix:all" = {
       exec = ''
         set -euo pipefail
+        export PATH="${config.env.DEVENV_PROFILE}/bin:$PATH"
         fix:clippy
         fix:dart
         fix:format

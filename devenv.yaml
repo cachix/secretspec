@@ -6,6 +6,11 @@ inputs:
         follows: nixpkgs
   nixpkgs:
     url: github:NixOS/nixpkgs/nixos-25.11
+  ifiokjr-nixpkgs:
+    url: github:ifiokjr/nixpkgs
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
   rust-overlay:
     url: github:oxalica/rust-overlay
     inputs:

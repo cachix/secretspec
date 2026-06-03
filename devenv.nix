@@ -16,6 +16,8 @@
     # formatting
     pkgs.dprint
     pkgs.taplo
+    # Dart SDK
+    pkgs.dart
     # installers
     pkgs.cargo-dist
   ];

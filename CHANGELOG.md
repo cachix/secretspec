@@ -40,8 +40,9 @@ Both features are purely additive at the TOML level — every existing
 
 ### Internal
 
-- Reworked GitHub Actions around the monochange release flow, shared devenv setup,
-  Rust binary asset publishing, and Dart SDK coverage reporting.
+- Reworked GitHub Actions and devenv scripts around the monochange release flow,
+  shared setup, Rust binary asset publishing, package checks, and Dart SDK coverage
+  reporting.
 
 - Expanded Dart SDK coverage for CLI argument construction, environment loading,
   process configuration, and error reporting.

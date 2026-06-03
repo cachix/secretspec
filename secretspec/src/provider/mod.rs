@@ -342,6 +342,19 @@ pub trait Provider: Send + Sync {
     /// For example: "onepassword://VaultName" or "dotenv://.env.production"
     fn uri(&self) -> String;
 
+    /// Records a human-readable reason for the secrets access happening in this
+    /// session (e.g. "secretspec run: deploy"), set via [`Secrets::with_reason`].
+    ///
+    /// Providers that support audit logging use this; for example the Proton Pass
+    /// provider forwards it to `pass-cli` agent sessions, which require a reason
+    /// for every audited item operation. The default implementation ignores it.
+    ///
+    /// Takes `&self` (relying on interior mutability) so it can be applied after
+    /// the provider is wrapped in an `Arc` (as preflight-enabled providers are).
+    ///
+    /// [`Secrets::with_reason`]: crate::Secrets::with_reason
+    fn set_reason(&self, _reason: Option<String>) {}
+
     /// Discovers and returns all secrets available in this provider.
     ///
     /// This method is used to introspect the provider and find all available secrets.
@@ -421,6 +434,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn uri(&self) -> String {
         (**self).uri()
     }
+    fn set_reason(&self, reason: Option<String>) {
+        (**self).set_reason(reason);
+    }
     fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
         (**self).reflect()
     }
@@ -494,6 +510,10 @@ impl Provider for PreflightGuard {
 
     fn uri(&self) -> String {
         self.inner.uri()
+    }
+
+    fn set_reason(&self, reason: Option<String>) {
+        self.inner.set_reason(reason);
     }
 
     fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {

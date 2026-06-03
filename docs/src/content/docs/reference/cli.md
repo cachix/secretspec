@@ -5,6 +5,19 @@ description: Complete reference for SecretSpec CLI commands
 
 The SecretSpec CLI provides commands for managing secrets across different providers and profiles.
 
+## Global Options
+
+These options are available on every command:
+
+| Option | Description |
+|--------|-------------|
+| `-f, --file <FILE>` | Path to `secretspec.toml` (default: auto-detect). Env: `SECRETSPEC_FILE` |
+| `--reason <REASON>` | Reason for accessing secrets, recorded by providers that support audit logging (e.g. Proton Pass agent sessions). Takes precedence over `PROTON_PASS_AGENT_REASON`. Env: `SECRETSPEC_REASON` |
+
+```bash
+$ secretspec run --reason "Deploying web frontend" -- ./deploy.sh
+```
+
 ## Commands
 
 ### init
@@ -240,6 +253,8 @@ $ secretspec import dotenv:/home/user/old-project/.env
 |----------|-------------|
 | `SECRETSPEC_PROFILE` | Default profile to use |
 | `SECRETSPEC_PROVIDER` | Default provider to use |
+| `SECRETSPEC_FILE` | Path to `secretspec.toml` (same as `--file`) |
+| `SECRETSPEC_REASON` | Reason for accessing secrets (same as `--reason`) |
 
 ## Quick Start Workflow
 

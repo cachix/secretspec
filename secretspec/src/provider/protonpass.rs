@@ -5,6 +5,22 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
+
+/// Environment variable pass-cli (>= 2.1.0) requires agent sessions to set before
+/// audited item operations (`item view`, `item create`, `item delete`, ...). For
+/// non-agent sessions and older pass-cli releases it is ignored, so setting it
+/// unconditionally is safe and backward compatible.
+const AGENT_REASON_ENV: &str = "PROTON_PASS_AGENT_REASON";
+
+/// Reason recorded in Proton Pass' agent audit log when neither a session reason
+/// (via `Secrets::with_reason`) nor `PROTON_PASS_AGENT_REASON` is provided.
+/// Carries the secretspec version so the audit log identifies the exact client.
+const DEFAULT_AGENT_REASON: &str = concat!(
+    "secretspec/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://secretspec.dev)"
+);
 
 // You can get the shape of pass-cli data with commands such as:
 // $ pass-cli item view --output json
@@ -109,6 +125,10 @@ pub struct ProtonPassProvider {
     /// Path to `pass-cli` binary.
     /// Override with the `SECRETSPEC_PROTONPASS_CLI_PATH` environment variable.
     cli_binary_path: String,
+    /// Session reason for the audit log, set via `set_reason` (last write wins). Uses
+    /// interior mutability because the provider is shared behind an `Arc` once
+    /// registered.
+    session_reason: Mutex<Option<String>>,
 }
 
 crate::register_provider! {
@@ -132,12 +152,31 @@ impl ProtonPassProvider {
         Self {
             config,
             cli_binary_path,
+            session_reason: Mutex::new(None),
         }
     }
 
     pub(crate) fn test_authentication(&self) -> Result<()> {
         self.run_pass_cli(&["test"], None)?;
         Ok(())
+    }
+
+    /// Resolves the reason passed to `pass-cli` for agent-session audit logging.
+    ///
+    /// Precedence: the session reason set via [`Secrets::with_reason`], then a
+    /// user-provided `PROTON_PASS_AGENT_REASON`, then a generic default. The value
+    /// is only consumed by `pass-cli` agent sessions; it is ignored otherwise.
+    ///
+    /// [`Secrets::with_reason`]: crate::Secrets::with_reason
+    fn agent_reason(&self) -> String {
+        self.session_reason
+            .lock()
+            .unwrap()
+            .clone()
+            .or_else(|| std::env::var(AGENT_REASON_ENV).ok())
+            .map(|r| r.trim().to_string())
+            .filter(|r| !r.is_empty())
+            .unwrap_or_else(|| DEFAULT_AGENT_REASON.to_string())
     }
 
     fn get_vault_name(&self) -> &str {
@@ -158,7 +197,10 @@ impl ProtonPassProvider {
 
     fn run_pass_cli(&self, args: &[&str], stdin: Option<&str>) -> Result<String> {
         let mut cmd = Command::new(&self.cli_binary_path);
-        cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.args(args)
+            .env(AGENT_REASON_ENV, self.agent_reason())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         let output = if let Some(data) = stdin {
             cmd.stdin(Stdio::piped());
@@ -226,6 +268,10 @@ impl Provider for ProtonPassProvider {
                 ProviderUrl::encode(template)
             ),
         }
+    }
+
+    fn set_reason(&self, reason: Option<String>) {
+        *self.session_reason.lock().unwrap() = reason;
     }
 
     fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
@@ -345,11 +391,13 @@ impl Provider for ProtonPassProvider {
             .collect();
 
         let cli_command = self.cli_binary_path.clone();
+        let reason = self.agent_reason();
 
         let handles: Vec<_> = keys_to_fetch
             .into_iter()
             .map(|(key, share_id, id)| {
                 let cmd = cli_command.clone();
+                let reason = reason.clone();
                 let key_owned = key.to_string();
                 thread::spawn(move || {
                     let output = Command::new(&cmd)
@@ -363,6 +411,7 @@ impl Provider for ProtonPassProvider {
                             "--output",
                             "json",
                         ])
+                        .env(AGENT_REASON_ENV, &reason)
                         .output();
                     match output {
                         Ok(output) if output.status.success() => {
@@ -396,5 +445,50 @@ impl Provider for ProtonPassProvider {
 impl Default for ProtonPassProvider {
     fn default() -> Self {
         Self::new(ProtonPassConfig::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn session_reason_is_used_and_trimmed() {
+        let provider = ProtonPassProvider::default();
+        provider.set_reason(Some("  deploy web frontend  ".to_string()));
+        assert_eq!(provider.agent_reason(), "deploy web frontend");
+    }
+
+    #[test]
+    fn set_reason_overwrites_previous_value() {
+        // set_reason is last-write-wins: a later reason must replace an earlier one
+        // (e.g. a default-reason build followed by an explicit reason).
+        let provider = ProtonPassProvider::default();
+        provider.set_reason(Some("first".to_string()));
+        provider.set_reason(Some("second".to_string()));
+        assert_eq!(provider.agent_reason(), "second");
+    }
+
+    #[test]
+    fn blank_session_reason_falls_back_to_default() {
+        let provider = ProtonPassProvider::default();
+        provider.set_reason(Some("   ".to_string()));
+        assert_eq!(provider.agent_reason(), DEFAULT_AGENT_REASON);
+    }
+
+    #[test]
+    fn default_reason_identifies_secretspec_with_version() {
+        assert!(DEFAULT_AGENT_REASON.starts_with("secretspec/"));
+        assert!(DEFAULT_AGENT_REASON.contains(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn set_reason_reaches_provider_through_arc() {
+        // Preflight-enabled providers are stored behind an `Arc`, so the reason
+        // must propagate through the blanket `Provider for Arc<T>` impl.
+        let provider: Arc<ProtonPassProvider> = Arc::new(ProtonPassProvider::default());
+        Provider::set_reason(&provider, Some("via arc".to_string()));
+        assert_eq!(provider.agent_reason(), "via arc");
     }
 }

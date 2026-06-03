@@ -233,6 +233,61 @@ impl TryFrom<&Path> for Config {
     }
 }
 
+/// When secretspec requires a reason for secret access.
+///
+/// Parsed from `[project].require_reason`, which accepts a boolean or the string
+/// `"agents"`. Defaults to [`RequireReason::Agents`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RequireReason {
+    /// Never require a reason.
+    Never,
+    /// Require a reason only when an AI agent is detected (the default).
+    #[default]
+    Agents,
+    /// Require a reason from every caller.
+    Always,
+}
+
+impl RequireReason {
+    /// Whether this is the serialized-default value (used to keep `"agents"` out of
+    /// generated config files).
+    fn is_default(&self) -> bool {
+        *self == RequireReason::default()
+    }
+}
+
+impl Serialize for RequireReason {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            RequireReason::Never => serializer.serialize_bool(false),
+            RequireReason::Always => serializer.serialize_bool(true),
+            RequireReason::Agents => serializer.serialize_str("agents"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RequireReason {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // A reason policy is either a boolean or the string "agents". Reuse serde's
+        // untagged dispatch (as elsewhere in this file) and map the result, keeping a
+        // precise error for unknown strings.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Bool(bool),
+            Str(String),
+        }
+        match Raw::deserialize(deserializer)? {
+            Raw::Bool(true) => Ok(RequireReason::Always),
+            Raw::Bool(false) => Ok(RequireReason::Never),
+            Raw::Str(ref s) if s == "agents" => Ok(RequireReason::Agents),
+            Raw::Str(other) => Err(serde::de::Error::custom(format!(
+                "invalid require_reason value '{other}': expected true, false, or \"agents\""
+            ))),
+        }
+    }
+}
+
 /// Project metadata and inheritance configuration.
 ///
 /// Contains essential project information and optional configuration inheritance.
@@ -247,6 +302,24 @@ pub struct Project {
     /// Optional list of relative paths to other SecretSpec projects to inherit from
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extends: Option<Vec<String>>,
+    /// Policy controlling when secret access must supply a reason. Accepts a boolean
+    /// or `"agents"` (the default); enforced by [`crate::Secrets`].
+    #[serde(default, skip_serializing_if = "RequireReason::is_default")]
+    pub require_reason: RequireReason,
+}
+
+impl Default for Project {
+    /// A minimal project: empty name, current revision, no inheritance, default
+    /// reason policy. Lets call sites build a `Project` with `..Default::default()`
+    /// so adding a field here does not require touching every literal.
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            revision: "1.0".to_string(),
+            extends: None,
+            require_reason: RequireReason::default(),
+        }
+    }
 }
 
 /// Configuration for a specific profile (environment).
@@ -840,6 +913,62 @@ impl From<toml::de::Error> for ParseError {
 }
 
 #[cfg(test)]
+mod require_reason_tests {
+    use super::*;
+
+    fn parse(line: &str) -> RequireReason {
+        let toml = format!("name = \"t\"\nrevision = \"1.0\"\n{line}");
+        toml::from_str::<Project>(&toml).unwrap().require_reason
+    }
+
+    #[test]
+    fn accepts_bool_and_agents_string() {
+        assert_eq!(parse("require_reason = true"), RequireReason::Always);
+        assert_eq!(parse("require_reason = false"), RequireReason::Never);
+        assert_eq!(parse("require_reason = \"agents\""), RequireReason::Agents);
+    }
+
+    #[test]
+    fn defaults_to_agents_when_absent() {
+        assert_eq!(parse(""), RequireReason::Agents);
+    }
+
+    #[test]
+    fn rejects_unknown_or_wrong_typed_values() {
+        // Invalid values must surface as a parse error (not silently default), now
+        // that the policy is parsed through the canonical config path.
+        let base = "name = \"t\"\nrevision = \"1.0\"\n";
+        assert!(toml::from_str::<Project>(&format!("{base}require_reason = \"nope\"")).is_err());
+        assert!(toml::from_str::<Project>(&format!("{base}require_reason = 1")).is_err());
+    }
+
+    #[test]
+    fn round_trips_through_serialize() {
+        // Default ("agents") is omitted; explicit booleans are preserved.
+        let toml = toml::to_string(&Project {
+            name: "t".to_string(),
+            revision: "1.0".to_string(),
+            extends: None,
+            require_reason: RequireReason::Agents,
+        })
+        .unwrap();
+        assert!(!toml.contains("require_reason"));
+
+        let toml = toml::to_string(&Project {
+            name: "t".to_string(),
+            revision: "1.0".to_string(),
+            extends: None,
+            require_reason: RequireReason::Always,
+        })
+        .unwrap();
+        assert_eq!(
+            toml::from_str::<Project>(&toml).unwrap().require_reason,
+            RequireReason::Always
+        );
+    }
+}
+
+#[cfg(test)]
 mod validation_tests {
     use super::*;
 
@@ -870,8 +999,7 @@ mod validation_tests {
         Config {
             project: Project {
                 name: name.to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles,
             providers: None,

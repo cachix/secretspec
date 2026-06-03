@@ -21,6 +21,12 @@ struct Cli {
     #[arg(short = 'f', long, global = true, env = "SECRETSPEC_FILE")]
     file: Option<PathBuf>,
 
+    /// Reason for accessing secrets, recorded by providers that support audit
+    /// logging (e.g. Proton Pass agent sessions). Takes precedence over the
+    /// PROTON_PASS_AGENT_REASON environment variable.
+    #[arg(long, global = true, env = "SECRETSPEC_REASON")]
+    reason: Option<String>,
+
     /// The subcommand to execute
     #[command(subcommand)]
     command: Commands,
@@ -244,14 +250,20 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
     Ok(doc.to_string())
 }
 
-/// Loads secrets using an explicit path or auto-detection.
-fn load_secrets(file: &Option<PathBuf>) -> miette::Result<Secrets> {
-    match file {
+/// Loads secrets using an explicit path or auto-detection, applying the optional
+/// session reason (from `--reason`/`SECRETSPEC_REASON`).
+fn load_secrets(file: &Option<PathBuf>, reason: &Option<String>) -> miette::Result<Secrets> {
+    let secrets = match file {
         Some(path) => Secrets::load_from(path),
         None => Secrets::load(),
     }
     .into_diagnostic()
-    .wrap_err("Failed to load secretspec configuration")
+    .wrap_err("Failed to load secretspec configuration")?;
+
+    Ok(match reason {
+        Some(reason) => secrets.with_reason(reason.clone()),
+        None => secrets,
+    })
 }
 
 /// Main entry point for the secretspec CLI application.
@@ -317,8 +329,7 @@ pub fn main() -> Result<()> {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string(),
-                    revision: "1.0".to_string(),
-                    extends: None,
+                    ..Default::default()
                 },
                 profiles,
                 providers: None,
@@ -537,7 +548,7 @@ pub fn main() -> Result<()> {
             provider,
             profile,
         } => {
-            let mut app = load_secrets(&cli.file)?;
+            let mut app = load_secrets(&cli.file, &cli.reason)?;
             if let Some(p) = provider {
                 app.set_provider(p);
             }
@@ -555,7 +566,7 @@ pub fn main() -> Result<()> {
             provider,
             profile,
         } => {
-            let mut app = load_secrets(&cli.file)?;
+            let mut app = load_secrets(&cli.file, &cli.reason)?;
             if let Some(p) = provider {
                 app.set_provider(p);
             }
@@ -573,7 +584,7 @@ pub fn main() -> Result<()> {
             provider,
             profile,
         } => {
-            let mut app = load_secrets(&cli.file)?;
+            let mut app = load_secrets(&cli.file, &cli.reason)?;
             if let Some(p) = provider {
                 app.set_provider(p);
             }
@@ -591,7 +602,7 @@ pub fn main() -> Result<()> {
             profile,
             no_prompt,
         } => {
-            let mut app = load_secrets(&cli.file)?;
+            let mut app = load_secrets(&cli.file, &cli.reason)?;
             if let Some(p) = provider {
                 app.set_provider(p);
             }
@@ -611,7 +622,7 @@ pub fn main() -> Result<()> {
         }
         // Import secrets from one provider to another
         Commands::Import { from_provider } => {
-            let app = load_secrets(&cli.file)?;
+            let app = load_secrets(&cli.file, &cli.reason)?;
             app.import(&from_provider)
                 .into_diagnostic()
                 .wrap_err("Failed to import secrets")?;
@@ -632,8 +643,7 @@ mod tests {
         Config {
             project: Project {
                 name: "myproj".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: HashMap::from([(
                 "default".to_string(),
@@ -713,8 +723,7 @@ mod tests {
         let config = Config {
             project: Project {
                 name: "weird \"name\"".to_string(),
-                revision: "1.0".to_string(),
-                extends: None,
+                ..Default::default()
             },
             profiles: HashMap::from([(
                 "default".to_string(),

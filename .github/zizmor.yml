@@ -1,0 +1,19 @@
+# zizmor configuration
+# https://docs.zizmor.sh/configuration/
+
+rules:
+  template-injection:
+    ignore:
+      - publish.yml
+      - release.yml
+      - release-pr.yml
+      - changeset-policy.yml
+
+  artipacked:
+    ignore:
+      - publish.yml
+      - release.yml
+
+  cache-poisoning:
+    ignore:
+      - devenv/action.yaml

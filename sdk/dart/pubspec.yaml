@@ -7,4 +7,5 @@ environment:
   sdk: ^3.5.0
 
 dev_dependencies:
+  coverage: ^1.9.0
   test: ^1.25.0

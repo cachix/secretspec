@@ -1,0 +1,136 @@
+name: devenv
+description: Set up the Monosecret development environment with devenv
+inputs:
+  github-token:
+    description: GitHub token used by Nix and GitHub API backed tools.
+    required: true
+  cache-version:
+    description: Version prefix for caches.
+    required: false
+    default: v1
+  free-runner-space:
+    description: Free Ubuntu runner disk space before installing dependencies.
+    required: false
+    default: "false"
+  install-node:
+    description: Install pnpm workspace dependencies when package.json is present.
+    required: false
+    default: "true"
+  install-dart:
+    description: Run dart pub get for the Dart SDK.
+    required: false
+    default: "true"
+  activate:
+    description: Export the devenv environment to later non-devenv shell steps.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: free ubuntu runner space
+      if: runner.os == 'Linux' && inputs.free-runner-space == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "Disk space before cleanup:"
+        df -h
+        sudo rm -rf /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /usr/local/lib/android /usr/share/dotnet
+        docker system prune --all --force || true
+        sudo apt-get clean
+        echo "Disk space after cleanup:"
+        df -h
+
+    - name: install linux system dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y libdbus-1-dev pkg-config
+
+    - name: cache rust dependencies
+      id: cache-rust-dependencies
+      continue-on-error: true
+      uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: ${{ inputs.cache-version }}
+
+    - name: cache cargo binaries
+      id: cache-cargo-binaries
+      continue-on-error: true
+      uses: actions/cache@v4
+      with:
+        path: ./.bin
+        key: ${{ runner.os }}-cargo-bin-${{ inputs.cache-version }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-bin-${{ inputs.cache-version }}-
+
+    - name: install nix
+      id: install-nix
+      continue-on-error: true
+      uses: cachix/install-nix-action@v31
+      with:
+        github_access_token: ${{ inputs.github-token }}
+
+    - name: retry install nix
+      if: steps.install-nix.outcome != 'success'
+      uses: cachix/install-nix-action@v31
+      with:
+        github_access_token: ${{ inputs.github-token }}
+
+    - name: set up devenv
+      shell: bash
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          if nix profile add --accept-flake-config nixpkgs#cachix && cachix use devenv && nix profile add nixpkgs#devenv; then
+            exit 0
+          fi
+          if [ "$attempt" -eq 3 ]; then
+            echo "::error::Failed to set up devenv after ${attempt} attempts"
+            exit 1
+          fi
+          sleep $((attempt * 10))
+        done
+
+    - name: warm devenv shell
+      shell: bash
+      run: devenv shell -- echo "devenv ready"
+
+    - name: activate devenv environment
+      if: inputs.activate == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        devenv shell -- env | while IFS= read -r line; do
+          [[ "$line" =~ ^PATH= ]] && continue
+          [[ -z "$line" ]] && continue
+          echo "$line" >> "$GITHUB_ENV"
+        done
+        devenv shell -- printenv PATH | tr ':' '\n' | while read -r dir; do
+          [[ -d "$dir" ]] && echo "$dir" >> "$GITHUB_PATH"
+        done
+
+    - name: install pnpm dependencies
+      if: inputs.install-node == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ ! -f package.json ]; then
+          exit 0
+        fi
+        if [ -f pnpm-lock.yaml ]; then
+          devenv shell -- pnpm install --frozen-lockfile
+        else
+          devenv shell -- pnpm install --no-frozen-lockfile
+        fi
+
+    - name: install dart dependencies
+      if: inputs.install-dart == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -f sdk/dart/pubspec.yaml ]; then
+          devenv shell -- bash -lc 'cd sdk/dart && dart pub get'
+        fi

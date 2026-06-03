@@ -1,6 +1,6 @@
 ---
 title: Quick Start
-description: Get up and running with SecretSpec in minutes
+description: Get up and running with Monosecret in minutes
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
@@ -13,7 +13,7 @@ Choose your preferred installation method:
 <TabItem label="Static Binary">
 
 ```bash
-curl -sSL https://install.secretspec.dev | sh
+curl -sSL https://install.monosecret.dev | sh
 ```
 
 </TabItem>
@@ -24,9 +24,9 @@ Add to your `devenv.nix`:
 ```nix
 { config, ... }:
 {
-  # Secrets are automatically populated from secretspec.toml
-  env.DATABASE_URL = config.secretspec.secrets.DATABASE_URL;
-  env.REDIS_URL = config.secretspec.secrets.REDIS_URL;
+  # Secrets are automatically populated from monosecret.toml
+  env.DATABASE_URL = config.monosecret.secrets.DATABASE_URL;
+  env.REDIS_URL = config.monosecret.secrets.REDIS_URL;
 }
 ```
 
@@ -34,7 +34,7 @@ Add to your `devenv.nix`:
 <TabItem label="Nix">
 
 ```bash
-nix-env -iA secretspec -f https://github.com/NixOS/nixpkgs/tarball/nixpkgs-unstable
+nix-env -iA monosecret -f https://github.com/NixOS/nixpkgs/tarball/nixpkgs-unstable
 ```
 
 </TabItem>
@@ -42,29 +42,29 @@ nix-env -iA secretspec -f https://github.com/NixOS/nixpkgs/tarball/nixpkgs-unsta
 
 ## Getting Started
 
-Follow these steps to get started with SecretSpec:
+Follow these steps to get started with Monosecret:
 
-## 1. Initialize `secretspec.toml`
+## 1. Initialize `monosecret.toml`
 
 Discover secrets from existing `.env` files:
 
 ```bash
-$ secretspec init
-✓ Created secretspec.toml with 0 secrets
+$ monosecret init
+✓ Created monosecret.toml with 0 secrets
 
 Next steps:
-  1. secretspec config init    # Set up user configuration
-  2. secretspec check          # Verify all secrets are set
-  3. secretspec run -- your-command  # Run with secrets
+  1. monosecret config init    # Set up user configuration
+  2. monosecret check          # Verify all secrets are set
+  3. monosecret run -- your-command  # Run with secrets
 ```
 
 If you have an existing `.env` file, you can import secrets from it:
 
 ```bash
-$ secretspec init --from .env
+$ monosecret init --from .env
 ```
 
-Now edit `secretspec.toml` to define the secrets your application needs:
+Now edit `monosecret.toml` to define the secrets your application needs:
 
 ```toml
 [project]
@@ -87,7 +87,7 @@ REDIS_URL = { required = true }
 Configure your preferred secrets storage backend:
 
 ```bash
-$ secretspec config init
+$ monosecret config init
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
   onepassword: OnePassword password manager
@@ -104,7 +104,7 @@ $ secretspec config init
 > development
   default
   none
-✓ Configuration saved to /home/user/.config/secretspec/config.toml
+✓ Configuration saved to /home/user/.config/monosecret/config.toml
 ```
 
 ## 3. Import existing secrets (optional)
@@ -113,10 +113,10 @@ If you have existing secrets in environment variables or another `.env` file, yo
 
 ```bash
 # Import from current environment variables
-$ secretspec import env
+$ monosecret import env
 
 # Import from another .env file
-$ secretspec import dotenv:/path/to/old/.env
+$ monosecret import dotenv:/path/to/old/.env
 ```
 
 ## 4. Check and configure secrets
@@ -124,13 +124,13 @@ $ secretspec import dotenv:/path/to/old/.env
 Verify that all required secrets are configured:
 
 ```bash
-$ secretspec check
+$ monosecret check
 ```
 
 If any secrets are missing, you'll be prompted to set them. You can also set secrets manually:
 
 ```bash
-$ secretspec set DATABASE_URL
+$ monosecret set DATABASE_URL
 Enter value for DATABASE_URL: postgresql://localhost/myapp
 ✓ Secret DATABASE_URL saved
 ```
@@ -140,10 +140,10 @@ Enter value for DATABASE_URL: postgresql://localhost/myapp
 Run your application with secrets injected as environment variables:
 
 ```bash
-$ secretspec run -- npm start
+$ monosecret run -- npm start
 
 # Or with a specific profile and provider
-$ secretspec run --profile production --provider dotenv -- npm start
+$ monosecret run --profile production --provider dotenv -- npm start
 ```
 
 ## Next Steps

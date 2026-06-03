@@ -1,0 +1,57 @@
+# :schema ./docs/src/schemas/monochange.schema.json
+
+[defaults]
+parent_bump = "patch"
+include_private = false
+warn_on_group_mismatch = true
+package_type = "cargo"
+changelog = false
+
+[changelog.sections]
+breaking = { heading = "Breaking", priority = 10 }
+feat = { heading = "Features", priority = 20 }
+fix = { heading = "Fixes", priority = 30 }
+docs = { heading = "Documentation", priority = 40 }
+other = { heading = "Other", priority = 50 }
+
+[changelog.types]
+major = { bump = "major", section = "breaking" }
+breaking = { bump = "major", section = "breaking" }
+feat = { bump = "minor", section = "feat" }
+fix = { bump = "patch", section = "fix" }
+docs = { bump = "none", section = "docs" }
+none = { bump = "none", section = "other" }
+
+[package.monosecret]
+path = "monosecret"
+changelog = "../CHANGELOG.md"
+
+[package.monosecret_derive]
+path = "monosecret_derive"
+changelog = "../CHANGELOG.md"
+
+[package."@monosecret/cli"]
+type = "npm"
+path = "packages/monosecret__cli"
+changelog = false
+
+[package."@monosecret/skill"]
+type = "npm"
+path = "packages/monosecret__skill"
+changelog = false
+
+[package.monosecret_dart]
+type = "dart"
+path = "sdk/dart"
+changelog = false
+
+[group.rust]
+packages = ["monosecret", "monosecret_derive"]
+release = true
+tag = true
+version_format = "primary"
+versioned_files = [
+  { path = "Cargo.toml", type = "cargo", fields = [
+    "workspace.package.version",
+  ] },
+]

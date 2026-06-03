@@ -14,6 +14,7 @@ The Keyring provider stores secrets in your system's native credential store. Re
 ## Installation
 
 Linux only - install if missing:
+
 ```bash
 # Debian/Ubuntu
 $ sudo apt-get install gnome-keyring
@@ -33,54 +34,54 @@ $ sudo pacman -S gnome-keyring
 keyring://[folder_prefix]
 ```
 
-- `folder_prefix`: Optional path prefix supporting `{project}`, `{profile}`, and `{key}` placeholders. Defaults to `secretspec/{project}/{profile}/{key}`.
+- `folder_prefix`: Optional path prefix supporting `{project}`, `{profile}`, and `{key}` placeholders. Defaults to `monosecret/{project}/{profile}/{key}`.
 
 ### Examples
 
 ```bash
 # Use default keyring storage
-$ secretspec set DATABASE_URL --provider keyring
+$ monosecret set DATABASE_URL --provider keyring
 
 # Custom folder prefix (e.g., to share secrets across projects — see below)
-$ secretspec set DATABASE_URL --provider "keyring://shared/{profile}/{key}"
+$ monosecret set DATABASE_URL --provider "keyring://shared/{profile}/{key}"
 ```
 
 ## Usage
 
 ```bash
 # Set a secret
-$ secretspec set DATABASE_URL
+$ monosecret set DATABASE_URL
 Enter value for DATABASE_URL: postgresql://localhost/mydb
 ✓ Secret DATABASE_URL saved to keyring
 
 # Get a secret
-$ secretspec get DATABASE_URL
+$ monosecret get DATABASE_URL
 postgresql://localhost/mydb
 
 # Run with secrets
-$ secretspec run -- npm start
+$ monosecret run -- npm start
 
 # Use with profiles
-$ secretspec set API_KEY --profile production
-$ secretspec run --profile production -- npm start
+$ monosecret set API_KEY --profile production
+$ monosecret run --profile production -- npm start
 ```
 
 ## Shared Secrets
 
-By default, secrets are stored under `secretspec/{project}/{profile}/{key}`, which isolates them per project. To share secrets across projects, use a custom folder prefix via the URI:
+By default, secrets are stored under `monosecret/{project}/{profile}/{key}`, which isolates them per project. To share secrets across projects, use a custom folder prefix via the URI:
 
 ```toml
-# ~/.config/secretspec/config.toml
+# ~/.config/monosecret/config.toml
 [defaults.providers]
-shared = "keyring://secretspec/shared/{profile}/{key}"
+shared = "keyring://monosecret/shared/{profile}/{key}"
 ```
 
 The URI supports `{project}`, `{profile}`, and `{key}` placeholders. By omitting `{project}`, multiple projects can read and write the same keyring entry:
 
 ```toml
-# secretspec.toml (in project-A and project-B)
+# monosecret.toml (in project-A and project-B)
 [profiles.default]
 ARTIFACTORY_USER = { description = "Artifactory user", providers = ["shared"] }
 ```
 
-Both projects will resolve `ARTIFACTORY_USER` from keyring service `secretspec/shared/default/ARTIFACTORY_USER`.
+Both projects will resolve `ARTIFACTORY_USER` from keyring service `monosecret/shared/default/ARTIFACTORY_USER`.

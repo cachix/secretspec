@@ -1,0 +1,33 @@
+[project]
+name = "test-profile-inheritance"
+revision = "1.0"
+
+# Default profile has common secrets that other profiles can inherit
+[profiles.default]
+DATABASE_URL = { description = "Database URL", required = true }
+API_KEY = { description = "API Key", required = true }
+LOG_LEVEL = { description = "Logging level", required = false, default = "info" }
+CACHE_TTL = { description = "Cache TTL in seconds", required = false, default = "3600" }
+
+# Development profile overrides some defaults
+[profiles.development]
+DATABASE_URL = { required = false, default = "sqlite:///dev.db" }
+DEBUG_MODE = { description = "Enable debug mode", required = false, default = "true" }
+# API_KEY is inherited from default
+# LOG_LEVEL is inherited from default
+# CACHE_TTL is inherited from default
+
+# Production profile has strict requirements
+[profiles.production]
+DATABASE_URL = { required = true }
+API_KEY = { required = true }
+LOG_LEVEL = { required = false, default = "error" }
+# CACHE_TTL is inherited from default
+
+# Staging profile is similar to production but with some overrides
+[profiles.staging]
+DATABASE_URL = { required = true }
+LOG_LEVEL = { required = false, default = "warn" }
+ENABLE_PROFILING = { description = "Enable performance profiling", required = false, default = "true" }
+# API_KEY is inherited from default
+# CACHE_TTL is inherited from default

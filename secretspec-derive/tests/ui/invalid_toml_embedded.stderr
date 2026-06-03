@@ -1,7 +1,0 @@
-error: Failed to parse TOML: I/O error: Failed to resolve path $WORKSPACE/target/tests/trybuild/secretspec-derive/invalid_toml_embedded.txt: No such file or directory (os error 2)
- --> tests/ui/invalid_toml_embedded.rs:4:1
-  |
-4 | declare_secrets!("invalid_toml_embedded.txt");
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: this error originates in the macro `declare_secrets` (in Nightly builds, run with -Z macro-backtrace for more info)

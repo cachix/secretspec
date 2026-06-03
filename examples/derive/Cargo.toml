@@ -1,15 +1,18 @@
 [package]
-name = "secretspec-derive-example"
-version = "0.1.0"
+name = "monosecret_derive-example"
+version = "0.0.0"
 edition = "2021"
 publish = false
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "derive"
 path = "derive.rs"
 
 [dependencies]
-secretspec = { path = "../../secretspec" }
-secretspec-derive = { path = "../../secretspec-derive" }
+monosecret = { path = "../../monosecret" }
+monosecret_derive = { path = "../../monosecret_derive" }
 secrecy = { workspace = true }
 serde = { workspace = true }

@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "secretspec",
+  "name": "monosecret",
   "compatibility_date": "2025-03-25",
   "main": "worker.js",
   "assets": {

@@ -38,24 +38,24 @@ dotenv:/absolute/path/.env
 ### Environment Variable
 
 ```bash
-export SECRETSPEC_PROVIDER=dotenv:.env.local
+export MONOSECRET_PROVIDER=dotenv:.env.local
 ```
 
 ## Usage
 
 ```bash
 # Initialize from existing .env
-$ secretspec init --from .env
+$ monosecret init --from .env
 
 # Set a secret
-$ secretspec set DATABASE_URL --provider dotenv
+$ monosecret set DATABASE_URL --provider dotenv
 Enter value for DATABASE_URL: postgresql://localhost/mydb
 
 # Run with secrets
-$ secretspec run --provider dotenv -- npm start
+$ monosecret run --provider dotenv -- npm start
 
 # Use different files for different environments
-$ secretspec run --provider dotenv:.env.production -- node server.js
+$ monosecret run --provider dotenv:.env.production -- node server.js
 ```
 
 ## Security

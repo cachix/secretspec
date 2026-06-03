@@ -1,0 +1,52 @@
+name: changeset-policy
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: read
+
+concurrency:
+  group: changeset-policy-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+      - name: setup
+        uses: ./.github/actions/devenv
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: collect changed files
+        id: changed
+        uses: tj-actions/changed-files@v46
+      - name: run changeset policy
+        env:
+          CHANGED_FILES: ${{ steps.changed.outputs.all_changed_files }}
+          PR_LABELS_JSON: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          mapfile -t labels < <(jq -r '.[]' <<<"$PR_LABELS_JSON")
+          args=(step:affected-packages --format json --verify)
+          for path in $CHANGED_FILES; do
+            args+=(--changed-paths "$path")
+          done
+          for label in "${labels[@]}"; do
+            args+=(--label "$label")
+          done
+          monochange "${args[@]}"
+        shell: devenv shell -- bash -e {0}

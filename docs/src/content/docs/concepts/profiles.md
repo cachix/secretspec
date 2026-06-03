@@ -11,7 +11,7 @@ A key feature of profiles is inheritance: all profiles automatically inherit sec
 
 ## Basic Usage
 
-Define profiles in your `secretspec.toml`:
+Define profiles in your `monosecret.toml`:
 
 ```toml
 [profiles.default]
@@ -32,22 +32,22 @@ SENTRY_DSN = { description = "Error tracking", required = true }
 
 ## Selecting Profiles
 
-SecretSpec resolves the active profile in this order:
+Monosecret resolves the active profile in this order:
 
 1. **Command line**: `--profile production` (highest priority)
-2. **Environment variable**: `SECRETSPEC_PROFILE=staging`
-3. **User config**: Default profile in `~/.config/secretspec/config.toml`
+2. **Environment variable**: `MONOSECRET_PROFILE=staging`
+3. **User config**: Default profile in `~/.config/monosecret/config.toml`
 4. **Fallback**: `default` profile
 
 ```bash
 # Use specific profile
-$ secretspec check --profile development
+$ monosecret check --profile development
 ✓ DATABASE_URL - PostgreSQL connection (using default)
 ✓ API_KEY - External API key (using default)
 
 # Set via environment
-export SECRETSPEC_PROFILE=production
-secretspec run -- npm start
+export MONOSECRET_PROFILE=production
+monosecret run -- npm start
 ```
 
 ## Profile Inheritance in Detail

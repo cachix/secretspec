@@ -48,7 +48,7 @@ pub struct ProviderConfigStructured {
 /// A single dependency declaration under `[providers.<name>.requires]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderRequirement {
-    /// The SecretSpec secret name that provides the value (e.g. `OP_SERVICE_ACCOUNT_TOKEN`).
+    /// The Monosecret secret name that provides the value (e.g. `OP_SERVICE_ACCOUNT_TOKEN`).
     pub secret: String,
 }
 ```
@@ -61,6 +61,7 @@ pub struct ProviderRequirement {
 ```
 
 Backward compat:
+
 - `providers = "keyring://"` → `ProviderConfig::Alias("keyring://")` via untagged deserialization.
 - Both `ProviderConfig::Alias` and `ProviderConfig::Structured` provide a `uri()` accessor.
 
@@ -69,10 +70,10 @@ Backward compat:
 ```toml
 [providers]
 keyring = "keyring://"
-env     = "env://"
+env = "env://"
 
 [providers.op-dotfiles]
-uri      = "onepassword://Development"
+uri = "onepassword://Development"
 requires = { service_token = { secret = "OP_SERVICE_ACCOUNT_TOKEN" } }
 ```
 
@@ -95,7 +96,7 @@ provider root (URI → resolves to a provider instance)
         + key  (e.g. "token" → field within that section)
 ```
 
-- `key` defaults to the SecretSpec secret name.
+- `key` defaults to the Monosecret secret name.
 - `path` is `Option<Vec<String>>` — absent means "use provider root directly".
 
 ### 2.3 New Types
@@ -123,7 +124,7 @@ pub struct ProviderRefDetail {
     /// Optional path segments within the provider's store (e.g. section, folder).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<Vec<String>>,
-    /// Optional key within that path. Defaults to the SecretSpec secret name.
+    /// Optional key within that path. Defaults to the Monosecret secret name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
 }
@@ -172,7 +173,7 @@ API_KEY = {
    validation error.
 4. **Bootstrap order**: providers with no dependencies are instantiated first.
    Then dependencies are resolved by looking up their required secrets as
-   normal secretspec secrets (using the already-instantiated bootstrap
+   normal monosecret secrets (using the already-instantiated bootstrap
    providers). Once a required secret is available, the dependent provider
    can be instantiated (e.g. with its `OP_SERVICE_ACCOUNT_TOKEN`).
 
@@ -287,11 +288,11 @@ section/field.
 
 ## 6. Backward Compatibility Guarantees
 
-| Existing feature              | Status                        |
-|-------------------------------|-------------------------------|
-| `[providers]` string aliases  | Untouched, supported          |
-| `Secret.providers` strings    | Untouched, supported          |
-| `ProfileDefaults.providers`   | Unchanged (`Vec<String>` stays) |
-| `GlobalDefaults.providers`    | Unchanged (aliases only)      |
-| Provider trait                | No signature changes          |
-| All existing tests            | Must pass without edits       |
+| Existing feature             | Status                          |
+| ---------------------------- | ------------------------------- |
+| `[providers]` string aliases | Untouched, supported            |
+| `Secret.providers` strings   | Untouched, supported            |
+| `ProfileDefaults.providers`  | Unchanged (`Vec<String>` stays) |
+| `GlobalDefaults.providers`   | Unchanged (aliases only)        |
+| Provider trait               | No signature changes            |
+| All existing tests           | Must pass without edits         |

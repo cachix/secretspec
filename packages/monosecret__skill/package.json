@@ -1,0 +1,8 @@
+{
+  "name": "@monosecret/skill",
+  "version": "0.0.0",
+  "description": "Agent skill for using Monosecret in development workflows",
+  "license": "Apache-2.0",
+  "files": ["SKILL.md", "README.md"],
+  "publishConfig": { "access": "public", "provenance": true }
+}

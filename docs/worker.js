@@ -11,7 +11,7 @@
  * not required given the edge cache. Any failure degrades to `{ stars: null }`
  * and the pill simply stays hidden.
  */
-const REPO = "cachix/secretspec";
+const REPO = "monosecret/monosecret";
 const TTL = 3600; // seconds
 
 export default {
@@ -28,7 +28,7 @@ export default {
 async function handleStars(env) {
   let stars = null;
   try {
-    const headers = { "User-Agent": "secretspec-docs" };
+    const headers = { "User-Agent": "monosecret-docs" };
     if (env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
     const res = await fetch(`https://api.github.com/repos/${REPO}`, {
       headers,

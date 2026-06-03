@@ -23,7 +23,7 @@ const dup = (arr) => [...arr, ...arr];
 <StarlightPage
   frontmatter={{
     title: 'Declare secrets once. Store them anywhere.',
-    description: 'Declare what your application needs in secretspec.toml — store the values in any of 11 backends. No secrets in git. Same code, every environment.',
+    description: 'Declare what your application needs in monosecret.toml — store the values in any of 11 backends. No secrets in git. Same code, every environment.',
     template: 'splash',
     hero: { tagline: '' },
   }}
@@ -38,22 +38,22 @@ const dup = (arr) => [...arr, ...arr];
       <p class="landing-badge">Declarative secrets manager</p>
       <h1 id="_top" class="landing-hero-title">Declare secrets once.<br>Store them anywhere.</h1>
       <p class="landing-hero-subtitle">
-        Stop committing <code class="inline-code">.env</code> files. Define what your application needs in <code class="inline-code">secretspec.toml</code>, then plug in keyring, 1Password, Vault, AWS, or any of 11 backends — same code, every environment.
+        Stop committing <code class="inline-code">.env</code> files. Define what your application needs in <code class="inline-code">monosecret.toml</code>, then plug in keyring, 1Password, Vault, AWS, or any of 11 backends — same code, every environment.
       </p>
       <div class="landing-hero-actions">
         <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
         <a href="/concepts/overview/" class="landing-btn landing-btn-secondary">Read the concepts</a>
-        <a href="https://github.com/cachix/secretspec" class="landing-btn landing-btn-secondary">View on GitHub</a>
+        <a href="https://github.com/monosecret/monosecret" class="landing-btn landing-btn-secondary">View on GitHub</a>
       </div>
     </div>
 
     <div class="landing-hero-split">
-      <!-- Left: secretspec.toml preview -->
+      <!-- Left: monosecret.toml preview -->
       <div class="landing-hero-preview">
         <div class="landing-terminal">
           <div class="landing-terminal-header">
             <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-            <span class="landing-terminal-title">secretspec.toml</span>
+            <span class="landing-terminal-title">monosecret.toml</span>
           </div>
           <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[project]</span>
 <span class="tok-key">name</span> <span class="tok-pun">=</span> <span class="tok-str">"my-app"</span>
@@ -79,19 +79,19 @@ const dup = (arr) => [...arr, ...arr];
             <span class="landing-terminal-title">terminal</span>
           </div>
           <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># 1. Initialize from existing .env</span>
-$ secretspec init --from dotenv
-<span class="tok-str">✓</span> Created secretspec.toml with 5 secrets
+$ monosecret init --from dotenv
+<span class="tok-str">✓</span> Created monosecret.toml with 5 secrets
 
 <span class="tok-com"># 2. Pick a storage backend (one-time)</span>
-$ secretspec config init
-<span class="tok-str">✓</span> Saved to ~/.config/secretspec/config.toml
+$ monosecret config init
+<span class="tok-str">✓</span> Saved to ~/.config/monosecret/config.toml
 
 <span class="tok-com"># 3. Run your app with secrets injected</span>
-$ secretspec run --profile production -- npm start
+$ monosecret run --profile production -- npm start
 <span class="tok-str">✓</span> Loaded DATABASE_URL from keyring
 <span class="tok-str">✓</span> Loaded REDIS_URL    from keyring
 <span class="tok-str">✓</span> Generated DB_PASSWORD (32 chars)
-<span class="tok-str">✓</span> Wrote TLS_CERT to /tmp/secretspec-tls-cert
+<span class="tok-str">✓</span> Wrote TLS_CERT to /tmp/monosecret-tls-cert
 <span class="tok-pun">›</span> npm start</code></pre>
         </div>
       </div>
@@ -135,15 +135,15 @@ $ secretspec run --profile production -- npm start
       <div class="landing-step">
         <span class="landing-step-num">1</span>
         <p class="landing-step-title">Declare</p>
-        <p class="landing-step-desc">Generate <code class="inline-code">secretspec.toml</code> from your existing <code class="inline-code">.env</code>, or write it by hand. Names and descriptions only — never values.</p>
-        <pre is:raw class="landing-step-code"><code>$ secretspec init --from dotenv</code></pre>
+        <p class="landing-step-desc">Generate <code class="inline-code">monosecret.toml</code> from your existing <code class="inline-code">.env</code>, or write it by hand. Names and descriptions only — never values.</p>
+        <pre is:raw class="landing-step-code"><code>$ monosecret init --from dotenv</code></pre>
       </div>
 
       <div class="landing-step">
         <span class="landing-step-num">2</span>
         <p class="landing-step-title">Configure</p>
         <p class="landing-step-desc">Pick a backend: system keyring, 1Password, Vault, AWS, GCP, Bitwarden, Pass, dotenv, or env vars.</p>
-        <pre is:raw class="landing-step-code"><code>$ secretspec config init
+        <pre is:raw class="landing-step-code"><code>$ monosecret config init
 ? Default provider: keyring</code></pre>
       </div>
 
@@ -151,7 +151,7 @@ $ secretspec run --profile production -- npm start
         <span class="landing-step-num">3</span>
         <p class="landing-step-title">Run</p>
         <p class="landing-step-desc">Secrets are loaded at runtime and injected as environment variables. Same command, every environment.</p>
-        <pre is:raw class="landing-step-code"><code>$ secretspec run -- npm start</code></pre>
+        <pre is:raw class="landing-step-code"><code>$ monosecret run -- npm start</code></pre>
       </div>
     </div>
   </div>
@@ -195,8 +195,8 @@ DATABASE_URL = { required = true }</code></pre>
 
       <a href="/sdk/rust/" class="landing-bento-card is-link landing-bento-3">
         <p class="landing-bento-title">Type-safe Rust SDK</p>
-        <p class="landing-bento-desc">Proc macro reads <code class="inline-code">secretspec.toml</code> at compile time and generates strongly-typed structs. Typos fail to compile.</p>
-        <pre is:raw class="landing-bento-mini-code"><code>secretspec_derive::declare_secrets!("secretspec.toml");
+        <p class="landing-bento-desc">Proc macro reads <code class="inline-code">monosecret.toml</code> at compile time and generates strongly-typed structs. Typos fail to compile.</p>
+        <pre is:raw class="landing-bento-mini-code"><code>monosecret_derive::declare_secrets!("monosecret.toml");
 let s = Secrets::builder().load()?;
 println!("{}", s.secrets.database_url);</code></pre>
       </a>
@@ -213,7 +213,7 @@ println!("{}", s.secrets.database_url);</code></pre>
 
       <a href="/reference/cli/" class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">One-line migration</p>
-        <p class="landing-bento-desc">Move all secrets between providers without changing application code. <code class="inline-code">secretspec import</code> does the rest.</p>
+        <p class="landing-bento-desc">Move all secrets between providers without changing application code. <code class="inline-code">monosecret import</code> does the rest.</p>
       </a>
     </div>
   </div>
@@ -226,7 +226,7 @@ println!("{}", s.secrets.database_url);</code></pre>
       <span class="landing-showcase-eyebrow">Declaration vs storage</span>
       <h2 class="landing-section-title">Declare a secret. Swap the source.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Your <code class="inline-code">secretspec.toml</code> never changes. The same code reads from Keychain, 1Password, Vault, AWS, or any of 11 backends.
+        Your <code class="inline-code">monosecret.toml</code> never changes. The same code reads from Keychain, 1Password, Vault, AWS, or any of 11 backends.
       </p>
     </div>
 
@@ -245,7 +245,7 @@ println!("{}", s.secrets.database_url);</code></pre>
         <div class="landing-terminal">
           <div class="landing-terminal-header">
             <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-            <span class="landing-terminal-title">secretspec.toml</span>
+            <span class="landing-terminal-title">monosecret.toml</span>
           </div>
           <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[project]</span>
 <span class="tok-key">name</span> <span class="tok-pun">=</span> <span class="tok-str">"my-app"</span>
@@ -264,12 +264,12 @@ println!("{}", s.secrets.database_url);</code></pre>
         <div class="landing-secret-arrow" aria-hidden="true">↓</div>
         <div class="landing-secret-step">
           <span aria-hidden="true">📄</span>
-          <span><strong>secretspec.toml</strong> declares <code class="inline-code">DATABASE_URL</code></span>
+          <span><strong>monosecret.toml</strong> declares <code class="inline-code">DATABASE_URL</code></span>
         </div>
         <div class="landing-secret-arrow" aria-hidden="true">↓</div>
         <div class="landing-secret-step">
           <span aria-hidden="true">🐚</span>
-          <span><code class="inline-code">$ secretspec run</code> — injected as env var at runtime</span>
+          <span><code class="inline-code">$ monosecret run</code> — injected as env var at runtime</span>
         </div>
         <div class="landing-secret-arrow" aria-hidden="true">↓</div>
         <div class="landing-secret-step">
@@ -312,12 +312,12 @@ println!("{}", s.secrets.database_url);</code></pre>
 
       <div class="landing-merged">
         <div class="landing-merged-label">Same command. Every profile.</div>
-        <div class="landing-merged-cmd">$ secretspec run --profile production -- npm start</div>
+        <div class="landing-merged-cmd">$ monosecret run --profile production -- npm start</div>
         <div class="landing-merged-list">
           <span class="landing-merged-chip">--profile development</span>
           <span class="landing-merged-chip">--profile staging</span>
           <span class="landing-merged-chip">--profile production</span>
-          <span class="landing-merged-chip">SECRETSPEC_PROFILE=ci</span>
+          <span class="landing-merged-chip">MONOSECRET_PROFILE=ci</span>
         </div>
       </div>
     </div>
@@ -331,7 +331,7 @@ println!("{}", s.secrets.database_url);</code></pre>
       <span class="landing-showcase-eyebrow">Per-secret providers</span>
       <h2 class="landing-section-title">Fallback chains, per secret.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Specify an ordered list of providers for each secret. SecretSpec walks the chain until it finds the value — perfect for shared team vaults with personal overrides.
+        Specify an ordered list of providers for each secret. Monosecret walks the chain until it finds the value — perfect for shared team vaults with personal overrides.
       </p>
     </div>
 
@@ -339,7 +339,7 @@ println!("{}", s.secrets.database_url);</code></pre>
       <div class="landing-terminal">
         <div class="landing-terminal-header">
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">secretspec.toml</span>
+          <span class="landing-terminal-title">monosecret.toml</span>
         </div>
         <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[providers]</span>
 <span class="tok-key">team_vault</span> <span class="tok-pun">=</span> <span class="tok-str">"onepassword://vault/Shared"</span>
@@ -376,7 +376,7 @@ println!("{}", s.secrets.database_url);</code></pre>
       <span class="landing-showcase-eyebrow">Type-safe SDK</span>
       <h2 class="landing-section-title">Compile-time secrets in Rust.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        The proc macro reads <code class="inline-code">secretspec.toml</code> at compile time and generates strongly-typed structs. Misspelling a secret name fails the build, not your deploy. <a href="/sdk/rust/" class="landing-link">SDK reference →</a>
+        The proc macro reads <code class="inline-code">monosecret.toml</code> at compile time and generates strongly-typed structs. Misspelling a secret name fails the build, not your deploy. <a href="/sdk/rust/" class="landing-link">SDK reference →</a>
       </p>
     </div>
 
@@ -385,8 +385,8 @@ println!("{}", s.secrets.database_url);</code></pre>
         <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
         <span class="landing-terminal-title">main.rs</span>
       </div>
-      <pre is:raw class="landing-terminal-body"><code><span class="tok-com">// Generate typed structs from secretspec.toml</span>
-secretspec_derive<span class="tok-pun">::</span><span class="tok-key">declare_secrets!</span><span class="tok-pun">(</span><span class="tok-str">"secretspec.toml"</span><span class="tok-pun">);</span>
+      <pre is:raw class="landing-terminal-body"><code><span class="tok-com">// Generate typed structs from monosecret.toml</span>
+monosecret_derive<span class="tok-pun">::</span><span class="tok-key">declare_secrets!</span><span class="tok-pun">(</span><span class="tok-str">"monosecret.toml"</span><span class="tok-pun">);</span>
 
 <span class="tok-key">fn</span> <span class="tok-sec">main</span><span class="tok-pun">()</span> <span class="tok-pun">-&gt;</span> Result<span class="tok-pun">&lt;(), Box&lt;</span><span class="tok-key">dyn</span> std::error::Error<span class="tok-pun">&gt;&gt; {</span>
     <span class="tok-key">let</span> secrets <span class="tok-pun">=</span> Secrets<span class="tok-pun">::</span>builder<span class="tok-pun">()</span>
@@ -416,7 +416,7 @@ secretspec_derive<span class="tok-pun">::</span><span class="tok-key">declare_se
       <span class="landing-showcase-eyebrow">Migration</span>
       <h2 class="landing-section-title">Switch backends with one command.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Outgrowing dotenv? Standardizing on Vault? <code class="inline-code">secretspec import</code> moves every secret without touching a single line of application code.
+        Outgrowing dotenv? Standardizing on Vault? <code class="inline-code">monosecret import</code> moves every secret without touching a single line of application code.
       </p>
     </div>
 
@@ -434,7 +434,7 @@ REDIS_URL=redis://…</code></pre>
       <div class="landing-pipe-card is-final">
         <div class="landing-pipe-label">2 · To</div>
         <div class="landing-pipe-title">keyring://</div>
-        <pre is:raw class="landing-pipe-code"><code>$ secretspec import dotenv://.env.production
+        <pre is:raw class="landing-pipe-code"><code>$ monosecret import dotenv://.env.production
 ✓ Imported 5 secrets to keyring://
 ✓ Application code unchanged</code></pre>
       </div>
@@ -449,7 +449,7 @@ REDIS_URL=redis://…</code></pre>
       <span class="landing-showcase-eyebrow">devenv &amp; Nix</span>
       <h2 class="landing-section-title">Native devenv &amp; Nix integration.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Enable SecretSpec in your <code class="inline-code">devenv.yaml</code> and every secret declared in <code class="inline-code">secretspec.toml</code> is loaded into <code class="inline-code">config.secretspec.secrets</code> — wire them into env vars, services, or processes from <code class="inline-code">devenv.nix</code>. <a href="https://devenv.sh/integrations/secretspec/" class="landing-link">devenv docs →</a>
+        Enable Monosecret in your <code class="inline-code">devenv.yaml</code> and every secret declared in <code class="inline-code">monosecret.toml</code> is loaded into <code class="inline-code">config.monosecret.secrets</code> — wire them into env vars, services, or processes from <code class="inline-code">devenv.nix</code>. <a href="https://devenv.sh/integrations/monosecret/" class="landing-link">devenv docs →</a>
       </p>
     </div>
 
@@ -459,7 +459,7 @@ REDIS_URL=redis://…</code></pre>
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">devenv.yaml</span>
         </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-key">secretspec</span><span class="tok-pun">:</span>
+        <pre is:raw class="landing-terminal-body"><code><span class="tok-key">monosecret</span><span class="tok-pun">:</span>
   <span class="tok-key">enable</span><span class="tok-pun">:</span> <span class="tok-num">true</span>
   <span class="tok-key">provider</span><span class="tok-pun">:</span> <span class="tok-str">keyring</span>   <span class="tok-com"># keyring, dotenv, env, 1password, …</span>
   <span class="tok-key">profile</span><span class="tok-pun">:</span> <span class="tok-str">default</span></code></pre>
@@ -473,13 +473,13 @@ REDIS_URL=redis://…</code></pre>
         <pre is:raw class="landing-terminal-body"><code><span class="tok-pun">{</span> <span class="tok-key">config</span><span class="tok-pun">,</span> <span class="tok-pun">... }:</span>
 <span class="tok-pun">{</span>
   <span class="tok-com"># Wire any declared secret into the shell env</span>
-  <span class="tok-key">env</span><span class="tok-pun">.</span><span class="tok-key">DATABASE_URL</span> <span class="tok-pun">=</span> <span class="tok-key">config</span><span class="tok-pun">.</span><span class="tok-key">secretspec</span><span class="tok-pun">.</span><span class="tok-key">secrets</span><span class="tok-pun">.</span><span class="tok-key">DATABASE_URL</span><span class="tok-pun">;</span>
+  <span class="tok-key">env</span><span class="tok-pun">.</span><span class="tok-key">DATABASE_URL</span> <span class="tok-pun">=</span> <span class="tok-key">config</span><span class="tok-pun">.</span><span class="tok-key">monosecret</span><span class="tok-pun">.</span><span class="tok-key">secrets</span><span class="tok-pun">.</span><span class="tok-key">DATABASE_URL</span><span class="tok-pun">;</span>
 <span class="tok-pun">}</span></code></pre>
       </div>
     </div>
 
     <p class="landing-chain-result" style="margin-top: 1.5rem;">
-      Switch providers per machine without touching <code class="inline-code">devenv.nix</code>: <code class="inline-code">devenv --secretspec-provider dotenv --secretspec-profile dev shell</code>.
+      Switch providers per machine without touching <code class="inline-code">devenv.nix</code>: <code class="inline-code">devenv --monosecret-provider dotenv --monosecret-profile dev shell</code>.
     </p>
   </div>
 </section>
@@ -495,7 +495,7 @@ REDIS_URL=redis://…</code></pre>
     </div>
 
     <div class="landing-community">
-      <a href="https://github.com/cachix/secretspec" class="landing-community-card">
+      <a href="https://github.com/monosecret/monosecret" class="landing-community-card">
         <span class="landing-community-stat">GitHub</span>
         <span class="landing-community-label">Star &amp; contribute</span>
         <span class="landing-community-desc">Read the source, file issues, send PRs. Apache 2.0.</span>
@@ -505,7 +505,7 @@ REDIS_URL=redis://…</code></pre>
         <span class="landing-community-label">Chat with the team</span>
         <span class="landing-community-desc">Get help, share setups, follow what's coming next.</span>
       </a>
-      <a href="https://devenv.sh/blog/2025/07/21/announcing-secretspec-declarative-secrets-management/" class="landing-community-card">
+      <a href="https://devenv.sh/blog/2025/07/21/announcing-monosecret-declarative-secrets-management/" class="landing-community-card">
         <span class="landing-community-stat">Blog</span>
         <span class="landing-community-label">Announcement post</span>
         <span class="landing-community-desc">The design rationale behind separating declaration from storage.</span>
@@ -529,7 +529,7 @@ REDIS_URL=redis://…</code></pre>
       </p>
       <div class="landing-hero-actions" style="justify-content: center;">
         <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
-        <a href="https://github.com/cachix/secretspec" class="landing-btn landing-btn-secondary">View on GitHub</a>
+        <a href="https://github.com/monosecret/monosecret" class="landing-btn landing-btn-secondary">View on GitHub</a>
       </div>
     </div>
   </div>

@@ -8,6 +8,7 @@ The LastPass provider integrates with LastPass password manager for secure cloud
 ## Prerequisites
 
 Install LastPass CLI:
+
 ```bash
 # macOS
 brew install lastpass-cli
@@ -50,22 +51,22 @@ echo "password" | lpass login --trust your-email@example.com
 
 ```bash
 # Set a secret
-secretspec set DATABASE_URL --provider lastpass
+monosecret set DATABASE_URL --provider lastpass
 Enter value for DATABASE_URL: postgresql://localhost/mydb
 
 # Set with folder
-secretspec set API_KEY --provider lastpass://Production
+monosecret set API_KEY --provider lastpass://Production
 Enter value for API_KEY: sk-123456
 
 # Get a secret
-secretspec get DATABASE_URL --provider lastpass
+monosecret get DATABASE_URL --provider lastpass
 
 # Run with secrets
-secretspec run --provider lastpass -- npm start
+monosecret run --provider lastpass -- npm start
 
 # Profile-specific secrets
-secretspec set DATABASE_URL --profile dev --provider lastpass://Development
-secretspec set DATABASE_URL --profile prod --provider lastpass://Production
+monosecret set DATABASE_URL --profile dev --provider lastpass://Development
+monosecret set DATABASE_URL --profile prod --provider lastpass://Production
 ```
 
 Secrets are stored as: `{folder_prefix}/{profile}/{project}/{key}`

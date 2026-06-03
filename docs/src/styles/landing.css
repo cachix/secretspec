@@ -1,6 +1,6 @@
-/* ── Landing page styles for SecretSpec ── */
+/* ── Landing page styles for Monosecret ── */
 
-/* SecretSpec slate-blue palette anchored to the brand color #223041 */
+/* Monosecret slate-blue palette anchored to the brand color #223041 */
 :root {
   --color-accent-50:  #f1f4f8;
   --color-accent-100: #dce3ed;
@@ -804,7 +804,7 @@
 .landing-terminal-body .tok-pun { color: rgba(255, 255, 255, 0.55); }
 .landing-terminal-body .tok-sec { color: #c79be0; }
 
-/* ── Provider switcher (SecretSpec showcase) ── */
+/* ── Provider switcher (Monosecret showcase) ── */
 
 .landing-secret {
   margin-top: 2rem;

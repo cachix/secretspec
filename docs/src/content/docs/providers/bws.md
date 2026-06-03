@@ -25,16 +25,16 @@ bws://PROJECT_UUID
 
 ```bash
 # Set a secret
-$ secretspec set DATABASE_URL --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c
+$ monosecret set DATABASE_URL --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c
 
 # Get a secret
-$ secretspec get DATABASE_URL --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c
+$ monosecret get DATABASE_URL --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c
 
 # Check secrets
-$ secretspec check --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c
+$ monosecret check --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c
 
 # Run with secrets
-$ secretspec run --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c -- npm start
+$ monosecret run --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c -- npm start
 ```
 
 ## Usage
@@ -51,12 +51,12 @@ export BWS_ACCESS_TOKEN="0.your-access-token..."
 
 ```bash
 # Set a secret
-$ secretspec set DATABASE_URL --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c
+$ monosecret set DATABASE_URL --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c
 Enter value for DATABASE_URL: postgresql://localhost/mydb
 ✓ Secret 'DATABASE_URL' saved to bws (profile: default)
 
 # Import from .env
-$ secretspec import dotenv://.env
+$ monosecret import dotenv://.env
 ```
 
 ### Secret Naming
@@ -70,5 +70,5 @@ Secrets are stored with flat key names matching the secret key directly (e.g., `
 $ export BWS_ACCESS_TOKEN="$BWS_TOKEN"
 
 # Run command
-$ secretspec run --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c -- deploy
+$ monosecret run --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c -- deploy
 ```

@@ -1,78 +1,78 @@
 ---
 title: Providers
-description: Understanding secret storage providers in SecretSpec
+description: Understanding secret storage providers in Monosecret
 ---
 
-Providers are pluggable storage backends that handle the storage and retrieval of secrets. They allow the same `secretspec.toml` to work across development machines, CI/CD pipelines, and production environments.
+Providers are pluggable storage backends that handle the storage and retrieval of secrets. They allow the same `monosecret.toml` to work across development machines, CI/CD pipelines, and production environments.
 
 ## Available Providers
 
-| Provider | Description | Read | Write | Encrypted |
-|----------|-------------|------|-------|-----------|
-| **keyring** | System credential storage (macOS Keychain, Windows Credential Manager, Linux Secret Service) | ✓ | ✓ | ✓ |
-| **dotenv** | Traditional `.env` file in your project directory | ✓ | ✓ | ✗ |
-| **env** | Read-only access to existing environment variables | ✓ | ✗ | ✗ |
-| **pass** | Unix password manager with GPG encryption | ✓ | ✓ | ✓ |
-| **protonpass** | Integration with Proton password manager | ✓ | ✓ | ✓ |
-| **onepassword** | Integration with OnePassword password manager | ✓ | ✓ | ✓ |
-| **lastpass** | Integration with LastPass password manager | ✓ | ✓ | ✓ |
-| **gcsm** | Google Cloud Secret Manager (requires `--features gcsm`) | ✓ | ✓ | ✓ |
-| **awssm** | AWS Secrets Manager (requires `--features awssm`) | ✓ | ✓ | ✓ |
-| **vault** | HashiCorp Vault / OpenBao (requires `--features vault`) | ✓ | ✓ | ✓ |
-| **bws** | Bitwarden Secrets Manager (requires `--features bws`) | ✓ | ✓ | ✓ |
+| Provider        | Description                                                                                  | Read | Write | Encrypted |
+| --------------- | -------------------------------------------------------------------------------------------- | ---- | ----- | --------- |
+| **keyring**     | System credential storage (macOS Keychain, Windows Credential Manager, Linux Secret Service) | ✓    | ✓     | ✓         |
+| **dotenv**      | Traditional `.env` file in your project directory                                            | ✓    | ✓     | ✗         |
+| **env**         | Read-only access to existing environment variables                                           | ✓    | ✗     | ✗         |
+| **pass**        | Unix password manager with GPG encryption                                                    | ✓    | ✓     | ✓         |
+| **protonpass**  | Integration with Proton password manager                                                     | ✓    | ✓     | ✓         |
+| **onepassword** | Integration with OnePassword password manager                                                | ✓    | ✓     | ✓         |
+| **lastpass**    | Integration with LastPass password manager                                                   | ✓    | ✓     | ✓         |
+| **gcsm**        | Google Cloud Secret Manager (requires `--features gcsm`)                                     | ✓    | ✓     | ✓         |
+| **awssm**       | AWS Secrets Manager (requires `--features awssm`)                                            | ✓    | ✓     | ✓         |
+| **vault**       | HashiCorp Vault / OpenBao (requires `--features vault`)                                      | ✓    | ✓     | ✓         |
+| **bws**         | Bitwarden Secrets Manager (requires `--features bws`)                                        | ✓    | ✓     | ✓         |
 
 ## Provider Selection
 
-SecretSpec determines which provider to use in this order:
+Monosecret determines which provider to use in this order:
 
-1. **Per-secret providers**: `providers` field in `secretspec.toml` (highest priority, with fallback chain)
-2. **CLI flag**: `secretspec --provider` flag
-3. **Environment**: `SECRETSPEC_PROVIDER`
-4. **Global default**: Default provider in user config set via `secretspec config init`
+1. **Per-secret providers**: `providers` field in `monosecret.toml` (highest priority, with fallback chain)
+2. **CLI flag**: `monosecret --provider` flag
+3. **Environment**: `MONOSECRET_PROVIDER`
+4. **Global default**: Default provider in user config set via `monosecret config init`
 
 ## Configuration
 
 Set your default provider:
 
 ```bash
-$ secretspec config init
+$ monosecret config init
 ```
 
 Override for specific commands:
 
 ```bash
 # Use dotenv for this command
-$ secretspec run --provider dotenv -- npm start
+$ monosecret run --provider dotenv -- npm start
 
 # Set for shell session
-$ export SECRETSPEC_PROVIDER=env
-$ secretspec check
+$ export MONOSECRET_PROVIDER=env
+$ monosecret check
 ```
 
 Configure providers with URIs:
 
 ```toml
-# ~/.config/secretspec/config.toml
+# ~/.config/monosecret/config.toml
 [defaults]
 provider = "keyring"
-profile = "development"  # optional default profile
+profile = "development" # optional default profile
 ```
 
 You can use provider URIs for more specific configuration:
 
 ```bash
 # Use a specific OnePassword vault
-$ secretspec run --provider "onepassword://Personal/Development" -- npm start
+$ monosecret run --provider "onepassword://Personal/Development" -- npm start
 # Native 1Password references are opt-in with op://
-$ secretspec run --provider "op://Development/dotfiles" -- npm start
+$ monosecret run --provider "op://Development/dotfiles" -- npm start
 
 # Use a specific dotenv file
-$ secretspec run --provider "dotenv:/home/user/work/.env" -- npm test
+$ monosecret run --provider "dotenv:/home/user/work/.env" -- npm test
 ```
 
 ## Per-Secret Provider Configuration
 
-For fine-grained control, you can specify different providers for individual secrets using the `providers` field in `secretspec.toml`. This enables fallback chains where secrets are retrieved from multiple providers in order of preference:
+For fine-grained control, you can specify different providers for individual secrets using the `providers` field in `monosecret.toml`. This enables fallback chains where secrets are retrieved from multiple providers in order of preference:
 
 ```toml
 [profiles.production]
@@ -87,12 +87,12 @@ You can also set default providers for an entire profile using `profiles.<name>.
 
 Provider aliases can be defined in two places:
 
-- **Project-level** — a top-level `[providers]` table in `secretspec.toml`. Check this into version control so the whole team and CI runners share the same mapping.
-- **User-level** — a `[defaults.providers]` table in `~/.config/secretspec/config.toml` for personal overrides.
+- **Project-level** — a top-level `[providers]` table in `monosecret.toml`. Check this into version control so the whole team and CI runners share the same mapping.
+- **User-level** — a `[defaults.providers]` table in `~/.config/monosecret/config.toml` for personal overrides.
 
 On name conflicts the project-level alias wins, so a stale user config cannot silently shadow the team's mapping.
 
-```toml title="secretspec.toml"
+```toml title="monosecret.toml"
 [providers]
 prod_vault = "onepassword://vault/Production"
 shared_vault = "onepassword://vault/Shared"
@@ -100,7 +100,7 @@ keyring = "keyring://"
 env = "env://"
 ```
 
-```toml title="~/.config/secretspec/config.toml"
+```toml title="~/.config/monosecret/config.toml"
 [defaults]
 provider = "keyring"
 
@@ -113,7 +113,7 @@ env = "env://"
 
 ### Fallback Chains
 
-When a secret specifies multiple providers, SecretSpec tries each provider in order until it finds the secret:
+When a monosecretifies multiple providers, Monosecret tries each provider in order until it finds the secret:
 
 ```toml
 # Try OnePassword first, then fall back to keyring if not found
@@ -121,6 +121,7 @@ DATABASE_URL = { description = "DB", providers = ["prod_vault", "keyring"] }
 ```
 
 This enables complex workflows:
+
 - **Shared vs environment-specific**: Try a shared vault first, fall back to local keyring
 - **Redundancy**: Maintain secrets in multiple locations for backup
 - **Migration**: Gradually move secrets from one provider to another
@@ -128,20 +129,20 @@ This enables complex workflows:
 
 ### Managing Provider Aliases
 
-Use CLI commands to manage user-level provider aliases in `~/.config/secretspec/config.toml`:
+Use CLI commands to manage user-level provider aliases in `~/.config/monosecret/config.toml`:
 
 ```bash
 # Add a provider alias
-$ secretspec config provider add prod_vault "onepassword://vault/Production"
+$ monosecret config provider add prod_vault "onepassword://vault/Production"
 
 # List all aliases
-$ secretspec config provider list
+$ monosecret config provider list
 
 # Remove an alias
-$ secretspec config provider remove prod_vault
+$ monosecret config provider remove prod_vault
 ```
 
-These commands operate on the user-level config only. To change project-level aliases, edit the `[providers]` table in `secretspec.toml` directly.
+These commands operate on the user-level config only. To change project-level aliases, edit the `[providers]` table in `monosecret.toml` directly.
 
 ## Next Steps
 

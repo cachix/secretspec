@@ -28,7 +28,7 @@ pub trait Provider: Send + Sync {
 
 ```rust
 use super::Provider;
-use crate::{Result, SecretSpecError};
+use crate::{Result, MonosecretError};
 use url::Url;
 use serde::{Deserialize, Serialize};
 
@@ -44,11 +44,11 @@ impl Default for MyBackendConfig {
 }
 
 impl TryFrom<&Url> for MyBackendConfig {
-    type Error = SecretSpecError;
+    type Error = MonosecretError;
 
     fn try_from(url: &Url) -> std::result::Result<Self, Self::Error> {
         if url.scheme() != "mybackend" {
-            return Err(SecretSpecError::ProviderOperationFailed(
+            return Err(MonosecretError::ProviderOperationFailed(
                 format!("Invalid scheme '{}' for mybackend provider", url.scheme())
             ));
         }

@@ -39,7 +39,7 @@ revision = "1.0"
 DATABASE_URL = { description = "Database connection string", required = false, default = "sqlite:///dev.db" }
 REDIS_URL = { description = "Redis connection URL", required = false, default = "redis://localhost:6379" }
 "#;
-        let common_path = common_dir.join("secretspec.toml");
+        let common_path = common_dir.join("monosecret.toml");
         fs::write(&common_path, common_config).unwrap();
 
         // Create auth config
@@ -52,7 +52,7 @@ revision = "1.0"
 JWT_SECRET = { description = "Secret key for JWT token signing", required = true }
 OAUTH_CLIENT_ID = { description = "OAuth client ID", required = false }
 "#;
-        let auth_path = auth_dir.join("secretspec.toml");
+        let auth_path = auth_dir.join("monosecret.toml");
         fs::write(&auth_path, auth_config).unwrap();
 
         // Create base config that extends from common and auth
@@ -69,7 +69,7 @@ DATABASE_URL = { description = "Override database connection", required = true }
 [profiles.development]
 API_KEY = { description = "API key for external service", required = false, default = "dev-api-key" }
 "#;
-        let base_path = base_dir.join("secretspec.toml");
+        let base_path = base_dir.join("monosecret.toml");
         fs::write(&base_path, base_config).unwrap();
 
         (common_path, auth_path, base_path)

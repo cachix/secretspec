@@ -15,8 +15,8 @@ const devStarsApi = {
     server.middlewares.use("/api/stars", async (_req, res) => {
       let stars = null;
       try {
-        const r = await fetch("https://api.github.com/repos/cachix/secretspec", {
-          headers: { "User-Agent": "secretspec-docs" },
+        const r = await fetch("https://api.github.com/repos/monosecret/monosecret", {
+          headers: { "User-Agent": "monosecret-docs" },
         });
         if (r.ok) {
           const data = await r.json();
@@ -33,7 +33,7 @@ const devStarsApi = {
 
 // https://astro.build/config
 export default defineConfig({
-  site: "https://secretspec.dev/",
+  site: "https://monosecret.dev/",
   vite: {
     plugins: [devStarsApi],
   },
@@ -41,9 +41,9 @@ export default defineConfig({
     starlight({
       plugins: [
         starlightLlmsTxt({
-          description: `SecretSpec is a declarative secrets manager for development workflows. It separates secret **declaration** from secret **storage**: commit a \`secretspec.toml\` that declares what secrets your application needs, while the actual values live in a secure provider (system keyring, 1Password, Vault, etc.).
+          description: `Monosecret is a declarative secrets manager for development workflows. It separates secret **declaration** from secret **storage**: commit a \`monosecret.toml\` that declares what secrets your application needs, while the actual values live in a secure provider (system keyring, 1Password, Vault, etc.).
 
-SecretSpec answers three questions for every project:
+Monosecret answers three questions for every project:
 
 - **WHAT** secrets does the application need?
 - **HOW** do requirements change per environment (via profiles)?
@@ -51,10 +51,10 @@ SecretSpec answers three questions for every project:
 
 ## Quick Start
 
-1. Initialize: \`secretspec init --from .env\` or create \`secretspec.toml\` manually
-2. Set secrets: \`secretspec set DATABASE_URL\`
-3. Check status: \`secretspec check\`
-4. Run commands with secrets: \`secretspec run -- npm start\`
+1. Initialize: \`monosecret init --from .env\` or create \`monosecret.toml\` manually
+2. Set secrets: \`monosecret set DATABASE_URL\`
+3. Check status: \`monosecret check\`
+4. Run commands with secrets: \`monosecret run -- npm start\`
 
 ## Configuration Example
 
@@ -76,7 +76,7 @@ DATABASE_URL = { default = "postgresql://localhost/dev" }
 ## Type-safe Rust SDK
 
 \`\`\`rust
-secretspec_derive::declare_secrets!("secretspec.toml");
+monosecret_derive::declare_secrets!("monosecret.toml");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let secrets = Secrets::builder()
@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Move every secret between providers without changing application code:
 
 \`\`\`bash
-$ secretspec import dotenv://.env.production
+$ monosecret import dotenv://.env.production
 \`\`\`
 
 ## Providers
@@ -102,7 +102,7 @@ $ secretspec import dotenv://.env.production
 Secrets can be stored in: keyring (default), dotenv files, environment variables, 1Password, LastPass, Pass, Proton Pass, Google Cloud Secret Manager, AWS Secrets Manager, HashiCorp Vault / OpenBao, or Bitwarden Secrets Manager.`,
         }),
       ],
-      title: "SecretSpec",
+      title: "Monosecret",
       components: {
         Hero: "./src/overrides/Hero.astro",
         SocialIcons: "./src/overrides/SocialIcons.astro",
@@ -116,7 +116,7 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
         {
           icon: "github",
           label: "GitHub",
-          href: "https://github.com/cachix/secretspec",
+          href: "https://github.com/monosecret/monosecret",
         },
         {
           icon: "discord",

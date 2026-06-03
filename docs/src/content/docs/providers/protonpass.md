@@ -9,7 +9,7 @@ The Proton Pass provider integrates with [Proton Pass](https://proton.me/pass) f
 
 - Proton Pass CLI (`pass-cli`) - download from [proton.me/pass/download](https://proton.me/pass/download)
 - A Proton account, signed in via `pass-cli login`
-- A vault to store secrets in (e.g. `pass-cli vault create secretspec`)
+- A vault to store secrets in (e.g. `pass-cli vault create monosecret`)
 
 ## Configuration
 
@@ -19,13 +19,13 @@ The Proton Pass provider integrates with [Proton Pass](https://proton.me/pass) f
 protonpass://[vault_name[/title-template]]
 ```
 
-- `vault_name`: Target vault (defaults to `secretspec`)
+- `vault_name`: Target vault (defaults to `monosecret`)
 - `title-template`: Item title pattern supporting `{project}`, `{profile}`, `{key}` placeholders
 
 ### Examples
 
 ```bash
-# Default vault ("secretspec")
+# Default vault ("monosecret")
 protonpass://
 
 # Specific vault
@@ -39,17 +39,17 @@ protonpass://Work/{project}/{profile}/{key}
 
 ```bash
 # Set a secret
-$ secretspec set DATABASE_URL --provider protonpass://Personal
+$ monosecret set DATABASE_URL --provider protonpass://Personal
 Enter value for DATABASE_URL: postgresql://localhost/mydb
 
 # Get a secret
-$ secretspec get DATABASE_URL --provider protonpass://Personal
+$ monosecret get DATABASE_URL --provider protonpass://Personal
 
 # Run with secrets
-$ secretspec run --provider protonpass://Personal -- npm start
+$ monosecret run --provider protonpass://Personal -- npm start
 
 # Profile-specific vault
-$ secretspec set DATABASE_URL --profile prod --provider protonpass://Production
+$ monosecret set DATABASE_URL --profile prod --provider protonpass://Production
 ```
 
 Secrets are stored as note items; the item title defaults to `{project}/{profile}/{key}`.
@@ -62,5 +62,5 @@ $ pass-cli personal-access-token create --name ci --expiration 1y
 
 # Authenticate in CI (store the token as a CI secret)
 $ pass-cli login --pat $PROTON_PASS_PAT
-$ secretspec run -- deploy
+$ monosecret run -- deploy
 ```

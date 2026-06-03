@@ -1,0 +1,4 @@
+[toolchain]
+channel = "nightly"
+components = ["cargo", "clippy", "llvm-tools-preview", "rustfmt", "rust-src"]
+profile = "default"

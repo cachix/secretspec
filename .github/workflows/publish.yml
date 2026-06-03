@@ -1,42 +1,120 @@
-name: Publish Crates
+name: publish
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Git tag to publish (e.g., 0.1.2 or v0.1.2)"
+        description: "Release tag to publish (for example v0.1.0)."
         required: true
         type: string
-  push:
-    tags:
-      - "*[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    environment: publisher
     permissions:
+      actions: read
+      contents: read
       id-token: write
+    if: github.repository_owner == 'ifiokjr' || github.repository_owner == 'monosecret'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-
-      - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v16
-        with:
-          name: devenv
-      - name: Install devenv.sh
-        run: nix profile install nixpkgs#devenv
-
-      - uses: rust-lang/crates-io-auth-action@v1
-        id: auth
-
-      - name: Publish secretspec crate
-        run: devenv shell cargo publish -p secretspec
+      - name: resolve release tag
+        id: release_tag
         env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG='${{ inputs.tag }}'
+          if ! git ls-remote --exit-code --tags "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag '$TAG' does not exist on the remote" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Publish secretspec-derive crate
-        run: devenv shell cargo publish -p secretspec-derive
+      - name: checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release_tag.outputs.tag }}
+          fetch-depth: 0
+
+      - name: verify tag checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_tag="${{ steps.release_tag.outputs.tag }}"
+          actual_commit=$(git rev-parse HEAD)
+          tag_commit=$(git rev-list -n1 "$expected_tag")
+          if [ "$actual_commit" != "$tag_commit" ]; then
+            echo "::error::Checked-out commit $actual_commit does not match tag $expected_tag ($tag_commit)" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$actual_commit" refs/remotes/origin/main 2>/dev/null; then
+            echo "::error::Tag $expected_tag ($actual_commit) is not on main" >&2
+            exit 1
+          fi
+
+      - name: setup
+        uses: ./.github/actions/devenv
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          free-runner-space: "true"
+          activate: "true"
+
+      - name: get crates oidc auth token
+        uses: rust-lang/crates-io-auth-action@v1
+        id: crates-oidc
+
+      - name: setup cargo stable for publish
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: setup node for publish
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: download release assets
         env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-assets"
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "monosecret-*-${RELEASE_TAG}.tar.gz" \
+            --pattern "monosecret-*-${RELEASE_TAG}.zip" \
+            --dir "$RUNNER_TEMP/release-assets" || true
+          find "$RUNNER_TEMP/release-assets" -type f -maxdepth 1 -print
+        shell: bash
+
+      - name: check publish readiness
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-oidc.outputs.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
+          PUB_TOKEN: ${{ secrets.PUB_TOKEN }}
+        run: monochange step:publish-readiness --from HEAD --output "$RUNNER_TEMP/publish-readiness.json" --format json
+        shell: devenv shell -- bash -e {0}
+
+      - name: publish packages with monochange
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-oidc.outputs.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
+          PUB_TOKEN: ${{ secrets.PUB_TOKEN }}
+        run: |
+          monochange step:publish-packages \
+            --log-level info \
+            --all \
+            --output "$RUNNER_TEMP/publish-result.json" \
+            --format json
+        shell: devenv shell -- bash -e {0}

@@ -1,8 +1,0 @@
-[project]
-name = "test-project"
-revision = "1.0"
-
-[profiles.default]
-API_KEY = { description = "API key for external service", required = true }
-DATABASE_URL = { description = "Database connection string", required = true }
-OPTIONAL_SECRET = { description = "Optional secret with default", required = false, default = "default-value" }

@@ -1,0 +1,38 @@
+[project]
+name = "complex-project"
+revision = "1.0"
+
+[profiles.default]
+ALWAYS_REQUIRED = { description = "Always required secret", required = true }
+REQUIRED_WITH_DEFAULT = { description = "Required with default", required = true, default = "default-value" }
+ALWAYS_OPTIONAL = { description = "Always optional", required = false }
+COMPLEX_SECRET = { description = "Complex secret with many overrides", required = true }
+MULTI_PROFILE = { description = "Multi-profile secret", required = false }
+
+[profiles.development]
+ALWAYS_REQUIRED = { description = "Always required secret", required = true }
+REQUIRED_WITH_DEFAULT = { description = "Required with default", required = true, default = "default-value" }
+ALWAYS_OPTIONAL = { description = "Always optional", required = false }
+COMPLEX_SECRET = { description = "Complex secret with many overrides", required = false, default = "dev-default" }
+MULTI_PROFILE = { description = "Multi-profile secret", required = false }
+
+[profiles.staging]
+ALWAYS_REQUIRED = { description = "Always required secret", required = true }
+REQUIRED_WITH_DEFAULT = { description = "Required with default", required = true, default = "default-value" }
+ALWAYS_OPTIONAL = { description = "Always optional", required = false }
+COMPLEX_SECRET = { description = "Complex secret with many overrides", required = true, default = "staging-default" }
+MULTI_PROFILE = { description = "Multi-profile secret", required = true, default = "staging-value" }
+
+[profiles.production]
+ALWAYS_REQUIRED = { description = "Always required secret", required = true }
+REQUIRED_WITH_DEFAULT = { description = "Required with default", required = true, default = "default-value" }
+ALWAYS_OPTIONAL = { description = "Always optional", required = false }
+COMPLEX_SECRET = { description = "Complex secret with many overrides", required = true }
+MULTI_PROFILE = { description = "Multi-profile secret", required = true }
+
+[profiles.test]
+ALWAYS_REQUIRED = { description = "Always required secret", required = true }
+REQUIRED_WITH_DEFAULT = { description = "Required with default", required = true, default = "default-value" }
+ALWAYS_OPTIONAL = { description = "Always optional", required = false }
+COMPLEX_SECRET = { description = "Complex secret with many overrides", required = false }
+MULTI_PROFILE = { description = "Multi-profile secret", required = false }

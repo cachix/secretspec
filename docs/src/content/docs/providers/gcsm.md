@@ -26,16 +26,16 @@ gcsm://PROJECT_ID
 
 ```bash
 # Set a secret
-$ secretspec set DATABASE_URL --provider gcsm://my-gcp-project
+$ monosecret set DATABASE_URL --provider gcsm://my-gcp-project
 
 # Get a secret
-$ secretspec get DATABASE_URL --provider gcsm://my-gcp-project
+$ monosecret get DATABASE_URL --provider gcsm://my-gcp-project
 
 # Check secrets
-$ secretspec check --provider gcsm://my-gcp-project
+$ monosecret check --provider gcsm://my-gcp-project
 
 # Run with secrets
-$ secretspec run --provider gcsm://my-gcp-project -- npm start
+$ monosecret run --provider gcsm://my-gcp-project -- npm start
 ```
 
 ## Usage
@@ -44,19 +44,19 @@ $ secretspec run --provider gcsm://my-gcp-project -- npm start
 
 ```bash
 # Set a secret
-$ secretspec set DATABASE_URL --provider gcsm://my-gcp-project
+$ monosecret set DATABASE_URL --provider gcsm://my-gcp-project
 Enter value for DATABASE_URL: postgresql://localhost/mydb
 ✓ Secret 'DATABASE_URL' saved to gcsm (profile: default)
 
 # Import from .env
-$ secretspec import dotenv://.env
+$ monosecret import dotenv://.env
 ```
 
 ### Secret Naming
 
-Secrets are stored as: `secretspec-{project}-{profile}-{key}`
+Secrets are stored as: `monosecret-{project}-{profile}-{key}`
 
-Example: `secretspec-myapp-production-DATABASE_URL`
+Example: `monosecret-myapp-production-DATABASE_URL`
 
 ### CI/CD with Service Accounts
 
@@ -65,5 +65,5 @@ Example: `secretspec-myapp-production-DATABASE_URL`
 $ export GOOGLE_APPLICATION_CREDENTIALS="/path/to/key.json"
 
 # Run command
-$ secretspec run --provider gcsm://my-gcp-project -- deploy
+$ monosecret run --provider gcsm://my-gcp-project -- deploy
 ```

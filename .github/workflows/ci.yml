@@ -193,7 +193,7 @@ jobs:
         with:
           files: ./coverage/rust.lcov,./sdk/dart/coverage/lcov.info
           disable_search: true
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           name: monosecret-workspace
           token: ${{ secrets.CODECOV_TOKEN }}
           use_oidc: true

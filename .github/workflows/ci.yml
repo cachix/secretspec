@@ -52,7 +52,7 @@ jobs:
         run: dprint check
         shell: devenv shell -- bash -e {0}
       - name: taplo
-        run: taplo fmt --check
+        run: git ls-files -z '*.toml' | xargs -0 taplo fmt --check
         shell: devenv shell -- bash -e {0}
       - name: dart format
         run: dart format --output=none --set-exit-if-changed sdk/dart

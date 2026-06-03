@@ -321,7 +321,7 @@ in
       exec = ''
         set -euo pipefail
         dprint check --allow-no-files
-        taplo fmt --check
+        git ls-files -z '*.toml' | xargs -0 taplo fmt --check
         rustup run nightly cargo fmt --all -- --check
         dart format --output=none --set-exit-if-changed sdk/dart
         nixfmt --check devenv.nix
@@ -390,7 +390,7 @@ in
       exec = ''
         set -euo pipefail
         dprint fmt --allow-no-files
-        taplo fmt
+        git ls-files -z '*.toml' | xargs -0 taplo fmt
         rustup run nightly cargo fmt --all
         dart format sdk/dart
         nixfmt devenv.nix

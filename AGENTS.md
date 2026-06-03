@@ -2,10 +2,9 @@
 
 When commiting changes related to Rust, make sure to update /CHANGELOG.md with one entry (can be multi-line).
 
-
 ## Project Overview
 
-SecretSpec is a declarative secrets manager for development workflows written in Rust. It provides a CLI tool and Rust library for managing environment variables and secrets across different environments using multiple storage backends (keyring, dotenv, environment variables, OnePassword, LastPass).
+Monosecret is a declarative secrets manager for development workflows written in Rust. It provides a CLI tool and Rust library for managing environment variables and secrets across different environments using multiple storage backends (keyring, dotenv, environment variables, OnePassword, LastPass).
 
 ## Build and Development Commands
 
@@ -34,15 +33,15 @@ pre-commit run -a
 
 The project is organized as a Rust workspace with two crates:
 
-1. **secretspec** (src/): Main CLI and library
-   - `bin/secretspec.rs`: CLI entry point that calls the main CLI module
+1. **monosecret** (src/): Main CLI and library
+   - `bin/monosecret.rs`: CLI entry point that calls the main CLI module
    - `cli/mod.rs`: CLI command definitions (init, config, set/get, check, run, import)
    - `lib.rs`: Core library with `Secrets` struct, validation logic, and CRUD operations
    - `config.rs`: Core configuration types (Config, Secret), TOML parsing, and inheritance logic
    - `provider/`: Storage backend implementations with trait-based plugin architecture
 
-2. **secretspec-derive**: Proc macro for type-safe code generation
-   - Reads `secretspec.toml` at compile time
+2. **monosecret_derive**: Proc macro for type-safe code generation
+   - Reads `monosecret.toml` at compile time
    - Generates strongly-typed structs from configuration
    - Supports both union types (safe for any profile) and profile-specific types
    - Validates secret names produce valid Rust identifiers
@@ -54,7 +53,7 @@ The provider system uses a trait-based architecture defined in `src/provider/mod
 1. Create module in `src/provider/your_provider.rs`
 2. Implement the `Provider` trait with methods: `get()`, `set()`, `allows_set()`, `name()`, `description()`
 3. Use the `#[provider]` macro for automatic registration
-4. Handle profile-aware storage paths (e.g., `secretspec/{project}/{profile}/{key}`)
+4. Handle profile-aware storage paths (e.g., `monosecret/{project}/{profile}/{key}`)
 
 Providers support URI-based configuration (e.g., `keyring://`, `onepassword://vault`, `dotenv://.env.production`). The provider system handles URI parsing and provider instantiation directly within each provider module.
 
@@ -66,29 +65,32 @@ When adding a new provider, update **every** location below — provider names a
 2. `docs/astro.config.mjs` - Add to sidebar navigation under "Providers" **and** to the providers sentence in the `starlightLlmsTxt` description block
 3. `docs/src/content/docs/concepts/providers.md` - Add a row to the "Available Providers" table
 4. `docs/src/content/docs/reference/providers.md` - Add a provider section **and** a row in the "Security Considerations" table
-5. `docs/src/pages/index.astro` - Add to the `providerIcons` array (top of file) **and** to the `secretspec config init` mini-terminal in the hero
-6. `docs/src/content/docs/quick-start.mdx` - Update the `secretspec config init` example output to include the new provider
-7. `README.md` (symlink to `secretspec/README.md`) - Add to the "Providers" bullet list **and** to the `secretspec config init` example output
+5. `docs/src/pages/index.astro` - Add to the `providerIcons` array (top of file) **and** to the `monosecret config init` mini-terminal in the hero
+6. `docs/src/content/docs/quick-start.mdx` - Update the `monosecret config init` example output to include the new provider
+7. `README.md` (symlink to `monosecret/README.md`) - Add to the "Providers" bullet list **and** to the `monosecret config init` example output
 
 ## Configuration System
 
 ### Profile Resolution
+
 1. CLI flag (`--profile`)
-2. Environment variable (`SECRETSPEC_PROFILE`)
+2. Environment variable (`MONOSECRET_PROFILE`)
 3. User config default
 4. Falls back to "default" profile
 
 ### Provider Resolution
-1. **Per-secret providers** (with fallback chain): specified in `secretspec.toml` as `providers: [alias1, alias2, ...]`
-   - Aliases resolved against the project `[providers]` table in `secretspec.toml` first, then the `[defaults.providers]` table in `~/.config/secretspec/config.toml`
+
+1. **Per-secret providers** (with fallback chain): specified in `monosecret.toml` as `providers: [alias1, alias2, ...]`
+   - Aliases resolved against the project `[providers]` table in `monosecret.toml` first, then the `[defaults.providers]` table in `~/.config/monosecret/config.toml`
    - Project-level aliases win on conflict
    - Tries each provider in order until secret is found
 2. CLI flag (`--provider`)
-3. Environment variable (`SECRETSPEC_PROVIDER`)
+3. Environment variable (`MONOSECRET_PROVIDER`)
 4. User config default provider
 5. Falls back to keyring provider
 
 ### Per-Secret Provider Configuration
+
 Secrets can specify their own providers using the `providers` field to override global defaults:
 
 ```toml
@@ -98,7 +100,8 @@ API_KEY = { description = "API Key", providers = ["shared"] }
 GITHUB_TOKEN = { description = "GitHub token from env", providers = ["env"] }
 ```
 
-Provider aliases can be checked into the project in `secretspec.toml` so every team member and CI runner sees them automatically:
+Provider aliases can be checked into the project in `monosecret.toml` so every team member and CI runner sees them automatically:
+
 ```toml
 [providers]
 prod_vault = "onepassword://vault/Production"
@@ -107,7 +110,8 @@ keyring = "keyring://"
 env = "env://"
 ```
 
-They can also be defined per-user in `~/.config/secretspec/config.toml` (project entries win on conflict):
+They can also be defined per-user in `~/.config/monosecret/config.toml` (project entries win on conflict):
+
 ```toml
 [defaults]
 provider = "keyring"
@@ -119,51 +123,55 @@ keyring = "keyring://"
 env = "env://"
 ```
 
-Manage the user-level map via CLI (project-level aliases are hand-edited in `secretspec.toml`):
+Manage the user-level map via CLI (project-level aliases are hand-edited in `monosecret.toml`):
+
 ```bash
 # Add provider alias to user config
-secretspec config provider add prod_vault "onepassword://vault/Production"
+monosecret config provider add prod_vault "onepassword://vault/Production"
 
 # List user-level aliases
-secretspec config provider list
+monosecret config provider list
 
 # Remove a user-level alias
-secretspec config provider remove prod_vault
+monosecret config provider remove prod_vault
 ```
 
 ### Secret Resolution
+
 1. Check active profile for secret
 2. Fall back to "default" profile
 3. Apply defaults if configured
 4. Validate required secrets are present
 
 ### Config Inheritance
+
 Projects can extend other configurations via `extends = ["../shared/common"]`. The system loads configs recursively and merges them with proper precedence.
 
 ## Testing
 
 - Unit tests are located alongside the code
-- Integration tests in `secretspec-derive/tests/` and `tests/integration/`
+- Integration tests in `monosecret_derive/tests/` and `tests/integration/`
 - UI tests using `trybuild` for macro error testing
 - Run specific test: `cargo test test_name`
 - Test CI runs on Ubuntu and macOS using devenv
 
 ### Provider Integration Tests
 
-Provider tests are located in `secretspec/src/provider/tests.rs` and test all provider implementations generically.
+Provider tests are located in `monosecret/src/provider/tests.rs` and test all provider implementations generically.
 
 ```bash
 # Run provider tests
-cargo test --package secretspec provider::tests
+cargo test --package monosecret provider::tests
 
-# Test specific providers using SECRETSPEC_TEST_PROVIDERS env var
-SECRETSPEC_TEST_PROVIDERS=keyring,dotenv cargo test --package secretspec provider::tests::integration_tests
+# Test specific providers using MONOSECRET_TEST_PROVIDERS env var
+MONOSECRET_TEST_PROVIDERS=keyring,dotenv cargo test --package monosecret provider::tests::integration_tests
 
 # Run with output visible
-SECRETSPEC_TEST_PROVIDERS=dotenv cargo test --package secretspec provider::tests -- --nocapture
+MONOSECRET_TEST_PROVIDERS=dotenv cargo test --package monosecret provider::tests -- --nocapture
 ```
 
 The integration tests cover:
+
 - Basic get/set operations
 - Multiple secrets handling
 - Special characters and Unicode
@@ -174,7 +182,7 @@ Note: Some providers (like `env`) are read-only and will skip write tests.
 
 ## Documentation Site (`docs/`)
 
-The docs site is an Astro Starlight site deployed to https://secretspec.dev/.
+The docs site is an Astro Starlight site deployed to https://monosecret.dev/.
 
 ### Structure
 
@@ -197,10 +205,10 @@ The docs site is an Astro Starlight site deployed to https://secretspec.dev/.
 
 ## Key Files
 
-- `secretspec.toml`: Project secrets configuration
-- `secretspec/src/provider/mod.rs`: Provider trait definition and documentation
-- `secretspec/src/cli/mod.rs`: CLI command definitions
-- `secretspec/src/bin/secretspec.rs`: CLI entry point
-- `secretspec/src/lib.rs`: Core SecretSpec implementation
-- `secretspec-derive/src/lib.rs`: Code generation macro implementation
-- `secretspec/src/provider/tests.rs`: Generic provider test suite
+- `monosecret.toml`: Project secrets configuration
+- `monosecret/src/provider/mod.rs`: Provider trait definition and documentation
+- `monosecret/src/cli/mod.rs`: CLI command definitions
+- `monosecret/src/bin/monosecret.rs`: CLI entry point
+- `monosecret/src/lib.rs`: Core Monosecret implementation
+- `monosecret_derive/src/lib.rs`: Code generation macro implementation
+- `monosecret/src/provider/tests.rs`: Generic provider test suite

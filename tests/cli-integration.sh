@@ -4,9 +4,9 @@ set -euo pipefail
 echo "Running CLI integration tests..."
 
 # Use dotenv provider for testing
-export SECRETSPEC_PROVIDER=dotenv
+export MONOSECRET_PROVIDER=dotenv
 # Ensure we use the default profile for tests
-export SECRETSPEC_PROFILE=default
+export MONOSECRET_PROFILE=default
 
 # Test directory for isolated tests
 TEST_DIR="$(mktemp -d)"
@@ -33,23 +33,23 @@ check_failure() {
 }
 
 # Test 1: Help command
-secretspec --help > /dev/null
+monosecret --help > /dev/null
 check_success "Help command works"
 
 # Test 2: Version command
-secretspec --version > /dev/null
+monosecret --version > /dev/null
 check_success "Version command works"
 
 # Test 3: Init command
-secretspec init
-check_success "Init command creates secretspec.toml"
+monosecret init
+check_success "Init command creates monosecret.toml"
 
 # Verify the file was created
-[ -f "secretspec.toml" ]
-check_success "secretspec.toml file exists"
+[ -f "monosecret.toml" ]
+check_success "monosecret.toml file exists"
 
 # Test 4: Declare and set a secret
-cat > secretspec.toml << EOF
+cat > monosecret.toml << EOF
 [project]
 name = "test-app"
 revision = "1.0"
@@ -58,16 +58,16 @@ revision = "1.0"
 TEST_SECRET = { description = "Test secret for integration tests" }
 EOF
 
-echo "test_value" | secretspec set TEST_SECRET
+echo "test_value" | monosecret set TEST_SECRET
 check_success "Set TEST_SECRET"
 
 # Get the secret
-VALUE=$(secretspec get TEST_SECRET)
+VALUE=$(monosecret get TEST_SECRET)
 [ "$VALUE" = "test_value" ]
 check_success "Get TEST_SECRET returns correct value"
 
 # Test 5: Check command with missing required secret
-cat > secretspec.toml << EOF
+cat > monosecret.toml << EOF
 [project]
 name = "test-app"
 revision = "1.0"
@@ -78,7 +78,7 @@ REQUIRED_SECRET = { description = "Required secret", required = true }
 EOF
 
 # Test that check fails when required secret is missing
-if secretspec check 2>/dev/null; then
+if monosecret check 2>/dev/null; then
     # Should have failed but didn't
     echo "✗ Check fails with missing required secret"
     exit 1
@@ -87,11 +87,11 @@ else
 fi
 
 # Set the required secret
-echo "required_value" | secretspec set REQUIRED_SECRET
+echo "required_value" | monosecret set REQUIRED_SECRET
 check_success "Set REQUIRED_SECRET"
 
 # Now check should pass
-secretspec check
+monosecret check
 check_success "Check passes with all required secrets"
 
 # Test 6: Import from .env file
@@ -101,7 +101,7 @@ ENV_VAR2=value2
 EOF
 
 # First declare the secrets we're importing
-cat > secretspec.toml << EOF
+cat > monosecret.toml << EOF
 [project]
 name = "test-app"
 revision = "1.0"
@@ -113,12 +113,12 @@ ENV_VAR1 = { description = "Imported from .env" }
 ENV_VAR2 = { description = "Imported from .env" }
 EOF
 
-secretspec import dotenv://.env.import
+monosecret import dotenv://.env.import
 check_success "Import from .env file"
 
 # Verify imported values
-VALUE1=$(secretspec get ENV_VAR1)
-VALUE2=$(secretspec get ENV_VAR2)
+VALUE1=$(monosecret get ENV_VAR1)
+VALUE2=$(monosecret get ENV_VAR2)
 [ "$VALUE1" = "value1" ] && [ "$VALUE2" = "value2" ]
 check_success "Imported values are correct"
 
@@ -127,26 +127,26 @@ echo "#!/usr/bin/env bash" > test_script.sh
 echo "echo \"\$TEST_SECRET\"" >> test_script.sh
 chmod +x test_script.sh
 
-OUTPUT=$(secretspec run -- ./test_script.sh)
+OUTPUT=$(monosecret run -- ./test_script.sh)
 [ "$OUTPUT" = "test_value" ]
 check_success "Run command with secrets injected"
 
 # Test 8: Profile support - init doesn't need profile, just add the profile to config
 
 # Declare secret in production profile
-cat >> secretspec.toml << EOF
+cat >> monosecret.toml << EOF
 
 [profiles.production]
 PROD_SECRET = { description = "Production secret" }
 EOF
 
-echo "prod_value" | secretspec set --profile production PROD_SECRET
+echo "prod_value" | monosecret set --profile production PROD_SECRET
 check_success "Set secret in production profile"
 
 # Test 9: List secrets - removed as this command doesn't exist
 
 # Test 10: Config command
-secretspec config show > /dev/null
+monosecret config show > /dev/null
 check_success "Config show command works"
 
 # Test 11: Init from provider
@@ -157,26 +157,26 @@ DATABASE_URL=postgres://localhost/test
 EOF
 
 # Test init with bare provider name
-rm -f secretspec.toml
-secretspec init --from dotenv:.env.source
+rm -f monosecret.toml
+monosecret init --from dotenv:.env.source
 check_success "Init from dotenv provider with path"
 
 # Verify secrets were imported
-grep -q "API_KEY" secretspec.toml && grep -q "DATABASE_URL" secretspec.toml
+grep -q "API_KEY" monosecret.toml && grep -q "DATABASE_URL" monosecret.toml
 check_success "Init imported secrets from .env file"
 
 # Test init with bare provider name (should use default .env)
 echo "DEFAULT_KEY=default-value" > .env
-rm -f secretspec.toml
-secretspec init --from dotenv
+rm -f monosecret.toml
+monosecret init --from dotenv
 check_success "Init from dotenv provider (bare name)"
 
 # Verify it found the default .env
-grep -q "DEFAULT_KEY" secretspec.toml
+grep -q "DEFAULT_KEY" monosecret.toml
 check_success "Init found default .env file"
 
-# Test: --provider CLI flag overrides SECRETSPEC_PROVIDER env var (regression for #77)
-cat > secretspec.toml << EOF
+# Test: --provider CLI flag overrides MONOSECRET_PROVIDER env var (regression for #77)
+cat > monosecret.toml << EOF
 [project]
 name = "test-app"
 revision = "1.0"
@@ -185,23 +185,23 @@ revision = "1.0"
 OVERRIDE_SECRET = { description = "Secret used to test provider precedence" }
 EOF
 
-# SECRETSPEC_PROVIDER=dotenv is already exported above. Stash a value there
+# MONOSECRET_PROVIDER=dotenv is already exported above. Stash a value there
 # and a different value in the process env, then ensure --provider env reads
 # the env provider rather than dotenv.
-echo "from_dotenv" | secretspec set OVERRIDE_SECRET
+echo "from_dotenv" | monosecret set OVERRIDE_SECRET
 check_success "Stash value in dotenv provider"
 
-VALUE=$(OVERRIDE_SECRET=from_env_provider secretspec get --provider env OVERRIDE_SECRET)
+VALUE=$(OVERRIDE_SECRET=from_env_provider monosecret get --provider env OVERRIDE_SECRET)
 [ "$VALUE" = "from_env_provider" ]
-check_success "--provider flag overrides SECRETSPEC_PROVIDER env var"
+check_success "--provider flag overrides MONOSECRET_PROVIDER env var"
 
-# Sanity check: without --provider, SECRETSPEC_PROVIDER (dotenv) is still used
-VALUE=$(secretspec get OVERRIDE_SECRET)
+# Sanity check: without --provider, MONOSECRET_PROVIDER (dotenv) is still used
+VALUE=$(monosecret get OVERRIDE_SECRET)
 [ "$VALUE" = "from_dotenv" ]
-check_success "SECRETSPEC_PROVIDER is still honored when --provider is absent"
+check_success "MONOSECRET_PROVIDER is still honored when --provider is absent"
 
 # Test 12: Default value handling
-cat > secretspec.toml << EOF
+cat > monosecret.toml << EOF
 [project]
 name = "test-app"
 revision = "1.0"
@@ -211,7 +211,7 @@ DEFAULT_SECRET = { description = "Secret with default", default = "default_value
 EOF
 
 # Should use default value when not set
-VALUE=$(secretspec get DEFAULT_SECRET)
+VALUE=$(monosecret get DEFAULT_SECRET)
 [ "$VALUE" = "default_value" ]
 check_success "Default value is used when secret not set"
 

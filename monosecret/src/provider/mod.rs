@@ -1,0 +1,972 @@
+//! # Provider System
+//!
+//! The provider module implements a trait-based plugin architecture for managing secrets
+//! across different storage backends. Providers handle the actual storage and retrieval
+//! of secrets, supporting everything from local files to cloud-based secret managers.
+//!
+//! ## Architecture
+//!
+//! The provider system is built around the [`Provider`] trait, which defines a common
+//! interface for all storage backends. Each provider implementation handles:
+//!
+//! - Profile-aware storage (e.g., development vs production secrets)
+//! - Project isolation (secrets are namespaced by project)
+//! - Optional write support (some providers are read-only)
+//!
+//! ## Available Providers
+//!
+//! - [`KeyringProvider`]: System keyring integration (default)
+//! - [`DotEnvProvider`]: `.env` file support
+//! - [`EnvProvider`]: Environment variables (read-only)
+//! - [`OnePasswordProvider`]: OnePassword integration
+//! - [`LastPassProvider`]: LastPass integration
+//!
+//! ## URI-Based Configuration
+//!
+//! Providers support URI-based configuration for flexibility:
+//!
+//! ```text
+//! keyring://
+//! dotenv://.env.production
+//! onepassword://vault/items
+//! lastpass://folder
+//! ```
+//!
+//! ## Example
+//!
+//! ```rust,ignore
+//! use monosecret::provider::Provider;
+//! use std::convert::TryFrom;
+//!
+//! // Create a provider from a URI string
+//! let provider = Box::<dyn Provider>::try_from("keyring://")?;
+//!
+//! // Store a secret
+//! provider.set("myproject", "API_KEY", "secret123", "production")?;
+//!
+//! // Retrieve a secret
+//! if let Some(value) = provider.get("myproject", "API_KEY", "production")? {
+//!     println!("API_KEY: {}", value);
+//! }
+//! ```
+
+use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::sync::OnceLock;
+
+use percent_encoding::AsciiSet;
+use percent_encoding::CONTROLS;
+use percent_encoding::percent_decode_str;
+use percent_encoding::percent_encode;
+use secrecy::SecretString;
+use url::Url;
+
+use crate::MonosecretError;
+use crate::Result;
+use crate::config::SecretRequest;
+
+/// Characters that are invalid in URI hosts but might appear in provider config
+/// values like vault names (e.g., 1Password vault "Home Lab").
+/// Structural URI delimiters (@, /, :, ?, #) are intentionally excluded so they
+/// are preserved during encoding.
+pub(crate) const URI_ENCODE_SET: &AsciiSet = &CONTROLS
+	.add(b' ')
+	.add(b'<')
+	.add(b'>')
+	.add(b'[')
+	.add(b']')
+	.add(b'|')
+	.add(b'^')
+	.add(b'\\');
+
+/// A URL wrapper that automatically percent-decodes all accessors.
+///
+/// Providers receive `&ProviderUrl` instead of `&Url`, ensuring they always
+/// get decoded values (e.g., `"Home Lab"` instead of `"Home%20Lab"`).
+///
+/// **Limitation:** Structural URI delimiters (`@`, `/`, `:`, `?`, `#`) are
+/// never encoded, so they cannot appear literally in provider config values
+/// like vault or folder names. For example, a vault named `"My@Vault"` would
+/// be misinterpreted as a username/host separator.
+pub(crate) struct ProviderUrl(Url);
+
+impl ProviderUrl {
+	pub fn new(url: Url) -> Self {
+		Self(url)
+	}
+
+	pub fn scheme(&self) -> &str {
+		self.0.scheme()
+	}
+
+	pub fn host(&self) -> Option<String> {
+		self.0
+			.host_str()
+			.map(|h| percent_decode_str(h).decode_utf8_lossy().into_owned())
+	}
+
+	pub fn username(&self) -> String {
+		percent_decode_str(self.0.username())
+			.decode_utf8_lossy()
+			.into_owned()
+	}
+
+	pub fn password(&self) -> Option<String> {
+		self.0
+			.password()
+			.map(|p| percent_decode_str(p).decode_utf8_lossy().into_owned())
+	}
+
+	pub fn path(&self) -> String {
+		percent_decode_str(self.0.path())
+			.decode_utf8_lossy()
+			.into_owned()
+	}
+
+	pub fn port(&self) -> Option<u16> {
+		self.0.port()
+	}
+
+	pub fn query_pairs(&self) -> url::form_urlencoded::Parse<'_> {
+		self.0.query_pairs()
+	}
+
+	/// Percent-encode a value for use in a URI (e.g., in `uri()` methods).
+	pub fn encode(value: &str) -> String {
+		percent_encode(value.as_bytes(), URI_ENCODE_SET).to_string()
+	}
+}
+
+/// Executes an async future in a blocking context.
+///
+/// If already inside a tokio runtime, uses `block_in_place` with the
+/// existing runtime handle. Otherwise, creates a new runtime.
+#[allow(dead_code)]
+pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
+	match tokio::runtime::Handle::try_current() {
+		Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+		Err(_) => {
+			tokio::runtime::Builder::new_current_thread()
+				.enable_all()
+				.build()
+				.expect("Failed to create tokio runtime")
+				.block_on(future)
+		}
+	}
+}
+
+#[cfg(feature = "awssm")]
+pub mod awssm;
+#[cfg(feature = "bws")]
+pub mod bws;
+pub mod dotenv;
+pub mod env;
+#[cfg(feature = "gcsm")]
+pub mod gcsm;
+#[cfg(feature = "keyring")]
+pub mod keyring;
+pub mod lastpass;
+pub mod onepassword;
+pub mod onepassword_env;
+pub mod pass;
+pub mod protonpass;
+#[cfg(feature = "vault")]
+pub mod vault;
+#[macro_use]
+pub mod macros;
+
+#[cfg(test)]
+pub(crate) mod tests;
+
+/// Information about a secret storage provider.
+///
+/// Contains metadata used for displaying available providers to users,
+/// including the provider's name, description, and example URIs.
+#[derive(Debug, Clone)]
+pub struct ProviderInfo {
+	/// The canonical name of the provider (e.g., "keyring", "1password").
+	pub name: &'static str,
+	/// A human-readable description of what the provider does.
+	pub description: &'static str,
+	/// Example URIs showing how to configure this provider.
+	pub examples: &'static [&'static str],
+}
+
+impl ProviderInfo {
+	/// Formats the provider information for display, including examples if available.
+	///
+	/// # Returns
+	///
+	/// A formatted string in one of two formats:
+	/// - Without examples: "name: description"
+	/// - With examples: "name: description (e.g., example1, example2)"
+	///
+	/// # Example
+	///
+	/// ```ignore
+	/// let info = ProviderInfo {
+	///     name: "onepassword",
+	///     description: "OnePassword password manager",
+	///     examples: &["onepassword://vault", "onepassword://work@Production"],
+	/// };
+	/// assert_eq!(
+	///     info.display_with_examples(),
+	///     "onepassword: OnePassword password manager (e.g., onepassword://vault, onepassword://work@Production)"
+	/// );
+	/// ```
+	pub fn display_with_examples(&self) -> String {
+		if self.examples.is_empty() {
+			format!("{}: {}", self.name, self.description)
+		} else {
+			format!(
+				"{}: {} (e.g., {})",
+				self.name,
+				self.description,
+				self.examples.join(", ")
+			)
+		}
+	}
+}
+
+/// Macro support types
+pub use macros::PROVIDER_REGISTRY;
+/// Macro support types
+pub use macros::ProviderRegistration;
+
+/// Returns a list of all available providers with their metadata.
+///
+/// This includes the provider name, description, and example URIs for each
+/// supported provider type.
+///
+/// # Returns
+///
+/// A vector of `ProviderInfo` structs containing metadata for each provider.
+pub fn providers() -> Vec<ProviderInfo> {
+	PROVIDER_REGISTRY
+		.iter()
+		.map(|reg| reg.info.clone())
+		.collect()
+}
+
+/// Trait defining the interface for secret storage providers.
+///
+/// All secret storage backends must implement this trait to integrate with Monosecret.
+/// The trait is designed to be flexible enough to support various storage mechanisms
+/// while maintaining a consistent interface.
+///
+/// # Thread Safety
+///
+/// Providers must be `Send + Sync` as they may be used across thread boundaries
+/// in multi-threaded applications.
+///
+/// # Profile Support
+///
+/// Providers should support profile-based secret isolation, allowing different values
+/// for the same key across environments (e.g., development, staging, production).
+///
+/// # Implementation Guidelines
+///
+/// - Providers should handle their own error cases and return appropriate `Result` types
+/// - Storage paths should follow the pattern: `{provider}/{project}/{profile}/{key}`
+/// - Providers may choose to be read-only by overriding [`allows_set`](Provider::allows_set)
+/// - Provider names should be lowercase and descriptive
+pub trait Provider: Send + Sync {
+	/// Retrieves a secret value from the provider.
+	///
+	/// # Arguments
+	///
+	/// * `project` - The project namespace for the secret
+	/// * `key` - The secret key/name to retrieve
+	/// * `profile` - The profile context (e.g., "default", "production")
+	///
+	/// # Returns
+	///
+	/// - `Ok(Some(value))` if the secret exists
+	/// - `Ok(None)` if the secret doesn't exist
+	/// - `Err` if there was an error accessing the provider
+	///
+	/// # Example
+	///
+	/// ```rust,ignore
+	/// match provider.get("myapp", "DATABASE_URL", "production")? {
+	///     Some(url) => println!("Database URL: {}", url),
+	///     None => println!("DATABASE_URL not found"),
+	/// }
+	/// ```
+	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>>;
+
+	/// Stores a secret value in the provider.
+	///
+	/// # Arguments
+	///
+	/// * `project` - The project namespace for the secret
+	/// * `key` - The secret key/name to store
+	/// * `value` - The secret value to store
+	/// * `profile` - The profile context (e.g., "default", "production")
+	///
+	/// # Returns
+	///
+	/// - `Ok(())` if the secret was successfully stored
+	/// - `Err` if there was an error or the provider is read-only
+	///
+	/// # Errors
+	///
+	/// This method should return an error if [`allows_set`](Provider::allows_set) returns `false`.
+	///
+	/// # Example
+	///
+	/// ```rust,ignore
+	/// provider.set("myapp", "API_KEY", "secret123", "production")?;
+	/// ```
+	fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()>;
+
+	/// Stores a secret value using provider-relative request hints.
+	fn set_with_request(
+		&self,
+		project: &str,
+		key: &str,
+		value: &SecretString,
+		profile: &str,
+		request: &crate::config::SecretRequest,
+	) -> Result<()> {
+		let storage_key = request.key.as_deref().unwrap_or(key);
+		self.set(project, storage_key, value, profile)
+	}
+
+	/// Applies resolved provider dependency secrets before the provider is used.
+	///
+	/// The default implementation ignores dependency secrets. Providers that
+	/// need scoped authentication material should copy only the dependencies
+	/// they understand into provider-local state and pass them directly to
+	/// child commands or SDK clients, rather than mutating process-global
+	/// environment variables.
+	fn configure_dependency_secrets(
+		&mut self,
+		_dependencies: &[(String, SecretString)],
+	) -> Result<()> {
+		Ok(())
+	}
+
+	/// Returns whether this provider supports setting values.
+	///
+	/// By default, providers are assumed to support writing. Read-only providers
+	/// (like environment variables) should override this to return `false`.
+	///
+	/// # Returns
+	///
+	/// - `true` if the provider supports [`set`](Provider::set) operations
+	/// - `false` if the provider is read-only
+	///
+	/// # Example
+	///
+	/// ```rust,ignore
+	/// if provider.allows_set() {
+	///     provider.set("myapp", "TOKEN", "value", "default")?;
+	/// } else {
+	///     eprintln!("Provider is read-only");
+	/// }
+	/// ```
+	fn allows_set(&self) -> bool {
+		true
+	}
+
+	/// Returns the name of this provider.
+	///
+	/// This should match the name registered with the provider macro.
+	fn name(&self) -> &'static str;
+
+	/// Returns the full URI representation of this provider.
+	///
+	/// This includes any configuration like vault names, paths, etc.
+	/// For example: "onepassword://VaultName" or "dotenv://.env.production"
+	fn uri(&self) -> String;
+
+	/// Discovers and returns all secrets available in this provider.
+	///
+	/// This method is used to introspect the provider and find all available secrets.
+	/// It's particularly useful for importing secrets from external sources.
+	///
+	/// # Returns
+	///
+	/// A HashMap where keys are secret names and values are `Secret` configurations.
+	/// The default implementation returns an empty map, indicating the provider
+	/// doesn't support reflection.
+	///
+	/// # Example
+	///
+	/// ```rust,ignore
+	/// let secrets = provider.reflect()?;
+	/// for (name, secret) in secrets {
+	///     println!("Found secret: {} = {:?}", name, secret);
+	/// }
+	/// ```
+	fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
+		Err(MonosecretError::ProviderOperationFailed(format!(
+			"Provider '{}' does not support reflection",
+			self.name()
+		)))
+	}
+
+	/// Retrieves multiple secrets from the provider in a single batch operation.
+	///
+	/// This method allows providers to optimize fetching multiple secrets at once,
+	/// which can significantly improve performance for providers with high latency
+	/// per request (like cloud-based secret managers).
+	///
+	/// # Arguments
+	///
+	/// * `project` - The project namespace for the secrets
+	/// * `keys` - A slice of secret keys to retrieve
+	/// * `profile` - The profile context (e.g., "default", "production")
+	///
+	/// # Returns
+	///
+	/// A HashMap where keys are the secret names and values are the secret values.
+	/// Secrets that don't exist are not included in the result.
+	///
+	/// # Default Implementation
+	///
+	/// The default implementation calls `get()` for each key sequentially.
+	/// Providers should override this for better performance when possible.
+	fn get_batch(
+		&self,
+		project: &str,
+		keys: &[&str],
+		profile: &str,
+	) -> Result<HashMap<String, SecretString>> {
+		let mut results = HashMap::new();
+		for key in keys {
+			if let Some(value) = self.get(project, key, profile)? {
+				results.insert((*key).to_string(), value);
+			}
+		}
+		Ok(results)
+	}
+
+	/// Look up a single secret with an optional provider-relative location.
+	///
+	/// The default implementation delegates to [`get`](Provider::get), using
+	/// `request.key` as an alternate storage key when present. Providers that
+	/// support richer path navigation (e.g. OnePassword with section/field
+	/// lookup) should override this.
+	fn get_with_request(
+		&self,
+		project: &str,
+		key: &str,
+		profile: &str,
+		request: &SecretRequest,
+	) -> Result<Option<SecretString>> {
+		let storage_key = request.key.as_deref().unwrap_or(key);
+		self.get(project, storage_key, profile)
+	}
+}
+
+impl<T: Provider> Provider for std::sync::Arc<T> {
+	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
+		(**self).get(project, key, profile)
+	}
+
+	fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
+		(**self).set(project, key, value, profile)
+	}
+
+	fn allows_set(&self) -> bool {
+		(**self).allows_set()
+	}
+
+	fn name(&self) -> &'static str {
+		(**self).name()
+	}
+
+	fn uri(&self) -> String {
+		(**self).uri()
+	}
+
+	fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
+		(**self).reflect()
+	}
+
+	fn get_batch(
+		&self,
+		project: &str,
+		keys: &[&str],
+		profile: &str,
+	) -> Result<HashMap<String, SecretString>> {
+		(**self).get_batch(project, keys, profile)
+	}
+
+	fn get_with_request(
+		&self,
+		project: &str,
+		key: &str,
+		profile: &str,
+		request: &SecretRequest,
+	) -> Result<Option<SecretString>> {
+		(**self).get_with_request(project, key, profile, request)
+	}
+}
+
+/// Return type from provider factories that pairs a provider with an
+/// optional preflight check (e.g. authentication verification).
+pub(crate) struct ProviderWithPreflight {
+	pub provider: Box<dyn Provider>,
+	pub preflight: Option<Box<dyn Fn() -> Result<()> + Send + Sync>>,
+}
+
+/// Wrapper that runs a preflight check exactly once before any provider
+/// operation, caching the result for all subsequent calls.
+struct PreflightGuard {
+	inner: Box<dyn Provider>,
+	preflight: Option<Box<dyn Fn() -> Result<()> + Send + Sync>>,
+	result: OnceLock<std::result::Result<(), String>>,
+}
+
+impl PreflightGuard {
+	fn new(pwp: ProviderWithPreflight) -> Self {
+		Self {
+			inner: pwp.provider,
+			preflight: pwp.preflight,
+			result: OnceLock::new(),
+		}
+	}
+
+	fn check(&self) -> Result<()> {
+		let result = self.result.get_or_init(|| {
+			if let Some(f) = &self.preflight {
+				f().map_err(|e| e.to_string())
+			} else {
+				Ok(())
+			}
+		});
+		match result {
+			Ok(()) => Ok(()),
+			Err(msg) => Err(MonosecretError::ProviderOperationFailed(msg.clone())),
+		}
+	}
+}
+
+impl Provider for PreflightGuard {
+	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
+		self.check()?;
+		self.inner.get(project, key, profile)
+	}
+
+	fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
+		self.check()?;
+		self.inner.set(project, key, value, profile)
+	}
+
+	fn allows_set(&self) -> bool {
+		self.inner.allows_set()
+	}
+
+	fn name(&self) -> &'static str {
+		self.inner.name()
+	}
+
+	fn uri(&self) -> String {
+		self.inner.uri()
+	}
+
+	fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
+		self.check()?;
+		self.inner.reflect()
+	}
+
+	fn get_batch(
+		&self,
+		project: &str,
+		keys: &[&str],
+		profile: &str,
+	) -> Result<HashMap<String, SecretString>> {
+		self.check()?;
+		self.inner.get_batch(project, keys, profile)
+	}
+
+	fn get_with_request(
+		&self,
+		project: &str,
+		key: &str,
+		profile: &str,
+		request: &SecretRequest,
+	) -> Result<Option<SecretString>> {
+		self.check()?;
+		self.inner.get_with_request(project, key, profile, request)
+	}
+}
+
+impl TryFrom<String> for Box<dyn Provider> {
+	type Error = MonosecretError;
+
+	/// Creates a provider instance from a URI string.
+	///
+	/// This function handles various URI formats and normalizes them before parsing.
+	/// It supports both full URIs and shorthand notations.
+	///
+	/// # URI Formats
+	///
+	/// - **Full URI**: `scheme://authority/path` (e.g., `onepassword://vault/Production`)
+	///
+	/// # Special Cases
+	///
+	/// - **1password**: Will error suggesting to use `onepassword` instead
+	/// - **Bare provider names**: Automatically converted to `provider://`
+	///
+	/// # Examples
+	///
+	/// ```ignore
+	/// use std::convert::TryFrom;
+	///
+	/// // Simple provider name
+	/// let provider = Box::<dyn Provider>::try_from("keyring".to_string())?;
+	///
+	/// // Full URI with configuration
+	/// let provider = Box::<dyn Provider>::try_from("onepassword://vault/Production".to_string())?;
+	///
+	/// // Dotenv with path
+	/// let provider = Box::<dyn Provider>::try_from("dotenv:.env.production".to_string())?;
+	/// ```
+	fn try_from(s: String) -> Result<Self> {
+		Self::try_from(&s as &str)
+	}
+}
+
+impl TryFrom<&str> for Box<dyn Provider> {
+	type Error = MonosecretError;
+
+	fn try_from(s: &str) -> Result<Self> {
+		// Parse the scheme from the input string
+		let (scheme, rest) = if let Some(pos) = s.find(':') {
+			let scheme = &s[..pos];
+			let rest = &s[pos + 1..];
+			(scheme, rest)
+		} else {
+			// Just a provider name, no URI components
+			(s, "")
+		};
+
+		// Validate scheme first
+		if scheme == "1password" {
+			return Err(MonosecretError::ProviderOperationFailed(
+                "Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault/path)".to_string()
+            ));
+		}
+
+		// Check if the scheme is registered
+		let is_valid_scheme = PROVIDER_REGISTRY
+			.iter()
+			.any(|reg| reg.schemes.contains(&scheme));
+
+		if !is_valid_scheme {
+			// Check if it's a known provider name to give a better error
+			if PROVIDER_REGISTRY.iter().any(|reg| reg.info.name == scheme) {
+				return Err(MonosecretError::ProviderOperationFailed(format!(
+					"Provider '{}' exists but URI parsing failed",
+					scheme
+				)));
+			} else {
+				return Err(MonosecretError::ProviderNotFound(scheme.to_string()));
+			}
+		}
+
+		// Build a proper URL with the correct scheme
+		let url_string = match rest {
+			// Just scheme name (e.g., "keyring")
+			"" | ":" => format!("{}://", scheme),
+			// Standard URI format already has // (e.g., "onepassword://vault/path")
+			s if s.starts_with("//") => format!("{}:{}", scheme, s),
+			// Path only format (e.g., "dotenv:/path/to/.env")
+			s if s.starts_with('/') => format!("{}://{}", scheme, s),
+			// Everything else - assume it's a host or path component
+			s => format!("{}://{}", scheme, s),
+		};
+
+		// Percent-encode characters that are invalid in URIs but might appear in
+		// provider config values (e.g., spaces in 1Password vault names like "Home Lab")
+		let url_string = {
+			let scheme_end = url_string.find("://").unwrap() + 3;
+			let (prefix, rest) = url_string.split_at(scheme_end);
+			format!(
+				"{}{}",
+				prefix,
+				percent_encode(rest.as_bytes(), URI_ENCODE_SET)
+			)
+		};
+
+		let proper_url = Url::parse(&url_string).map_err(|e| {
+			MonosecretError::ProviderOperationFailed(format!(
+				"Invalid provider specification '{}': {}",
+				s, e
+			))
+		})?;
+
+		provider_from_url_with_dependencies(&ProviderUrl::new(proper_url), &[])
+	}
+}
+
+impl TryFrom<&Url> for Box<dyn Provider> {
+	type Error = MonosecretError;
+
+	fn try_from(url: &Url) -> Result<Self> {
+		provider_from_url_with_dependencies(&ProviderUrl::new(url.clone()), &[])
+	}
+}
+
+pub(crate) fn provider_from_spec_with_dependencies(
+	s: &str,
+	dependencies: &[(String, SecretString)],
+) -> Result<Box<dyn Provider>> {
+	let (scheme, rest) = if let Some(pos) = s.find(':') {
+		let scheme = &s[..pos];
+		let rest = &s[pos + 1..];
+		(scheme, rest)
+	} else {
+		(s, "")
+	};
+
+	if scheme == "1password" {
+		return Err(MonosecretError::ProviderOperationFailed(
+            "Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault/path)"
+                .to_string(),
+        ));
+	}
+
+	let is_valid_scheme = PROVIDER_REGISTRY
+		.iter()
+		.any(|reg| reg.schemes.contains(&scheme));
+
+	if !is_valid_scheme {
+		if PROVIDER_REGISTRY.iter().any(|reg| reg.info.name == scheme) {
+			return Err(MonosecretError::ProviderOperationFailed(format!(
+				"Provider '{}' exists but URI parsing failed",
+				scheme
+			)));
+		} else {
+			return Err(MonosecretError::ProviderNotFound(scheme.to_string()));
+		}
+	}
+
+	let url_string = match rest {
+		"" | ":" => format!("{}://", scheme),
+		s if s.starts_with("//") => format!("{}:{}", scheme, s),
+		s if s.starts_with('/') => format!("{}://{}", scheme, s),
+		s => format!("{}://{}", scheme, s),
+	};
+
+	let url_string = {
+		let scheme_end = url_string.find("://").unwrap() + 3;
+		let (prefix, rest) = url_string.split_at(scheme_end);
+		format!(
+			"{}{}",
+			prefix,
+			percent_encode(rest.as_bytes(), URI_ENCODE_SET)
+		)
+	};
+
+	let proper_url = Url::parse(&url_string).map_err(|e| {
+		MonosecretError::ProviderOperationFailed(format!(
+			"Invalid provider specification '{}': {}",
+			s, e
+		))
+	})?;
+
+	provider_from_url_with_dependencies(&ProviderUrl::new(proper_url), dependencies)
+}
+
+fn provider_from_url_with_dependencies(
+	url: &ProviderUrl,
+	dependencies: &[(String, SecretString)],
+) -> Result<Box<dyn Provider>> {
+	let scheme = url.scheme();
+
+	// Find the provider registration for this scheme
+	let registration = PROVIDER_REGISTRY
+		.iter()
+		.find(|reg| reg.schemes.contains(&scheme))
+		.ok_or_else(|| MonosecretError::ProviderNotFound(scheme.to_string()))?;
+
+	let pwp = (registration.factory)(url, dependencies)?;
+	if pwp.preflight.is_some() {
+		Ok(Box::new(PreflightGuard::new(pwp)))
+	} else {
+		Ok(pwp.provider)
+	}
+}
+
+#[cfg(test)]
+mod url_tests {
+	use std::collections::HashMap;
+
+	use url::Url;
+
+	use super::*;
+
+	fn url(s: &str) -> ProviderUrl {
+		ProviderUrl::new(Url::parse(s).unwrap())
+	}
+
+	#[test]
+	fn host_and_path_are_percent_decoded() {
+		let u = url("keyring://Home%20Lab/My%20Path");
+		assert_eq!(u.host().as_deref(), Some("Home Lab"));
+		assert_eq!(u.path(), "/My Path");
+	}
+
+	#[test]
+	fn username_and_password_are_percent_decoded() {
+		let u = url("onepassword://work%40acct:tok%20en@Vault");
+		assert_eq!(u.username(), "work@acct");
+		assert_eq!(u.password().as_deref(), Some("tok en"));
+		assert_eq!(u.host().as_deref(), Some("Vault"));
+	}
+
+	#[test]
+	fn missing_password_and_port_are_none() {
+		let u = url("keyring://host");
+		assert_eq!(u.password(), None);
+		assert_eq!(u.port(), None);
+		assert_eq!(u.username(), "");
+	}
+
+	#[test]
+	fn port_is_parsed_when_present() {
+		assert_eq!(url("https://example.com:8200/").port(), Some(8200));
+	}
+
+	#[test]
+	fn query_pairs_are_decoded() {
+		let u = url("keyring://h/p?prefix=a%20b&kv=v2");
+		let pairs: HashMap<String, String> = u
+			.query_pairs()
+			.map(|(k, v)| (k.into_owned(), v.into_owned()))
+			.collect();
+		assert_eq!(pairs.get("prefix").map(String::as_str), Some("a b"));
+		assert_eq!(pairs.get("kv").map(String::as_str), Some("v2"));
+	}
+
+	#[test]
+	fn encode_escapes_spaces_but_keeps_plain() {
+		assert_eq!(ProviderUrl::encode("plain"), "plain");
+		assert_eq!(ProviderUrl::encode("Home Lab"), "Home%20Lab");
+	}
+
+	#[test]
+	fn provider_info_display_with_and_without_examples() {
+		let with = ProviderInfo {
+			name: "onepassword",
+			description: "OnePassword",
+			examples: &["onepassword://vault", "onepassword://work@Production"],
+		};
+		assert_eq!(
+			with.display_with_examples(),
+			"onepassword: OnePassword (e.g., onepassword://vault, onepassword://work@Production)"
+		);
+
+		let without = ProviderInfo {
+			name: "env",
+			description: "Environment variables",
+			examples: &[],
+		};
+		assert_eq!(
+			without.display_with_examples(),
+			"env: Environment variables"
+		);
+	}
+}
+
+mod dependency_factory_tests {
+	use std::sync::Mutex;
+
+	use secrecy::ExposeSecret;
+
+	use super::*;
+
+	static CAPTURED_DEPENDENCIES: Mutex<Vec<Vec<(String, String)>>> = Mutex::new(Vec::new());
+
+	struct DependencyTestConfig;
+
+	impl TryFrom<&ProviderUrl> for DependencyTestConfig {
+		type Error = MonosecretError;
+
+		fn try_from(_url: &ProviderUrl) -> Result<Self> {
+			Ok(Self)
+		}
+	}
+
+	struct DependencyTestProvider;
+
+	impl DependencyTestProvider {
+		fn new(_config: DependencyTestConfig) -> Self {
+			Self
+		}
+	}
+
+	crate::register_provider! {
+		struct: DependencyTestProvider,
+		config: DependencyTestConfig,
+		name: "dependency-test",
+		description: "Dependency injection test provider",
+		schemes: ["dependency-test"],
+		examples: ["dependency-test://"],
+	}
+
+	impl Provider for DependencyTestProvider {
+		fn configure_dependency_secrets(
+			&mut self,
+			dependencies: &[(String, SecretString)],
+		) -> Result<()> {
+			CAPTURED_DEPENDENCIES.lock().unwrap().push(
+				dependencies
+					.iter()
+					.map(|(name, value)| (name.clone(), value.expose_secret().to_string()))
+					.collect(),
+			);
+			Ok(())
+		}
+
+		fn name(&self) -> &'static str {
+			Self::PROVIDER_NAME
+		}
+
+		fn uri(&self) -> String {
+			"dependency-test://".to_string()
+		}
+
+		fn get(&self, _project: &str, _key: &str, _profile: &str) -> Result<Option<SecretString>> {
+			Ok(None)
+		}
+
+		fn set(
+			&self,
+			_project: &str,
+			_key: &str,
+			_value: &SecretString,
+			_profile: &str,
+		) -> Result<()> {
+			Ok(())
+		}
+	}
+
+	#[test]
+	fn provider_factory_passes_dependencies_to_provider_before_use() {
+		CAPTURED_DEPENDENCIES.lock().unwrap().clear();
+
+		let provider = provider_from_spec_with_dependencies(
+			"dependency-test://",
+			&[
+				("FIRST".into(), SecretString::new("one".into())),
+				("SECOND".into(), SecretString::new("two".into())),
+			],
+		)
+		.unwrap();
+
+		assert_eq!(provider.name(), "dependency-test");
+		assert_eq!(
+			CAPTURED_DEPENDENCIES.lock().unwrap().as_slice(),
+			&[vec![
+				("FIRST".to_string(), "one".to_string()),
+				("SECOND".to_string(), "two".to_string()),
+			]]
+		);
+	}
+}

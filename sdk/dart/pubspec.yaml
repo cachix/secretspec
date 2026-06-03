@@ -1,0 +1,10 @@
+name: monosecret
+description: Dart SDK for invoking Monosecret and loading secrets into Dart applications.
+version: 0.1.0
+repository: https://github.com/monosecret/monosecret
+
+environment:
+  sdk: ^3.5.0
+
+dev_dependencies:
+  test: ^1.25.0

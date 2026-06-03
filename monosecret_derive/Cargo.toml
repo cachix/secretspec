@@ -1,0 +1,30 @@
+[package]
+name = "monosecret_derive"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+repository = "https://github.com/monosecret/monosecret"
+description = "Derive macros for Monosecret type-safe code generation"
+
+[lints]
+workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+monosecret = { version = "0.1.0", path = "../monosecret", default-features = false }
+proc-macro2.workspace = true
+quote.workspace = true
+serde.workspace = true
+syn.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+http.workspace = true
+insta.workspace = true
+monosecret.workspace = true
+secrecy.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+trybuild.workspace = true

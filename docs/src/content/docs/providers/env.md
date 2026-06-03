@@ -11,9 +11,9 @@ The env provider accepts no configuration options:
 
 ```bash
 # All these are equivalent
-$ secretspec check --provider env
-$ secretspec check --provider env:
-$ secretspec check --provider env://
+$ monosecret check --provider env
+$ monosecret check --provider env:
+$ monosecret check --provider env://
 ```
 
 ## When to Use
@@ -30,11 +30,11 @@ export DATABASE_URL="postgresql://localhost/mydb"
 export API_KEY="sk-1234567890"
 
 # Check secrets are available
-$ secretspec check --provider env
+$ monosecret check --provider env
 ✓ All required secrets are configured
 
 # Run with environment variables
-$ secretspec run --provider env -- npm start
+$ monosecret run --provider env -- npm start
 ```
 
 ### CI/CD Integration
@@ -46,5 +46,5 @@ $ secretspec run --provider env -- npm start
     DATABASE_URL: ${{ secrets.DATABASE_URL }}
     API_KEY: ${{ secrets.API_KEY }}
   run: |
-    secretspec run --provider env -- npm run deploy
+    monosecret run --provider env -- npm run deploy
 ```

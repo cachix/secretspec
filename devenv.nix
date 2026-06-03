@@ -12,7 +12,10 @@
     # keyring
     pkgs.dbus
     # coverage testing
-    pkgs.cargo-tarpaulin
+    pkgs.cargo-llvm-cov
+    # formatting
+    pkgs.dprint
+    pkgs.taplo
     # installers
     pkgs.cargo-dist
   ];
@@ -26,6 +29,14 @@
 
   enterTest = ''
     cargo test --all
+  '';
+
+  scripts."fix:all".exec = ''
+    dprint fmt
+    taplo fmt
+    cargo +nightly fmt --all
+    dart format sdk/dart
+    monochange step:validate
   '';
 
   scripts.test-cli-integration.exec = ''

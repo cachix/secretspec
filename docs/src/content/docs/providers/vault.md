@@ -32,16 +32,16 @@ openbao://[namespace@]host[:port][/mount][?key=value&...]
 
 ```bash
 # Set a secret using Vault KV v2
-$ secretspec set DATABASE_URL --provider vault://vault.example.com:8200/secret
+$ monosecret set DATABASE_URL --provider vault://vault.example.com:8200/secret
 
 # Get a secret
-$ secretspec get DATABASE_URL --provider vault://vault.example.com:8200/secret
+$ monosecret get DATABASE_URL --provider vault://vault.example.com:8200/secret
 
 # Check secrets
-$ secretspec check --provider vault://vault.example.com:8200/secret
+$ monosecret check --provider vault://vault.example.com:8200/secret
 
 # Run with secrets
-$ secretspec run --provider vault://vault.example.com:8200/secret -- npm start
+$ monosecret run --provider vault://vault.example.com:8200/secret -- npm start
 ```
 
 ## Usage
@@ -50,42 +50,42 @@ $ secretspec run --provider vault://vault.example.com:8200/secret -- npm start
 
 ```bash
 # With default "secret" mount
-$ secretspec set DATABASE_URL --provider vault://vault.example.com:8200
+$ monosecret set DATABASE_URL --provider vault://vault.example.com:8200
 Enter value for DATABASE_URL: postgresql://localhost/mydb
 ✓ Secret 'DATABASE_URL' saved to vault (profile: default)
 
 # With custom mount
-$ secretspec set API_KEY --provider vault://vault.example.com:8200/custom-kv
+$ monosecret set API_KEY --provider vault://vault.example.com:8200/custom-kv
 
 # Using OpenBao
-$ secretspec check --provider openbao://bao.internal:8200/secret
+$ monosecret check --provider openbao://bao.internal:8200/secret
 ```
 
 ### KV Version 1
 
 ```bash
 # Use KV v1 engine
-$ secretspec set DATABASE_URL --provider "vault://vault.example.com:8200/secret?kv=1"
+$ monosecret set DATABASE_URL --provider "vault://vault.example.com:8200/secret?kv=1"
 ```
 
 ### Vault Namespaces
 
 ```bash
 # Using namespace in URI
-$ secretspec check --provider vault://team-a@vault.example.com:8200/secret
+$ monosecret check --provider vault://team-a@vault.example.com:8200/secret
 
 # Or via environment variable
 $ export VAULT_NAMESPACE=team-a
-$ secretspec check --provider vault://vault.example.com:8200/secret
+$ monosecret check --provider vault://vault.example.com:8200/secret
 ```
 
 ### Secret Naming
 
-Secrets are stored at the KV path: `secretspec/{project}/{profile}/{key}`
+Secrets are stored at the KV path: `monosecret/{project}/{profile}/{key}`
 
 Each secret is stored as a KV entry with a `value` field.
 
-Example for KV v2: `GET /v1/secret/data/secretspec/myapp/production/DATABASE_URL`
+Example for KV v2: `GET /v1/secret/data/monosecret/myapp/production/DATABASE_URL`
 
 ### Development Mode
 
@@ -97,7 +97,7 @@ $ vault server -dev
 
 # Use with TLS disabled
 $ export VAULT_TOKEN=hvs.dev-root-token
-$ secretspec check --provider "vault://127.0.0.1:8200/secret?tls=false"
+$ monosecret check --provider "vault://127.0.0.1:8200/secret?tls=false"
 ```
 
 ### Authentication
@@ -110,7 +110,7 @@ Reads the token from `VAULT_TOKEN` environment variable or `~/.vault-token` file
 
 ```bash
 export VAULT_TOKEN=hvs.your-token-here
-secretspec run --provider vault://vault.example.com:8200 -- npm start
+monosecret run --provider vault://vault.example.com:8200 -- npm start
 ```
 
 #### AppRole
@@ -120,5 +120,5 @@ Authenticates using `VAULT_ROLE_ID` and `VAULT_SECRET_ID` environment variables.
 ```bash
 export VAULT_ROLE_ID=your-role-id
 export VAULT_SECRET_ID=your-secret-id
-secretspec run --provider "vault://vault.example.com:8200/secret?auth=approle" -- deploy
+monosecret run --provider "vault://vault.example.com:8200/secret?auth=approle" -- deploy
 ```

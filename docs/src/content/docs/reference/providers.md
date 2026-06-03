@@ -1,9 +1,9 @@
 ---
 title: Providers Reference
-description: Complete reference for SecretSpec storage providers and their URI configurations
+description: Complete reference for Monosecret storage providers and their URI configurations
 ---
 
-SecretSpec supports multiple storage backends for secrets. Each provider has its own URI format and configuration options.
+Monosecret supports multiple storage backends for secrets. Each provider has its own URI format and configuration options.
 
 ## DotEnv Provider
 
@@ -36,7 +36,7 @@ keyring://                   # System default keychain
 ```
 
 **Features**: Read/write, secure encryption, profiles, cross-platform
-**Storage**: Service `secretspec/{project}`, username `{profile}:{key}`
+**Storage**: Service `monosecret/{project}`, username `{profile}:{key}`
 
 ## LastPass Provider
 
@@ -57,7 +57,7 @@ lastpass://localhost         # Root (no folder)
 **URI**: `onepassword://[account@]vault`, `onepassword+token://user:token@vault`, `op://vault/item`, or `op+token://user:token@vault/item`
 
 ```bash
-onepassword://MyVault                           # SecretSpec-owned storage
+onepassword://MyVault                           # Monosecret-owned storage
 onepassword://work@CompanyVault                 # Specific account
 onepassword+token://user:op_token@SecureVault   # Service account
 op://Development/dotfiles/forges                # Native 1Password reference prefix
@@ -66,7 +66,7 @@ op+token://user:op_token@Development/dotfiles   # Native reference with service 
 
 **Features**: Read/write, cloud sync, profiles via vaults, service accounts, native `op://` references
 **Prerequisites**: `op` CLI, authenticated with `op signin` or a service account token
-**Storage**: `onepassword://` uses SecretSpec-owned items; `op://` reads native 1Password references and can edit existing fields
+**Storage**: `onepassword://` uses Monosecret-owned items; `op://` reads native 1Password references and can edit existing fields
 
 ## Pass Provider
 
@@ -78,14 +78,14 @@ pass://                       # Default password store
 
 **Features**: Read/write, GPG encryption, profiles, local storage
 **Prerequisites**: `pass` CLI, initialized with `pass init <gpg-key-id>`
-**Storage**: Path `secretspec/{project}/{profile}/{key}`
+**Storage**: Path `monosecret/{project}/{profile}/{key}`
 
 ## Proton Pass Provider
 
 **URI**: `protonpass://[vault[/title-template]]` - Stores secrets in Proton Pass via the official `pass-cli`
 
 ```bash
-protonpass://                                      # Default vault ("secretspec")
+protonpass://                                      # Default vault ("monosecret")
 protonpass://Work                                  # Specific vault
 protonpass://Work/{project}/{profile}/{key}        # Custom vault and title template
 ```
@@ -104,7 +104,7 @@ gcsm://my-gcp-project         # GCP project ID
 
 **Features**: Read/write, cloud sync, profiles, service account support
 **Prerequisites**: `gcloud` CLI, authenticated, Secret Manager API enabled, build with `--features gcsm`
-**Storage**: Secret name `secretspec-{project}-{profile}-{key}`
+**Storage**: Secret name `monosecret-{project}-{profile}-{key}`
 
 ## AWS Secrets Manager Provider
 
@@ -118,7 +118,7 @@ awssm://                      # SDK default region and credentials
 
 **Features**: Read/write, cloud sync, profiles, IAM/SSO authentication
 **Prerequisites**: AWS credentials configured, build with `--features awssm`
-**Storage**: Secret name `secretspec/{project}/{profile}/{key}`
+**Storage**: Secret name `monosecret/{project}/{profile}/{key}`
 
 ## Vault / OpenBao Provider
 
@@ -135,7 +135,7 @@ vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
 
 **Features**: Read/write, KV v1 and v2, namespaces, OpenBao compatible
 **Prerequisites**: Vault/OpenBao server, `VAULT_TOKEN` env var or `~/.vault-token`, build with `--features vault`
-**Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
+**Storage**: KV path `monosecret/{project}/{profile}/{key}` with a `value` field
 
 ## Bitwarden Secrets Manager Provider
 
@@ -152,37 +152,38 @@ bws://a9230ec4-5507-4870-b8b5-b3f500587e4c   # BWS project UUID
 ## Provider Selection
 
 ### Command Line
+
 ```bash
 # Simple provider names
-secretspec get API_KEY --provider keyring
-secretspec get API_KEY --provider dotenv
-secretspec get API_KEY --provider env
+monosecret get API_KEY --provider keyring
+monosecret get API_KEY --provider dotenv
+monosecret get API_KEY --provider env
 
 # URIs with configuration
-secretspec get API_KEY --provider dotenv:/path/to/.env
-secretspec get API_KEY --provider onepassword://vault
-secretspec get API_KEY --provider "onepassword://account@vault"
+monosecret get API_KEY --provider dotenv:/path/to/.env
+monosecret get API_KEY --provider onepassword://vault
+monosecret get API_KEY --provider "onepassword://account@vault"
 ```
 
 ### Environment Variables
-```bash
-export SECRETSPEC_PROVIDER=keyring
-export SECRETSPEC_PROVIDER="dotenv:///config/.env"
-```
 
+```bash
+export MONOSECRET_PROVIDER=keyring
+export MONOSECRET_PROVIDER="dotenv:///config/.env"
+```
 
 ## Security Considerations
 
-| Provider | Encryption | Storage Location | Network Access |
-|----------|------------|------------------|----------------|
-| DotEnv | ❌ Plain text | Local filesystem | ❌ No |
-| Environment | ❌ Plain text | Process memory | ❌ No |
-| Keyring | ✅ System encryption | System keychain | ❌ No |
-| Pass | ✅ GPG encryption | Local filesystem | ❌ No |
-| Proton Pass | ✅ End-to-end | Cloud (Proton) | ✅ Yes |
-| LastPass | ✅ End-to-end | Cloud (LastPass) | ✅ Yes |
-| OnePassword | ✅ End-to-end | Cloud (OnePassword) | ✅ Yes |
-| GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |
-| AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |
-| Vault/OpenBao | ✅ Vault encryption | Vault/OpenBao server | ✅ Yes |
-| BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
+| Provider      | Encryption           | Storage Location     | Network Access |
+| ------------- | -------------------- | -------------------- | -------------- |
+| DotEnv        | ❌ Plain text        | Local filesystem     | ❌ No          |
+| Environment   | ❌ Plain text        | Process memory       | ❌ No          |
+| Keyring       | ✅ System encryption | System keychain      | ❌ No          |
+| Pass          | ✅ GPG encryption    | Local filesystem     | ❌ No          |
+| Proton Pass   | ✅ End-to-end        | Cloud (Proton)       | ✅ Yes         |
+| LastPass      | ✅ End-to-end        | Cloud (LastPass)     | ✅ Yes         |
+| OnePassword   | ✅ End-to-end        | Cloud (OnePassword)  | ✅ Yes         |
+| GCSM          | ✅ Google-managed    | Cloud (GCP)          | ✅ Yes         |
+| AWSSM         | ✅ AWS KMS           | Cloud (AWS)          | ✅ Yes         |
+| Vault/OpenBao | ✅ Vault encryption  | Vault/OpenBao server | ✅ Yes         |
+| BWS           | ✅ End-to-end        | Cloud (Bitwarden)    | ✅ Yes         |

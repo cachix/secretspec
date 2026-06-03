@@ -1,0 +1,16 @@
+{
+  "name": "@monosecret/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "CLI for Monosecret declarative secrets management",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/monosecret/monosecret.git" },
+  "bin": { "monosecret": "bin/monosecret.js" },
+  "files": ["bin", "README.md"],
+  "publishConfig": { "access": "public", "provenance": true },
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build": "pnpm --dir ../.. build",
+    "prepack": "pnpm --dir ../.. build"
+  }
+}

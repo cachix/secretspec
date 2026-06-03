@@ -1,13 +1,13 @@
-# SecretSpec Code Generation Example
+# Monosecret Code Generation Example
 
-This example demonstrates how to use SecretSpec's proc macro to create strongly-typed secret structs.
+This example demonstrates how to use Monosecret's proc macro to create strongly-typed secret structs.
 
 ## How it works
 
-1. The `secretspec_derive::declare_secrets!()` macro generates Rust structs from `secretspec.toml` at compile time
+1. The `monosecret_derive::declare_secrets!()` macro generates Rust structs from `monosecret.toml` at compile time
 2. The generated types include:
-   - `SecretSpec` struct with union types (safe for any profile)
-   - `SecretSpecProfile` enum with profile-specific field types
+   - `Monosecret` struct with union types (safe for any profile)
+   - `MonosecretProfile` enum with profile-specific field types
    - `Profile` enum with all profiles from your TOML
    - Methods for loading from different providers and profiles
 
@@ -27,7 +27,7 @@ The proc macro generates types like this:
 
 ```rust
 // Union type struct (safe for any profile)
-pub struct SecretSpec {
+pub struct Monosecret {
     pub database_url: Option<String>,  // Optional because it has default in dev
     pub api_key: Option<String>,       // Optional because it has default in dev
     pub redis_url: Option<String>,     // Optional with default
@@ -35,7 +35,7 @@ pub struct SecretSpec {
 }
 
 // Profile-specific enum
-pub enum SecretSpecProfile {
+pub enum MonosecretProfile {
     Development {
         database_url: Option<String>,  // Has default in dev profile
         api_key: Option<String>,       // Has default in dev profile
@@ -50,9 +50,9 @@ pub enum SecretSpecProfile {
     }
 }
 
-impl SecretSpec {
-    pub fn load(provider: Provider) -> Result<Self, SecretSpecError> { ... }
-    pub fn load_profile(provider: Provider, profile: Profile) -> Result<SecretSpecProfile, SecretSpecError> { ... }
+impl Monosecret {
+    pub fn load(provider: Provider) -> Result<Self, MonosecretError> { ... }
+    pub fn load_profile(provider: Provider, profile: Profile) -> Result<MonosecretProfile, MonosecretError> { ... }
     pub fn set_as_env_vars(&self) { ... }
 }
 ```

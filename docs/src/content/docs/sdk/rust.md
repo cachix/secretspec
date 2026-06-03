@@ -1,9 +1,9 @@
 ---
 title: Rust SDK
-description: Type-safe Rust integration for SecretSpec
+description: Type-safe Rust integration for Monosecret
 ---
 
-SecretSpec provides a Rust library with type-safe access to secrets through a derive macro that generates strongly-typed structs from your `secretspec.toml` file at compile time.
+Monosecret provides a Rust library with type-safe access to secrets through a derive macro that generates strongly-typed structs from your `monosecret.toml` file at compile time.
 
 ## Quick Start
 
@@ -11,37 +11,37 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-secretspec = { version = "0.2.0" }
-secretspec-derive = { version = "0.2.0" }
+monosecret = { version = "0.2.0" }
+monosecret_derive = { version = "0.2.0" }
 ```
 
 Basic example:
 
 ```rust
-// Generate typed structs from secretspec.toml
-secretspec_derive::declare_secrets!("secretspec.toml");
+// Generate typed structs from monosecret.toml
+monosecret_derive::declare_secrets!("monosecret.toml");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load secrets using the builder pattern
-    let secretspec = SecretSpec::builder()
+    let monosecret = Monosecret::builder()
         .with_provider("keyring")  // Can use provider name or URI like "dotenv:/path/to/.env"
         .with_profile("development")  // Can use string or Profile enum
         .load()?;  // All conversions and errors are handled here
 
     // Access secrets (field names are lowercased)
-    println!("Database: {}", secretspec.secrets.database_url);  // DATABASE_URL → database_url
+    println!("Database: {}", monosecret.secrets.database_url);  // DATABASE_URL → database_url
 
     // Optional secrets are Option<String>
-    if let Some(redis) = &secretspec.secrets.redis_url {
+    if let Some(redis) = &monosecret.secrets.redis_url {
         println!("Redis: {}", redis);
     }
 
     // Access profile and provider information
-    println!("Using profile: {}", secretspec.profile);
-    println!("Using provider: {}", secretspec.provider);
+    println!("Using profile: {}", monosecret.profile);
+    println!("Using provider: {}", monosecret.provider);
 
     // From backwards compatibility, you can tell it to set environment variables
-    secretspec.secrets.set_as_env_vars();
+    monosecret.secrets.set_as_env_vars();
 
     Ok(())
 }
@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 The `load_profile()` method on the builder provides profile-specific types for your secrets:
 
 ```rust
-secretspec_derive::declare_secrets!("secretspec.toml");
+monosecret_derive::declare_secrets!("monosecret.toml");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load secrets with profile-specific types
@@ -90,14 +90,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Secrets with `as_path = true` are generated as `PathBuf` instead of `String`:
 
 ```toml
-# secretspec.toml
+# monosecret.toml
 [profiles.default]
 TLS_CERT = { description = "TLS certificate", as_path = true }
 TLS_KEY = { description = "TLS private key", as_path = true, required = false }
 ```
 
 ```rust
-secretspec_derive::declare_secrets!("secretspec.toml");
+monosecret_derive::declare_secrets!("monosecret.toml");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let validated = Secrets::builder().check()?;

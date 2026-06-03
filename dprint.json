@@ -1,0 +1,19 @@
+{
+  "markdown": {},
+  "json": {},
+  "includes": ["**/*.{md,json,yml,yaml}"],
+  "excludes": [
+    "target",
+    "docs/node_modules",
+    "docs/.astro",
+    "Cargo.lock",
+    "sdk/dart/.dart_tool",
+    ".claude/settings.local.json",
+    "context.md",
+    "PR-CHANGES.md"
+  ],
+  "plugins": [
+    "https://plugins.dprint.dev/markdown-0.18.0.wasm",
+    "https://plugins.dprint.dev/json-0.20.0.wasm"
+  ]
+}

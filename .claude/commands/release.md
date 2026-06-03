@@ -1,5 +1,5 @@
 ---
-description: release secretspec crates
+description: release monosecret crates
 ---
 
 - next version is #$ARGUMENTS

@@ -1,42 +1,32 @@
-name: Publish Crates
+name: publish
 
 on:
+  release:
+    types: [published]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Git tag to publish (e.g., 0.1.2 or v0.1.2)"
-        required: true
-        type: string
-  push:
-    tags:
-      - "*[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/setup-node@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-
-      - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v16
-        with:
-          name: devenv
-      - name: Install devenv.sh
-        run: nix profile install nixpkgs#devenv
-
-      - uses: rust-lang/crates-io-auth-action@v1
-        id: auth
-
-      - name: Publish secretspec crate
-        run: devenv shell cargo publish -p secretspec
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - uses: dart-lang/setup-dart@v1
+      - run: corepack enable
+      - name: Install monochange
+        run: cargo install monochange --locked
+      - name: Publish packages
         env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-
-      - name: Publish secretspec-derive crate
-        run: devenv shell cargo publish -p secretspec-derive
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PUB_TOKEN: ${{ secrets.PUB_TOKEN }}
+        run: monochange publish

@@ -1,0 +1,19 @@
+{
+  "name": "monosecret-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.12.1",
+  "scripts": {
+    "build": "cargo build --release --bin monosecret",
+    "check": "cargo check --all-targets --all-features",
+    "fmt": "dprint fmt && cargo +nightly fmt --all",
+    "test": "cargo test --all",
+    "release:plan": "monochange plan",
+    "release:version": "monochange version",
+    "release:publish": "monochange publish",
+    "fix:all": "dprint fmt && taplo fmt && cargo +nightly fmt --all && dart format sdk/dart && monochange step:validate"
+  },
+  "devDependencies": {
+    "dprint": "^0.50.0"
+  }
+}

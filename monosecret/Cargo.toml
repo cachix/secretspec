@@ -1,0 +1,60 @@
+[package]
+name = "monosecret"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+repository = "https://github.com/monosecret/monosecret"
+description = "Declarative secrets, every environment, any provider"
+
+[lints]
+workspace = true
+
+[lib]
+name = "monosecret"
+path = "src/lib.rs"
+
+[[bin]]
+name = "monosecret"
+path = "src/bin/monosecret.rs"
+required-features = ["cli"]
+
+[dependencies]
+aws-config = { workspace = true, optional = true }
+aws-sdk-secretsmanager = { workspace = true, optional = true }
+bitwarden = { workspace = true, optional = true }
+clap.workspace = true
+colored.workspace = true
+data-encoding.workspace = true
+dotenvy.workspace = true
+etcetera.workspace = true
+google-cloud-secretmanager-v1 = { workspace = true, optional = true }
+inquire.workspace = true
+keyring = { workspace = true, optional = true }
+linkme.workspace = true
+miette.workspace = true
+percent-encoding.workspace = true
+rand.workspace = true
+reqwest = { workspace = true, optional = true }
+rsa.workspace = true
+rustls = { workspace = true, optional = true }
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+toml_edit = { workspace = true, optional = true }
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+whoami = { workspace = true, optional = true }
+
+[features]
+default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws"]
+cli = ["dep:toml_edit"]
+keyring = ["dep:keyring", "dep:whoami"]
+gcsm = ["dep:google-cloud-secretmanager-v1"]
+awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
+vault = ["dep:reqwest"]
+bws = ["dep:bitwarden", "dep:rustls"]

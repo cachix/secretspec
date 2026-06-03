@@ -1,0 +1,7 @@
+error: Failed to parse TOML: I/O error: Failed to resolve path $WORKSPACE/target/tests/trybuild/monosecret_derive/invalid_toml.txt: No such file or directory (os error 2)
+ --> tests/ui/invalid_toml.rs:4:1
+  |
+4 | declare_secrets!("invalid_toml.txt");
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `declare_secrets` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -3222,6 +3222,70 @@ dependencies = [
 ]
 
 [[package]]
+name = "monosecret"
+version = "0.1.0"
+dependencies = [
+ "aws-config",
+ "aws-sdk-secretsmanager",
+ "bitwarden",
+ "clap",
+ "colored",
+ "data-encoding",
+ "dotenvy",
+ "etcetera",
+ "google-cloud-secretmanager-v1",
+ "inquire",
+ "keyring",
+ "linkme",
+ "miette",
+ "percent-encoding",
+ "rand 0.9.4",
+ "reqwest 0.12.28",
+ "rsa 0.9.10",
+ "rustls 0.23.40",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "toml_edit",
+ "tracing",
+ "url",
+ "uuid",
+ "whoami",
+]
+
+[[package]]
+name = "monosecret_derive"
+version = "0.1.0"
+dependencies = [
+ "http 1.4.1",
+ "insta",
+ "monosecret",
+ "proc-macro2",
+ "quote",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "syn",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
+ "trybuild",
+]
+
+[[package]]
+name = "monosecret_derive-example"
+version = "0.1.0"
+dependencies = [
+ "monosecret",
+ "monosecret_derive",
+ "secrecy",
+ "serde",
+]
+
+[[package]]
 name = "num-bigint"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4290,70 +4354,6 @@ checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
 dependencies = [
  "serde",
  "zeroize",
-]
-
-[[package]]
-name = "secretspec"
-version = "0.11.0"
-dependencies = [
- "aws-config",
- "aws-sdk-secretsmanager",
- "bitwarden",
- "clap",
- "colored",
- "data-encoding",
- "dotenvy",
- "etcetera",
- "google-cloud-secretmanager-v1",
- "inquire",
- "keyring",
- "linkme",
- "miette",
- "percent-encoding",
- "rand 0.9.4",
- "reqwest 0.12.28",
- "rsa 0.9.10",
- "rustls 0.23.40",
- "secrecy",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "toml 0.9.12+spec-1.1.0",
- "toml_edit",
- "tracing",
- "url",
- "uuid",
- "whoami",
-]
-
-[[package]]
-name = "secretspec-derive"
-version = "0.11.0"
-dependencies = [
- "http 1.4.1",
- "insta",
- "proc-macro2",
- "quote",
- "secrecy",
- "secretspec",
- "serde",
- "serde_json",
- "syn",
- "tempfile",
- "toml 0.9.12+spec-1.1.0",
- "trybuild",
-]
-
-[[package]]
-name = "secretspec-derive-example"
-version = "0.1.0"
-dependencies = [
- "secrecy",
- "secretspec",
- "secretspec-derive",
- "serde",
 ]
 
 [[package]]

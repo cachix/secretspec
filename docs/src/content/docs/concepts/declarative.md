@@ -1,9 +1,9 @@
 ---
 title: Declarative Configuration
-description: Understanding secretspec.toml and its declarative approach
+description: Understanding monosecret.toml and its declarative approach
 ---
 
-SecretSpec uses `secretspec.toml` to declare what secrets your application needs, separating requirements from storage mechanisms for portability across environments.
+Monosecret uses `monosecret.toml` to declare what secrets your application needs, separating requirements from storage mechanisms for portability across environments.
 
 ## Basic Structure
 
@@ -11,7 +11,7 @@ SecretSpec uses `secretspec.toml` to declare what secrets your application needs
 [project]
 name = "my-app"
 revision = "1.0"
-extends = ["../shared/common"]  # Optional: inherit from other configs
+extends = ["../shared/common"] # Optional: inherit from other configs
 
 [profiles.default]
 DATABASE_URL = { description = "PostgreSQL connection string", required = true }
@@ -32,6 +32,7 @@ SECRET_NAME = {
 ```
 
 **Options:**
+
 - `description`: Explains the secret's purpose (required)
 - `required`: Whether the secret must be provided (default: `true`)
 - `default`: Fallback value for optional secrets

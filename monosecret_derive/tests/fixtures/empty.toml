@@ -1,0 +1,6 @@
+[project]
+name = "empty-project"
+revision = "1.0"
+
+[profiles.default]
+# No secrets defined

@@ -1,38 +1,38 @@
 ---
-title: secretspec.toml Reference
-description: Complete reference for secretspec.toml configuration options
+title: monosecret.toml Reference
+description: Complete reference for monosecret.toml configuration options
 ---
 
-## secretspec.toml Reference
+## monosecret.toml Reference
 
-The `secretspec.toml` file defines project-specific secret requirements. This file should be checked into version control.
+The `monosecret.toml` file defines project-specific secret requirements. This file should be checked into version control.
 
 ### [project] Section
 
 ```toml
 [project]
-name = "my-app"              # Project name (required)
-revision = "1.0"             # Format version (required, must be "1.0")
-extends = ["../shared"]      # Paths to parent configs for inheritance (optional)
+name = "my-app" # Project name (required)
+revision = "1.0" # Format version (required, must be "1.0")
+extends = ["../shared"] # Paths to parent configs for inheritance (optional)
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | Yes | Project identifier |
-| `revision` | string | Yes | Format version (must be "1.0") |
-| `extends` | array[string] | No | Paths to parent configuration files |
+| Field      | Type          | Required | Description                         |
+| ---------- | ------------- | -------- | ----------------------------------- |
+| `name`     | string        | Yes      | Project identifier                  |
+| `revision` | string        | Yes      | Format version (must be "1.0")      |
+| `extends`  | array[string] | No       | Paths to parent configuration files |
 
 ### [profiles.*] Section
 
 Defines secret variables for different environments. At least a `[profiles.default]` section is required.
 
 ```toml
-[profiles.default]           # Default profile (required)
+[profiles.default] # Default profile (required)
 DATABASE_URL = { description = "PostgreSQL connection", required = true }
 API_KEY = { description = "External API key", required = true }
 REDIS_URL = { description = "Redis cache", required = false, default = "redis://localhost:6379" }
 
-[profiles.production]        # Additional profile (optional)
+[profiles.production] # Additional profile (optional)
 DATABASE_URL = { description = "Production database", required = true }
 ```
 
@@ -40,16 +40,16 @@ DATABASE_URL = { description = "Production database", required = true }
 
 Each secret variable is defined as a table with the following fields:
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `description` | string | Yes | Human-readable description of the secret |
-| `required` | boolean | No* | Whether the value must be provided (default: true) |
-| `default` | string | No** | Default value if not provided |
-| `providers` | array[string or table] | No | List of provider references (see [Provider References](#provider-references)) |
-| `groups` | array[string] | No | Declared groups this secret belongs to (see [Secret Groups](#secret-groups)) |
-| `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
-| `type` | string | No*** | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
-| `generate` | boolean or table | No*** | Enable auto-generation when secret is missing |
+| Field         | Type                   | Required | Description                                                                                   |
+| ------------- | ---------------------- | -------- | --------------------------------------------------------------------------------------------- |
+| `description` | string                 | Yes      | Human-readable description of the secret                                                      |
+| `required`    | boolean                | No*      | Whether the value must be provided (default: true)                                            |
+| `default`     | string                 | No**     | Default value if not provided                                                                 |
+| `providers`   | array[string or table] | No       | List of provider references (see [Provider References](#provider-references))                 |
+| `groups`      | array[string]          | No       | Declared groups this secret belongs to (see [Secret Groups](#secret-groups))                  |
+| `as_path`     | boolean                | No       | Write secret to temp file and return file path (default: false)                               |
+| `type`        | string                 | No***    | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
+| `generate`    | boolean or table       | No***    | Enable auto-generation when secret is missing                                                 |
 
 *If `default` is provided, `required` defaults to false
 **Only valid when `required = false`
@@ -58,13 +58,13 @@ Each secret variable is defined as a table with the following fields:
 ## Complete Example
 
 ```toml
-# secretspec.toml
+# monosecret.toml
 [project]
 name = "web-api"
 revision = "1.0"
-extends = ["../shared/secretspec.toml"]  # Optional inheritance
+extends = ["../shared/monosecret.toml"] # Optional inheritance
 
-# Groups used by filtered `secretspec run --group ...`
+# Groups used by filtered `monosecret run --group ...`
 [groups]
 web = "Secrets needed by the web app"
 worker = "Secrets needed by background workers"
@@ -100,12 +100,12 @@ REDIS_URL = { description = "Redis cache connection", required = true }
 
 Provider aliases may be declared in two places:
 
-1. **In `secretspec.toml`** — a top-level `[providers]` table. Check this into version control so every team member and CI runner sees the same mapping out of the box.
-2. **In `~/.config/secretspec/config.toml`** — a per-user `[defaults.providers]` table for personal overrides.
+1. **In `monosecret.toml`** — a top-level `[providers]` table. Check this into version control so every team member and CI runner sees the same mapping out of the box.
+2. **In `~/.config/monosecret/config.toml`** — a per-user `[defaults.providers]` table for personal overrides.
 
 On conflict the project-level alias wins, so a stale local config cannot silently shadow the team's mapping.
 
-```toml title="secretspec.toml"
+```toml title="monosecret.toml"
 [providers]
 prod_vault = "onepassword://vault/Production"
 shared_vault = "onepassword://vault/Shared"
@@ -116,7 +116,7 @@ env = "env://"
 DATABASE_URL = { description = "Production DB", providers = ["prod_vault", "keyring"] }
 ```
 
-```toml title="~/.config/secretspec/config.toml"
+```toml title="~/.config/monosecret/config.toml"
 [defaults]
 provider = "keyring"
 
@@ -131,16 +131,16 @@ Manage user-level aliases via CLI:
 
 ```bash
 # Add a provider alias to your user config
-$ secretspec config provider add prod_vault "onepassword://vault/Production"
+$ monosecret config provider add prod_vault "onepassword://vault/Production"
 
 # List all aliases known to your user config
-$ secretspec config provider list
+$ monosecret config provider list
 
 # Remove an alias from your user config
-$ secretspec config provider remove prod_vault
+$ monosecret config provider remove prod_vault
 ```
 
-The CLI commands operate on the user-global config only — edit `secretspec.toml` by hand to change project-level aliases.
+The CLI commands operate on the user-global config only — edit `monosecret.toml` by hand to change project-level aliases.
 
 ### Secret Groups
 
@@ -159,7 +159,7 @@ STRIPE_KEY = { description = "Stripe API key", groups = ["web"] }
 Groups power filtered runs:
 
 ```bash
-secretspec run --group web -- npm start
+monosecret run --group web -- npm start
 ```
 
 Secrets may only reference declared groups. When a profile overrides a secret, omitted `groups` inherit from `[profiles.default]`; explicitly setting `groups = [...]` replaces the default groups rather than merging them.
@@ -189,13 +189,13 @@ API_KEY = {
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `provider` | string | Yes | The provider alias name |
-| `path` | array[string] | No | Location path within the provider (e.g. a 1Password section name) |
-| `key` | string | No | Field key at that path; defaults to the SecretSpec secret name |
+| Field      | Type          | Required | Description                                                       |
+| ---------- | ------------- | -------- | ----------------------------------------------------------------- |
+| `provider` | string        | Yes      | The provider alias name                                           |
+| `path`     | array[string] | No       | Location path within the provider (e.g. a 1Password section name) |
+| `key`      | string        | No       | Field key at that path; defaults to the Monosecret secret name    |
 
-For 1Password, `onepassword://` keeps the original SecretSpec-owned storage behavior. Use `op://` when the provider ref should compose a native 1Password reference:
+For 1Password, `onepassword://` keeps the original Monosecret-owned storage behavior. Use `op://` when the provider ref should compose a native 1Password reference:
 
 ```toml
 [providers]
@@ -214,7 +214,7 @@ for authentication:
 
 ```toml
 [providers]
-keyring = "keyring://"              # Simple alias — backward compatible
+keyring = "keyring://" # Simple alias — backward compatible
 
 [providers.op-dev]
 uri = "onepassword://Development"
@@ -222,16 +222,16 @@ uri = "onepassword://Development"
 service_token = { secret = "OP_SERVICE_ACCOUNT_TOKEN" }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `uri` | string | Yes | The provider URI |
-| `depends_on` | table | No | Secrets this provider needs for authentication |
+| Field        | Type   | Required | Description                                    |
+| ------------ | ------ | -------- | ---------------------------------------------- |
+| `uri`        | string | Yes      | The provider URI                               |
+| `depends_on` | table  | No       | Secrets this provider needs for authentication |
 
 Each entry under `depends_on` has:
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `secret` | string | Yes | The SecretSpec secret name that provides the value |
+| Field    | Type   | Required | Description                                        |
+| -------- | ------ | -------- | -------------------------------------------------- |
+| `secret` | string | Yes      | The Monosecret secret name that provides the value |
 
 ### as_path Option
 
@@ -243,11 +243,11 @@ TLS_CERT = { description = "TLS certificate", as_path = true }
 GOOGLE_APPLICATION_CREDENTIALS = { description = "GCP service account", as_path = true }
 ```
 
-| Context | Behavior |
-|---------|----------|
-| CLI (`get`, `check`, `run`) | Files are persisted (not deleted after command exits) |
-| Rust SDK | Files cleaned up when `ValidatedSecrets` is dropped; use `keep_temp_files()` to persist |
-| Rust SDK types | `PathBuf` or `Option<PathBuf>` instead of `String` |
+| Context                     | Behavior                                                                                |
+| --------------------------- | --------------------------------------------------------------------------------------- |
+| CLI (`get`, `check`, `run`) | Files are persisted (not deleted after command exits)                                   |
+| Rust SDK                    | Files cleaned up when `ValidatedSecrets` is dropped; use `keep_temp_files()` to persist |
+| Rust SDK types              | `PathBuf` or `Option<PathBuf>` instead of `String`                                      |
 
 ### Secret Generation
 
@@ -279,14 +279,14 @@ MANUAL_SECRET = { description = "Manually managed", type = "password" }
 
 #### Generation Types
 
-| Type | Default Output | Options |
-|------|---------------|---------|
-| `password` | 32 alphanumeric chars | `length` (int), `charset` (`"alphanumeric"` or `"ascii"`) |
-| `hex` | 64 hex chars (32 bytes) | `bytes` (int) |
-| `base64` | 44 chars (32 bytes) | `bytes` (int) |
-| `uuid` | UUID v4 (36 chars) | none |
-| `command` | stdout of command | `command` (string, required) |
-| `rsa_private_key` | 2048-bit RSA private key (PKCS1 PEM) | `bits` (int) |
+| Type              | Default Output                       | Options                                                   |
+| ----------------- | ------------------------------------ | --------------------------------------------------------- |
+| `password`        | 32 alphanumeric chars                | `length` (int), `charset` (`"alphanumeric"` or `"ascii"`) |
+| `hex`             | 64 hex chars (32 bytes)              | `bytes` (int)                                             |
+| `base64`          | 44 chars (32 bytes)                  | `bytes` (int)                                             |
+| `uuid`            | UUID v4 (36 chars)                   | none                                                      |
+| `command`         | stdout of command                    | `command` (string, required)                              |
+| `rsa_private_key` | 2048-bit RSA private key (PKCS1 PEM) | `bits` (int)                                              |
 
 #### Behavior
 
@@ -300,4 +300,4 @@ MANUAL_SECRET = { description = "Manually managed", type = "password" }
 
 - All profiles automatically inherit from `[profiles.default]`
 - Profile-specific values override default values
-- Use the `extends` field in `[project]` to inherit from other secretspec.toml files
+- Use the `extends` field in `[project]` to inherit from other monosecret.toml files

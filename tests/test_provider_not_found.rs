@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod test_provider_not_found {
-    use secretspec::provider::Provider;
+    use monosecret::provider::Provider;
     use std::convert::TryFrom;
 
     #[test]
@@ -16,7 +16,7 @@ mod test_provider_not_found {
                     println!("Error when keyring feature disabled: {}", e);
                     // Check if it's ProviderNotFound
                     match e {
-                        secretspec::SecretSpecError::ProviderNotFound(name) => {
+                        monosecret::MonosecretError::ProviderNotFound(name) => {
                             assert_eq!(name, "keyring");
                         }
                         _ => panic!("Expected ProviderNotFound, got: {:?}", e),
@@ -43,7 +43,7 @@ mod test_provider_not_found {
             Err(e) => {
                 println!("Error for nonexistent provider: {}", e);
                 match e {
-                    secretspec::SecretSpecError::ProviderNotFound(name) => {
+                    monosecret::MonosecretError::ProviderNotFound(name) => {
                         assert_eq!(name, "nonexistent_provider");
                     }
                     _ => panic!("Expected ProviderNotFound, got: {:?}", e),

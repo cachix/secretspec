@@ -27,22 +27,22 @@ awssm://[AWS_PROFILE@]REGION[?prefix=PREFIX]
 
 ```bash
 # Set a secret (SDK default credentials)
-$ secretspec set DATABASE_URL --provider awssm://us-east-1
+$ monosecret set DATABASE_URL --provider awssm://us-east-1
 
 # Use a specific AWS profile
-$ secretspec check --provider awssm://production@us-east-1
+$ monosecret check --provider awssm://production@us-east-1
 
 # Use a prefix to scope secrets under "myteam/"
-$ secretspec set DATABASE_URL --provider "awssm://us-east-1?prefix=myteam"
+$ monosecret set DATABASE_URL --provider "awssm://us-east-1?prefix=myteam"
 
 # Get a secret
-$ secretspec get DATABASE_URL --provider awssm://us-east-1
+$ monosecret get DATABASE_URL --provider awssm://us-east-1
 
 # Run with secrets
-$ secretspec run --provider awssm://us-east-1 -- npm start
+$ monosecret run --provider awssm://us-east-1 -- npm start
 
 # Use SDK defaults for both profile and region
-$ secretspec set DATABASE_URL --provider awssm
+$ monosecret set DATABASE_URL --provider awssm
 ```
 
 ## Usage
@@ -51,21 +51,21 @@ $ secretspec set DATABASE_URL --provider awssm
 
 ```bash
 # Set a secret
-$ secretspec set DATABASE_URL --provider awssm://us-east-1
+$ monosecret set DATABASE_URL --provider awssm://us-east-1
 Enter value for DATABASE_URL: postgresql://localhost/mydb
 ✓ Secret 'DATABASE_URL' saved to awssm (profile: default)
 
 # Import from .env
-$ secretspec import dotenv://.env
+$ monosecret import dotenv://.env
 ```
 
 ### Secret Naming
 
-Secrets are stored as: `[prefix/]secretspec/{project}/{profile}/{key}`
+Secrets are stored as: `[prefix/]monosecret/{project}/{profile}/{key}`
 
-Example: `secretspec/myapp/production/DATABASE_URL`
+Example: `monosecret/myapp/production/DATABASE_URL`
 
-With `?prefix=myteam`: `myteam/secretspec/myapp/production/DATABASE_URL`
+With `?prefix=myteam`: `myteam/monosecret/myapp/production/DATABASE_URL`
 
 ### Authentication
 
@@ -90,7 +90,7 @@ AWS Secrets Manager uses the standard AWS SDK credential chain:
         "secretsmanager:CreateSecret",
         "secretsmanager:PutSecretValue"
       ],
-      "Resource": "arn:aws:secretsmanager:*:*:secret:secretspec/*"
+      "Resource": "arn:aws:secretsmanager:*:*:secret:monosecret/*"
     }
   ]
 }
@@ -99,7 +99,7 @@ AWS Secrets Manager uses the standard AWS SDK credential chain:
 If you use a prefix (e.g., `?prefix=myteam`), adjust the resource ARN accordingly:
 
 ```
-arn:aws:secretsmanager:*:*:secret:myteam/secretspec/*
+arn:aws:secretsmanager:*:*:secret:myteam/monosecret/*
 ```
 
 :::note
@@ -115,8 +115,8 @@ $ export AWS_SECRET_ACCESS_KEY=...
 $ export AWS_DEFAULT_REGION=us-east-1
 
 # Run command
-$ secretspec run --provider awssm://us-east-1 -- deploy
+$ monosecret run --provider awssm://us-east-1 -- deploy
 
 # Or with IAM roles (no credentials needed)
-$ secretspec run --provider awssm://us-east-1 -- deploy
+$ monosecret run --provider awssm://us-east-1 -- deploy
 ```

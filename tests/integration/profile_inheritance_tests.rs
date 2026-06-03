@@ -1,5 +1,5 @@
 use crate::common::TestFixture;
-use secretspec::Config;
+use monosecret::Config;
 
 // Integration tests for profile inheritance using the public API
 // (Unit tests for detailed inheritance logic are in src/tests.rs)

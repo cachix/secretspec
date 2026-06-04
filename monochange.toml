@@ -35,6 +35,11 @@ type = "npm"
 path = "packages/monosecret__cli"
 changelog = false
 
+[package."@monosecret/sdk"]
+type = "npm"
+path = "packages/MonoSecret_SDK"
+changelog = false
+
 [package."@monosecret/skill"]
 type = "npm"
 path = "packages/monosecret__skill"

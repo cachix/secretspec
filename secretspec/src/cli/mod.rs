@@ -105,6 +105,21 @@ enum Commands {
         /// Provider backend to import from (secrets will be imported to the default provider)
         from_provider: String,
     },
+    /// Show the local audit log of secret access
+    Audit {
+        /// Only show entries for this project
+        #[arg(long)]
+        project: Option<String>,
+        /// Only show entries for this action (get, set, check, run, import)
+        #[arg(long)]
+        action: Option<String>,
+        /// Show only the last N entries
+        #[arg(short = 'n', long)]
+        tail: Option<usize>,
+        /// Output raw JSON Lines instead of a formatted summary
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Configuration-related subcommands.
@@ -405,13 +420,13 @@ pub fn main() -> Result<()> {
                     Some(profile_choice.to_string())
                 };
 
-                let config = GlobalConfig {
-                    defaults: GlobalDefaults {
-                        provider: Some(provider.to_string()),
-                        profile,
-                        providers: None,
-                    },
-                };
+                // Preserve any existing config (audit settings, provider aliases)
+                // rather than overwriting the whole file: re-running `config init`
+                // must not silently drop a user's `[audit]` table — which would
+                // re-enable disabled logging — or their saved provider aliases.
+                let mut config = GlobalConfig::load().into_diagnostic()?.unwrap_or_default();
+                config.defaults.provider = Some(provider.to_string());
+                config.defaults.profile = profile;
 
                 config.save().into_diagnostic()?;
                 println!(
@@ -469,6 +484,7 @@ pub fn main() -> Result<()> {
                                         profile: None,
                                         providers: None,
                                     },
+                                    audit: None,
                                 });
 
                         // Initialize providers map if needed
@@ -628,7 +644,179 @@ pub fn main() -> Result<()> {
                 .wrap_err("Failed to import secrets")?;
             Ok(())
         }
+        // Show the local audit log
+        Commands::Audit {
+            project,
+            action,
+            tail,
+            json,
+        } => show_audit_log(project, action, tail, json),
     }
+}
+
+/// Reads and prints the local audit log, applying optional filters.
+fn show_audit_log(
+    project: Option<String>,
+    action: Option<String>,
+    tail: Option<usize>,
+    json: bool,
+) -> Result<()> {
+    let audit = GlobalConfig::load()
+        .into_diagnostic()
+        .wrap_err("Failed to load global configuration")?
+        .and_then(|g| g.audit)
+        .unwrap_or_default();
+
+    let path = audit.resolved_path().ok_or_else(|| {
+        if audit.has_relative_path() {
+            miette!(
+                "[audit] path {} is not absolute; set an absolute path in ~/.config/secretspec/config.toml",
+                audit.path.as_deref().map(|p| p.display().to_string()).unwrap_or_default()
+            )
+        } else {
+            miette!("Could not determine the audit log location")
+        }
+    })?;
+
+    if !path.exists() {
+        eprintln!("No audit log found at {}", path.display());
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&path)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("Failed to read audit log at {}", path.display()))?;
+
+    for (line, value) in filter_audit_entries(&content, project.as_deref(), action.as_deref(), tail)
+    {
+        if json {
+            println!("{line}");
+        } else {
+            println!("{}", format_audit_line(&value));
+        }
+    }
+
+    Ok(())
+}
+
+/// Parses the audit log, keeps the entries matching the optional `project` and
+/// `action` filters, then retains only the last `tail` of them. Each surviving
+/// entry is returned as its raw line text (for `--json`) paired with its parsed
+/// JSON value (for formatting). A line that is not valid JSON — e.g. a torn write
+/// — is dropped, so it never reaches output. Pure (no I/O) so it can be tested.
+fn filter_audit_entries<'a>(
+    content: &'a str,
+    project: Option<&str>,
+    action: Option<&str>,
+    tail: Option<usize>,
+) -> Vec<(&'a str, serde_json::Value)> {
+    let mut entries: Vec<(&str, serde_json::Value)> = content
+        .lines()
+        .filter_map(|line| {
+            let v = serde_json::from_str::<serde_json::Value>(line).ok()?;
+            let field = |k: &str| v.get(k).and_then(|x| x.as_str());
+            if let Some(p) = project
+                && field("project") != Some(p)
+            {
+                return None;
+            }
+            // Actions serialize lowercase (`get`/`set`/...); match case-insensitively
+            // so `--action Get` is not silently dropped. (`project` stays exact: a
+            // project name is an identity, not an enum.)
+            if let Some(a) = action
+                && !field("action").is_some_and(|x| x.eq_ignore_ascii_case(a))
+            {
+                return None;
+            }
+            Some((line, v))
+        })
+        .collect();
+
+    if let Some(n) = tail
+        && entries.len() > n
+    {
+        entries.drain(0..entries.len() - n);
+    }
+
+    entries
+}
+
+/// Renders control characters in a field harmlessly so caller controlled audit
+/// content (reason, command, key, ...) cannot inject escape sequences that
+/// erase, overwrite, or forge lines in the formatted `secretspec audit` view.
+///
+/// ASCII control bytes (0x00..=0x1F) and DEL (0x7F) are replaced with a visible
+/// `\xNN` rendering; all other characters pass through unchanged so normal
+/// entries look identical.
+fn sanitize_field(s: &str) -> String {
+    if !s.chars().any(|c| c.is_control()) {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_control() {
+            out.push_str(&format!("\\x{:02x}", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Renders one parsed JSON Lines audit entry as a readable, colored summary line.
+/// The value has already been validated as JSON by `show_audit_log`.
+fn format_audit_line(v: &serde_json::Value) -> String {
+    use colored::Colorize;
+
+    let str_field = |k: &str| v.get(k).and_then(|x| x.as_str());
+
+    let ts = sanitize_field(str_field("ts").unwrap_or(""));
+    let action = sanitize_field(str_field("action").unwrap_or("?"));
+    let outcome = sanitize_field(str_field("outcome").unwrap_or("?"));
+    let project = sanitize_field(str_field("project").unwrap_or(""));
+    let profile = sanitize_field(str_field("profile").unwrap_or(""));
+
+    let target = if let Some(key) = str_field("key") {
+        sanitize_field(key)
+    } else if let Some(arr) = v.get("keys").and_then(|x| x.as_array()) {
+        arr.iter()
+            .filter_map(|x| x.as_str())
+            .map(sanitize_field)
+            .collect::<Vec<_>>()
+            .join(",")
+    } else {
+        String::new()
+    };
+
+    let outcome_colored = match outcome.as_str() {
+        "found" | "written" | "started" => outcome.green(),
+        "missing" | "error" => outcome.red(),
+        _ => outcome.yellow(),
+    };
+
+    let mut s = format!("{}  {:<6} {}", ts.dimmed(), action.bold(), outcome_colored);
+    if let Some(cmd) = str_field("command") {
+        s += &format!("  {}", sanitize_field(cmd).bold());
+    }
+    if !target.is_empty() {
+        s += &format!("  {target}");
+    }
+    s += &format!("  ({project}/{profile}");
+    if let Some(provider) = str_field("provider") {
+        s += &format!(" via {}", sanitize_field(provider));
+    }
+    s += ")";
+    if let Some(reason) = str_field("reason") {
+        s += &format!("  reason: {}", sanitize_field(reason).italic());
+    }
+    if let Some(agent) = v
+        .get("actor")
+        .and_then(|a| a.get("agent"))
+        .and_then(|x| x.as_str())
+    {
+        s += &format!("  [{}]", sanitize_field(agent));
+    }
+    s
 }
 
 #[cfg(test)]
@@ -654,6 +842,128 @@ mod tests {
             )]),
             providers: None,
         }
+    }
+
+    #[test]
+    fn sanitize_field_neutralizes_control_characters() {
+        // A clean string passes through unchanged (and takes the early-return path).
+        assert_eq!(sanitize_field("DATABASE_URL"), "DATABASE_URL");
+        assert_eq!(sanitize_field(""), "");
+
+        // ASCII control bytes and DEL become a visible `\xNN` rendering so a
+        // caller-controlled field (reason, command, key) cannot inject an escape
+        // sequence that erases or forges lines in the formatted audit view.
+        assert_eq!(sanitize_field("a\nb"), "a\\x0ab");
+        assert_eq!(sanitize_field("a\tb"), "a\\x09b");
+        assert_eq!(sanitize_field("a\x00b"), "a\\x00b");
+        assert_eq!(sanitize_field("a\x7fb"), "a\\x7fb");
+
+        // A real ANSI clear-line sequence is defanged: the ESC byte is escaped,
+        // so the literal control character no longer reaches the terminal.
+        let injected = sanitize_field("ok\x1b[2Kforged");
+        assert_eq!(injected, "ok\\x1b[2Kforged");
+        assert!(!injected.contains('\x1b'));
+    }
+
+    /// Three audit lines for two projects/actions, used by the filter tests.
+    fn sample_log() -> String {
+        [
+            r#"{"action":"get","project":"alpha","key":"A"}"#,
+            r#"{"action":"set","project":"beta","key":"B"}"#,
+            r#"{"action":"get","project":"beta","key":"C"}"#,
+        ]
+        .join("\n")
+    }
+
+    fn keys_of(entries: &[(&str, serde_json::Value)]) -> Vec<String> {
+        entries
+            .iter()
+            .map(|(_, v)| v["key"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn filter_audit_entries_filters_by_project_and_action() {
+        let log = sample_log();
+
+        // No filters -> every entry, in order.
+        assert_eq!(
+            keys_of(&filter_audit_entries(&log, None, None, None)),
+            vec!["A", "B", "C"]
+        );
+
+        // Project is matched exactly.
+        assert_eq!(
+            keys_of(&filter_audit_entries(&log, Some("beta"), None, None)),
+            vec!["B", "C"]
+        );
+
+        // Action is matched case-insensitively, so `--action GET` still matches.
+        assert_eq!(
+            keys_of(&filter_audit_entries(&log, None, Some("GET"), None)),
+            vec!["A", "C"]
+        );
+
+        // Both filters combine.
+        assert_eq!(
+            keys_of(&filter_audit_entries(&log, Some("beta"), Some("get"), None)),
+            vec!["C"]
+        );
+    }
+
+    #[test]
+    fn filter_audit_entries_applies_tail_and_drops_invalid_lines() {
+        let log = sample_log();
+
+        // `tail` keeps only the last N (after filtering).
+        assert_eq!(
+            keys_of(&filter_audit_entries(&log, None, None, Some(2))),
+            vec!["B", "C"]
+        );
+        // A tail larger than the entry count is a no-op.
+        assert_eq!(
+            keys_of(&filter_audit_entries(&log, None, None, Some(99))),
+            vec!["A", "B", "C"]
+        );
+
+        // Non-JSON lines (e.g. a torn write) and blank lines are dropped.
+        let torn = format!("{}\nnot json\n\n", sample_log());
+        assert_eq!(
+            keys_of(&filter_audit_entries(&torn, None, None, None)),
+            vec!["A", "B", "C"]
+        );
+    }
+
+    #[test]
+    fn format_audit_line_renders_fields() {
+        // Color is disabled so assertions are on stable plain text.
+        colored::control::set_override(false);
+
+        let single: serde_json::Value = serde_json::from_str(
+            r#"{"ts":"2026-06-07T00:00:00Z","action":"get","outcome":"found",
+                "project":"demo","profile":"prod","key":"DB","provider":"dotenv://.env",
+                "reason":"deploy","actor":{"agent":"claude-code"}}"#,
+        )
+        .unwrap();
+        let line = format_audit_line(&single);
+        assert!(line.contains("get"));
+        assert!(line.contains("found"));
+        assert!(line.contains("DB"));
+        assert!(line.contains("(demo/prod via dotenv://.env)"));
+        assert!(line.contains("reason: deploy"));
+        assert!(line.contains("[claude-code]"));
+
+        // A bulk entry joins `keys[]` and shows the executed command.
+        let bulk: serde_json::Value = serde_json::from_str(
+            r#"{"ts":"t","action":"run","outcome":"started","project":"demo",
+                "profile":"prod","keys":["A","B"],"command":"./deploy.sh"}"#,
+        )
+        .unwrap();
+        let line = format_audit_line(&bulk);
+        assert!(line.contains("./deploy.sh"));
+        assert!(line.contains("A,B"));
+
+        colored::control::unset_override();
     }
 
     #[test]

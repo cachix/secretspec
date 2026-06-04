@@ -340,6 +340,17 @@ pub trait Provider: Send + Sync {
     ///
     /// This includes any configuration like vault names, paths, etc.
     /// For example: "onepassword://VaultName" or "dotenv://.env.production"
+    ///
+    /// # Contract: the returned URI must be credential-free
+    ///
+    /// The audit log records this URI and the fallback-chain warnings print it,
+    /// so it must never contain a secret the user embedded in the source URI
+    /// (e.g. a `:password` or service-account token). Reconstruct the URI from
+    /// non-secret attribution only — account, profile, namespace, host, path —
+    /// and drop any credential, which authentication resolves from the
+    /// environment or a token field instead. This contract is enforced for every
+    /// registered scheme by `uri_never_echoes_a_userinfo_password` in
+    /// `provider::tests`.
     fn uri(&self) -> String;
 
     /// Records a human-readable reason for the secrets access happening in this

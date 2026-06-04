@@ -66,6 +66,106 @@ pub enum SecretSpecError {
     ReasonRequired,
 }
 
+impl SecretSpecError {
+    /// A stable, non-sensitive token identifying the error variant, for audit logs.
+    ///
+    /// Returns only the variant name, never the error message: messages can embed
+    /// secret names, provider URIs, or backend detail that must not reach the log.
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            SecretSpecError::Io(_) => "io",
+            SecretSpecError::Toml(_) => "toml",
+            SecretSpecError::UnsupportedRevision(_) => "unsupported_revision",
+            SecretSpecError::TomlSer(_) => "toml_ser",
+            #[cfg(feature = "keyring")]
+            SecretSpecError::Keyring(_) => "keyring",
+            SecretSpecError::Dotenv(_) => "dotenv",
+            SecretSpecError::NoProviderConfigured => "no_provider_configured",
+            SecretSpecError::ProviderNotFound(_) => "provider_not_found",
+            SecretSpecError::SecretNotFound(_) => "secret_not_found",
+            SecretSpecError::RequiredSecretMissing(_) => "required_secret_missing",
+            SecretSpecError::NoManifest => "no_manifest",
+            SecretSpecError::ExtendedConfigNotFound(_) => "extended_config_not_found",
+            SecretSpecError::NoProjectName => "no_project_name",
+            SecretSpecError::ProviderOperationFailed(_) => "provider_operation_failed",
+            SecretSpecError::InquireError(_) => "inquire",
+            SecretSpecError::Json(_) => "json",
+            SecretSpecError::InvalidProfile(_) => "invalid_profile",
+            SecretSpecError::ValidationFailed(_) => "validation_failed",
+            SecretSpecError::GenerationFailed(_) => "generation_failed",
+            SecretSpecError::ReasonRequired => "reason_required",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `kind()` returns a stable token per variant and never the (possibly
+    /// secret-bearing) error message.
+    #[test]
+    fn kind_returns_stable_non_sensitive_tokens() {
+        let cases: Vec<(SecretSpecError, &str)> = vec![
+            (io::Error::other("boom").into(), "io"),
+            (
+                SecretSpecError::UnsupportedRevision("9.9".into()),
+                "unsupported_revision",
+            ),
+            (
+                SecretSpecError::NoProviderConfigured,
+                "no_provider_configured",
+            ),
+            (
+                SecretSpecError::ProviderNotFound("vault".into()),
+                "provider_not_found",
+            ),
+            (
+                SecretSpecError::SecretNotFound("X".into()),
+                "secret_not_found",
+            ),
+            (
+                SecretSpecError::RequiredSecretMissing("X".into()),
+                "required_secret_missing",
+            ),
+            (SecretSpecError::NoManifest, "no_manifest"),
+            (
+                SecretSpecError::ExtendedConfigNotFound("../x".into()),
+                "extended_config_not_found",
+            ),
+            (SecretSpecError::NoProjectName, "no_project_name"),
+            (
+                SecretSpecError::ProviderOperationFailed("nope".into()),
+                "provider_operation_failed",
+            ),
+            (
+                SecretSpecError::InvalidProfile("ghost".into()),
+                "invalid_profile",
+            ),
+            (
+                SecretSpecError::GenerationFailed("rng".into()),
+                "generation_failed",
+            ),
+            (SecretSpecError::ReasonRequired, "reason_required"),
+        ];
+
+        for (err, expected) in cases {
+            assert_eq!(err.kind(), expected);
+        }
+    }
+
+    #[test]
+    fn kind_tags_wrapped_parse_errors() {
+        let json: SecretSpecError = serde_json::from_str::<serde_json::Value>("nope")
+            .unwrap_err()
+            .into();
+        assert_eq!(json.kind(), "json");
+
+        let toml: SecretSpecError = "= bad".parse::<toml::Table>().unwrap_err().into();
+        assert_eq!(toml.kind(), "toml");
+    }
+}
+
 /// A type alias for `Result<T, SecretSpecError>`
 ///
 /// This provides a convenient shorthand for functions that return

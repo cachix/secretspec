@@ -195,9 +195,9 @@ in
     "build:node" = {
       exec = ''
         set -euo pipefail
-        pnpm --filter @monosecret/cli --filter @monosecret/sdk run build
+        pnpm --filter @monosecret/cli --filter @monosecret/client run build
       '';
-      description = "Build npm package entry points and TypeScript SDK.";
+      description = "Build npm package entry points and TypeScript client.";
       binary = "bash";
     };
 
@@ -232,7 +232,7 @@ in
     "test:node" = {
       exec = ''
         set -euo pipefail
-        pnpm --filter @monosecret/sdk run test
+        pnpm --filter @monosecret/client run test
       '';
       description = "Run npm package tests.";
       binary = "bash";
@@ -307,7 +307,7 @@ in
     "package:node:check" = {
       exec = ''
         set -euo pipefail
-        for package in packages/monosecret__cli packages/MonoSecret_SDK packages/monosecret__skill packages/monosecret__cli-*; do
+        for package in packages/monosecret__cli packages/monosecret__client packages/monosecret__skill packages/monosecret__cli-*; do
           (cd "$package" && npm pack --dry-run)
         done
       '';
@@ -371,7 +371,7 @@ in
     "lint:node" = {
       exec = ''
         set -euo pipefail
-        pnpm --filter @monosecret/sdk run check
+        pnpm --filter @monosecret/client run check
       '';
       description = "Run TypeScript static analysis for npm packages.";
       binary = "bash";

@@ -1,17 +1,17 @@
-# @monosecret/sdk
+# @monosecret/client
 
-TypeScript SDK for [Monosecret](https://github.com/ifiokjr/monosecret), implemented as a small typed wrapper around the `monosecret` CLI.
+TypeScript client for [Monosecret](https://github.com/ifiokjr/monosecret), implemented as a small typed wrapper around the `monosecret` CLI.
 
 ## Install
 
 ```sh
-pnpm add @monosecret/sdk @monosecret/cli
+pnpm add @monosecret/client @monosecret/cli
 ```
 
 ## Usage
 
 ```ts
-import { MonosecretClient } from '@monosecret/sdk';
+import { MonosecretClient } from '@monosecret/client';
 
 const monosecret = new MonosecretClient();
 

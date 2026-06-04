@@ -1,11 +1,11 @@
 ---
-"@monosecret/sdk": major
+"@monosecret/client": major
 ---
 
-Add the initial TypeScript SDK package for invoking Monosecret from Node.js applications.
+Add the initial TypeScript client package for invoking Monosecret from Node.js applications.
 
 ```ts
-import { MonosecretClient } from '@monosecret/sdk';
+import { MonosecretClient } from '@monosecret/client';
 
 const monosecret = new MonosecretClient();
 const databaseUrl = await monosecret.get('DATABASE_URL', {

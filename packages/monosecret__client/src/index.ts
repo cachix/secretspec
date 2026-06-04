@@ -24,7 +24,7 @@ export interface SecretSelectorOptions {
 }
 
 export interface CheckOptions extends SecretSelectorOptions {
-  /** Pass `--no-prompt` to the CLI. Defaults to true for SDK-safe non-interactive checks. */
+  /** Pass `--no-prompt` to the CLI. Defaults to true for client-safe non-interactive checks. */
   noPrompt?: boolean;
 }
 

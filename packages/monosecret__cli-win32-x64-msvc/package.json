@@ -1,0 +1,27 @@
+{
+  "name": "@monosecret/cli-win32-x64-msvc",
+  "version": "0.0.0",
+  "description": "Prebuilt Monosecret binary for Windows x64",
+  "homepage": "https://github.com/ifiokjr/monosecret",
+  "bugs": {
+    "url": "https://github.com/ifiokjr/monosecret/issues"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ifiokjr/monosecret.git"
+  },
+  "files": [
+    "bin"
+  ],
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

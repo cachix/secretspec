@@ -451,7 +451,7 @@ mod tests {
 		}
 	}
 
-	// Regression test for https://github.com/monosecret/monosecret/issues/74:
+	// Regression test for https://github.com/ifiokjr/monosecret/issues/74:
 	// setting a secret on a file that already holds a JSON-shaped value used to
 	// corrupt the existing value because the serializer did not escape quotes.
 	#[test]

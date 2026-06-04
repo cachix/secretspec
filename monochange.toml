@@ -40,9 +40,49 @@ type = "npm"
 path = "packages/monosecret__skill"
 changelog = false
 
+[package."@monosecret/cli-darwin-arm64"]
+type = "npm"
+path = "packages/monosecret__cli-darwin-arm64"
+changelog = false
+
+[package."@monosecret/cli-darwin-x64"]
+type = "npm"
+path = "packages/monosecret__cli-darwin-x64"
+changelog = false
+
+[package."@monosecret/cli-linux-arm64-gnu"]
+type = "npm"
+path = "packages/monosecret__cli-linux-arm64-gnu"
+changelog = false
+
+[package."@monosecret/cli-linux-arm64-musl"]
+type = "npm"
+path = "packages/monosecret__cli-linux-arm64-musl"
+changelog = false
+
+[package."@monosecret/cli-linux-x64-gnu"]
+type = "npm"
+path = "packages/monosecret__cli-linux-x64-gnu"
+changelog = false
+
+[package."@monosecret/cli-linux-x64-musl"]
+type = "npm"
+path = "packages/monosecret__cli-linux-x64-musl"
+changelog = false
+
+[package."@monosecret/cli-win32-arm64-msvc"]
+type = "npm"
+path = "packages/monosecret__cli-win32-arm64-msvc"
+changelog = false
+
+[package."@monosecret/cli-win32-x64-msvc"]
+type = "npm"
+path = "packages/monosecret__cli-win32-x64-msvc"
+changelog = false
+
 [package.monosecret_dart]
 type = "dart"
-path = "sdk/dart"
+path = "packages/monosecret"
 changelog = false
 
 [group.rust]

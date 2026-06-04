@@ -15,7 +15,7 @@ const devStarsApi = {
     server.middlewares.use("/api/stars", async (_req, res) => {
       let stars = null;
       try {
-        const r = await fetch("https://api.github.com/repos/monosecret/monosecret", {
+        const r = await fetch("https://api.github.com/repos/ifiokjr/monosecret", {
           headers: { "User-Agent": "monosecret-docs" },
         });
         if (r.ok) {
@@ -116,7 +116,7 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
         {
           icon: "github",
           label: "GitHub",
-          href: "https://github.com/monosecret/monosecret",
+          href: "https://github.com/ifiokjr/monosecret",
         },
         {
           icon: "discord",

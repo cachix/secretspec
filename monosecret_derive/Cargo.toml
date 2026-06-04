@@ -3,7 +3,7 @@ name = "monosecret_derive"
 version.workspace = true
 edition.workspace = true
 license = "Apache-2.0"
-repository = "https://github.com/monosecret/monosecret"
+repository = "https://github.com/ifiokjr/monosecret"
 description = "Derive macros for Monosecret type-safe code generation"
 
 [lints]

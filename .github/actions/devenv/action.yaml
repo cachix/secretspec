@@ -17,7 +17,7 @@ inputs:
     required: false
     default: "true"
   install-dart:
-    description: Run dart pub get for the Dart SDK.
+    description: Run dart pub get for the Dart workspace.
     required: false
     default: "true"
   activate:
@@ -142,6 +142,6 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        if [ -f sdk/dart/pubspec.yaml ]; then
-          devenv shell -- bash -lc 'cd sdk/dart && dart pub get'
+        if [ -f pubspec.yaml ]; then
+          devenv shell -- dart pub get
         fi

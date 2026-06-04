@@ -11,7 +11,7 @@
  * not required given the edge cache. Any failure degrades to `{ stars: null }`
  * and the pill simply stays hidden.
  */
-const REPO = "monosecret/monosecret";
+const REPO = "ifiokjr/monosecret";
 const TTL = 3600; // seconds
 
 export default {

@@ -1,4 +1,4 @@
-[![Build Status](https://img.shields.io/github/check-runs/monosecret/monosecret/main)](https://github.com/monosecret/monosecret/actions)
+[![Build Status](https://img.shields.io/github/check-runs/ifiokjr/monosecret/main)](https://github.com/ifiokjr/monosecret/actions)
 [![Crates.io](https://img.shields.io/crates/v/monosecret)](https://crates.io/crates/monosecret)
 [![docs.rs](https://docs.rs/monosecret/badge.svg)](https://docs.rs/monosecret)
 [![Discord channel](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Finvites%2FnaMgvexb6q%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&logo=discord&logoColor=white&label=Discord%20users&color=green&style=flat)](https://discord.gg/naMgvexb6q)
@@ -203,7 +203,7 @@ We welcome contributions! Areas where you can help:
 - **Package managers** - Get Monosecret into your favorite package manager
 - **Documentation** - Improve guides and examples
 
-See our [GitHub repository](https://github.com/monosecret/monosecret) to get started.
+See our [GitHub repository](https://github.com/ifiokjr/monosecret) to get started.
 
 ## License
 

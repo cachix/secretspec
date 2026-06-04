@@ -144,10 +144,17 @@ in
     "install:dart" = {
       exec = ''
         set -euo pipefail
-        cd sdk/dart
         dart pub get
       '';
-      description = "Install Dart SDK dependencies.";
+      description = "Install Dart workspace dependencies.";
+      binary = "bash";
+    };
+    "melos" = {
+      exec = ''
+        set -euo pipefail
+        dart run melos "$@"
+      '';
+      description = "Run the melos CLI for the Dart workspace.";
       binary = "bash";
     };
     "update:deps" = {
@@ -155,7 +162,7 @@ in
         set -euo pipefail
         cargo update
         pnpm update --latest
-        (cd sdk/dart && dart pub upgrade)
+        dart pub upgrade
         devenv update
       '';
       description = "Update Rust, pnpm, Dart, and devenv dependencies.";
@@ -211,8 +218,7 @@ in
       exec = ''
         set -euo pipefail
         install:dart
-        cd sdk/dart
-        dart test
+        melos exec --fail-fast -- dart test
       '';
       description = "Run Dart SDK tests.";
       binary = "bash";
@@ -252,16 +258,16 @@ in
       exec = ''
         set -euo pipefail
         install:dart
-        cd sdk/dart
+        cd packages/monosecret
         dart test --coverage=coverage
         dart run coverage:format_coverage \
           --lcov \
           --in=coverage \
           --out=coverage/lcov.info \
-          --packages=.dart_tool/package_config.json \
+          --package=. \
           --report-on=lib
       '';
-      description = "Generate Dart SDK coverage at sdk/dart/coverage/lcov.info.";
+      description = "Generate Dart SDK coverage at packages/monosecret/coverage/lcov.info.";
       binary = "bash";
     };
 
@@ -287,8 +293,9 @@ in
     "package:node:check" = {
       exec = ''
         set -euo pipefail
-        npm --prefix packages/monosecret__cli pack --dry-run
-        npm --prefix packages/monosecret__skill pack --dry-run
+        for package in packages/monosecret__cli packages/monosecret__skill packages/monosecret__cli-*; do
+          npm --prefix "$package" pack --dry-run
+        done
       '';
       description = "Dry-run npm package tarballs.";
       binary = "bash";
@@ -296,7 +303,7 @@ in
     "package:dart:check" = {
       exec = ''
         set -euo pipefail
-        cd sdk/dart
+        cd packages/monosecret
         dart pub publish --dry-run
       '';
       description = "Dry-run Dart package publishing.";
@@ -323,7 +330,7 @@ in
         dprint check --allow-no-files
         git ls-files -z '*.toml' | xargs -0 taplo fmt --check
         rustup run nightly cargo fmt --all -- --check
-        dart format --output=none --set-exit-if-changed sdk/dart
+        dart format --output=none --set-exit-if-changed packages/monosecret
         nixfmt --check devenv.nix
       '';
       description = "Check dprint, TOML, rustfmt, Dart, and Nix formatting.";
@@ -341,8 +348,7 @@ in
       exec = ''
         set -euo pipefail
         install:dart
-        cd sdk/dart
-        dart analyze
+        dart analyze .
       '';
       description = "Run Dart static analysis for the SDK.";
       binary = "bash";
@@ -392,7 +398,7 @@ in
         dprint fmt --allow-no-files
         git ls-files -z '*.toml' | xargs -0 taplo fmt
         rustup run nightly cargo fmt --all
-        dart format sdk/dart
+        dart format packages/monosecret
         nixfmt devenv.nix
       '';
       description = "Format dprint-managed files, TOML, Rust, Dart, and Nix.";
@@ -410,7 +416,7 @@ in
       exec = ''
         set -euo pipefail
         install:dart
-        cd sdk/dart
+        cd packages/monosecret
         dart fix --apply
       '';
       description = "Apply Dart analyzer fixes where possible.";

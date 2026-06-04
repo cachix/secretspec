@@ -55,13 +55,13 @@ jobs:
         run: git ls-files -z '*.toml' | xargs -0 taplo fmt --check
         shell: devenv shell -- bash -e {0}
       - name: dart format
-        run: dart format --output=none --set-exit-if-changed sdk/dart
+        run: dart format --output=none --set-exit-if-changed packages/monosecret
         shell: devenv shell -- bash -e {0}
       - name: clippy
         run: cargo clippy --all-targets --all-features --locked
         shell: devenv shell -- bash -e {0}
       - name: dart analyze
-        run: cd sdk/dart && dart analyze
+        run: cd packages/monosecret && dart analyze
         shell: devenv shell -- bash -e {0}
       - name: validate monochange configuration
         run: monochange step:validate
@@ -88,7 +88,7 @@ jobs:
         run: cargo test --all --all-features --locked
         shell: devenv shell -- bash -e {0}
       - name: dart tests
-        run: cd sdk/dart && dart test
+        run: cd packages/monosecret && dart test
         shell: devenv shell -- bash -e {0}
 
   build:
@@ -138,11 +138,12 @@ jobs:
         shell: devenv shell -- bash -e {0}
       - name: npm package dry-run
         run: |
-          npm --prefix packages/monosecret__cli pack --dry-run
-          npm --prefix packages/monosecret__skill pack --dry-run
+          for package in packages/monosecret__cli packages/monosecret__skill packages/monosecret__cli-*; do
+            npm --prefix "$package" pack --dry-run
+          done
         shell: devenv shell -- bash -e {0}
       - name: dart publish dry-run
-        run: cd sdk/dart && dart pub publish --dry-run
+        run: cd packages/monosecret && dart pub publish --dry-run
         shell: devenv shell -- bash -e {0}
 
   coverage:
@@ -168,14 +169,14 @@ jobs:
         shell: devenv shell -- bash -e {0}
       - name: dart coverage
         run: |
-          cd sdk/dart
+          cd packages/monosecret
           dart pub global activate coverage
           dart test --coverage=coverage
           dart pub global run coverage:format_coverage \
             --lcov \
             --in=coverage \
             --out=coverage/lcov.info \
-            --packages=.dart_tool/package_config.json \
+            --package=. \
             --report-on=lib
         shell: devenv shell -- bash -e {0}
       - name: upload coverage artifact
@@ -184,14 +185,14 @@ jobs:
           name: coverage-reports
           path: |
             coverage/rust.lcov
-            sdk/dart/coverage/lcov.info
+            packages/monosecret/coverage/lcov.info
           if-no-files-found: error
           retention-days: 7
       - name: upload coverage to codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: codecov/codecov-action@v5
         with:
-          files: ./coverage/rust.lcov,./sdk/dart/coverage/lcov.info
+          files: ./coverage/rust.lcov,./packages/monosecret/coverage/lcov.info
           disable_search: true
           fail_ci_if_error: false
           name: monosecret-workspace

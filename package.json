@@ -5,6 +5,7 @@
   "packageManager": "pnpm@10.12.1",
   "scripts": {
     "build": "devenv shell build:all",
+    "build:rust": "devenv shell build:dist",
     "check": "devenv shell lint:all",
     "fmt": "devenv shell fix:format",
     "test": "devenv shell test:all",

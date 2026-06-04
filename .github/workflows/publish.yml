@@ -92,14 +92,26 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --pattern "monosecret-*-${RELEASE_TAG}.tar.gz" \
             --pattern "monosecret-*-${RELEASE_TAG}.zip" \
-            --dir "$RUNNER_TEMP/release-assets" || true
-          find "$RUNNER_TEMP/release-assets" -type f -maxdepth 1 -print
+            --dir "$RUNNER_TEMP/release-assets"
+          find "$RUNNER_TEMP/release-assets" -maxdepth 1 -type f -print
         shell: bash
+
+      - name: populate cli npm packages with release binaries
+        env:
+          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          pnpm build:rust
+          pnpm node scripts/npm/build-packages.js \
+            --release-tag "$RELEASE_TAG" \
+            --assets-dir "$RUNNER_TEMP/release-assets"
+          pnpm node scripts/npm/populate-packages.js \
+            --packages-dir packages
+        shell: devenv shell -- bash -e {0}
 
       - name: check publish readiness
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-oidc.outputs.token }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
           PUB_TOKEN: ${{ secrets.PUB_TOKEN }}
         run: monochange step:publish-readiness --from HEAD --output "$RUNNER_TEMP/publish-readiness.json" --format json
@@ -108,7 +120,6 @@ jobs:
       - name: publish packages with monochange
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-oidc.outputs.token }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
           PUB_TOKEN: ${{ secrets.PUB_TOKEN }}
         run: |

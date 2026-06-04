@@ -14,6 +14,20 @@ use crate::Result;
 use crate::provider::Provider;
 use crate::provider::ProviderUrl;
 
+const PROTON_PASS_AGENT_REASON_ENV: &str = "PROTON_PASS_AGENT_REASON";
+
+fn normalize_agent_reason(reason: &str) -> Option<String> {
+	let trimmed = reason.trim();
+	(!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn default_agent_reason() -> String {
+	format!(
+		"monosecret/{} (https://monosecret.dev)",
+		env!("CARGO_PKG_VERSION")
+	)
+}
+
 // You can get the shape of pass-cli data with commands such as:
 // $ pass-cli item view --output json
 //   {"item": {"id": "...", "share_id": "...", "content": {"title": "...", "note": "..."}}}
@@ -117,6 +131,8 @@ pub struct ProtonPassProvider {
 	/// Path to `pass-cli` binary.
 	/// Override with the `MONOSECRET_PROTONPASS_CLI_PATH` environment variable.
 	cli_binary_path: String,
+	/// Reason passed to Proton Pass agent sessions for audited operations.
+	reason: std::sync::RwLock<Option<String>>,
 }
 
 crate::register_provider! {
@@ -141,6 +157,7 @@ impl ProtonPassProvider {
 		Self {
 			config,
 			cli_binary_path,
+			reason: std::sync::RwLock::new(None),
 		}
 	}
 
@@ -165,9 +182,24 @@ impl ProtonPassProvider {
 			.replace("{key}", key)
 	}
 
+	fn agent_reason(&self) -> String {
+		self.reason
+			.read()
+			.ok()
+			.and_then(|reason| reason.clone())
+			.or_else(|| {
+				std::env::var(PROTON_PASS_AGENT_REASON_ENV)
+					.ok()
+					.and_then(|v| normalize_agent_reason(&v))
+			})
+			.unwrap_or_else(default_agent_reason)
+	}
+
 	fn run_pass_cli(&self, args: &[&str], stdin: Option<&str>) -> Result<String> {
 		let mut cmd = Command::new(&self.cli_binary_path);
 		cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+		let reason = self.agent_reason();
+		cmd.env(PROTON_PASS_AGENT_REASON_ENV, reason);
 
 		let output = if let Some(data) = stdin {
 			cmd.stdin(Stdio::piped());
@@ -223,6 +255,13 @@ impl ProtonPassProvider {
 impl Provider for ProtonPassProvider {
 	fn name(&self) -> &'static str {
 		Self::PROVIDER_NAME
+	}
+
+	fn set_reason(&self, reason: Option<String>) {
+		let normalized = reason.as_deref().and_then(normalize_agent_reason);
+		if let Ok(mut stored) = self.reason.write() {
+			*stored = normalized;
+		}
 	}
 
 	fn uri(&self) -> String {

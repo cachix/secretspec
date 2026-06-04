@@ -20,6 +20,7 @@ use crate::config::GlobalConfig;
 use crate::config::Profile;
 use crate::config::ProviderDependency;
 use crate::config::ProviderRef;
+use crate::config::RequireReason;
 use crate::config::Resolved;
 use crate::config::SecretRequest;
 use crate::error::MonosecretError;
@@ -104,6 +105,47 @@ fn env_var_with_legacy(name: &str, legacy_name: &str) -> Option<String> {
 	env::var(name).ok().or_else(|| env::var(legacy_name).ok())
 }
 
+/// Monosecret's own opt-in for marking the current process as an agent. Lets any
+/// harness that the `detect-coding-agent` crate does not recognize identify itself.
+const AGENT_OPT_IN_ENV: &str = "MONOSECRET_AGENT";
+const LEGACY_AGENT_OPT_IN_ENV: &str = "SECRETSPEC_AGENT";
+
+/// Whether monosecret is currently running as an AI coding agent.
+fn running_as_agent() -> bool {
+	std::env::var_os(AGENT_OPT_IN_ENV).is_some_and(|v| !v.is_empty())
+		|| std::env::var_os(LEGACY_AGENT_OPT_IN_ENV).is_some_and(|v| !v.is_empty())
+		|| detect_coding_agent::is_agent()
+}
+
+/// Pure policy decision: does `mode` require a reason given whether the caller is
+/// an agent? Kept separate from [`running_as_agent`] so it is deterministically testable.
+fn policy_requires_reason(mode: RequireReason, is_agent: bool) -> bool {
+	match mode {
+		RequireReason::Never => false,
+		RequireReason::Always => true,
+		RequireReason::Agents => is_agent,
+	}
+}
+
+/// Environment variable holding the session reason for SDK/library callers.
+const REASON_ENV: &str = "MONOSECRET_REASON";
+const LEGACY_REASON_ENV: &str = "SECRETSPEC_REASON";
+
+/// Normalizes a session reason: trims surrounding whitespace and treats a blank
+/// result as "no reason given".
+pub(crate) fn normalize_reason(reason: &str) -> Option<String> {
+	let trimmed = reason.trim();
+	(!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Resolves the session reason from the environment, normalized via
+/// [`normalize_reason`]. An explicit [`Secrets::with_reason`] takes precedence.
+fn env_reason() -> Option<String> {
+	env_var_with_legacy(REASON_ENV, LEGACY_REASON_ENV)
+		.as_deref()
+		.and_then(normalize_reason)
+}
+
 /// The main entry point for the monosecret library
 ///
 /// `Secrets` manages the loading, validation, and retrieval of secrets
@@ -127,6 +169,12 @@ pub struct Secrets {
 	provider: Option<String>,
 	/// The profile to use (if set via builder)
 	profile: Option<String>,
+	/// Reason for this session's secret access, forwarded to providers that
+	/// support audit logging (set via [`Secrets::with_reason`]).
+	reason: Option<String>,
+	/// Project policy (`[project].require_reason` in monosecret.toml) controlling
+	/// when secret access requires an explicit reason.
+	require_reason: RequireReason,
 }
 
 impl Secrets {
@@ -154,6 +202,8 @@ impl Secrets {
 			global_config,
 			provider,
 			profile,
+			reason: None,
+			require_reason: RequireReason::Never,
 		}
 	}
 
@@ -198,10 +248,12 @@ impl Secrets {
 		let project_config = Config::try_from(path)?;
 		let global_config = GlobalConfig::load()?;
 		Ok(Self {
+			require_reason: project_config.project.require_reason.unwrap_or_default(),
 			config: project_config,
 			global_config,
 			provider: None,
 			profile: None,
+			reason: env_reason(),
 		})
 	}
 
@@ -245,6 +297,31 @@ impl Secrets {
 	/// ```
 	pub fn set_profile(&mut self, profile: impl Into<String>) {
 		self.profile = Some(profile.into());
+	}
+
+	/// Sets a human-readable reason for this session's secret access.
+	pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
+		if let Some(reason) = normalize_reason(&reason.into()) {
+			self.reason = Some(reason);
+		}
+		self
+	}
+
+	fn ensure_reason(&self) -> Result<()> {
+		if self.reason.is_some() {
+			return Ok(());
+		}
+		let is_agent = self.require_reason == RequireReason::Agents && running_as_agent();
+		if policy_requires_reason(self.require_reason, is_agent) {
+			return Err(MonosecretError::ReasonRequired);
+		}
+		Ok(())
+	}
+
+	fn build_provider(&self, spec: String) -> Result<Box<dyn ProviderTrait>> {
+		let provider = Box::<dyn ProviderTrait>::try_from(spec)?;
+		provider.set_reason(self.reason.clone());
+		Ok(provider)
 	}
 
 	/// Get a reference to the project configuration (for testing)
@@ -474,13 +551,15 @@ impl Secrets {
 			.map(|(dep, value)| (dep.effective_as().to_string(), value))
 			.collect::<Vec<_>>();
 
-		provider_from_spec_with_dependencies(&uri, &dependencies)
+		let provider = provider_from_spec_with_dependencies(&uri, &dependencies)?;
+		provider.set_reason(self.reason.clone());
+		Ok(provider)
 	}
 
 	fn provider_from_uri(&self, uri: String, profile_name: &str) -> Result<Box<dyn ProviderTrait>> {
 		match self.alias_for_provider_uri(&uri) {
 			Some(alias) => self.provider_from_alias(&alias, uri, profile_name),
-			None => Box::<dyn ProviderTrait>::try_from(uri),
+			None => self.build_provider(uri),
 		}
 	}
 
@@ -929,6 +1008,7 @@ impl Secrets {
 	/// spec.set("DATABASE_URL", Some("postgres://localhost".to_string())).unwrap();
 	/// ```
 	pub fn set(&self, name: &str, value: Option<String>) -> Result<()> {
+		self.ensure_reason()?;
 		// Check if the secret exists in the spec
 		let profile_name = self.resolve_profile_name(None);
 		self.require_profile(&profile_name)?;
@@ -1049,6 +1129,7 @@ impl Secrets {
 	/// - The secret is not defined in the specification
 	/// - The secret is not found and has no default value
 	pub fn get(&self, name: &str) -> Result<()> {
+		self.ensure_reason()?;
 		let profile_name = self.resolve_profile_name(None);
 		let secret_config = self
 			.resolve_secret_config(name, None)
@@ -1272,6 +1353,7 @@ impl Secrets {
 	/// let validated = spec.check(false).unwrap();
 	/// ```
 	pub fn check(&self, no_prompt: bool) -> Result<ValidatedSecrets> {
+		self.ensure_reason()?;
 		let profile_display = self.resolve_profile_name(None);
 
 		eprintln!(
@@ -1452,6 +1534,7 @@ impl Secrets {
 	/// spec.import("dotenv://.env.production").unwrap();
 	/// ```
 	pub fn import(&self, from_provider: &str) -> Result<()> {
+		self.ensure_reason()?;
 		// Resolve profile (checks env var, then global config, then defaults to "default")
 		let profile_display = self.resolve_profile_name(None);
 
@@ -1718,6 +1801,7 @@ impl Secrets {
 	/// }
 	/// ```
 	pub fn validate(&self) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
+		self.ensure_reason()?;
 		self.validate_selected(None)
 	}
 
@@ -2044,6 +2128,7 @@ impl Secrets {
 	/// spec.run(vec!["npm".to_string(), "start".to_string()]).unwrap();
 	/// ```
 	pub fn run(&self, command: Vec<String>) -> Result<()> {
+		self.ensure_reason()?;
 		let exit_code = self.run_command(command)?;
 		std::process::exit(exit_code);
 	}
@@ -2125,5 +2210,33 @@ mod provider_uri_redaction_tests {
 		assert!(!redacted.contains("user"));
 		assert!(!redacted.contains("pass"));
 		assert!(redacted.contains("redacted"));
+	}
+}
+
+#[cfg(test)]
+mod policy_tests {
+	use super::*;
+
+	#[test]
+	fn policy_decision_matrix() {
+		use RequireReason::*;
+		assert!(!policy_requires_reason(Never, true));
+		assert!(!policy_requires_reason(Never, false));
+		assert!(policy_requires_reason(Always, false));
+		assert!(policy_requires_reason(Always, true));
+		assert!(policy_requires_reason(Agents, true));
+		assert!(!policy_requires_reason(Agents, false));
+	}
+
+	#[test]
+	fn normalize_reason_trims_and_blanks_to_none() {
+		assert_eq!(
+			normalize_reason("  deploy web  "),
+			Some("deploy web".to_string())
+		);
+		assert_eq!(normalize_reason("deploy"), Some("deploy".to_string()));
+		assert_eq!(normalize_reason(""), None);
+		assert_eq!(normalize_reason("   "), None);
+		assert_eq!(normalize_reason("\t\n"), None);
 	}
 }

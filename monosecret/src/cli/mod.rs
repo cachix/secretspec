@@ -46,6 +46,10 @@ struct Cli {
 	#[arg(short = 'v', long, global = true, action = clap::ArgAction::Count)]
 	verbose: u8,
 
+	/// Reason for accessing secrets. Env: MONOSECRET_REASON (legacy: SECRETSPEC_REASON).
+	#[arg(long, global = true, env = "MONOSECRET_REASON")]
+	reason: Option<String>,
+
 	/// The subcommand to execute
 	#[command(subcommand)]
 	command: Commands,
@@ -281,13 +285,17 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
 }
 
 /// Loads secrets using an explicit path or auto-detection.
-fn load_secrets(file: &Option<PathBuf>) -> miette::Result<Secrets> {
-	match file {
+fn load_secrets(file: &Option<PathBuf>, reason: Option<&str>) -> miette::Result<Secrets> {
+	let secrets = match file {
 		Some(path) => Secrets::load_from(path),
 		None => Secrets::load(),
 	}
 	.into_diagnostic()
-	.wrap_err("Failed to load monosecret configuration")
+	.wrap_err("Failed to load monosecret configuration")?;
+	Ok(match reason {
+		Some(reason) => secrets.with_reason(reason.to_string()),
+		None => secrets,
+	})
 }
 
 /// A lightweight log level used by the CLI's stderr tracing subscriber.
@@ -702,6 +710,7 @@ pub fn main() -> Result<()> {
 						.to_string(),
 					revision: "1.0".to_string(),
 					extends: None,
+					require_reason: None,
 				},
 				profiles,
 				providers: None,
@@ -924,7 +933,7 @@ pub fn main() -> Result<()> {
 			provider,
 			profile,
 		} => {
-			let mut app = load_secrets(&cli.file)?;
+			let mut app = load_secrets(&cli.file, cli.reason.as_deref())?;
 			if let Some(p) = provider {
 				app.set_provider(p);
 			}
@@ -942,7 +951,7 @@ pub fn main() -> Result<()> {
 			provider,
 			profile,
 		} => {
-			let mut app = load_secrets(&cli.file)?;
+			let mut app = load_secrets(&cli.file, cli.reason.as_deref())?;
 			if let Some(p) = provider {
 				app.set_provider(p);
 			}
@@ -962,7 +971,7 @@ pub fn main() -> Result<()> {
 			include,
 			group,
 		} => {
-			let mut app = load_secrets(&cli.file)?;
+			let mut app = load_secrets(&cli.file, cli.reason.as_deref())?;
 			if let Some(p) = provider {
 				app.set_provider(p);
 			}
@@ -980,7 +989,7 @@ pub fn main() -> Result<()> {
 			profile,
 			no_prompt,
 		} => {
-			let mut app = load_secrets(&cli.file)?;
+			let mut app = load_secrets(&cli.file, cli.reason.as_deref())?;
 			if let Some(p) = provider {
 				app.set_provider(p);
 			}
@@ -1000,7 +1009,7 @@ pub fn main() -> Result<()> {
 		}
 		// Import secrets from one provider to another
 		Commands::Import { from_provider } => {
-			let app = load_secrets(&cli.file)?;
+			let app = load_secrets(&cli.file, cli.reason.as_deref())?;
 			app.import(&from_provider)
 				.into_diagnostic()
 				.wrap_err("Failed to import secrets")?;
@@ -1023,6 +1032,7 @@ mod tests {
 				name: "myproj".to_string(),
 				revision: "1.0".to_string(),
 				extends: None,
+				require_reason: None,
 			},
 			profiles: HashMap::from([(
 				"default".to_string(),
@@ -1105,6 +1115,7 @@ mod tests {
 				name: "weird \"name\"".to_string(),
 				revision: "1.0".to_string(),
 				extends: None,
+				require_reason: None,
 			},
 			profiles: HashMap::from([(
 				"default".to_string(),

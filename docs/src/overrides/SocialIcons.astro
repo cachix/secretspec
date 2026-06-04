@@ -18,7 +18,7 @@ try {
   // Cargo.toml missing or unreadable — degrade to no pill rather than fail the build.
 }
 
-// The star count is fetched at runtime (see the <script> below) from our own
+// The star count is fetched at runtime (see the inline script below) from our own
 // /api/stars edge route, which proxies GitHub with edge caching — so we never
 // hit the GitHub API per-visitor. The pill renders hidden and reveals itself
 // once populated; a failed lookup just leaves it hidden.

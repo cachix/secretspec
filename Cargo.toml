@@ -53,6 +53,7 @@ tracing = "0.1"
 trybuild = "1.0"
 url = "2.5.4"
 uuid = { version = "1", features = ["v4"] }
+detect-coding-agent = "0.1"
 whoami = "2.0"
 
 # The profile that 'dist' will build with

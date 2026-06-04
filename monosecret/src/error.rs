@@ -58,6 +58,13 @@ pub enum MonosecretError {
 	ValidationFailed(ValidationErrors),
 	#[error("Secret generation failed: {0}")]
 	GenerationFailed(String),
+	#[error(
+		"Accessing secrets requires a reason. Provide one with --reason \"<why you are accessing \
+		 these secrets>\", the MONOSECRET_REASON environment variable, or Secrets::with_reason() in \
+		 the SDK. (Policy: require_reason in [project] of monosecret.toml — defaults to \"agents\"; \
+		 set it to false to disable.)"
+	)]
+	ReasonRequired,
 }
 
 /// A type alias for `Result<T, MonosecretError>`

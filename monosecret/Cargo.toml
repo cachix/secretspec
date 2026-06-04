@@ -25,6 +25,7 @@ bitwarden = { workspace = true, optional = true }
 clap.workspace = true
 colored.workspace = true
 data-encoding.workspace = true
+detect-coding-agent.workspace = true
 dotenvy.workspace = true
 etcetera.workspace = true
 google-cloud-secretmanager-v1 = { workspace = true, optional = true }

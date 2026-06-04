@@ -5,6 +5,19 @@ description: Complete reference for Monosecret CLI commands
 
 The Monosecret CLI provides commands for managing secrets across different providers and profiles.
 
+## Global Options
+
+These options are available on every command:
+
+| Option              | Description                                                                                                                                                                                                                |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-f, --file <FILE>` | Path to `monosecret.toml` (default: auto-detect). Env: `MONOSECRET_FILE` (legacy: `SECRETSPEC_FILE`)                                                                                                                       |
+| `--reason <REASON>` | Reason for accessing secrets, recorded by providers that support audit logging (e.g. Proton Pass agent sessions). Takes precedence over `PROTON_PASS_AGENT_REASON`. Env: `MONOSECRET_REASON` (legacy: `SECRETSPEC_REASON`) |
+
+```bash
+$ monosecret run --reason "Deploying web frontend" -- ./deploy.sh
+```
+
 ## Commands
 
 ### init
@@ -277,10 +290,12 @@ $ monosecret import dotenv:/home/user/old-project/.env
 
 ## Environment Variables
 
-| Variable              | Description             |
-| --------------------- | ----------------------- |
-| `MONOSECRET_PROFILE`  | Default profile to use  |
-| `MONOSECRET_PROVIDER` | Default provider to use |
+| Variable              | Description                                                                    |
+| --------------------- | ------------------------------------------------------------------------------ |
+| `MONOSECRET_PROFILE`  | Default profile to use (legacy: `SECRETSPEC_PROFILE`)                          |
+| `MONOSECRET_PROVIDER` | Default provider to use (legacy: `SECRETSPEC_PROVIDER`)                        |
+| `MONOSECRET_FILE`     | Path to `monosecret.toml` (same as `--file`; legacy: `SECRETSPEC_FILE`)        |
+| `MONOSECRET_REASON`   | Reason for accessing secrets (same as `--reason`; legacy: `SECRETSPEC_REASON`) |
 
 ## Quick Start Workflow
 

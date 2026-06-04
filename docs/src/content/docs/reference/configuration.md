@@ -11,16 +11,55 @@ The `monosecret.toml` file defines project-specific secret requirements. This fi
 
 ```toml
 [project]
-name = "my-app" # Project name (required)
-revision = "1.0" # Format version (required, must be "1.0")
-extends = ["../shared"] # Paths to parent configs for inheritance (optional)
+name = "my-app"              # Project name (required)
+revision = "1.0"             # Format version (required, must be "1.0")
+extends = ["../shared"]      # Paths to parent configs for inheritance (optional)
+require_reason = "agents"    # When to require a reason for secret access (optional)
 ```
 
-| Field      | Type          | Required | Description                         |
-| ---------- | ------------- | -------- | ----------------------------------- |
-| `name`     | string        | Yes      | Project identifier                  |
-| `revision` | string        | Yes      | Format version (must be "1.0")      |
-| `extends`  | array[string] | No       | Paths to parent configuration files |
+| Field            | Type                  | Required | Description                                                                                                                          |
+| ---------------- | --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `name`           | string                | Yes      | Project identifier                                                                                                                   |
+| `revision`       | string                | Yes      | Format version (must be "1.0")                                                                                                       |
+| `extends`        | array[string]         | No       | Paths to parent configuration files                                                                                                  |
+| `require_reason` | `"agents"` \| boolean | No       | When secret access must supply a reason (via `--reason`, `MONOSECRET_REASON`, or the SDK's `with_reason()`). Defaults to `"agents"`. |
+
+#### Requiring a reason for secret access
+
+`require_reason` controls when monosecret demands a reason for accessing secrets.
+It accepts three values:
+
+| Value                | Behavior                                                                                             |
+| -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `"agents"` (default) | Require a reason **only when an AI agent is detected**. Humans running interactively are unaffected. |
+| `true`               | Require a reason from **every** caller (humans, CI, agents).                                         |
+| `false`              | Never require a reason.                                                                              |
+
+Because the rule is enforced inside monosecret and checked into `monosecret.toml`,
+every clone, CI runner, and AI agent is held to it — there is no per-tool opt-out:
+
+```bash
+# Under an AI agent, with the default "agents" policy:
+$ monosecret run -- ./deploy.sh
+Error: Accessing secrets requires a reason. Provide one with --reason "<why...>" ...
+
+$ monosecret run --reason "Deploy web frontend" -- ./deploy.sh   # ok
+```
+
+**Agent detection.** monosecret delegates detection of known agents to the
+[`detect-coding-agent`](https://crates.io/crates/detect-coding-agent) crate. In addition,
+monosecret checks its own `MONOSECRET_AGENT` environment variable as an explicit opt-in:
+
+```bash
+# Mark any harness the detector does not recognize as an agent:
+$ export MONOSECRET_AGENT=1
+```
+
+If your agent isn't auto-detected, set `MONOSECRET_AGENT=1` (legacy: `SECRETSPEC_AGENT=1`) or use
+`require_reason = true` to require a reason from everyone.
+
+The reason is also forwarded to providers that support audit logging (e.g. the
+[Proton Pass](/providers/protonpass/) provider records it in the agent audit log).
 
 ### [profiles.*] Section
 

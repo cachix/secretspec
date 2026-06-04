@@ -298,6 +298,15 @@ impl Config {
 	/// The current configuration takes precedence - values from `other`
 	/// are only used if not already present.
 	pub fn merge_with(&mut self, other: Config) {
+		// Inherit the reason policy from the parent when this config leaves it
+		// unspecified. `name`/`revision`/`extends` stay per-project and are not
+		// merged, but `require_reason` is a security policy meant to apply
+		// uniformly, so a shared base config can set it for everything that
+		// extends it.
+		if self.project.require_reason.is_none() {
+			self.project.require_reason = other.project.require_reason;
+		}
+
 		// Merge profiles
 		for (profile_name, profile_config) in other.profiles {
 			match self.profiles.get_mut(&profile_name) {
@@ -435,6 +444,64 @@ impl TryFrom<&Path> for Config {
 	}
 }
 
+/// When monosecret requires a reason for secret access.
+///
+/// Parsed from `[project].require_reason`, which accepts a boolean or the string
+/// `"agents"`. Defaults to [`RequireReason::Agents`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RequireReason {
+	/// Never require a reason.
+	Never,
+	/// Require a reason only when an AI agent is detected (the default).
+	#[default]
+	Agents,
+	/// Require a reason from every caller.
+	Always,
+}
+
+impl Serialize for RequireReason {
+	fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		match self {
+			RequireReason::Never => serializer.serialize_bool(false),
+			RequireReason::Always => serializer.serialize_bool(true),
+			RequireReason::Agents => serializer.serialize_str("agents"),
+		}
+	}
+}
+
+impl<'de> Deserialize<'de> for RequireReason {
+	fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		struct RequireReasonVisitor;
+
+		impl serde::de::Visitor<'_> for RequireReasonVisitor {
+			type Value = RequireReason;
+
+			fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+				f.write_str(r#"a boolean or the string "agents""#)
+			}
+
+			fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<RequireReason, E> {
+				Ok(if v {
+					RequireReason::Always
+				} else {
+					RequireReason::Never
+				})
+			}
+
+			fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<RequireReason, E> {
+				match v {
+					"agents" => Ok(RequireReason::Agents),
+					other => Err(E::custom(format!(
+						"invalid require_reason value '{other}': expected true, false, or \"agents\""
+					))),
+				}
+			}
+		}
+
+		deserializer.deserialize_any(RequireReasonVisitor)
+	}
+}
+
 /// Project metadata and inheritance configuration.
 ///
 /// Contains essential project information and optional configuration inheritance.
@@ -449,6 +516,23 @@ pub struct Project {
 	/// Optional list of relative paths to other Monosecret projects to inherit from
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub extends: Option<Vec<String>>,
+	/// Policy controlling when secret access must supply a reason. Accepts a boolean
+	/// or `"agents"`; enforced by [`crate::Secrets`]. `None` means "unspecified": it
+	/// resolves to [`RequireReason::default`] unless a parent config supplies a value
+	/// via `extends` (see [`Config::merge_with`]).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub require_reason: Option<RequireReason>,
+}
+
+impl Default for Project {
+	fn default() -> Self {
+		Self {
+			name: String::new(),
+			revision: "1.0".to_string(),
+			extends: None,
+			require_reason: None,
+		}
+	}
 }
 
 /// Configuration for a specific profile (environment).
@@ -1104,6 +1188,7 @@ mod validation_tests {
 				name: name.to_string(),
 				revision: "1.0".to_string(),
 				extends: None,
+				require_reason: None,
 			},
 			profiles,
 			providers: None,

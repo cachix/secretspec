@@ -10,7 +10,12 @@ let
   custom = inputs.ifiokjr-nixpkgs.packages.${pkgs.stdenv.hostPlatform.system};
 in
 {
-  languages.rust.enable = true;
+  languages.rust = {
+    enable = true;
+    # Pinned to >= 1.92 for the detect-coding-agent dependency's MSRV.
+    channel = "stable";
+    version = "1.92.0";
+  };
   languages.javascript = {
     enable = true;
     npm = {

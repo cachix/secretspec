@@ -25,7 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Because the tool enforces it and it is checked into the repo, the policy applies
   uniformly and cannot be bypassed by an individual tool's configuration. An invalid
   `require_reason` value is rejected at config-parse time rather than silently
-  falling back to the default.
+  falling back to the default. The policy is inherited through `extends`: a shared
+  base config's `require_reason` applies to every config that extends it, unless the
+  child sets its own.
   **Note:** the default `"agents"` means AI agents must now pass a reason out of
   the box.
 
@@ -36,8 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   appear missing under an agent session. The provider now sets this variable on
   every `pass-cli` invocation. The reason is resolved as `--reason`/`with_reason`,
   then `PROTON_PASS_AGENT_REASON`, then a secretspec-versioned default
-  (`secretspec/<version> (https://secretspec.dev)`); it is ignored by older
-  releases and non-agent sessions.
+  (`secretspec/<version> (https://secretspec.dev)`); each source is normalized first,
+  so a blank reason falls through to the next rather than masking it. It is ignored by
+  older releases and non-agent sessions.
 
 ### Changed
 - Minimum supported Rust version raised to 1.92 (required by the

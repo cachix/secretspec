@@ -169,13 +169,23 @@ impl ProtonPassProvider {
     ///
     /// [`Secrets::with_reason`]: crate::Secrets::with_reason
     fn agent_reason(&self) -> String {
-        self.session_reason
-            .lock()
-            .unwrap()
-            .clone()
-            .or_else(|| std::env::var(AGENT_REASON_ENV).ok())
-            .map(|r| r.trim().to_string())
-            .filter(|r| !r.is_empty())
+        let session = self.session_reason.lock().unwrap().clone();
+        let env = std::env::var(AGENT_REASON_ENV).ok();
+        Self::resolve_reason(session, env)
+    }
+
+    /// Pure precedence logic for [`Self::agent_reason`], split out so it can be
+    /// tested without touching the process environment.
+    ///
+    /// Each source is normalized via [`crate::secrets::normalize_reason`] *before*
+    /// falling through, so a blank/whitespace session reason does not shadow a
+    /// usable `PROTON_PASS_AGENT_REASON` (it falls through to it), and a blank env
+    /// value falls through to the default.
+    fn resolve_reason(session: Option<String>, env: Option<String>) -> String {
+        session
+            .as_deref()
+            .and_then(crate::secrets::normalize_reason)
+            .or_else(|| env.as_deref().and_then(crate::secrets::normalize_reason))
             .unwrap_or_else(|| DEFAULT_AGENT_REASON.to_string())
     }
 
@@ -195,12 +205,21 @@ impl ProtonPassProvider {
             .replace("{key}", key)
     }
 
+    /// Builds a `pass-cli` command with the agent-session reason wired in.
+    ///
+    /// Both the single-shot [`Self::run_pass_cli`] and the parallel batch-fetch
+    /// threads go through here, so the `PROTON_PASS_AGENT_REASON` env var (required
+    /// by `pass-cli` >= 2.1.0) can never drift between the two paths. Takes the
+    /// resolved values by `&str` so the batch threads can call it without `&self`.
+    fn pass_cli_command(binary: &str, reason: &str) -> Command {
+        let mut cmd = Command::new(binary);
+        cmd.env(AGENT_REASON_ENV, reason);
+        cmd
+    }
+
     fn run_pass_cli(&self, args: &[&str], stdin: Option<&str>) -> Result<String> {
-        let mut cmd = Command::new(&self.cli_binary_path);
-        cmd.args(args)
-            .env(AGENT_REASON_ENV, self.agent_reason())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let mut cmd = Self::pass_cli_command(&self.cli_binary_path, &self.agent_reason());
+        cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
 
         let output = if let Some(data) = stdin {
             cmd.stdin(Stdio::piped());
@@ -400,7 +419,7 @@ impl Provider for ProtonPassProvider {
                 let reason = reason.clone();
                 let key_owned = key.to_string();
                 thread::spawn(move || {
-                    let output = Command::new(&cmd)
+                    let output = Self::pass_cli_command(&cmd, &reason)
                         .args([
                             "item",
                             "view",
@@ -411,7 +430,6 @@ impl Provider for ProtonPassProvider {
                             "--output",
                             "json",
                         ])
-                        .env(AGENT_REASON_ENV, &reason)
                         .output();
                     match output {
                         Ok(output) if output.status.success() => {
@@ -471,16 +489,39 @@ mod tests {
     }
 
     #[test]
-    fn blank_session_reason_falls_back_to_default() {
-        let provider = ProtonPassProvider::default();
-        provider.set_reason(Some("   ".to_string()));
-        assert_eq!(provider.agent_reason(), DEFAULT_AGENT_REASON);
+    fn resolve_reason_precedence() {
+        let r = |s: Option<&str>, e: Option<&str>| {
+            ProtonPassProvider::resolve_reason(s.map(str::to_string), e.map(str::to_string))
+        };
+        // Session reason wins and is trimmed.
+        assert_eq!(r(Some("  session  "), Some("env")), "session");
+        // Env value is used (and trimmed) when no session reason is set.
+        assert_eq!(r(None, Some("  env reason  ")), "env reason");
+        // A blank/whitespace session reason must NOT shadow a usable env value: it
+        // falls through to `PROTON_PASS_AGENT_REASON` rather than the default.
+        assert_eq!(r(Some("   "), Some("audit env reason")), "audit env reason");
+        // With every source blank or absent, fall back to the versioned default.
+        assert_eq!(r(Some("   "), None), DEFAULT_AGENT_REASON);
+        assert_eq!(r(None, Some("   ")), DEFAULT_AGENT_REASON);
+        assert_eq!(r(None, None), DEFAULT_AGENT_REASON);
     }
 
     #[test]
     fn default_reason_identifies_secretspec_with_version() {
         assert!(DEFAULT_AGENT_REASON.starts_with("secretspec/"));
         assert!(DEFAULT_AGENT_REASON.contains(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn pass_cli_command_sets_agent_reason_env() {
+        // Both the single-shot and batch-fetch paths build their command through
+        // this helper, so verifying it wires PROTON_PASS_AGENT_REASON keeps the two
+        // from drifting apart and silently re-introducing the >= 2.1.0 regression.
+        let cmd = ProtonPassProvider::pass_cli_command("pass-cli", "deploy web");
+        let found = cmd.get_envs().any(|(k, v)| {
+            k.to_str() == Some(AGENT_REASON_ENV) && v.and_then(|v| v.to_str()) == Some("deploy web")
+        });
+        assert!(found, "PROTON_PASS_AGENT_REASON must be set on the command");
     }
 
     #[test]

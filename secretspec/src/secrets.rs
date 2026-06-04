@@ -121,7 +121,10 @@ const REASON_ENV: &str = "SECRETSPEC_REASON";
 /// result as "no reason given". Applied to every reason source so the policy gate
 /// and the audit log agree on what counts as a real reason (a blank `--reason ""`
 /// or `SECRETSPEC_REASON=` must not satisfy the policy). Kept pure for testability.
-fn normalize_reason(reason: &str) -> Option<String> {
+///
+/// Shared with providers (e.g. Proton Pass) so the gate and the audit reason agree
+/// on what counts as a real reason.
+pub(crate) fn normalize_reason(reason: &str) -> Option<String> {
     let trimmed = reason.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
@@ -207,7 +210,7 @@ impl Secrets {
         let project_config = Config::try_from(path)?;
         let global_config = GlobalConfig::load()?;
         Ok(Self {
-            require_reason: project_config.project.require_reason,
+            require_reason: project_config.project.require_reason.unwrap_or_default(),
             config: project_config,
             global_config,
             provider: None,

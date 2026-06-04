@@ -109,6 +109,15 @@ impl Config {
     /// The current configuration takes precedence - values from `other`
     /// are only used if not already present.
     pub fn merge_with(&mut self, other: Config) {
+        // Inherit the reason policy from the parent when this config leaves it
+        // unspecified. `name`/`revision`/`extends` stay per-project and are not
+        // merged, but `require_reason` is a security policy meant to apply
+        // uniformly, so a shared base config can set it for everything that
+        // extends it.
+        if self.project.require_reason.is_none() {
+            self.project.require_reason = other.project.require_reason;
+        }
+
         // Merge profiles
         for (profile_name, profile_config) in other.profiles {
             match self.profiles.get_mut(&profile_name) {
@@ -248,14 +257,6 @@ pub enum RequireReason {
     Always,
 }
 
-impl RequireReason {
-    /// Whether this is the serialized-default value (used to keep `"agents"` out of
-    /// generated config files).
-    fn is_default(&self) -> bool {
-        *self == RequireReason::default()
-    }
-}
-
 impl Serialize for RequireReason {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
@@ -268,23 +269,38 @@ impl Serialize for RequireReason {
 
 impl<'de> Deserialize<'de> for RequireReason {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        // A reason policy is either a boolean or the string "agents". Reuse serde's
-        // untagged dispatch (as elsewhere in this file) and map the result, keeping a
-        // precise error for unknown strings.
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Raw {
-            Bool(bool),
-            Str(String),
+        // A reason policy is a boolean or the string "agents". A hand-written visitor
+        // (rather than an untagged enum) lets serde report a precise, located error for
+        // a wrong *type*, not just for unknown strings. For example `require_reason = 1`
+        // yields "invalid type: integer `1`, expected a boolean or the string \"agents\"".
+        struct RequireReasonVisitor;
+
+        impl serde::de::Visitor<'_> for RequireReasonVisitor {
+            type Value = RequireReason;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(r#"a boolean or the string "agents""#)
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<RequireReason, E> {
+                Ok(if v {
+                    RequireReason::Always
+                } else {
+                    RequireReason::Never
+                })
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<RequireReason, E> {
+                match v {
+                    "agents" => Ok(RequireReason::Agents),
+                    other => Err(E::custom(format!(
+                        "invalid require_reason value '{other}': expected true, false, or \"agents\""
+                    ))),
+                }
+            }
         }
-        match Raw::deserialize(deserializer)? {
-            Raw::Bool(true) => Ok(RequireReason::Always),
-            Raw::Bool(false) => Ok(RequireReason::Never),
-            Raw::Str(ref s) if s == "agents" => Ok(RequireReason::Agents),
-            Raw::Str(other) => Err(serde::de::Error::custom(format!(
-                "invalid require_reason value '{other}': expected true, false, or \"agents\""
-            ))),
-        }
+
+        deserializer.deserialize_any(RequireReasonVisitor)
     }
 }
 
@@ -303,13 +319,15 @@ pub struct Project {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extends: Option<Vec<String>>,
     /// Policy controlling when secret access must supply a reason. Accepts a boolean
-    /// or `"agents"` (the default); enforced by [`crate::Secrets`].
-    #[serde(default, skip_serializing_if = "RequireReason::is_default")]
-    pub require_reason: RequireReason,
+    /// or `"agents"`; enforced by [`crate::Secrets`]. `None` means "unspecified": it
+    /// resolves to [`RequireReason::default`] unless a parent config supplies a value
+    /// via `extends` (see [`Config::merge_with`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_reason: Option<RequireReason>,
 }
 
 impl Default for Project {
-    /// A minimal project: empty name, current revision, no inheritance, default
+    /// A minimal project: empty name, current revision, no inheritance, unspecified
     /// reason policy. Lets call sites build a `Project` with `..Default::default()`
     /// so adding a field here does not require touching every literal.
     fn default() -> Self {
@@ -317,7 +335,7 @@ impl Default for Project {
             name: String::new(),
             revision: "1.0".to_string(),
             extends: None,
-            require_reason: RequireReason::default(),
+            require_reason: None,
         }
     }
 }
@@ -916,21 +934,51 @@ impl From<toml::de::Error> for ParseError {
 mod require_reason_tests {
     use super::*;
 
-    fn parse(line: &str) -> RequireReason {
+    fn parse(line: &str) -> Option<RequireReason> {
         let toml = format!("name = \"t\"\nrevision = \"1.0\"\n{line}");
         toml::from_str::<Project>(&toml).unwrap().require_reason
     }
 
     #[test]
     fn accepts_bool_and_agents_string() {
-        assert_eq!(parse("require_reason = true"), RequireReason::Always);
-        assert_eq!(parse("require_reason = false"), RequireReason::Never);
-        assert_eq!(parse("require_reason = \"agents\""), RequireReason::Agents);
+        assert_eq!(parse("require_reason = true"), Some(RequireReason::Always));
+        assert_eq!(parse("require_reason = false"), Some(RequireReason::Never));
+        assert_eq!(
+            parse("require_reason = \"agents\""),
+            Some(RequireReason::Agents)
+        );
     }
 
     #[test]
-    fn defaults_to_agents_when_absent() {
-        assert_eq!(parse(""), RequireReason::Agents);
+    fn unspecified_require_reason_is_none_and_resolves_to_agents() {
+        // Absent in TOML parses to `None` so `extends` can fill it from a parent;
+        // the runtime default is applied at use via `unwrap_or_default`.
+        assert_eq!(parse(""), None);
+        assert_eq!(parse("").unwrap_or_default(), RequireReason::Agents);
+    }
+
+    #[test]
+    fn extends_inherits_parent_require_reason_when_unspecified() {
+        use std::collections::HashMap;
+        let cfg = |rr: Option<RequireReason>| Config {
+            project: Project {
+                name: "t".to_string(),
+                require_reason: rr,
+                ..Default::default()
+            },
+            profiles: HashMap::new(),
+            providers: None,
+        };
+
+        // Child leaves the policy unspecified -> it inherits the parent's value.
+        let mut child = cfg(None);
+        child.merge_with(cfg(Some(RequireReason::Always)));
+        assert_eq!(child.project.require_reason, Some(RequireReason::Always));
+
+        // Child sets the policy explicitly -> its own value wins over the parent's.
+        let mut child = cfg(Some(RequireReason::Never));
+        child.merge_with(cfg(Some(RequireReason::Always)));
+        assert_eq!(child.project.require_reason, Some(RequireReason::Never));
     }
 
     #[test]
@@ -938,18 +986,35 @@ mod require_reason_tests {
         // Invalid values must surface as a parse error (not silently default), now
         // that the policy is parsed through the canonical config path.
         let base = "name = \"t\"\nrevision = \"1.0\"\n";
-        assert!(toml::from_str::<Project>(&format!("{base}require_reason = \"nope\"")).is_err());
-        assert!(toml::from_str::<Project>(&format!("{base}require_reason = 1")).is_err());
+
+        // An unknown string names the accepted values.
+        let err = toml::from_str::<Project>(&format!("{base}require_reason = \"nope\""))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("expected true, false, or \"agents\""),
+            "unexpected error: {err}"
+        );
+
+        // A wrong *type* reports a precise type mismatch rather than a vague
+        // "did not match any variant" message.
+        let err = toml::from_str::<Project>(&format!("{base}require_reason = 1"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("invalid type") && err.contains("boolean or the string"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
     fn round_trips_through_serialize() {
-        // Default ("agents") is omitted; explicit booleans are preserved.
+        // An unspecified policy (None) is omitted; explicit values are preserved.
         let toml = toml::to_string(&Project {
             name: "t".to_string(),
             revision: "1.0".to_string(),
             extends: None,
-            require_reason: RequireReason::Agents,
+            require_reason: None,
         })
         .unwrap();
         assert!(!toml.contains("require_reason"));
@@ -958,12 +1023,12 @@ mod require_reason_tests {
             name: "t".to_string(),
             revision: "1.0".to_string(),
             extends: None,
-            require_reason: RequireReason::Always,
+            require_reason: Some(RequireReason::Always),
         })
         .unwrap();
         assert_eq!(
             toml::from_str::<Project>(&toml).unwrap().require_reason,
-            RequireReason::Always
+            Some(RequireReason::Always)
         );
     }
 }

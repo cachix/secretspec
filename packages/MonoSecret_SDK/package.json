@@ -1,0 +1,49 @@
+{
+  "name": "@monosecret/sdk",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "TypeScript SDK for Monosecret declarative secrets management",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/ifiokjr/monosecret",
+  "bugs": {
+    "url": "https://github.com/ifiokjr/monosecret/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ifiokjr/monosecret.git",
+    "directory": "packages/MonoSecret_SDK"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "pnpm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsdown": "^0.15.12",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.8"
+  }
+}

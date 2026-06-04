@@ -195,9 +195,9 @@ in
     "build:node" = {
       exec = ''
         set -euo pipefail
-        pnpm --filter @monosecret/cli run build
+        pnpm --filter @monosecret/cli --filter @monosecret/sdk run build
       '';
-      description = "Build npm package entry points.";
+      description = "Build npm package entry points and TypeScript SDK.";
       binary = "bash";
     };
 
@@ -206,9 +206,10 @@ in
         set -euo pipefail
         export PATH="$DEVENV_PROFILE/bin:$PATH"
         test:rust
+        test:node
         test:dart
       '';
-      description = "Run all Rust and Dart tests.";
+      description = "Run all Rust, npm, and Dart tests.";
       binary = "bash";
     };
     "test:rust" = {
@@ -226,6 +227,14 @@ in
         melos exec --fail-fast -- dart test
       '';
       description = "Run Dart SDK tests.";
+      binary = "bash";
+    };
+    "test:node" = {
+      exec = ''
+        set -euo pipefail
+        pnpm --filter @monosecret/sdk run test
+      '';
+      description = "Run npm package tests.";
       binary = "bash";
     };
     "test-cli-integration" = {
@@ -298,8 +307,8 @@ in
     "package:node:check" = {
       exec = ''
         set -euo pipefail
-        for package in packages/monosecret__cli packages/monosecret__skill packages/monosecret__cli-*; do
-          npm --prefix "$package" pack --dry-run
+        for package in packages/monosecret__cli packages/MonoSecret_SDK packages/monosecret__skill packages/monosecret__cli-*; do
+          (cd "$package" && npm pack --dry-run)
         done
       '';
       description = "Dry-run npm package tarballs.";
@@ -321,12 +330,13 @@ in
         export PATH="$DEVENV_PROFILE/bin:$PATH"
         lint:format
         lint:clippy
+        lint:node
         lint:dart
         lint:monochange
         lint:workflows
         package:check
       '';
-      description = "Run all lint and publish-readiness checks: formatting, Rust, Dart, monochange, workflows, and package metadata.";
+      description = "Run all lint and publish-readiness checks: formatting, Rust, npm, Dart, monochange, workflows, and package metadata.";
       binary = "bash";
     };
     "lint:format" = {
@@ -356,6 +366,14 @@ in
         dart analyze .
       '';
       description = "Run Dart static analysis for the SDK.";
+      binary = "bash";
+    };
+    "lint:node" = {
+      exec = ''
+        set -euo pipefail
+        pnpm --filter @monosecret/sdk run check
+      '';
+      description = "Run TypeScript static analysis for npm packages.";
       binary = "bash";
     };
     "lint:monochange" = {

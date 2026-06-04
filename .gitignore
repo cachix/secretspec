@@ -1,4 +1,6 @@
 .devenv*
 .pre-commit*
 .direnv
+node_modules
+dist
 target

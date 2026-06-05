@@ -118,7 +118,8 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
         SocialIcons: "./src/overrides/SocialIcons.astro",
       },
       logo: {
-        src: "./src/assets/logo.png",
+        light: "./src/assets/logo.png",
+        dark: "./src/assets/logo-dark.png",
         replacesTitle: true,
       },
       tagline: "Declarative secrets for development workflows",

@@ -64,7 +64,7 @@ jobs:
         run: cd packages/monosecret && dart analyze
         shell: devenv shell -- bash -e {0}
       - name: validate monochange configuration
-        run: monochange step:validate
+        run: monochange step validate
         shell: devenv shell -- bash -e {0}
 
   test:

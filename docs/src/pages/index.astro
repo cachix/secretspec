@@ -1,5 +1,23 @@
 ---
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { getCollection } from 'astro:content';
+
+// Latest blog post — surfaced in a banner near the top of the landing page.
+const posts = (await getCollection('docs'))
+  .filter((e) => e.id.startsWith('blog/') && !e.data.draft)
+  .sort(
+    (a, b) =>
+      (b.data.date?.valueOf() ?? 0) - (a.data.date?.valueOf() ?? 0),
+  );
+const latestPost = posts[0];
+const latestPostDate = latestPost?.data.date
+  ? new Intl.DateTimeFormat('en', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      timeZone: 'UTC',
+    }).format(latestPost.data.date)
+  : null;
 
 // simpleicons CDN — { slug, label }. slug=null renders the generic lock fallback.
 const providerIcons = [
@@ -34,6 +52,21 @@ const dup = (arr) => [...arr, ...arr];
 <!-- ============ HERO ============ -->
 <section class="landing-hero">
   <div class="landing-hero-inner">
+    <!-- Latest blog post — sits inside the hero so the grid backdrop shows through -->
+    {latestPost && (
+    <a href={`/blog/${latestPost.id.replace(/^blog\//, '')}/`} class="landing-blog-banner">
+      <span class="landing-blog-flag">Latest from the blog</span>
+      <span class="landing-blog-main">
+        <span class="landing-blog-title">{latestPost.data.title}</span>
+        {latestPost.data.description && (
+          <span class="landing-blog-desc">{latestPost.data.description}</span>
+        )}
+      </span>
+      {latestPostDate && <span class="landing-blog-date">{latestPostDate}</span>}
+      <span class="landing-blog-cta" aria-hidden="true">Read post →</span>
+    </a>
+    )}
+
     <div class="landing-hero-head">
       <p class="landing-badge">Declarative secrets manager</p>
       <h1 id="_top" class="landing-hero-title">Declare secrets once.<br>Store them anywhere.</h1>

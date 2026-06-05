@@ -24,9 +24,12 @@
 }
 
 /* Remove Starlight's content panel constraints on the landing page only.
+   The DOM nests as `.content-panel > .sl-container`, so we anchor on the
+   content panel (which contains the hero) and clear its padding/border too —
+   otherwise its 1.5rem padding pushes the hero grid down from the navbar.
    Scoped via `:has(.landing-hero)` so other splash pages keep their layout. */
-.sl-container:has(.landing-hero) .content-panel,
-.sl-container:has(.landing-hero) {
+.content-panel:has(.landing-hero),
+.content-panel:has(.landing-hero) .sl-container {
   max-width: none;
   padding: 0;
   border: none;
@@ -110,14 +113,14 @@
 
 .landing-hero {
   position: relative;
-  padding: 3rem 1rem 2.5rem;
+  padding: 2rem 1rem 2.5rem;
   overflow: hidden;
   isolation: isolate;
 }
 
 @media (min-width: 640px) {
   .landing-hero {
-    padding: 5rem 1.5rem 4rem;
+    padding: 2.5rem 1.5rem 4rem;
   }
 }
 
@@ -1232,6 +1235,123 @@
 
 [data-theme='dark'] .landing-community-desc {
   color: var(--color-gray-400);
+}
+
+/* ── Latest blog post banner ── */
+
+.landing-blog-banner {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  max-width: 60rem;
+  /* Bottom gap matches the hero's padding-top so the tile is evenly spaced
+     between the navbar above and the hero badge below. */
+  margin: 0 auto 2rem;
+  padding: 1.1rem 1.5rem;
+  border-radius: 1rem;
+  background: var(--sl-color-bg-nav);
+  border: 1px solid var(--sl-color-hairline);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.landing-blog-banner:hover {
+  border-color: var(--color-accent-400);
+  transform: translateY(-2px);
+}
+
+.landing-blog-flag {
+  flex-shrink: 0;
+  align-self: flex-start;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  background: var(--color-accent-100);
+  color: var(--color-accent-600);
+  border: 1px solid var(--color-accent-200);
+}
+
+[data-theme='dark'] .landing-blog-flag {
+  background: var(--color-accent-800);
+  color: var(--color-accent-200);
+  border-color: var(--color-accent-700);
+}
+
+.landing-blog-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.landing-blog-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-gray-900);
+}
+
+[data-theme='dark'] .landing-blog-title {
+  color: #fff;
+}
+
+.landing-blog-desc {
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--color-gray-500);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-theme='dark'] .landing-blog-desc {
+  color: var(--color-gray-400);
+}
+
+.landing-blog-date {
+  flex-shrink: 0;
+  font-family: var(--sl-font-mono, monospace);
+  font-size: 0.75rem;
+  color: var(--color-gray-500);
+}
+
+[data-theme='dark'] .landing-blog-date {
+  color: var(--color-gray-400);
+}
+
+.landing-blog-cta {
+  flex-shrink: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-accent-600);
+}
+
+[data-theme='dark'] .landing-blog-cta {
+  color: var(--color-accent-200);
+}
+
+@media (min-width: 640px) {
+  .landing-blog-banner {
+    margin-bottom: 2.5rem;
+  }
+}
+
+@media (max-width: 40rem) {
+  .landing-blog-banner {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  .landing-blog-desc {
+    white-space: normal;
+  }
+  .landing-blog-date,
+  .landing-blog-cta {
+    font-size: 0.75rem;
+  }
 }
 
 /* ── Final CTA card ── */

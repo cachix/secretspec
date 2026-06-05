@@ -44,9 +44,9 @@ export default defineConfig({
         starlightBlog({
           title: "Blog",
           authors: {
-            cachix: {
-              name: "Cachix",
-              url: "https://github.com/cachix",
+            domen: {
+              name: "Domen Kožar",
+              url: "https://github.com/domenkozar",
             },
           },
         }),

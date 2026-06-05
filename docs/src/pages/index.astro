@@ -55,14 +55,16 @@ const dup = (arr) => [...arr, ...arr];
     <!-- Latest blog post — sits inside the hero so the grid backdrop shows through -->
     {latestPost && (
     <a href={`/blog/${latestPost.id.replace(/^blog\//, '')}/`} class="landing-blog-banner">
-      <span class="landing-blog-flag">Latest from the blog</span>
+      <span class="landing-blog-aside">
+        <span class="landing-blog-flag">Latest from the blog</span>
+        {latestPostDate && <span class="landing-blog-date">{latestPostDate}</span>}
+      </span>
       <span class="landing-blog-main">
         <span class="landing-blog-title">{latestPost.data.title}</span>
         {latestPost.data.description && (
           <span class="landing-blog-desc">{latestPost.data.description}</span>
         )}
       </span>
-      {latestPostDate && <span class="landing-blog-date">{latestPostDate}</span>}
       <span class="landing-blog-cta" aria-hidden="true">Read post →</span>
     </a>
     )}

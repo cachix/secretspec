@@ -1261,9 +1261,17 @@
   transform: translateY(-2px);
 }
 
-.landing-blog-flag {
+.landing-blog-aside {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
   flex-shrink: 0;
   align-self: flex-start;
+}
+
+.landing-blog-flag {
+  flex-shrink: 0;
   font-size: 0.6875rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -1342,14 +1350,31 @@
 
 @media (max-width: 40rem) {
   .landing-blog-banner {
-    flex-wrap: wrap;
-    gap: 0.75rem;
+    /* Block flow so the title and CTA collapse into one inline run: the CTA
+       reads as the tail of the heading sentence rather than a separate item. */
+    display: block;
+  }
+  .landing-blog-aside {
+    /* Flag and date on one row above the heading, date pushed to the right. */
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
   }
   .landing-blog-desc {
-    white-space: normal;
+    display: none;
   }
-  .landing-blog-date,
+  .landing-blog-main,
+  .landing-blog-title {
+    display: inline;
+  }
   .landing-blog-cta {
+    /* Inline so it flows as the tail of the heading, a touch smaller than the
+       title so it still reads as a secondary call to action. */
+    display: inline;
+    font-size: 0.875rem;
+  }
+  .landing-blog-date {
     font-size: 0.75rem;
   }
 }

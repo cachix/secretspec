@@ -13,9 +13,9 @@
     "fix:all": "devenv shell fix:all",
     "coverage": "devenv shell coverage:all",
     "package:check": "devenv shell package:check",
-    "release:plan": "monochange plan",
-    "release:version": "monochange version",
-    "release:publish": "monochange publish"
+    "release:plan": "monochange step prepare-release --dry-run --diff",
+    "release:version": "monochange step prepare-release",
+    "release:publish": "monochange step publish-packages --all"
   },
   "devDependencies": {
     "dprint": "^0.50.0"

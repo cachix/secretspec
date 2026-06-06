@@ -49,7 +49,7 @@ use super::ProviderUrl;
 use crate::MonosecretError;
 use crate::Result;
 
-/// Maximum number of secrets per BatchGetSecretValue API call.
+/// Maximum number of secrets per `BatchGetSecretValue` API call.
 const AWS_BATCH_GET_MAX_SECRETS: usize = 20;
 
 /// Configuration for the AWS Secrets Manager provider.
@@ -120,7 +120,7 @@ crate::register_provider! {
 }
 
 impl AwssmProvider {
-	/// Creates a new AwssmProvider with the given configuration.
+	/// Creates a new `AwssmProvider` with the given configuration.
 	pub fn new(config: AwssmConfig) -> Self {
 		Self { config }
 	}
@@ -151,8 +151,8 @@ impl AwssmProvider {
 		}
 
 		let secret_name = match prefix {
-			Some(p) => format!("{}/monosecret/{}/{}/{}", p, project, profile, key),
-			None => format!("monosecret/{}/{}/{}", project, profile, key),
+			Some(p) => format!("{p}/monosecret/{project}/{profile}/{key}"),
+			None => format!("monosecret/{project}/{profile}/{key}"),
 		};
 
 		// AWS secret names can be up to 512 characters
@@ -212,8 +212,7 @@ impl AwssmProvider {
 					Ok(None)
 				} else {
 					Err(MonosecretError::ProviderOperationFailed(format!(
-						"Failed to get secret '{}': {}",
-						secret_name, service_err
+						"Failed to get secret '{secret_name}': {service_err}"
 					)))
 				}
 			}
@@ -237,7 +236,7 @@ impl AwssmProvider {
 		Ok((secret_names, name_to_key))
 	}
 
-	/// Fetches multiple secrets in batches of 20 using the BatchGetSecretValue API.
+	/// Fetches multiple secrets in batches of 20 using the `BatchGetSecretValue` API.
 	async fn get_batch_async(
 		&self,
 		project: &str,
@@ -282,8 +281,7 @@ impl AwssmProvider {
 					let secret_id = error.secret_id().unwrap_or("unknown");
 					let message = error.message().unwrap_or("no message");
 					return Err(MonosecretError::ProviderOperationFailed(format!(
-						"Failed to get secret '{}': {} - {}",
-						secret_id, error_code, message
+						"Failed to get secret '{secret_id}': {error_code} - {message}"
 					)));
 				}
 				// ResourceNotFoundException: secret not present, omit from results
@@ -335,8 +333,7 @@ impl AwssmProvider {
 					Ok(())
 				} else {
 					Err(MonosecretError::ProviderOperationFailed(format!(
-						"Failed to create secret '{}': {}",
-						secret_name, service_err
+						"Failed to create secret '{secret_name}': {service_err}"
 					)))
 				}
 			}
@@ -351,8 +348,8 @@ impl Provider for AwssmProvider {
 
 	fn uri(&self) -> String {
 		let base = match (&self.config.aws_profile, &self.config.region) {
-			(Some(profile), Some(region)) => format!("awssm://{}@{}", profile, region),
-			(None, Some(region)) => format!("awssm://{}", region),
+			(Some(profile), Some(region)) => format!("awssm://{profile}@{region}"),
+			(None, Some(region)) => format!("awssm://{region}"),
 			(_, None) => "awssm".to_string(),
 		};
 		match &self.config.prefix {
@@ -461,8 +458,8 @@ mod tests {
 
 	#[test]
 	fn test_build_batch_request_names_chunking() {
-		let keys: Vec<String> = (0..45).map(|i| format!("SECRET_{}", i)).collect();
-		let key_refs: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
+		let keys: Vec<String> = (0..45).map(|i| format!("SECRET_{i}")).collect();
+		let key_refs: Vec<&str> = keys.iter().map(std::string::String::as_str).collect();
 
 		let (secret_names, name_to_key) =
 			AwssmProvider::build_batch_request_names(None, "proj", &key_refs, "default").unwrap();

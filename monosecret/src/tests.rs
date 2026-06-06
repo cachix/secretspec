@@ -1691,7 +1691,7 @@ fn test_import_between_dotenv_files() {
 	// Import from source dotenv to target dotenv
 	let from_provider = format!("dotenv://{}", source_env_path.display());
 	let result = spec.import(&from_provider);
-	assert!(result.is_ok(), "Import should succeed: {:?}", result);
+	assert!(result.is_ok(), "Import should succeed: {result:?}");
 
 	// Verify using dotenvy that the values are correct
 	let vars: HashMap<String, String> = {
@@ -1821,8 +1821,7 @@ fn test_import_edge_cases() {
 	let result = spec.import(&from_provider);
 	assert!(
 		result.is_ok(),
-		"Import should handle edge cases: {:?}",
-		result
+		"Import should handle edge cases: {result:?}"
 	);
 
 	// Verify using dotenvy that the values are correct
@@ -1839,7 +1838,7 @@ fn test_import_edge_cases() {
 	// Empty value should be imported
 	assert_eq!(
 		vars.get("EMPTY_VALUE"),
-		Some(&"".to_string()),
+		Some(&String::new()),
 		"Empty value should be imported"
 	);
 
@@ -2274,7 +2273,7 @@ fn test_get_existing_secret() {
 	);
 
 	let result = spec.get("TEST_SECRET");
-	assert!(result.is_ok(), "Failed to get secret: {:?}", result);
+	assert!(result.is_ok(), "Failed to get secret: {result:?}");
 }
 
 #[test]
@@ -2449,12 +2448,12 @@ fn test_import_dotenv_profile_issue_36() {
 	// This test should initially fail, helping us identify the root cause
 
 	match result {
-		Ok(_) => {
+		Ok(()) => {
 			// Check what was actually imported by reading the target file
 			if target_env_path.exists() {
 				let target_contents = fs::read_to_string(&target_env_path).unwrap();
 				println!("Target file after import:");
-				println!("{}", target_contents);
+				println!("{target_contents}");
 
 				// The real bug: JWT_SECRET should be imported from .env
 				assert!(
@@ -2485,7 +2484,7 @@ fn test_import_dotenv_profile_issue_36() {
 			}
 		}
 		Err(e) => {
-			panic!("Import should not fail: {:?}", e);
+			panic!("Import should not fail: {e:?}");
 		}
 	}
 
@@ -2901,7 +2900,7 @@ fn test_get_secret_with_fallback_chain() {
 			let db_url = valid.resolved.secrets.get("DATABASE_URL").unwrap();
 			assert_eq!(db_url.expose_secret(), "postgres://localhost");
 		}
-		Err(e) => panic!("Validation should succeed: {:?}", e),
+		Err(e) => panic!("Validation should succeed: {e:?}"),
 	}
 }
 
@@ -2982,7 +2981,7 @@ fn test_validate_falls_back_on_primary_provider_error() {
 			let api_key = valid.resolved.secrets.get("API_KEY").unwrap();
 			assert_eq!(api_key.expose_secret(), "from-fallback");
 		}
-		Err(e) => panic!("Expected fallback to succeed, got: {:?}", e),
+		Err(e) => panic!("Expected fallback to succeed, got: {e:?}"),
 	}
 }
 
@@ -3183,7 +3182,7 @@ fn test_validate_with_per_secret_providers() {
 			// No missing required secrets
 			assert!(valid.missing_optional.is_empty());
 		}
-		Err(e) => panic!("Validation should succeed: {:?}", e),
+		Err(e) => panic!("Validation should succeed: {e:?}"),
 	}
 }
 
@@ -3457,10 +3456,10 @@ fn test_as_path_secrets() {
 
 	// Create a dotenv file with a secret
 	let env_file = temp_dir.path().join(".env");
-	fs::write(&env_file, format!("CERT_DATA={}", secret_value)).unwrap();
+	fs::write(&env_file, format!("CERT_DATA={secret_value}")).unwrap();
 	fs::write(
 		&env_file,
-		format!("CERT_DATA={}\nREGULAR_SECRET=not-a-path", secret_value),
+		format!("CERT_DATA={secret_value}\nREGULAR_SECRET=not-a-path"),
 	)
 	.unwrap();
 
@@ -3542,7 +3541,7 @@ fn test_as_path_secrets_keep_temp_files() {
 
 	// Create a dotenv file with a secret
 	let env_file = temp_dir.path().join(".env");
-	fs::write(&env_file, format!("CERT_DATA={}", secret_value)).unwrap();
+	fs::write(&env_file, format!("CERT_DATA={secret_value}")).unwrap();
 
 	// Create config with as_path secret
 	let config_file = temp_dir.path().join("monosecret.toml");
@@ -3610,7 +3609,7 @@ fn test_run_cleans_up_as_path_temp_files() {
 	let secret_value = "secret-cert-content";
 
 	let env_file = temp_dir.path().join(".env");
-	fs::write(&env_file, format!("CERT_DATA={}", secret_value)).unwrap();
+	fs::write(&env_file, format!("CERT_DATA={secret_value}")).unwrap();
 
 	let config_file = temp_dir.path().join("monosecret.toml");
 	fs::write(
@@ -3656,9 +3655,8 @@ CERT_DATA = { description = "Certificate data", as_path = true }
 		"child should have observed the temp file path via $CERT_DATA"
 	);
 	assert!(
-		!std::path::Path::new(&captured_path).exists(),
-		"as_path temp file at {} should be removed once `run` returns",
-		captured_path
+		!Path::new(&captured_path).exists(),
+		"as_path temp file at {captured_path} should be removed once `run` returns"
 	);
 }
 
@@ -3702,7 +3700,7 @@ API_TOKEN = { description = "API token", type = "hex", generate = { bytes = 32 }
 		Some(crate::config::GenerateConfig::Options(opts)) => {
 			assert_eq!(opts.bytes, Some(32));
 		}
-		other => panic!("Expected Options, got {:?}", other),
+		other => panic!("Expected Options, got {other:?}"),
 	}
 }
 
@@ -3724,7 +3722,7 @@ MONGO_KEY = { description = "MongoDB keyfile", type = "command", generate = { co
 		Some(crate::config::GenerateConfig::Options(opts)) => {
 			assert_eq!(opts.command.as_deref(), Some("echo test"));
 		}
-		other => panic!("Expected Options, got {:?}", other),
+		other => panic!("Expected Options, got {other:?}"),
 	}
 }
 
@@ -3760,8 +3758,7 @@ BAD_SECRET = { description = "Missing type", generate = true }
 	let err_msg = result.unwrap_err().to_string();
 	assert!(
 		err_msg.contains("requires 'type'"),
-		"Expected error about missing type, got: {}",
-		err_msg
+		"Expected error about missing type, got: {err_msg}"
 	);
 }
 
@@ -3799,8 +3796,7 @@ CONFLICT = { description = "Both", type = "password", generate = true, default =
 	let err_msg = result.unwrap_err().to_string();
 	assert!(
 		err_msg.contains("cannot both be set"),
-		"Expected conflict error, got: {}",
-		err_msg
+		"Expected conflict error, got: {err_msg}"
 	);
 }
 
@@ -3819,8 +3815,7 @@ CMD_SECRET = { description = "Cmd", type = "command", generate = true }
 	let err_msg = result.unwrap_err().to_string();
 	assert!(
 		err_msg.contains("command"),
-		"Expected command requirement error, got: {}",
-		err_msg
+		"Expected command requirement error, got: {err_msg}"
 	);
 }
 
@@ -3839,8 +3834,7 @@ BAD_TYPE = { description = "Unknown type", type = "rsa_key", generate = true }
 	let err_msg = result.unwrap_err().to_string();
 	assert!(
 		err_msg.contains("unknown secret type"),
-		"Expected unknown type error, got: {}",
-		err_msg
+		"Expected unknown type error, got: {err_msg}"
 	);
 }
 
@@ -3880,7 +3874,7 @@ DB_PASSWORD = { description = "Database password", type = "password", generate =
 	let s = value.expose_secret();
 	assert_eq!(s.len(), 32, "Default password length should be 32");
 	assert!(
-		s.chars().all(|c| c.is_alphanumeric()),
+		s.chars().all(char::is_alphanumeric),
 		"Default password should be alphanumeric"
 	);
 }
@@ -4169,7 +4163,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
 }
 
 /// Builds a project + global config matching the scenario in
-/// https://github.com/ifiokjr/monosecret/issues/81: profile defaults declare a
+/// <https://github.com/ifiokjr/monosecret/issues/81>: profile defaults declare a
 /// `providers = ["personal", "team"]` chain whose aliases resolve to dotenv files,
 /// and the secret has no per-secret `providers` override.
 fn build_chain_scenario(
@@ -4235,10 +4229,10 @@ fn build_chain_scenario(
 	(config, global_config, personal_path, team_path)
 }
 
-fn read_env_var(path: &std::path::Path, key: &str) -> Option<String> {
+fn read_env_var(path: &Path, key: &str) -> Option<String> {
 	dotenvy::from_path_iter(path)
 		.ok()?
-		.filter_map(|res| res.ok())
+		.filter_map(std::result::Result::ok)
 		.find(|(k, _)| k == key)
 		.map(|(_, v)| v)
 }
@@ -4336,7 +4330,7 @@ fn strip_ansi(s: &str) -> String {
 	out
 }
 
-/// Regression for https://github.com/ifiokjr/monosecret/issues/72: when every
+/// Regression for <https://github.com/ifiokjr/monosecret/issues/72>: when every
 /// optional secret is set, the summary line keeps its previous two-segment
 /// form so we don't churn output for the common case.
 #[test]
@@ -4345,7 +4339,7 @@ fn test_format_summary_omits_optional_when_none_missing() {
 	assert_eq!(strip_ansi(&line), "Summary: 5 found, 0 missing");
 }
 
-/// Regression for https://github.com/ifiokjr/monosecret/issues/72: missing
+/// Regression for <https://github.com/ifiokjr/monosecret/issues/72>: missing
 /// optional secrets must surface in the summary as a third segment rather
 /// than being silently absorbed into "found".
 #[test]
@@ -4360,7 +4354,7 @@ fn test_format_summary_appends_optional_when_some_missing() {
 	);
 }
 
-/// End-to-end check for https://github.com/ifiokjr/monosecret/issues/72:
+/// End-to-end check for <https://github.com/ifiokjr/monosecret/issues/72>:
 /// an optional secret that has no value in the backing provider must land in
 /// `missing_optional` instead of being treated as found. The display layer
 /// relies on this — without it, `monosecret check` would still print a green
@@ -4533,8 +4527,7 @@ fn test_unknown_alias_error_lists_both_sources() {
 	let msg = err.to_string();
 	assert!(
 		msg.contains("project_only") && msg.contains("global_only"),
-		"error should list aliases from both project and global config, got: {}",
-		msg
+		"error should list aliases from both project and global config, got: {msg}"
 	);
 }
 
@@ -4586,12 +4579,16 @@ APP_SECRET = { description = "App", required = true }
 		.expect("merged config should carry [providers]");
 
 	assert_eq!(
-		providers.get("op_infra").map(|c| c.uri()),
+		providers
+			.get("op_infra")
+			.map(super::config::ProviderConfig::uri),
 		Some("onepassword://Shared"),
 		"alias defined only in extended config should be inherited"
 	);
 	assert_eq!(
-		providers.get("op_overridden").map(|c| c.uri()),
+		providers
+			.get("op_overridden")
+			.map(super::config::ProviderConfig::uri),
 		Some("onepassword://NewVault"),
 		"alias defined in both should resolve to the current (extending) config's value"
 	);
@@ -5251,13 +5248,11 @@ fn test_resolve_provider_requirements_errors_when_secret_not_defined() {
 	let msg = err.to_string();
 	assert!(
 		msg.contains("MISSING_SECRET"),
-		"error should mention the missing secret, got: {}",
-		msg
+		"error should mention the missing secret, got: {msg}"
 	);
 	assert!(
 		msg.contains("needs_secret"),
-		"error should mention the provider alias, got: {}",
-		msg
+		"error should mention the provider alias, got: {msg}"
 	);
 }
 
@@ -5393,12 +5388,7 @@ fn test_get_with_request_default_delegates_to_get_with_request_key() {
 	}
 
 	impl crate::provider::Provider for SpyProvider {
-		fn get(
-			&self,
-			project: &str,
-			key: &str,
-			profile: &str,
-		) -> crate::Result<Option<SecretString>> {
+		fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
 			self.get_calls
 				.lock()
 				.unwrap()
@@ -5406,10 +5396,8 @@ fn test_get_with_request_default_delegates_to_get_with_request_key() {
 			Ok(Some(SecretString::new("dummy".into())))
 		}
 
-		fn set(&self, _: &str, _: &str, _: &SecretString, _: &str) -> crate::Result<()> {
-			Err(crate::MonosecretError::ProviderOperationFailed(
-				"nope".into(),
-			))
+		fn set(&self, _: &str, _: &str, _: &SecretString, _: &str) -> Result<()> {
+			Err(MonosecretError::ProviderOperationFailed("nope".into()))
 		}
 
 		fn allows_set(&self) -> bool {
@@ -5558,7 +5546,7 @@ fn test_resolve_provider_requirements_falls_back_to_default_provider() {
 	let original_dir = std::env::current_dir().unwrap();
 	std::env::set_current_dir(temp_dir.path()).unwrap();
 
-	std::fs::write(
+	fs::write(
 		temp_dir.path().join("monosecret.toml"),
 		r#"
 [project]
@@ -5582,8 +5570,8 @@ OP_TOKEN = { description = "Auth token", required = true }
 	unsafe { std::env::set_var("OP_TOKEN", "ghp_test_value") };
 
 	let config_home = temp_dir.path().join(".config");
-	std::fs::create_dir_all(config_home.join("monosecret")).unwrap();
-	std::fs::write(
+	fs::create_dir_all(config_home.join("monosecret")).unwrap();
+	fs::write(
 		config_home.join("monosecret").join("config.toml"),
 		"[defaults]\nprovider = \"env\"\n",
 	)

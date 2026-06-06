@@ -79,7 +79,7 @@ impl Default for DotEnvConfig {
 impl TryFrom<&ProviderUrl> for DotEnvConfig {
 	type Error = MonosecretError;
 
-	/// Creates a DotEnvConfig from a URL.
+	/// Creates a `DotEnvConfig` from a URL.
 	///
 	/// Parses a URL in the format `dotenv://[path]` to extract
 	/// the path to the .env file. The URL parsing handles several cases:
@@ -100,7 +100,7 @@ impl TryFrom<&ProviderUrl> for DotEnvConfig {
 		let path_str = url.path();
 		let path = if !path_str.is_empty() && path_str != "/" {
 			if let Some(host) = url.host() {
-				format!("{}{}", host, path_str)
+				format!("{host}{path_str}")
 			} else {
 				path_str
 			}
@@ -118,7 +118,7 @@ impl TryFrom<&ProviderUrl> for DotEnvConfig {
 
 /// Provider for managing secrets in .env files.
 ///
-/// The DotEnvProvider implements the Provider trait to enable reading
+/// The `DotEnvProvider` implements the Provider trait to enable reading
 /// and writing secrets from/to .env files. It uses the dotenvy crate
 /// for parsing and a small local serializer for writing, with proper
 /// handling of special characters and escaping.
@@ -151,7 +151,7 @@ crate::register_provider! {
 }
 
 impl DotEnvProvider {
-	/// Creates a new DotEnvProvider with the given configuration.
+	/// Creates a new `DotEnvProvider` with the given configuration.
 	///
 	/// # Arguments
 	///
@@ -183,7 +183,7 @@ impl Provider for DotEnvProvider {
 		if path_str == ".env" {
 			"dotenv".to_string()
 		} else {
-			format!("dotenv:{}", path_str)
+			format!("dotenv:{path_str}")
 		}
 	}
 
@@ -292,7 +292,7 @@ impl Provider for DotEnvProvider {
 			secrets.insert(
 				key.clone(),
 				Secret {
-					description: Some(format!("{} secret", key)),
+					description: Some(format!("{key} secret")),
 					required: Some(true),
 					..Default::default()
 				},
@@ -349,7 +349,7 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		let env_file = dir.path().join(".env");
 
-		let mut file = std::fs::File::create(&env_file).unwrap();
+		let mut file = fs::File::create(&env_file).unwrap();
 		writeln!(file, "API_KEY=test123").unwrap();
 		writeln!(file, "DATABASE_URL=postgres://localhost").unwrap();
 

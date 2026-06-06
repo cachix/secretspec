@@ -1,7 +1,7 @@
 //! Secret value generation
 //!
 //! This module provides generation of secret values based on type and configuration.
-//! Supported types: password, hex, base64, uuid, command, rsa_private_key.
+//! Supported types: password, hex, base64, uuid, command, `rsa_private_key`.
 
 use data_encoding::BASE64;
 use data_encoding::HEXLOWER;
@@ -23,8 +23,7 @@ pub fn generate(secret_type: &str, config: &GenerateConfig) -> crate::Result<Sec
 		"command" => generate_from_command(config),
 		"rsa_private_key" => generate_rsa(config),
 		unknown => Err(MonosecretError::GenerationFailed(format!(
-			"unknown secret type '{}'",
-			unknown
+			"unknown secret type '{unknown}'"
 		))),
 	}
 }
@@ -49,8 +48,7 @@ fn generate_password(config: &GenerateConfig) -> crate::Result<SecretString> {
 		"ascii" => (33u8..=126).collect(),
 		unknown => {
 			return Err(MonosecretError::GenerationFailed(format!(
-				"unknown charset '{}', expected 'alphanumeric' or 'ascii'",
-				unknown
+				"unknown charset '{unknown}', expected 'alphanumeric' or 'ascii'"
 			)));
 		}
 	};
@@ -110,13 +108,13 @@ fn generate_rsa(config: &GenerateConfig) -> crate::Result<SecretString> {
 	};
 
 	let private_key = RsaPrivateKey::new(&mut rsa::rand_core::OsRng, bits).map_err(|e| {
-		MonosecretError::GenerationFailed(format!("failed to generate RSA key: {}", e))
+		MonosecretError::GenerationFailed(format!("failed to generate RSA key: {e}"))
 	})?;
 
 	let pem = private_key
 		.to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
 		.map_err(|e| {
-			MonosecretError::GenerationFailed(format!("failed to encode RSA key as PEM: {}", e))
+			MonosecretError::GenerationFailed(format!("failed to encode RSA key as PEM: {e}"))
 		})?;
 
 	Ok(SecretString::new(pem.to_string().into()))
@@ -141,10 +139,7 @@ fn generate_from_command(config: &GenerateConfig) -> crate::Result<SecretString>
 		.arg(command)
 		.output()
 		.map_err(|e| {
-			MonosecretError::GenerationFailed(format!(
-				"failed to execute command '{}': {}",
-				command, e
-			))
+			MonosecretError::GenerationFailed(format!("failed to execute command '{command}': {e}"))
 		})?;
 
 	if !output.status.success() {
@@ -158,17 +153,13 @@ fn generate_from_command(config: &GenerateConfig) -> crate::Result<SecretString>
 	}
 
 	let stdout = String::from_utf8(output.stdout).map_err(|_| {
-		MonosecretError::GenerationFailed(format!(
-			"command '{}' produced non-UTF-8 output",
-			command
-		))
+		MonosecretError::GenerationFailed(format!("command '{command}' produced non-UTF-8 output"))
 	})?;
 
 	let trimmed = stdout.trim();
 	if trimmed.is_empty() {
 		return Err(MonosecretError::GenerationFailed(format!(
-			"command '{}' produced empty output",
-			command
+			"command '{command}' produced empty output"
 		)));
 	}
 
@@ -187,7 +178,7 @@ mod tests {
 		let value = generate("password", &GenerateConfig::Bool(true)).unwrap();
 		let s = value.expose_secret();
 		assert_eq!(s.len(), 32);
-		assert!(s.chars().all(|c| c.is_alphanumeric()));
+		assert!(s.chars().all(char::is_alphanumeric));
 	}
 
 	#[test]

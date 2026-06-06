@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Cargo workspace metadata now keeps `monosecret_derive` on the workspace `monosecret`
+  dependency with default features disabled during package validation.
 - Proton Pass provider now works with `pass-cli` >= 2.1.0 agent sessions. Since
   2.1.0, audited item operations (`item view`, `item create`, `item delete`)
   fail unless `PROTON_PASS_AGENT_REASON` is set, which made existing secrets

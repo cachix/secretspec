@@ -27,10 +27,10 @@ pub struct PassConfig {
 impl TryFrom<&ProviderUrl> for PassConfig {
 	type Error = MonosecretError;
 
-	/// Creates a PassConfig from a URL.
+	/// Creates a `PassConfig` from a URL.
 	///
 	/// The URL must have the scheme "pass" (e.g., "pass://" or
-	/// "pass://monosecret/shared/{profile}/{key}").
+	/// "<pass://monosecret/shared/{profile}/{key>}").
 	fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
 		if url.scheme() != "pass" {
 			return Err(MonosecretError::ProviderOperationFailed(format!(
@@ -43,7 +43,7 @@ impl TryFrom<&ProviderUrl> for PassConfig {
 
 		if let Some(host) = url.host() {
 			let path = url.path();
-			config.folder_prefix = Some(format!("{}{}", host, path));
+			config.folder_prefix = Some(format!("{host}{path}"));
 		}
 
 		Ok(config)
@@ -52,7 +52,7 @@ impl TryFrom<&ProviderUrl> for PassConfig {
 
 /// Provider for managing secrets with pass (password-store).
 ///
-/// The PassProvider uses the Unix password manager `pass`, which stores
+/// The `PassProvider` uses the Unix password manager `pass`, which stores
 /// secrets as GPG-encrypted files in a hierarchical structure.
 ///
 /// # Storage Format
@@ -82,14 +82,14 @@ crate::register_provider! {
 }
 
 impl PassProvider {
-	/// Creates a new PassProvider with the given configuration.
+	/// Creates a new `PassProvider` with the given configuration.
 	pub fn new(config: PassConfig) -> Self {
 		Self { config }
 	}
 
 	/// Formats the entry name for a secret.
 	///
-	/// Uses folder_prefix as a format string with {project}, {profile}, and {key} placeholders.
+	/// Uses `folder_prefix` as a format string with {project}, {profile}, and {key} placeholders.
 	/// Defaults to "monosecret/{project}/{profile}/{key}" if not configured.
 	fn format_entry_name(&self, project: &str, profile: &str, key: &str) -> String {
 		let format_string = self
@@ -140,8 +140,7 @@ impl Provider for PassProvider {
 			.output()
 			.map_err(|e| {
 				MonosecretError::ProviderOperationFailed(format!(
-					"Failed to execute 'pass' command: {}. Is pass installed?",
-					e
+					"Failed to execute 'pass' command: {e}. Is pass installed?"
 				))
 			})?;
 
@@ -153,16 +152,14 @@ impl Provider for PassProvider {
 			}
 
 			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"pass command failed: {}",
-				stderr
+				"pass command failed: {stderr}"
 			)));
 		}
 
 		let content = String::from_utf8(output.stdout)
 			.map_err(|e| {
 				MonosecretError::ProviderOperationFailed(format!(
-					"Failed to parse pass output as UTF-8: {}",
-					e
+					"Failed to parse pass output as UTF-8: {e}"
 				))
 			})?
 			.trim()
@@ -195,8 +192,7 @@ impl Provider for PassProvider {
 			.spawn()
 			.map_err(|e| {
 				MonosecretError::ProviderOperationFailed(format!(
-					"Failed to execute pass command: {}",
-					e
+					"Failed to execute pass command: {e}"
 				))
 			})?;
 
@@ -211,8 +207,7 @@ impl Provider for PassProvider {
 			.write_all(value.expose_secret().as_bytes())
 			.map_err(|e| {
 				MonosecretError::ProviderOperationFailed(format!(
-					"Failed to write to pass stdin: {}",
-					e
+					"Failed to write to pass stdin: {e}"
 				))
 			})?;
 
@@ -221,16 +216,14 @@ impl Provider for PassProvider {
 
 		let output = child.wait_with_output().map_err(|e| {
 			MonosecretError::ProviderOperationFailed(format!(
-				"Failed to wait for pass command: {}",
-				e
+				"Failed to wait for pass command: {e}"
 			))
 		})?;
 
 		if !output.status.success() {
 			let stderr = String::from_utf8_lossy(&output.stderr);
 			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"pass command failed: {}",
-				stderr
+				"pass command failed: {stderr}"
 			)));
 		}
 

@@ -18,8 +18,8 @@
 //! - [`KeyringProvider`]: System keyring integration (default)
 //! - [`DotEnvProvider`]: `.env` file support
 //! - [`EnvProvider`]: Environment variables (read-only)
-//! - [`OnePasswordProvider`]: OnePassword integration
-//! - [`LastPassProvider`]: LastPass integration
+//! - [`OnePasswordProvider`]: `OnePassword` integration
+//! - [`LastPassProvider`]: `LastPass` integration
 //!
 //! ## URI-Based Configuration
 //!
@@ -142,7 +142,7 @@ impl ProviderUrl {
 /// If already inside a tokio runtime, uses `block_in_place` with the
 /// existing runtime handle. Otherwise, creates a new runtime.
 #[allow(dead_code)]
-pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
+pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
 	match tokio::runtime::Handle::try_current() {
 		Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
 		Err(_) => tokio::runtime::Builder::new_current_thread()
@@ -325,7 +325,7 @@ pub trait Provider: Send + Sync {
 		key: &str,
 		value: &SecretString,
 		profile: &str,
-		request: &crate::config::SecretRequest,
+		request: &SecretRequest,
 	) -> Result<()> {
 		let storage_key = request.key.as_deref().unwrap_or(key);
 		self.set(project, storage_key, value, profile)
@@ -376,7 +376,7 @@ pub trait Provider: Send + Sync {
 	/// Returns the full URI representation of this provider.
 	///
 	/// This includes any configuration like vault names, paths, etc.
-	/// For example: "onepassword://VaultName" or "dotenv://.env.production"
+	/// For example: "<onepassword://VaultName>" or "<dotenv://.env.production>"
 	fn uri(&self) -> String;
 
 	/// Records a human-readable reason for the secrets access happening in this
@@ -399,7 +399,7 @@ pub trait Provider: Send + Sync {
 	///
 	/// # Returns
 	///
-	/// A HashMap where keys are secret names and values are `Secret` configurations.
+	/// A `HashMap` where keys are secret names and values are `Secret` configurations.
 	/// The default implementation returns an empty map, indicating the provider
 	/// doesn't support reflection.
 	///
@@ -432,7 +432,7 @@ pub trait Provider: Send + Sync {
 	///
 	/// # Returns
 	///
-	/// A HashMap where keys are the secret names and values are the secret values.
+	/// A `HashMap` where keys are the secret names and values are the secret values.
 	/// Secrets that don't exist are not included in the result.
 	///
 	/// # Default Implementation
@@ -458,7 +458,7 @@ pub trait Provider: Send + Sync {
 	///
 	/// The default implementation delegates to [`get`](Provider::get), using
 	/// `request.key` as an alternate storage key when present. Providers that
-	/// support richer path navigation (e.g. OnePassword with section/field
+	/// support richer path navigation (e.g. `OnePassword` with section/field
 	/// lookup) should override this.
 	fn get_with_request(
 		&self,
@@ -680,24 +680,22 @@ impl TryFrom<&str> for Box<dyn Provider> {
 			// Check if it's a known provider name to give a better error
 			if PROVIDER_REGISTRY.iter().any(|reg| reg.info.name == scheme) {
 				return Err(MonosecretError::ProviderOperationFailed(format!(
-					"Provider '{}' exists but URI parsing failed",
-					scheme
+					"Provider '{scheme}' exists but URI parsing failed"
 				)));
-			} else {
-				return Err(MonosecretError::ProviderNotFound(scheme.to_string()));
 			}
+			return Err(MonosecretError::ProviderNotFound(scheme.to_string()));
 		}
 
 		// Build a proper URL with the correct scheme
 		let url_string = match rest {
 			// Just scheme name (e.g., "keyring")
-			"" | ":" => format!("{}://", scheme),
+			"" | ":" => format!("{scheme}://"),
 			// Standard URI format already has // (e.g., "onepassword://vault/path")
-			s if s.starts_with("//") => format!("{}:{}", scheme, s),
+			s if s.starts_with("//") => format!("{scheme}:{s}"),
 			// Path only format (e.g., "dotenv:/path/to/.env")
-			s if s.starts_with('/') => format!("{}://{}", scheme, s),
+			s if s.starts_with('/') => format!("{scheme}://{s}"),
 			// Everything else - assume it's a host or path component
-			s => format!("{}://{}", scheme, s),
+			s => format!("{scheme}://{s}"),
 		};
 
 		// Percent-encode characters that are invalid in URIs but might appear in
@@ -714,8 +712,7 @@ impl TryFrom<&str> for Box<dyn Provider> {
 
 		let proper_url = Url::parse(&url_string).map_err(|e| {
 			MonosecretError::ProviderOperationFailed(format!(
-				"Invalid provider specification '{}': {}",
-				s, e
+				"Invalid provider specification '{s}': {e}"
 			))
 		})?;
 
@@ -757,19 +754,17 @@ pub(crate) fn provider_from_spec_with_dependencies(
 	if !is_valid_scheme {
 		if PROVIDER_REGISTRY.iter().any(|reg| reg.info.name == scheme) {
 			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"Provider '{}' exists but URI parsing failed",
-				scheme
+				"Provider '{scheme}' exists but URI parsing failed"
 			)));
-		} else {
-			return Err(MonosecretError::ProviderNotFound(scheme.to_string()));
 		}
+		return Err(MonosecretError::ProviderNotFound(scheme.to_string()));
 	}
 
 	let url_string = match rest {
-		"" | ":" => format!("{}://", scheme),
-		s if s.starts_with("//") => format!("{}:{}", scheme, s),
-		s if s.starts_with('/') => format!("{}://{}", scheme, s),
-		s => format!("{}://{}", scheme, s),
+		"" | ":" => format!("{scheme}://"),
+		s if s.starts_with("//") => format!("{scheme}:{s}"),
+		s if s.starts_with('/') => format!("{scheme}://{s}"),
+		s => format!("{scheme}://{s}"),
 	};
 
 	let url_string = {
@@ -784,8 +779,7 @@ pub(crate) fn provider_from_spec_with_dependencies(
 
 	let proper_url = Url::parse(&url_string).map_err(|e| {
 		MonosecretError::ProviderOperationFailed(format!(
-			"Invalid provider specification '{}': {}",
-			s, e
+			"Invalid provider specification '{s}': {e}"
 		))
 	})?;
 

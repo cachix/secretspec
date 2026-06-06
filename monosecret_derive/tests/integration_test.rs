@@ -112,7 +112,7 @@ mod empty_generation {
 	#[test]
 	fn test_empty_struct() {
 		// Verify the struct is generated even with no secrets
-		let _size = std::mem::size_of::<Monosecret>();
+		let _size = size_of::<Monosecret>();
 
 		// The struct should have no fields
 		fn _test_no_fields(_s: Monosecret) {

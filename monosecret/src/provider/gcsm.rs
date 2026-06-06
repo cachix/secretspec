@@ -65,8 +65,7 @@ fn validate_gcp_project_id(project_id: &str) -> std::result::Result<(), Monosecr
 	let len = project_id.len();
 	if !(6..=30).contains(&len) {
 		return Err(MonosecretError::ProviderOperationFailed(format!(
-			"GCP project ID must be 6-30 characters, got {}",
-			len
+			"GCP project ID must be 6-30 characters, got {len}"
 		)));
 	}
 
@@ -86,9 +85,8 @@ fn validate_gcp_project_id(project_id: &str) -> std::result::Result<(), Monosecr
 	for c in chars {
 		if !c.is_ascii_lowercase() && !c.is_ascii_digit() && c != '-' {
 			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"GCP project ID contains invalid character '{}'. \
-                Only lowercase letters, digits, and hyphens are allowed",
-				c
+				"GCP project ID contains invalid character '{c}'. \
+                Only lowercase letters, digits, and hyphens are allowed"
 			)));
 		}
 	}
@@ -146,7 +144,7 @@ crate::register_provider! {
 }
 
 impl GcsmProvider {
-	/// Creates a new GcsmProvider with the given configuration.
+	/// Creates a new `GcsmProvider` with the given configuration.
 	pub fn new(config: GcsmConfig) -> Self {
 		Self { config }
 	}
@@ -157,17 +155,15 @@ impl GcsmProvider {
 	fn validate_name_component(name: &str, component: &str) -> Result<()> {
 		if component.is_empty() {
 			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"{} cannot be empty",
-				name
+				"{name} cannot be empty"
 			)));
 		}
 
 		for c in component.chars() {
 			if !c.is_ascii_alphanumeric() && c != '_' && c != '-' {
 				return Err(MonosecretError::ProviderOperationFailed(format!(
-					"{} contains invalid character '{}'. \
-                    Only alphanumeric characters, underscores, and hyphens are allowed",
-					name, c
+					"{name} contains invalid character '{c}'. \
+                    Only alphanumeric characters, underscores, and hyphens are allowed"
 				)));
 			}
 		}
@@ -189,7 +185,7 @@ impl GcsmProvider {
 		Self::validate_name_component("profile", profile)?;
 		Self::validate_name_component("key", key)?;
 
-		let secret_name = format!("monosecret-{}-{}-{}", project, profile, key);
+		let secret_name = format!("monosecret-{project}-{profile}-{key}");
 
 		// GCP secret IDs must be 1-255 characters
 		if secret_name.len() > 255 {
@@ -214,16 +210,15 @@ impl GcsmProvider {
 		s.contains("ALREADY_EXISTS") || s.contains("alreadyExists")
 	}
 
-	/// Creates a SecretManagerService client.
+	/// Creates a `SecretManagerService` client.
 	async fn create_client(&self) -> Result<SecretManagerService> {
 		SecretManagerService::builder().build().await.map_err(|e| {
 			MonosecretError::ProviderOperationFailed(format!(
-				"Failed to create GCP Secret Manager client: {}\n\n\
+				"Failed to create GCP Secret Manager client: {e}\n\n\
                 Ensure Application Default Credentials are configured:\n  \
                 - Local development: Run 'gcloud auth application-default login'\n  \
                 - Service account: Set GOOGLE_APPLICATION_CREDENTIALS environment variable\n  \
-                - GKE: Configure Workload Identity",
-				e
+                - GKE: Configure Workload Identity"
 			))
 		})
 	}
@@ -253,8 +248,7 @@ impl GcsmProvider {
 				if let Some(payload) = response.payload {
 					let data = String::from_utf8(payload.data.to_vec()).map_err(|e| {
 						MonosecretError::ProviderOperationFailed(format!(
-							"Secret data is not valid UTF-8: {}",
-							e
+							"Secret data is not valid UTF-8: {e}"
 						))
 					})?;
 					Ok(Some(SecretString::new(data.into())))
@@ -268,8 +262,7 @@ impl GcsmProvider {
 					Ok(None)
 				} else {
 					Err(MonosecretError::ProviderOperationFailed(format!(
-						"Failed to access secret '{}': {}",
-						secret_name, e
+						"Failed to access secret '{secret_name}': {e}"
 					)))
 				}
 			}
@@ -306,8 +299,7 @@ impl GcsmProvider {
 		if let Err(e) = create_result {
 			if !Self::is_already_exists_error(&e) {
 				return Err(MonosecretError::ProviderOperationFailed(format!(
-					"Failed to create secret '{}': {}",
-					secret_name, e
+					"Failed to create secret '{secret_name}': {e}"
 				)));
 			}
 			// ALREADY_EXISTS is expected for existing secrets, continue to add version
@@ -327,8 +319,7 @@ impl GcsmProvider {
 			.await
 			.map_err(|e| {
 				MonosecretError::ProviderOperationFailed(format!(
-					"Failed to add secret version for '{}': {}",
-					secret_name, e
+					"Failed to add secret version for '{secret_name}': {e}"
 				))
 			})?;
 

@@ -40,8 +40,7 @@ DATABASE_URL = { description = "DB connection", providers = [{ provider = "op-de
 	let op_dev = providers.get("op-dev").unwrap();
 	assert!(
 		matches!(op_dev, ProviderConfig::Alias(s) if s == "onepassword://Development"),
-		"expected Alias, got {:?}",
-		op_dev
+		"expected Alias, got {op_dev:?}"
 	);
 
 	// Default profile secrets
@@ -56,7 +55,7 @@ DATABASE_URL = { description = "DB connection", providers = [{ provider = "op-de
 			assert_eq!(d.path.as_ref(), Some(&vec!["GitHub".to_string()]));
 			assert_eq!(d.key.as_deref(), Some("token"));
 		}
-		other => panic!("expected Detail, got {:?}", other),
+		other => panic!("expected Detail, got {other:?}"),
 	}
 
 	let gh_user = def.secrets.get("GITHUB_USER").unwrap();
@@ -67,7 +66,7 @@ DATABASE_URL = { description = "DB connection", providers = [{ provider = "op-de
 			assert_eq!(d.path.as_ref(), Some(&vec!["GitHub".to_string()]));
 			assert_eq!(d.key.as_deref(), Some("user"));
 		}
-		other => panic!("expected Detail, got {:?}", other),
+		other => panic!("expected Detail, got {other:?}"),
 	}
 
 	let db_url = def.secrets.get("DATABASE_URL").unwrap();
@@ -78,7 +77,7 @@ DATABASE_URL = { description = "DB connection", providers = [{ provider = "op-de
 			assert_eq!(d.path.as_ref(), Some(&vec!["Database".to_string()]));
 			assert_eq!(d.key.as_deref(), Some("url"));
 		}
-		other => panic!("expected Detail, got {:?}", other),
+		other => panic!("expected Detail, got {other:?}"),
 	}
 
 	// SecretRequest from ref
@@ -127,7 +126,7 @@ NPM_TOKEN     = { description = "NPM publish token", providers = ["ci-env"] }
 			assert_eq!(s.uri, "onepassword+env+token://abc123def456");
 			assert_eq!(s.depends_on[0].secret, "OP_SERVICE_ACCOUNT_TOKEN");
 		}
-		other => panic!("expected Structured, got {:?}", other),
+		other => panic!("expected Structured, got {other:?}"),
 	}
 
 	let def = config.profiles.get("default").unwrap();

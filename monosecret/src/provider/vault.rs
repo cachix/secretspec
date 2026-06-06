@@ -1,6 +1,6 @@
-//! HashiCorp Vault / OpenBao provider
+//! `HashiCorp` Vault / `OpenBao` provider
 //!
-//! This provider integrates with HashiCorp Vault and OpenBao to store and retrieve
+//! This provider integrates with `HashiCorp` Vault and `OpenBao` to store and retrieve
 //! secrets using the KV (Key-Value) secrets engine (v1 and v2).
 //!
 //! # Authentication
@@ -8,8 +8,8 @@
 //! Supports two authentication methods, selected via the `auth` query parameter:
 //!
 //! - Token (default) -- uses `VAULT_TOKEN` environment variable or `~/.vault-token` file
-//! - AppRole (`?auth=approle`) -- uses `VAULT_ROLE_ID` and `VAULT_SECRET_ID` environment
-//!   variables to perform an AppRole login
+//! - `AppRole` (`?auth=approle`) -- uses `VAULT_ROLE_ID` and `VAULT_SECRET_ID` environment
+//!   variables to perform an `AppRole` login
 //!
 //! # URI Format
 //!
@@ -24,9 +24,9 @@
 //! # Examples
 //!
 //! - `vault://vault.example.com:8200/secret` -- KV v2, token auth
-//! - `vault://vault.example.com:8200/secret?auth=approle` -- AppRole auth
+//! - `vault://vault.example.com:8200/secret?auth=approle` -- `AppRole` auth
 //! - `vault://ns1@vault.example.com:8200/secret` -- with Vault namespace
-//! - `openbao://bao.internal:8200/secret` -- OpenBao server
+//! - `openbao://bao.internal:8200/secret` -- `OpenBao` server
 //! - `vault://127.0.0.1:8200/secret?kv=1` -- KV v1 engine
 //! - `vault://vault.example.com:8200/secret?tls=false` -- disable TLS (dev mode)
 //!
@@ -69,17 +69,17 @@ pub enum KvVersion {
 	V2,
 }
 
-/// Authentication method for the Vault / OpenBao provider.
+/// Authentication method for the Vault / `OpenBao` provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AuthMethod {
 	/// Token-based authentication via `VAULT_TOKEN` or `~/.vault-token`.
 	#[default]
 	Token,
-	/// AppRole authentication via `VAULT_ROLE_ID` and `VAULT_SECRET_ID`.
+	/// `AppRole` authentication via `VAULT_ROLE_ID` and `VAULT_SECRET_ID`.
 	AppRole,
 }
 
-/// Configuration for the Vault / OpenBao provider.
+/// Configuration for the Vault / `OpenBao` provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultConfig {
 	/// The Vault server endpoint URL (e.g., `https://vault.example.com:8200`).
@@ -113,8 +113,7 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
 		let scheme = url.scheme();
 		if scheme != "vault" && scheme != "openbao" {
 			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"Invalid scheme '{}' for vault provider. Expected 'vault' or 'openbao'.",
-				scheme
+				"Invalid scheme '{scheme}' for vault provider. Expected 'vault' or 'openbao'."
 			)));
 		}
 
@@ -122,8 +121,7 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
 		let use_tls = url
 			.query_pairs()
 			.find(|(k, _)| k == "tls")
-			.map(|(_, v)| v != "false" && v != "0")
-			.unwrap_or(true);
+			.is_none_or(|(_, v)| v != "false" && v != "0");
 
 		let http_scheme = if use_tls { "https" } else { "http" };
 
@@ -131,9 +129,9 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
 		let endpoint = match url.host().filter(|s| !s.is_empty()) {
 			Some(host) => {
 				if let Some(port) = url.port() {
-					format!("{}://{}:{}", http_scheme, host, port)
+					format!("{http_scheme}://{host}:{port}")
 				} else {
-					format!("{}://{}", http_scheme, host)
+					format!("{http_scheme}://{host}")
 				}
 			}
 			None => std::env::var("VAULT_ADDR")
@@ -172,12 +170,12 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
 		// Namespace from URI username or VAULT_NAMESPACE env var
 		let namespace = {
 			let username = url.username();
-			if !username.is_empty() {
-				Some(username)
-			} else {
+			if username.is_empty() {
 				std::env::var("VAULT_NAMESPACE")
 					.ok()
 					.filter(|s| !s.is_empty())
+			} else {
+				Some(username)
 			}
 		};
 
@@ -188,8 +186,7 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
 				"approle" => Ok(AuthMethod::AppRole),
 				"token" => Ok(AuthMethod::Token),
 				other => Err(MonosecretError::ProviderOperationFailed(format!(
-					"Unknown auth method '{}'. Expected 'token' or 'approle'.",
-					other
+					"Unknown auth method '{other}'. Expected 'token' or 'approle'."
 				))),
 			})
 			.transpose()?
@@ -205,9 +202,9 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
 	}
 }
 
-/// HashiCorp Vault / OpenBao provider.
+/// `HashiCorp` Vault / `OpenBao` provider.
 ///
-/// Stores and retrieves secrets from a Vault or OpenBao server using the
+/// Stores and retrieves secrets from a Vault or `OpenBao` server using the
 /// KV secrets engine (v1 or v2) with token-based authentication.
 pub struct VaultProvider {
 	config: VaultConfig,
@@ -223,7 +220,7 @@ crate::register_provider! {
 }
 
 impl VaultProvider {
-	/// Creates a new VaultProvider with the given configuration.
+	/// Creates a new `VaultProvider` with the given configuration.
 	pub fn new(config: VaultConfig) -> Self {
 		Self { config }
 	}
@@ -248,7 +245,7 @@ impl VaultProvider {
 			));
 		}
 
-		Ok(format!("monosecret/{}/{}/{}", project, profile, key))
+		Ok(format!("monosecret/{project}/{profile}/{key}"))
 	}
 
 	/// Resolves the Vault token using the configured authentication method.
@@ -288,7 +285,7 @@ impl VaultProvider {
 		))
 	}
 
-	/// Authenticates via AppRole and returns a client token.
+	/// Authenticates via `AppRole` and returns a client token.
 	async fn resolve_approle_auth(&self) -> Result<SecretString> {
 		let role_id = std::env::var("VAULT_ROLE_ID").map_err(|_| {
 			MonosecretError::ProviderOperationFailed(
@@ -312,22 +309,20 @@ impl VaultProvider {
 
 		let client = reqwest::Client::new();
 		let response = client.post(&url).json(&body).send().await.map_err(|e| {
-			MonosecretError::ProviderOperationFailed(format!("AppRole login failed: {}", e))
+			MonosecretError::ProviderOperationFailed(format!("AppRole login failed: {e}"))
 		})?;
 
 		if !response.status().is_success() {
 			let status = response.status();
 			let body = response.text().await.unwrap_or_default();
 			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"AppRole login returned HTTP {}: {}",
-				status, body
+				"AppRole login returned HTTP {status}: {body}"
 			)));
 		}
 
 		let resp: serde_json::Value = response.json().await.map_err(|e| {
 			MonosecretError::ProviderOperationFailed(format!(
-				"Failed to parse AppRole login response: {}",
-				e
+				"Failed to parse AppRole login response: {e}"
 			))
 		})?;
 
@@ -346,7 +341,7 @@ impl VaultProvider {
 		headers.insert(
 			"X-Vault-Token",
 			HeaderValue::from_str(token.expose_secret()).map_err(|e| {
-				MonosecretError::ProviderOperationFailed(format!("Invalid token value: {}", e))
+				MonosecretError::ProviderOperationFailed(format!("Invalid token value: {e}"))
 			})?,
 		);
 		if let Some(ns) = namespace {
@@ -354,8 +349,7 @@ impl VaultProvider {
 				"X-Vault-Namespace",
 				HeaderValue::from_str(ns).map_err(|e| {
 					MonosecretError::ProviderOperationFailed(format!(
-						"Invalid namespace value: {}",
-						e
+						"Invalid namespace value: {e}"
 					))
 				})?,
 			);
@@ -410,8 +404,7 @@ impl VaultProvider {
 			200 => {
 				let body: serde_json::Value = response.json().await.map_err(|e| {
 					MonosecretError::ProviderOperationFailed(format!(
-						"Failed to parse Vault response: {}",
-						e
+						"Failed to parse Vault response: {e}"
 					))
 				})?;
 
@@ -438,8 +431,7 @@ impl VaultProvider {
 			status => {
 				let body = response.text().await.unwrap_or_default();
 				Err(MonosecretError::ProviderOperationFailed(format!(
-					"Vault returned HTTP {}: {}",
-					status, body
+					"Vault returned HTTP {status}: {body}"
 				)))
 			}
 		}
@@ -491,8 +483,7 @@ impl VaultProvider {
 			status => {
 				let body = response.text().await.unwrap_or_default();
 				Err(MonosecretError::ProviderOperationFailed(format!(
-					"Vault returned HTTP {} while writing secret: {}",
-					status, body
+					"Vault returned HTTP {status} while writing secret: {body}"
 				)))
 			}
 		}

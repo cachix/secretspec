@@ -16,7 +16,7 @@ use crate::validation::ValidationErrors;
 #[derive(Error, Debug, Diagnostic)]
 pub enum MonosecretError {
 	#[error("IO error: {0}")]
-	Io(#[from] std::io::Error),
+	Io(#[from] io::Error),
 	#[error("TOML parsing error: {0}")]
 	Toml(#[from] toml::de::Error),
 	#[error(

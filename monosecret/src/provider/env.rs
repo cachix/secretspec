@@ -181,7 +181,7 @@ impl Provider for EnvProvider {
 	fn set(&self, _project: &str, _key: &str, _value: &SecretString, _profile: &str) -> Result<()> {
 		// Environment variables are read-only in this backend
 		// Setting environment variables at runtime doesn't persist across processes
-		Err(crate::MonosecretError::ProviderOperationFailed(
+		Err(MonosecretError::ProviderOperationFailed(
             "Environment variable provider is read-only. Set variables in your shell or process environment.".to_string()
         ))
 	}

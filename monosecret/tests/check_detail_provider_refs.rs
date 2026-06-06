@@ -104,10 +104,10 @@ fn onepassword_auth_failures_are_error_logs() {
 
 	fs::write(
 		&op,
-		r#"#!/usr/bin/env sh
+		r"#!/usr/bin/env sh
 printf '%s\n' 'not currently signed in' >&2
 exit 1
-"#,
+",
 	)
 	.expect("write fake op command");
 	let mut permissions = fs::metadata(&op)

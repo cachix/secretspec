@@ -25,15 +25,14 @@ worker = "Worker secrets"
 admin = "Admin secrets"
 
 [providers]
-local = "dotenv://{}"
+local = "dotenv://{dotenv_path}"
 
 [profiles.default]
 WEB_TOKEN = {{ description = "web token", groups = ["web"], providers = ["local"] }}
 WORKER_TOKEN = {{ description = "worker token", groups = ["worker"], providers = ["local"] }}
 SHARED_TOKEN = {{ description = "shared token", groups = ["web", "worker"], providers = ["local"] }}
 MISSING_REQUIRED = {{ description = "missing", providers = ["local"] }}
-"#,
-		dotenv_path
+"#
 	)
 }
 

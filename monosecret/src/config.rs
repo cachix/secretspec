@@ -253,16 +253,15 @@ impl Config {
 
 		// Validate each profile
 		for (profile_name, profile) in &self.profiles {
-			profile.validate().map_err(|e| {
-				ParseError::Validation(format!("Profile '{}': {}", profile_name, e))
-			})?;
+			profile
+				.validate()
+				.map_err(|e| ParseError::Validation(format!("Profile '{profile_name}': {e}")))?;
 
 			for (secret_name, secret) in &profile.secrets {
 				if let Some(groups) = &secret.groups {
 					let declared = self.declared_groups().ok_or_else(|| {
 						ParseError::Validation(format!(
-							"Secret '{}.{}' references groups but no top-level [groups] table is declared",
-							profile_name, secret_name
+							"Secret '{profile_name}.{secret_name}' references groups but no top-level [groups] table is declared"
 						))
 					})?;
 
@@ -272,8 +271,7 @@ impl Config {
 						}
 
 						return Err(ParseError::Validation(format!(
-							"Secret '{}.{}' references undeclared group '{}'",
-							profile_name, secret_name, group
+							"Secret '{profile_name}.{secret_name}' references undeclared group '{group}'"
 						)));
 					}
 				}
@@ -593,14 +591,13 @@ impl Profile {
 			// Validate secret name is a valid identifier
 			if !is_valid_identifier(name) {
 				return Err(format!(
-					"Invalid secret name '{}': must be a valid identifier (alphanumeric and underscores, not starting with a number)",
-					name
+					"Invalid secret name '{name}': must be a valid identifier (alphanumeric and underscores, not starting with a number)"
 				));
 			}
 
 			secret
 				.validate()
-				.map_err(|e| format!("Secret '{}': {}", name, e))?;
+				.map_err(|e| format!("Secret '{name}': {e}"))?;
 		}
 
 		Ok(())
@@ -729,7 +726,7 @@ pub struct Secret {
 	/// The temporary file will be cleaned up when the resolved secrets are dropped.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub as_path: Option<bool>,
-	/// The type of secret, used for generation (e.g., "password", "hex", "base64", "uuid", "command", "rsa_private_key")
+	/// The type of secret, used for generation (e.g., "password", "hex", "base64", "uuid", "command", "`rsa_private_key`")
 	#[serde(rename = "type", skip_serializing_if = "Option::is_none")]
 	pub secret_type: Option<String>,
 	/// Auto-generation configuration. Either `true` for defaults or a table with options.
@@ -794,7 +791,7 @@ impl Secret {
 				match t.as_str() {
 					"password" | "hex" | "base64" | "uuid" | "command" | "rsa_private_key" => {}
 					unknown => {
-						return Err(format!("unknown secret type '{}'", unknown));
+						return Err(format!("unknown secret type '{unknown}'"));
 					}
 				}
 			}
@@ -808,7 +805,7 @@ impl Secret {
 			match t.as_str() {
 				"password" | "hex" | "base64" | "uuid" | "command" | "rsa_private_key" => {}
 				unknown => {
-					return Err(format!("unknown secret type '{}'", unknown));
+					return Err(format!("unknown secret type '{unknown}'"));
 				}
 			}
 		}
@@ -936,7 +933,7 @@ impl GlobalConfig {
 				return Ok(None);
 			}
 		};
-		let content = std::fs::read_to_string(&config_path).map_err(ParseError::Io)?;
+		let content = fs::read_to_string(&config_path).map_err(ParseError::Io)?;
 		toml::from_str(&content).map(Some).map_err(ParseError::Toml)
 	}
 
@@ -953,12 +950,12 @@ impl GlobalConfig {
 
 		// Ensure the parent directory exists
 		if let Some(parent) = config_path.parent() {
-			std::fs::create_dir_all(parent)?;
+			fs::create_dir_all(parent)?;
 		}
 
 		let content = toml::to_string_pretty(self)
 			.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-		std::fs::write(&config_path, content)?;
+		fs::write(&config_path, content)?;
 
 		Ok(())
 	}
@@ -1013,7 +1010,7 @@ impl GlobalConfig {
 		// Create parent directories for the new path
 		#[allow(clippy::collapsible_if)]
 		if let Some(parent) = new_path.parent() {
-			if let Err(err) = std::fs::create_dir_all(parent) {
+			if let Err(err) = fs::create_dir_all(parent) {
 				eprintln!(
 					"Warning: failed to create config directory {} while migrating from {}: {}. Continuing to use legacy config path.",
 					parent.display(),
@@ -1025,7 +1022,7 @@ impl GlobalConfig {
 		}
 
 		// Copy old config to new location
-		if let Err(err) = std::fs::copy(&old_path, new_path) {
+		if let Err(err) = fs::copy(&old_path, new_path) {
 			eprintln!(
 				"Warning: failed to migrate config from {} to {}: {}. Continuing to use legacy config path.",
 				old_path.display(),
@@ -1037,7 +1034,7 @@ impl GlobalConfig {
 
 		// Rename old file to indicate it has been migrated
 		let old_backup = old_path.with_extension("toml.old");
-		if let Err(err) = std::fs::rename(&old_path, &old_backup) {
+		if let Err(err) = fs::rename(&old_path, &old_backup) {
 			eprintln!(
 				"Warning: migrated config to {}, but failed to back up {} to {}: {}",
 				new_path.display(),
@@ -1113,21 +1110,17 @@ pub enum ParseError {
 impl std::fmt::Display for ParseError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			ParseError::Io(e) => write!(f, "I/O error: {}", e),
-			ParseError::Toml(e) => write!(f, "TOML parsing error: {}", e),
+			ParseError::Io(e) => write!(f, "I/O error: {e}"),
+			ParseError::Toml(e) => write!(f, "TOML parsing error: {e}"),
 			ParseError::UnsupportedRevision(rev) => {
-				write!(
-					f,
-					"Unsupported revision '{}'. Only '1.0' is supported.",
-					rev
-				)
+				write!(f, "Unsupported revision '{rev}'. Only '1.0' is supported.")
 			}
 			ParseError::CircularDependency(msg) => {
-				write!(f, "Circular dependency detected: {}", msg)
+				write!(f, "Circular dependency detected: {msg}")
 			}
-			ParseError::Validation(msg) => write!(f, "Validation error: {}", msg),
+			ParseError::Validation(msg) => write!(f, "Validation error: {msg}"),
 			ParseError::ExtendedConfigNotFound(path) => {
-				write!(f, "Extended config file not found: {}", path)
+				write!(f, "Extended config file not found: {path}")
 			}
 		}
 	}

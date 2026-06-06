@@ -14,7 +14,7 @@ use crate::provider::Provider;
 use crate::provider::ProviderUrl;
 use crate::provider::onepassword::strip_op_session_env;
 
-/// Configuration for the OnePassword Environments provider.
+/// Configuration for the `OnePassword` Environments provider.
 ///
 /// This provider uses `op environment read` to fetch secrets from a
 /// [1Password Environment](https://www.1password.dev/environments).
@@ -71,7 +71,7 @@ impl TryFrom<&ProviderUrl> for OnePasswordEnvConfig {
 		if let Some(host) = url.host()
 			&& host != "localhost"
 		{
-			config.environment_id = host.to_string();
+			config.environment_id = host.clone();
 		}
 
 		if config.environment_id.is_empty() {
@@ -98,10 +98,10 @@ impl TryFrom<&ProviderUrl> for OnePasswordEnvConfig {
 				if let Some(password) = url.password() {
 					config.service_account_token = Some(password);
 				} else {
-					config.service_account_token = Some(username.to_string());
+					config.service_account_token = Some(username.clone());
 				}
 			} else {
-				config.account = Some(username.to_string());
+				config.account = Some(username.clone());
 			}
 		}
 

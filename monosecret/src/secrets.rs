@@ -68,9 +68,7 @@ fn warn_provider_failure(uri: &str, secret_name: &str, err: &MonosecretError) {
 /// during construction or during `get_batch`); affected secrets will still be
 /// retried via their per-secret fallback chain below.
 fn warn_primary_provider_failure(uri: Option<&str>, err: &MonosecretError) {
-	let uri = uri
-		.map(redact_provider_uri)
-		.unwrap_or_else(|| "<default>".to_string());
+	let uri = uri.map_or_else(|| "<default>".to_string(), redact_provider_uri);
 	tracing::warn!(provider = %uri, error = %err, "primary batch provider failed");
 	eprintln!(
 		"{} primary provider {} failed: {}; will try fallback chain for affected secrets",
@@ -82,7 +80,7 @@ fn warn_primary_provider_failure(uri: Option<&str>, err: &MonosecretError) {
 
 /// Walks up from the current directory looking for `monosecret.toml`.
 fn find_config_file() -> Result<PathBuf> {
-	let mut dir = std::env::current_dir()?;
+	let mut dir = env::current_dir()?;
 	loop {
 		let candidate = dir.join("monosecret.toml");
 		if candidate.exists() {
@@ -112,8 +110,8 @@ const LEGACY_AGENT_OPT_IN_ENV: &str = "SECRETSPEC_AGENT";
 
 /// Whether monosecret is currently running as an AI coding agent.
 fn running_as_agent() -> bool {
-	std::env::var_os(AGENT_OPT_IN_ENV).is_some_and(|v| !v.is_empty())
-		|| std::env::var_os(LEGACY_AGENT_OPT_IN_ENV).is_some_and(|v| !v.is_empty())
+	env::var_os(AGENT_OPT_IN_ENV).is_some_and(|v| !v.is_empty())
+		|| env::var_os(LEGACY_AGENT_OPT_IN_ENV).is_some_and(|v| !v.is_empty())
 		|| detect_coding_agent::is_agent()
 }
 
@@ -263,7 +261,7 @@ impl Secrets {
 	///
 	/// # Arguments
 	///
-	/// * `provider` - The provider name or URI (e.g., "keyring", "dotenv:/path/to/.env")
+	/// * `provider` - The provider name or URI (e.g., "keyring", "<dotenv:/path/to/.env>")
 	///
 	/// # Example
 	///
@@ -340,8 +338,8 @@ impl Secrets {
 	///
 	/// Profile resolution order:
 	/// 1. Provided profile argument
-	/// 2. Profile set via set_profile()
-	/// 3. MONOSECRET_PROFILE environment variable
+	/// 2. Profile set via `set_profile()`
+	/// 3. `MONOSECRET_PROFILE` environment variable
 	/// 4. Global configuration default profile
 	/// 5. "default" profile
 	///
@@ -354,7 +352,7 @@ impl Secrets {
 	/// The resolved profile name
 	pub(crate) fn resolve_profile_name(&self, profile: Option<&str>) -> String {
 		profile
-			.map(|p| p.to_string())
+			.map(ToString::to_string)
 			.or_else(|| self.profile.clone())
 			.or_else(|| env_var_with_legacy("MONOSECRET_PROFILE", "SECRETSPEC_PROFILE"))
 			.or_else(|| {
@@ -371,7 +369,7 @@ impl Secrets {
 		self.config.profiles.get(profile_name).ok_or_else(|| {
 			let mut available: Vec<&str> =
 				self.config.profiles.keys().map(String::as_str).collect();
-			available.sort();
+			available.sort_unstable();
 			MonosecretError::InvalidProfile(format!(
 				"'{}' is not defined in monosecret.toml. Available profiles: {}",
 				profile_name,
@@ -390,9 +388,7 @@ impl Secrets {
 	///
 	/// The resolved profile configuration
 	pub(crate) fn resolve_profile(&self, profile: Option<&str>) -> Result<Profile> {
-		let profile_name = profile
-			.map(str::to_string)
-			.unwrap_or_else(|| self.resolve_profile_name(None));
+		let profile_name = profile.map_or_else(|| self.resolve_profile_name(None), str::to_string);
 		let mut profile_config = self.require_profile(&profile_name)?.clone();
 
 		// If not the default profile, also add secrets from default profile
@@ -438,13 +434,13 @@ impl Secrets {
 		let current_defaults =
 			current_profile.and_then(|profile_config| profile_config.defaults.as_ref());
 
-		let default_secret = if profile_name != "default" {
+		let default_secret = if profile_name == "default" {
+			None
+		} else {
 			self.config
 				.profiles
 				.get("default")
 				.and_then(|default_profile| default_profile.secrets.get(name))
-		} else {
-			None
 		};
 
 		match (current_secret, default_secret) {
@@ -599,8 +595,7 @@ impl Secrets {
 				.resolve_secret_config(secret_name, Some(profile_name))
 				.ok_or_else(|| {
 					MonosecretError::SecretNotFound(format!(
-						"Provider '{}' requires secret '{}' but it is not defined in monosecret.toml",
-						alias, secret_name
+						"Provider '{alias}' requires secret '{secret_name}' but it is not defined in monosecret.toml"
 					))
 				})?;
 
@@ -619,8 +614,7 @@ impl Secrets {
 						Some(v) => v,
 						None => {
 							return Err(MonosecretError::ProviderOperationFailed(format!(
-								"Provider '{}' requires secret '{}' but it was not found",
-								alias, secret_name
+								"Provider '{alias}' requires secret '{secret_name}' but it was not found"
 							)));
 						}
 					}
@@ -632,8 +626,7 @@ impl Secrets {
 						Some(v) => v,
 						None => {
 							return Err(MonosecretError::ProviderOperationFailed(format!(
-								"Provider '{}' requires secret '{}' but it was not found",
-								alias, secret_name
+								"Provider '{alias}' requires secret '{secret_name}' but it was not found"
 							)));
 						}
 					}
@@ -668,7 +661,7 @@ impl Secrets {
 		names
 	}
 
-	/// Resolves a list of [`ProviderRef`]s to (URI, SecretRequest) pairs, preserving order.
+	/// Resolves a list of [`ProviderRef`]s to (URI, `SecretRequest`) pairs, preserving order.
 	///
 	/// Each [`ProviderRef`] contributes its resolved URI and any location hints
 	/// (path, key) from [`ProviderRefDetail`].  Bare alias refs produce a default
@@ -688,34 +681,30 @@ impl Secrets {
 		let mut entries = Vec::with_capacity(refs.len());
 		for r in refs {
 			let alias = r.provider_alias();
-			match self.lookup_provider_alias(alias) {
-				Some(uri) => {
-					let request = SecretRequest::from_provider_ref(r);
-					tracing::debug!(
-						alias = %alias,
-						provider = %redact_provider_uri(&uri),
-						path = ?request.path,
-						key = ?request.key,
-						"resolved provider reference"
-					);
-					entries.push((uri, request));
-				}
-				None => {
-					let known = self.known_provider_aliases();
-					let msg = if known.is_empty() {
-						format!(
-							"Provider alias '{}' is not defined. Declare it in [providers] in monosecret.toml or in the global config.",
-							alias
-						)
-					} else {
-						format!(
-							"Provider alias '{}' is not defined. Available aliases: {}",
-							alias,
-							known.join(", ")
-						)
-					};
-					return Err(MonosecretError::ProviderNotFound(msg));
-				}
+			if let Some(uri) = self.lookup_provider_alias(alias) {
+				let request = SecretRequest::from_provider_ref(r);
+				tracing::debug!(
+					alias = %alias,
+					provider = %redact_provider_uri(&uri),
+					path = ?request.path,
+					key = ?request.key,
+					"resolved provider reference"
+				);
+				entries.push((uri, request));
+			} else {
+				let known = self.known_provider_aliases();
+				let msg = if known.is_empty() {
+					format!(
+						"Provider alias '{alias}' is not defined. Declare it in [providers] in monosecret.toml or in the global config."
+					)
+				} else {
+					format!(
+						"Provider alias '{}' is not defined. Available aliases: {}",
+						alias,
+						known.join(", ")
+					)
+				};
+				return Err(MonosecretError::ProviderNotFound(msg));
 			}
 		}
 		Ok(Some(entries))
@@ -736,24 +725,22 @@ impl Secrets {
 		};
 		let mut uris = Vec::with_capacity(aliases.len());
 		for alias in aliases {
-			match self.lookup_provider_alias(alias) {
-				Some(uri) => uris.push(uri),
-				None => {
-					let known = self.known_provider_aliases();
-					let msg = if known.is_empty() {
-						format!(
-							"Provider alias '{}' is not defined. Declare it in [providers] in monosecret.toml or in the global config.",
-							alias
-						)
-					} else {
-						format!(
-							"Provider alias '{}' is not defined. Available aliases: {}",
-							alias,
-							known.join(", ")
-						)
-					};
-					return Err(MonosecretError::ProviderNotFound(msg));
-				}
+			if let Some(uri) = self.lookup_provider_alias(alias) {
+				uris.push(uri)
+			} else {
+				let known = self.known_provider_aliases();
+				let msg = if known.is_empty() {
+					format!(
+						"Provider alias '{alias}' is not defined. Declare it in [providers] in monosecret.toml or in the global config."
+					)
+				} else {
+					format!(
+						"Provider alias '{}' is not defined. Available aliases: {}",
+						alias,
+						known.join(", ")
+					)
+				};
+				return Err(MonosecretError::ProviderNotFound(msg));
 			}
 		}
 		Ok(Some(uris))
@@ -776,7 +763,7 @@ impl Secrets {
 	/// Resolves the explicit spec via [`Self::explicit_provider_spec`], then
 	/// expands any matching alias via [`Self::lookup_provider_alias`].
 	pub(crate) fn resolve_provider_override(&self, override_arg: Option<&str>) -> Option<String> {
-		let spec = self.explicit_provider_spec(override_arg.map(|s| s.to_string()))?;
+		let spec = self.explicit_provider_spec(override_arg.map(ToString::to_string))?;
 		Some(self.lookup_provider_alias(&spec).unwrap_or(spec))
 	}
 
@@ -804,8 +791,7 @@ impl Secrets {
 				.and_then(|uris| uris.into_iter().next())
 				.ok_or_else(|| {
 					MonosecretError::ProviderNotFound(format!(
-						"Provider alias '{}' could not be resolved",
-						alias
+						"Provider alias '{alias}' could not be resolved"
 					))
 				})?;
 			return self.provider_from_alias(&alias, uri, &profile_name);
@@ -834,7 +820,7 @@ impl Secrets {
 	/// Provider resolution order:
 	/// 1. Provided provider argument
 	/// 2. Provider set via builder (used by the CLI to forward `--provider`)
-	/// 3. Environment variable (MONOSECRET_PROVIDER)
+	/// 3. Environment variable (`MONOSECRET_PROVIDER`)
 	/// 4. Global configuration default provider
 	/// 5. Error if no provider is configured
 	///
@@ -1014,23 +1000,22 @@ impl Secrets {
 		self.require_profile(&profile_name)?;
 
 		// Check if the secret exists in the profile or is inherited from default
-		let secret_config = match self.resolve_secret_config(name, None) {
-			Some(sc) => sc,
-			None => {
-				let profile = self.resolve_profile(Some(&profile_name))?;
-				let mut available_secrets = profile
-					.into_iter()
-					.map(|(name, _)| name)
-					.collect::<Vec<_>>();
-				available_secrets.sort();
+		let secret_config = if let Some(sc) = self.resolve_secret_config(name, None) {
+			sc
+		} else {
+			let profile = self.resolve_profile(Some(&profile_name))?;
+			let mut available_secrets = profile
+				.into_iter()
+				.map(|(name, _)| name)
+				.collect::<Vec<_>>();
+			available_secrets.sort();
 
-				return Err(MonosecretError::SecretNotFound(format!(
-					"Secret '{}' is not defined in profile '{}'. Available secrets: {}",
-					name,
-					profile_name,
-					available_secrets.join(", ")
-				)));
-			}
+			return Err(MonosecretError::SecretNotFound(format!(
+				"Secret '{}' is not defined in profile '{}'. Available secrets: {}",
+				name,
+				profile_name,
+				available_secrets.join(", ")
+			)));
 		};
 
 		let (backend, write_request) = if self.resolve_provider_override(None).is_none() {
@@ -1153,8 +1138,7 @@ impl Secrets {
 					let temp_path = temp_file.into_temp_path();
 					let persisted_path = temp_path.keep().map_err(|e| {
 						MonosecretError::Io(io::Error::other(format!(
-							"Failed to persist temporary file: {}",
-							e
+							"Failed to persist temporary file: {e}"
 						)))
 					})?;
 					println!("{}", persisted_path.display());
@@ -1173,13 +1157,12 @@ impl Secrets {
 						let temp_path = temp_file.into_temp_path();
 						let persisted_path = temp_path.keep().map_err(|e| {
 							MonosecretError::Io(io::Error::other(format!(
-								"Failed to persist temporary file: {}",
-								e
+								"Failed to persist temporary file: {e}"
 							)))
 						})?;
 						println!("{}", persisted_path.display());
 					} else {
-						println!("{}", default_value);
+						println!("{default_value}");
 					}
 					Ok(())
 				} else {
@@ -1389,7 +1372,7 @@ impl Secrets {
 			.collect::<HashSet<_>>();
 		let missing_optional: HashSet<&String> = valid.missing_optional.iter().collect();
 
-		for (name, config) in profile.iter() {
+		for (name, config) in &profile {
 			if missing_optional.contains(&name) {
 				optional_count += 1;
 				eprintln!(
@@ -1557,7 +1540,7 @@ impl Secrets {
 		let profile = self.resolve_profile(Some(&profile_display))?;
 
 		// Process each secret using proper profile resolution
-		for (name, config) in profile.into_iter() {
+		for (name, config) in profile {
 			let secret_config = self
 				.resolve_secret_config(&name, Some(&profile_display))
 				.expect("Secret should exist since we're iterating over it");
@@ -1568,62 +1551,60 @@ impl Secrets {
 			match from_provider_instance.get(&self.config.project.name, &name, &profile_display)? {
 				Some(value) => {
 					// Secret exists in "from" provider, check if it exists in "to" provider
-					match to_provider.get(&self.config.project.name, &name, &profile_display)? {
-						Some(_) => {
-							eprintln!(
-								"{} {} - {} {} (→ {})",
-								"○".yellow(),
-								name,
-								config.description.as_deref().unwrap_or("No description"),
-								"(already exists in target)".yellow(),
-								to_provider.name().blue()
-							);
-							already_exists += 1;
-						}
-						None => {
-							// Secret doesn't exist in "to" provider, import it
-							to_provider.set(
-								&self.config.project.name,
-								&name,
-								&value,
-								&profile_display,
-							)?;
-							eprintln!(
-								"{} {} - {} (→ {})",
-								"✓".green(),
-								name,
-								config.description.as_deref().unwrap_or("No description"),
-								to_provider.name().blue()
-							);
-							imported += 1;
-						}
+					if let Some(_) =
+						to_provider.get(&self.config.project.name, &name, &profile_display)?
+					{
+						eprintln!(
+							"{} {} - {} {} (→ {})",
+							"○".yellow(),
+							name,
+							config.description.as_deref().unwrap_or("No description"),
+							"(already exists in target)".yellow(),
+							to_provider.name().blue()
+						);
+						already_exists += 1;
+					} else {
+						// Secret doesn't exist in "to" provider, import it
+						to_provider.set(
+							&self.config.project.name,
+							&name,
+							&value,
+							&profile_display,
+						)?;
+						eprintln!(
+							"{} {} - {} (→ {})",
+							"✓".green(),
+							name,
+							config.description.as_deref().unwrap_or("No description"),
+							to_provider.name().blue()
+						);
+						imported += 1;
 					}
 				}
 				None => {
 					// Secret doesn't exist in "from" provider
 					// Check if it exists in the "to" provider
-					match to_provider.get(&self.config.project.name, &name, &profile_display)? {
-						Some(_) => {
-							eprintln!(
-								"{} {} - {} {} (→ {})",
-								"○".blue(),
-								name,
-								config.description.as_deref().unwrap_or("No description"),
-								"(already in target, not in source)".blue(),
-								to_provider.name().blue()
-							);
-							already_exists += 1;
-						}
-						None => {
-							eprintln!(
-								"{} {} - {} {}",
-								"✗".red(),
-								name,
-								config.description.as_deref().unwrap_or("No description"),
-								"(not found in source)".red()
-							);
-							not_found += 1;
-						}
+					if let Some(_) =
+						to_provider.get(&self.config.project.name, &name, &profile_display)?
+					{
+						eprintln!(
+							"{} {} - {} {} (→ {})",
+							"○".blue(),
+							name,
+							config.description.as_deref().unwrap_or("No description"),
+							"(already in target, not in source)".blue(),
+							to_provider.name().blue()
+						);
+						already_exists += 1;
+					} else {
+						eprintln!(
+							"{} {} - {} {}",
+							"✗".red(),
+							name,
+							config.description.as_deref().unwrap_or("No description"),
+							"(not found in source)".red()
+						);
+						not_found += 1;
 					}
 				}
 			}
@@ -1688,8 +1669,7 @@ impl Secrets {
 			Some(t) => t.as_str(),
 			None => {
 				return Err(MonosecretError::GenerationFailed(format!(
-					"Secret '{}' has generate config but no type",
-					name
+					"Secret '{name}' has generate config but no type"
 				)));
 			}
 		};
@@ -1847,8 +1827,7 @@ impl Secrets {
 
 			let can_batch = primary_entry
 				.as_ref()
-				.map(|(_, request)| request == &SecretRequest::default())
-				.unwrap_or(true);
+				.is_none_or(|(_, request)| request == &SecretRequest::default());
 
 			if can_batch {
 				provider_groups
@@ -1895,7 +1874,7 @@ impl Secrets {
 				}
 			};
 
-			let keys: Vec<&str> = secret_names.iter().map(|s| s.as_str()).collect();
+			let keys: Vec<&str> = secret_names.iter().map(String::as_str).collect();
 			match provider.get_batch(&self.config.project.name, &keys, &profile_name) {
 				Ok(batch_results) => fetched_values.extend(batch_results),
 				Err(e) => {
@@ -1914,84 +1893,80 @@ impl Secrets {
 			let default = secret_config.default.clone();
 			let as_path = secret_config.as_path.unwrap_or(false);
 
-			match fetched_values.remove(&name) {
-				Some(value) => {
+			if let Some(value) = fetched_values.remove(&name) {
+				if as_path {
+					// Write secret to temp file and store the path
+					let (temp_file, path_str) = self.write_secret_to_temp_file(&value)?;
+					temp_files.push(temp_file);
+					secrets.insert(name.clone(), SecretString::new(path_str.into()));
+				} else {
+					secrets.insert(name, value);
+				}
+			} else {
+				let primary_uri = &secret_primary_uris[&name];
+				let primary_failed = failed_primary_uris.contains_key(primary_uri);
+
+				// An explicit override collapses the chain to one provider, so no fallback.
+				let fallback_value =
+					match (override_uri.as_ref(), secret_config.providers.as_deref()) {
+						(None, Some(providers)) if providers.len() > 1 => {
+							let fallback_entries =
+								self.resolve_provider_ref_uris(Some(&providers[1..]))?;
+							self.get_secret_from_providers(
+								&self.config.project.name,
+								&name,
+								&profile_name,
+								fallback_entries.as_deref(),
+								None,
+							)?
+						}
+						// No alternative chain to try and the primary failed: surface the
+						// original error rather than reporting the secret as merely missing.
+						_ if primary_failed => {
+							return Err(failed_primary_uris
+								.remove(primary_uri)
+								.expect("primary_failed implies entry present"));
+						}
+						_ => None,
+					};
+
+				if let Some(value) = fallback_value {
 					if as_path {
-						// Write secret to temp file and store the path
 						let (temp_file, path_str) = self.write_secret_to_temp_file(&value)?;
 						temp_files.push(temp_file);
 						secrets.insert(name.clone(), SecretString::new(path_str.into()));
 					} else {
 						secrets.insert(name, value);
 					}
-				}
-				None => {
-					let primary_uri = &secret_primary_uris[&name];
-					let primary_failed = failed_primary_uris.contains_key(primary_uri);
-
-					// An explicit override collapses the chain to one provider, so no fallback.
-					let fallback_value =
-						match (override_uri.as_ref(), secret_config.providers.as_deref()) {
-							(None, Some(providers)) if providers.len() > 1 => {
-								let fallback_entries =
-									self.resolve_provider_ref_uris(Some(&providers[1..]))?;
-								self.get_secret_from_providers(
-									&self.config.project.name,
-									&name,
-									&profile_name,
-									fallback_entries.as_deref(),
-									None,
-								)?
-							}
-							// No alternative chain to try and the primary failed: surface the
-							// original error rather than reporting the secret as merely missing.
-							_ if primary_failed => {
-								return Err(failed_primary_uris
-									.remove(primary_uri)
-									.expect("primary_failed implies entry present"));
-							}
-							_ => None,
-						};
-
-					if let Some(value) = fallback_value {
-						if as_path {
-							let (temp_file, path_str) = self.write_secret_to_temp_file(&value)?;
-							temp_files.push(temp_file);
-							secrets.insert(name.clone(), SecretString::new(path_str.into()));
-						} else {
-							secrets.insert(name, value);
-						}
-					} else if let Some(generated) =
-						self.try_generate_secret(&name, &secret_config, &profile_name)?
-					{
-						if as_path {
-							let (temp_file, path_str) =
-								self.write_secret_to_temp_file(&generated)?;
-							temp_files.push(temp_file);
-							secrets.insert(name.clone(), SecretString::new(path_str.into()));
-						} else {
-							secrets.insert(name, generated);
-						}
-					} else if let Some(default_value) = default {
-						if as_path {
-							// Write default value to temp file
-							let (temp_file, path_str) = self.write_secret_to_temp_file(
-								&SecretString::new(default_value.clone().into()),
-							)?;
-							temp_files.push(temp_file);
-							secrets.insert(name.clone(), SecretString::new(path_str.into()));
-						} else {
-							secrets.insert(
-								name.clone(),
-								SecretString::new(default_value.clone().into()),
-							);
-						}
-						with_defaults.push((name, default_value));
-					} else if required {
-						missing_required.push(name);
+				} else if let Some(generated) =
+					self.try_generate_secret(&name, &secret_config, &profile_name)?
+				{
+					if as_path {
+						let (temp_file, path_str) = self.write_secret_to_temp_file(&generated)?;
+						temp_files.push(temp_file);
+						secrets.insert(name.clone(), SecretString::new(path_str.into()));
 					} else {
-						missing_optional.push(name);
+						secrets.insert(name, generated);
 					}
+				} else if let Some(default_value) = default {
+					if as_path {
+						// Write default value to temp file
+						let (temp_file, path_str) = self.write_secret_to_temp_file(
+							&SecretString::new(default_value.clone().into()),
+						)?;
+						temp_files.push(temp_file);
+						secrets.insert(name.clone(), SecretString::new(path_str.into()));
+					} else {
+						secrets.insert(
+							name.clone(),
+							SecretString::new(default_value.clone().into()),
+						);
+					}
+					with_defaults.push((name, default_value));
+				} else if required {
+					missing_required.push(name);
+				} else {
+					missing_optional.push(name);
 				}
 			}
 		}
@@ -2000,21 +1975,21 @@ impl Secrets {
 			self.validation_report_provider_uri(override_uri.as_deref(), &secret_primary_uris)?;
 
 		// Check if there are any missing required secrets
-		if !missing_required.is_empty() {
+		if missing_required.is_empty() {
+			Ok(Ok(ValidatedSecrets {
+				resolved: Resolved::new(secrets, report_provider_uri, profile_name.clone()),
+				missing_optional,
+				with_defaults,
+				temp_files,
+			}))
+		} else {
 			Ok(Err(ValidationErrors::new(
 				missing_required,
 				missing_optional,
 				with_defaults,
 				report_provider_uri,
-				profile_name.to_string(),
+				profile_name.clone(),
 			)))
-		} else {
-			Ok(Ok(ValidatedSecrets {
-				resolved: Resolved::new(secrets, report_provider_uri, profile_name.to_string()),
-				missing_optional,
-				with_defaults,
-				temp_files,
-			}))
 		}
 	}
 
@@ -2051,8 +2026,7 @@ impl Secrets {
 		for name in include_names {
 			if !profile.secrets.contains_key(&name) {
 				return Err(Self::invalid_input(format!(
-					"Included secret '{}' is not defined in profile '{}'",
-					name, profile_name
+					"Included secret '{name}' is not defined in profile '{profile_name}'"
 				)));
 			}
 			selected.insert(name);
@@ -2065,8 +2039,7 @@ impl Secrets {
 				.is_some_and(|declared| declared.contains_key(&group))
 			{
 				return Err(Self::invalid_input(format!(
-					"Group '{}' is not declared in the top-level [groups] table",
-					group
+					"Group '{group}' is not declared in the top-level [groups] table"
 				)));
 			}
 
@@ -2087,8 +2060,7 @@ impl Secrets {
 
 			if !matched {
 				return Err(Self::invalid_input(format!(
-					"Group '{}' does not match any secrets in profile '{}'",
-					group, profile_name
+					"Group '{group}' does not match any secrets in profile '{profile_name}'"
 				)));
 			}
 		}

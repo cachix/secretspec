@@ -55,18 +55,18 @@ where
 	results
 }
 
-/// Represents a OnePassword item retrieved from the CLI.
+/// Represents a `OnePassword` item retrieved from the CLI.
 ///
 /// This struct deserializes the JSON output from the `op item get` command
 /// and contains an array of fields that hold the actual secret data.
 #[derive(Debug, Deserialize)]
 pub(crate) struct OnePasswordItem {
-	/// Collection of fields within the OnePassword item.
+	/// Collection of fields within the `OnePassword` item.
 	/// Each field represents a piece of data stored in the item.
 	pub(crate) fields: Vec<OnePasswordField>,
 }
 
-/// Represents a single field within a OnePassword item.
+/// Represents a single field within a `OnePassword` item.
 ///
 /// Fields can contain various types of data such as passwords, strings,
 /// or concealed values. The field's label is used to identify specific
@@ -88,14 +88,14 @@ pub(crate) struct OnePasswordField {
 	pub(crate) value: Option<String>,
 }
 
-/// A section within a OnePassword item.
+/// A section within a `OnePassword` item.
 #[derive(Debug, Deserialize)]
 pub(crate) struct OnePasswordSection {
 	/// Optional label for the section (e.g. "GitHub").
 	pub(crate) label: Option<String>,
 }
 
-/// Template for creating new OnePassword items via the CLI.
+/// Template for creating new `OnePassword` items via the CLI.
 ///
 /// This struct is serialized to JSON and passed to the `op item create` command
 /// using the `--template` flag. It defines the structure and metadata for
@@ -104,7 +104,7 @@ pub(crate) struct OnePasswordSection {
 struct OnePasswordItemTemplate {
 	/// The title of the item, formatted as "monosecret/{project}/{profile}/{key}".
 	title: String,
-	/// The category of the item. Always "SECURE_NOTE" for monosecret items.
+	/// The category of the item. Always "`SECURE_NOTE`" for monosecret items.
 	category: String,
 	/// Collection of fields to include in the item.
 	/// Contains project, key, and value fields.
@@ -114,10 +114,10 @@ struct OnePasswordItemTemplate {
 	tags: Vec<String>,
 }
 
-/// Template for individual fields when creating OnePassword items.
+/// Template for individual fields when creating `OnePassword` items.
 ///
 /// Each field represents a piece of data to store in the item.
-/// Used within OnePasswordItemTemplate to define the item's content.
+/// Used within `OnePasswordItemTemplate` to define the item's content.
 #[derive(Debug, Serialize)]
 struct OnePasswordFieldTemplate {
 	/// Human-readable label for the field (e.g., "project", "key", "value").
@@ -129,10 +129,10 @@ struct OnePasswordFieldTemplate {
 	value: String,
 }
 
-/// Configuration for the OnePassword provider.
+/// Configuration for the `OnePassword` provider.
 ///
 /// This struct contains all the necessary configuration options for
-/// interacting with OnePassword CLI. It supports both interactive authentication
+/// interacting with `OnePassword` CLI. It supports both interactive authentication
 /// and service account tokens for automated workflows.
 ///
 /// # Examples
@@ -158,7 +158,7 @@ struct OnePasswordFieldTemplate {
 pub struct OnePasswordConfig {
 	/// Optional account shorthand (for multiple accounts).
 	///
-	/// Used with the `--account` flag when you have multiple OnePassword
+	/// Used with the `--account` flag when you have multiple `OnePassword`
 	/// accounts configured. This should match the shorthand shown in
 	/// `op account list`.
 	pub account: Option<String>,
@@ -169,11 +169,11 @@ pub struct OnePasswordConfig {
 	pub default_vault: Option<String>,
 	/// Service account token (alternative to interactive auth).
 	///
-	/// When set, this token is passed via the OP_SERVICE_ACCOUNT_TOKEN
+	/// When set, this token is passed via the `OP_SERVICE_ACCOUNT_TOKEN`
 	/// environment variable to authenticate without user interaction.
 	/// Ideal for CI/CD environments.
 	pub service_account_token: Option<String>,
-	/// Optional folder prefix format string for organizing Monosecret-owned secrets in OnePassword.
+	/// Optional folder prefix format string for organizing Monosecret-owned secrets in `OnePassword`.
 	///
 	/// Supports placeholders: {project}, {profile}, and {key}.
 	/// Defaults to "monosecret/{project}/{profile}/{key}" if not specified.
@@ -201,8 +201,7 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
 			"onepassword" | "onepassword+token" | "op" | "op+token" => {}
 			_ => {
 				return Err(MonosecretError::ProviderOperationFailed(format!(
-					"Invalid scheme '{}' for OnePassword provider",
-					scheme
+					"Invalid scheme '{scheme}' for OnePassword provider"
 				)));
 			}
 		}
@@ -219,7 +218,10 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
 			let username = url.username();
 
 			// Check if we have username (account) information
-			if !username.is_empty() {
+			if username.is_empty() {
+				// No username, so the host is the vault
+				config.default_vault = Some(host);
+			} else {
 				// Handle user:token format for service account tokens
 				if scheme == "onepassword+token" || scheme == "op+token" {
 					if let Some(password) = url.password() {
@@ -230,9 +232,6 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
 				} else {
 					config.account = Some(username);
 				}
-				config.default_vault = Some(host);
-			} else {
-				// No username, so the host is the vault
 				config.default_vault = Some(host);
 			}
 		}
@@ -321,10 +320,10 @@ pub(crate) fn strip_op_session_env(cmd: &mut Command) {
 	}
 }
 
-/// Provider implementation for OnePassword password manager.
+/// Provider implementation for `OnePassword` password manager.
 ///
-/// This provider integrates with OnePassword CLI (`op`) to store and retrieve
-/// secrets. It organizes secrets in a hierarchical structure within OnePassword
+/// This provider integrates with `OnePassword` CLI (`op`) to store and retrieve
+/// secrets. It organizes secrets in a hierarchical structure within `OnePassword`
 /// items using a configurable format string that defaults to: `monosecret/{project}/{profile}/{key}`.
 ///
 /// # Authentication
@@ -342,9 +341,9 @@ pub(crate) fn strip_op_session_env(cmd: &mut Command) {
 ///
 /// # Storage Structure
 ///
-/// Secrets are stored as Secure Note items in OnePassword with:
-/// - Title: formatted according to folder_prefix configuration
-/// - Category: SECURE_NOTE
+/// Secrets are stored as Secure Note items in `OnePassword` with:
+/// - Title: formatted according to `folder_prefix` configuration
+/// - Category: `SECURE_NOTE`
 /// - Fields: project, key, value
 /// - Tags: "automated", {project}
 ///
@@ -361,7 +360,7 @@ pub(crate) fn strip_op_session_env(cmd: &mut Command) {
 pub struct OnePasswordProvider {
 	/// Configuration for the provider including auth settings and default vault.
 	config: OnePasswordConfig,
-	/// The OnePassword CLI command to use (either "op" or a custom path).
+	/// The `OnePassword` CLI command to use (either "op" or a custom path).
 	op_command: String,
 	/// Provider-local dependency secrets that are passed to the `op` child process.
 	dependency_env: HashMap<String, SecretString>,
@@ -384,7 +383,7 @@ crate::register_provider! {
 }
 
 impl OnePasswordProvider {
-	/// Creates a new OnePasswordProvider with the given configuration.
+	/// Creates a new `OnePasswordProvider` with the given configuration.
 	///
 	/// # Arguments
 	///
@@ -406,7 +405,7 @@ impl OnePasswordProvider {
 		}
 	}
 
-	/// Executes a OnePassword CLI command with proper error handling.
+	/// Executes a `OnePassword` CLI command with proper error handling.
 	///
 	/// This method handles:
 	/// - Setting up authentication (account, service token)
@@ -426,7 +425,7 @@ impl OnePasswordProvider {
 	/// # Errors
 	///
 	/// Returns specific errors for:
-	/// - Missing OnePassword CLI installation
+	/// - Missing `OnePassword` CLI installation
 	/// - Authentication required
 	/// - Command execution failures
 	/// - Stdin write failures
@@ -532,7 +531,7 @@ impl OnePasswordProvider {
 			.map_err(|e| MonosecretError::ProviderOperationFailed(e.to_string()))
 	}
 
-	/// Checks if the user is authenticated with OnePassword (uncached).
+	/// Checks if the user is authenticated with `OnePassword` (uncached).
 	///
 	/// Uses `op vault list` rather than `op whoami` because the latter only
 	/// reports the state of an explicit `op signin` session and reports
@@ -565,7 +564,7 @@ impl OnePasswordProvider {
 	///
 	/// # Returns
 	///
-	/// The vault name to use - always returns the configured default_vault or "Private"
+	/// The vault name to use - always returns the configured `default_vault` or "Private"
 	fn get_vault_name(&self, _profile: &str) -> String {
 		self.config
 			.default_vault
@@ -608,9 +607,9 @@ impl OnePasswordProvider {
 			.map(|item| item.id))
 	}
 
-	/// Formats the item name for storage in OnePassword.
+	/// Formats the item name for storage in `OnePassword`.
 	///
-	/// Creates a hierarchical name using the folder_prefix format string.
+	/// Creates a hierarchical name using the `folder_prefix` format string.
 	/// Supports placeholders: {project}, {profile}, and {key}.
 	/// Defaults to "monosecret/{project}/{profile}/{key}" if not configured.
 	///
@@ -636,7 +635,7 @@ impl OnePasswordProvider {
 			.replace("{key}", key)
 	}
 
-	/// Creates a template for a new OnePassword item.
+	/// Creates a template for a new `OnePassword` item.
 	///
 	/// This template is serialized to JSON and used with `op item create`.
 	/// The item is created as a Secure Note with structured fields.
@@ -650,7 +649,7 @@ impl OnePasswordProvider {
 	///
 	/// # Returns
 	///
-	/// A OnePasswordItemTemplate ready for serialization
+	/// A `OnePasswordItemTemplate` ready for serialization
 	fn create_item_template(
 		&self,
 		project: &str,
@@ -682,7 +681,7 @@ impl OnePasswordProvider {
 		}
 	}
 
-	/// Extracts the secret value from a OnePassword item JSON.
+	/// Extracts the secret value from a `OnePassword` item JSON.
 	///
 	/// Looks for a field labeled "value" first, then falls back to
 	/// password or concealed fields.
@@ -714,7 +713,7 @@ impl OnePasswordProvider {
 }
 
 impl OnePasswordProvider {
-	/// Checks that the user is authenticated with OnePassword.
+	/// Checks that the user is authenticated with `OnePassword`.
 	/// Called by the preflight guard before any provider operations.
 	pub(crate) fn check_auth(&self) -> Result<()> {
 		if self.is_authenticated()? {
@@ -867,7 +866,7 @@ impl Provider for OnePasswordProvider {
 			(false, false) => "onepassword",
 		};
 
-		let mut uri = format!("{}://", scheme);
+		let mut uri = format!("{scheme}://");
 
 		// For service account token, the token itself might be in the URI
 		// but we don't want to expose the actual token value, just indicate it's configured
@@ -898,9 +897,9 @@ impl Provider for OnePasswordProvider {
 		uri
 	}
 
-	/// Retrieves a secret from OnePassword.
+	/// Retrieves a secret from `OnePassword`.
 	///
-	/// Searches for an item with the title formatted according to the folder_prefix
+	/// Searches for an item with the title formatted according to the `folder_prefix`
 	/// configuration in the appropriate vault. The method looks for a field labeled "value"
 	/// first, then falls back to password or concealed fields.
 	///
@@ -1042,7 +1041,7 @@ impl Provider for OnePasswordProvider {
 		Ok(None)
 	}
 
-	/// Stores or updates a secret in OnePassword.
+	/// Stores or updates a secret in `OnePassword`.
 	///
 	/// If an item with the same title exists, it updates the "value" field.
 	/// Otherwise, it creates a new Secure Note item with the secret data.
@@ -1117,7 +1116,7 @@ impl Provider for OnePasswordProvider {
 		self.set(_project, storage_key, value, profile)
 	}
 
-	/// Retrieves multiple secrets from OnePassword in a single batch operation.
+	/// Retrieves multiple secrets from `OnePassword` in a single batch operation.
 	///
 	/// This optimized implementation:
 	/// 1. Authenticates once (cached)
@@ -1220,7 +1219,7 @@ impl Provider for OnePasswordProvider {
 }
 
 impl Default for OnePasswordProvider {
-	/// Creates a OnePasswordProvider with default configuration.
+	/// Creates a `OnePasswordProvider` with default configuration.
 	///
 	/// Uses interactive authentication and the "Private" vault by default.
 	fn default() -> Self {
@@ -1507,9 +1506,7 @@ esac
 		let panic_hook = std::panic::take_hook();
 		std::panic::set_hook(Box::new(|_| {}));
 		let outcomes = collect_bounded_parallel(vec![1, 2], 1, "worker failed", |job| {
-			if job == 2 {
-				panic!("boom");
-			}
+			assert!(job != 2, "boom");
 			job
 		});
 		std::panic::set_hook(panic_hook);

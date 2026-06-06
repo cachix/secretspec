@@ -17,7 +17,7 @@ pub struct ValidatedSecrets {
 	pub resolved: Resolved<HashMap<String, SecretString>>,
 	/// List of optional secrets that are missing
 	pub missing_optional: Vec<String>,
-	/// List of secrets using their default values (name, default_value)
+	/// List of secrets using their default values (name, `default_value`)
 	pub with_defaults: Vec<(String, String)>,
 	/// Temporary files for secrets with as_path=true.
 	/// These are kept alive for the lifetime of ValidatedSecrets and automatically
@@ -32,7 +32,7 @@ impl ValidatedSecrets {
 	/// This method consumes the temporary file handles and persists them,
 	/// so they won't be automatically deleted when this struct is dropped.
 	/// This is useful when you want the temporary files to outlive the
-	/// ValidatedSecrets instance, such as in CLI commands.
+	/// `ValidatedSecrets` instance, such as in CLI commands.
 	///
 	/// # Returns
 	///
@@ -48,7 +48,7 @@ impl ValidatedSecrets {
 		for temp_file in temp_files {
 			let temp_path = temp_file.into_temp_path();
 			let path = temp_path.keep().map_err(|e| {
-				std::io::Error::other(format!("Failed to persist temporary file: {}", e))
+				std::io::Error::other(format!("Failed to persist temporary file: {e}"))
 			})?;
 			paths.push(path);
 		}
@@ -67,7 +67,7 @@ pub struct ValidationErrors {
 	pub missing_required: Vec<String>,
 	/// List of optional secrets that are missing
 	pub missing_optional: Vec<String>,
-	/// List of secrets using their default values (name, default_value)
+	/// List of secrets using their default values (name, `default_value`)
 	pub with_defaults: Vec<(String, String)>,
 	/// The provider name that was used
 	pub provider: String,
@@ -76,7 +76,7 @@ pub struct ValidationErrors {
 }
 
 impl ValidationErrors {
-	/// Create a new ValidationErrors instance
+	/// Create a new `ValidationErrors` instance
 	pub fn new(
 		missing_required: Vec<String>,
 		missing_optional: Vec<String>,

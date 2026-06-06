@@ -27,7 +27,7 @@ impl MockProvider {
 impl Provider for MockProvider {
 	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
 		let storage = self.storage.lock().unwrap();
-		let full_key = format!("{}/{}/{}", project, profile, key);
+		let full_key = format!("{project}/{profile}/{key}");
 		Ok(storage
 			.get(&full_key)
 			.map(|v| SecretString::new(v.clone().into())))
@@ -35,7 +35,7 @@ impl Provider for MockProvider {
 
 	fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
 		let mut storage = self.storage.lock().unwrap();
-		let full_key = format!("{}/{}/{}", project, profile, key);
+		let full_key = format!("{project}/{profile}/{key}");
 		storage.insert(full_key, value.expose_secret().to_string());
 		Ok(())
 	}
@@ -80,7 +80,7 @@ fn test_create_from_string_with_plain_names() {
 	// Test onepassword separately to debug the issue
 	match Box::<dyn Provider>::try_from("onepassword") {
 		Ok(provider) => assert_eq!(provider.name(), "onepassword"),
-		Err(e) => panic!("Failed to create onepassword provider: {}", e),
+		Err(e) => panic!("Failed to create onepassword provider: {e}"),
 	}
 
 	let provider = Box::<dyn Provider>::try_from("lastpass").unwrap();
@@ -270,7 +270,7 @@ mod integration_tests {
 			.unwrap()
 			.as_micros();
 		let suffix = timestamp % 100000;
-		format!("monosecret_test_{}", suffix)
+		format!("monosecret_test_{suffix}")
 	}
 
 	fn get_test_providers() -> Vec<String> {
@@ -313,7 +313,7 @@ mod integration_tests {
 			}
 			_ => {
 				let provider = Box::<dyn Provider>::try_from(provider_name)
-					.unwrap_or_else(|_| panic!("{} provider should exist", provider_name));
+					.unwrap_or_else(|_| panic!("{provider_name} provider should exist"));
 				(provider, None)
 			}
 		}
@@ -330,7 +330,7 @@ mod integration_tests {
 				// Expected: key doesn't exist
 			}
 			Ok(Some(_)) => {
-				panic!("[{}] Should not find non-existent secret", provider_name);
+				panic!("[{provider_name}] Should not find non-existent secret");
 			}
 			Err(_) => {
 				// Some providers may return error instead of None
@@ -338,27 +338,21 @@ mod integration_tests {
 		}
 
 		// Test 2: Try to set a secret (may fail for read-only providers)
-		let test_value = SecretString::new(format!("test_password_{}", provider_name).into());
+		let test_value = SecretString::new(format!("test_password_{provider_name}").into());
 
 		if provider.allows_set() {
 			// Provider claims to support set, so it should work
 			provider
 				.set(&project_name, "TEST_PASSWORD", &test_value, "default")
 				.unwrap_or_else(|_| {
-					panic!(
-						"[{}] Provider claims to support set but failed",
-						provider_name
-					)
+					panic!("[{provider_name}] Provider claims to support set but failed")
 				});
 
 			// Verify we can retrieve it
 			let retrieved = provider
 				.get(&project_name, "TEST_PASSWORD", "default")
 				.unwrap_or_else(|_| {
-					panic!(
-						"[{}] Should not error when getting after set",
-						provider_name
-					)
+					panic!("[{provider_name}] Should not error when getting after set")
 				});
 
 			match retrieved {
@@ -366,28 +360,21 @@ mod integration_tests {
 					assert_eq!(
 						value.expose_secret(),
 						test_value.expose_secret(),
-						"[{}] Retrieved value should match set value",
-						provider_name
+						"[{provider_name}] Retrieved value should match set value"
 					);
 				}
 				None => {
-					panic!("[{}] Should find secret after setting it", provider_name);
+					panic!("[{provider_name}] Should find secret after setting it");
 				}
 			}
 		} else {
 			// Provider is read-only, verify set fails
 			match provider.set(&project_name, "TEST_PASSWORD", &test_value, "default") {
-				Ok(_) => {
-					panic!(
-						"[{}] Read-only provider should not allow set operations",
-						provider_name
-					);
+				Ok(()) => {
+					panic!("[{provider_name}] Read-only provider should not allow set operations");
 				}
 				Err(_) => {
-					println!(
-						"[{}] Read-only provider correctly rejected set",
-						provider_name
-					);
+					println!("[{provider_name}] Read-only provider correctly rejected set");
 				}
 			}
 		}
@@ -403,7 +390,7 @@ mod integration_tests {
 		// Test actual providers if environment variable is set
 		let providers = get_test_providers();
 		for provider_name in providers {
-			println!("Testing provider: {}", provider_name);
+			println!("Testing provider: {provider_name}");
 			let (provider, _temp_dir) = create_provider_with_temp_path(&provider_name);
 			test_provider_basic_workflow(provider.as_ref(), &provider_name);
 		}
@@ -448,7 +435,7 @@ mod integration_tests {
 		let test_key = "API_KEY";
 
 		for profile in &profiles {
-			let value = SecretString::new(format!("key_for_{}", profile).into());
+			let value = SecretString::new(format!("key_for_{profile}").into());
 			provider
 				.set(&project_name, test_key, &value, profile)
 				.expect("Should set with profile");
@@ -474,7 +461,7 @@ mod integration_tests {
 				if i == j {
 					assert!(result.is_some(), "Should find value in same profile");
 				} else {
-					let expected_value = format!("key_for_{}", profile);
+					let expected_value = format!("key_for_{profile}");
 					assert_eq!(
 						result.map(|s| s.expose_secret().to_string()),
 						Some(expected_value),

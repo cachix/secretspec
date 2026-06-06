@@ -42,11 +42,11 @@ struct Cli {
 	#[arg(short = 'f', long, global = true, env = "MONOSECRET_FILE")]
 	file: Option<PathBuf>,
 
-	/// Increase diagnostic logging (-v/--verbose for debug, -vv/--verbose --verbose for trace). Can also use RUST_LOG=debug/trace.
+	/// Increase diagnostic logging (-v/--verbose for debug, -vv/--verbose --verbose for trace). Can also use `RUST_LOG=debug/trace`.
 	#[arg(short = 'v', long, global = true, action = clap::ArgAction::Count)]
 	verbose: u8,
 
-	/// Reason for accessing secrets. Env: MONOSECRET_REASON (legacy: SECRETSPEC_REASON).
+	/// Reason for accessing secrets. Env: `MONOSECRET_REASON` (legacy: `SECRETSPEC_REASON`).
 	#[arg(long, global = true, env = "MONOSECRET_REASON")]
 	reason: Option<String>,
 
@@ -63,7 +63,7 @@ struct Cli {
 enum Commands {
 	/// Initialize a new monosecret.toml (optionally, from a provider)
 	Init {
-		/// Provider URL to import from (e.g., dotenv://.env, dotenv://.env.production)
+		/// Provider URL to import from (e.g., <dotenv://.env>, <dotenv://.env.production>)
 		/// Currently only dotenv provider is supported.
 		///
 		/// Note: no short flag here — `-f` is the global `--file` option.
@@ -160,7 +160,7 @@ enum ProviderAction {
 	Add {
 		/// Name of the provider alias
 		name: String,
-		/// Provider URI (e.g., "keyring://", "onepassword://vault/Shared", "dotenv://.env.local")
+		/// Provider URI (e.g., "keyring://", "<onepassword://vault/Shared>", "<dotenv://.env.local>")
 		uri: String,
 	},
 	/// Remove a provider alias
@@ -285,7 +285,7 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
 }
 
 /// Loads secrets using an explicit path or auto-detection.
-fn load_secrets(file: &Option<PathBuf>, reason: Option<&str>) -> miette::Result<Secrets> {
+fn load_secrets(file: &Option<PathBuf>, reason: Option<&str>) -> Result<Secrets> {
 	let secrets = match file {
 		Some(path) => Secrets::load_from(path),
 		None => Secrets::load(),
@@ -737,13 +737,13 @@ pub fn main() -> Result<()> {
 				.values()
 				.map(|p| p.secrets.len())
 				.sum::<usize>();
-			println!("✓ Created monosecret.toml with {} secrets", secret_count);
+			println!("✓ Created monosecret.toml with {secret_count} secrets");
 
 			// If we imported from a provider, suggest migration
 			if provider.name() == "dotenv" && secret_count > 0 {
-				println!("\nTo migrate your secrets from {}:", from);
+				println!("\nTo migrate your secrets from {from}:");
 				println!("  1. Review monosecret.toml and adjust as needed");
-				println!("  2. monosecret import {}    # Import secret values", from);
+				println!("  2. monosecret import {from}    # Import secret values");
 			}
 
 			println!("\nNext steps:");
@@ -812,11 +812,11 @@ pub fn main() -> Result<()> {
 								GlobalConfig::path().into_diagnostic()?.display()
 							);
 							match config.defaults.provider {
-								Some(provider) => println!("Provider: {}", provider),
+								Some(provider) => println!("Provider: {provider}"),
 								None => println!("Provider: (none)"),
 							}
 							match config.defaults.profile {
-								Some(profile) => println!("Profile:  {}", profile),
+								Some(profile) => println!("Profile:  {profile}"),
 								None => println!("Profile:  (none)"),
 							}
 							if let Some(providers) = &config.defaults.providers {
@@ -824,7 +824,7 @@ pub fn main() -> Result<()> {
 								let mut aliases: Vec<_> = providers.iter().collect();
 								aliases.sort_by(|(a, _), (b, _)| a.cmp(b));
 								for (alias, uri) in aliases {
-									println!("  {} = {}", alias, uri);
+									println!("  {alias} = {uri}");
 								}
 							} else {
 								println!("\nProvider Aliases: (none)");
@@ -865,9 +865,9 @@ pub fn main() -> Result<()> {
 								config.save().into_diagnostic()?;
 
 								if existing.is_some() {
-									println!("✓ Provider alias '{}' updated to '{}'", name, uri);
+									println!("✓ Provider alias '{name}' updated to '{uri}'");
 								} else {
-									println!("✓ Provider alias '{}' added: '{}'", name, uri);
+									println!("✓ Provider alias '{name}' added: '{uri}'");
 								}
 							}
 							Ok(())
@@ -879,9 +879,9 @@ pub fn main() -> Result<()> {
 									if let Some(providers) = &mut config.defaults.providers {
 										if providers.remove(&name).is_some() {
 											config.save().into_diagnostic()?;
-											println!("✓ Provider alias '{}' removed", name);
+											println!("✓ Provider alias '{name}' removed");
 										} else {
-											println!("✗ Provider alias '{}' not found", name);
+											println!("✗ Provider alias '{name}' not found");
 										}
 									} else {
 										println!("✗ No provider aliases configured");
@@ -907,7 +907,7 @@ pub fn main() -> Result<()> {
 												providers.into_iter().collect();
 											aliases.sort_by(|(a, _), (b, _)| a.cmp(b));
 											for (alias, uri) in aliases {
-												println!("  {} = {}", alias, uri);
+												println!("  {alias} = {uri}");
 											}
 										}
 									} else {

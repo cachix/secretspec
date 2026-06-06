@@ -21,22 +21,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			);
 			let secrets = &result.secrets;
 			if let Some(database_url) = &secrets.database_url {
-				println!("   - Database URL: {}", database_url);
+				println!("   - Database URL: {database_url}");
 			}
 			if let Some(api_key) = &secrets.api_key {
-				println!("   - API Key: {} (found)", api_key);
+				println!("   - API Key: {api_key} (found)");
 			} else {
 				println!("   - API Key: None");
 			}
 			if let Some(redis_url) = &secrets.redis_url {
-				println!("   - Redis URL: {}", redis_url);
+				println!("   - Redis URL: {redis_url}");
 			}
 			if let Some(log_level) = &secrets.log_level {
-				println!("   - Log Level: {}", log_level);
+				println!("   - Log Level: {log_level}");
 			}
 		}
 		Err(e) => {
-			println!("   ✗ Failed to load secrets: {}", e);
+			println!("   ✗ Failed to load secrets: {e}");
 		}
 	}
 
@@ -54,22 +54,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			);
 			let secrets = &result.secrets;
 			if let Some(database_url) = &secrets.database_url {
-				println!("   - Database URL: {}", database_url);
+				println!("   - Database URL: {database_url}");
 			}
 			if let Some(api_key) = &secrets.api_key {
-				println!("   - API Key: {} (found)", api_key);
+				println!("   - API Key: {api_key} (found)");
 			} else {
 				println!("   - API Key: None");
 			}
 			if let Some(redis_url) = &secrets.redis_url {
-				println!("   - Redis URL: {}", redis_url);
+				println!("   - Redis URL: {redis_url}");
 			}
 			if let Some(log_level) = &secrets.log_level {
-				println!("   - Log Level: {}", log_level);
+				println!("   - Log Level: {log_level}");
 			}
 		}
 		Err(e) => {
-			println!("   ✗ Failed to load development profile: {}", e);
+			println!("   ✗ Failed to load development profile: {e}");
 		}
 	}
 
@@ -88,7 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			);
 		}
 		Err(e) => {
-			println!("   ✗ Failed to load with string profile: {}", e);
+			println!("   ✗ Failed to load with string profile: {e}");
 		}
 	}
 
@@ -100,7 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			println!("   - Provider: {:?}", result.provider);
 		}
 		Err(e) => {
-			println!("   ✗ Failed to load with URI: {}", e);
+			println!("   ✗ Failed to load with URI: {e}");
 		}
 	}
 
@@ -133,14 +133,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 					..
 				} => {
 					println!("   - Production secrets are strongly typed");
-					println!("   - Database URL: {}", database_url); // String, not Option<String>
-					println!("   - API Key: {}", api_key); // String, not Option<String>
+					println!("   - Database URL: {database_url}"); // String, not Option<String>
+					println!("   - API Key: {api_key}"); // String, not Option<String>
 				}
 				_ => println!("   - Got different profile"),
 			}
 		}
 		Err(e) => {
-			println!("   ✗ Failed to load profile: {}", e);
+			println!("   ✗ Failed to load profile: {e}");
 		}
 	}
 

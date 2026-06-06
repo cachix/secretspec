@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: setup
         uses: ./.github/actions/devenv
         with:
@@ -35,9 +37,18 @@ jobs:
         id: changed
         uses: tj-actions/changed-files@v46
       - name: run changeset policy
-        uses: monochange/actions/changeset-policy@53bd37cbecff25eeefa689bd7ac5fc807dbabac7
-        with:
-          setup-monochange: devenv shell monochange
-          changed-paths: ${{ steps.changed.outputs.all_changed_files }}
-          labels: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          CHANGED_FILES: ${{ steps.changed.outputs.all_changed_files }}
+          PR_LABELS_JSON: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          mapfile -t labels < <(jq -r '.[]' <<<"$PR_LABELS_JSON")
+          args=(step affected-packages --format json --verify)
+          for path in $CHANGED_FILES; do
+            args+=(--changed-paths "$path")
+          done
+          for label in "${labels[@]}"; do
+            args+=(--label "$label")
+          done
+          monochange "${args[@]}"
+        shell: devenv shell -- bash -e {0}

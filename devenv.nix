@@ -413,7 +413,6 @@ in
     "fix:all" = {
       exec = ''
         set -euo pipefail
-        export PATH="$DEVENV_PROFILE/bin:$PATH"
         fix:clippy
         fix:dart
         fix:format

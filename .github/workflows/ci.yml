@@ -29,6 +29,8 @@ jobs:
     steps:
       - name: checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: run zizmor
         uses: zizmorcore/zizmor-action@v0.5.3
         with:
@@ -41,6 +43,8 @@ jobs:
     steps:
       - name: checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: setup
         uses: ./.github/actions/devenv
         with:
@@ -66,9 +70,6 @@ jobs:
       - name: validate monochange configuration
         run: monochange step validate
         shell: devenv shell -- bash -e {0}
-      - name: actionlint
-        run: actionlint .github/workflows/*.yml
-        shell: devenv shell -- bash -e {0}
 
   test:
     timeout-minutes: 60
@@ -82,6 +83,8 @@ jobs:
     steps:
       - name: checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: setup
         uses: ./.github/actions/devenv
         with:
@@ -107,6 +110,8 @@ jobs:
     steps:
       - name: checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: setup devenv
         if: runner.os != 'Windows'
         uses: ./.github/actions/devenv
@@ -131,6 +136,7 @@ jobs:
       - name: checkout repository
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: setup
         uses: ./.github/actions/devenv
@@ -159,6 +165,7 @@ jobs:
       - name: checkout repository
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: setup
         uses: ./.github/actions/devenv

@@ -1,0 +1,6 @@
+[templates]
+paths = [".templates"]
+
+[padding]
+before = 0
+after = 0

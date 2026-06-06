@@ -24,14 +24,14 @@
     "provenance": true
   },
   "optionalDependencies": {
-    "@monosecret/cli-darwin-arm64": "^0.0.0",
-    "@monosecret/cli-darwin-x64": "^0.0.0",
-    "@monosecret/cli-linux-arm64-gnu": "^0.0.0",
-    "@monosecret/cli-linux-arm64-musl": "^0.0.0",
-    "@monosecret/cli-linux-x64-gnu": "^0.0.0",
-    "@monosecret/cli-linux-x64-musl": "^0.0.0",
-    "@monosecret/cli-win32-arm64-msvc": "^0.0.0",
-    "@monosecret/cli-win32-x64-msvc": "^0.0.0"
+    "@monosecret/cli-darwin-arm64": "workspace:*",
+    "@monosecret/cli-darwin-x64": "workspace:*",
+    "@monosecret/cli-linux-arm64-gnu": "workspace:*",
+    "@monosecret/cli-linux-arm64-musl": "workspace:*",
+    "@monosecret/cli-linux-x64-gnu": "workspace:*",
+    "@monosecret/cli-linux-x64-musl": "workspace:*",
+    "@monosecret/cli-win32-arm64-msvc": "workspace:*",
+    "@monosecret/cli-win32-x64-msvc": "workspace:*"
   },
   "engines": {
     "node": ">=18"

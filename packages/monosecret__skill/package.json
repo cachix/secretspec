@@ -3,6 +3,11 @@
   "version": "0.0.0",
   "description": "Agent skill for using Monosecret in development workflows",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ifiokjr/monosecret.git",
+    "directory": "packages/monosecret__skill"
+  },
   "files": ["SKILL.md", "README.md"],
   "publishConfig": { "access": "public", "provenance": true }
 }

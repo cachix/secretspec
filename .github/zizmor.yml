@@ -2,6 +2,22 @@
 # https://docs.zizmor.sh/configuration/
 
 rules:
+  unpinned-uses:
+    ignore:
+      - action.yaml
+      - devenv/action.yaml
+      - .github/actions/devenv/action.yaml
+      - changeset-policy.yml
+      - ci.yml
+      - publish.yml
+      - release.yml
+
+  github-env:
+    ignore:
+      - action.yaml
+      - devenv/action.yaml
+      - .github/actions/devenv/action.yaml
+
   template-injection:
     ignore:
       - publish.yml

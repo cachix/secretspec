@@ -9,7 +9,10 @@
 //!
 //! # URI Format
 //!
-//! `bws://project-uuid`
+//! `bws://[server-base@]project-uuid`
+//!
+//! Server Base is a hostname pointing to the bitwarden vault instance.
+//! Defaults to bitwarden.com
 //!
 //! The UUID identifies the Bitwarden Secrets Manager project where secrets are stored.
 //! This provides namespace isolation — different projects use different BWS project IDs.
@@ -35,13 +38,13 @@
 
 use super::{Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
-use bitwarden::Client;
 use bitwarden::auth::login::AccessTokenLoginRequest;
 use bitwarden::secrets_manager::ClientSecretsExt;
 use bitwarden::secrets_manager::secrets::{
     SecretCreateRequest, SecretIdentifiersByProjectRequest, SecretPutRequest, SecretResponse,
     SecretsGetRequest,
 };
+use bitwarden::{Client, ClientSettings};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -54,6 +57,9 @@ use std::sync::OnceLock;
 pub struct BwsConfig {
     /// The BWS project UUID (e.g., "a9230ec4-5507-4870-b8b5-b3f500587e4c")
     pub project_id: uuid::Uuid,
+
+    /// The Bitwarden instance base URL (e.g., "https://vault.bitwarden.eu")
+    pub server_base: Option<String>,
 }
 
 impl TryFrom<&ProviderUrl> for BwsConfig {
@@ -81,7 +87,17 @@ impl TryFrom<&ProviderUrl> for BwsConfig {
             ))
         })?;
 
-        Ok(Self { project_id })
+        // Extract server base URL from the username: bws://[server-base@]project-uuid
+        let server_base = if !url.username().is_empty() {
+            Some(url.username())
+        } else {
+            None
+        };
+
+        Ok(Self {
+            project_id,
+            server_base,
+        })
     }
 }
 
@@ -156,7 +172,14 @@ impl BwsProvider {
         // before creating the client. ok() ignores if already installed.
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-        let client = Client::new(None);
+        // Set the API and Identity URLs based on server base URL if set
+        let settings = self.config.server_base.as_ref().map(|it| ClientSettings {
+            identity_url: format!("https://{it}/identity"),
+            api_url: format!("https://{it}/api"),
+            ..Default::default()
+        });
+
+        let client = Client::new(settings);
 
         client
             .auth()
@@ -347,7 +370,10 @@ impl Provider for BwsProvider {
     }
 
     fn uri(&self) -> String {
-        format!("bws://{}", self.config.project_id)
+        match self.config.server_base {
+            Some(ref server_base) => format!("bws://{server_base}@{}", self.config.project_id),
+            None => format!("bws://{}", self.config.project_id),
+        }
     }
 
     fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
@@ -405,6 +431,14 @@ mod tests {
     }
 
     #[test]
+    fn test_bws_config_read_server_base() {
+        let url = provider_url("bws://bw.home.internal@a9230ec4-5507-4870-b8b5-b3f500587e4c");
+        let result = BwsConfig::try_from(&url).unwrap();
+
+        assert_eq!(result.server_base, Some("bw.home.internal".to_string()));
+    }
+
+    #[test]
     fn test_bws_config_invalid_uuid() {
         let url = provider_url("bws://not-a-valid-uuid");
         let result = BwsConfig::try_from(&url);
@@ -434,6 +468,20 @@ mod tests {
     fn test_bws_provider_metadata() {
         let config = BwsConfig {
             project_id: uuid::Uuid::parse_str("a9230ec4-5507-4870-b8b5-b3f500587e4c").unwrap(),
+            server_base: Some("vault.bitwarden.com".to_string()),
+        };
+        let provider = BwsProvider::new(config);
+
+        assert_eq!(provider.name(), "bws");
+        assert_eq!(
+            provider.uri(),
+            "bws://vault.bitwarden.com@a9230ec4-5507-4870-b8b5-b3f500587e4c"
+        );
+        assert!(provider.allows_set());
+
+        let config = BwsConfig {
+            project_id: uuid::Uuid::parse_str("a9230ec4-5507-4870-b8b5-b3f500587e4c").unwrap(),
+            server_base: None,
         };
         let provider = BwsProvider::new(config);
 
@@ -450,6 +498,7 @@ mod tests {
 
         let config = BwsConfig {
             project_id: uuid::Uuid::parse_str("a9230ec4-5507-4870-b8b5-b3f500587e4c").unwrap(),
+            server_base: None,
         };
         let provider = BwsProvider::new(config);
 

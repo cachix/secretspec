@@ -384,10 +384,18 @@ in
       description = "Validate monochange release metadata.";
       binary = "bash";
     };
-    "lint:workflows" = {
+    "lint:actionlint" = {
       exec = ''
         set -euo pipefail
         actionlint .github/workflows/*.yml
+      '';
+      description = "Lint GitHub Actions workflow syntax with actionlint.";
+      binary = "bash";
+    };
+    "lint:workflows" = {
+      exec = ''
+        set -euo pipefail
+        lint:actionlint
         zizmor .github/workflows/ .github/actions/
       '';
       description = "Lint GitHub Actions syntax with actionlint and scan workflow security with zizmor.";
@@ -412,7 +420,7 @@ in
         fix:monochange
         fix:workflows
       '';
-      description = "Fix all autofixable issues: Clippy, Dart, formatting, monochange metadata, and workflow security.";
+      description = "Fix all autofixable issues: Clippy, Dart, formatting, monochange metadata, workflow security, and actionlint validation.";
       binary = "bash";
     };
     "fix:format" = {
@@ -457,9 +465,9 @@ in
       exec = ''
         set -euo pipefail
         zizmor --fix .github/workflows/ .github/actions/ || true
-        actionlint .github/workflows/*.yml
+        lint:actionlint
       '';
-      description = "Auto-fix zizmor findings where possible, then validate workflow syntax.";
+      description = "Auto-fix zizmor findings where possible, then validate workflow syntax with actionlint.";
       binary = "bash";
     };
   };

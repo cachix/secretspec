@@ -66,6 +66,9 @@ jobs:
       - name: validate monochange configuration
         run: monochange step validate
         shell: devenv shell -- bash -e {0}
+      - name: actionlint
+        run: actionlint .github/workflows/*.yml
+        shell: devenv shell -- bash -e {0}
 
   test:
     timeout-minutes: 60

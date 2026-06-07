@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   child sets its own.
   **Note:** the default `"agents"` means AI agents must now pass a reason out of
   the box.
+- `bws` provider now accepts an optional server base in the URI
+  (`bws://[server-base@]project-uuid`) to target EU cloud or self hosted
+  Bitwarden instances. When set, the identity and API endpoints are derived as
+  `https://<server-base>/identity` and `https://<server-base>/api`; omitting it
+  keeps the `bitwarden.com` US cloud default.
 
 ### Fixed
 - Proton Pass provider now works with `pass-cli` >= 2.1.0 agent sessions. Since

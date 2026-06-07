@@ -137,11 +137,17 @@ vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
 
 ## Bitwarden Secrets Manager Provider
 
-**URI**: `bws://PROJECT_UUID` - Stores secrets in Bitwarden Secrets Manager
+**URI**: `bws://[SERVER_BASE@]PROJECT_UUID` - Stores secrets in Bitwarden Secrets Manager
 
 ```bash
-bws://a9230ec4-5507-4870-b8b5-b3f500587e4c   # BWS project UUID
+bws://a9230ec4-5507-4870-b8b5-b3f500587e4c                    # US cloud (default)
+bws://vault.bitwarden.eu@a9230ec4-5507-4870-b8b5-b3f500587e4c # EU cloud
+bws://bw.example.com@a9230ec4-5507-4870-b8b5-b3f500587e4c     # Self hosted
 ```
+
+`SERVER_BASE` is the bare hostname of the Bitwarden instance; the identity and
+API endpoints are derived as `https://SERVER_BASE/identity` and
+`https://SERVER_BASE/api`. Omit it to use the `bitwarden.com` US cloud.
 
 **Features**: Read/write, cloud sync, project-scoped, end-to-end encryption
 **Prerequisites**: BWS subscription, machine account access token, build with `--features bws`

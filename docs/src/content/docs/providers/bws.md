@@ -16,16 +16,31 @@ The Bitwarden Secrets Manager (BWS) provider integrates with Bitwarden for centr
 ### URI Format
 
 ```
-bws://PROJECT_UUID
+bws://[SERVER_BASE@]PROJECT_UUID
 ```
 
 - `PROJECT_UUID`: Your Bitwarden Secrets Manager project UUID
+- `SERVER_BASE` (optional): Hostname of the Bitwarden instance for EU cloud or
+  self hosted deployments. Defaults to `bitwarden.com` (US cloud) when omitted.
+
+When `SERVER_BASE` is set, the identity and API endpoints are derived as
+`https://SERVER_BASE/identity` and `https://SERVER_BASE/api`, matching the
+`bws config server-base` behavior described in the
+[Bitwarden Secrets Manager CLI docs](https://bitwarden.com/help/secrets-manager-cli/#server).
+Use the web vault hostname here, for example `vault.bitwarden.eu` for the EU
+cloud. Only a bare hostname is supported (no scheme prefix or custom port).
 
 ### Examples
 
 ```bash
-# Set a secret
+# US cloud (default)
 $ secretspec set DATABASE_URL --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c
+
+# EU cloud
+$ secretspec set DATABASE_URL --provider bws://vault.bitwarden.eu@a9230ec4-5507-4870-b8b5-b3f500587e4c
+
+# Self hosted instance
+$ secretspec set DATABASE_URL --provider bws://bw.example.com@a9230ec4-5507-4870-b8b5-b3f500587e4c
 
 # Get a secret
 $ secretspec get DATABASE_URL --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c

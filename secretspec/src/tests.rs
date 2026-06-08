@@ -425,6 +425,137 @@ fn test_resolution_report_provenance() {
     assert!(stripe.required);
 }
 
+fn resolve_test_config(secrets: HashMap<String, Secret>) -> Config {
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
+    Config {
+        project: Project {
+            name: "resolve-test".to_string(),
+            ..Default::default()
+        },
+        profiles,
+        providers: None,
+    }
+}
+
+#[test]
+fn test_resolve_carries_values_and_provenance() {
+    use crate::resolve::ResolvedSource;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "DATABASE_URL=postgres://localhost/db\n").unwrap();
+
+    let secret = |required: bool, default: Option<&str>| Secret {
+        description: Some("test".to_string()),
+        required: Some(required),
+        default: default.map(String::from),
+        ..Default::default()
+    };
+
+    let mut secrets = HashMap::new();
+    secrets.insert("DATABASE_URL".to_string(), secret(true, None));
+    secrets.insert("LOG_LEVEL".to_string(), secret(false, Some("info")));
+    secrets.insert("SENTRY_DSN".to_string(), secret(false, None));
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(resolve_test_config(secrets), None, Some(provider), None);
+
+    let response = spec.resolve().unwrap();
+    assert_eq!(response.schema_version, 1);
+    assert_eq!(response.profile, "default");
+    assert!(response.is_ok());
+    assert_eq!(response.missing_optional, vec!["SENTRY_DSN".to_string()]);
+
+    // Provider value is exposed with provenance.
+    let db = &response.secrets["DATABASE_URL"];
+    assert_eq!(db.value.as_deref(), Some("postgres://localhost/db"));
+    assert!(db.path.is_none());
+    assert!(!db.as_path);
+    assert_eq!(db.source, ResolvedSource::Provider);
+    assert!(db.source_provider.is_some());
+
+    // Default value is exposed and attributed to the default source.
+    let log = &response.secrets["LOG_LEVEL"];
+    assert_eq!(log.value.as_deref(), Some("info"));
+    assert_eq!(log.source, ResolvedSource::Default);
+    assert!(log.source_provider.is_none());
+
+    // Optional-missing does not appear in secrets.
+    assert!(!response.secrets.contains_key("SENTRY_DSN"));
+
+    // without_values strips values but keeps structure.
+    let stripped = response.without_values();
+    assert!(stripped.secrets["DATABASE_URL"].value.is_none());
+    assert_eq!(
+        stripped.secrets["DATABASE_URL"].source,
+        ResolvedSource::Provider
+    );
+}
+
+#[test]
+fn test_resolve_missing_required_is_empty_with_error_list() {
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "").unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "STRIPE_KEY".to_string(),
+        Secret {
+            description: Some("stripe".to_string()),
+            required: Some(true),
+            ..Default::default()
+        },
+    );
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(resolve_test_config(secrets), None, Some(provider), None);
+
+    let response = spec.resolve().unwrap();
+    assert!(!response.is_ok());
+    assert_eq!(response.missing_required, vec!["STRIPE_KEY".to_string()]);
+    // A failed resolution returns no values, mirroring the derive crate's load().
+    assert!(response.secrets.is_empty());
+}
+
+#[test]
+fn test_resolve_as_path_returns_persisted_path() {
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "TLS_CERT=----cert-bytes----\n").unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "TLS_CERT".to_string(),
+        Secret {
+            description: Some("cert".to_string()),
+            required: Some(true),
+            as_path: Some(true),
+            ..Default::default()
+        },
+    );
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(resolve_test_config(secrets), None, Some(provider), None);
+
+    let response = spec.resolve().unwrap();
+    let cert = &response.secrets["TLS_CERT"];
+    assert!(cert.as_path);
+    assert!(cert.value.is_none());
+    let path = cert.path.as_deref().expect("as_path yields a path");
+    // The temp file is persisted, so the path is readable after resolve returns.
+    let contents = fs::read_to_string(path).unwrap();
+    assert_eq!(contents, "----cert-bytes----");
+    fs::remove_file(path).ok();
+}
+
 #[test]
 fn test_secretspec_new() {
     let config = Config {

@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `secretspec resolve --json` resolves every declared secret and prints a
+  versioned, value-carrying JSON object: the SDK boundary other-language
+  clients consume. Each entry reports the value (or, for `as_path` secrets, the
+  path to a persisted temp file), its `source` (`provider`, `generated`,
+  `default`), and the serving provider's credential-free URI. When a required
+  secret is missing the command exits non-zero with an empty `secrets` object
+  and a populated `missing_required` list, mirroring the derive crate's
+  `load()`. `--no-values` emits the same structure without secret values. Unlike
+  `check`, this command prints secret values to stdout and is meant to be piped,
+  not displayed. The same payload is available to the Rust SDK via
+  `Secrets::resolve()`, returning the new public `ResolveResponse`,
+  `ResolvedSecret`, and `ResolvedSource` types; its JSON Schema is committed at
+  `schema/resolve-response.schema.json`.
 - `secretspec check --json` and `secretspec check --explain` surface a
   value-free resolution report describing how every declared secret resolved
   for the active profile: its status (`resolved`, `missing_required`,

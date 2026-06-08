@@ -5,10 +5,11 @@ use crate::config::{Config, GlobalConfig, Profile, RequireReason, Resolved};
 use crate::error::{Result, SecretSpecError};
 use crate::provider::Provider as ProviderTrait;
 use crate::report::{ResolutionStatus, SecretResolution};
+use crate::resolve::{RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource};
 use crate::validation::{ValidatedSecrets, ValidationErrors};
 use colored::Colorize;
 use secrecy::{ExposeSecret, SecretString};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::env;
 use std::io::{self, IsTerminal, Read};
@@ -2006,6 +2007,90 @@ impl Secrets {
     /// `Check` audit event per call.
     pub fn validate(&self) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
         self.validate_audited(true)
+    }
+
+    /// Resolve every declared secret into a value-carrying [`ResolveResponse`],
+    /// the authoritative output other-language SDKs consume (over the C ABI or
+    /// `secretspec resolve --json`).
+    ///
+    /// Unlike [`Self::validate`], the returned payload **carries secret
+    /// values** (or, for `as_path` secrets, the path to a persisted temp file).
+    /// Treat its bytes as sensitive. When a required secret is missing the
+    /// resolution failed: `secrets` is empty and `missing_required` is
+    /// populated, mirroring the derive crate's `load()`.
+    ///
+    /// `as_path` temp files are persisted so the returned paths stay valid for
+    /// the caller; this is a one-shot boundary and the caller owns their
+    /// lifetime thereafter.
+    pub fn resolve(&self) -> Result<ResolveResponse> {
+        match self.validate()? {
+            Ok(mut validated) => {
+                // Persist as_path temp files so returned paths outlive this call.
+                validated.keep_temp_files()?;
+
+                let mut secrets = BTreeMap::new();
+                for entry in &validated.resolution {
+                    if entry.status != ResolutionStatus::Resolved {
+                        continue;
+                    }
+                    let raw = validated
+                        .resolved
+                        .secrets
+                        .get(&entry.name)
+                        .expect("a Resolved entry always has a value")
+                        .expose_secret()
+                        .to_string();
+                    let source = if entry.generated {
+                        ResolvedSource::Generated
+                    } else if entry.default_applied {
+                        ResolvedSource::Default
+                    } else {
+                        ResolvedSource::Provider
+                    };
+                    let (value, path) = if entry.as_path {
+                        (None, Some(raw))
+                    } else {
+                        (Some(raw), None)
+                    };
+                    secrets.insert(
+                        entry.name.clone(),
+                        ResolvedSecret {
+                            value,
+                            path,
+                            as_path: entry.as_path,
+                            source,
+                            source_provider: entry.source_provider.clone(),
+                        },
+                    );
+                }
+
+                let mut missing_optional = validated.missing_optional.clone();
+                missing_optional.sort();
+
+                Ok(ResolveResponse {
+                    schema_version: RESOLVE_SCHEMA_VERSION,
+                    provider: validated.resolved.provider.clone(),
+                    profile: validated.resolved.profile.clone(),
+                    secrets,
+                    missing_required: Vec::new(),
+                    missing_optional,
+                })
+            }
+            Err(errors) => {
+                let mut missing_required = errors.missing_required.clone();
+                missing_required.sort();
+                let mut missing_optional = errors.missing_optional.clone();
+                missing_optional.sort();
+                Ok(ResolveResponse {
+                    schema_version: RESOLVE_SCHEMA_VERSION,
+                    provider: errors.provider.clone(),
+                    profile: errors.profile.clone(),
+                    secrets: BTreeMap::new(),
+                    missing_required,
+                    missing_optional,
+                })
+            }
+        }
     }
 
     /// Resolves all secrets. `emit_check` controls whether this pass records a

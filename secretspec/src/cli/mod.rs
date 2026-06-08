@@ -103,6 +103,22 @@ enum Commands {
         #[arg(long)]
         explain: bool,
     },
+    /// Resolve all secrets and print them as JSON (the SDK boundary).
+    ///
+    /// Unlike `check`, this prints secret VALUES (to stdout). It is intended for
+    /// programmatic consumption by other-language SDKs and tooling; pipe it, do
+    /// not display it. Use `--no-values` for a value-free structural view.
+    Resolve {
+        /// Provider backend to use
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        provider: Option<String>,
+        /// Profile to use
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        profile: Option<String>,
+        /// Omit secret values, emitting only structure and provenance
+        #[arg(long)]
+        no_values: bool,
+    },
     /// Init or show ~/.config/secretspec/config.toml
     Config {
         #[command(subcommand)]
@@ -674,6 +690,35 @@ pub fn main() -> Result<()> {
                 .keep_temp_files()
                 .into_diagnostic()
                 .wrap_err("Failed to persist temporary files")?;
+            Ok(())
+        }
+        // Resolve all secrets to JSON (the SDK boundary; prints values)
+        Commands::Resolve {
+            provider,
+            profile,
+            no_values,
+        } => {
+            let mut app = load_secrets(&cli.file, &cli.reason)?;
+            if let Some(p) = provider {
+                app.set_provider(p);
+            }
+            if let Some(p) = profile {
+                app.set_profile(p);
+            }
+            let mut response = app
+                .resolve()
+                .into_diagnostic()
+                .wrap_err("Failed to resolve secrets")?;
+            if no_values {
+                response = response.without_values();
+            }
+            let rendered = serde_json::to_string_pretty(&response)
+                .into_diagnostic()
+                .wrap_err("Failed to serialize resolve response")?;
+            println!("{}", rendered);
+            if !response.is_ok() {
+                std::process::exit(1);
+            }
             Ok(())
         }
         // Import secrets from one provider to another

@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- New `secretspec::codegen` module: a shared, language-neutral intermediate
+  representation (IR) that reduces a manifest to the typed-accessor decisions
+  every generator needs (union vs per-profile field sets, optionality, `as_path`,
+  profile list). It is the single source of truth those decisions are computed
+  in, so the Rust derive macro and the eventual TypeScript/Python/Go/Ruby
+  emitters cannot drift. `build_ir(&Config) -> CodegenIr`.
 - New `secretspec-ffi` crate exposing a deliberately narrow C ABI for resolving
   secrets from any language. The entire native surface is three functions
   (`secretspec_resolve`, `secretspec_free`, `secretspec_abi_version`); all

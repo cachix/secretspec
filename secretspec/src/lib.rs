@@ -42,6 +42,7 @@
 
 // Internal modules
 mod audit;
+pub mod codegen;
 mod config;
 mod error;
 pub(crate) mod generator;

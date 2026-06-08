@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   profile list). It is the single source of truth those decisions are computed
   in, so the Rust derive macro and the eventual TypeScript/Python/Go/Ruby
   emitters cannot drift. `build_ir(&Config) -> CodegenIr`.
+
+### Changed
+- The `secretspec-derive` macro now computes all of its typing decisions through
+  the shared `secretspec::codegen` IR instead of its own duplicated logic. The
+  generated `SecretSpec`/`SecretSpecProfile`/`Profile` API and builder are
+  unchanged (verified by the existing integration and trybuild tests); this
+  guarantees the macro and the future other-language emitters stay consistent.
 - New `secretspec-ffi` crate exposing a deliberately narrow C ABI for resolving
   secrets from any language. The entire native surface is three functions
   (`secretspec_resolve`, `secretspec_free`, `secretspec_abi_version`); all

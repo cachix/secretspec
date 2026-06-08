@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- New `secretspec-ffi` crate exposing a deliberately narrow C ABI for resolving
+  secrets from any language. The entire native surface is three functions
+  (`secretspec_resolve`, `secretspec_free`, `secretspec_abi_version`); all
+  richness lives in the versioned JSON contract, so language bindings stay thin.
+  `secretspec_resolve` takes a JSON request (`path`, `provider`, `profile`,
+  `reason`, `no_values`, all optional) and returns a JSON envelope that
+  separates transport failure (`{"ok": false, "error": {...}}`) from a
+  successful resolution (`{"ok": true, "response": {...}}`), which still reports
+  domain results like `missing_required` in its own fields. Panics are caught at
+  the boundary; returned strings are owned by the caller and freed with
+  `secretspec_free`. A C header ships at `secretspec-ffi/include/secretspec.h`.
+  `SecretSpecError::kind()` is now public so SDKs can do typed error handling.
 - `secretspec resolve --json` resolves every declared secret and prints a
   versioned, value-carrying JSON object: the SDK boundary other-language
   clients consume. Each entry reports the value (or, for `as_path` secrets, the

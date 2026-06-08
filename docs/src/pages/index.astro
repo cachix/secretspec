@@ -404,6 +404,54 @@ println!("{}", s.secrets.database_url);</code></pre>
   </div>
 </section>
 
+<!-- ============ SHOWCASE: audit & agent reason ============ -->
+<section class="landing-showcase">
+  <div class="landing-container">
+    <div class="landing-showcase-head">
+      <span class="landing-showcase-eyebrow">Audit &amp; AI agents</span>
+      <h2 class="landing-section-title">Know who read a secret — and why.</h2>
+      <p class="landing-section-lead landing-section-lead-narrow">
+        Every access is appended to a local, append-only log — values never written, URI credentials redacted. And when an AI agent is driving, SecretSpec makes it state a reason first. <a href="/concepts/audit/" class="landing-link">How auditing works →</a>
+      </p>
+    </div>
+
+    <div class="landing-fallback">
+      <div class="landing-terminal">
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">agent session</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># An AI agent runs your app — no reason given</span>
+$ secretspec run -- ./deploy.sh
+Error: accessing secrets requires a reason.
+       Provide one with --reason <span class="tok-str">"&lt;why...&gt;"</span>
+
+<span class="tok-com"># State why — required for agents by default</span>
+$ secretspec run --reason <span class="tok-str">"Deploy web frontend"</span> \
+    -- ./deploy.sh
+<span class="tok-str">✓</span> Loaded DATABASE_URL from keyring
+<span class="tok-pun">›</span> ./deploy.sh</code></pre>
+      </div>
+
+      <div class="landing-terminal">
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">secretspec audit</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Review who accessed what, why, and the outcome</span>
+$ secretspec audit -n 1
+<span class="tok-com">2026-06-04T17:04Z</span>  <span class="tok-key">run</span>  <span class="tok-str">started</span>  ./deploy.sh
+  DATABASE_URL  (my-app/production via keyring://)
+  reason: <span class="tok-str">Deploy web frontend</span>  <span class="tok-pun">[claude-code]</span></code></pre>
+      </div>
+    </div>
+
+    <p class="landing-chain-result" style="margin-top: 1.5rem;">
+      The default <code class="inline-code">require_reason = "agents"</code> policy is checked into <code class="inline-code">secretspec.toml</code>, so every clone, CI runner, and agent is held to it — humans running interactively are unaffected. <a href="/reference/configuration/#requiring-a-reason-for-secret-access" class="landing-link">Configure the policy →</a>
+    </p>
+  </div>
+</section>
+
 <!-- ============ SHOWCASE: Rust SDK ============ -->
 <section class="landing-showcase">
   <div class="landing-container">

@@ -340,6 +340,120 @@ impl Default for Project {
     }
 }
 
+/// Audit logging configuration, parsed from the top-level `[audit]` table in the
+/// user-global config (`~/.config/secretspec/config.toml`).
+///
+/// Auditing is an operator/per-machine concern (where the log lives, whether it is
+/// on), so it lives in the user config rather than the project's `secretspec.toml`:
+/// a cloned repository must not be able to redirect or silence your local audit
+/// log. secretspec records every secret read/write to a local JSON Lines file so
+/// that access is reviewable after the fact. Auditing is **on by default**; set
+/// `enabled = false` to turn it off. Secret values are never written to the log.
+///
+/// ```toml
+/// [audit]
+/// enabled = false
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AuditConfig {
+    /// Whether to record secret access. Defaults to `true`.
+    pub enabled: bool,
+    /// Where to write the JSON Lines log. Must be an absolute path (a leading `~`
+    /// is expanded to the home directory); a relative path is rejected and
+    /// auditing is disabled, because it would resolve against the current working
+    /// directory and scatter the log per-CWD. When unset, defaults to the per-user
+    /// XDG state directory (`~/.local/state/secretspec/audit.log` on Linux).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    /// Hard cap on the log file size in bytes (default 1 MiB). At the cap the file
+    /// is truncated and restarted; no rotated backups are kept, so the log is a
+    /// rolling-by-reset record bounded to this size, not a complete history.
+    pub max_size_bytes: u64,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            path: None,
+            max_size_bytes: 1_048_576,
+        }
+    }
+}
+
+impl AuditConfig {
+    /// The resolved on-disk path: the configured `path` (with a leading `~`
+    /// expanded to the home directory), or the default per-user audit log
+    /// location when no `path` is set.
+    ///
+    /// Returns `None` when the location cannot be honored: either no `path` is set
+    /// and no default can be determined (no home/state directory), or the
+    /// configured `path` is **relative**. A relative path is rejected rather than
+    /// resolved against the current working directory — that would write a separate
+    /// log in every directory secretspec runs from. Use [`Self::has_relative_path`]
+    /// to distinguish the relative-path case for a precise diagnostic.
+    pub fn resolved_path(&self) -> Option<PathBuf> {
+        match self.path.clone() {
+            // Reject a relative configured path; only an absolute one is honored.
+            Some(path) => Some(expand_tilde(path)).filter(|p| p.is_absolute()),
+            None => default_audit_path(),
+        }
+    }
+
+    /// Whether a `path` is configured but is not absolute (after `~` expansion).
+    /// Such a path is rejected by [`Self::resolved_path`]; this lets callers emit a
+    /// "path is not absolute" message instead of a generic "no location" one.
+    pub fn has_relative_path(&self) -> bool {
+        self.path
+            .as_ref()
+            .is_some_and(|p| !expand_tilde(p.clone()).is_absolute())
+    }
+}
+
+/// Shared etcetera arguments identifying secretspec, so the app identity (used
+/// to derive config/state/data dirs) lives in a single place.
+fn app_strategy_args() -> etcetera::app_strategy::AppStrategyArgs {
+    etcetera::app_strategy::AppStrategyArgs {
+        top_level_domain: String::new(),
+        author: String::new(),
+        app_name: "secretspec".into(),
+    }
+}
+
+/// Default audit log location: the per-user state directory chosen by
+/// `choose_app_strategy`. That is the XDG strategy on both Linux and macOS (the
+/// CLI convention etcetera uses), so the log lives at
+/// `~/.local/state/secretspec/audit.log` on each. The `data_dir` fallback only
+/// applies on platforms whose strategy reports no distinct state dir.
+fn default_audit_path() -> Option<PathBuf> {
+    use etcetera::app_strategy::{AppStrategy, choose_app_strategy};
+    let strategy = choose_app_strategy(app_strategy_args()).ok()?;
+    let dir = strategy.state_dir().unwrap_or_else(|| strategy.data_dir());
+    Some(dir.join("audit.log"))
+}
+
+/// Expands a leading `~` (or `~/`) in a configured path to the user's home
+/// directory. A documented `path = "~/.local/state/..."` would otherwise become
+/// a literal `./~` directory. Paths without a leading `~`, or paths that cannot
+/// be resolved to a home directory, are returned unchanged.
+fn expand_tilde(path: PathBuf) -> PathBuf {
+    let Ok(rest) = path.strip_prefix("~") else {
+        return path;
+    };
+    let Some(home) = home_dir() else {
+        return path;
+    };
+    home.join(rest)
+}
+
+/// Best-effort home directory, via etcetera with an `HOME` env fallback.
+fn home_dir() -> Option<PathBuf> {
+    etcetera::home_dir()
+        .ok()
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+}
+
 /// Configuration for a specific profile (environment).
 ///
 /// A profile represents a specific environment or context (e.g., "default", "production", "staging").
@@ -643,6 +757,12 @@ pub struct GlobalConfig {
     /// Default settings
     #[serde(default)]
     pub defaults: GlobalDefaults,
+    /// Audit logging configuration (top-level `[audit]` table). Auditing is a
+    /// per-machine/operator concern, so it lives here rather than in the project's
+    /// `secretspec.toml`. `None` means "unspecified" and resolves to
+    /// [`AuditConfig::default`] (auditing on).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit: Option<AuditConfig>,
 }
 
 /// Default settings in the global configuration.
@@ -681,13 +801,9 @@ impl GlobalConfig {
     ///
     /// Returns an error if the config directory cannot be determined
     pub fn path() -> Result<PathBuf, io::Error> {
-        use etcetera::app_strategy::{AppStrategy, AppStrategyArgs, choose_app_strategy};
-        let strategy = choose_app_strategy(AppStrategyArgs {
-            top_level_domain: String::new(),
-            author: String::new(),
-            app_name: "secretspec".into(),
-        })
-        .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
+        use etcetera::app_strategy::{AppStrategy, choose_app_strategy};
+        let strategy = choose_app_strategy(app_strategy_args())
+            .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
         Ok(strategy.config_dir().join("config.toml"))
     }
 
@@ -1030,6 +1146,101 @@ mod require_reason_tests {
             toml::from_str::<Project>(&toml).unwrap().require_reason,
             Some(RequireReason::Always)
         );
+    }
+}
+
+#[cfg(test)]
+mod audit_config_tests {
+    use super::*;
+
+    fn with_path(path: &str) -> AuditConfig {
+        AuditConfig {
+            path: Some(PathBuf::from(path)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn resolved_path_keeps_absolute_and_rejects_relative() {
+        // An absolute configured path is honored verbatim.
+        let abs = with_path("/var/log/secretspec/audit.log");
+        assert_eq!(
+            abs.resolved_path(),
+            Some(PathBuf::from("/var/log/secretspec/audit.log"))
+        );
+        assert!(!abs.has_relative_path());
+
+        // A relative path (bare filename or nested) is rejected: it would resolve
+        // against the current working directory and scatter the log per-CWD.
+        for rel in ["audit.log", "logs/audit.log", "./audit.log"] {
+            let cfg = with_path(rel);
+            assert_eq!(
+                cfg.resolved_path(),
+                None,
+                "relative path {rel:?} must reject"
+            );
+            assert!(
+                cfg.has_relative_path(),
+                "{rel:?} should be flagged relative"
+            );
+        }
+    }
+
+    #[test]
+    fn unset_path_is_not_flagged_relative() {
+        // No configured path falls back to the per-user default and is never
+        // reported as a relative-path error.
+        let cfg = AuditConfig::default();
+        assert!(!cfg.has_relative_path());
+    }
+
+    #[test]
+    fn expand_tilde_expands_leading_tilde_only() {
+        // Paths without a leading `~` are returned unchanged...
+        assert_eq!(
+            expand_tilde(PathBuf::from("/abs/path")),
+            PathBuf::from("/abs/path")
+        );
+        assert_eq!(
+            expand_tilde(PathBuf::from("relative/path")),
+            PathBuf::from("relative/path")
+        );
+        // ...including a `~` that is not the leading component.
+        assert_eq!(
+            expand_tilde(PathBuf::from("/a/~/b")),
+            PathBuf::from("/a/~/b")
+        );
+
+        // A leading `~/...` expands against the resolved home directory.
+        if let Some(home) = home_dir() {
+            assert_eq!(
+                expand_tilde(PathBuf::from("~/.local/state/secretspec/audit.log")),
+                home.join(".local/state/secretspec/audit.log")
+            );
+        }
+    }
+
+    #[test]
+    fn audit_config_omitted_fields_default_to_on() {
+        // The security-relevant defaults: auditing on, no explicit path, 1 MiB cap.
+        // A missing field must not silently disable logging.
+        let cfg: AuditConfig = toml::from_str("").unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.path, None);
+        assert_eq!(cfg.max_size_bytes, 1_048_576);
+    }
+
+    #[test]
+    fn global_config_wires_audit_table() {
+        // A present `[audit]` table populates `GlobalConfig::audit`...
+        let g: GlobalConfig =
+            toml::from_str("[defaults]\nprovider = \"keyring\"\n\n[audit]\nenabled = false\n")
+                .unwrap();
+        assert_eq!(g.audit.map(|a| a.enabled), Some(false));
+
+        // ...and an absent one leaves it unspecified (resolving to on-by-default).
+        let g: GlobalConfig = toml::from_str("[defaults]\nprovider = \"keyring\"\n").unwrap();
+        assert!(g.audit.is_none());
     }
 }
 

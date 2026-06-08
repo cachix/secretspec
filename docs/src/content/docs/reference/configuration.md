@@ -61,7 +61,8 @@ $ export SECRETSPEC_AGENT=1
 If your agent isn't auto-detected, set `SECRETSPEC_AGENT=1` (or use
 `require_reason = true` to require a reason from everyone).
 
-The reason is also forwarded to providers that support audit logging (e.g. the
+The reason is recorded in secretspec's own [audit log](/concepts/audit/) and is also
+forwarded to providers that support auditing (e.g. the
 [Proton Pass](/providers/protonpass/) provider records it in the agent audit log).
 
 ### [profiles.*] Section
@@ -177,6 +178,32 @@ $ secretspec config provider remove prod_vault
 ```
 
 The CLI commands operate on the user-global config only — edit `secretspec.toml` by hand to change project-level aliases.
+
+### Audit Logging
+
+secretspec records every secret access to a local [audit log](/concepts/audit/).
+Auditing is a per-machine/operator concern — where the log lives and whether it is
+on — so it is configured in the **user-global config**, not the project's
+`secretspec.toml`. A cloned repository therefore cannot redirect or silence your
+audit log. Auditing is **on by default**; configure it under the top-level
+`[audit]` table:
+
+```toml title="~/.config/secretspec/config.toml"
+[audit]
+enabled = true                                   # set false to turn auditing off
+path = "~/.local/state/secretspec/audit.log"     # default: per-user XDG state dir
+max_size_bytes = 1048576                          # default: 1 MiB
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `true` | Whether to record secret access. |
+| `path` | string | per-user state dir | Where to write the JSON Lines log. Must be absolute (a leading `~` is expanded); a relative path is rejected and auditing is disabled. |
+| `max_size_bytes` | integer | `1048576` (1 MiB) | Hard size cap. At the cap the file is truncated and restarted; no rotated backups are kept. |
+
+Secret values are never written to the log, and credentials embedded in provider
+URIs are redacted. Audit failures never block secret access. See
+[Audit Logging](/concepts/audit/) for the record format and full details.
 
 ### as_path Option
 

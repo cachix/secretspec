@@ -1089,6 +1089,7 @@ mod secret_spec_generation {
             fn load_internal(
                 provider_str: Option<String>,
                 profile_str: Option<String>,
+                reason: Option<String>,
             ) -> Result<secretspec::ValidatedSecrets, secretspec::SecretSpecError> {
                 let mut spec = secretspec::Secrets::load()?;
                 if let Some(provider) = provider_str {
@@ -1096,6 +1097,14 @@ mod secret_spec_generation {
                 }
                 if let Some(profile) = profile_str {
                     spec.set_profile(profile);
+                }
+                // Apply an explicit builder reason on top of any SECRETSPEC_REASON
+                // already resolved by `Secrets::load`. Required to satisfy the
+                // `require_reason` policy (default "agents") from typed SDK code,
+                // which otherwise has no way to supply a reason. A blank reason is
+                // ignored by `with_reason`, leaving the env-resolved value intact.
+                if let Some(reason) = reason {
+                    spec = spec.with_reason(reason);
                 }
                 match spec.validate()? {
                     Ok(valid_secrets) => Ok(valid_secrets),
@@ -1153,7 +1162,10 @@ mod secret_spec_generation {
                         None => std::env::var("SECRETSPEC_PROFILE").ok(),
                     };
 
-                    let validation_result = load_internal(provider_str, profile_str)?;
+                    // The static `load` has no reason parameter; a reason is supplied
+                    // via the SECRETSPEC_REASON env var (honored by `Secrets::load`)
+                    // or through `SecretSpec::builder().with_reason(...)`.
+                    let validation_result = load_internal(provider_str, profile_str, None)?;
                     let provider_name = validation_result.resolved.provider.clone();
                     let profile = validation_result.resolved.profile.clone();
                     let secrets = validation_result.resolved.secrets;
@@ -1200,6 +1212,7 @@ mod builder_generation {
     /// pub struct SecretSpecBuilder {
     ///     provider: Option<Box<dyn FnOnce() -> Result<Box<dyn secretspec::Provider>, String>>>,
     ///     profile: Option<Box<dyn FnOnce() -> Result<Profile, String>>>,
+    ///     reason: Option<String>,
     /// }
     /// ```
     pub fn generate_struct() -> proc_macro2::TokenStream {
@@ -1207,6 +1220,7 @@ mod builder_generation {
             pub struct SecretSpecBuilder {
                 provider: Option<Box<dyn FnOnce() -> Result<Box<dyn secretspec::Provider>, String>>>,
                 profile: Option<Box<dyn FnOnce() -> Result<Profile, String>>>,
+                reason: Option<String>,
             }
         }
     }
@@ -1243,7 +1257,23 @@ mod builder_generation {
                     Self {
                         provider: None,
                         profile: None,
+                        reason: None,
                     }
+                }
+
+                /// Set a human-readable reason for this session's secret access.
+                ///
+                /// Required to satisfy the project's `require_reason` policy
+                /// (`[project].require_reason` in secretspec.toml, default `"agents"`)
+                /// when loading from agent contexts, and recorded in the audit log.
+                /// Mirrors the CLI `--reason` flag and `Secrets::with_reason`. A blank
+                /// reason is ignored, falling back to the `SECRETSPEC_REASON` env var.
+                pub fn with_reason<T>(mut self, reason: T) -> Self
+                where
+                    T: Into<String>,
+                {
+                    self.reason = Some(reason.into());
+                    self
                 }
 
                 pub fn with_provider<T>(mut self, provider: T) -> Self
@@ -1364,8 +1394,9 @@ mod builder_generation {
                 pub fn load(mut self) -> Result<secretspec::Resolved<SecretSpec>, secretspec::SecretSpecError> {
                     #resolve_provider_load
                     #resolve_profile_load
+                    let reason_str = self.reason.take();
 
-                    let validation_result = load_internal(provider_str, profile_str)?;
+                    let validation_result = load_internal(provider_str, profile_str, reason_str)?;
                     let provider_name = validation_result.resolved.provider.clone();
                     let profile = validation_result.resolved.profile.clone();
                     let secrets = validation_result.resolved.secrets;
@@ -1383,6 +1414,7 @@ mod builder_generation {
 
                 pub fn load_profile(mut self) -> Result<secretspec::Resolved<SecretSpecProfile>, secretspec::SecretSpecError> {
                     #resolve_provider_profile
+                    let reason_str = self.reason.take();
 
                     let (profile_str, selected_profile) = if let Some(profile_fn) = self.profile.take() {
                         let profile = profile_fn()
@@ -1399,7 +1431,7 @@ mod builder_generation {
                         (profile_str, selected_profile)
                     };
 
-                    let validation_result = load_internal(provider_str, profile_str)?;
+                    let validation_result = load_internal(provider_str, profile_str, reason_str)?;
                     let provider_name = validation_result.resolved.provider.clone();
                     let profile = validation_result.resolved.profile.clone();
                     let secrets = validation_result.resolved.secrets;

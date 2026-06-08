@@ -264,5 +264,12 @@ mod profile_inheritance {
         let _ = SecretSpec::builder()
             .with_profile(Profile::Production)
             .with_provider("keyring://");
+
+        // The builder exposes with_reason so typed SDK callers can satisfy the
+        // require_reason policy (default "agents") without relying on the
+        // SECRETSPEC_REASON env var. (Not loading; just verifying the API exists.)
+        let _ = SecretSpec::builder()
+            .with_reason("running database migrations")
+            .with_provider("dotenv://.env");
     }
 }

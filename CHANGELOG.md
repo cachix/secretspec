@@ -8,14 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Audit logging for secret access, on by default. Every secret read and write,
+  from both the CLI and the Rust SDK, is appended to a local per-user log as JSON
+  Lines. Only metadata is recorded (secret names, the serving provider with any
+  embedded credentials redacted, outcome, reason, and actor including a detected
+  coding agent); secret values are never written. Each operation is recorded once:
+  `get` and `set` per secret, `check` as a single event, `run` when the child
+  process starts, and `import` per copied secret. Auditing never blocks secret
+  access; if it cannot write the log it warns on stderr and continues. The log is
+  a single file capped at 1 MiB. It is configured per machine via the `[audit]`
+  table in `~/.config/secretspec/config.toml` (not the project's
+  `secretspec.toml`), so a cloned repository cannot redirect or silence it. The
+  new `secretspec audit` command reads the log, with `--project`, `--action`,
+  `--tail`/`-n`, and `--json` filters. See
+  [Audit Logging](https://secretspec.dev/concepts/audit/) for details.
 - `--reason` CLI flag (and `SECRETSPEC_REASON` env var) records a human-readable
   reason for a session's secret access, forwarded to providers that support audit
   logging. `SECRETSPEC_REASON` is honored across the SDK/library too: it is resolved
   by `Secrets::load`/`load_from` (so `secretspec-derive`-generated code and other
   library callers can satisfy the `require_reason` policy and supply an audit reason
   without code changes), and `Secrets::with_reason(...)` sets it explicitly, taking
-  precedence. Blank or whitespace-only reasons are ignored so they cannot satisfy the
-  policy. Backed by a new `Provider::set_reason` trait method (default no-op).
+  precedence. The `secretspec-derive`-generated typed builder also gains a
+  `with_reason(...)` method, so SDK callers can satisfy `require_reason` in code
+  (not only via the env var). Blank or whitespace-only reasons are ignored so they
+  cannot satisfy the policy. Backed by a new `Provider::set_reason` trait method
+  (default no-op).
 - `[project] require_reason` policy in `secretspec.toml`, controlling when secret
   access must supply an explicit reason. Accepts `"agents"` (the default — require
   a reason only when an AI agent is detected), `true` (require it from every
@@ -36,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `https://<server-base>/identity` and `https://<server-base>/api`; omitting it
   keeps the `bitwarden.com` US cloud default.
 
+### Changed
+- Minimum supported Rust version raised to 1.92 (required by the
+  `detect-coding-agent` dependency). The devenv toolchain is pinned accordingly.
+
 ### Fixed
 - Proton Pass provider now works with `pass-cli` >= 2.1.0 agent sessions. Since
   2.1.0, audited item operations (`item view`, `item create`, `item delete`)
@@ -46,23 +67,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`secretspec/<version> (https://secretspec.dev)`); each source is normalized first,
   so a blank reason falls through to the next rather than masking it. It is ignored by
   older releases and non-agent sessions.
-
-### Changed
-- Minimum supported Rust version raised to 1.92 (required by the
-  `detect-coding-agent` dependency). The devenv toolchain is pinned accordingly.
-
-### Internal
-- Expanded test coverage for previously untested logic: CLI argument parsing
-  and `init` TOML generation, the config/secret validation guards
-  (`Config::validate`, `Secret::validate`, identifier checks), the
-  `ValidationErrors` display/`has_errors` behavior, `ProviderUrl`
-  encode/decode and `ProviderInfo` display, and the no-network parsing and
-  path-building logic of the keyring, pass, and OnePassword providers
-  (`TryFrom<&ProviderUrl>`, path/item-name builders, and `uri()` round-trips),
-  and the `Secrets` public surface (`check()` present/missing paths,
-  `run_command` child exit-code propagation, and the `InvalidProfile` error).
-
-### Fixed
 - `secretspec init` now serializes the generated `secretspec.toml` with
   `toml_edit` instead of hand-interpolating strings. This fixes several cases
   that previously produced TOML that could not be parsed back: a project name,

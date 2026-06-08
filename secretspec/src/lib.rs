@@ -41,6 +41,7 @@
 //! ```
 
 // Internal modules
+mod audit;
 mod config;
 mod error;
 pub(crate) mod generator;
@@ -58,7 +59,9 @@ pub use config::Resolved;
 
 // Re-export config types for CLI usage only - these are marked #[doc(hidden)]
 #[doc(hidden)]
-pub use config::{Config, GlobalConfig, GlobalDefaults, Profile, ProfileDefaults, Project};
+pub use config::{
+    AuditConfig, Config, GlobalConfig, GlobalDefaults, Profile, ProfileDefaults, Project,
+};
 
 // Re-export Secret and generation types for secretspec-derive
 #[doc(hidden)]

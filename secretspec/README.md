@@ -21,6 +21,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
 - **[Profile Support](https://secretspec.dev/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
 - **Secret Generation**: Auto-generate passwords, tokens, UUIDs, and more when secrets are missing — declarative "generate if absent"
 - **Configuration Inheritance**: Extend and override shared configurations using the `extends` feature
+- **[Audit Logging](https://secretspec.dev/concepts/audit/)**: Every secret access recorded locally (who, when, why, outcome) — on by default, secret values never logged
 - **Discovery**: `secretspec init` to discover secrets from existing `.env` files
 
 ## Quick Start

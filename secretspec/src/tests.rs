@@ -1,5 +1,6 @@
 use crate::config::{
-    Config, GlobalConfig, GlobalDefaults, ParseError, Profile, Project, Resolved, Secret,
+    Config, GlobalConfig, GlobalDefaults, ParseError, Profile, Project, RequireReason, Resolved,
+    Secret,
 };
 use crate::error::{Result, SecretSpecError};
 use crate::secrets::Secrets;
@@ -108,31 +109,39 @@ require_reason = true
     )
     .unwrap();
 
+    // Build hermetically from the parsed project config rather than via
+    // `load_from`, which would build a real audit logger and write to the user's
+    // real audit log. This still exercises that `require_reason = true` parses to
+    // the Always policy and that the gate is enforced.
+    let project_config = Config::try_from(project_path.as_path()).unwrap();
+    assert_eq!(
+        project_config.project.require_reason,
+        Some(RequireReason::Always)
+    );
+    let build = || {
+        let mut spec = Secrets::new(project_config.clone(), None, None, None);
+        spec.set_require_reason(RequireReason::Always);
+        spec
+    };
+
     // require_reason = true -> any caller (agent or not) is refused without a reason.
-    let spec = Secrets::load_from(&project_path).unwrap();
     assert!(matches!(
-        spec.validate(),
+        build().validate(),
         Err(SecretSpecError::ReasonRequired)
     ));
 
     // With an explicit reason the policy is satisfied: validation proceeds past the
     // gate. It may still fail later for environment reasons (e.g. no provider
     // configured), so assert specifically that it is no longer the reason gate.
-    let spec = Secrets::load_from(&project_path)
-        .unwrap()
-        .with_reason("running migrations");
     assert!(!matches!(
-        spec.validate(),
+        build().with_reason("running migrations").validate(),
         Err(SecretSpecError::ReasonRequired)
     ));
 
     // A blank/whitespace-only reason must NOT satisfy the policy: it carries no
     // audit value, so the gate still refuses access.
-    let spec = Secrets::load_from(&project_path)
-        .unwrap()
-        .with_reason("   ");
     assert!(matches!(
-        spec.validate(),
+        build().with_reason("   ").validate(),
         Err(SecretSpecError::ReasonRequired)
     ));
 }
@@ -154,10 +163,18 @@ require_reason = false
     )
     .unwrap();
 
+    // Hermetic build (see the sibling test) — no real audit log is touched.
+    let project_config = Config::try_from(project_path.as_path()).unwrap();
+    assert_eq!(
+        project_config.project.require_reason,
+        Some(RequireReason::Never)
+    );
+    let mut spec = Secrets::new(project_config, None, None, None);
+    spec.set_require_reason(RequireReason::Never);
+
     // require_reason = false -> the reason gate never fires, even under an agent.
     // (validate() may still fail later for environment reasons such as no provider
     // configured, so assert specifically that it is not the ReasonRequired gate.)
-    let spec = Secrets::load_from(&project_path).unwrap();
     assert!(!matches!(
         spec.validate(),
         Err(SecretSpecError::ReasonRequired)
@@ -182,6 +199,7 @@ fn test_new_with_default_overrides() {
             profile: Some("production".to_string()),
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config, Some(global_config), None, None);
@@ -332,6 +350,7 @@ fn test_secretspec_new() {
             profile: Some("dev".to_string()),
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config.clone(), Some(global_config.clone()), None, None);
@@ -354,6 +373,7 @@ fn test_resolve_profile() {
             profile: Some("development".to_string()),
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(
@@ -515,6 +535,7 @@ fn test_get_provider_with_global_config() {
             profile: None,
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(
@@ -1470,6 +1491,7 @@ fn test_set_with_undefined_secret() {
             profile: None,
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(project_config, Some(global_config), None, None);
@@ -1536,6 +1558,7 @@ fn test_set_with_defined_secret() {
             profile: None,
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(project_config, Some(global_config), None, None);
@@ -1589,6 +1612,7 @@ fn test_set_with_readonly_provider() {
             profile: None,
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(project_config, Some(global_config), None, None);
@@ -1698,6 +1722,7 @@ fn test_import_between_dotenv_files() {
             profile: Some("default".to_string()),
             providers: None,
         },
+        audit: None,
     };
 
     // Create SecretSpec instance
@@ -1824,6 +1849,7 @@ fn test_import_edge_cases() {
             profile: Some("default".to_string()),
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(project_config, Some(global_config), None, None);
@@ -1904,6 +1930,7 @@ API_KEY = { description = "Dev API key", required = true }
             profile: None,
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config.clone(), Some(global_config.clone()), None, None);
@@ -2088,6 +2115,7 @@ fn test_import_with_profiles() {
             profile: Some("development".to_string()),
             providers: None, // Use development profile
         },
+        audit: None,
     };
 
     let spec = Secrets::new(project_config, Some(global_config), None, None);
@@ -2146,6 +2174,7 @@ fn test_run_with_empty_command() {
                 profile: None,
                 providers: None,
             },
+            audit: None,
         }),
         None,
         None,
@@ -2207,6 +2236,7 @@ fn test_run_with_missing_required_secrets() {
                 profile: None,
                 providers: None,
             },
+            audit: None,
         }),
         None,
         None,
@@ -2266,6 +2296,7 @@ fn test_get_existing_secret() {
                 profile: None,
                 providers: None,
             },
+            audit: None,
         }),
         None,
         None,
@@ -2319,6 +2350,7 @@ fn test_get_secret_with_default() {
                 profile: None,
                 providers: None,
             },
+            audit: None,
         }),
         None,
         None,
@@ -2371,6 +2403,7 @@ fn test_get_nonexistent_secret() {
                 profile: None,
                 providers: None,
             },
+            audit: None,
         }),
         None,
         None,
@@ -2418,6 +2451,7 @@ fn test_import_dotenv_profile_issue_36() {
             profile: Some("development".to_string()),
             providers: None, // Using development profile as per bug report
         },
+        audit: None,
     };
 
     // Create SecretSpec instance
@@ -2541,6 +2575,7 @@ fn test_per_secret_provider_configuration() {
             profile: None,
             providers: Some(providers_map),
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config, Some(global_config), None, None);
@@ -2573,6 +2608,7 @@ fn test_provider_alias_resolution() {
             profile: None,
             providers: Some(providers_map),
         },
+        audit: None,
     };
 
     let spec = Secrets::new(
@@ -2637,6 +2673,7 @@ fn test_provider_alias_not_found() {
             profile: None,
             providers: Some(providers_map),
         },
+        audit: None,
     };
 
     let spec = Secrets::new(
@@ -2738,6 +2775,7 @@ fn test_per_secret_provider_with_fallback_chain() {
             profile: None,
             providers: Some(providers_map),
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config, Some(global_config), None, None);
@@ -2835,6 +2873,7 @@ fn test_get_secret_with_fallback_chain() {
             profile: None,
             providers: Some(providers_map),
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config, Some(global_config), None, None);
@@ -2917,6 +2956,7 @@ fn test_validate_falls_back_on_primary_provider_error() {
             profile: None,
             providers: Some(providers_map),
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config, Some(global_config), None, None);
@@ -2984,6 +3024,7 @@ fn test_validate_surfaces_error_when_all_providers_fail() {
             profile: None,
             providers: Some(providers_map),
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config, Some(global_config), None, None);
@@ -3082,6 +3123,7 @@ fn test_validate_with_per_secret_providers() {
             profile: None,
             providers: Some(providers_map),
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config, Some(global_config), None, None);
@@ -3413,6 +3455,7 @@ REGULAR_SECRET = { description = "Regular secret", as_path = false }
             profile: None,
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config, Some(global_config), None, None);
@@ -3491,6 +3534,7 @@ CERT_DATA = { description = "Certificate data", as_path = true }
             profile: None,
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config, Some(global_config), None, None);
@@ -3560,6 +3604,7 @@ CERT_DATA = { description = "Certificate data", as_path = true }
             profile: None,
             providers: None,
         },
+        audit: None,
     };
     let spec = Secrets::new(config, Some(global_config), None, None);
 
@@ -3797,6 +3842,7 @@ DB_PASSWORD = { description = "Database password", type = "password", generate =
             profile: None,
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config, Some(global_config), None, None);
@@ -3838,6 +3884,7 @@ DB_PASSWORD = { description = "Database password", type = "password", generate =
             profile: None,
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config, Some(global_config), None, None);
@@ -3881,6 +3928,7 @@ DB_PASSWORD = { description = "Database password", type = "password", generate =
             profile: None,
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config.clone(), Some(global_config.clone()), None, None);
@@ -3937,6 +3985,7 @@ REQUEST_ID = { description = "ID", type = "uuid", generate = true }
             profile: None,
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config, Some(global_config), None, None);
@@ -4003,6 +4052,7 @@ PROD_KEY = { description = "Production key", type = "hex", generate = { bytes = 
             profile: None,
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(
@@ -4150,6 +4200,7 @@ fn build_chain_scenario(
             profile: Some("development".to_string()),
             providers: Some(providers_map),
         },
+        audit: None,
     };
 
     (config, global_config, personal_path, team_path)
@@ -4310,6 +4361,7 @@ OPTIONAL_MISSING = { description = "optional, not set", required = false }
             profile: None,
             providers: None,
         },
+        audit: None,
     };
 
     let spec = Secrets::new(config, Some(global_config), None, None);
@@ -4358,6 +4410,7 @@ fn global_config_with_aliases(aliases: &[(&str, &str)]) -> GlobalConfig {
             profile: None,
             providers: Some(aliases_map(aliases)),
         },
+        audit: None,
     }
 }
 
@@ -4669,6 +4722,7 @@ fn dotenv_spec(
                 profile: None,
                 providers: None,
             },
+            audit: None,
         }),
         None,
         None,
@@ -4747,6 +4801,320 @@ fn test_run_command_returns_child_exit_code() {
     );
     assert_eq!(spec.run_command(vec!["true".to_string()]).unwrap(), 0);
     assert_eq!(spec.run_command(vec!["false".to_string()]).unwrap(), 1);
+}
+
+/// The audit `action`s emitted by an operation, in order.
+fn audit_actions(lines: &std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Vec<String> {
+    lines
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|l| {
+            serde_json::from_str::<serde_json::Value>(l).unwrap()["action"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn audit_check_emits_single_check_event() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec(
+        "REQUIRED=value\n",
+        required_secret_profile("REQUIRED"),
+        &temp_dir,
+    );
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    spec.check(true).expect("check should succeed");
+
+    // Exactly one `check` event — not the 2-3 that the repeated internal
+    // re-validations used to produce.
+    assert_eq!(audit_actions(&lines), vec!["check"]);
+}
+
+#[test]
+fn audit_run_emits_run_not_check() {
+    let temp_dir = TempDir::new().unwrap();
+    // Present required secret -> resolution succeeds and the command runs.
+    let mut spec = dotenv_spec(
+        "REQUIRED=value\n",
+        required_secret_profile("REQUIRED"),
+        &temp_dir,
+    );
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    spec.run_command(vec!["true".to_string()]).unwrap();
+
+    // `run` records itself as a single `run` event; the internal read it performs
+    // through `ensure_secrets` must not also be logged as a `check`.
+    assert_eq!(audit_actions(&lines), vec!["run"]);
+
+    // A successfully launched command is `started`, not `found`.
+    let event: serde_json::Value = serde_json::from_str(&lines.lock().unwrap()[0]).unwrap();
+    assert_eq!(event["outcome"], "started");
+}
+
+/// The full audit events emitted by an operation, parsed in order.
+fn audit_events(lines: &std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Vec<serde_json::Value> {
+    lines
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .collect()
+}
+
+/// A `default`-only profile: one optional secret carrying a fallback value, so a
+/// `get` with no stored value resolves to the default.
+fn defaulted_secret_profile(name: &str, default: &str) -> HashMap<String, Profile> {
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        name.to_string(),
+        Secret {
+            description: Some("with default".to_string()),
+            required: Some(false),
+            default: Some(default.to_string()),
+            ..Default::default()
+        },
+    );
+    HashMap::from([(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    )])
+}
+
+#[test]
+fn audit_get_present_records_found_without_value() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec(
+        "REQUIRED=hunter2\n",
+        required_secret_profile("REQUIRED"),
+        &temp_dir,
+    );
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    spec.get("REQUIRED").unwrap();
+
+    let events = audit_events(&lines);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["action"], "get");
+    assert_eq!(events[0]["outcome"], "found");
+    assert_eq!(events[0]["key"], "REQUIRED");
+    assert!(events[0]["provider"].as_str().unwrap().contains("dotenv"));
+    // The retrieved value never reaches the log.
+    assert!(!lines.lock().unwrap()[0].contains("hunter2"));
+}
+
+#[test]
+fn audit_get_missing_records_missing() {
+    let temp_dir = TempDir::new().unwrap();
+    // Empty .env -> a required secret with no default is missing.
+    let mut spec = dotenv_spec("", required_secret_profile("REQUIRED"), &temp_dir);
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    assert!(matches!(
+        spec.get("REQUIRED"),
+        Err(SecretSpecError::SecretNotFound(_))
+    ));
+
+    let events = audit_events(&lines);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["action"], "get");
+    // A missing read is recorded as `missing` even though `get` then errors.
+    assert_eq!(events[0]["outcome"], "missing");
+    assert_eq!(events[0]["key"], "REQUIRED");
+}
+
+#[test]
+fn audit_get_default_records_default() {
+    let temp_dir = TempDir::new().unwrap();
+    // No stored value -> the configured default is served.
+    let mut spec = dotenv_spec(
+        "",
+        defaulted_secret_profile("OPTIONAL", "fallback"),
+        &temp_dir,
+    );
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    spec.get("OPTIONAL").unwrap();
+
+    let events = audit_events(&lines);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["action"], "get");
+    assert_eq!(events[0]["outcome"], "default");
+    assert_eq!(events[0]["key"], "OPTIONAL");
+}
+
+#[test]
+fn audit_get_undefined_records_error() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec("", required_secret_profile("REQUIRED"), &temp_dir);
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    assert!(matches!(
+        spec.get("UNDEFINED"),
+        Err(SecretSpecError::SecretNotFound(_))
+    ));
+
+    let events = audit_events(&lines);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["action"], "get");
+    assert_eq!(events[0]["outcome"], "error");
+    assert_eq!(events[0]["error_kind"], "secret_not_found");
+    // No provider can be attributed to an undefined secret.
+    assert!(events[0].get("provider").is_none());
+}
+
+#[test]
+fn audit_set_records_written_without_value() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec("", required_secret_profile("REQUIRED"), &temp_dir);
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    spec.set("REQUIRED", Some("secret_value".to_string()))
+        .unwrap();
+
+    let events = audit_events(&lines);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["action"], "set");
+    assert_eq!(events[0]["outcome"], "written");
+    assert_eq!(events[0]["key"], "REQUIRED");
+    assert!(events[0]["provider"].as_str().unwrap().contains("dotenv"));
+    // The stored value is never logged.
+    assert!(!lines.lock().unwrap()[0].contains("secret_value"));
+}
+
+#[test]
+fn audit_set_undefined_records_error() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec("", required_secret_profile("REQUIRED"), &temp_dir);
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    assert!(matches!(
+        spec.set("UNDEFINED", Some("v".to_string())),
+        Err(SecretSpecError::SecretNotFound(_))
+    ));
+
+    let events = audit_events(&lines);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["action"], "set");
+    assert_eq!(events[0]["outcome"], "error");
+    assert_eq!(events[0]["error_kind"], "secret_not_found");
+}
+
+#[test]
+fn audit_set_readonly_provider_records_error() {
+    let project_config = Config {
+        project: Project {
+            name: "test".to_string(),
+            ..Default::default()
+        },
+        profiles: required_secret_profile("REQUIRED"),
+        providers: None,
+    };
+    // `env` is read-only, so a `set` is rejected and recorded as an error.
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some("env".to_string()),
+            profile: None,
+            providers: None,
+        },
+        audit: None,
+    };
+    let mut spec = Secrets::new(project_config, Some(global_config), None, None);
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    assert!(matches!(
+        spec.set("REQUIRED", Some("v".to_string())),
+        Err(SecretSpecError::ProviderOperationFailed(_))
+    ));
+
+    let events = audit_events(&lines);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["action"], "set");
+    assert_eq!(events[0]["outcome"], "error");
+    assert_eq!(events[0]["error_kind"], "provider_operation_failed");
+}
+
+#[test]
+fn audit_policy_denied_still_records_blocked_attempt() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec(
+        "REQUIRED=value\n",
+        required_secret_profile("REQUIRED"),
+        &temp_dir,
+    );
+    // require_reason = Always with no reason supplied -> every access is denied.
+    spec.set_require_reason(RequireReason::Always);
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    assert!(matches!(
+        spec.get("REQUIRED"),
+        Err(SecretSpecError::ReasonRequired)
+    ));
+
+    // A blocked access still leaves an audit trace.
+    let events = audit_events(&lines);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["action"], "get");
+    assert_eq!(events[0]["outcome"], "error");
+    assert_eq!(events[0]["error_kind"], "reason_required");
+    assert_eq!(events[0]["key"], "REQUIRED");
+}
+
+#[test]
+fn audit_import_records_keys_and_per_secret_writes() {
+    let temp_dir = TempDir::new().unwrap();
+    // Target provider (the spec default) starts empty.
+    let mut spec = dotenv_spec("", required_secret_profile("REQUIRED"), &temp_dir);
+    // Source provider holds the secret to copy.
+    let source = temp_dir.path().join("source.env");
+    fs::write(&source, "REQUIRED=from_source\n").unwrap();
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    spec.import(&format!("dotenv://{}", source.display()))
+        .unwrap();
+
+    let events = audit_events(&lines);
+    let actions: Vec<&str> = events
+        .iter()
+        .map(|e| e["action"].as_str().unwrap())
+        .collect();
+    // Each copied secret is recorded as a `set`, then one bulk `import` event.
+    assert_eq!(actions, vec!["set", "import"]);
+
+    let set = &events[0];
+    assert_eq!(set["outcome"], "written");
+    assert_eq!(set["key"], "REQUIRED");
+
+    let import = &events[1];
+    assert_eq!(import["outcome"], "written");
+    assert_eq!(import["keys"][0], "REQUIRED");
+    // The copied value is never logged.
+    assert!(
+        !lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.contains("from_source"))
+    );
 }
 
 #[test]

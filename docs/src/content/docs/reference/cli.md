@@ -247,6 +247,31 @@ $ secretspec import dotenv:/home/user/old-project/.env
 - Copy secrets between different profiles or projects
 - Import existing environment variables into SecretSpec management
 
+### audit
+
+Show the local [audit log](/concepts/audit/) of secret access.
+
+```bash
+secretspec audit [--project <NAME>] [--action <ACTION>] [-n <N>] [--json]
+```
+
+**Options:**
+- `--project <NAME>` - Only show entries for this project
+- `--action <ACTION>` - Only show entries for this action (`get`, `set`, `check`, `run`, `import`)
+- `-n, --tail <N>` - Show only the last N entries
+- `--json` - Output raw JSON Lines instead of the formatted summary
+
+The log location is read from your user-global config (`[audit]` in `~/.config/secretspec/config.toml`), defaulting to the per-user state directory.
+
+**Example:**
+```bash
+$ secretspec audit --action run -n 5
+2026-06-04T18:06:29Z  run    found  ./deploy.sh  API_KEY,DATABASE_URL  (my-app/production)  reason: deploy  [claude-code]
+
+# Pipe raw entries to jq
+$ secretspec audit --json | jq 'select(.outcome == "missing")'
+```
+
 ## Environment Variables
 
 | Variable | Description |

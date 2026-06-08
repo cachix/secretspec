@@ -62,6 +62,36 @@ fn test_create_from_string_with_full_uris() {
     assert_eq!(provider.name(), "onepassword");
 }
 
+/// The audit log and the fallback-chain warnings persist a provider's `uri()`
+/// and rely on it never echoing a credential the user embedded in the source
+/// URI (see `Provider::uri`). Enforce that contract for every registered scheme:
+/// build the provider from a URI carrying a recognizable secret in the
+/// *password* position and assert the reconstructed `uri()` does not contain it.
+///
+/// The username/host/path positions hold non-secret attribution (1Password
+/// accounts, AWS profiles, Vault namespaces) and are intentionally preserved; a
+/// URL *password* is always a credential and must never resurface. A scheme that
+/// rejects this URI shape simply builds nothing, which leaks nothing.
+#[test]
+fn uri_never_echoes_a_userinfo_password() {
+    const SECRET: &str = "leaked_pw_DO_NOT_ECHO";
+
+    for reg in super::PROVIDER_REGISTRY {
+        for &scheme in reg.schemes {
+            let source = format!("{scheme}://attribution:{SECRET}@host/path");
+            // Only assert on schemes that build; a parse failure echoes nothing.
+            let Ok(provider) = Box::<dyn Provider>::try_from(source.as_str()) else {
+                continue;
+            };
+            let uri = provider.uri();
+            assert!(
+                !uri.contains(SECRET),
+                "provider scheme {scheme:?} echoed a URL password into uri(): {uri:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn test_create_from_string_with_plain_names() {
     // Test plain provider names

@@ -33,6 +33,7 @@ url.workspace = true
 percent-encoding.workspace = true
 whoami = { workspace = true, optional = true }
 linkme.workspace = true
+jiff.workspace = true
 secrecy.workspace = true
 bitwarden = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }

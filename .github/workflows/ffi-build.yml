@@ -1,0 +1,80 @@
+name: "FFI cdylib"
+
+# Builds the secretspec-ffi C ABI library for each platform the language SDKs
+# bundle. Builds NATIVELY on a per-platform runner rather than cross-compiling,
+# because the crate links system libraries (e.g. dbus/keyring on Linux) that
+# make cross toolchains painful.
+#
+# NOTE: This produces development-grade artifacts. Production packaging
+# (manylinux compliance for Python wheels, macOS code signing/notarization,
+# Windows runtime considerations) is follow-up work tracked with the SDK
+# distribution effort.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - v**
+  pull_request:
+    paths:
+      - "secretspec-ffi/**"
+      - "secretspec/**"
+      - ".github/workflows/ffi-build.yml"
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            artifact: libsecretspec_ffi.so
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            artifact: libsecretspec_ffi.so
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            artifact: libsecretspec_ffi.dylib
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            artifact: libsecretspec_ffi.dylib
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            artifact: secretspec_ffi.dll
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build cdylib
+        run: cargo build -p secretspec-ffi --release --target ${{ matrix.target }}
+
+      - name: Smoke test the C ABI (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cc secretspec-ffi/tests/smoke.c \
+            -I secretspec-ffi/include \
+            -L target/${{ matrix.target }}/release \
+            -lsecretspec_ffi -o smoke
+          LD_LIBRARY_PATH=target/${{ matrix.target }}/release \
+          DYLD_LIBRARY_PATH=target/${{ matrix.target }}/release \
+          ./smoke
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: secretspec-ffi-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/${{ matrix.artifact }}
+            secretspec-ffi/include/secretspec.h

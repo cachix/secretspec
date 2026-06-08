@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secretspec.dev/schema/resolution-report.schema.json",
+  "title": "SecretSpec resolution report",
+  "description": "Value-free, versioned description of how every declared secret resolved for one profile. Emitted by `secretspec check --json`. Never contains secret values.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "provider", "profile", "secrets"],
+  "properties": {
+    "schema_version": {
+      "description": "Wire-format version. Consumers should refuse versions they do not understand.",
+      "type": "integer",
+      "const": 1
+    },
+    "provider": {
+      "description": "Credential-free URI of the provider the resolution is reported against.",
+      "type": "string"
+    },
+    "profile": {
+      "description": "The profile that was resolved.",
+      "type": "string"
+    },
+    "secrets": {
+      "description": "One entry per declared secret, sorted by name.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/secretResolution" }
+    }
+  },
+  "$defs": {
+    "secretResolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status", "required", "default_applied", "generated", "as_path"],
+      "properties": {
+        "name": {
+          "description": "Declared secret name (the UPPER_SNAKE manifest key).",
+          "type": "string"
+        },
+        "status": {
+          "description": "Whether the secret resolved, and if not whether that is an error.",
+          "type": "string",
+          "enum": ["resolved", "missing_required", "missing_optional"]
+        },
+        "required": {
+          "description": "Whether the active profile marks this secret as required.",
+          "type": "boolean"
+        },
+        "source_provider": {
+          "description": "Credential-free URI of the provider that answered. Present only when the value came from a provider (absent when generated, defaulted, or missing).",
+          "type": "string"
+        },
+        "default_applied": {
+          "description": "Whether the value came from the manifest's committed default.",
+          "type": "boolean"
+        },
+        "generated": {
+          "description": "Whether the value was freshly minted by the secret's generate config.",
+          "type": "boolean"
+        },
+        "as_path": {
+          "description": "Whether the value is materialized to a temp file and exposed as a path.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

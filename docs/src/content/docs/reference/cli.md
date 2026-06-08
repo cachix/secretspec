@@ -130,6 +130,9 @@ secretspec check [OPTIONS]
 **Options:**
 - `-p, --provider <PROVIDER>` - Provider backend to use
 - `-P, --profile <PROFILE>` - Profile to use
+- `-n, --no-prompt` - Don't prompt for missing secrets (exit with error if any are missing)
+- `--json` - Print a value-free resolution report as JSON instead of prompting
+- `--explain` - Print a value-free, human-readable resolution trace instead of prompting
 
 **Example:**
 ```bash
@@ -138,6 +141,45 @@ $ secretspec check --profile production
 ✗ API_KEY - API key for external service (required)
 Enter value for API_KEY (profile: production): ****
 ✓ Secret 'API_KEY' saved to keyring (profile: production)
+```
+
+#### Resolution report (`--json` / `--explain`)
+
+`--json` and `--explain` report how every declared secret resolved for the
+active profile without prompting and without ever printing a secret value. Both
+exit non-zero when a required secret is missing, so they work as a CI gate.
+
+`--explain` prints a human-readable trace:
+
+```bash
+$ secretspec check --profile production --explain
+profile:  production
+provider: keyring://
+  DATABASE_URL  ok        source keyring://
+  JWT_SECRET    ok        generated
+  LOG_LEVEL     ok        default value
+  SENTRY_DSN    missing   optional
+  STRIPE_KEY    MISSING   required
+```
+
+`--json` emits a versioned, machine-readable object for tooling and CI. Each
+entry reports the `status` (`resolved`, `missing_required`, `missing_optional`),
+whether the value came from a provider (`source_provider`, credential-free), a
+generator (`generated`), or a committed default (`default_applied`), and whether
+it is exposed `as_path`. No secret values appear. The canonical JSON Schema is
+committed at `schema/resolution-report.schema.json`.
+
+```bash
+$ secretspec check --profile production --json
+{
+  "schema_version": 1,
+  "provider": "keyring://",
+  "profile": "production",
+  "secrets": [
+    { "name": "DATABASE_URL", "status": "resolved", "required": true, "source_provider": "keyring://", "default_applied": false, "generated": false, "as_path": false },
+    { "name": "STRIPE_KEY", "status": "missing_required", "required": true, "default_applied": false, "generated": false, "as_path": false }
+  ]
+}
 ```
 
 ### get

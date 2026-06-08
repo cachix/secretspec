@@ -94,6 +94,14 @@ enum Commands {
         /// Don't prompt for missing secrets (exit with error if any are missing)
         #[arg(short = 'n', long)]
         no_prompt: bool,
+        /// Print the value-free resolution report as JSON (no secret values).
+        /// Never prompts; exits non-zero if a required secret is missing.
+        #[arg(long, conflicts_with = "explain")]
+        json: bool,
+        /// Print a value-free, human-readable resolution trace (no secret
+        /// values). Never prompts; exits non-zero if a required secret is missing.
+        #[arg(long)]
+        explain: bool,
     },
     /// Init or show ~/.config/secretspec/config.toml
     Config {
@@ -617,6 +625,8 @@ pub fn main() -> Result<()> {
             provider,
             profile,
             no_prompt,
+            json,
+            explain,
         } => {
             let mut app = load_secrets(&cli.file, &cli.reason)?;
             if let Some(p) = provider {
@@ -625,6 +635,36 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
+
+            // `--json`/`--explain` surface the value-free resolution report
+            // instead of the interactive prompt-for-missing flow. They report
+            // on every declared secret (including missing required ones) and
+            // exit non-zero when a required secret is missing, so CI can gate.
+            if json || explain {
+                let report = match app
+                    .validate()
+                    .into_diagnostic()
+                    .wrap_err("Failed to resolve secrets")?
+                {
+                    Ok(validated) => validated.report(),
+                    Err(errors) => errors.report(),
+                };
+
+                if json {
+                    let rendered = serde_json::to_string_pretty(&report)
+                        .into_diagnostic()
+                        .wrap_err("Failed to serialize resolution report")?;
+                    println!("{}", rendered);
+                } else {
+                    print!("{}", report.to_explain_string());
+                }
+
+                if !report.all_required_present() {
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+
             let mut validated = app
                 .check(no_prompt)
                 .into_diagnostic()

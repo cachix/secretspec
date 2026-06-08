@@ -316,6 +316,7 @@ fn test_validation_result_structure() {
         resolved: Resolved::new(HashMap::new(), "keyring".to_string(), "default".to_string()),
         missing_optional: vec!["optional_secret".to_string()],
         with_defaults: Vec::new(),
+        resolution: Vec::new(),
         temp_files: Vec::new(),
     };
     assert_eq!(valid_result.missing_optional.len(), 1);
@@ -331,6 +332,97 @@ fn test_validation_result_structure() {
     );
     assert!(validation_errors.has_errors());
     assert_eq!(validation_errors.missing_required.len(), 1);
+}
+
+#[test]
+fn test_resolution_report_provenance() {
+    use crate::report::ResolutionStatus;
+
+    let temp_dir = TempDir::new().unwrap();
+    // Only DATABASE_URL is present in the backend; everything else exercises a
+    // different resolution arm (default, missing-optional, missing-required).
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "DATABASE_URL=postgres://localhost/db\n").unwrap();
+
+    let secret = |required: bool, default: Option<&str>| Secret {
+        description: Some("test".to_string()),
+        required: Some(required),
+        default: default.map(String::from),
+        ..Default::default()
+    };
+
+    let mut secrets = HashMap::new();
+    secrets.insert("DATABASE_URL".to_string(), secret(true, None));
+    secrets.insert("LOG_LEVEL".to_string(), secret(false, Some("info")));
+    secrets.insert("SENTRY_DSN".to_string(), secret(false, None));
+    secrets.insert("STRIPE_KEY".to_string(), secret(true, None));
+
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
+
+    let config = Config {
+        project: Project {
+            name: "report-test".to_string(),
+            ..Default::default()
+        },
+        profiles,
+        providers: None,
+    };
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(config, None, Some(provider), None);
+
+    // A required secret (STRIPE_KEY) is missing, so validation reports an error,
+    // but the report still describes every declared secret.
+    let report = match spec.validate().unwrap() {
+        Ok(validated) => validated.report(),
+        Err(errors) => errors.report(),
+    };
+
+    assert_eq!(report.schema_version, 1);
+    assert_eq!(report.profile, "default");
+    assert!(!report.all_required_present());
+
+    // Entries are sorted by name for deterministic output.
+    let names: Vec<&str> = report.secrets.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["DATABASE_URL", "LOG_LEVEL", "SENTRY_DSN", "STRIPE_KEY"]
+    );
+
+    let by_name = |name: &str| {
+        report
+            .secrets
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("missing entry {name}"))
+    };
+
+    let db = by_name("DATABASE_URL");
+    assert_eq!(db.status, ResolutionStatus::Resolved);
+    assert!(db.required);
+    assert!(db.source_provider.is_some(), "provider hit is attributed");
+    assert!(!db.default_applied);
+    assert!(!db.generated);
+
+    let log = by_name("LOG_LEVEL");
+    assert_eq!(log.status, ResolutionStatus::Resolved);
+    assert!(log.default_applied);
+    assert!(log.source_provider.is_none(), "a default has no provider");
+
+    let sentry = by_name("SENTRY_DSN");
+    assert_eq!(sentry.status, ResolutionStatus::MissingOptional);
+    assert!(!sentry.required);
+
+    let stripe = by_name("STRIPE_KEY");
+    assert_eq!(stripe.status, ResolutionStatus::MissingRequired);
+    assert!(stripe.required);
 }
 
 #[test]

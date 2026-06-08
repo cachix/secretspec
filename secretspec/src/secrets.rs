@@ -4,6 +4,7 @@ use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
 use crate::config::{Config, GlobalConfig, Profile, RequireReason, Resolved};
 use crate::error::{Result, SecretSpecError};
 use crate::provider::Provider as ProviderTrait;
+use crate::report::{ResolutionStatus, SecretResolution};
 use crate::validation::{ValidatedSecrets, ValidationErrors};
 use colored::Colorize;
 use secrecy::{ExposeSecret, SecretString};
@@ -2020,6 +2021,12 @@ impl Secrets {
                 let mut missing_optional = Vec::new();
                 let mut with_defaults = Vec::new();
                 let mut temp_files = Vec::new();
+                // Per-secret provenance for the value-free resolution report.
+                let mut resolution: Vec<SecretResolution> = Vec::new();
+                // Credential-free `uri()` of each successfully built primary
+                // provider group, keyed by the configured group URI, so a
+                // primary hit can be attributed to the provider that answered.
+                let mut group_uris: HashMap<Option<String>, String> = HashMap::new();
 
                 let profile = self.resolve_profile(Some(&profile_name))?;
                 let all_secrets: Vec<(String, crate::config::Secret)> =
@@ -2085,6 +2092,12 @@ impl Secrets {
                         }
                     };
 
+                    // Attribute primary hits to the provider's own credential-free
+                    // `uri()`, never the raw configured alias (which may embed a
+                    // token). Recorded before the fetch so attribution survives a
+                    // partial batch.
+                    group_uris.insert(provider_uri.clone(), provider.uri());
+
                     let keys: Vec<&str> = secret_names.iter().map(|s| s.as_str()).collect();
                     match provider.get_batch(&self.config.project.name, &keys, &profile_name) {
                         Ok(batch_results) => fetched_values.extend(batch_results),
@@ -2096,7 +2109,10 @@ impl Secrets {
                     }
                 }
 
-                // Process results - apply defaults, handle as_path, track missing
+                // Process results - apply defaults, handle as_path, track missing.
+                // Each secret also records a value-free provenance entry for the
+                // resolution report (status, which provider answered, generated,
+                // defaulted).
                 for (name, _) in all_secrets {
                     let secret_config = self
                         .resolve_secret_config(&name, Some(&profile_name))
@@ -2105,8 +2121,17 @@ impl Secrets {
                     let default = secret_config.default.clone();
                     let as_path = secret_config.as_path.unwrap_or(false);
 
+                    // `name` is consumed by whichever arm resolves/records it;
+                    // keep a copy for the provenance entry pushed at the end.
+                    let report_name = name.clone();
+                    let status;
+                    let mut source_provider = None;
+                    let mut default_applied = false;
+                    let mut generated = false;
+
                     match fetched_values.remove(&name) {
                         Some(value) => {
+                            source_provider = group_uris.get(&secret_primary_uris[&name]).cloned();
                             self.insert_resolved(
                                 &mut secrets,
                                 &mut temp_files,
@@ -2114,13 +2139,14 @@ impl Secrets {
                                 value,
                                 as_path,
                             )?;
+                            status = ResolutionStatus::Resolved;
                         }
                         None => {
                             let primary_uri = &secret_primary_uris[&name];
                             let primary_failed = failed_primary_uris.contains_key(primary_uri);
 
                             // An explicit override collapses the chain to one provider, no fallback.
-                            let fallback_value =
+                            let (fallback_value, fallback_uri) =
                                 match (override_uri.as_ref(), secret_config.providers.as_deref()) {
                                     (None, Some(providers)) if providers.len() > 1 => {
                                         let fallback_uris =
@@ -2132,7 +2158,6 @@ impl Secrets {
                                             fallback_uris.as_deref(),
                                             None,
                                         )?
-                                        .0
                                     }
                                     // No alternative chain to try and the primary failed: surface the
                                     // original error rather than reporting the secret as merely
@@ -2144,10 +2169,11 @@ impl Secrets {
                                             .expect("primary_failed implies entry present");
                                         return Err(err);
                                     }
-                                    _ => None,
+                                    _ => (None, None),
                                 };
 
                             if let Some(value) = fallback_value {
+                                source_provider = fallback_uri;
                                 self.insert_resolved(
                                     &mut secrets,
                                     &mut temp_files,
@@ -2155,17 +2181,21 @@ impl Secrets {
                                     value,
                                     as_path,
                                 )?;
-                            } else if let Some(generated) =
+                                status = ResolutionStatus::Resolved;
+                            } else if let Some(generated_value) =
                                 self.try_generate_secret(&name, &secret_config, &profile_name)?
                             {
+                                generated = true;
                                 self.insert_resolved(
                                     &mut secrets,
                                     &mut temp_files,
                                     name,
-                                    generated,
+                                    generated_value,
                                     as_path,
                                 )?;
+                                status = ResolutionStatus::Resolved;
                             } else if let Some(default_value) = default {
+                                default_applied = true;
                                 self.insert_resolved(
                                     &mut secrets,
                                     &mut temp_files,
@@ -2174,13 +2204,26 @@ impl Secrets {
                                     as_path,
                                 )?;
                                 with_defaults.push((name, default_value));
+                                status = ResolutionStatus::Resolved;
                             } else if required {
                                 missing_required.push(name);
+                                status = ResolutionStatus::MissingRequired;
                             } else {
                                 missing_optional.push(name);
+                                status = ResolutionStatus::MissingOptional;
                             }
                         }
                     }
+
+                    resolution.push(SecretResolution {
+                        name: report_name,
+                        status,
+                        required,
+                        source_provider,
+                        default_applied,
+                        generated,
+                        as_path,
+                    });
                 }
 
                 let report_provider_uri = self.validation_report_provider_uri(
@@ -2189,13 +2232,15 @@ impl Secrets {
                 )?;
 
                 if !missing_required.is_empty() {
-                    Ok(Err(ValidationErrors::new(
+                    let mut errors = ValidationErrors::new(
                         missing_required,
                         missing_optional,
                         with_defaults,
                         report_provider_uri,
                         profile_name.to_string(),
-                    )))
+                    );
+                    errors.resolution = resolution;
+                    Ok(Err(errors))
                 } else {
                     Ok(Ok(ValidatedSecrets {
                         resolved: Resolved::new(
@@ -2205,6 +2250,7 @@ impl Secrets {
                         ),
                         missing_optional,
                         with_defaults,
+                        resolution,
                         temp_files,
                     }))
                 }

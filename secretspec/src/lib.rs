@@ -45,6 +45,7 @@ mod audit;
 mod config;
 mod error;
 pub(crate) mod generator;
+mod report;
 mod secrets;
 mod validation;
 
@@ -70,6 +71,9 @@ pub use config::{GenerateConfig, GenerateOptions, Secret};
 // Public API exports
 pub use error::{Result, SecretSpecError};
 pub use provider::Provider;
+pub use report::{
+    RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus, SecretResolution,
+};
 pub use secrets::Secrets;
 pub use validation::ValidatedSecrets;
 

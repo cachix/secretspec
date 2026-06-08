@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `secretspec check --json` and `secretspec check --explain` surface a
+  value-free resolution report describing how every declared secret resolved
+  for the active profile: its status (`resolved`, `missing_required`,
+  `missing_optional`), whether the value came from a provider (with the serving
+  provider's credential-free URI), a generator, or a committed default, and
+  whether it is exposed `as_path`. Secret values are never included. Both flags
+  skip the interactive prompt-for-missing flow and exit non-zero when a required
+  secret is missing, so CI can gate on them. `--json` emits a versioned
+  (`schema_version`) machine-readable object; its canonical JSON Schema is
+  committed at `schema/resolution-report.schema.json`. The same report is
+  available to the Rust SDK via `ValidatedSecrets::report()` /
+  `ValidationErrors::report()`, returning the new public `ResolutionReport`,
+  `SecretResolution`, and `ResolutionStatus` types.
+
 ## [0.12.0] - 2026-06-08
 
 ### Added

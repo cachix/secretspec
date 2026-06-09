@@ -24,6 +24,8 @@
       '';
     };
   };
+  # Go SDK (secretspec-go) binds the C ABI via purego (dlopen, no cgo).
+  languages.go.enable = true;
 
   packages = [
     # keyring

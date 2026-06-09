@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- New `secretspec-go` Go SDK: a thin client over the `secretspec-ffi` C ABI,
+  loaded at runtime via purego (dlopen, no cgo), so Go apps inherit every
+  provider with no Go-side resolution logic. Mirrors the derive crate's
+  vocabulary (`secretspec.New().WithProvider(...).WithProfile(...).WithReason(...).Load()`
+  returning a `*Resolved` with `Provider`/`Profile`/`Secrets`, plus `SetAsEnv()`).
+  A missing required secret returns `*MissingRequiredError`; other failures
+  return `*Error` with a stable `.Kind`. `as_path` secrets are returned as a
+  readable file path. The library is found via `SECRETSPEC_FFI_LIB` or a Cargo
+  target directory. `devenv.nix` now provides Go.
 - New `secretspec-py` Python SDK: a thin client over the `secretspec-ffi` C ABI
   (loaded via cffi), so Python apps inherit every provider with no Python-side
   resolution logic. Mirrors the derive crate's vocabulary

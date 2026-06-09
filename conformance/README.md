@@ -39,8 +39,17 @@ the comparison is deterministic and meaningful across languages.
 
 ## Running
 
-Each SDK runs the fixtures as part of its own test suite (so it uses that
-language's native runner), reading this directory relative to the repo root:
+Run everything with the aggregate runner (inside the project devenv shell). It
+builds the `secretspec-ffi` cdylib once, points every SDK at it via
+`SECRETSPEC_FFI_LIB`, runs each language's conformance suite, and prints a
+combined PASS/FAIL/SKIP summary (exiting non-zero if any language fails):
+
+```sh
+devenv shell -- bash conformance/run.sh
+```
+
+Or run a single language in its own native runner, reading this directory
+relative to the repo root:
 
 - Python: `cd secretspec-py && pytest`
 - Go: `cd secretspec-go && go test ./...`

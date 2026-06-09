@@ -35,7 +35,7 @@ Generate typed interfaces with `secretspec schema` plus
 [quicktype](https://quicktype.io), then convert `resolved.fieldsJson()`:
 
 ```bash
-secretspec schema | quicktype -s schema --lang typescript -o secrets_gen.ts
+secretspec schema | quicktype -s schema --top-level SecretSpec --lang typescript -o secrets_gen.ts
 ```
 
 ```ts

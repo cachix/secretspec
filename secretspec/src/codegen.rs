@@ -2,11 +2,11 @@
 //!
 //! Every typed-accessor generator computes the *same* decisions from a manifest:
 //! which secrets exist, whether a field is optional, whether it is a file path,
-//! how profiles map to types. If each generator (the Rust derive macro plus the
-//! eventual TypeScript/Python/Go/Ruby emitters) recomputed those decisions, they
-//! would drift. This module is the single brain: a manifest is reduced to a
-//! language-neutral [`CodegenIr`] once, and every emitter is a thin template
-//! over it.
+//! how profiles map to types. If each generator (the Rust derive macro and the
+//! JSON Schema emitter that drives quicktype for other languages) recomputed
+//! those decisions, they would drift. This module is the single brain: a
+//! manifest is reduced to a language-neutral [`CodegenIr`] once, and each
+//! emitter is a thin template over it.
 //!
 //! The IR deliberately mirrors the two shapes the derive crate exposes:
 //! - a **union** field set (`SecretSpec`) safe to use without knowing the
@@ -176,14 +176,16 @@ pub fn build_ir(config: &Config) -> CodegenIr {
 /// JSON Schema emitter.
 ///
 /// Rather than hand-write typed accessors per language, we emit a JSON Schema
-/// describing the manifest's types and let [quicktype](https://quicktype.io)
-/// generate the idiomatic types and deserializers for any target language. We
-/// then maintain only the small generic `fields()` helper in each runtime SDK,
-/// which hands quicktype's deserializer a flat `{SECRET_NAME: value}` map.
+/// describing one manifest shape and let [quicktype](https://quicktype.io)
+/// generate the idiomatic type and deserializer for any target language. We then
+/// maintain only the small generic `fields()` helper in each runtime SDK, which
+/// hands quicktype's deserializer a flat `{SECRET_NAME: value}` map.
 ///
-/// The schema defines one type per shape the derive crate exposes: `SecretSpec`
-/// (the union, safe for any profile) and one `<Profile>Secrets` per profile. A
-/// `Manifest` wrapper references them all so quicktype emits every type.
+/// The schema is a single-root object so quicktype emits a properly named type
+/// with a converter in every language (a wrapper or `$ref` root makes quicktype
+/// drop the converter or rename the type). By default it describes the union
+/// `SecretSpec` (safe for any profile); with a profile it describes that
+/// profile's exact fields. Pair it with `quicktype --top-level <Name>`.
 pub mod schema {
     use super::{CodegenIr, IrField};
     use serde_json::{Map, Value, json};
@@ -198,7 +200,7 @@ pub mod schema {
         }
     }
 
-    fn object_schema(fields: &[IrField]) -> Value {
+    fn object_schema(title: &str, fields: &[IrField]) -> Value {
         let mut properties = Map::new();
         let mut required = Vec::new();
         for field in fields {
@@ -208,8 +210,10 @@ pub mod schema {
             }
         }
         json!({
+            "$schema": "http://json-schema.org/draft-06/schema#",
             "type": "object",
             "additionalProperties": false,
+            "title": title,
             "properties": Value::Object(properties),
             "required": required,
         })
@@ -224,44 +228,29 @@ pub mod schema {
     }
 
     /// Emit the JSON Schema (draft-06, the dialect quicktype consumes) for the
-    /// manifest's types.
-    pub fn emit(ir: &CodegenIr) -> String {
-        let mut definitions = Map::new();
-        let mut wrapper_props = Map::new();
-
-        definitions.insert("SecretSpec".to_string(), object_schema(&ir.union));
-        wrapper_props.insert(
-            "SecretSpec".to_string(),
-            json!({ "$ref": "#/definitions/SecretSpec" }),
-        );
-
-        for profile in &ir.profile_fields {
-            let name = format!("{}Secrets", capitalize(&profile.name));
-            definitions.insert(name.clone(), object_schema(&profile.fields));
-            wrapper_props.insert(
-                name.clone(),
-                json!({ "$ref": format!("#/definitions/{name}") }),
-            );
-        }
-
-        // A wrapper that references every type so quicktype emits all of them.
-        definitions.insert(
-            "Manifest".to_string(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": Value::Object(wrapper_props),
-            }),
-        );
-
-        let schema = json!({
-            "$schema": "http://json-schema.org/draft-06/schema#",
-            "$ref": "#/definitions/Manifest",
-            "title": ir.project,
-            "definitions": Value::Object(definitions),
-        });
-
-        format!("{}\n", serde_json::to_string_pretty(&schema).unwrap())
+    /// union (`profile = None`) or one profile's fields. Returns an error if the
+    /// named profile does not exist.
+    pub fn emit(ir: &CodegenIr, profile: Option<&str>) -> Result<String, String> {
+        let schema = match profile {
+            None => object_schema("SecretSpec", &ir.union),
+            Some(name) => {
+                let found = ir
+                    .profile_fields
+                    .iter()
+                    .find(|p| p.name == name)
+                    .ok_or_else(|| {
+                        format!(
+                            "unknown profile '{name}'; available: {}",
+                            ir.profiles.join(", ")
+                        )
+                    })?;
+                object_schema(&format!("{}Secrets", capitalize(name)), &found.fields)
+            }
+        };
+        Ok(format!(
+            "{}\n",
+            serde_json::to_string_pretty(&schema).unwrap()
+        ))
     }
 }
 
@@ -419,19 +408,14 @@ mod tests {
             ),
         ]));
 
-        let rendered = schema::emit(&ir);
-        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
-        let defs = &value["definitions"];
-
-        // The union type and one type per profile, plus the Manifest wrapper.
-        assert!(defs["SecretSpec"].is_object());
-        assert!(defs["DevelopmentSecrets"].is_object());
-        assert!(defs["ProductionSecrets"].is_object());
-        assert_eq!(value["$ref"], "#/definitions/Manifest");
+        // Union schema: single-root object titled SecretSpec.
+        let union: serde_json::Value =
+            serde_json::from_str(&schema::emit(&ir, None).unwrap()).unwrap();
+        assert_eq!(union["type"], "object");
+        assert_eq!(union["title"], "SecretSpec");
 
         // Required vs nullable: DATABASE_URL required everywhere; API_KEY optional
         // in development, so optional in the union and nullable in the schema.
-        let union = &defs["SecretSpec"];
         assert_eq!(union["properties"]["DATABASE_URL"]["type"], "string");
         assert_eq!(
             union["properties"]["API_KEY"]["type"],
@@ -445,6 +429,16 @@ mod tests {
             .collect();
         assert!(required.contains(&"DATABASE_URL"));
         assert!(!required.contains(&"API_KEY"));
+
+        // A profile schema is titled <Profile>Secrets with that profile's fields.
+        let prod: serde_json::Value =
+            serde_json::from_str(&schema::emit(&ir, Some("production")).unwrap()).unwrap();
+        assert_eq!(prod["title"], "ProductionSecrets");
+        assert!(prod["properties"]["DATABASE_URL"].is_object());
+        assert!(prod["properties"]["API_KEY"].is_null()); // not in production
+
+        // An unknown profile is an error.
+        assert!(schema::emit(&ir, Some("nope")).is_err());
     }
 
     #[test]

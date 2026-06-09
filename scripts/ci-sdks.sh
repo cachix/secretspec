@@ -30,7 +30,7 @@ echo "==> Go"
 ( cd secretspec-go && go test ./... )
 
 echo "==> Ruby"
-( cd secretspec-rb && ruby test/test_resolve.rb )
+( cd secretspec-rb && ruby -e 'Dir["test/test_*.rb"].sort.each { |f| require File.expand_path(f) }' )
 
 echo "==> Node"
 # The Node SDK uses a napi-rs addon (built by its test harness), not the cdylib,

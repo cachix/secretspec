@@ -134,12 +134,14 @@ module Secretspec
 
         dir = Dir.pwd
         loop do
-          %w[release debug].each do |profile|
-            lib_names.each do |name|
-              candidate = File.join(dir, "target", profile, name)
-              return candidate if File.exist?(candidate)
-            end
-          end
+          # Within the nearest target/, pick the most recently built library
+          # rather than always preferring release, so a stale release build does
+          # not shadow the debug build just produced.
+          candidates = %w[release debug].flat_map do |profile|
+            lib_names.map { |name| File.join(dir, "target", profile, name) }
+          end.select { |c| File.exist?(c) }
+          return candidates.max_by { |c| File.mtime(c) } unless candidates.empty?
+
           parent = File.dirname(dir)
           break if parent == dir
 

@@ -12,6 +12,18 @@
       install.enable = true;
     };
   };
+  # Python is used by the reference SDK (secretspec-py), which binds the
+  # secretspec-ffi C ABI via cffi (dlopen) over the prebuilt cdylib.
+  languages.python = {
+    enable = true;
+    venv = {
+      enable = true;
+      requirements = ''
+        cffi
+        pytest
+      '';
+    };
+  };
 
   packages = [
     # keyring
@@ -20,6 +32,8 @@
     pkgs.cargo-tarpaulin
     # installers
     pkgs.cargo-dist
+    # packaging the Python SDK wheel that bundles the cdylib
+    pkgs.maturin
   ];
 
   git-hooks.hooks = {

@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- New `secretspec-py` Python SDK: a thin client over the `secretspec-ffi` C ABI
+  (loaded via cffi), so Python apps inherit every provider with no Python-side
+  resolution logic. Mirrors the derive crate's vocabulary
+  (`SecretSpec.builder().with_provider(...).with_profile(...).with_reason(...).load()`
+  returning a `Resolved` with `.secrets`/`.provider`/`.profile`, plus
+  `set_as_env()`). A missing required secret raises `MissingRequiredError`; other
+  failures raise `SecretSpecError` with a stable `.kind`. `as_path` secrets are
+  returned as a readable file path. The native library is found via
+  `SECRETSPEC_FFI_LIB`, a wheel-bundled copy, or a Cargo target directory.
+  `devenv.nix` now provides Python, cffi, pytest, and maturin.
 - New `secretspec::codegen` module: a shared, language-neutral intermediate
   representation (IR) that reduces a manifest to the typed-accessor decisions
   every generator needs (union vs per-profile field sets, optionality, `as_path`,

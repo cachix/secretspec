@@ -6,11 +6,17 @@
   "homepage": "https://secretspec.dev/",
   "main": "index.js",
   "types": "index.d.ts",
-  "files": ["index.js", "index.d.ts"],
+  "files": [
+    "index.js",
+    "index.d.ts"
+  ],
   "scripts": {
     "test": "node --test"
   },
   "dependencies": {
     "koffi": "^2.9.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
   }
 }

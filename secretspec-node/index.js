@@ -115,6 +115,23 @@ class Resolved {
       process.env[name] = secret.get();
     }
   }
+
+  /** Flat { SECRET_NAME: value } object (the file path for as_path secrets). */
+  fields() {
+    const out = {};
+    for (const [name, secret] of Object.entries(this.secrets)) {
+      out[name] = secret.get();
+    }
+    return out;
+  }
+
+  /**
+   * fields() as a JSON string, the input for a quicktype-generated deserializer
+   * (e.g. Convert.toSecretSpec). See `secretspec schema`.
+   */
+  fieldsJson() {
+    return JSON.stringify(this.fields());
+  }
 }
 
 class Builder {

@@ -240,32 +240,38 @@ persisted temp file), its `source` (`provider`, `generated`, or `default`), and
 the serving provider's credential-free URI. The canonical JSON Schema is
 committed at `schema/resolve-response.schema.json`.
 
-### codegen
-Generate typed accessors for another language from the manifest, driven by the
-shared codegen IR (so every language stays consistent). Value-free: reads only
-the manifest, never a provider.
+### schema
+Emit a JSON Schema for the manifest's typed shapes: a `SecretSpec` type (the
+union, safe for any profile) plus one `<Profile>Secrets` type per profile.
+Value-free: reads only the manifest, never a provider.
 
 ```bash
-secretspec codegen --lang <LANG> [-o FILE]
+secretspec schema [-o FILE]
 ```
 
 **Options:**
-- `--lang <LANG>` - Target language (`python`)
 - `-o, --output <FILE>` - Write to this file instead of stdout
 
-For Python it emits a `SecretSpec` union dataclass plus one `<Profile>Secrets`
-dataclass per profile, each with a builder-style `load`, over the `secretspec`
-Python SDK:
+Rather than ship a typed-accessor generator per language, feed this schema to
+[quicktype](https://quicktype.io), which generates idiomatic types **and**
+deserializers for any language. At runtime, hand the generated deserializer the
+flat `{SECRET_NAME: value}` map from the SDK's `fields()` helper:
 
 ```bash
-$ secretspec codegen --lang python -o secrets_gen.py
+$ secretspec schema | quicktype -s schema --lang python -o secrets_gen.py
 ```
 ```python
-from secrets_gen import SecretSpec
+from secretspec import SecretSpec
+from secrets_gen import SecretSpec as Secrets  # quicktype-generated, typed
 
-s = SecretSpec.load(profile="production", reason="boot")
+resolved = SecretSpec.builder().with_profile("production").with_reason("boot").load()
+s = Secrets.from_dict(resolved.fields())
 print(s.database_url)   # typed str
 ```
+
+The same pattern works in every SDK: Go `UnmarshalSecretSpec(resolved.FieldsJSON())`,
+TypeScript `Convert.toSecretSpec(resolved.fieldsJson())`, Ruby
+`SecretSpec.from_dynamic!(resolved.fields)`.
 
 ### set
 Set a secret value.

@@ -49,6 +49,13 @@ module Secretspec
     def set_as_env!
       secrets.each { |name, secret| ENV[name] = secret.get }
     end
+
+    # Flat { "SECRET_NAME" => value } hash (the file path for as_path). Feed this
+    # to a quicktype-generated deserializer (e.g. from_dynamic!). See
+    # `secretspec schema`.
+    def fields
+      secrets.transform_values(&:get)
+    end
   end
 
   # The narrow C ABI, loaded lazily via Fiddle.

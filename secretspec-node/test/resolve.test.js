@@ -7,21 +7,16 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-// Build the secretspec-ffi cdylib and point the SDK at it, unless
-// SECRETSPEC_FFI_LIB is already set.
-function ensureLib() {
-  if (process.env.SECRETSPEC_FFI_LIB) return;
-  const repo = path.resolve(__dirname, '..', '..');
-  execFileSync('cargo', ['build', '-p', 'secretspec-ffi'], { cwd: repo, stdio: 'inherit' });
-  const meta = JSON.parse(
-    execFileSync('cargo', ['metadata', '--no-deps', '--format-version', '1'], { cwd: repo }),
-  );
-  const name =
-    process.platform === 'darwin' ? 'libsecretspec_ffi.dylib' : 'libsecretspec_ffi.so';
-  process.env.SECRETSPEC_FFI_LIB = path.join(meta.target_directory, 'debug', name);
+// Build the napi addon (secretspec.node) unless it is already present.
+function ensureAddon() {
+  const addon = path.resolve(__dirname, '..', 'secretspec.node');
+  if (fs.existsSync(addon)) return;
+  execFileSync('bash', [path.resolve(__dirname, '..', 'scripts', 'build-addon.sh')], {
+    stdio: 'inherit',
+  });
 }
 
-ensureLib();
+ensureAddon();
 const {
   SecretSpec,
   MissingRequiredError,

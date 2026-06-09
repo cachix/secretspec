@@ -3,10 +3,11 @@ title: Node.js SDK
 description: Resolve SecretSpec secrets from Node.js and TypeScript
 ---
 
-The Node.js / TypeScript SDK (`secretspec`) is a thin client over the
-`secretspec-ffi` C ABI, loaded via [koffi](https://koffi.dev/) (dlopen).
-Resolution happens in the Rust core, so the SDK inherits every provider with no
-JS-side logic. TypeScript declarations ship in `index.d.ts`.
+The Node.js / TypeScript SDK (`secretspec`) is a thin wrapper over a
+[napi-rs](https://napi.rs/) native addon that embeds the resolver. Resolution
+happens in the Rust core, so the SDK inherits every provider with no JS-side
+logic, and `npm install` needs no native build. TypeScript declarations ship in
+`index.d.ts`.
 
 ## Quick start
 
@@ -43,8 +44,3 @@ import { Convert } from './secrets_gen'; // typed, generated
 const typed = Convert.toSecretSpec(resolved.fieldsJson());
 console.log(typed.DATABASE_URL);
 ```
-
-## Library discovery
-
-The native library is found via the `SECRETSPEC_FFI_LIB` environment variable,
-or a Cargo `target` directory found by searching up from the working directory.

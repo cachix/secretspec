@@ -1,0 +1,57 @@
+name: "Node addon"
+
+# Builds the napi-rs Node addon (secretspec.node) per platform and smoke tests
+# it. The addon embeds the resolver, so the published npm package needs no
+# native build at install time.
+#
+# NOTE: this uploads a per-platform addon artifact. Full npm distribution
+# publishes these as per-platform packages (the pattern @napi-rs/cli automates);
+# that publish wiring is the remaining follow-up.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - v**
+  pull_request:
+    paths:
+      - "secretspec-node/**"
+      - "secretspec/**"
+      - ".github/workflows/node-addon.yml"
+
+jobs:
+  addon:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-x64, runner: ubuntu-latest }
+          - { target: linux-arm64, runner: ubuntu-24.04-arm }
+          - { target: darwin-x64, runner: macos-13 }
+          - { target: darwin-arm64, runner: macos-14 }
+          - { target: win32-x64, runner: windows-latest }
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux system dependencies (dbus for keyring)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build the addon and run the SDK tests
+        shell: bash
+        run: |
+          bash secretspec-node/scripts/build-addon.sh
+          ( cd secretspec-node && node --test )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-addon-${{ matrix.target }}
+          path: secretspec-node/secretspec.node

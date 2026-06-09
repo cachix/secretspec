@@ -90,3 +90,99 @@ impl ResolveResponse {
         self
     }
 }
+
+#[derive(Debug, Default, Deserialize)]
+struct JsonRequest {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    no_values: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct JsonError {
+    kind: String,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct JsonEnvelope {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response: Option<ResolveResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<JsonError>,
+}
+
+fn envelope_error(kind: &str, message: impl Into<String>) -> JsonEnvelope {
+    JsonEnvelope {
+        ok: false,
+        response: None,
+        error: Some(JsonError {
+            kind: kind.to_string(),
+            message: message.into(),
+        }),
+    }
+}
+
+fn resolve_envelope(request_json: &str) -> JsonEnvelope {
+    let request: JsonRequest = match serde_json::from_str(request_json) {
+        Ok(request) => request,
+        Err(e) => return envelope_error("invalid_request", format!("invalid request JSON: {e}")),
+    };
+
+    let loaded = match &request.path {
+        Some(path) => crate::Secrets::load_from(std::path::Path::new(path)),
+        None => crate::Secrets::load(),
+    };
+    let mut app = match loaded {
+        Ok(app) => app,
+        Err(e) => return envelope_error(e.kind(), e.to_string()),
+    };
+
+    if let Some(provider) = request.provider {
+        app.set_provider(provider);
+    }
+    if let Some(profile) = request.profile {
+        app.set_profile(profile);
+    }
+    if let Some(reason) = request.reason {
+        app = app.with_reason(reason);
+    }
+
+    match app.resolve() {
+        Ok(mut response) => {
+            if request.no_values {
+                response = response.without_values();
+            }
+            JsonEnvelope {
+                ok: true,
+                response: Some(response),
+                error: None,
+            }
+        }
+        Err(e) => envelope_error(e.kind(), e.to_string()),
+    }
+}
+
+/// Resolve secrets from a JSON request string and return the JSON response
+/// envelope: `{"ok": true, "response": <ResolveResponse>}` or
+/// `{"ok": false, "error": {"kind", "message"}}`.
+///
+/// This is the shared JSON boundary used by every native binding (the C ABI in
+/// `secretspec-ffi` and the napi-rs Node addon), so the envelope contract is
+/// defined in exactly one place. The request accepts optional `path`,
+/// `provider`, `profile`, `reason`, and `no_values`. The response carries secret
+/// values; treat its bytes as sensitive.
+pub fn resolve_json(request_json: &str) -> String {
+    let envelope = resolve_envelope(request_json);
+    serde_json::to_string(&envelope).unwrap_or_else(|_| {
+        "{\"ok\":false,\"error\":{\"kind\":\"serialize\",\"message\":\"failed to serialize response\"}}".to_string()
+    })
+}

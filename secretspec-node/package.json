@@ -6,17 +6,9 @@
   "homepage": "https://secretspec.dev/",
   "main": "index.js",
   "types": "index.d.ts",
-  "files": [
-    "index.js",
-    "index.d.ts"
-  ],
+  "files": ["index.js", "index.d.ts", "secretspec.node"],
   "scripts": {
+    "build": "bash scripts/build-addon.sh",
     "test": "node --test"
-  },
-  "dependencies": {
-    "koffi": "^2.9.0"
-  },
-  "devDependencies": {
-    "typescript": "^6.0.3"
   }
 }

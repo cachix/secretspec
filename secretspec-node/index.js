@@ -2,14 +2,23 @@
 
 // Node.js SDK for SecretSpec, a declarative secrets manager.
 //
-// A thin client over the secretspec-ffi C ABI, loaded at runtime via koffi
-// (dlopen). Resolution happens entirely in the Rust core, so the SDK inherits
-// every provider with no JS-side logic. Mirrors the Rust derive crate's
-// vocabulary.
+// A thin wrapper over the native napi-rs addon (secretspec.node), which embeds
+// the resolver and shares the same JSON envelope contract as every other
+// language binding. Resolution (providers, chains, profiles, generation,
+// as_path) happens entirely in the Rust core; this layer marshals JSON and
+// exposes the builder API. TypeScript declarations ship in index.d.ts.
 
-const fs = require('fs');
-const path = require('path');
-const koffi = require('koffi');
+let native;
+try {
+  // The prebuilt addon for this platform. napi-rs publishes it per platform;
+  // in a source checkout, build it with scripts/build-addon.sh.
+  native = require('./secretspec.node');
+} catch (err) {
+  throw new Error(
+    'failed to load the secretspec native addon (secretspec.node); build it ' +
+      `with scripts/build-addon.sh. Underlying error: ${err.message}`,
+  );
+}
 
 class SecretSpecError extends Error {
   constructor(kind, message) {
@@ -24,62 +33,6 @@ class MissingRequiredError extends SecretSpecError {
     super('missing_required', `missing required secret(s): ${missing.join(', ')}`);
     this.name = 'MissingRequiredError';
     this.missing = missing;
-  }
-}
-
-function libNames() {
-  if (process.platform === 'darwin') return ['libsecretspec_ffi.dylib'];
-  if (process.platform === 'win32') return ['secretspec_ffi.dll'];
-  return ['libsecretspec_ffi.so'];
-}
-
-function findLibrary() {
-  const override = process.env.SECRETSPEC_FFI_LIB;
-  if (override) return override;
-
-  let dir = process.cwd();
-  for (;;) {
-    for (const profile of ['release', 'debug']) {
-      for (const name of libNames()) {
-        const candidate = path.join(dir, 'target', profile, name);
-        if (fs.existsSync(candidate)) return candidate;
-      }
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  throw new SecretSpecError(
-    'load',
-    'could not locate the secretspec-ffi library; set SECRETSPEC_FFI_LIB',
-  );
-}
-
-let _lib = null;
-
-function lib() {
-  if (_lib) return _lib;
-  const handle = koffi.load(findLibrary());
-  _lib = {
-    // void* return so we own the pointer and can free it after decoding.
-    resolve: handle.func('void *secretspec_resolve(const char *)'),
-    free: handle.func('void secretspec_free(void *)'),
-    // const char* return is a static string; koffi decodes it directly.
-    abi: handle.func('const char *secretspec_abi_version()'),
-  };
-  return _lib;
-}
-
-function resolveRaw(request) {
-  const l = lib();
-  const ptr = l.resolve(JSON.stringify(request));
-  if (!ptr) {
-    throw new SecretSpecError('ffi', 'secretspec_resolve returned null');
-  }
-  try {
-    return koffi.decode(ptr, 'char', -1); // NUL-terminated C string
-  } finally {
-    l.free(ptr);
   }
 }
 
@@ -149,7 +102,7 @@ class Builder {
    * missing, and SecretSpecError for any other failure.
    */
   load() {
-    const envelope = JSON.parse(resolveRaw(this._request));
+    const envelope = JSON.parse(native.resolve(JSON.stringify(this._request)));
     if (!envelope.ok) {
       const err = envelope.error || {};
       throw new SecretSpecError(err.kind || 'unknown', err.message || '');
@@ -170,7 +123,7 @@ const SecretSpec = {
 };
 
 function abiVersion() {
-  return lib().abi();
+  return native.abiVersion();
 }
 
 module.exports = {

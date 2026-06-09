@@ -14,10 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Ruby, and Node SDKs agree. Each SDK runs the fixtures inside its own native
   test runner. For `as_path` secrets the canonical value is the materialized
   file's contents, so the comparison is deterministic across languages.
-- New `secretspec` Node.js / TypeScript SDK (`secretspec-node`): a thin client
-  over the `secretspec-ffi` C ABI, loaded at runtime via koffi (dlopen), so
-  Node apps inherit every provider with no JS-side resolution logic. Mirrors the
-  derive crate's vocabulary
+- New `secretspec::resolve_json(&str) -> String`: the shared JSON-in/JSON-out
+  resolution boundary (request to response envelope), so every native binding
+  (the `secretspec-ffi` C ABI and the napi-rs Node addon) defines the envelope
+  contract in exactly one place. `secretspec-ffi` is now a thin wrapper over it.
+- New `secretspec` Node.js / TypeScript SDK (`secretspec-node`): a thin wrapper
+  over a napi-rs native addon that embeds the resolver, so Node apps inherit
+  every provider with no JS-side resolution logic and `npm install` needs no
+  native build. Mirrors the derive crate's vocabulary
   (`SecretSpec.builder().withProvider(...).withProfile(...).withReason(...).load()`
   returning a `Resolved` with `provider`/`profile`/`secrets`, plus `setAsEnv()`).
   A missing required secret throws `MissingRequiredError`; other failures throw

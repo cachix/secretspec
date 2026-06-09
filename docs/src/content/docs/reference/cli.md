@@ -240,6 +240,33 @@ persisted temp file), its `source` (`provider`, `generated`, or `default`), and
 the serving provider's credential-free URI. The canonical JSON Schema is
 committed at `schema/resolve-response.schema.json`.
 
+### codegen
+Generate typed accessors for another language from the manifest, driven by the
+shared codegen IR (so every language stays consistent). Value-free: reads only
+the manifest, never a provider.
+
+```bash
+secretspec codegen --lang <LANG> [-o FILE]
+```
+
+**Options:**
+- `--lang <LANG>` - Target language (`python`)
+- `-o, --output <FILE>` - Write to this file instead of stdout
+
+For Python it emits a `SecretSpec` union dataclass plus one `<Profile>Secrets`
+dataclass per profile, each with a builder-style `load`, over the `secretspec`
+Python SDK:
+
+```bash
+$ secretspec codegen --lang python -o secrets_gen.py
+```
+```python
+from secrets_gen import SecretSpec
+
+s = SecretSpec.load(profile="production", reason="boot")
+print(s.database_url)   # typed str
+```
+
 ### set
 Set a secret value.
 

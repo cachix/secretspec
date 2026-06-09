@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   profile list). It is the single source of truth those decisions are computed
   in, so the Rust derive macro and the eventual TypeScript/Python/Go/Ruby
   emitters cannot drift. `build_ir(&Config) -> CodegenIr`.
+- New `secretspec codegen --lang python` command: emits typed Python accessors
+  over the `secretspec` Python SDK from the manifest, driven by the shared IR.
+  It mirrors the derive crate's shape (a `SecretSpec` union dataclass plus one
+  `<Profile>Secrets` dataclass per profile, each with a builder-style `load`)
+  with idiomatic snake_case attributes typed as `str`/`Optional[str]`/`Path`.
+  Value-free: reads only the manifest. `-o` writes to a file instead of stdout.
 
 ### Changed
 - The `secretspec-derive` macro now computes all of its typing decisions through

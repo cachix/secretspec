@@ -21,12 +21,19 @@ def _lib_name() -> str:
     return "libsecretspec_ffi.so"
 
 
+def _bin_name() -> str:
+    return "secretspec.exe" if sys.platform == "win32" else "secretspec"
+
+
 def _ensure_lib() -> None:
-    if os.environ.get("SECRETSPEC_FFI_LIB"):
+    have_lib = bool(os.environ.get("SECRETSPEC_FFI_LIB"))
+    have_bin = bool(os.environ.get("SECRETSPEC_BIN"))
+    if have_lib and have_bin:
         return
 
+    # Build the cdylib (for the runtime SDK) and the CLI (for codegen tests).
     subprocess.run(
-        ["cargo", "build", "-p", "secretspec-ffi"],
+        ["cargo", "build", "-p", "secretspec-ffi", "-p", "secretspec"],
         cwd=_REPO_ROOT,
         check=True,
     )
@@ -37,8 +44,9 @@ def _ensure_lib() -> None:
         capture_output=True,
         text=True,
     )
-    target_dir = pathlib.Path(json.loads(meta.stdout)["target_directory"])
-    os.environ["SECRETSPEC_FFI_LIB"] = str(target_dir / "debug" / _lib_name())
+    debug_dir = pathlib.Path(json.loads(meta.stdout)["target_directory"]) / "debug"
+    os.environ.setdefault("SECRETSPEC_FFI_LIB", str(debug_dir / _lib_name()))
+    os.environ.setdefault("SECRETSPEC_BIN", str(debug_dir / _bin_name()))
 
 
 _ensure_lib()

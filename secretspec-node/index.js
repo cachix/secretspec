@@ -112,9 +112,32 @@ class Builder {
   /**
    * Resolve the secrets. Throws MissingRequiredError if a required secret is
    * missing, and SecretSpecError for any other failure.
+   *
+   * Synchronous: the native resolve runs on the Node main thread. Prefer
+   * loadAsync() when a provider may do network I/O (1Password, LastPass).
    */
   load() {
-    const envelope = JSON.parse(native.resolve(JSON.stringify(this._request)));
+    return this._parse(native.resolve(JSON.stringify(this._request)));
+  }
+
+  /**
+   * Like load(), but resolves on the libuv threadpool so a provider doing
+   * network I/O does not block the Node event loop. Returns a Promise<Resolved>
+   * and rejects with the same error types load() throws.
+   */
+  async loadAsync() {
+    if (typeof native.resolveAsync !== 'function') {
+      throw new SecretSpecError(
+        'addon',
+        'the loaded native addon predates resolveAsync; rebuild it with scripts/build-addon.sh',
+      );
+    }
+    return this._parse(await native.resolveAsync(JSON.stringify(this._request)));
+  }
+
+  /** Parse a JSON response envelope string into a Resolved (or throw). */
+  _parse(raw) {
+    const envelope = JSON.parse(raw);
     if (!envelope.ok) {
       const err = envelope.error || {};
       throw new SecretSpecError(err.kind || 'unknown', err.message || '');

@@ -16,11 +16,16 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from cffi import FFI
+
+# Response wire-format version this SDK understands. Tracks secretspec-ffi's
+# RESOLVE_SCHEMA_VERSION; a mismatch means the loaded library is incompatible.
+_RESOLVE_SCHEMA_VERSION = 1
 
 __all__ = [
     "SecretSpec",
@@ -84,12 +89,16 @@ def _find_library() -> str:
 
 
 _lib = None
+_lib_lock = threading.Lock()
 
 
 def _load() -> object:
+    # Double-checked locking so concurrent first callers do not race to dlopen.
     global _lib
     if _lib is None:
-        _lib = _ffi.dlopen(_find_library())
+        with _lib_lock:
+            if _lib is None:
+                _lib = _ffi.dlopen(_find_library())
     return _lib
 
 
@@ -179,7 +188,18 @@ def _resolve_response(request: dict) -> dict:
     if not envelope.get("ok", False):
         err = envelope.get("error", {})
         raise SecretSpecError(err.get("kind", "unknown"), err.get("message", ""))
-    return envelope["response"]
+    response = envelope.get("response")
+    if response is None:
+        raise SecretSpecError("ffi", "secretspec_resolve reported ok with no response")
+    version = response.get("schema_version")
+    if version != _RESOLVE_SCHEMA_VERSION:
+        raise SecretSpecError(
+            "version",
+            f"unsupported resolve schema version {version} (expected "
+            f"{_RESOLVE_SCHEMA_VERSION}); the secretspec-ffi library and this SDK "
+            "are out of sync",
+        )
+    return response
 
 
 def resolve(
@@ -231,6 +251,11 @@ class _Builder:
             self._request["reason"] = reason
         return self
 
+    def with_no_values(self, no_values: bool = True) -> "_Builder":
+        """Omit secret values, returning only structure and provenance."""
+        self._request["no_values"] = no_values
+        return self
+
     def load(self) -> Resolved:
         response = _resolve_response(self._request)
 
@@ -243,7 +268,7 @@ class _Builder:
                 value=entry.get("value"),
                 path=entry.get("path"),
                 as_path=entry.get("as_path", False),
-                source=entry.get("source", "provider"),
+                source=entry.get("source", ""),
                 source_provider=entry.get("source_provider"),
             )
             for name, entry in response.get("secrets", {}).items()

@@ -190,6 +190,7 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
         {
           label: "SDK",
           items: [
+            { label: "Overview", slug: "sdk/overview" },
             { label: "Rust SDK", slug: "sdk/rust" },
             { label: "Python SDK", slug: "sdk/python" },
             { label: "Go SDK", slug: "sdk/go" },

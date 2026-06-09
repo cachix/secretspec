@@ -15,6 +15,10 @@ require "json"
 require "rbconfig"
 
 module Secretspec
+  # Response wire-format version this SDK understands. Tracks secretspec-ffi's
+  # RESOLVE_SCHEMA_VERSION; a mismatch means the loaded library is incompatible.
+  RESOLVE_SCHEMA_VERSION = 1
+
   # A resolution failure (bad manifest, provider error, reason policy).
   class Error < StandardError
     attr_reader :kind
@@ -45,9 +49,14 @@ module Secretspec
 
   # A successful resolution, mirroring the Rust Resolved wrapper.
   Resolved = Struct.new(:provider, :profile, :secrets, :missing_optional) do
-    # Export each resolved secret into ENV by its declared name.
+    # Export each resolved secret into ENV by its declared name. Secrets with no
+    # usable value (e.g. under no_values) are skipped rather than deleted from
+    # ENV (assigning nil would remove the variable).
     def set_as_env!
-      secrets.each { |name, secret| ENV[name] = secret.get }
+      secrets.each do |name, secret|
+        value = secret.get
+        ENV[name] = value unless value.nil?
+      end
     end
 
     # Flat { "SECRET_NAME" => value } hash (the file path for as_path). Feed this
@@ -60,6 +69,9 @@ module Secretspec
 
   # The narrow C ABI, loaded lazily via Fiddle.
   module Native
+    # Guards the one-time dlopen so concurrent first callers do not race.
+    @load_mutex = Mutex.new
+
     class << self
       def resolve(request_json)
         ensure_loaded
@@ -83,17 +95,23 @@ module Secretspec
       def ensure_loaded
         return if @loaded
 
-        handle = Fiddle.dlopen(find_library)
-        @resolve = Fiddle::Function.new(
-          handle["secretspec_resolve"], [Fiddle::TYPE_VOIDP], Fiddle::TYPE_VOIDP
-        )
-        @free = Fiddle::Function.new(
-          handle["secretspec_free"], [Fiddle::TYPE_VOIDP], Fiddle::TYPE_VOID
-        )
-        @abi = Fiddle::Function.new(
-          handle["secretspec_abi_version"], [], Fiddle::TYPE_VOIDP
-        )
-        @loaded = true
+        @load_mutex.synchronize do
+          # Re-check inside the lock: another thread may have loaded while we
+          # waited, and @loaded is only set after every function is registered.
+          next if @loaded
+
+          handle = Fiddle.dlopen(find_library)
+          @resolve = Fiddle::Function.new(
+            handle["secretspec_resolve"], [Fiddle::TYPE_VOIDP], Fiddle::TYPE_VOIDP
+          )
+          @free = Fiddle::Function.new(
+            handle["secretspec_free"], [Fiddle::TYPE_VOIDP], Fiddle::TYPE_VOID
+          )
+          @abi = Fiddle::Function.new(
+            handle["secretspec_abi_version"], [], Fiddle::TYPE_VOIDP
+          )
+          @loaded = true
+        end
       end
 
       def lib_names
@@ -166,6 +184,12 @@ module Secretspec
       self
     end
 
+    # Omit secret values, returning only structure and provenance.
+    def with_no_values(no_values = true)
+      @request["no_values"] = no_values
+      self
+    end
+
     # Resolve the secrets. Raises MissingRequiredError if a required secret is
     # missing, and Error for any other failure.
     def load
@@ -177,6 +201,16 @@ module Secretspec
       end
 
       response = envelope["response"]
+      raise Error.new("ffi", "secretspec_resolve reported ok with no response") if response.nil?
+
+      version = response["schema_version"]
+      unless version == RESOLVE_SCHEMA_VERSION
+        raise Error.new("version",
+                        "unsupported resolve schema version #{version} " \
+                        "(expected #{RESOLVE_SCHEMA_VERSION}); the secretspec-ffi " \
+                        "library and this SDK are out of sync")
+      end
+
       missing = response["missing_required"] || []
       raise MissingRequiredError.new(missing) unless missing.empty?
 

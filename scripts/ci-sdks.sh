@@ -33,6 +33,8 @@ echo "==> Ruby"
 ( cd secretspec-rb && ruby test/test_resolve.rb )
 
 echo "==> Node"
-( cd secretspec-node && { [ -d node_modules ] || npm install --no-audit --no-fund; } && node --test )
+# The Node SDK uses a napi-rs addon (built by its test harness), not the cdylib,
+# and has no npm dependencies.
+( cd secretspec-node && node --test )
 
 echo "==> All SDK suites passed"

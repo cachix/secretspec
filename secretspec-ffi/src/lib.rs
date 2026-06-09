@@ -45,62 +45,14 @@
 
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::Path;
-
-use secretspec::{ResolveResponse, Secrets};
-use serde::{Deserialize, Serialize};
 
 /// ABI version, NUL-terminated for direct return as a C string.
 const ABI_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 
-#[derive(Debug, Default, Deserialize)]
-struct ResolveRequest {
-    #[serde(default)]
-    path: Option<String>,
-    #[serde(default)]
-    provider: Option<String>,
-    #[serde(default)]
-    profile: Option<String>,
-    #[serde(default)]
-    reason: Option<String>,
-    #[serde(default)]
-    no_values: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct FfiError {
-    kind: String,
-    message: String,
-}
-
-#[derive(Debug, Serialize)]
-struct Envelope {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    response: Option<ResolveResponse>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<FfiError>,
-}
-
-impl Envelope {
-    fn ok(response: ResolveResponse) -> Self {
-        Self {
-            ok: true,
-            response: Some(response),
-            error: None,
-        }
-    }
-
-    fn err(kind: &str, message: impl Into<String>) -> Self {
-        Self {
-            ok: false,
-            response: None,
-            error: Some(FfiError {
-                kind: kind.to_string(),
-                message: message.into(),
-            }),
-        }
-    }
+/// A hand-built error envelope for failures that occur before the request
+/// reaches the shared resolver (null pointer, non-UTF-8 input).
+fn input_error(message: &str) -> String {
+    format!("{{\"ok\":false,\"error\":{{\"kind\":\"invalid_input\",\"message\":{message:?}}}}}")
 }
 
 /// Returns the ABI version as a static NUL-terminated string. Do not free.
@@ -139,16 +91,10 @@ pub unsafe extern "C" fn secretspec_free(ptr: *mut c_char) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn secretspec_resolve(request_json: *const c_char) -> *mut c_char {
     // Never let a panic unwind across the FFI boundary (that is UB).
-    let envelope = match catch_unwind(AssertUnwindSafe(|| resolve_inner(request_json))) {
-        Ok(env) => env,
-        Err(_) => Envelope::err("panic", "internal panic during resolve"),
+    let json = match catch_unwind(AssertUnwindSafe(|| resolve_inner(request_json))) {
+        Ok(json) => json,
+        Err(_) => input_error("internal panic during resolve"),
     };
-
-    let json = serde_json::to_string(&envelope).unwrap_or_else(|_| {
-        // Should be unreachable; fall back to a hand-built valid envelope.
-        "{\"ok\":false,\"error\":{\"kind\":\"serialize\",\"message\":\"failed to serialize response\"}}"
-            .to_string()
-    });
 
     match CString::new(json) {
         Ok(c) => c.into_raw(),
@@ -156,49 +102,15 @@ pub unsafe extern "C" fn secretspec_resolve(request_json: *const c_char) -> *mut
     }
 }
 
-fn resolve_inner(request_json: *const c_char) -> Envelope {
+fn resolve_inner(request_json: *const c_char) -> String {
     if request_json.is_null() {
-        return Envelope::err("invalid_input", "request_json was null");
+        return input_error("request_json was null");
     }
 
     // Safety: caller contract guarantees a NUL-terminated string when non-null.
     let raw = unsafe { CStr::from_ptr(request_json) };
-    let text = match raw.to_str() {
-        Ok(s) => s,
-        Err(_) => return Envelope::err("invalid_input", "request_json was not valid UTF-8"),
-    };
-
-    let request: ResolveRequest = match serde_json::from_str(text) {
-        Ok(req) => req,
-        Err(e) => return Envelope::err("invalid_request", format!("invalid request JSON: {e}")),
-    };
-
-    let loaded = match &request.path {
-        Some(path) => Secrets::load_from(Path::new(path)),
-        None => Secrets::load(),
-    };
-    let mut app = match loaded {
-        Ok(app) => app,
-        Err(e) => return Envelope::err(e.kind(), e.to_string()),
-    };
-
-    if let Some(provider) = request.provider {
-        app.set_provider(provider);
-    }
-    if let Some(profile) = request.profile {
-        app.set_profile(profile);
-    }
-    if let Some(reason) = request.reason {
-        app = app.with_reason(reason);
-    }
-
-    match app.resolve() {
-        Ok(mut response) => {
-            if request.no_values {
-                response = response.without_values();
-            }
-            Envelope::ok(response)
-        }
-        Err(e) => Envelope::err(e.kind(), e.to_string()),
+    match raw.to_str() {
+        Ok(text) => secretspec::resolve_json(text),
+        Err(_) => input_error("request_json was not valid UTF-8"),
     }
 }

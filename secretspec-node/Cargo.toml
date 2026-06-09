@@ -1,0 +1,18 @@
+[package]
+name = "secretspec-node-native"
+version.workspace = true
+edition.workspace = true
+repository = "https://github.com/cachix/secretspec"
+description = "napi-rs Node addon for SecretSpec"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2.16", default-features = false, features = ["napi8"] }
+napi-derive = "2.16"
+secretspec = { workspace = true }
+
+[build-dependencies]
+napi-build = "2.1"

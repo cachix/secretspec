@@ -14,9 +14,9 @@ name = "secretspec_ffi"
 crate-type = ["cdylib", "staticlib", "lib"]
 
 [dependencies]
+# The envelope/resolve logic lives in the secretspec crate (resolve_json); this
+# crate is only the C ABI wrapper.
 secretspec = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

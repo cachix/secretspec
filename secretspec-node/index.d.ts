@@ -40,9 +40,16 @@ export class Builder {
   withNoValues(noValues?: boolean): this;
   /**
    * Resolve the secrets. Throws MissingRequiredError if a required secret is
-   * missing, and SecretSpecError for any other failure.
+   * missing, and SecretSpecError for any other failure. Synchronous: runs on the
+   * Node main thread.
    */
   load(): Resolved;
+  /**
+   * Like load(), but resolves on the libuv threadpool so a provider doing
+   * network I/O does not block the Node event loop. Rejects with the same error
+   * types load() throws.
+   */
+  loadAsync(): Promise<Resolved>;
 }
 
 export const SecretSpec: {

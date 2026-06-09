@@ -69,3 +69,25 @@ jobs:
         with:
           name: gem-${{ matrix.target }}
           path: secretspec-rb/*.gem
+
+  publish:
+    name: publish to RubyGems
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [gems]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - uses: actions/download-artifact@v4
+        with:
+          path: gems
+          merge-multiple: true
+      - name: gem push
+        # Requires the RUBYGEMS_API_KEY secret (or RubyGems Trusted Publishing).
+        env:
+          GEM_HOST_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
+        run: |
+          for gem in gems/*.gem; do
+            gem push "$gem"
+          done

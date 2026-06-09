@@ -1,0 +1,5 @@
+# The embedded cdylibs are large (tens of MB); track them with git-LFS when a
+# release commits them. They are gitignored during development.
+lib/*.so    filter=lfs diff=lfs merge=lfs -text
+lib/*.dylib filter=lfs diff=lfs merge=lfs -text
+lib/*.dll   filter=lfs diff=lfs merge=lfs -text

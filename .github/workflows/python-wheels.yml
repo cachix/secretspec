@@ -1,15 +1,14 @@
 name: "Python wheels"
 
-# Builds platform wheels for the Python SDK that bundle the secretspec-ffi
-# cdylib (into secretspec/_lib/), so `pip install secretspec` works without a
-# separate native build.
+# Builds portable wheels for the Python SDK that bundle the secretspec-ffi
+# cdylib, and publishes them to PyPI on a version tag.
 #
-# NOTE: the Linux wheels produced here are tagged `linux_*`, not `manylinux_*`.
-# Publishing to PyPI requires repairing them against a manylinux toolchain
-# (`auditwheel repair`) so the bundled cdylib's system dependencies (notably
-# libdbus, pulled in by the keyring provider) are vendored and the glibc
-# requirement is portable. That repair step is the remaining follow-up before a
-# PyPI release; the build + bundling mechanism below is what is validated.
+# Linux wheels are built inside a manylinux container (old glibc) and repaired
+# with auditwheel so the bundled cdylib's system deps (notably libdbus from the
+# keyring provider) are vendored. macOS/Windows build natively.
+#
+# UNVALIDATED: this pipeline has not been run; it needs a CI run to debug and,
+# for publishing, PyPI Trusted Publishing configured for this repo/environment.
 
 on:
   workflow_dispatch:
@@ -24,48 +23,73 @@ on:
       - ".github/workflows/python-wheels.yml"
 
 jobs:
-  wheels:
-    name: ${{ matrix.target }}
+  linux:
+    name: wheel ${{ matrix.arch }} (manylinux)
+    runs-on: ${{ matrix.runner }}
+    container: quay.io/pypa/manylinux_2_28_${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-latest }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install build deps (rust, dbus)
+        run: |
+          yum install -y dbus-devel
+          curl -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Build wheel and repair to manylinux
+        run: |
+          bash secretspec-py/scripts/stage-cdylib.sh
+          python3.11 -m build --wheel --outdir dist_raw secretspec-py
+          auditwheel repair --wheel-dir wheelhouse dist_raw/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+
+  native:
+    name: wheel ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { target: linux-x86_64, runner: ubuntu-latest }
-          - { target: linux-aarch64, runner: ubuntu-24.04-arm }
           - { target: macos-x86_64, runner: macos-13 }
           - { target: macos-aarch64, runner: macos-14 }
           - { target: windows-x86_64, runner: windows-latest }
-
     steps:
       - uses: actions/checkout@v5
-
-      - name: Install Linux system dependencies (dbus for keyring)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
-
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Stage the cdylib and build the wheel
+      - name: Build wheel
         shell: bash
         run: |
           python -m pip install --upgrade build
           bash secretspec-py/scripts/stage-cdylib.sh
           ( cd secretspec-py && python -m build --wheel --outdir "$GITHUB_WORKSPACE/wheelhouse" )
-
-      - name: Smoke test the wheel
-        shell: bash
-        run: |
-          python -m pip install --find-links wheelhouse secretspec
-          # Run outside the repo with no SECRETSPEC_FFI_LIB so only the bundled
-          # library can satisfy the import.
-          cd "$RUNNER_TEMP"
-          python -c "import secretspec; print('abi', secretspec.abi_version())"
-
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.target }}
           path: wheelhouse/*.whl
+
+  publish:
+    name: publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, native]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # PyPI Trusted Publishing (OIDC), no token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

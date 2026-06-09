@@ -167,6 +167,21 @@ func (r *Resolved) SetAsEnv() error {
 	return nil
 }
 
+// Fields returns a flat map of SECRET_NAME -> value (the file path for as_path).
+func (r *Resolved) Fields() map[string]string {
+	out := make(map[string]string, len(r.Secrets))
+	for name, secret := range r.Secrets {
+		out[name] = secret.Get()
+	}
+	return out
+}
+
+// FieldsJSON marshals Fields() to JSON, the input for a quicktype-generated
+// deserializer (e.g. UnmarshalSecretSpec). See `secretspec schema`.
+func (r *Resolved) FieldsJSON() ([]byte, error) {
+	return json.Marshal(r.Fields())
+}
+
 // ABIVersion returns the version reported by the loaded library.
 func ABIVersion() (string, error) {
 	if err := ensureLoaded(); err != nil {

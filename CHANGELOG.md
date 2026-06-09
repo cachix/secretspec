@@ -55,16 +55,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `devenv.nix` now provides Python, cffi, pytest, and maturin.
 - New `secretspec::codegen` module: a shared, language-neutral intermediate
   representation (IR) that reduces a manifest to the typed-accessor decisions
-  every generator needs (union vs per-profile field sets, optionality, `as_path`,
-  profile list). It is the single source of truth those decisions are computed
-  in, so the Rust derive macro and the eventual TypeScript/Python/Go/Ruby
-  emitters cannot drift. `build_ir(&Config) -> CodegenIr`.
-- New `secretspec codegen --lang python` command: emits typed Python accessors
-  over the `secretspec` Python SDK from the manifest, driven by the shared IR.
-  It mirrors the derive crate's shape (a `SecretSpec` union dataclass plus one
-  `<Profile>Secrets` dataclass per profile, each with a builder-style `load`)
-  with idiomatic snake_case attributes typed as `str`/`Optional[str]`/`Path`.
-  Value-free: reads only the manifest. `-o` writes to a file instead of stdout.
+  (union vs per-profile field sets, optionality, `as_path`, profile list). It is
+  the single source of truth those decisions are computed in, so the Rust derive
+  macro and the JSON Schema emitter cannot drift. `build_ir(&Config) -> CodegenIr`.
+- New `secretspec schema` command: emits a JSON Schema for the manifest's typed
+  shapes (a `SecretSpec` union type plus one `<Profile>Secrets` per profile).
+  Rather than hand-write a typed-accessor generator per language, feed this to
+  [quicktype](https://quicktype.io) to generate idiomatic types and
+  deserializers for any language, then hand the deserializer the flat
+  `{SECRET_NAME: value}` map from each SDK's new `fields()` helper (e.g. in
+  Python, `SecretSpec.from_dict(resolved.fields())`). This keeps the per-language
+  maintenance to the small `fields()` method. `fields()` (and a JSON variant for
+  Go/Node) is available on the resolved result in every SDK. Value-free: `schema`
+  reads only the manifest; `-o` writes to a file instead of stdout.
 
 ### Changed
 - The `secretspec-derive` macro now computes all of its typing decisions through

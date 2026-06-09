@@ -25,6 +25,10 @@ export class Resolved {
   missingOptional: string[];
   /** Export each resolved secret into process.env by its declared name. */
   setAsEnv(): void;
+  /** Flat { SECRET_NAME: value } object (the file path for as_path secrets). */
+  fields(): Record<string, string>;
+  /** fields() as a JSON string, the input for a quicktype-generated deserializer. */
+  fieldsJson(): string;
 }
 
 export class Builder {

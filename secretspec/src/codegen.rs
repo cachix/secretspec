@@ -173,44 +173,46 @@ pub fn build_ir(config: &Config) -> CodegenIr {
     }
 }
 
-/// Language emitters: thin templates that turn the [`CodegenIr`] into typed
-/// accessors. Each mirrors the derive crate's shape (a union type plus
-/// per-profile types, a builder-style `load`) using the target language's
-/// idioms.
-pub mod python {
+/// JSON Schema emitter.
+///
+/// Rather than hand-write typed accessors per language, we emit a JSON Schema
+/// describing the manifest's types and let [quicktype](https://quicktype.io)
+/// generate the idiomatic types and deserializers for any target language. We
+/// then maintain only the small generic `fields()` helper in each runtime SDK,
+/// which hands quicktype's deserializer a flat `{SECRET_NAME: value}` map.
+///
+/// The schema defines one type per shape the derive crate exposes: `SecretSpec`
+/// (the union, safe for any profile) and one `<Profile>Secrets` per profile. A
+/// `Manifest` wrapper references them all so quicktype emits every type.
+pub mod schema {
     use super::{CodegenIr, IrField};
-    use std::fmt::Write;
+    use serde_json::{Map, Value, json};
 
-    /// The Python attribute name (snake_case) for an `UPPER_SNAKE` secret name.
-    fn attr(name: &str) -> String {
-        name.to_lowercase()
-    }
-
-    /// The Python type annotation for a field.
-    fn type_ann(field: &IrField) -> &'static str {
-        match (field.optional, field.as_path) {
-            (false, false) => "str",
-            (true, false) => "Optional[str]",
-            (false, true) => "Path",
-            (true, true) => "Optional[Path]",
+    fn property_type(field: &IrField) -> Value {
+        // Every secret is a string; optional secrets are nullable. `as_path`
+        // secrets are also strings (the file path), so they need no special type.
+        if field.optional {
+            json!({ "type": ["string", "null"] })
+        } else {
+            json!({ "type": "string" })
         }
     }
 
-    /// The constructor keyword-argument line that pulls one field out of the
-    /// runtime `Resolved`.
-    fn assignment(field: &IrField) -> String {
-        let env = &field.name;
-        let name = attr(env);
-        match (field.optional, field.as_path) {
-            (false, false) => format!("            {name}=r.secrets[\"{env}\"].get,"),
-            (false, true) => format!("            {name}=Path(r.secrets[\"{env}\"].get),"),
-            (true, false) => format!(
-                "            {name}=(r.secrets[\"{env}\"].get if \"{env}\" in r.secrets else None),"
-            ),
-            (true, true) => format!(
-                "            {name}=(Path(r.secrets[\"{env}\"].get) if \"{env}\" in r.secrets else None),"
-            ),
+    fn object_schema(fields: &[IrField]) -> Value {
+        let mut properties = Map::new();
+        let mut required = Vec::new();
+        for field in fields {
+            properties.insert(field.name.clone(), property_type(field));
+            if !field.optional {
+                required.push(Value::String(field.name.clone()));
+            }
         }
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": Value::Object(properties),
+            "required": required,
+        })
     }
 
     fn capitalize(s: &str) -> String {
@@ -221,96 +223,45 @@ pub mod python {
         }
     }
 
-    /// Emit one frozen dataclass plus its `load` classmethod. When
-    /// `pinned_profile` is set the class always loads that profile (no `profile`
-    /// argument); otherwise `load` takes a `profile` argument.
-    fn emit_class(
-        out: &mut String,
-        class: &str,
-        doc: &str,
-        fields: &[IrField],
-        pinned_profile: Option<&str>,
-    ) {
-        writeln!(out, "@dataclass(frozen=True)").unwrap();
-        writeln!(out, "class {class}:").unwrap();
-        writeln!(out, "    \"\"\"{doc}\"\"\"").unwrap();
-        writeln!(out).unwrap();
-        // No field has a default, so any order is valid for the dataclass.
-        for field in fields {
-            writeln!(out, "    {}: {}", attr(&field.name), type_ann(field)).unwrap();
-        }
-        writeln!(out).unwrap();
-
-        writeln!(out, "    @classmethod").unwrap();
-        if pinned_profile.is_some() {
-            writeln!(
-                out,
-                "    def load(cls, *, provider: Optional[str] = None, reason: Optional[str] = None, path: Optional[str] = None) -> \"{class}\":"
-            )
-            .unwrap();
-        } else {
-            writeln!(
-                out,
-                "    def load(cls, *, provider: Optional[str] = None, profile: Optional[str] = None, reason: Optional[str] = None, path: Optional[str] = None) -> \"{class}\":"
-            )
-            .unwrap();
-        }
-        writeln!(out, "        r = (").unwrap();
-        writeln!(out, "            _secretspec.SecretSpec.builder()").unwrap();
-        writeln!(out, "            .with_path(path)").unwrap();
-        writeln!(out, "            .with_provider(provider)").unwrap();
-        match pinned_profile {
-            Some(profile) => writeln!(out, "            .with_profile(\"{profile}\")").unwrap(),
-            None => writeln!(out, "            .with_profile(profile)").unwrap(),
-        }
-        writeln!(out, "            .with_reason(reason)").unwrap();
-        writeln!(out, "            .load()").unwrap();
-        writeln!(out, "        )").unwrap();
-        if fields.is_empty() {
-            writeln!(out, "        return cls()").unwrap();
-        } else {
-            writeln!(out, "        return cls(").unwrap();
-            for field in fields {
-                writeln!(out, "{}", assignment(field)).unwrap();
-            }
-            writeln!(out, "        )").unwrap();
-        }
-        writeln!(out).unwrap();
-        writeln!(out).unwrap();
-    }
-
-    /// Emit a Python module of typed accessors over the runtime `secretspec`
-    /// package: a `SecretSpec` union dataclass plus one `<Profile>Secrets`
-    /// dataclass per profile.
+    /// Emit the JSON Schema (draft-06, the dialect quicktype consumes) for the
+    /// manifest's types.
     pub fn emit(ir: &CodegenIr) -> String {
-        let mut out = String::new();
-        writeln!(
-            out,
-            "# Code generated by `secretspec codegen --lang python`. Do not edit."
-        )
-        .unwrap();
-        writeln!(out, "# Project: {}", ir.project).unwrap();
-        writeln!(out, "from dataclasses import dataclass").unwrap();
-        writeln!(out, "from pathlib import Path").unwrap();
-        writeln!(out, "from typing import Optional").unwrap();
-        writeln!(out).unwrap();
-        writeln!(out, "import secretspec as _secretspec").unwrap();
-        writeln!(out).unwrap();
-        writeln!(out).unwrap();
+        let mut definitions = Map::new();
+        let mut wrapper_props = Map::new();
 
-        emit_class(
-            &mut out,
-            "SecretSpec",
-            "Union of all profiles; safe to use without knowing the active profile.",
-            &ir.union,
-            None,
+        definitions.insert("SecretSpec".to_string(), object_schema(&ir.union));
+        wrapper_props.insert(
+            "SecretSpec".to_string(),
+            json!({ "$ref": "#/definitions/SecretSpec" }),
         );
+
         for profile in &ir.profile_fields {
-            let class = format!("{}Secrets", capitalize(&profile.name));
-            let doc = format!("Secrets for the '{}' profile.", profile.name);
-            emit_class(&mut out, &class, &doc, &profile.fields, Some(&profile.name));
+            let name = format!("{}Secrets", capitalize(&profile.name));
+            definitions.insert(name.clone(), object_schema(&profile.fields));
+            wrapper_props.insert(
+                name.clone(),
+                json!({ "$ref": format!("#/definitions/{name}") }),
+            );
         }
-        out
+
+        // A wrapper that references every type so quicktype emits all of them.
+        definitions.insert(
+            "Manifest".to_string(),
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": Value::Object(wrapper_props),
+            }),
+        );
+
+        let schema = json!({
+            "$schema": "http://json-schema.org/draft-06/schema#",
+            "$ref": "#/definitions/Manifest",
+            "title": ir.project,
+            "definitions": Value::Object(definitions),
+        });
+
+        format!("{}\n", serde_json::to_string_pretty(&schema).unwrap())
     }
 }
 
@@ -453,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn python_emitter_types_fields_and_assigns_from_runtime() {
+    fn schema_emits_types_and_nullability_for_quicktype() {
         let ir = build_ir(&config_with(vec![
             (
                 "development",
@@ -464,32 +415,36 @@ mod tests {
             ),
             (
                 "production",
-                vec![
-                    ("DATABASE_URL", secret(Some(true), None, None)),
-                    ("TLS_CERT", secret(Some(true), Some(true), None)),
-                ],
+                vec![("DATABASE_URL", secret(Some(true), None, None))],
             ),
         ]));
-        let code = python::emit(&ir);
 
-        // Union types: required -> str, optional/missing -> Optional[...], path.
-        assert!(code.contains("class SecretSpec:"));
-        assert!(code.contains("    database_url: str"));
-        assert!(code.contains("    api_key: Optional[str]"));
-        assert!(code.contains("    tls_cert: Optional[Path]"));
+        let rendered = schema::emit(&ir);
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        let defs = &value["definitions"];
 
-        // Required field is pulled directly; optional is guarded; path is wrapped.
-        assert!(code.contains("database_url=r.secrets[\"DATABASE_URL\"].get,"));
-        assert!(code.contains(
-            "api_key=(r.secrets[\"API_KEY\"].get if \"API_KEY\" in r.secrets else None),"
-        ));
+        // The union type and one type per profile, plus the Manifest wrapper.
+        assert!(defs["SecretSpec"].is_object());
+        assert!(defs["DevelopmentSecrets"].is_object());
+        assert!(defs["ProductionSecrets"].is_object());
+        assert_eq!(value["$ref"], "#/definitions/Manifest");
 
-        // Per-profile classes mirror derive's profile-specific shape.
-        assert!(code.contains("class DevelopmentSecrets:"));
-        assert!(code.contains("class ProductionSecrets:"));
-        // production pins its profile and types TLS_CERT as a required Path.
-        assert!(code.contains(".with_profile(\"production\")"));
-        assert!(code.contains("    tls_cert: Path"));
+        // Required vs nullable: DATABASE_URL required everywhere; API_KEY optional
+        // in development, so optional in the union and nullable in the schema.
+        let union = &defs["SecretSpec"];
+        assert_eq!(union["properties"]["DATABASE_URL"]["type"], "string");
+        assert_eq!(
+            union["properties"]["API_KEY"]["type"],
+            serde_json::json!(["string", "null"])
+        );
+        let required: Vec<&str> = union["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(required.contains(&"DATABASE_URL"));
+        assert!(!required.contains(&"API_KEY"));
     }
 
     #[test]

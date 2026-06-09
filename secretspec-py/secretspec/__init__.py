@@ -145,6 +145,15 @@ class Resolved:
             if usable is not None:
                 os.environ[name] = usable
 
+    def fields(self) -> dict:
+        """Flat ``{SECRET_NAME: value}`` map (the file path for ``as_path``).
+
+        This is the input for a quicktype-generated deserializer: feed it to the
+        generated type's ``from_dict`` to get a typed object. See
+        ``secretspec schema``.
+        """
+        return {name: secret.get for name, secret in self.secrets.items()}
+
 
 def abi_version() -> str:
     """The ABI version reported by the loaded library."""

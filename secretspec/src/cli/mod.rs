@@ -1,6 +1,6 @@
 use crate::provider::{Provider, providers};
 use crate::{Config, GlobalConfig, GlobalDefaults, Profile, Project, Secrets};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use std::collections::HashMap;
 use std::fs;
@@ -103,15 +103,15 @@ enum Commands {
         #[arg(long)]
         explain: bool,
     },
-    /// Generate typed accessors for another language from the manifest.
+    /// Emit a JSON Schema for the manifest's typed shapes.
     ///
-    /// Emits code that wraps that language's runtime SDK, driven by the shared
-    /// codegen IR so every language stays consistent. Value-free: reads only the
-    /// manifest, never a provider.
-    Codegen {
-        /// Target language to generate
-        #[arg(long, value_enum)]
-        lang: CodegenLang,
+    /// Feed this to [quicktype](https://quicktype.io) to generate idiomatic
+    /// typed accessors (plus deserializers) for any language, then hand the
+    /// deserializer the flat map from each SDK's `fields()` helper. Value-free:
+    /// reads only the manifest, never a provider.
+    ///
+    /// Example: `secretspec schema | quicktype -s schema --lang typescript`
+    Schema {
         /// Write to this file instead of stdout
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -157,13 +157,6 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-}
-
-/// Target languages for `secretspec codegen`.
-#[derive(Clone, Debug, ValueEnum)]
-enum CodegenLang {
-    /// Python typed accessors over the `secretspec` Python SDK
-    Python,
 }
 
 /// Configuration-related subcommands.
@@ -713,17 +706,15 @@ pub fn main() -> Result<()> {
             Ok(())
         }
         // Generate typed accessors for another language (value-free)
-        Commands::Codegen { lang, output } => {
+        Commands::Schema { output } => {
             let app = load_secrets(&cli.file, &cli.reason)?;
             let ir = crate::codegen::build_ir(app.config());
-            let code = match lang {
-                CodegenLang::Python => crate::codegen::python::emit(&ir),
-            };
+            let schema = crate::codegen::schema::emit(&ir);
             match output {
-                Some(path) => fs::write(&path, code)
+                Some(path) => fs::write(&path, schema)
                     .into_diagnostic()
                     .wrap_err_with(|| format!("Failed to write {}", path.display()))?,
-                None => print!("{}", code),
+                None => print!("{}", schema),
             }
             Ok(())
         }

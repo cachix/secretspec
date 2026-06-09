@@ -501,6 +501,79 @@ secretspec_derive<span class="tok-pun">::</span><span class="tok-key">declare_se
   </div>
 </section>
 
+<!-- ============ SHOWCASE: Language SDKs ============ -->
+<section class="landing-showcase">
+  <div class="landing-container">
+    <div class="landing-showcase-head">
+      <span class="landing-showcase-eyebrow">Language SDKs</span>
+      <h2 class="landing-section-title">Use it from any language.</h2>
+      <p class="landing-section-lead landing-section-lead-narrow">
+        Rust, Python, Go, Ruby, and Node.js/TypeScript all resolve from the same <code class="inline-code">secretspec.toml</code> through one Rust core — every provider, chain, and profile behaves identically, with no per-language logic. <a href="/sdk/overview/" class="landing-link">How the SDKs work →</a>
+      </p>
+    </div>
+
+    <div class="landing-fallback">
+      <!-- Python -->
+      <div class="landing-terminal">
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">Python</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code><span class="tok-key">from</span> secretspec <span class="tok-key">import</span> SecretSpec
+
+s <span class="tok-pun">=</span> SecretSpec.builder() \
+    .with_provider(<span class="tok-str">"keyring://"</span>) \
+    .with_reason(<span class="tok-str">"boot"</span>).load()
+print(s.secrets[<span class="tok-str">"DATABASE_URL"</span>].get)</code></pre>
+      </div>
+
+      <!-- Node.js / TypeScript -->
+      <div class="landing-terminal">
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">Node.js</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code><span class="tok-key">const</span> { SecretSpec } <span class="tok-pun">=</span> require(<span class="tok-str">"secretspec"</span>);
+
+<span class="tok-key">const</span> s <span class="tok-pun">=</span> SecretSpec.builder()
+  .withProvider(<span class="tok-str">"keyring://"</span>)
+  .withReason(<span class="tok-str">"boot"</span>).load();
+console.log(s.secrets.DATABASE_URL.get());</code></pre>
+      </div>
+    </div>
+
+    <div class="landing-fallback" style="margin-top: 1.5rem;">
+      <!-- Go -->
+      <div class="landing-terminal">
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">Go</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code>s<span class="tok-pun">,</span> _ <span class="tok-pun">:=</span> secretspec.New().
+    WithProvider(<span class="tok-str">"keyring://"</span>).
+    WithReason(<span class="tok-str">"boot"</span>).Load()
+fmt.Println(s.Secrets[<span class="tok-str">"DATABASE_URL"</span>].Get())</code></pre>
+      </div>
+
+      <!-- Ruby -->
+      <div class="landing-terminal">
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">Ruby</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code>s <span class="tok-pun">=</span> Secretspec::SecretSpec.builder
+      .with_provider(<span class="tok-str">"keyring://"</span>)
+      .with_reason(<span class="tok-str">"boot"</span>).load
+puts s.secrets[<span class="tok-str">"DATABASE_URL"</span>].get</code></pre>
+      </div>
+    </div>
+
+    <p class="landing-chain-result" style="margin-top: 1.5rem;">
+      Each SDK is a thin client over one native core — the <code class="inline-code">secretspec-ffi</code> library (or a napi-rs addon for Node) — so a new provider is available everywhere at once. Need typed access? <code class="inline-code">secretspec schema</code> feeds <a href="https://quicktype.io" class="landing-link">quicktype</a> to generate typed classes for any language, and the Rust SDK checks them at compile time. <a href="/sdk/overview/" class="landing-link">SDK overview →</a>
+    </p>
+  </div>
+</section>
+
 <!-- ============ SHOWCASE: migration ============ -->
 <section class="landing-showcase">
   <div class="landing-container">

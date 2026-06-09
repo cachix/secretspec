@@ -510,8 +510,8 @@ impl Secrets {
         Ok(())
     }
 
-    /// Get a reference to the project configuration (for testing)
-    #[cfg(test)]
+    /// Get a reference to the project configuration. Used by `secretspec
+    /// codegen` (which needs the manifest, not a provider) and by tests.
     pub(crate) fn config(&self) -> &Config {
         &self.config
     }

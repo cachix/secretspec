@@ -1,6 +1,6 @@
 use crate::provider::{Provider, providers};
 use crate::{Config, GlobalConfig, GlobalDefaults, Profile, Project, Secrets};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use std::collections::HashMap;
 use std::fs;
@@ -103,6 +103,19 @@ enum Commands {
         #[arg(long)]
         explain: bool,
     },
+    /// Generate typed accessors for another language from the manifest.
+    ///
+    /// Emits code that wraps that language's runtime SDK, driven by the shared
+    /// codegen IR so every language stays consistent. Value-free: reads only the
+    /// manifest, never a provider.
+    Codegen {
+        /// Target language to generate
+        #[arg(long, value_enum)]
+        lang: CodegenLang,
+        /// Write to this file instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Resolve all secrets and print them as JSON (the SDK boundary).
     ///
     /// Unlike `check`, this prints secret VALUES (to stdout). It is intended for
@@ -144,6 +157,13 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// Target languages for `secretspec codegen`.
+#[derive(Clone, Debug, ValueEnum)]
+enum CodegenLang {
+    /// Python typed accessors over the `secretspec` Python SDK
+    Python,
 }
 
 /// Configuration-related subcommands.
@@ -690,6 +710,21 @@ pub fn main() -> Result<()> {
                 .keep_temp_files()
                 .into_diagnostic()
                 .wrap_err("Failed to persist temporary files")?;
+            Ok(())
+        }
+        // Generate typed accessors for another language (value-free)
+        Commands::Codegen { lang, output } => {
+            let app = load_secrets(&cli.file, &cli.reason)?;
+            let ir = crate::codegen::build_ir(app.config());
+            let code = match lang {
+                CodegenLang::Python => crate::codegen::python::emit(&ir),
+            };
+            match output {
+                Some(path) => fs::write(&path, code)
+                    .into_diagnostic()
+                    .wrap_err_with(|| format!("Failed to write {}", path.display()))?,
+                None => print!("{}", code),
+            }
             Ok(())
         }
         // Resolve all secrets to JSON (the SDK boundary; prints values)

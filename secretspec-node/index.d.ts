@@ -36,6 +36,8 @@ export class Builder {
   withProvider(provider: string): this;
   withProfile(profile: string): this;
   withReason(reason: string): this;
+  /** Omit secret values, returning only structure and provenance. */
+  withNoValues(noValues?: boolean): this;
   /**
    * Resolve the secrets. Throws MissingRequiredError if a required secret is
    * missing, and SecretSpecError for any other failure.

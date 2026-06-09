@@ -63,13 +63,23 @@ func findLibrary() (string, error) {
 		return "", err
 	}
 	for {
+		// Within the nearest ancestor target/, pick the most recently built
+		// library rather than always preferring release: a stale release build
+		// must not shadow the debug build the developer just produced.
+		var bestPath string
+		var best os.FileInfo
 		for _, profile := range []string{"release", "debug"} {
 			for _, name := range libNames() {
 				candidate := filepath.Join(dir, "target", profile, name)
-				if _, err := os.Stat(candidate); err == nil {
-					return candidate, nil
+				if info, err := os.Stat(candidate); err == nil {
+					if best == nil || info.ModTime().After(best.ModTime()) {
+						best, bestPath = info, candidate
+					}
 				}
 			}
+		}
+		if bestPath != "" {
+			return bestPath, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {

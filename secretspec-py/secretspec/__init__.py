@@ -72,14 +72,20 @@ def _find_library() -> str:
             return str(bundled)
 
     # 3. A Cargo target directory, searching up from the current directory.
+    #    Within the nearest target/, pick the most recently built library rather
+    #    than always preferring release, so a stale release build does not shadow
+    #    the debug build just produced.
     for base in [Path.cwd(), *Path.cwd().parents]:
         target = base / "target"
         if target.is_dir():
-            for profile in ("release", "debug"):
-                for name in names:
-                    candidate = target / profile / name
-                    if candidate.exists():
-                        return str(candidate)
+            existing = [
+                target / profile / name
+                for profile in ("release", "debug")
+                for name in names
+                if (target / profile / name).exists()
+            ]
+            if existing:
+                return str(max(existing, key=lambda p: p.stat().st_mtime))
 
     raise SecretSpecError(
         "load",

@@ -108,6 +108,12 @@ module Secretspec
         env = ENV["SECRETSPEC_FFI_LIB"]
         return env if env && !env.empty?
 
+        # A copy bundled in a platform gem (staged into vendor/ at build time).
+        lib_names.each do |name|
+          bundled = File.expand_path("../../vendor/#{name}", __FILE__)
+          return bundled if File.exist?(bundled)
+        end
+
         dir = Dir.pwd
         loop do
           %w[release debug].each do |profile|

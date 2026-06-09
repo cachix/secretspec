@@ -21,8 +21,9 @@ cargo build -p secretspec-ffi || exit 1
 target_dir="$(cargo metadata --no-deps --format-version 1 \
   | grep -o '"target_directory":"[^"]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/')"
 case "$(uname -s)" in
-  Darwin) lib_name="libsecretspec_ffi.dylib" ;;
-  *)      lib_name="libsecretspec_ffi.so" ;;
+  Darwin)                lib_name="libsecretspec_ffi.dylib" ;;
+  MINGW*|MSYS*|CYGWIN*)  lib_name="secretspec_ffi.dll" ;;
+  *)                     lib_name="libsecretspec_ffi.so" ;;
 esac
 export SECRETSPEC_FFI_LIB="$target_dir/debug/$lib_name"
 echo "==> SECRETSPEC_FFI_LIB=$SECRETSPEC_FFI_LIB"

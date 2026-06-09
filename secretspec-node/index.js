@@ -20,6 +20,10 @@ try {
   );
 }
 
+// Response wire-format version this SDK understands. Tracks secretspec-ffi's
+// RESOLVE_SCHEMA_VERSION; a mismatch means the native addon is out of sync.
+const RESOLVE_SCHEMA_VERSION = 1;
+
 class SecretSpecError extends Error {
   constructor(kind, message) {
     super(`${message} (kind: ${kind})`);
@@ -62,10 +66,17 @@ class Resolved {
     this.missingOptional = response.missing_optional || [];
   }
 
-  /** Export each resolved secret into process.env by its declared name. */
+  /**
+   * Export each resolved secret into process.env by its declared name. Secrets
+   * with no usable value (e.g. under no_values) are skipped rather than coerced
+   * to the string "null".
+   */
   setAsEnv() {
     for (const [name, secret] of Object.entries(this.secrets)) {
-      process.env[name] = secret.get();
+      const value = secret.get();
+      if (value != null) {
+        process.env[name] = value;
+      }
     }
   }
 
@@ -96,6 +107,7 @@ class Builder {
   withProvider(p) { if (p != null) this._request.provider = p; return this; }
   withProfile(p) { if (p != null) this._request.profile = p; return this; }
   withReason(r) { if (r != null) this._request.reason = r; return this; }
+  withNoValues(v = true) { this._request.no_values = v; return this; }
 
   /**
    * Resolve the secrets. Throws MissingRequiredError if a required secret is
@@ -108,6 +120,16 @@ class Builder {
       throw new SecretSpecError(err.kind || 'unknown', err.message || '');
     }
     const response = envelope.response;
+    if (response == null) {
+      throw new SecretSpecError('ffi', 'secretspec_resolve reported ok with no response');
+    }
+    if (response.schema_version !== RESOLVE_SCHEMA_VERSION) {
+      throw new SecretSpecError(
+        'version',
+        `unsupported resolve schema version ${response.schema_version} (expected ` +
+          `${RESOLVE_SCHEMA_VERSION}); the native addon and this SDK are out of sync`,
+      );
+    }
     const missing = response.missing_required || [];
     if (missing.length) {
       throw new MissingRequiredError(missing);

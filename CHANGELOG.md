@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- New cross-language conformance suite (`conformance/`): shared fixtures
+  (manifest + `.env` + a canonical `expected.json`) that every SDK resolves and
+  must reduce to the identical canonical result, guaranteeing the Python, Go,
+  Ruby, and Node SDKs agree. Each SDK runs the fixtures inside its own native
+  test runner. For `as_path` secrets the canonical value is the materialized
+  file's contents, so the comparison is deterministic across languages.
 - New `secretspec` Node.js / TypeScript SDK (`secretspec-node`): a thin client
   over the `secretspec-ffi` C ABI, loaded at runtime via koffi (dlopen), so
   Node apps inherit every provider with no JS-side resolution logic. Mirrors the

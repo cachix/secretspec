@@ -136,3 +136,35 @@ class ResolveTest < Minitest::Test
     refute_empty error.kind
   end
 end
+
+# Cross-language conformance: resolve the shared fixtures and assert this SDK
+# produces the canonical result every other SDK must also produce.
+class ConformanceTest < Minitest::Test
+  FIXTURES = File.expand_path("../../conformance/fixtures", __dir__)
+
+  def canonical(resolved)
+    secrets = {}
+    resolved.secrets.each do |name, secret|
+      value = secret.as_path ? File.read(secret.get) : secret.value
+      secrets[name] = { "value" => value, "source" => secret.source, "as_path" => secret.as_path }
+    end
+    {
+      "profile" => resolved.profile,
+      "secrets" => secrets,
+      "missing_required" => [],
+      "missing_optional" => resolved.missing_optional.sort
+    }
+  end
+
+  Dir.glob(File.join(FIXTURES, "*")).select { |p| File.directory?(p) }.sort.each do |dir|
+    define_method("test_conformance_#{File.basename(dir)}") do
+      expected = JSON.parse(File.read(File.join(dir, "expected.json")))
+      resolved = Secretspec::SecretSpec.builder
+                                       .with_path(File.join(dir, "secretspec.toml"))
+                                       .with_provider("dotenv://#{File.join(dir, '.env')}")
+                                       .with_reason("conformance")
+                                       .load
+      assert_equal expected, canonical(resolved)
+    end
+  end
+end

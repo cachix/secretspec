@@ -1,15 +1,15 @@
 #[cfg(test)]
 mod tests {
-    use crate::capitalize_first;
     use secretspec::Config;
+    use secretspec::codegen::capitalize;
 
     #[test]
-    fn test_capitalize_first() {
-        assert_eq!(capitalize_first("development"), "Development");
-        assert_eq!(capitalize_first("production"), "Production");
-        assert_eq!(capitalize_first("test"), "Test");
-        assert_eq!(capitalize_first(""), "");
-        assert_eq!(capitalize_first("a"), "A");
+    fn test_capitalize() {
+        assert_eq!(capitalize("development"), "Development");
+        assert_eq!(capitalize("production"), "Production");
+        assert_eq!(capitalize("test"), "Test");
+        assert_eq!(capitalize(""), "");
+        assert_eq!(capitalize("a"), "A");
     }
 
     #[test]

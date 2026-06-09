@@ -119,6 +119,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ValidationErrors::report()`, returning the new public `ResolutionReport`,
   `SecretResolution`, and `ResolutionStatus` types.
 
+### Fixed
+- `secretspec::resolve_json` now catches panics itself, so both native
+  boundaries that funnel through it (the `secretspec-ffi` C ABI and the napi-rs
+  Node addon) return the same `{"ok": false, "error": {...}}` envelope on an
+  internal panic. Previously only the C ABI caught panics, so a panic in the
+  Node addon surfaced as an opaque thrown error instead of the documented
+  envelope.
+- A per-profile JSON Schema (`secretspec schema --profile <p>`) now allows
+  additional properties. `secretspec resolve --profile <p>` returns the
+  profile's own secrets plus those inherited from the `default` profile (the
+  runtime resolver merges them; the per-profile type intentionally does not,
+  matching the derive macro), so a strict quicktype-generated deserializer would
+  otherwise reject a valid resolve result over the inherited keys. The union
+  schema stays exhaustive (`additionalProperties: false`).
+- `secretspec resolve --profile <p>` and the SDKs no longer export an empty or
+  literal-`"null"` environment variable for a secret with no usable value
+  (e.g. under `no_values`): the Go, Node, and Ruby SDKs now skip such secrets in
+  `set_as_env`, matching Python. Ruby previously *deleted* the variable
+  (`ENV[name] = nil`); Node set the string `"null"`; Go set `""`.
+- The Go, Python, Ruby, and Node SDKs now validate the response
+  `schema_version` against the version they were built for and surface a clear
+  error on mismatch, instead of silently misparsing a skewed `secretspec-ffi`
+  library. They also no longer panic / raise an opaque error when a successful
+  envelope is missing its `response` object.
+- The Go SDK extracts the embedded `cdylib` into an owner-only (`0o700`) temp
+  directory and re-extracts when the cached file's content hash (not just its
+  size) differs, closing a predictable-path load and a stale-file reuse.
+
+### Changed
+- `secretspec::codegen` exposes a single `capitalize` helper now shared by both
+  the JSON Schema emitter and the `secretspec-derive` macro (previously a
+  byte-identical copy in each), so profile type-name casing can never drift.
+- `secretspec::codegen::build_ir` computes the union field set in one pass over
+  all profiles instead of re-scanning every profile per field, and
+  `validate`/`resolve` resolve each secret's merged config once per pass instead
+  of twice.
+- The Python, Ruby, and Node SDK builders gained `with_no_values` /
+  `withNoValues` for parity with the Go SDK and the underlying request contract.
+
 ## [0.12.1] - 2026-06-15
 
 ### Fixed

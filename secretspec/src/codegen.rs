@@ -25,7 +25,7 @@
 
 use crate::config::{Config, Secret};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 /// One field in a generated type. `name` is the canonical `UPPER_SNAKE` env key
 /// and the source of truth; each emitter applies its own casing.
@@ -71,57 +71,70 @@ fn is_secret_optional(secret: &Secret) -> bool {
     secret.required != Some(true)
 }
 
-/// For the union type a field is optional if it is optional in, or absent from,
-/// any profile, so the union can safely represent secrets from any profile.
-fn is_field_optional_across_profiles(name: &str, config: &Config) -> bool {
-    for profile in config.profiles.values() {
-        match profile.secrets.get(name) {
-            Some(secret) if !is_secret_optional(secret) => {}
-            // Optional in this profile, or missing from it.
-            _ => return true,
+/// Build the union field set: every unique secret across all profiles, sorted.
+///
+/// Computed in a single pass over every `(profile, secret)` rather than
+/// re-scanning all profiles per field. A union field is:
+/// - optional if it is optional in, or absent from, *any* profile (equivalently,
+///   required only when present and `required = true` in **every** profile);
+/// - a path if *any* profile declares it `as_path`;
+/// - described by the first profile, in sorted name order, that declares a
+///   description.
+fn build_union(config: &Config) -> Vec<IrField> {
+    let total_profiles = config.profiles.len();
+
+    // Sorted once so "first description wins" is deterministic.
+    let mut sorted_profiles: Vec<&String> = config.profiles.keys().collect();
+    sorted_profiles.sort();
+
+    struct Acc {
+        /// Profiles where the secret is present and `required = true`.
+        required_count: usize,
+        as_path: bool,
+        description: Option<String>,
+    }
+    let mut acc: BTreeMap<String, Acc> = BTreeMap::new();
+
+    for profile_name in sorted_profiles {
+        for (name, secret) in &config.profiles[profile_name].secrets {
+            let entry = acc.entry(name.clone()).or_insert(Acc {
+                required_count: 0,
+                as_path: false,
+                description: None,
+            });
+            if !is_secret_optional(secret) {
+                entry.required_count += 1;
+            }
+            if secret.as_path == Some(true) {
+                entry.as_path = true;
+            }
+            if entry.description.is_none() {
+                entry.description = secret.description.clone();
+            }
         }
     }
-    false
-}
 
-/// For the union type a field is a path if any profile declares it `as_path`.
-fn is_field_as_path_across_profiles(name: &str, config: &Config) -> bool {
-    config
-        .profiles
-        .values()
-        .any(|profile| profile.secrets.get(name).and_then(|s| s.as_path) == Some(true))
-}
-
-/// Pick a description for a union field: the first profile (by sorted name) that
-/// declares one.
-fn union_description(name: &str, config: &Config) -> Option<String> {
-    let mut profile_names: Vec<&String> = config.profiles.keys().collect();
-    profile_names.sort();
-    profile_names.into_iter().find_map(|profile_name| {
-        config.profiles[profile_name]
-            .secrets
-            .get(name)
-            .and_then(|s| s.description.clone())
-    })
-}
-
-/// Build the union field set: every unique secret across all profiles, sorted.
-fn build_union(config: &Config) -> Vec<IrField> {
-    let names: BTreeSet<&String> = config
-        .profiles
-        .values()
-        .flat_map(|profile| profile.secrets.keys())
-        .collect();
-
-    names
-        .into_iter()
-        .map(|name| IrField {
-            name: name.clone(),
-            optional: is_field_optional_across_profiles(name, config),
-            as_path: is_field_as_path_across_profiles(name, config),
-            description: union_description(name, config),
+    acc.into_iter()
+        .map(|(name, a)| IrField {
+            name,
+            // Required only if present and `required = true` in every profile;
+            // optional if optional in, or missing from, any profile.
+            optional: a.required_count != total_profiles,
+            as_path: a.as_path,
+            description: a.description,
         })
         .collect()
+}
+
+/// Capitalize the first character, leaving the rest unchanged. Shared by the
+/// JSON Schema emitter (for `<Profile>Secrets` titles) and the derive macro (for
+/// `SecretSpecProfile::<Variant>` names) so the two never disagree on casing.
+pub fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+    }
 }
 
 /// Build the exact field set for one profile's raw secrets, sorted by name.
@@ -187,7 +200,7 @@ pub fn build_ir(config: &Config) -> CodegenIr {
 /// `SecretSpec` (safe for any profile); with a profile it describes that
 /// profile's exact fields. Pair it with `quicktype --top-level <Name>`.
 pub mod schema {
-    use super::{CodegenIr, IrField};
+    use super::{CodegenIr, IrField, capitalize};
     use serde_json::{Map, Value, json};
 
     fn property_type(field: &IrField) -> Value {
@@ -200,7 +213,7 @@ pub mod schema {
         }
     }
 
-    fn object_schema(title: &str, fields: &[IrField]) -> Value {
+    fn object_schema(title: &str, fields: &[IrField], additional_properties: bool) -> Value {
         let mut properties = Map::new();
         let mut required = Vec::new();
         for field in fields {
@@ -212,27 +225,29 @@ pub mod schema {
         json!({
             "$schema": "http://json-schema.org/draft-06/schema#",
             "type": "object",
-            "additionalProperties": false,
+            "additionalProperties": additional_properties,
             "title": title,
             "properties": Value::Object(properties),
             "required": required,
         })
     }
 
-    fn capitalize(s: &str) -> String {
-        let mut chars = s.chars();
-        match chars.next() {
-            None => String::new(),
-            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        }
-    }
-
     /// Emit the JSON Schema (draft-06, the dialect quicktype consumes) for the
     /// union (`profile = None`) or one profile's fields. Returns an error if the
     /// named profile does not exist.
+    ///
+    /// The union lists every secret across every profile, so it is **exhaustive**
+    /// (`additionalProperties: false`): a runtime `fields()` map can never carry a
+    /// key the union does not declare. A per-profile schema lists only the
+    /// secrets that profile declares, but `secretspec resolve --profile <p>`
+    /// returns those **plus** secrets inherited from the `default` profile (the
+    /// runtime resolver merges them; the per-profile type intentionally does not,
+    /// matching the derive macro). So per-profile schemas allow additional
+    /// properties — otherwise a strict quicktype deserializer would reject a valid
+    /// resolve result over the inherited keys.
     pub fn emit(ir: &CodegenIr, profile: Option<&str>) -> Result<String, String> {
         let schema = match profile {
-            None => object_schema("SecretSpec", &ir.union),
+            None => object_schema("SecretSpec", &ir.union, false),
             Some(name) => {
                 let found = ir
                     .profile_fields
@@ -244,7 +259,7 @@ pub mod schema {
                             ir.profiles.join(", ")
                         )
                     })?;
-                object_schema(&format!("{}Secrets", capitalize(name)), &found.fields)
+                object_schema(&format!("{}Secrets", capitalize(name)), &found.fields, true)
             }
         };
         Ok(format!(
@@ -413,6 +428,8 @@ mod tests {
             serde_json::from_str(&schema::emit(&ir, None).unwrap()).unwrap();
         assert_eq!(union["type"], "object");
         assert_eq!(union["title"], "SecretSpec");
+        // The union is exhaustive across every profile, so it is strict.
+        assert_eq!(union["additionalProperties"], false);
 
         // Required vs nullable: DATABASE_URL required everywhere; API_KEY optional
         // in development, so optional in the union and nullable in the schema.
@@ -436,6 +453,9 @@ mod tests {
         assert_eq!(prod["title"], "ProductionSecrets");
         assert!(prod["properties"]["DATABASE_URL"].is_object());
         assert!(prod["properties"]["API_KEY"].is_null()); // not in production
+        // A per-profile schema must tolerate the default-inherited secrets that
+        // `resolve --profile production` adds beyond production's own fields.
+        assert_eq!(prod["additionalProperties"], true);
 
         // An unknown profile is an error.
         assert!(schema::emit(&ir, Some("nope")).is_err());

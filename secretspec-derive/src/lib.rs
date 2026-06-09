@@ -22,7 +22,7 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use secretspec::Config;
-use secretspec::codegen::{CodegenIr, IrField, build_ir};
+use secretspec::codegen::{CodegenIr, IrField, build_ir, capitalize};
 use std::collections::{BTreeMap, HashSet};
 use syn::{LitStr, parse_macro_input};
 
@@ -226,7 +226,7 @@ impl ProfileVariant {
     /// // variant.capitalized == "Production"
     /// ```
     fn new(name: String) -> Self {
-        let capitalized = capitalize_first(&name);
+        let capitalized = capitalize(&name);
         Self { name, capitalized }
     }
 
@@ -456,7 +456,7 @@ fn is_valid_rust_identifier(s: &str) -> bool {
 /// - Profile names with invalid characters (e.g., "prod-env")
 fn validate_profile_identifiers(config: &Config, errors: &mut Vec<String>) {
     for profile_name in config.profiles.keys() {
-        let variant_name = capitalize_first(profile_name);
+        let variant_name = capitalize(profile_name);
         if !is_valid_rust_identifier(&variant_name) {
             errors.push(format!(
                 "Profile '{}' produces invalid Rust enum variant '{}'",
@@ -1422,33 +1422,6 @@ fn generate_secret_spec_code(config: Config) -> proc_macro2::TokenStream {
         #load_internal
         #builder_code
         #secret_spec_impl
-    }
-}
-
-/// Capitalize the first character of a string.
-///
-/// Used to convert profile names to enum variant names.
-///
-/// # Arguments
-///
-/// * `s` - The string to capitalize
-///
-/// # Returns
-///
-/// A new string with the first character capitalized
-///
-/// # Examples
-///
-/// ```ignore
-/// assert_eq!(capitalize_first("production"), "Production");
-/// assert_eq!(capitalize_first("test_env"), "Test_env");
-/// assert_eq!(capitalize_first(""), "");
-/// ```
-fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
     }
 }
 

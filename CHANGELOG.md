@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- New `secretspec` Node.js / TypeScript SDK (`secretspec-node`): a thin client
+  over the `secretspec-ffi` C ABI, loaded at runtime via koffi (dlopen), so
+  Node apps inherit every provider with no JS-side resolution logic. Mirrors the
+  derive crate's vocabulary
+  (`SecretSpec.builder().withProvider(...).withProfile(...).withReason(...).load()`
+  returning a `Resolved` with `provider`/`profile`/`secrets`, plus `setAsEnv()`).
+  A missing required secret throws `MissingRequiredError`; other failures throw
+  `SecretSpecError` with a stable `.kind`. `as_path` secrets are returned as a
+  readable file path. TypeScript declarations ship in `index.d.ts`. The library
+  is found via `SECRETSPEC_FFI_LIB` or a Cargo target directory.
 - New `secretspec-rb` Ruby SDK: a thin client over the `secretspec-ffi` C ABI,
   loaded at runtime via the stdlib Fiddle (dlopen, no native gem), so Ruby apps
   inherit every provider with no Ruby-side resolution logic. Mirrors the derive

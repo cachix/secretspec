@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- New `secretspec-rb` Ruby SDK: a thin client over the `secretspec-ffi` C ABI,
+  loaded at runtime via the stdlib Fiddle (dlopen, no native gem), so Ruby apps
+  inherit every provider with no Ruby-side resolution logic. Mirrors the derive
+  crate's vocabulary (`Secretspec::SecretSpec.builder.with_provider(...).with_profile(...).with_reason(...).load`
+  returning a `Resolved` with `#provider`/`#profile`/`#secrets`, plus
+  `set_as_env!`). A missing required secret raises
+  `Secretspec::MissingRequiredError`; other failures raise `Secretspec::Error`
+  with a stable `#kind`. `as_path` secrets are returned as a readable file path.
+  The library is found via `SECRETSPEC_FFI_LIB` or a Cargo target directory.
+  `devenv.nix` now provides Ruby.
 - New `secretspec-go` Go SDK: a thin client over the `secretspec-ffi` C ABI,
   loaded at runtime via purego (dlopen, no cgo), so Go apps inherit every
   provider with no Go-side resolution logic. Mirrors the derive crate's

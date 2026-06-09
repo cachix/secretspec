@@ -26,6 +26,8 @@
   };
   # Go SDK (secretspec-go) binds the C ABI via purego (dlopen, no cgo).
   languages.go.enable = true;
+  # Ruby SDK (secretspec-rb) binds the C ABI via stdlib Fiddle (dlopen).
+  languages.ruby.enable = true;
 
   packages = [
     # keyring

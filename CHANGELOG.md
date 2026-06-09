@@ -20,8 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contract in exactly one place. `secretspec-ffi` is now a thin wrapper over it.
 - New `secretspec` Node.js / TypeScript SDK (`secretspec-node`): a thin wrapper
   over a napi-rs native addon that embeds the resolver, so Node apps inherit
-  every provider with no JS-side resolution logic and `npm install` needs no
-  native build. Mirrors the derive crate's vocabulary
+  every provider with no JS-side resolution logic. The native addon is built from
+  the Rust core with `scripts/build-addon.sh`; prebuilt per-platform npm packages
+  are a follow-up. Mirrors the derive crate's vocabulary
   (`SecretSpec.builder().withProvider(...).withProfile(...).withReason(...).load()`
   returning a `Resolved` with `provider`/`profile`/`secrets`, plus `setAsEnv()`).
   A missing required secret throws `MissingRequiredError`; other failures throw
@@ -120,6 +121,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SecretResolution`, and `ResolutionStatus` types.
 
 ### Fixed
+- The `provider` field of the resolution report (`check --json`/`--explain`) and
+  the resolve response (`resolve --json`, every SDK's `response.provider`) is now
+  run through `redact_uri_strict`, so a user-authored provider alias or
+  `--provider` override that embeds a credential
+  (`vault+token:s3cr3t@host`, `vault://host?token=...`) no longer leaks that
+  credential into machine-readable output or across the FFI boundary. The
+  per-secret `source_provider` was already credential-free; this aligns the
+  top-level field with it.
+- The Node SDK gains `Builder.loadAsync()` (backed by a new `resolveAsync` napi
+  binding that runs on the libuv threadpool), so resolving from a network-backed
+  provider no longer blocks the Node event loop. The synchronous `load()` is
+  unchanged.
+- The Go, Python, and Ruby SDKs now load the most recently built `cdylib` when
+  walking up to a Cargo `target/` directory, instead of always preferring
+  `release`, so a stale release build no longer shadows the debug build a
+  developer just produced.
 - `secretspec::resolve_json` now catches panics itself, so both native
   boundaries that funnel through it (the `secretspec-ffi` C ABI and the napi-rs
   Node addon) return the same `{"ok": false, "error": {...}}` envelope on an

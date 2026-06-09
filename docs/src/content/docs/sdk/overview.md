@@ -64,6 +64,7 @@ quicktype owns the type generation.
 
 The SDKs are designed to install with no native build: the C ABI library is
 bundled in the Python wheel and the Ruby gem, embedded in the Go module, and
-shipped as a napi-rs addon for Node. The native library is otherwise discovered
-from the `SECRETSPEC_FFI_LIB` environment variable or a Cargo `target`
-directory, which is how it works from a source checkout.
+built as a napi-rs addon for Node (prebuilt per-platform npm packages are a
+follow-up). The native library is otherwise discovered from the
+`SECRETSPEC_FFI_LIB` environment variable or a Cargo `target` directory, which
+is how it works from a source checkout.

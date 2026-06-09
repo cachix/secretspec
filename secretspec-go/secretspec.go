@@ -24,6 +24,12 @@ import (
 	"github.com/ebitengine/purego"
 )
 
+// resolveSchemaVersion is the response wire-format version this SDK understands.
+// It tracks secretspec-ffi's RESOLVE_SCHEMA_VERSION; a mismatch means the loaded
+// library is incompatible with this SDK, so Load reports it rather than silently
+// misparsing.
+const resolveSchemaVersion = 1
+
 var (
 	loadOnce sync.Once
 	loadErr  error
@@ -140,18 +146,27 @@ type ResolvedSecret struct {
 	SourceProvider *string
 }
 
-// Get returns the usable string: the file path for as_path secrets, else the value.
-func (s ResolvedSecret) Get() string {
+// usable returns the secret's usable string and whether one is present: the file
+// path for as_path secrets, otherwise the value. Both are absent when a
+// value-less response (e.g. no_values) strips them, in which case ok is false.
+func (s ResolvedSecret) usable() (string, bool) {
 	if s.AsPath {
 		if s.Path != nil {
-			return *s.Path
+			return *s.Path, true
 		}
-		return ""
+		return "", false
 	}
 	if s.Value != nil {
-		return *s.Value
+		return *s.Value, true
 	}
-	return ""
+	return "", false
+}
+
+// Get returns the usable string: the file path for as_path secrets, else the
+// value. It is the empty string when no usable value is present (see usable).
+func (s ResolvedSecret) Get() string {
+	v, _ := s.usable()
+	return v
 }
 
 // Resolved is a successful resolution, mirroring the Rust Resolved wrapper.
@@ -163,10 +178,14 @@ type Resolved struct {
 }
 
 // SetAsEnv exports each resolved secret into the process environment by name.
+// Secrets with no usable value (e.g. under no_values) are skipped rather than
+// exported as an empty string.
 func (r *Resolved) SetAsEnv() error {
 	for name, secret := range r.Secrets {
-		if err := os.Setenv(name, secret.Get()); err != nil {
-			return err
+		if value, ok := secret.usable(); ok {
+			if err := os.Setenv(name, value); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -270,6 +289,15 @@ func (b *Builder) Load() (*Resolved, error) {
 	}
 
 	resp := env.Response
+	if resp == nil {
+		return nil, &Error{Kind: "ffi", Message: "secretspec_resolve reported ok with no response"}
+	}
+	if resp.SchemaVersion != resolveSchemaVersion {
+		return nil, &Error{Kind: "version", Message: fmt.Sprintf(
+			"unsupported resolve schema version %d (expected %d); the secretspec-ffi library and this SDK are out of sync",
+			resp.SchemaVersion, resolveSchemaVersion,
+		)}
+	}
 	if len(resp.MissingRequired) > 0 {
 		return nil, &MissingRequiredError{Missing: resp.MissingRequired}
 	}

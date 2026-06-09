@@ -1,0 +1,71 @@
+name: "Ruby gems"
+
+# Builds platform-specific gems for the Ruby SDK that bundle the secretspec-ffi
+# cdylib (into vendor/), so `gem install secretspec` works without a separate
+# native build.
+#
+# NOTE: as with the Python wheels, the Linux gem here links the runner's glibc
+# and system libraries (notably libdbus, via the keyring provider). A portable
+# release build should use a baseline toolchain (e.g. rake-compiler-dock) and
+# vendor those deps. That is the remaining follow-up; the build + bundling
+# mechanism below is what is validated.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - v**
+  pull_request:
+    paths:
+      - "secretspec-rb/**"
+      - "secretspec-ffi/**"
+      - "secretspec/**"
+      - ".github/workflows/ruby-gems.yml"
+
+jobs:
+  gems:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-linux, runner: ubuntu-latest }
+          - { target: aarch64-linux, runner: ubuntu-24.04-arm }
+          - { target: x86_64-darwin, runner: macos-13 }
+          - { target: arm64-darwin, runner: macos-14 }
+          - { target: x64-mingw, runner: windows-latest }
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux system dependencies (dbus for keyring)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Stage the cdylib and build the platform gem
+        shell: bash
+        run: |
+          bash secretspec-rb/scripts/stage-cdylib.sh
+          ( cd secretspec-rb && gem build secretspec.gemspec )
+
+      - name: Smoke test the gem
+        shell: bash
+        run: |
+          cd secretspec-rb
+          gem install --no-document --install-dir "$RUNNER_TEMP/gemhome" secretspec-*.gem
+          # Run outside the repo with no SECRETSPEC_FFI_LIB so only the bundled
+          # library can satisfy the require.
+          cd "$RUNNER_TEMP"
+          GEM_HOME="$RUNNER_TEMP/gemhome" GEM_PATH="$RUNNER_TEMP/gemhome" \
+            ruby -e 'require "secretspec"; puts "abi " + Secretspec.abi_version'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gem-${{ matrix.target }}
+          path: secretspec-rb/*.gem

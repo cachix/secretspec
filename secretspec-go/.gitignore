@@ -1,0 +1,3 @@
+# Embedded cdylibs are large (tens of MB); staged at build time, committed for a
+# release via git-LFS rather than plain git.
+lib/

@@ -47,6 +47,11 @@ func findLibrary() (string, error) {
 	if p := os.Getenv("SECRETSPEC_FFI_LIB"); p != "" {
 		return p, nil
 	}
+	// A library embedded at build time (go:embed, per platform) is extracted to
+	// a temp file and used, so `go get` works with no native build.
+	if len(embeddedLib) > 0 {
+		return extractEmbedded()
+	}
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err

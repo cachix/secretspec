@@ -452,46 +452,6 @@ $ secretspec audit -n 1
   </div>
 </section>
 
-<!-- ============ SHOWCASE: Rust SDK ============ -->
-<section class="landing-showcase">
-  <div class="landing-container">
-    <div class="landing-showcase-head">
-      <span class="landing-showcase-eyebrow">Type-safe SDK</span>
-      <h2 class="landing-section-title">Compile-time secrets in Rust.</h2>
-      <p class="landing-section-lead landing-section-lead-narrow">
-        The proc macro reads <code class="inline-code">secretspec.toml</code> at compile time and generates strongly-typed structs. Misspelling a secret name fails the build, not your deploy. <a href="/sdk/rust/" class="landing-link">SDK reference →</a>
-      </p>
-    </div>
-
-    <div class="landing-terminal" style="max-width: 56rem; margin: 2rem auto 0;">
-      <div class="landing-terminal-header">
-        <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-        <span class="landing-terminal-title">main.rs</span>
-      </div>
-      <pre is:raw class="landing-terminal-body"><code><span class="tok-com">// Generate typed structs from secretspec.toml</span>
-secretspec_derive<span class="tok-pun">::</span><span class="tok-key">declare_secrets!</span><span class="tok-pun">(</span><span class="tok-str">"secretspec.toml"</span><span class="tok-pun">);</span>
-
-<span class="tok-key">fn</span> <span class="tok-sec">main</span><span class="tok-pun">()</span> <span class="tok-pun">-&gt;</span> Result<span class="tok-pun">&lt;(), Box&lt;</span><span class="tok-key">dyn</span> std::error::Error<span class="tok-pun">&gt;&gt; {</span>
-    <span class="tok-key">let</span> secrets <span class="tok-pun">=</span> Secrets<span class="tok-pun">::</span>builder<span class="tok-pun">()</span>
-        <span class="tok-pun">.</span>with_provider<span class="tok-pun">(</span><span class="tok-str">"keyring"</span><span class="tok-pun">)</span>
-        <span class="tok-pun">.</span>with_profile<span class="tok-pun">(</span>Profile<span class="tok-pun">::</span>Production<span class="tok-pun">)</span>
-        <span class="tok-pun">.</span>load<span class="tok-pun">()?;</span>
-
-    <span class="tok-com">// DATABASE_URL → database_url (compile-time checked)</span>
-    println!<span class="tok-pun">(</span><span class="tok-str">"Database: {}"</span><span class="tok-pun">,</span> secrets<span class="tok-pun">.</span>secrets<span class="tok-pun">.</span>database_url<span class="tok-pun">);</span>
-
-    <span class="tok-com">// Optional secrets are Option&lt;String&gt;</span>
-    <span class="tok-key">if let</span> Some<span class="tok-pun">(</span>redis<span class="tok-pun">) = &amp;</span>secrets<span class="tok-pun">.</span>secrets<span class="tok-pun">.</span>redis_url <span class="tok-pun">{</span>
-        println!<span class="tok-pun">(</span><span class="tok-str">"Redis: {}"</span><span class="tok-pun">,</span> redis<span class="tok-pun">);</span>
-    <span class="tok-pun">}</span>
-
-    secrets<span class="tok-pun">.</span>secrets<span class="tok-pun">.</span>set_as_env_vars<span class="tok-pun">();</span>
-    Ok<span class="tok-pun">(())</span>
-<span class="tok-pun">}</span></code></pre>
-    </div>
-  </div>
-</section>
-
 <!-- ============ SHOWCASE: Language SDKs ============ -->
 <section class="landing-showcase">
   <div class="landing-container">
@@ -559,8 +519,39 @@ puts s.secrets[<span class="tok-str">"DATABASE_URL"</span>].get</code></pre>
       </div>
     </div>
 
+    <p class="landing-section-lead landing-section-lead-narrow" style="text-align: center; margin-top: 2.5rem;">
+      And in <strong>Rust</strong>, a proc macro reads <code class="inline-code">secretspec.toml</code> at compile time and generates strongly-typed structs — misspelling a secret fails the build, not your deploy. <a href="/sdk/rust/" class="landing-link">Rust SDK →</a>
+    </p>
+
+    <div class="landing-terminal" style="max-width: 56rem; margin: 1.5rem auto 0;">
+      <div class="landing-terminal-header">
+        <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+        <span class="landing-terminal-title">main.rs</span>
+      </div>
+      <pre is:raw class="landing-terminal-body"><code><span class="tok-com">// Generate typed structs from secretspec.toml</span>
+secretspec_derive<span class="tok-pun">::</span><span class="tok-key">declare_secrets!</span><span class="tok-pun">(</span><span class="tok-str">"secretspec.toml"</span><span class="tok-pun">);</span>
+
+<span class="tok-key">fn</span> <span class="tok-sec">main</span><span class="tok-pun">()</span> <span class="tok-pun">-&gt;</span> Result<span class="tok-pun">&lt;(), Box&lt;</span><span class="tok-key">dyn</span> std::error::Error<span class="tok-pun">&gt;&gt; {</span>
+    <span class="tok-key">let</span> secrets <span class="tok-pun">=</span> Secrets<span class="tok-pun">::</span>builder<span class="tok-pun">()</span>
+        <span class="tok-pun">.</span>with_provider<span class="tok-pun">(</span><span class="tok-str">"keyring"</span><span class="tok-pun">)</span>
+        <span class="tok-pun">.</span>with_profile<span class="tok-pun">(</span>Profile<span class="tok-pun">::</span>Production<span class="tok-pun">)</span>
+        <span class="tok-pun">.</span>load<span class="tok-pun">()?;</span>
+
+    <span class="tok-com">// DATABASE_URL → database_url (compile-time checked)</span>
+    println!<span class="tok-pun">(</span><span class="tok-str">"Database: {}"</span><span class="tok-pun">,</span> secrets<span class="tok-pun">.</span>secrets<span class="tok-pun">.</span>database_url<span class="tok-pun">);</span>
+
+    <span class="tok-com">// Optional secrets are Option&lt;String&gt;</span>
+    <span class="tok-key">if let</span> Some<span class="tok-pun">(</span>redis<span class="tok-pun">) = &amp;</span>secrets<span class="tok-pun">.</span>secrets<span class="tok-pun">.</span>redis_url <span class="tok-pun">{</span>
+        println!<span class="tok-pun">(</span><span class="tok-str">"Redis: {}"</span><span class="tok-pun">,</span> redis<span class="tok-pun">);</span>
+    <span class="tok-pun">}</span>
+
+    secrets<span class="tok-pun">.</span>secrets<span class="tok-pun">.</span>set_as_env_vars<span class="tok-pun">();</span>
+    Ok<span class="tok-pun">(())</span>
+<span class="tok-pun">}</span></code></pre>
+    </div>
+
     <p class="landing-chain-result" style="margin-top: 1.5rem;">
-      Each SDK is a thin client over one native core — the <code class="inline-code">secretspec-ffi</code> library (or a napi-rs addon for Node) — so a new provider is available everywhere at once. Need typed access? <code class="inline-code">secretspec schema</code> feeds <a href="https://quicktype.io" class="landing-link">quicktype</a> to generate typed classes for any language, and the Rust SDK checks them at compile time. <a href="/sdk/overview/" class="landing-link">SDK overview →</a>
+      Every SDK is a thin client over one native core — the <code class="inline-code">secretspec-ffi</code> library (or a napi-rs addon for Node) — so a new provider is available everywhere at once. For typed access in the dynamic languages, <code class="inline-code">secretspec schema</code> feeds <a href="https://quicktype.io" class="landing-link">quicktype</a> to generate typed classes. <a href="/sdk/overview/" class="landing-link">SDK overview →</a>
     </p>
   </div>
 </section>

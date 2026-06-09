@@ -885,13 +885,20 @@ impl Secrets {
 
     /// Returns a provider URI for validation result metadata without forcing a
     /// user-global default when every secret used an explicit or per-secret provider.
+    ///
+    /// The returned URI lands in the `provider` field of the resolution report and
+    /// the resolve response, which `check --explain` prints, `--json` emits, and the
+    /// other-language SDKs read over the FFI boundary. A user-authored alias or
+    /// override may embed a credential (`vault+token:s3cr3t@host`,
+    /// `vault://host?token=...`), so raw URIs are run through `redact_uri_strict`
+    /// first. The `provider.uri()` paths below are already credential-free.
     fn validation_report_provider_uri(
         &self,
         override_uri: Option<&str>,
         secret_primary_uris: &HashMap<String, Option<String>>,
     ) -> Result<String> {
         if let Some(uri) = override_uri {
-            return Ok(uri.to_string());
+            return Ok(crate::audit::redact_uri_strict(uri));
         }
 
         if secret_primary_uris.values().any(Option::is_none) {
@@ -905,7 +912,7 @@ impl Secrets {
         provider_uris.sort();
 
         if let Some(uri) = provider_uris.first() {
-            return Ok((*uri).clone());
+            return Ok(crate::audit::redact_uri_strict(uri.as_str()));
         }
 
         self.get_provider(None).map(|provider| provider.uri())
@@ -2554,5 +2561,51 @@ mod policy_tests {
             Some("clean_value")
         );
         assert_eq!(env.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod report_provider_tests {
+    use super::*;
+
+    /// The `provider` field of the resolution report / resolve response must not
+    /// echo a credential embedded in a user-authored override or alias URI. That
+    /// field is shown by `check --explain`, emitted by `--json`, and crosses the
+    /// SDK boundary, so `validation_report_provider_uri` runs raw URIs through
+    /// `redact_uri_strict` (the `provider.uri()` paths are already credential-free).
+    #[test]
+    fn report_provider_uri_redacts_credentials() {
+        let spec = Secrets::new(
+            Config {
+                project: crate::config::Project {
+                    name: "redact-test".to_string(),
+                    ..Default::default()
+                },
+                profiles: HashMap::new(),
+                providers: None,
+            },
+            None,
+            None,
+            None,
+        );
+
+        // Override branch: userinfo and query token are stripped.
+        let got = spec
+            .validation_report_provider_uri(
+                Some("vault+token:s3cr3t@host/db?token=abc"),
+                &HashMap::new(),
+            )
+            .unwrap();
+        assert_eq!(got, "vault+token:host/db");
+        assert!(!got.contains("s3cr3t") && !got.contains("abc"));
+
+        // Per-secret alias branch: the first sorted primary URI is redacted too.
+        let mut primaries = HashMap::new();
+        primaries.insert("DB".to_string(), Some("vault://host?token=zzz".to_string()));
+        let got = spec
+            .validation_report_provider_uri(None, &primaries)
+            .unwrap();
+        assert_eq!(got, "vault://host");
+        assert!(!got.contains("zzz"));
     }
 }

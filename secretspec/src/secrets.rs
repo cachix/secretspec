@@ -2124,15 +2124,27 @@ impl Secrets {
                     keys
                 };
 
+                // Resolve each secret's effective config once. Both the
+                // provider-grouping pass and the processing pass below need it,
+                // and the field-level merge (current profile over `default`) it
+                // performs is not free — resolving it twice per secret was waste.
+                let secret_configs: HashMap<String, crate::config::Secret> = all_secrets
+                    .iter()
+                    .map(|(name, _)| {
+                        let cfg = self
+                            .resolve_secret_config(name, Some(&profile_name))
+                            .expect("Secret should exist in config since we're iterating over it");
+                        (name.clone(), cfg)
+                    })
+                    .collect();
+
                 let override_uri = self.resolve_provider_override(None);
 
                 let mut provider_groups: HashMap<Option<String>, Vec<String>> = HashMap::new();
                 let mut secret_primary_uris: HashMap<String, Option<String>> = HashMap::new();
 
                 for (name, _) in &all_secrets {
-                    let secret_config = self
-                        .resolve_secret_config(name, Some(&profile_name))
-                        .expect("Secret should exist in config since we're iterating over it");
+                    let secret_config = &secret_configs[name];
 
                     let provider_uri = match (&override_uri, secret_config.providers.as_deref()) {
                         (Some(uri), _) => Some(uri.clone()),
@@ -2199,9 +2211,7 @@ impl Secrets {
                 // resolution report (status, which provider answered, generated,
                 // defaulted).
                 for (name, _) in all_secrets {
-                    let secret_config = self
-                        .resolve_secret_config(&name, Some(&profile_name))
-                        .expect("Secret should exist in config since we're iterating over it");
+                    let secret_config = &secret_configs[&name];
                     let required = secret_config.required.unwrap_or(true);
                     let default = secret_config.default.clone();
                     let as_path = secret_config.as_path.unwrap_or(false);
@@ -2268,7 +2278,7 @@ impl Secrets {
                                 )?;
                                 status = ResolutionStatus::Resolved;
                             } else if let Some(generated_value) =
-                                self.try_generate_secret(&name, &secret_config, &profile_name)?
+                                self.try_generate_secret(&name, secret_config, &profile_name)?
                             {
                                 generated = true;
                                 self.insert_resolved(

@@ -181,7 +181,17 @@ fn resolve_envelope(request_json: &str) -> JsonEnvelope {
 /// `provider`, `profile`, `reason`, and `no_values`. The response carries secret
 /// values; treat its bytes as sensitive.
 pub fn resolve_json(request_json: &str) -> String {
-    let envelope = resolve_envelope(request_json);
+    // Catch panics here, at the one place both native boundaries funnel through
+    // (the C ABI in `secretspec-ffi` and the napi-rs Node addon). Unwinding across
+    // either is undefined behavior, and turning a panic into the same
+    // `{"ok":false,"error":...}` envelope every binding already parses means all
+    // bindings behave identically — the C ABI no longer needs to be the only one
+    // guarding the boundary.
+    let envelope = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        resolve_envelope(request_json)
+    }))
+    .unwrap_or_else(|_| envelope_error("internal", "internal panic during resolve"));
+
     serde_json::to_string(&envelope).unwrap_or_else(|_| {
         "{\"ok\":false,\"error\":{\"kind\":\"serialize\",\"message\":\"failed to serialize response\"}}".to_string()
     })

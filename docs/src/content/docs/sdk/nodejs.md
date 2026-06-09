@@ -6,8 +6,9 @@ description: Resolve SecretSpec secrets from Node.js and TypeScript
 The Node.js / TypeScript SDK (`secretspec`) is a thin wrapper over a
 [napi-rs](https://napi.rs/) native addon that embeds the resolver. Resolution
 happens in the Rust core, so the SDK inherits every provider with no JS-side
-logic, and `npm install` needs no native build. TypeScript declarations ship in
-`index.d.ts`.
+logic. The addon is built from the Rust core with `scripts/build-addon.sh`;
+prebuilt per-platform npm packages are a follow-up. TypeScript declarations ship
+in `index.d.ts`.
 
 ## Quick start
 

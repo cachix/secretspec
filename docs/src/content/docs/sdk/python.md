@@ -36,7 +36,7 @@ Generate typed classes with `secretspec schema` plus
 [quicktype](https://quicktype.io), then build them from `resolved.fields()`:
 
 ```bash
-secretspec schema | quicktype -s schema --lang python -o secrets_gen.py
+secretspec schema | quicktype -s schema --top-level SecretSpec --lang python -o secrets_gen.py
 ```
 
 ```python

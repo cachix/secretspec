@@ -34,7 +34,7 @@ Generate typed classes with `secretspec schema` plus
 [quicktype](https://quicktype.io), then build them from `resolved.fields`:
 
 ```bash
-secretspec schema | quicktype -s schema --lang ruby -o secrets_gen.rb
+secretspec schema | quicktype -s schema --top-level SecretSpec --lang ruby -o secrets_gen.rb
 ```
 
 ```ruby

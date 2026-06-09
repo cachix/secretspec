@@ -52,6 +52,8 @@ def _generate_types(tmp_path: pathlib.Path, name: str):
             "-s",
             "schema",
             str(schema),
+            "--top-level",
+            "SecretSpec",
             "--lang",
             "python",
             "--python-version",

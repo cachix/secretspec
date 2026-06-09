@@ -103,15 +103,19 @@ enum Commands {
         #[arg(long)]
         explain: bool,
     },
-    /// Emit a JSON Schema for the manifest's typed shapes.
+    /// Emit a JSON Schema for the manifest's typed shape.
     ///
-    /// Feed this to [quicktype](https://quicktype.io) to generate idiomatic
-    /// typed accessors (plus deserializers) for any language, then hand the
-    /// deserializer the flat map from each SDK's `fields()` helper. Value-free:
-    /// reads only the manifest, never a provider.
+    /// Feed this to [quicktype](https://quicktype.io) to generate an idiomatic
+    /// typed accessor (plus a deserializer) for any language, then hand the
+    /// deserializer the flat map from each SDK's `fields()` helper. By default it
+    /// describes the union `SecretSpec` (safe for any profile); `--profile` gives
+    /// that profile's exact fields. Value-free: reads only the manifest.
     ///
-    /// Example: `secretspec schema | quicktype -s schema --lang typescript`
+    /// Example: `secretspec schema | quicktype -s schema --top-level SecretSpec --lang typescript`
     Schema {
+        /// Emit the schema for this profile's fields instead of the union
+        #[arg(short = 'P', long)]
+        profile: Option<String>,
         /// Write to this file instead of stdout
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -706,10 +710,11 @@ pub fn main() -> Result<()> {
             Ok(())
         }
         // Generate typed accessors for another language (value-free)
-        Commands::Schema { output } => {
+        Commands::Schema { profile, output } => {
             let app = load_secrets(&cli.file, &cli.reason)?;
             let ir = crate::codegen::build_ir(app.config());
-            let schema = crate::codegen::schema::emit(&ir);
+            let schema = crate::codegen::schema::emit(&ir, profile.as_deref())
+                .map_err(|e| miette!("{e}"))?;
             match output {
                 Some(path) => fs::write(&path, schema)
                     .into_diagnostic()

@@ -37,7 +37,7 @@ Generate typed structs with `secretspec schema` plus
 [quicktype](https://quicktype.io), then unmarshal `resolved.FieldsJSON()`:
 
 ```bash
-secretspec schema | quicktype -s schema --lang go -o secrets_gen.go
+secretspec schema | quicktype -s schema --top-level SecretSpec --lang go -o secrets_gen.go
 ```
 
 ```go

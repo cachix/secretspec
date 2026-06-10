@@ -17,9 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   missing required secret throws `MissingRequiredError`; other failures throw
   `SecretSpecError` with a stable `errorKind`. `as_path` secrets come back as a
   readable file path. Wired into the cross-language conformance suite (all three
-  dimensions) and a `Haskell SDK` CI workflow. The `secretspec-ffi` `cdylib` is
-  linked at build time (`--extra-lib-dirs`) and must be on the runtime loader
-  path.
+  dimensions), the `schema -> quicktype -> typed` codegen e2e test (using
+  quicktype's Haskell target), and a `Haskell SDK` CI workflow that also publishes
+  to Hackage on a version tag. The `secretspec-ffi` `cdylib` is linked at build
+  time (`--extra-lib-dirs`) and must be on the runtime loader path.
 - New cross-language conformance suite (`conformance/`): shared fixtures
   (manifest + `.env` + a canonical `expected.json`) that every SDK resolves and
   must reduce to the identical canonical result, guaranteeing the Python, Go,
@@ -85,7 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This keeps the per-language maintenance to the small `fields()` method.
   `fields()` (and a JSON variant for Go/Node) is available on the resolved result
   in every SDK, and the full `schema -> quicktype -> typed` pipeline is e2e-tested
-  in all four SDK suites. Value-free: `schema` reads only the manifest.
+  in all five SDK suites. Value-free: `schema` reads only the manifest.
 - New `Secrets::report()` and a `mode: "report"` request on the shared
   `resolve_json` boundary: a value-free `ResolutionReport` (per-secret status and
   provenance, never a value) that, unlike resolve, reports a missing required
@@ -186,7 +187,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   absent value from an empty one. Node's `index.d.ts` types `fields()` as
   `Record<string, string | null>` (was `Record<string, string>`, which a
   `no_values` result violated). A new `no_values` conformance dimension asserts
-  all four SDKs produce the identical all-null fields map.
+  all five SDKs produce the identical all-null fields map.
 - A per-profile JSON Schema (`secretspec schema --profile <p>`) now allows
   additional properties. `secretspec resolve --profile <p>` returns the
   profile's own secrets plus those inherited from the `default` profile (the

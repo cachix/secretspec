@@ -28,6 +28,8 @@
   languages.go.enable = true;
   # Ruby SDK (secretspec-rb) binds the C ABI via stdlib Fiddle (dlopen).
   languages.ruby.enable = true;
+  # Haskell SDK (secretspec-hs) links the C ABI at build time via the FFI.
+  languages.haskell.enable = true;
 
   packages = [
     # keyring

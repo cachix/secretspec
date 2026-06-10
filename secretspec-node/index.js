@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('node:fs');
+
 // Node.js SDK for SecretSpec, a declarative secrets manager.
 //
 // A thin wrapper over the native napi-rs addon (secretspec.node), which embeds
@@ -23,6 +25,10 @@ try {
 // Response wire-format version this SDK understands. Tracks secretspec-ffi's
 // RESOLVE_SCHEMA_VERSION; a mismatch means the native addon is out of sync.
 const RESOLVE_SCHEMA_VERSION = 1;
+
+// Wire-format version of the value-free report. Tracks secretspec's
+// RESOLUTION_REPORT_SCHEMA_VERSION.
+const REPORT_SCHEMA_VERSION = 1;
 
 class SecretSpecError extends Error {
   constructor(kind, message) {
@@ -96,6 +102,49 @@ class Resolved {
   fieldsJson() {
     return JSON.stringify(this.fields());
   }
+
+  /**
+   * Remove the temp files backing any as_path secrets in this result. The
+   * resolver persists those files (mode 0400) so their paths stay valid after
+   * resolve returns; the caller owns their lifetime. Call dispose() when done
+   * (or use `using resolved = builder.load()` for automatic disposal) so secret
+   * files do not accumulate in the temp dir. A file already gone is not an error.
+   */
+  dispose() {
+    for (const secret of Object.values(this.secrets)) {
+      if (secret.asPath && secret.path != null) {
+        try {
+          fs.unlinkSync(secret.path);
+        } catch (err) {
+          if (err.code !== 'ENOENT') throw err;
+        }
+      }
+    }
+  }
+
+  [Symbol.dispose]() {
+    this.dispose();
+  }
+}
+
+class SecretReport {
+  constructor(entry) {
+    this.name = entry.name;
+    this.status = entry.status;
+    this.required = entry.required ?? false;
+    this.sourceProvider = entry.source_provider ?? null;
+    this.defaultApplied = entry.default_applied ?? false;
+    this.generated = entry.generated ?? false;
+    this.asPath = entry.as_path ?? false;
+  }
+}
+
+class Report {
+  constructor(response) {
+    this.provider = response.provider;
+    this.profile = response.profile;
+    this.secrets = (response.secrets || []).map((s) => new SecretReport(s));
+  }
 }
 
 class Builder {
@@ -159,6 +208,53 @@ class Builder {
     }
     return new Resolved(response);
   }
+
+  /**
+   * Resolve a value-free Report (the inventory/preflight view, the same one the
+   * CLI exposes as `check --json`). Unlike load(), never throws
+   * MissingRequiredError: a missing required secret appears as a SecretReport
+   * with status "missing_required". Synchronous; prefer reportAsync() for
+   * network-backed providers.
+   */
+  report() {
+    return this._parseReport(
+      native.resolve(JSON.stringify({ ...this._request, mode: 'report' })),
+    );
+  }
+
+  /** Like report(), but resolves on the libuv threadpool. */
+  async reportAsync() {
+    if (typeof native.resolveAsync !== 'function') {
+      throw new SecretSpecError(
+        'addon',
+        'the loaded native addon predates resolveAsync; rebuild it with scripts/build-addon.sh',
+      );
+    }
+    return this._parseReport(
+      await native.resolveAsync(JSON.stringify({ ...this._request, mode: 'report' })),
+    );
+  }
+
+  /** Parse a JSON report envelope string into a Report (or throw). */
+  _parseReport(raw) {
+    const envelope = JSON.parse(raw);
+    if (!envelope.ok) {
+      const err = envelope.error || {};
+      throw new SecretSpecError(err.kind || 'unknown', err.message || '');
+    }
+    const response = envelope.response;
+    if (response == null) {
+      throw new SecretSpecError('ffi', 'secretspec_resolve reported ok with no response');
+    }
+    if (response.schema_version !== REPORT_SCHEMA_VERSION) {
+      throw new SecretSpecError(
+        'version',
+        `unsupported report schema version ${response.schema_version} (expected ` +
+          `${REPORT_SCHEMA_VERSION}); the native addon and this SDK are out of sync`,
+      );
+    }
+    return new Report(response);
+  }
 }
 
 const SecretSpec = {
@@ -176,6 +272,8 @@ module.exports = {
   Builder,
   Resolved,
   ResolvedSecret,
+  Report,
+  SecretReport,
   SecretSpecError,
   MissingRequiredError,
   abiVersion,

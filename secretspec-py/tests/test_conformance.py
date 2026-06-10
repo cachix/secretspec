@@ -30,8 +30,36 @@ def _canonical(resolved) -> dict:
     }
 
 
+def _canonical_report(report) -> dict:
+    return {
+        "profile": report.profile,
+        "secrets": {
+            s.name: {
+                "status": s.status,
+                "required": s.required,
+                "as_path": s.as_path,
+                "generated": s.generated,
+                "default_applied": s.default_applied,
+                # Present-or-not (not the path-dependent value) so the vector is
+                # machine-independent yet still catches a dropped source_provider.
+                "source_provider": s.source_provider is not None,
+            }
+            for s in report.secrets
+        },
+    }
+
+
 def _fixtures():
     return sorted(p.name for p in FIXTURES.iterdir() if p.is_dir())
+
+
+def _builder(directory):
+    return (
+        SecretSpec.builder()
+        .with_path(str(directory / "secretspec.toml"))
+        .with_provider(f"dotenv://{directory / '.env'}")
+        .with_reason("conformance")
+    )
 
 
 @pytest.mark.parametrize("fixture", _fixtures())
@@ -39,12 +67,31 @@ def test_conformance(fixture):
     directory = FIXTURES / fixture
     expected = json.loads((directory / "expected.json").read_text())
 
-    resolved = (
-        SecretSpec.builder()
-        .with_path(str(directory / "secretspec.toml"))
-        .with_provider(f"dotenv://{directory / '.env'}")
-        .with_reason("conformance")
-        .load()
-    )
+    resolved = _builder(directory).load()
 
     assert _canonical(resolved) == expected
+
+
+@pytest.mark.parametrize("fixture", _fixtures())
+def test_conformance_no_values(fixture):
+    """Under no_values every SDK must emit the same all-null fields map: a
+    value-less secret serializes to null, not an empty string."""
+    directory = FIXTURES / fixture
+    expected = json.loads((directory / "expected_no_values.json").read_text())
+
+    resolved = _builder(directory).with_no_values().load()
+    try:
+        assert resolved.fields() == expected
+    finally:
+        resolved.close()
+
+
+@pytest.mark.parametrize("fixture", _fixtures())
+def test_conformance_report(fixture):
+    """The value-free report (status + provenance) is identical across SDKs."""
+    directory = FIXTURES / fixture
+    expected = json.loads((directory / "expected_report.json").read_text())
+
+    report = _builder(directory).report()
+
+    assert _canonical_report(report) == expected

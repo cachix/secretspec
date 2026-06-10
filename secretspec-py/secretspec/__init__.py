@@ -27,13 +27,20 @@ from cffi import FFI
 # RESOLVE_SCHEMA_VERSION; a mismatch means the loaded library is incompatible.
 _RESOLVE_SCHEMA_VERSION = 1
 
+# Wire-format version of the value-free report. Tracks secretspec's
+# RESOLUTION_REPORT_SCHEMA_VERSION.
+_REPORT_SCHEMA_VERSION = 1
+
 __all__ = [
     "SecretSpec",
     "Resolved",
     "ResolvedSecret",
+    "Report",
+    "SecretReport",
     "SecretSpecError",
     "MissingRequiredError",
     "resolve",
+    "report",
     "abi_version",
 ]
 
@@ -160,14 +167,63 @@ class Resolved:
             if usable is not None:
                 os.environ[name] = usable
 
-    def fields(self) -> dict:
+    def fields(self) -> dict[str, Optional[str]]:
         """Flat ``{SECRET_NAME: value}`` map (the file path for ``as_path``).
+
+        A secret with no usable value (e.g. under ``no_values``) maps to
+        ``None``, matching the null the other SDKs emit.
 
         This is the input for a quicktype-generated deserializer: feed it to the
         generated type's ``from_dict`` to get a typed object. See
         ``secretspec schema``.
         """
         return {name: secret.get for name, secret in self.secrets.items()}
+
+    def close(self) -> None:
+        """Remove the temp files backing any ``as_path`` secrets in this result.
+
+        The resolver persists those files (mode 0400) so their paths stay valid
+        after resolve returns; the caller owns their lifetime. Call ``close()``
+        (or use this object as a context manager) when done so secret files do
+        not accumulate in the temp dir. A file already gone is not an error.
+        """
+        for secret in self.secrets.values():
+            if secret.as_path and secret.path is not None:
+                try:
+                    os.remove(secret.path)
+                except FileNotFoundError:
+                    pass
+
+    def __enter__(self) -> "Resolved":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+
+@dataclass(frozen=True)
+class SecretReport:
+    """Value-free resolution outcome for one declared secret: how it would
+    resolve and from where, never the value itself."""
+
+    name: str
+    status: str  # "resolved" | "missing_required" | "missing_optional"
+    required: bool
+    source_provider: Optional[str]
+    default_applied: bool
+    generated: bool
+    as_path: bool
+
+
+@dataclass(frozen=True)
+class Report:
+    """A value-free resolution snapshot. Unlike :class:`Resolved`, a missing
+    required secret is a ``missing_required`` status here, not an error, so a
+    report describes a profile even when its secrets are not all available."""
+
+    provider: str
+    profile: str
+    secrets: list[SecretReport]
 
 
 def abi_version() -> str:
@@ -208,6 +264,25 @@ def _resolve_response(request: dict) -> dict:
     return response
 
 
+def _report_response(request: dict) -> dict:
+    envelope = _resolve_envelope(request)
+    if not envelope.get("ok", False):
+        err = envelope.get("error", {})
+        raise SecretSpecError(err.get("kind", "unknown"), err.get("message", ""))
+    response = envelope.get("response")
+    if response is None:
+        raise SecretSpecError("ffi", "secretspec_resolve reported ok with no response")
+    version = response.get("schema_version")
+    if version != _REPORT_SCHEMA_VERSION:
+        raise SecretSpecError(
+            "version",
+            f"unsupported report schema version {version} (expected "
+            f"{_REPORT_SCHEMA_VERSION}); the secretspec-ffi library and this SDK "
+            "are out of sync",
+        )
+    return response
+
+
 def resolve(
     *,
     path: Optional[str] = None,
@@ -223,6 +298,24 @@ def resolve(
     return SecretSpec.builder().with_path(path).with_provider(provider).with_profile(
         profile
     ).with_reason(reason).load()
+
+
+def report(
+    *,
+    path: Optional[str] = None,
+    provider: Optional[str] = None,
+    profile: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> Report:
+    """Resolve a value-free :class:`Report` (the inventory/preflight view).
+
+    Unlike :func:`resolve`, never raises :class:`MissingRequiredError`: a missing
+    required secret appears as a :class:`SecretReport` with status
+    ``"missing_required"``.
+    """
+    return SecretSpec.builder().with_path(path).with_provider(provider).with_profile(
+        profile
+    ).with_reason(reason).report()
 
 
 class SecretSpec:
@@ -284,4 +377,32 @@ class _Builder:
             profile=response["profile"],
             secrets=secrets,
             missing_optional=response.get("missing_optional", []),
+        )
+
+    def report(self) -> Report:
+        """Resolve a value-free :class:`Report` (the inventory/preflight view).
+
+        Unlike :meth:`load`, never raises :class:`MissingRequiredError`: a missing
+        required secret appears as a :class:`SecretReport` with status
+        ``"missing_required"``.
+        """
+        request = dict(self._request)
+        request["mode"] = "report"
+        response = _report_response(request)
+        secrets = [
+            SecretReport(
+                name=s["name"],
+                status=s["status"],
+                required=s.get("required", False),
+                source_provider=s.get("source_provider"),
+                default_applied=s.get("default_applied", False),
+                generated=s.get("generated", False),
+                as_path=s.get("as_path", False),
+            )
+            for s in response.get("secrets", [])
+        ]
+        return Report(
+            provider=response["provider"],
+            profile=response["profile"],
+            secrets=secrets,
         )

@@ -156,10 +156,12 @@ type ResolvedSecret struct {
 	SourceProvider *string
 }
 
-// usable returns the secret's usable string and whether one is present: the file
+// Usable returns the secret's usable string and whether one is present: the file
 // path for as_path secrets, otherwise the value. Both are absent when a
 // value-less response (e.g. no_values) strips them, in which case ok is false.
-func (s ResolvedSecret) usable() (string, bool) {
+// This is the null-aware accessor; the other SDKs express the same thing as a
+// get() that returns null/None/nil.
+func (s ResolvedSecret) Usable() (string, bool) {
 	if s.AsPath {
 		if s.Path != nil {
 			return *s.Path, true
@@ -173,9 +175,10 @@ func (s ResolvedSecret) usable() (string, bool) {
 }
 
 // Get returns the usable string: the file path for as_path secrets, else the
-// value. It is the empty string when no usable value is present (see usable).
+// value. It is the empty string when no usable value is present; use Usable to
+// distinguish an absent value from a genuinely empty one.
 func (s ResolvedSecret) Get() string {
-	v, _ := s.usable()
+	v, _ := s.Usable()
 	return v
 }
 
@@ -192,7 +195,7 @@ type Resolved struct {
 // exported as an empty string.
 func (r *Resolved) SetAsEnv() error {
 	for name, secret := range r.Secrets {
-		if value, ok := secret.usable(); ok {
+		if value, ok := secret.Usable(); ok {
 			if err := os.Setenv(name, value); err != nil {
 				return err
 			}
@@ -202,18 +205,45 @@ func (r *Resolved) SetAsEnv() error {
 }
 
 // Fields returns a flat map of SECRET_NAME -> value (the file path for as_path).
-func (r *Resolved) Fields() map[string]string {
-	out := make(map[string]string, len(r.Secrets))
+// A secret with no usable value (e.g. under no_values) maps to a nil pointer,
+// which marshals to JSON null, matching the null the Python, Ruby, and Node SDKs
+// emit; the value is a non-nil pointer otherwise.
+func (r *Resolved) Fields() map[string]*string {
+	out := make(map[string]*string, len(r.Secrets))
 	for name, secret := range r.Secrets {
-		out[name] = secret.Get()
+		if v, ok := secret.Usable(); ok {
+			val := v
+			out[name] = &val
+		} else {
+			out[name] = nil
+		}
 	}
 	return out
 }
 
-// FieldsJSON marshals Fields() to JSON, the input for a quicktype-generated
-// deserializer (e.g. UnmarshalSecretSpec). See `secretspec schema`.
+// FieldsJSON marshals Fields() to JSON (a `{SECRET_NAME: value-or-null}` object),
+// the input for a quicktype-generated deserializer (e.g. UnmarshalSecretSpec).
+// See `secretspec schema`.
 func (r *Resolved) FieldsJSON() ([]byte, error) {
 	return json.Marshal(r.Fields())
+}
+
+// Close removes the temp files backing any as_path secrets in this result. The
+// resolver persists those files (mode 0400) so their paths stay valid after
+// resolve returns; the caller owns their lifetime. Call it (e.g.
+// `defer resolved.Close()`) when done so secret files do not accumulate in the
+// temp dir. Non-as_path secrets and a no_values result hold no path and are
+// skipped, and a file already gone is not an error.
+func (r *Resolved) Close() error {
+	var firstErr error
+	for _, secret := range r.Secrets {
+		if secret.AsPath && secret.Path != nil {
+			if err := os.Remove(*secret.Path); err != nil && !os.IsNotExist(err) && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
 }
 
 // ABIVersion returns the version reported by the loaded library.
@@ -328,4 +358,107 @@ func (b *Builder) Load() (*Resolved, error) {
 		Secrets:         secrets,
 		MissingOptional: resp.MissingOptional,
 	}, nil
+}
+
+// reportSchemaVersion is the value-free report wire-format version this SDK
+// understands; it tracks secretspec's RESOLUTION_REPORT_SCHEMA_VERSION.
+const reportSchemaVersion = 1
+
+// SecretReport is the value-free resolution outcome for one declared secret:
+// how it would resolve and from where, never the value itself.
+type SecretReport struct {
+	Name           string
+	Status         string // "resolved" | "missing_required" | "missing_optional"
+	Required       bool
+	SourceProvider *string
+	DefaultApplied bool
+	Generated      bool
+	AsPath         bool
+}
+
+// Report is a value-free resolution snapshot: every declared secret and how it
+// would resolve, never a value. Unlike Load, a missing required secret is
+// reported as a SecretReport with Status "missing_required" rather than an
+// error, so it describes a profile even when its secrets are not all available.
+type Report struct {
+	Provider string
+	Profile  string
+	Secrets  []SecretReport
+}
+
+type secretReportJSON struct {
+	Name           string  `json:"name"`
+	Status         string  `json:"status"`
+	Required       bool    `json:"required"`
+	SourceProvider *string `json:"source_provider"`
+	DefaultApplied bool    `json:"default_applied"`
+	Generated      bool    `json:"generated"`
+	AsPath         bool    `json:"as_path"`
+}
+
+type reportResponseJSON struct {
+	SchemaVersion int                `json:"schema_version"`
+	Provider      string             `json:"provider"`
+	Profile       string             `json:"profile"`
+	Secrets       []secretReportJSON `json:"secrets"`
+}
+
+type reportEnvelopeJSON struct {
+	OK       bool                `json:"ok"`
+	Response *reportResponseJSON `json:"response"`
+	Error    *errorJSON          `json:"error"`
+}
+
+// Report resolves the value-free report (the inventory/preflight view, the same
+// one the CLI exposes as `check --json`). It never returns
+// *MissingRequiredError: a missing required secret appears as a SecretReport
+// with Status "missing_required". It returns *Error for a genuine failure.
+func (b *Builder) Report() (*Report, error) {
+	if err := ensureLoaded(); err != nil {
+		return nil, err
+	}
+	req := make(map[string]any, len(b.req)+1)
+	for k, v := range b.req {
+		req[k] = v
+	}
+	req["mode"] = "report"
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+
+	ptr := cResolve(string(payload))
+	if ptr == 0 {
+		return nil, &Error{Kind: "ffi", Message: "secretspec_resolve returned null"}
+	}
+	raw := goString(ptr)
+	cFree(ptr)
+
+	var env reportEnvelopeJSON
+	if err := json.Unmarshal([]byte(raw), &env); err != nil {
+		return nil, err
+	}
+	if !env.OK {
+		kind, message := "unknown", ""
+		if env.Error != nil {
+			kind, message = env.Error.Kind, env.Error.Message
+		}
+		return nil, &Error{Kind: kind, Message: message}
+	}
+	resp := env.Response
+	if resp == nil {
+		return nil, &Error{Kind: "ffi", Message: "secretspec_resolve reported ok with no response"}
+	}
+	if resp.SchemaVersion != reportSchemaVersion {
+		return nil, &Error{Kind: "version", Message: fmt.Sprintf(
+			"unsupported report schema version %d (expected %d); the secretspec-ffi library and this SDK are out of sync",
+			resp.SchemaVersion, reportSchemaVersion,
+		)}
+	}
+
+	secrets := make([]SecretReport, len(resp.Secrets))
+	for i, s := range resp.Secrets {
+		secrets[i] = SecretReport(s)
+	}
+	return &Report{Provider: resp.Provider, Profile: resp.Profile, Secrets: secrets}, nil
 }

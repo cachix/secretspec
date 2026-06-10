@@ -25,10 +25,38 @@ export class Resolved {
   missingOptional: string[];
   /** Export each resolved secret into process.env by its declared name. */
   setAsEnv(): void;
-  /** Flat { SECRET_NAME: value } object (the file path for as_path secrets). */
-  fields(): Record<string, string>;
+  /**
+   * Flat { SECRET_NAME: value } object (the file path for as_path secrets). A
+   * secret with no usable value (e.g. under no_values) maps to null, matching
+   * the other SDKs.
+   */
+  fields(): Record<string, string | null>;
   /** fields() as a JSON string, the input for a quicktype-generated deserializer. */
   fieldsJson(): string;
+  /**
+   * Remove the temp files backing any as_path secrets in this result. Call when
+   * done (or use `using` for automatic disposal) so secret files do not
+   * accumulate in the temp dir.
+   */
+  dispose(): void;
+  [Symbol.dispose](): void;
+}
+
+export class SecretReport {
+  name: string;
+  /** "resolved" | "missing_required" | "missing_optional" */
+  status: string;
+  required: boolean;
+  sourceProvider: string | null;
+  defaultApplied: boolean;
+  generated: boolean;
+  asPath: boolean;
+}
+
+export class Report {
+  provider: string;
+  profile: string;
+  secrets: SecretReport[];
 }
 
 export class Builder {
@@ -50,6 +78,14 @@ export class Builder {
    * types load() throws.
    */
   loadAsync(): Promise<Resolved>;
+  /**
+   * Resolve a value-free Report (the inventory/preflight view). Unlike load(),
+   * never throws MissingRequiredError: a missing required secret appears as a
+   * SecretReport with status "missing_required".
+   */
+  report(): Report;
+  /** Like report(), but resolves on the libuv threadpool. */
+  reportAsync(): Promise<Report>;
 }
 
 export const SecretSpec: {

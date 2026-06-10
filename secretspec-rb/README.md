@@ -24,6 +24,23 @@ resolved.set_as_env!    # export everything into ENV
 A missing required secret raises `Secretspec::MissingRequiredError`; any other
 failure raises `Secretspec::Error` (with a stable `#kind`).
 
+## Cleanup
+
+`as_path` secrets are materialized to temp files that outlive the call. Pass a
+block to `load` (which closes automatically) or call `resolved.close` when done
+so the secret files do not accumulate in the temp dir.
+
+## Value-free report
+
+`report` returns the inventory/preflight view: per-secret status and provenance,
+never a value. Unlike `load`, it does not raise when a required secret is missing
+— it appears as a `SecretReport` with status `"missing_required"`.
+
+```ruby
+report = Secretspec::SecretSpec.builder.with_profile("production").report
+report.secrets.each { |s| puts [s.name, s.status, s.required].join(" ") }
+```
+
 ## Library discovery
 
 The native library is found via the `SECRETSPEC_FFI_LIB` environment variable,

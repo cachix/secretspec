@@ -42,12 +42,56 @@ for (const fixture of fs.readdirSync(FIXTURES).sort()) {
 
   test(`conformance: ${fixture}`, () => {
     const expected = JSON.parse(fs.readFileSync(path.join(dir, 'expected.json'), 'utf8'));
-    const resolved = SecretSpec.builder()
-      .withPath(path.join(dir, 'secretspec.toml'))
-      .withProvider(`dotenv://${path.join(dir, '.env')}`)
-      .withReason('conformance')
-      .load();
+    const resolved = builder(dir).load();
 
     assert.deepStrictEqual(canonical(resolved), expected);
   });
+
+  test(`conformance no_values: ${fixture}`, () => {
+    // Under no_values every SDK must emit the same all-null fields map: a
+    // value-less secret serializes to null, not an empty string.
+    const expected = JSON.parse(
+      fs.readFileSync(path.join(dir, 'expected_no_values.json'), 'utf8'),
+    );
+    const resolved = builder(dir).withNoValues().load();
+    try {
+      assert.deepStrictEqual(JSON.parse(resolved.fieldsJson()), expected);
+    } finally {
+      resolved.dispose();
+    }
+  });
+
+  test(`conformance report: ${fixture}`, () => {
+    // The value-free report (status + provenance) is identical across SDKs.
+    const expected = JSON.parse(
+      fs.readFileSync(path.join(dir, 'expected_report.json'), 'utf8'),
+    );
+    const report = builder(dir).report();
+
+    assert.deepStrictEqual(canonicalReport(report), expected);
+  });
+}
+
+function builder(dir) {
+  return SecretSpec.builder()
+    .withPath(path.join(dir, 'secretspec.toml'))
+    .withProvider(`dotenv://${path.join(dir, '.env')}`)
+    .withReason('conformance');
+}
+
+function canonicalReport(report) {
+  const secrets = {};
+  for (const s of report.secrets) {
+    secrets[s.name] = {
+      status: s.status,
+      required: s.required,
+      as_path: s.asPath,
+      generated: s.generated,
+      default_applied: s.defaultApplied,
+      // Present-or-not (not the path-dependent value) so the vector is
+      // machine-independent yet still catches a dropped source_provider.
+      source_provider: s.sourceProvider != null,
+    };
+  }
+  return { profile: report.profile, secrets };
 }

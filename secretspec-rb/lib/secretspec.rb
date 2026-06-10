@@ -19,6 +19,10 @@ module Secretspec
   # RESOLVE_SCHEMA_VERSION; a mismatch means the loaded library is incompatible.
   RESOLVE_SCHEMA_VERSION = 1
 
+  # Wire-format version of the value-free report. Tracks secretspec's
+  # RESOLUTION_REPORT_SCHEMA_VERSION.
+  REPORT_SCHEMA_VERSION = 1
+
   # A resolution failure (bad manifest, provider error, reason policy).
   class Error < StandardError
     attr_reader :kind
@@ -59,13 +63,39 @@ module Secretspec
       end
     end
 
-    # Flat { "SECRET_NAME" => value } hash (the file path for as_path). Feed this
-    # to a quicktype-generated deserializer (e.g. from_dynamic!). See
-    # `secretspec schema`.
+    # Flat { "SECRET_NAME" => value } hash (the file path for as_path). A secret
+    # with no usable value (e.g. under no_values) maps to nil, matching the null
+    # the other SDKs emit. Feed this to a quicktype-generated deserializer (e.g.
+    # from_dynamic!). See `secretspec schema`.
     def fields
       secrets.transform_values(&:get)
     end
+
+    # Remove the temp files backing any as_path secrets in this result. The
+    # resolver persists those files (mode 0400) so their paths stay valid after
+    # resolve returns; the caller owns their lifetime. Call #close (or pass a
+    # block to Builder#load, which closes automatically) when done so secret
+    # files do not accumulate in the temp dir. A file already gone is not an
+    # error.
+    def close
+      secrets.each_value do |secret|
+        next unless secret.as_path && secret.path
+
+        File.delete(secret.path) if File.exist?(secret.path)
+      end
+      nil
+    end
   end
+
+  # Value-free resolution outcome for one declared secret: how it would resolve
+  # and from where, never the value itself.
+  SecretReport = Struct.new(:name, :status, :required, :source_provider,
+                            :default_applied, :generated, :as_path)
+
+  # A value-free resolution snapshot. Unlike Resolved, a missing required secret
+  # is a "missing_required" status here, not an error, so a report describes a
+  # profile even when its secrets are not all available.
+  Report = Struct.new(:provider, :profile, :secrets)
 
   # The narrow C ABI, loaded lazily via Fiddle.
   module Native
@@ -194,6 +224,10 @@ module Secretspec
 
     # Resolve the secrets. Raises MissingRequiredError if a required secret is
     # missing, and Error for any other failure.
+    #
+    # Without a block, returns the Resolved (the caller should #close it when
+    # done to clean up any as_path temp files). With a block, yields the Resolved
+    # and closes it afterwards, returning the block's value.
     def load
       envelope = JSON.parse(Native.resolve(JSON.generate(@request)))
 
@@ -224,10 +258,49 @@ module Secretspec
         )
       end
 
-      Resolved.new(
+      resolved = Resolved.new(
         response["provider"], response["profile"], secrets,
         response["missing_optional"] || []
       )
+      return resolved unless block_given?
+
+      begin
+        yield resolved
+      ensure
+        resolved.close
+      end
+    end
+
+    # Resolve a value-free Report (the inventory/preflight view, the same one the
+    # CLI exposes as `check --json`). Unlike #load, never raises
+    # MissingRequiredError: a missing required secret appears as a SecretReport
+    # with status "missing_required".
+    def report
+      request = @request.merge("mode" => "report")
+      envelope = JSON.parse(Native.resolve(JSON.generate(request)))
+
+      unless envelope["ok"]
+        err = envelope["error"] || {}
+        raise Error.new(err["kind"] || "unknown", err["message"] || "")
+      end
+
+      response = envelope["response"]
+      raise Error.new("ffi", "secretspec_resolve reported ok with no response") if response.nil?
+
+      version = response["schema_version"]
+      unless version == REPORT_SCHEMA_VERSION
+        raise Error.new("version",
+                        "unsupported report schema version #{version} " \
+                        "(expected #{REPORT_SCHEMA_VERSION}); the secretspec-ffi " \
+                        "library and this SDK are out of sync")
+      end
+
+      secrets = (response["secrets"] || []).map do |s|
+        SecretReport.new(s["name"], s["status"], s["required"],
+                         s["source_provider"], s["default_applied"],
+                         s["generated"], s["as_path"])
+      end
+      Report.new(response["provider"], response["profile"], secrets)
     end
   end
 

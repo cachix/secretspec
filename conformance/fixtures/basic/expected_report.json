@@ -1,0 +1,8 @@
+{
+  "profile": "default",
+  "secrets": {
+    "DATABASE_URL": { "status": "resolved", "required": true, "as_path": false, "generated": false, "default_applied": false, "source_provider": true },
+    "LOG_LEVEL": { "status": "resolved", "required": false, "as_path": false, "generated": false, "default_applied": true, "source_provider": false },
+    "SENTRY_DSN": { "status": "missing_optional", "required": false, "as_path": false, "generated": false, "default_applied": false, "source_provider": false }
+  }
+}

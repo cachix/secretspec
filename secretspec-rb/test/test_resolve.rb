@@ -156,15 +156,51 @@ class ConformanceTest < Minitest::Test
     }
   end
 
+  def canonical_report(report)
+    secrets = {}
+    report.secrets.each do |s|
+      secrets[s.name] = {
+        "status" => s.status,
+        "required" => s.required,
+        "as_path" => s.as_path,
+        "generated" => s.generated,
+        "default_applied" => s.default_applied,
+        # Present-or-not (not the path-dependent value) so the vector is
+        # machine-independent yet still catches a dropped source_provider.
+        "source_provider" => !s.source_provider.nil?
+      }
+    end
+    { "profile" => report.profile, "secrets" => secrets }
+  end
+
+  def conformance_builder(dir)
+    Secretspec::SecretSpec.builder
+                          .with_path(File.join(dir, "secretspec.toml"))
+                          .with_provider("dotenv://#{File.join(dir, '.env')}")
+                          .with_reason("conformance")
+  end
+
   Dir.glob(File.join(FIXTURES, "*")).select { |p| File.directory?(p) }.sort.each do |dir|
-    define_method("test_conformance_#{File.basename(dir)}") do
+    name = File.basename(dir)
+
+    define_method("test_conformance_#{name}") do
       expected = JSON.parse(File.read(File.join(dir, "expected.json")))
-      resolved = Secretspec::SecretSpec.builder
-                                       .with_path(File.join(dir, "secretspec.toml"))
-                                       .with_provider("dotenv://#{File.join(dir, '.env')}")
-                                       .with_reason("conformance")
-                                       .load
-      assert_equal expected, canonical(resolved)
+      assert_equal expected, canonical(conformance_builder(dir).load)
+    end
+
+    # Under no_values every SDK must emit the same all-null fields map: a
+    # value-less secret serializes to null, not an empty string.
+    define_method("test_conformance_no_values_#{name}") do
+      expected = JSON.parse(File.read(File.join(dir, "expected_no_values.json")))
+      conformance_builder(dir).with_no_values.load do |resolved|
+        assert_equal expected, resolved.fields
+      end
+    end
+
+    # The value-free report (status + provenance) is identical across SDKs.
+    define_method("test_conformance_report_#{name}") do
+      expected = JSON.parse(File.read(File.join(dir, "expected_report.json")))
+      assert_equal expected, canonical_report(conformance_builder(dir).report)
     end
   end
 end

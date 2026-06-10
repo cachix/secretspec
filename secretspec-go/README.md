@@ -36,6 +36,26 @@ func main() {
 A missing required secret returns `*MissingRequiredError`; any other failure
 returns `*Error` (with a stable `.Kind`).
 
+## Cleanup
+
+`as_path` secrets are materialized to temp files that outlive the call. Call
+`resolved.Close()` (e.g. `defer resolved.Close()`) when done so the secret files
+do not accumulate in the temp dir.
+
+## Value-free report
+
+`Report()` returns the inventory/preflight view: per-secret status and
+provenance, never a value. Unlike `Load()`, it does not fail when a required
+secret is missing — it appears as a `SecretReport` with `Status`
+`"missing_required"`.
+
+```go
+report, _ := secretspec.New().WithProfile("production").Report()
+for _, s := range report.Secrets {
+	fmt.Println(s.Name, s.Status, s.Required)
+}
+```
+
 ## Library discovery
 
 The native library is found via the `SECRETSPEC_FFI_LIB` environment variable,

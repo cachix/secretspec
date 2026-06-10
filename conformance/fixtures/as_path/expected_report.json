@@ -1,0 +1,6 @@
+{
+  "profile": "default",
+  "secrets": {
+    "TLS_CERT": { "status": "resolved", "required": true, "as_path": true, "generated": false, "default_applied": false, "source_provider": true }
+  }
+}

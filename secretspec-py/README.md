@@ -25,6 +25,25 @@ resolved.set_as_env()      # export everything into os.environ
 A missing required secret raises `MissingRequiredError`; any other failure
 raises `SecretSpecError` (with a stable `.kind`).
 
+## Cleanup
+
+`as_path` secrets are materialized to temp files that outlive the call. Use the
+result as a context manager (`with SecretSpec.builder()...load() as resolved:`)
+or call `resolved.close()` when done so the secret files do not accumulate.
+
+## Value-free report
+
+`report()` returns the inventory/preflight view: per-secret status and
+provenance, never a value. Unlike `load()`, it does not raise when a required
+secret is missing — it appears as a `SecretReport` with status
+`"missing_required"`.
+
+```python
+report = SecretSpec.builder().with_profile("production").report()
+for s in report.secrets:
+    print(s.name, s.status, s.required)
+```
+
 ## Library discovery
 
 The SDK loads the native library from, in order: the `SECRETSPEC_FFI_LIB`

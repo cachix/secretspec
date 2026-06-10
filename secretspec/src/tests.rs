@@ -557,6 +557,86 @@ fn test_resolve_as_path_returns_persisted_path() {
 }
 
 #[test]
+fn test_resolve_without_values_keeps_structure_but_no_value_or_path() {
+    use crate::resolve::ResolvedSource;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(
+        &env_path,
+        "DATABASE_URL=postgres://localhost/db\nTLS_CERT=----cert----\n",
+    )
+    .unwrap();
+
+    let secret = |as_path: bool| Secret {
+        description: Some("t".to_string()),
+        required: Some(true),
+        as_path: Some(as_path),
+        ..Default::default()
+    };
+    let mut secrets = HashMap::new();
+    secrets.insert("DATABASE_URL".to_string(), secret(false));
+    secrets.insert("TLS_CERT".to_string(), secret(true));
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(resolve_test_config(secrets), None, Some(provider), None);
+
+    let response = spec.resolve_without_values().unwrap();
+    assert!(response.is_ok());
+
+    // Plain secret: no value materialized, but structure + provenance preserved.
+    let db = &response.secrets["DATABASE_URL"];
+    assert!(db.value.is_none());
+    assert!(db.path.is_none());
+    assert!(!db.as_path);
+    assert_eq!(db.source, ResolvedSource::Provider);
+
+    // as_path secret: no value AND no path, so no temp file is persisted; the
+    // as_path flag is still reported so the shape is intact.
+    let cert = &response.secrets["TLS_CERT"];
+    assert!(cert.value.is_none());
+    assert!(cert.path.is_none());
+    assert!(cert.as_path);
+}
+
+#[test]
+fn test_report_lists_missing_required_without_failing() {
+    use crate::report::ResolutionStatus;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "PRESENT=here\n").unwrap();
+
+    let secret = || Secret {
+        description: Some("t".to_string()),
+        required: Some(true),
+        ..Default::default()
+    };
+    let mut secrets = HashMap::new();
+    secrets.insert("PRESENT".to_string(), secret());
+    secrets.insert("MISSING".to_string(), secret());
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(resolve_test_config(secrets), None, Some(provider), None);
+
+    // resolve() fails the whole call when a required secret is missing.
+    assert!(!spec.resolve().unwrap().is_ok());
+
+    // report() instead lists every secret with a status and never a value, so an
+    // inventory/preflight consumer still gets the shape back.
+    let report = spec.report().unwrap();
+    let status = |name: &str| {
+        report
+            .secrets
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| s.status.clone())
+    };
+    assert_eq!(status("PRESENT"), Some(ResolutionStatus::Resolved));
+    assert_eq!(status("MISSING"), Some(ResolutionStatus::MissingRequired));
+}
+
+#[test]
 fn test_secretspec_new() {
     let config = Config {
         project: Project {

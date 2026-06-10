@@ -4,7 +4,7 @@ use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
 use crate::config::{Config, GlobalConfig, Profile, RequireReason, Resolved};
 use crate::error::{Result, SecretSpecError};
 use crate::provider::Provider as ProviderTrait;
-use crate::report::{ResolutionStatus, SecretResolution};
+use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
 use crate::resolve::{RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource};
 use crate::validation::{ValidatedSecrets, ValidationErrors};
 use colored::Colorize;
@@ -2030,23 +2030,43 @@ impl Secrets {
     /// the caller; this is a one-shot boundary and the caller owns their
     /// lifetime thereafter.
     pub fn resolve(&self) -> Result<ResolveResponse> {
+        self.resolve_impl(true)
+    }
+
+    /// Like [`Self::resolve`], but never materializes secret values: every
+    /// `value`/`path` in the response is `None`, no `as_path` temp file is
+    /// persisted, and no secret byte is ever copied into the response. Structure
+    /// and provenance (`as_path`, `source`, `source_provider`,
+    /// `missing_optional`) are still populated. This backs the `no_values`
+    /// request path, so a policy/preflight consumer that wants only the resolve
+    /// shape never pulls secret values into its process, and `as_path`
+    /// resolution leaves no temp file behind. Resolution still runs (providers
+    /// are still queried) so provenance can be reported; a missing required
+    /// secret still fails the same way as [`Self::resolve`]. For a value-free
+    /// view that tolerates missing required secrets, use [`Self::report`].
+    pub fn resolve_without_values(&self) -> Result<ResolveResponse> {
+        self.resolve_impl(false)
+    }
+
+    /// Shared core of [`Self::resolve`]/[`Self::resolve_without_values`].
+    /// `include_values` gates whether resolved secret values are copied into the
+    /// response (and whether `as_path` temp files are persisted past the call).
+    fn resolve_impl(&self, include_values: bool) -> Result<ResolveResponse> {
         match self.validate()? {
             Ok(mut validated) => {
                 // Persist as_path temp files so returned paths outlive this call.
-                validated.keep_temp_files()?;
+                // Only needed when we actually return paths: under
+                // `!include_values` the temp files are dropped (auto-deleted)
+                // together with `validated`, so nothing is left on disk.
+                if include_values {
+                    validated.keep_temp_files()?;
+                }
 
                 let mut secrets = BTreeMap::new();
                 for entry in &validated.resolution {
                     if entry.status != ResolutionStatus::Resolved {
                         continue;
                     }
-                    let raw = validated
-                        .resolved
-                        .secrets
-                        .get(&entry.name)
-                        .expect("a Resolved entry always has a value")
-                        .expose_secret()
-                        .to_string();
                     let source = if entry.generated {
                         ResolvedSource::Generated
                     } else if entry.default_applied {
@@ -2054,10 +2074,23 @@ impl Secrets {
                     } else {
                         ResolvedSource::Provider
                     };
-                    let (value, path) = if entry.as_path {
-                        (None, Some(raw))
+                    // Only copy the secret value out when the caller wants it;
+                    // otherwise the bytes never enter the response.
+                    let (value, path) = if !include_values {
+                        (None, None)
                     } else {
-                        (Some(raw), None)
+                        let raw = validated
+                            .resolved
+                            .secrets
+                            .get(&entry.name)
+                            .expect("a Resolved entry always has a value")
+                            .expose_secret()
+                            .to_string();
+                        if entry.as_path {
+                            (None, Some(raw))
+                        } else {
+                            (Some(raw), None)
+                        }
                     };
                     secrets.insert(
                         entry.name.clone(),
@@ -2098,6 +2131,21 @@ impl Secrets {
                 })
             }
         }
+    }
+
+    /// Resolve every declared secret into a value-free [`ResolutionReport`]:
+    /// per-secret status (resolved / missing-required / missing-optional) plus
+    /// provenance, never a value. Unlike [`Self::resolve`], a missing required
+    /// secret is reported as a `MissingRequired` status rather than failing the
+    /// call, so this is the inventory/preflight view: it answers "what is
+    /// declared and how would each secret resolve" even for a profile whose
+    /// secrets the caller cannot fully provide. It is the same report the CLI
+    /// surfaces as `check --json` / `check --explain`, exposed to the SDKs.
+    pub fn report(&self) -> Result<ResolutionReport> {
+        Ok(match self.validate()? {
+            Ok(validated) => validated.report(),
+            Err(errors) => errors.report(),
+        })
     }
 
     /// Resolves all secrets. `emit_check` controls whether this pass records a

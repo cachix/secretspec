@@ -468,7 +468,7 @@ $ secretspec audit -n 1
       <span class="landing-showcase-eyebrow">Language SDKs</span>
       <h2 class="landing-section-title">Use it from any language.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Rust, Python, Go, Ruby, and Node.js/TypeScript all resolve from the same <code class="inline-code">secretspec.toml</code> through one Rust core — every provider, chain, and profile behaves identically, with no per-language logic. <a href="/sdk/overview/" class="landing-link">How the SDKs work →</a>
+        Rust, Python, Go, Ruby, Node.js/TypeScript, and Haskell all resolve from the same <code class="inline-code">secretspec.toml</code> through one Rust core — every provider, chain, and profile behaves identically, with no per-language logic. <a href="/sdk/overview/" class="landing-link">How the SDKs work →</a>
       </p>
     </div>
 
@@ -525,6 +525,20 @@ fmt.Println(s.Secrets[<span class="tok-str">"DATABASE_URL"</span>].Get())</code>
       .with_provider(<span class="tok-str">"keyring://"</span>)
       .with_reason(<span class="tok-str">"boot"</span>).load
 puts s.secrets[<span class="tok-str">"DATABASE_URL"</span>].get</code></pre>
+      </div>
+    </div>
+
+    <div class="landing-fallback" style="margin-top: 1.5rem;">
+      <!-- Haskell -->
+      <div class="landing-terminal">
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">Haskell</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code>s <span class="tok-pun">&lt;-</span> S.load (S.builder
+      <span class="tok-pun">&amp;</span> S.withProvider <span class="tok-str">"keyring://"</span>
+      <span class="tok-pun">&amp;</span> S.withReason <span class="tok-str">"boot"</span>)
+print (S.get <span class="tok-pun">=&lt;&lt;</span> Map.lookup <span class="tok-str">"DATABASE_URL"</span> (S.resolvedSecrets s))</code></pre>
       </div>
     </div>
 

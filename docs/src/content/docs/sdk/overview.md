@@ -3,9 +3,9 @@ title: SDK Overview
 description: How the SecretSpec language SDKs work
 ---
 
-SecretSpec ships SDKs for Rust, Python, Go, Ruby, and Node.js/TypeScript. They
-all resolve secrets from the same declarative `secretspec.toml`, and they all
-behave identically, because they share one resolver.
+SecretSpec ships SDKs for Rust, Python, Go, Ruby, Node.js/TypeScript, and
+Haskell. They all resolve secrets from the same declarative `secretspec.toml`,
+and they all behave identically, because they share one resolver.
 
 ## One resolver, thin clients
 
@@ -17,6 +17,7 @@ that core rather than a reimplementation:
   strongly-typed access.
 - **Python** (cffi), **Go** (purego), and **Ruby** (Fiddle) load the
   `secretspec-ffi` C ABI and exchange a small JSON request/response with it.
+- **Haskell** links the same C ABI at build time via the GHC FFI.
 - **Node.js/TypeScript** uses a [napi-rs](https://napi.rs/) native addon that
   embeds the same resolver.
 
@@ -42,8 +43,8 @@ print(resolved.secrets["DATABASE_URL"].get)
 ```
 
 See each language's page for the idiomatic spelling: [Rust](/sdk/rust),
-[Python](/sdk/python), [Go](/sdk/go), [Ruby](/sdk/ruby), and
-[Node.js](/sdk/nodejs).
+[Python](/sdk/python), [Go](/sdk/go), [Ruby](/sdk/ruby),
+[Node.js](/sdk/nodejs), and [Haskell](/sdk/haskell).
 
 ## Typed access
 
@@ -68,3 +69,7 @@ built as a napi-rs addon for Node (prebuilt per-platform npm packages are a
 follow-up). The native library is otherwise discovered from the
 `SECRETSPEC_FFI_LIB` environment variable or a Cargo `target` directory, which
 is how it works from a source checkout.
+
+The Haskell SDK is the exception: it links the C ABI at build time, so the
+`secretspec-ffi` `cdylib` must be on the linker path (`--extra-lib-dirs`) and the
+runtime loader path when building and running it.

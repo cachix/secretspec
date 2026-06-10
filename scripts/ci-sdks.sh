@@ -37,4 +37,18 @@ echo "==> Node"
 # and has no npm dependencies.
 ( cd secretspec-node && node --test )
 
+echo "==> Haskell"
+# The Haskell SDK links the cdylib at build time, so its directory goes on both
+# the linker path (--extra-lib-dirs) and the runtime loader path.
+(
+  cd secretspec-hs
+  hs_lib_dir="$(dirname "$SECRETSPEC_FFI_LIB")"
+  cabal update
+  # --write-ghc-environment-files lets the codegen test's runghc see aeson and
+  # the quicktype-generated module's transitive imports; SECRETSPEC_BIN (set
+  # above) lets it run `secretspec schema`.
+  LD_LIBRARY_PATH="$hs_lib_dir:${LD_LIBRARY_PATH:-}" \
+    cabal test --extra-lib-dirs="$hs_lib_dir" --write-ghc-environment-files=always
+)
+
 echo "==> All SDK suites passed"

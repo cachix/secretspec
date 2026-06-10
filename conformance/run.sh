@@ -54,11 +54,20 @@ run_node()   { (
   [ -d node_modules ] || npm install --no-audit --no-fund >/dev/null
   node --test test/conformance.test.js
 ); }
+run_haskell() { (
+  cd secretspec-hs
+  # The Haskell SDK links the cdylib at build time, so its directory must be on
+  # both the linker path (--extra-lib-dirs) and the runtime loader path.
+  lib_dir="$(dirname "$SECRETSPEC_FFI_LIB")"
+  export LD_LIBRARY_PATH="$lib_dir:${LD_LIBRARY_PATH:-}"
+  cabal test --extra-lib-dirs="$lib_dir" --test-show-details=streaming
+); }
 
-run "Python" python run_python
-run "Go"     go     run_go
-run "Ruby"   ruby   run_ruby
-run "Node"   node   run_node
+run "Python"  python run_python
+run "Go"      go     run_go
+run "Ruby"    ruby   run_ruby
+run "Node"    node   run_node
+run "Haskell" cabal  run_haskell
 
 echo
 echo "==> Conformance summary"

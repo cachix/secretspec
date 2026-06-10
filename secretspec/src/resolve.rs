@@ -91,6 +91,20 @@ impl ResolveResponse {
     }
 }
 
+/// Which resolution shape a request asks for.
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RequestMode {
+    /// The value-carrying [`ResolveResponse`] (the default).
+    #[default]
+    Resolve,
+    /// The value-free [`crate::report::ResolutionReport`]: per-secret status and
+    /// provenance, never a value, and a missing required secret is reported as a
+    /// status rather than failing the call. This is the inventory/preflight view
+    /// the CLI exposes as `check --json`.
+    Report,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct JsonRequest {
     #[serde(default)]
@@ -103,38 +117,25 @@ struct JsonRequest {
     reason: Option<String>,
     #[serde(default)]
     no_values: bool,
+    #[serde(default)]
+    mode: RequestMode,
 }
 
-#[derive(Debug, Serialize)]
-struct JsonError {
-    kind: String,
-    message: String,
+fn error_envelope(kind: &str, message: impl Into<String>) -> serde_json::Value {
+    serde_json::json!({
+        "ok": false,
+        "error": { "kind": kind, "message": message.into() },
+    })
 }
 
-#[derive(Debug, Serialize)]
-struct JsonEnvelope {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    response: Option<ResolveResponse>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<JsonError>,
+fn ok_envelope(response: impl Serialize) -> serde_json::Value {
+    serde_json::json!({ "ok": true, "response": response })
 }
 
-fn envelope_error(kind: &str, message: impl Into<String>) -> JsonEnvelope {
-    JsonEnvelope {
-        ok: false,
-        response: None,
-        error: Some(JsonError {
-            kind: kind.to_string(),
-            message: message.into(),
-        }),
-    }
-}
-
-fn resolve_envelope(request_json: &str) -> JsonEnvelope {
+fn dispatch(request_json: &str) -> serde_json::Value {
     let request: JsonRequest = match serde_json::from_str(request_json) {
         Ok(request) => request,
-        Err(e) => return envelope_error("invalid_request", format!("invalid request JSON: {e}")),
+        Err(e) => return error_envelope("invalid_request", format!("invalid request JSON: {e}")),
     };
 
     let loaded = match &request.path {
@@ -143,7 +144,7 @@ fn resolve_envelope(request_json: &str) -> JsonEnvelope {
     };
     let mut app = match loaded {
         Ok(app) => app,
-        Err(e) => return envelope_error(e.kind(), e.to_string()),
+        Err(e) => return error_envelope(e.kind(), e.to_string()),
     };
 
     if let Some(provider) = request.provider {
@@ -156,30 +157,40 @@ fn resolve_envelope(request_json: &str) -> JsonEnvelope {
         app = app.with_reason(reason);
     }
 
-    match app.resolve() {
-        Ok(mut response) => {
-            if request.no_values {
-                response = response.without_values();
-            }
-            JsonEnvelope {
-                ok: true,
-                response: Some(response),
-                error: None,
+    match request.mode {
+        // Value-free report: never fails on a missing required secret, so an
+        // inventory/preflight consumer always gets the shape back.
+        RequestMode::Report => match app.report() {
+            Ok(report) => ok_envelope(report),
+            Err(e) => error_envelope(e.kind(), e.to_string()),
+        },
+        // Value-carrying resolve. `no_values` takes the path that never copies a
+        // secret value into the response (and persists no temp file).
+        RequestMode::Resolve => {
+            let resolved = if request.no_values {
+                app.resolve_without_values()
+            } else {
+                app.resolve()
+            };
+            match resolved {
+                Ok(response) => ok_envelope(response),
+                Err(e) => error_envelope(e.kind(), e.to_string()),
             }
         }
-        Err(e) => envelope_error(e.kind(), e.to_string()),
     }
 }
 
 /// Resolve secrets from a JSON request string and return the JSON response
-/// envelope: `{"ok": true, "response": <ResolveResponse>}` or
+/// envelope: `{"ok": true, "response": <ResolveResponse | ResolutionReport>}` or
 /// `{"ok": false, "error": {"kind", "message"}}`.
 ///
 /// This is the shared JSON boundary used by every native binding (the C ABI in
 /// `secretspec-ffi` and the napi-rs Node addon), so the envelope contract is
 /// defined in exactly one place. The request accepts optional `path`,
-/// `provider`, `profile`, `reason`, and `no_values`. The response carries secret
-/// values; treat its bytes as sensitive.
+/// `provider`, `profile`, `reason`, `no_values`, and `mode` (`"resolve"` by
+/// default, or `"report"` for the value-free [`crate::report::ResolutionReport`]).
+/// A `resolve` response carries secret values; treat its bytes as sensitive. A
+/// `report` response never does.
 pub fn resolve_json(request_json: &str) -> String {
     // Catch panics here, at the one place both native boundaries funnel through
     // (the C ABI in `secretspec-ffi` and the napi-rs Node addon). Unwinding across
@@ -187,10 +198,9 @@ pub fn resolve_json(request_json: &str) -> String {
     // `{"ok":false,"error":...}` envelope every binding already parses means all
     // bindings behave identically — the C ABI no longer needs to be the only one
     // guarding the boundary.
-    let envelope = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        resolve_envelope(request_json)
-    }))
-    .unwrap_or_else(|_| envelope_error("internal", "internal panic during resolve"));
+    let envelope =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dispatch(request_json)))
+            .unwrap_or_else(|_| error_envelope("internal", "internal panic during resolve"));
 
     serde_json::to_string(&envelope).unwrap_or_else(|_| {
         "{\"ok\":false,\"error\":{\"kind\":\"serialize\",\"message\":\"failed to serialize response\"}}".to_string()

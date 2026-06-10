@@ -736,13 +736,13 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
-            let mut response = app
-                .resolve()
-                .into_diagnostic()
-                .wrap_err("Failed to resolve secrets")?;
-            if no_values {
-                response = response.without_values();
+            let response = if no_values {
+                app.resolve_without_values()
+            } else {
+                app.resolve()
             }
+            .into_diagnostic()
+            .wrap_err("Failed to resolve secrets")?;
             let rendered = serde_json::to_string_pretty(&response)
                 .into_diagnostic()
                 .wrap_err("Failed to serialize resolve response")?;

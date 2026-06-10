@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- New `secretspec` Haskell SDK (`secretspec-hs`): a thin client over the
+  `secretspec-ffi` C ABI, linked at build time via the GHC FFI, so Haskell apps
+  inherit every provider with no Haskell-side resolution logic. Mirrors the
+  derive crate's vocabulary (`builder` with `withProvider`/`withProfile`/
+  `withReason`/`withNoValues`, then `load`/`report`), returning a `Resolved`
+  (`get`/`fields`/`fieldsJson`/`setAsEnv`/`close`) or a value-free `Report`. A
+  missing required secret throws `MissingRequiredError`; other failures throw
+  `SecretSpecError` with a stable `errorKind`. `as_path` secrets come back as a
+  readable file path. Wired into the cross-language conformance suite (all three
+  dimensions) and a `Haskell SDK` CI workflow. The `secretspec-ffi` `cdylib` is
+  linked at build time (`--extra-lib-dirs`) and must be on the runtime loader
+  path.
 - New cross-language conformance suite (`conformance/`): shared fixtures
   (manifest + `.env` + a canonical `expected.json`) that every SDK resolves and
   must reduce to the identical canonical result, guaranteeing the Python, Go,
@@ -74,6 +86,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fields()` (and a JSON variant for Go/Node) is available on the resolved result
   in every SDK, and the full `schema -> quicktype -> typed` pipeline is e2e-tested
   in all four SDK suites. Value-free: `schema` reads only the manifest.
+- New `Secrets::report()` and a `mode: "report"` request on the shared
+  `resolve_json` boundary: a value-free `ResolutionReport` (per-secret status and
+  provenance, never a value) that, unlike resolve, reports a missing required
+  secret as a `missing_required` status instead of failing the whole call. This
+  is the inventory/preflight view the CLI already exposes as
+  `check --json`/`--explain`, now reachable from every language SDK via a
+  `report()` builder method (Node also has `reportAsync()`) returning a `Report`
+  of `SecretReport` entries. Exercised by a new `report` conformance dimension so
+  the four SDKs stay byte-identical.
+- Every language SDK gains a cleanup affordance for the temp files that back
+  `as_path` secrets, which the resolver persists (mode 0400) so their paths stay
+  valid after resolve returns: Go `Resolved.Close()`, Python `Resolved.close()`
+  (and `with` context-manager support), Ruby `Resolved#close` (and a block form
+  of `Builder#load` that closes automatically), and Node `Resolved.dispose()`
+  (plus `Symbol.dispose` for `using`). Previously a long-running SDK consumer
+  that resolved `as_path` secrets in a loop leaked one owner-readable file per
+  resolve into the temp dir with no way to clean them up.
 
 ### Changed
 - The `secretspec-derive` macro now computes all of its typing decisions through
@@ -143,6 +172,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   internal panic. Previously only the C ABI caught panics, so a panic in the
   Node addon surfaced as an opaque thrown error instead of the documented
   envelope.
+- A `no_values` resolution (`secretspec resolve --json --no-values` and every
+  SDK's no-values path) no longer copies secret values into the response or
+  persists `as_path` temp files. It now routes through a new
+  `Secrets::resolve_without_values`, which never calls `expose_secret` and never
+  keeps a temp file, so no secret byte crosses the boundary and an `as_path`
+  secret leaves nothing on disk. Previously the resolver fully materialized every
+  value (and persisted every `as_path` temp file) and only then stripped them.
+- The Go SDK's `Resolved.Fields()`/`FieldsJSON()` now emit JSON `null` for a
+  value-less secret (e.g. under `no_values`) instead of the empty string `""`,
+  matching the `null` the Python, Ruby, and Node SDKs already emit; `Fields()`
+  now returns `map[string]*string` and a new `Usable()` accessor distinguishes an
+  absent value from an empty one. Node's `index.d.ts` types `fields()` as
+  `Record<string, string | null>` (was `Record<string, string>`, which a
+  `no_values` result violated). A new `no_values` conformance dimension asserts
+  all four SDKs produce the identical all-null fields map.
 - A per-profile JSON Schema (`secretspec schema --profile <p>`) now allows
   additional properties. `secretspec resolve --profile <p>` returns the
   profile's own secrets plus those inherited from the `default` profile (the

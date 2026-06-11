@@ -2,8 +2,10 @@ name: "Go embedded lib"
 
 # Builds the per-platform cdylib the Go SDK embeds (go:embed, behind the
 # `embed_lib` build tag) and verifies the embedded build works with no
-# SECRETSPEC_FFI_LIB set. The libraries are uploaded as artifacts; a release
-# commits them into the module via git-LFS (they are tens of MB each).
+# SECRETSPEC_FFI_LIB set. The libraries are uploaded as artifacts and attached to
+# GitHub releases for users who want a self-contained `-tags embed_lib` build;
+# they are never committed to the repo (the Go module proxy does not carry binary
+# assets — see RELEASE.md).
 
 on:
   workflow_dispatch:

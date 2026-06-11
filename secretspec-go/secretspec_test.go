@@ -161,6 +161,9 @@ TLS_CERT = { description = "cert", required = true, as_path = true }
 	if err != nil {
 		t.Fatal(err)
 	}
+	// as_path materializes a 0400 temp file the caller owns; remove it so the
+	// test does not leave secret-bearing files behind in the temp dir.
+	defer resolved.Close()
 
 	cert := resolved.Secrets["TLS_CERT"]
 	if !cert.AsPath || cert.Value != nil {
@@ -172,6 +175,16 @@ TLS_CERT = { description = "cert", required = true, as_path = true }
 	}
 	if string(contents) != "----cert----" {
 		t.Fatalf("cert contents = %q", contents)
+	}
+}
+
+// A zero-value Builder (not constructed via New) must not panic on a nil-map
+// write in the setters.
+func TestZeroValueBuilderDoesNotPanic(t *testing.T) {
+	var b Builder
+	got := b.WithPath("x").WithProvider("env://").WithProfile("p")
+	if got.req["path"] != "x" || got.req["provider"] != "env://" || got.req["profile"] != "p" {
+		t.Fatalf("zero-value builder did not record fields: %+v", got.req)
 	}
 }
 

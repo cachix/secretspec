@@ -3,8 +3,7 @@
 //! Unlike the value-free [`crate::report::ResolutionReport`] (which powers
 //! `check --json` and must never expose a value), this payload **does** carry
 //! the resolved secret values. It is the single authoritative output that any
-//! other-language SDK consumes, either over the C ABI (in-process) or via
-//! `secretspec resolve --json` (subprocess). Producing it deliberately exposes
+//! other-language SDK consumes over the C ABI. Producing it deliberately exposes
 //! secrets, so it is only built at an explicit resolve boundary and its bytes
 //! must be treated as sensitive by the caller.
 //!

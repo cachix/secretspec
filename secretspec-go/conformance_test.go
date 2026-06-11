@@ -37,6 +37,9 @@ func TestConformance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Remove any as_path temp files this value-carrying resolve
+			// materialized, so repeated runs do not accumulate secret files.
+			defer resolved.Close()
 
 			actual := canonical(t, resolved)
 

@@ -1,5 +1,5 @@
-# The embedded cdylibs are large (tens of MB); track them with git-LFS when a
-# release commits them. They are gitignored during development.
-lib/*.so    filter=lfs diff=lfs merge=lfs -text
-lib/*.dylib filter=lfs diff=lfs merge=lfs -text
-lib/*.dll   filter=lfs diff=lfs merge=lfs -text
+# Per-platform cdylibs are never committed to this repo: the Go module proxy
+# does not run git-LFS smudge filters, so LFS-tracked binaries reach `go get`
+# consumers as pointer files, and plain git would bloat history. They are staged
+# locally for `-tags embed_lib` builds (see lib/ in .gitignore) and attached to
+# GitHub releases instead. See RELEASE.md.

@@ -30,19 +30,29 @@ Version tags are `vX.Y.Z`; the publish jobs trigger on them.
   build the cdylib on an old-glibc baseline (e.g. a `manylinux` container, as the
   Python job does, or `rake-compiler-dock`) and bundle that. Tracked follow-up.
 
-## Go (git-LFS) — `go-embed.yml`
+## Go (system library) — `go-embed.yml`
 
-Go has no binary registry, so the per-platform cdylibs are committed into the
-module and embedded via `go:embed` (behind the `embed_lib` build tag).
+Go has no binary registry, and the module proxy (`proxy.golang.org`) builds
+module zips from raw git objects — it does **not** run git-LFS smudge filters, so
+LFS-tracked files reach consumers as ~130-byte pointer text, not libraries.
+`go:embed` over LFS therefore cannot ship a working library through `go get`.
+(Committing the ~34 MB-per-platform libs to *plain* git would work but bloats
+history permanently and ships every platform's lib in the module zip.)
 
-- **Build:** `go-embed.yml` builds the per-platform libs and uploads them as
-  artifacts.
-- **Release (manual):** stage all platforms' libs into `secretspec-go/lib/`
-  (from the CI artifacts), un-ignore them, `git lfs track` is already set via
-  `secretspec-go/.gitattributes`, commit them with LFS, and flip embedding on by
-  default (drop the `embed_lib` gate or document `-tags embed_lib`). The libs are
-  ~34 MB each, so plain git is unsuitable; **git-LFS must be enabled** for the
-  repo.
+So the Go SDK follows the purego norm: the cdylib is provided at runtime, not
+shipped through the module. Consumers either set `SECRETSPEC_FFI_LIB` to an
+installed/built `libsecretspec_ffi`, or build with `-tags embed_lib` after
+staging the per-platform library into `secretspec-go/lib/` themselves (a
+self-contained, vendored build — not a module-proxy install).
+
+- **Build:** `go-embed.yml` builds the per-platform libs, uploads them as
+  artifacts, and smoke-tests an `-tags embed_lib` build with a staged lib.
+- **Release:** nothing to publish to a registry. Attach the per-platform cdylibs
+  to the GitHub release so users who want a self-contained build can download and
+  stage them. Do **not** commit binaries to the repo (plain git or LFS).
+
+> The loader rejects an embedded git-LFS pointer with a clear error, so a botched
+> LFS-based build fails loudly instead of feeding pointer text to `dlopen`.
 
 ## Node.js (npm) — `node-addon.yml`
 

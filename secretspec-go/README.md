@@ -58,5 +58,21 @@ for _, s := range report.Secrets {
 
 ## Library discovery
 
-The native library is found via the `SECRETSPEC_FFI_LIB` environment variable,
-or a Cargo `target` directory found by searching up from the working directory.
+The native `secretspec-ffi` cdylib is resolved at runtime, in order:
+
+1. The `SECRETSPEC_FFI_LIB` environment variable (an explicit path).
+2. A library embedded at build time with `-tags embed_lib` (see below).
+3. A Cargo `target` directory found by searching up from the working directory
+   (the development path).
+
+This SDK uses [purego](https://github.com/ebitengine/purego), so the cdylib is
+loaded at runtime rather than linked. Provide it one of two ways:
+
+- **System library:** install/build `libsecretspec_ffi` and point
+  `SECRETSPEC_FFI_LIB` at it (or run inside a Cargo checkout, which the search in
+  step 3 finds automatically).
+- **Vendored/embedded:** stage the per-platform library into `lib/` and build
+  with `go build -tags embed_lib`. The library is then embedded via `go:embed`
+  and extracted to a per-user, owner-only cache directory at first use. This is
+  an opt-in for self-contained builds; it is **not** shipped through the Go
+  module proxy (which does not carry binary assets).

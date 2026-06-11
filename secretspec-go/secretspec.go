@@ -95,6 +95,19 @@ func findLibrary() (string, error) {
 
 func ensureLoaded() error {
 	loadOnce.Do(func() {
+		// purego.RegisterLibFunc panics (it does not return an error) when a
+		// symbol is missing. Recover so an incompatible library yields a returned
+		// *Error instead of a panic that escapes the Once — which would otherwise
+		// mark it done with loadErr nil and the function pointers nil, turning
+		// every later call into a nil-pointer panic for the process lifetime.
+		defer func() {
+			if r := recover(); r != nil {
+				loadErr = &Error{
+					Kind:    "load",
+					Message: fmt.Sprintf("failed to bind secretspec-ffi symbols (incompatible library?): %v", r),
+				}
+			}
+		}()
 		path, err := findLibrary()
 		if err != nil {
 			loadErr = err
@@ -264,11 +277,22 @@ func New() *Builder {
 	return &Builder{req: map[string]any{}}
 }
 
-func (b *Builder) WithPath(path string) *Builder     { b.req["path"] = path; return b }
-func (b *Builder) WithProvider(p string) *Builder    { b.req["provider"] = p; return b }
-func (b *Builder) WithProfile(p string) *Builder     { b.req["profile"] = p; return b }
-func (b *Builder) WithReason(reason string) *Builder { b.req["reason"] = reason; return b }
-func (b *Builder) WithNoValues(v bool) *Builder      { b.req["no_values"] = v; return b }
+// set lazily initializes the request map so a zero-value Builder (e.g.
+// `var b Builder` or `&Builder{}`, not just New()) does not panic with a
+// nil-map write in the setters below.
+func (b *Builder) set(key string, value any) *Builder {
+	if b.req == nil {
+		b.req = map[string]any{}
+	}
+	b.req[key] = value
+	return b
+}
+
+func (b *Builder) WithPath(path string) *Builder     { return b.set("path", path) }
+func (b *Builder) WithProvider(p string) *Builder    { return b.set("provider", p) }
+func (b *Builder) WithProfile(p string) *Builder     { return b.set("profile", p) }
+func (b *Builder) WithReason(reason string) *Builder { return b.set("reason", reason) }
+func (b *Builder) WithNoValues(v bool) *Builder      { return b.set("no_values", v) }
 
 type envelopeJSON struct {
 	OK       bool          `json:"ok"`

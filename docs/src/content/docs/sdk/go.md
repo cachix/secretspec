@@ -48,5 +48,16 @@ fmt.Println(typed.DatabaseURL)
 
 ## Library discovery
 
-The native library is found via the `SECRETSPEC_FFI_LIB` environment variable,
-or a Cargo `target` directory found by searching up from the working directory.
+The native `secretspec-ffi` cdylib is resolved at runtime, in order:
+
+1. The `SECRETSPEC_FFI_LIB` environment variable (an explicit path).
+2. A library embedded at build time with `-tags embed_lib`.
+3. A Cargo `target` directory found by searching up from the working directory
+   (the development path).
+
+The SDK uses [purego](https://github.com/ebitengine/purego), so the cdylib is
+loaded at runtime, not linked. Either install/build `libsecretspec_ffi` and set
+`SECRETSPEC_FFI_LIB`, or stage the per-platform library into `lib/` and build
+with `-tags embed_lib` for a self-contained binary. The embedded library is
+extracted to a per-user, owner-only cache directory at first use, and is not
+distributed through the Go module proxy.

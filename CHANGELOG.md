@@ -151,6 +151,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SecretResolution`, and `ResolutionStatus` types.
 
 ### Fixed
+- The value-free resolution surfaces — `Secrets::report()`, `resolve_without_values()`
+  / the FFI `{"no_values": true}` and `{"mode": "report"}` requests, and
+  `check --json`/`--explain` (now routed through `report()`) — are side-effect-free.
+  Previously they ran the full resolution, which **minted and stored a brand-new
+  secret in the provider** for any declared `generate` secret that was not yet
+  set (and failed outright on a read-only provider like `env://`). A read-only
+  preflight no longer writes to a provider: a generatable-but-absent secret is
+  reported as it *would* resolve (`generated`) without being created.
+- The value-free path no longer writes `as_path` secrets to a temp file. It used
+  to materialize every secret to disk (a 0400 file in the temp dir) only to delete
+  it on drop, contrary to its documented "leaves no temp file behind" contract;
+  a `no_values` resolve now never touches disk.
+- A per-secret provider chain whose **primary provider errors** (e.g. an
+  unreachable vault) and whose fallback chain has no value now surfaces that
+  provider error, exactly as a single-provider failure already did, instead of
+  silently reporting the secret as `missing_required`. Machine consumers
+  (`check --json`, the SDKs) can again distinguish a provider outage from an
+  unprovisioned secret.
+- The Haskell SDK no longer leaks the native (secret-bearing) response buffer
+  when an asynchronous exception — e.g. a `System.Timeout.timeout` around
+  `load`/`report` — arrives mid-resolve: the free is now installed under `mask`
+  and runs via `finally`.
+- The Go SDK no longer panics when the loaded library is missing a symbol (an
+  incompatible/old cdylib): `purego.RegisterLibFunc` panics are recovered and
+  returned as a `load` `*Error`, instead of escaping `sync.Once` and leaving the
+  loader permanently poisoned with nil function pointers.
+- A zero-value Go `Builder` (`var b secretspec.Builder` / `&Builder{}`, not via
+  `New()`) no longer panics with a nil-map write in its `WithX` setters; the
+  request map is initialized lazily.
+- The Go SDK extracts an embedded (`-tags embed_lib`) cdylib into a per-user,
+  owner-only cache directory (under `os.UserCacheDir()`) and verifies the
+  directory is private before use, instead of a predictably-named directory under
+  the shared system temp dir. This closes a local-attacker file-swap (TOCTOU)
+  that could run attacker code in the process on a shared host, and avoids
+  `noexec` temp mounts. An embedded git-LFS pointer (from a botched release) is
+  now rejected with a clear error rather than fed to `dlopen`. Distribution
+  switched to the system-library model (provide the cdylib via
+  `SECRETSPEC_FFI_LIB`, or vendor it for an `embed_lib` build); git-LFS + module
+  proxy cannot ship a working library, so it is no longer prescribed.
 - The `provider` field of the resolution report (`check --json`/`--explain`) and
   the resolve response (`resolve --json`, every SDK's `response.provider`) is now
   run through `redact_uri_strict`, so a user-authored provider alias or

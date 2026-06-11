@@ -674,14 +674,13 @@ pub fn main() -> Result<()> {
             // on every declared secret (including missing required ones) and
             // exit non-zero when a required secret is missing, so CI can gate.
             if json || explain {
-                let report = match app
-                    .validate()
+                // Value-free report: never mints, stores, or writes a secret as
+                // a side effect of this read-only preflight (unlike `validate()`,
+                // which is the value-injecting path).
+                let report = app
+                    .report()
                     .into_diagnostic()
-                    .wrap_err("Failed to resolve secrets")?
-                {
-                    Ok(validated) => validated.report(),
-                    Err(errors) => errors.report(),
-                };
+                    .wrap_err("Failed to resolve secrets")?;
 
                 if json {
                     let rendered = serde_json::to_string_pretty(&report)

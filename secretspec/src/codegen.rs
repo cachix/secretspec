@@ -239,7 +239,7 @@ pub mod schema {
     /// The union lists every secret across every profile, so it is **exhaustive**
     /// (`additionalProperties: false`): a runtime `fields()` map can never carry a
     /// key the union does not declare. A per-profile schema lists only the
-    /// secrets that profile declares, but `secretspec resolve --profile <p>`
+    /// secrets that profile declares, but resolving with that profile
     /// returns those **plus** secrets inherited from the `default` profile (the
     /// runtime resolver merges them; the per-profile type intentionally does not,
     /// matching the derive macro). So per-profile schemas allow additional

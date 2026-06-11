@@ -123,19 +123,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the boundary; returned strings are owned by the caller and freed with
   `secretspec_free`. A C header ships at `secretspec-ffi/include/secretspec.h`.
   `SecretSpecError::kind()` is now public so SDKs can do typed error handling.
-- `secretspec resolve --json` resolves every declared secret and prints a
-  versioned, value-carrying JSON object: the SDK boundary other-language
-  clients consume. Each entry reports the value (or, for `as_path` secrets, the
-  path to a persisted temp file), its `source` (`provider`, `generated`,
-  `default`), and the serving provider's credential-free URI. When a required
-  secret is missing the command exits non-zero with an empty `secrets` object
-  and a populated `missing_required` list, mirroring the derive crate's
-  `load()`. `--no-values` emits the same structure without secret values. Unlike
-  `check`, this command prints secret values to stdout and is meant to be piped,
-  not displayed. The same payload is available to the Rust SDK via
-  `Secrets::resolve()`, returning the new public `ResolveResponse`,
-  `ResolvedSecret`, and `ResolvedSource` types; its JSON Schema is committed at
-  `schema/resolve-response.schema.json`.
+- `Secrets::resolve()` resolves every declared secret into a versioned,
+  value-carrying `ResolveResponse`: the SDK boundary other-language clients
+  consume over the `secretspec-ffi` C ABI. Each entry reports the value (or,
+  for `as_path` secrets, the path to a persisted temp file), its `source`
+  (`provider`, `generated`, `default`), and the serving provider's
+  credential-free URI. When a required secret is missing the resolution fails
+  with an empty `secrets` object and a populated `missing_required` list,
+  mirroring the derive crate's `load()`. The new `ResolveResponse`,
+  `ResolvedSecret`, and `ResolvedSource` types are public; the payload's JSON
+  Schema is committed at `schema/resolve-response.schema.json`. The contract is
+  deliberately not exposed as a CLI subcommand: `check` never prints a value,
+  `get` prints exactly one, and bulk value extraction stays in-process behind
+  the C ABI.
 - `secretspec check --json` and `secretspec check --explain` surface a
   value-free resolution report describing how every declared secret resolved
   for the active profile: its status (`resolved`, `missing_required`,
@@ -212,8 +212,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   internal panic. Previously only the C ABI caught panics, so a panic in the
   Node addon surfaced as an opaque thrown error instead of the documented
   envelope.
-- A `no_values` resolution (`secretspec resolve --json --no-values` and every
-  SDK's no-values path) no longer copies secret values into the response or
+- A `no_values` resolution (every SDK's no-values path) no longer copies
+  secret values into the response or
   persists `as_path` temp files. It now routes through a new
   `Secrets::resolve_without_values`, which never calls `expose_secret` and never
   keeps a temp file, so no secret byte crosses the boundary and an `as_path`
@@ -228,13 +228,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `no_values` result violated). A new `no_values` conformance dimension asserts
   all five SDKs produce the identical all-null fields map.
 - A per-profile JSON Schema (`secretspec schema --profile <p>`) now allows
-  additional properties. `secretspec resolve --profile <p>` returns the
+  additional properties. Resolving with a profile returns the
   profile's own secrets plus those inherited from the `default` profile (the
   runtime resolver merges them; the per-profile type intentionally does not,
   matching the derive macro), so a strict quicktype-generated deserializer would
   otherwise reject a valid resolve result over the inherited keys. The union
   schema stays exhaustive (`additionalProperties: false`).
-- `secretspec resolve --profile <p>` and the SDKs no longer export an empty or
+- The SDKs no longer export an empty or
   literal-`"null"` environment variable for a secret with no usable value
   (e.g. under `no_values`): the Go, Node, and Ruby SDKs now skip such secrets in
   `set_as_env`, matching Python. Ruby previously *deleted* the variable

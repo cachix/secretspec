@@ -199,47 +199,6 @@ $ secretspec get DATABASE_URL --profile production
 postgresql://prod.example.com/mydb
 ```
 
-### resolve
-Resolve every declared secret and print it as JSON. This is the SDK boundary:
-other-language clients consume this payload (over a subprocess or the C ABI)
-rather than reimplementing resolution.
-
-```bash
-secretspec resolve [OPTIONS]
-```
-
-Unlike `check`, `resolve` prints secret **values** to stdout. Pipe it into a
-program; do not display it. Use `--no-values` for a value-free structural view.
-When a required secret is missing, the command exits non-zero with an empty
-`secrets` object and a populated `missing_required` list (mirroring the SDK's
-`load()`).
-
-**Options:**
-- `-p, --provider <PROVIDER>` - Provider backend to use
-- `-P, --profile <PROFILE>` - Profile to use
-- `--no-values` - Omit secret values, emitting only structure and provenance
-
-**Example:**
-```bash
-$ secretspec resolve --profile production
-{
-  "schema_version": 1,
-  "provider": "keyring://",
-  "profile": "production",
-  "secrets": {
-    "DATABASE_URL": { "value": "postgresql://prod.example.com/mydb", "as_path": false, "source": "provider", "source_provider": "keyring://" },
-    "TLS_CERT": { "path": "/tmp/.tmpAbc123", "as_path": true, "source": "provider", "source_provider": "keyring://" }
-  },
-  "missing_required": [],
-  "missing_optional": []
-}
-```
-
-Each entry reports the value (or, for `as_path` secrets, the `path` to a
-persisted temp file), its `source` (`provider`, `generated`, or `default`), and
-the serving provider's credential-free URI. The canonical JSON Schema is
-committed at `schema/resolve-response.schema.json`.
-
 ### schema
 Emit a single-root JSON Schema for the manifest's typed shape: by default the
 union `SecretSpec` (safe for any profile); with `--profile`, that profile's exact

@@ -120,22 +120,6 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// Resolve all secrets and print them as JSON (the SDK boundary).
-    ///
-    /// Unlike `check`, this prints secret VALUES (to stdout). It is intended for
-    /// programmatic consumption by other-language SDKs and tooling; pipe it, do
-    /// not display it. Use `--no-values` for a value-free structural view.
-    Resolve {
-        /// Provider backend to use
-        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
-        provider: Option<String>,
-        /// Profile to use
-        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
-        profile: Option<String>,
-        /// Omit secret values, emitting only structure and provenance
-        #[arg(long)]
-        no_values: bool,
-    },
     /// Init or show ~/.config/secretspec/config.toml
     Config {
         #[command(subcommand)]
@@ -719,35 +703,6 @@ pub fn main() -> Result<()> {
                     .into_diagnostic()
                     .wrap_err_with(|| format!("Failed to write {}", path.display()))?,
                 None => print!("{}", schema),
-            }
-            Ok(())
-        }
-        // Resolve all secrets to JSON (the SDK boundary; prints values)
-        Commands::Resolve {
-            provider,
-            profile,
-            no_values,
-        } => {
-            let mut app = load_secrets(&cli.file, &cli.reason)?;
-            if let Some(p) = provider {
-                app.set_provider(p);
-            }
-            if let Some(p) = profile {
-                app.set_profile(p);
-            }
-            let response = if no_values {
-                app.resolve_without_values()
-            } else {
-                app.resolve()
-            }
-            .into_diagnostic()
-            .wrap_err("Failed to resolve secrets")?;
-            let rendered = serde_json::to_string_pretty(&response)
-                .into_diagnostic()
-                .wrap_err("Failed to serialize resolve response")?;
-            println!("{}", rendered);
-            if !response.is_ok() {
-                std::process::exit(1);
             }
             Ok(())
         }

@@ -2021,8 +2021,7 @@ impl Secrets {
     }
 
     /// Resolve every declared secret into a value-carrying [`ResolveResponse`],
-    /// the authoritative output other-language SDKs consume (over the C ABI or
-    /// `secretspec resolve --json`).
+    /// the authoritative output other-language SDKs consume over the C ABI.
     ///
     /// Unlike [`Self::validate`], the returned payload **carries secret
     /// values** (or, for `as_path` secrets, the path to a persisted temp file).

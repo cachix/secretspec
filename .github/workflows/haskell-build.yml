@@ -23,6 +23,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # The cdylib + CLI debug build (AWS/GCP/Bitwarden providers) plus the
+      # Nix store overflows the ~14GB free on a hosted runner.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /opt/ghc \
+            /usr/local/share/boost /usr/local/share/powershell
+          sudo docker image prune --all --force
+          df -h /
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
         with:

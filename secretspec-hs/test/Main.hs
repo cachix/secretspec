@@ -184,6 +184,9 @@ testConformance dir = do
   actual <- canonical resolved
   expected <- readJson (dir </> "expected.json")
   expect (actual == expected) (mismatch "expected.json" actual expected)
+  -- Remove any as_path temp files this value-carrying resolve materialized, so
+  -- repeated runs do not leave secret-bearing files behind in the temp dir.
+  S.close resolved
 
 -- Under no_values every SDK must emit the same all-null fields map: a
 -- value-less secret serializes to null, not an empty string.

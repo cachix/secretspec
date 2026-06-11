@@ -45,7 +45,7 @@ module SecretSpec
   , abiVersion
   ) where
 
-import           Control.Exception (Exception, throwIO)
+import           Control.Exception (Exception, finally, mask, throwIO)
 import           Control.Monad (forM_, unless, when)
 import           Data.Aeson (FromJSON (..), Value, eitherDecodeStrict, encode,
                              object, withObject, (.!=), (.:), (.:?), (.=))
@@ -290,16 +290,20 @@ requestBytes b mode =
 
 -- Marshal a request to secretspec_resolve and copy the response out before
 -- freeing the native allocation.
+--
+-- The response is a Rust allocation the caller must free, and it carries secret
+-- values. @mask@ keeps an async exception (e.g. a 'System.Timeout.timeout'
+-- around 'load') from landing between the call returning and the free being
+-- installed, and @finally@ guarantees the free runs whether @packCString@
+-- succeeds, throws, or is interrupted — so the secret-bearing buffer never leaks.
 callNative :: BL.ByteString -> IO BS.ByteString
 callNative reqLazy =
-  BS.useAsCString (BL.toStrict reqLazy) $ \creq -> do
-    cresp <- c_secretspec_resolve creq
-    if cresp == nullPtr
-      then throwIO (SecretSpecError "ffi" "secretspec_resolve returned null")
-      else do
-        resp <- BS.packCString cresp
-        c_secretspec_free cresp
-        pure resp
+  BS.useAsCString (BL.toStrict reqLazy) $ \creq ->
+    mask $ \restore -> do
+      cresp <- c_secretspec_resolve creq
+      if cresp == nullPtr
+        then throwIO (SecretSpecError "ffi" "secretspec_resolve returned null")
+        else restore (BS.packCString cresp) `finally` c_secretspec_free cresp
 
 -- Decode the envelope, unwrap @ok@/@error@, and check the schema version,
 -- returning the response object as a 'Value' for the caller to project.

@@ -15,11 +15,13 @@ on:
   push:
     tags:
       - v**
+  # PR runs are scoped to changes in the Python SDK or this workflow. Core
+  # resolver and FFI changes are verified on PRs by the devenv-based test.yml,
+  # sdks.yml, and ffi-build.yml; the full matrix here still runs on tags and
+  # manual dispatch.
   pull_request:
     paths:
       - "secretspec-py/**"
-      - "secretspec-ffi/**"
-      - "secretspec/**"
       - ".github/workflows/python-wheels.yml"
 
 jobs:
@@ -38,8 +40,10 @@ jobs:
       - name: Install build deps (rust, dbus)
         run: |
           yum install -y dbus-devel
-          curl -sSf https://sh.rustup.rs | sh -s -- -y
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # Installs the version pinned in rust-toolchain.toml
+          "$HOME/.cargo/bin/rustup" toolchain install
       - name: Build wheel and repair to manylinux
         run: |
           bash secretspec-py/scripts/stage-cdylib.sh
@@ -62,7 +66,8 @@ jobs:
           - { target: windows-x86_64, runner: windows-latest }
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

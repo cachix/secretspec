@@ -12,11 +12,13 @@ on:
   push:
     tags:
       - v**
+  # PR runs are scoped to changes in the Go SDK or this workflow. Core
+  # resolver and FFI changes are verified on PRs by the devenv-based test.yml,
+  # sdks.yml, and ffi-build.yml; the full matrix here still runs on tags and
+  # manual dispatch.
   pull_request:
     paths:
       - "secretspec-go/**"
-      - "secretspec-ffi/**"
-      - "secretspec/**"
       - ".github/workflows/go-embed.yml"
 
 jobs:
@@ -40,7 +42,8 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"

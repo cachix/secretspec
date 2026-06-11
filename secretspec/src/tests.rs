@@ -636,6 +636,157 @@ fn test_report_lists_missing_required_without_failing() {
     assert_eq!(status("MISSING"), Some(ResolutionStatus::MissingRequired));
 }
 
+/// A generatable secret with no stored value must be reported by the value-free
+/// surfaces (`report()`, `resolve_without_values()`) as *would-generate* without
+/// actually minting and storing it — a read-only preflight must not mutate the
+/// provider. The full `resolve()` still generates and writes.
+#[test]
+fn test_value_free_surfaces_do_not_generate_or_store() {
+    use crate::config::GenerateConfig;
+    use crate::report::ResolutionStatus;
+    use crate::resolve::ResolvedSource;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "").unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "SESSION_KEY".to_string(),
+        Secret {
+            description: Some("generated".to_string()),
+            required: Some(true),
+            secret_type: Some("hex".to_string()),
+            generate: Some(GenerateConfig::Bool(true)),
+            ..Default::default()
+        },
+    );
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(resolve_test_config(secrets), None, Some(provider), None);
+
+    // report(): the secret would resolve via generation, but nothing is written.
+    let report = spec.report().unwrap();
+    let entry = report
+        .secrets
+        .iter()
+        .find(|s| s.name == "SESSION_KEY")
+        .expect("SESSION_KEY in report");
+    assert_eq!(entry.status, ResolutionStatus::Resolved);
+    assert!(entry.generated);
+    assert_eq!(
+        fs::read_to_string(&env_path).unwrap(),
+        "",
+        "report() must not store a generated secret"
+    );
+
+    // resolve_without_values(): same — provenance says generated, no value, no write.
+    let response = spec.resolve_without_values().unwrap();
+    let resolved = &response.secrets["SESSION_KEY"];
+    assert_eq!(resolved.source, ResolvedSource::Generated);
+    assert!(resolved.value.is_none());
+    assert_eq!(
+        fs::read_to_string(&env_path).unwrap(),
+        "",
+        "resolve_without_values() must not store a generated secret"
+    );
+
+    // The full resolve still generates and persists the value.
+    let full = spec.resolve().unwrap();
+    assert!(full.is_ok());
+    assert!(full.secrets["SESSION_KEY"].value.is_some());
+    assert!(
+        fs::read_to_string(&env_path)
+            .unwrap()
+            .contains("SESSION_KEY"),
+        "resolve() generates and stores the secret"
+    );
+}
+
+/// The value-free `report()` over a read-only provider must succeed (a missing
+/// generatable secret is reported as would-generate) rather than failing because
+/// a generated value cannot be stored. Regression: the value-free path used to
+/// reach the provider write and error on `env://`.
+#[test]
+fn test_value_free_report_tolerates_read_only_provider() {
+    use crate::config::GenerateConfig;
+    use crate::report::ResolutionStatus;
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "SESSION_KEY".to_string(),
+        Secret {
+            description: Some("generated".to_string()),
+            required: Some(true),
+            secret_type: Some("hex".to_string()),
+            generate: Some(GenerateConfig::Bool(true)),
+            ..Default::default()
+        },
+    );
+
+    let spec = Secrets::new(
+        resolve_test_config(secrets),
+        None,
+        Some("env://".to_string()),
+        None,
+    );
+
+    let report = spec.report().expect("report() must not fail on env://");
+    let entry = report
+        .secrets
+        .iter()
+        .find(|s| s.name == "SESSION_KEY")
+        .expect("SESSION_KEY in report");
+    assert_eq!(entry.status, ResolutionStatus::Resolved);
+    assert!(entry.generated);
+}
+
+/// When a per-secret provider chain's primary provider *errors* (not merely
+/// lacks the secret) and the fallback chain has no value, the resolution must
+/// surface the provider error — exactly like a single-provider failure — instead
+/// of silently downgrading to `missing_required`, so a machine consumer can tell
+/// an outage from an unprovisioned secret.
+#[test]
+fn test_chain_primary_error_surfaces_instead_of_missing() {
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    // Fallback provider is reachable but does not hold the secret.
+    fs::write(&env_path, "").unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "DB_PASSWORD".to_string(),
+        Secret {
+            description: Some("db".to_string()),
+            required: Some(true),
+            providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
+            ..Default::default()
+        },
+    );
+
+    // Primary alias resolves to an unbuildable provider (the "outage"); fallback
+    // is a healthy dotenv that simply lacks the key.
+    let mut provider_aliases = HashMap::new();
+    provider_aliases.insert("primary".to_string(), "bogus://unreachable".to_string());
+    provider_aliases.insert(
+        "fallback".to_string(),
+        format!("dotenv://{}", env_path.display()),
+    );
+
+    let mut config = resolve_test_config(secrets);
+    config.providers = Some(provider_aliases);
+
+    // No explicit provider override, so the per-secret chain is used.
+    let spec = Secrets::new(config, None, None, None);
+
+    // The primary provider error must propagate, not be reported as missing.
+    assert!(
+        spec.resolve().is_err(),
+        "a primary provider outage with an empty fallback must surface the error"
+    );
+    assert!(spec.report().is_err());
+}
+
 #[test]
 fn test_secretspec_new() {
     let config = Config {

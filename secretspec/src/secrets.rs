@@ -54,6 +54,25 @@ fn warn_primary_provider_failure(display_uri: Option<&str>, err: &SecretSpecErro
     );
 }
 
+/// Whether a resolution pass may produce side effects and persist secrets.
+///
+/// A resolution pass always queries providers to learn what is present, but the
+/// two value-free entry points ([`Secrets::report`], [`Secrets::resolve_without_values`])
+/// must not change anything as a side effect of reading. This flag gates the two
+/// mutating steps of a pass so those entry points can share the exact same
+/// resolution logic without inheriting its side effects.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Materialize {
+    /// Full pass: mint-and-store a missing generatable secret and write each
+    /// `as_path` secret to a temp file. Backs `validate()`/`resolve()`/`check`.
+    Values,
+    /// Value-free pass: never write a generated secret back to a provider and
+    /// never persist a secret to disk. A generatable-but-absent secret is still
+    /// reported as it *would* resolve, without minting it. Backs `report()` and
+    /// `resolve_without_values()`.
+    None,
+}
+
 /// Walks up from the current directory looking for `secretspec.toml`.
 fn find_config_file() -> Result<PathBuf> {
     let mut dir = std::env::current_dir()?;
@@ -1321,8 +1340,9 @@ impl Secrets {
 
         // First validate to see what's missing. Use the non-auditing variant:
         // the caller that owns this operation (`check`, `run`) records its own
-        // audit event, so re-validating here must not emit another `Check`.
-        let validation_result = self.validate_audited(false)?;
+        // audit event, so re-validating here must not emit another `Check`. This
+        // is the value-injecting path (`run`), so it materializes fully.
+        let validation_result = self.validate_audited(false, Materialize::Values)?;
 
         match validation_result {
             Ok(valid_secrets) => Ok(valid_secrets),
@@ -1410,7 +1430,7 @@ impl Secrets {
                     // Re-validate to get the updated results
                     // Re-validate after prompting; still part of the same
                     // operation, so do not emit another `Check` event.
-                    match self.validate_audited(false)? {
+                    match self.validate_audited(false, Materialize::Values)? {
                         Ok(valid_secrets) => Ok(valid_secrets),
                         Err(still_errors) => Err(SecretSpecError::RequiredSecretMissing(
                             still_errors.missing_required.join(", "),
@@ -1850,6 +1870,17 @@ impl Secrets {
     /// Returns `Ok(Some(value))` if generation succeeded,
     /// `Ok(None)` if generation is not configured,
     /// or `Err` if generation was configured but failed.
+    /// Whether an absent secret would be auto-generated on a full resolve: it
+    /// declares an enabled `generate` config. Lets the value-free pass report
+    /// that a missing secret *would* resolve via generation without minting and
+    /// storing it (the side effect [`Self::try_generate_secret`] performs). A
+    /// `generate`-enabled secret with no declared type still counts here; the
+    /// resulting "no type" error is raised only on the full pass that actually
+    /// generates, keeping the value-free preflight failure-free.
+    fn would_generate(secret_config: &crate::config::Secret) -> bool {
+        matches!(&secret_config.generate, Some(g) if g.is_enabled())
+    }
+
     fn try_generate_secret(
         &self,
         name: &str,
@@ -1986,7 +2017,7 @@ impl Secrets {
     /// and by `secretspec-derive`-generated code — so it records exactly one
     /// `Check` audit event per call.
     pub fn validate(&self) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
-        self.validate_audited(true)
+        self.validate_audited(true, Materialize::Values)
     }
 
     /// Resolve every declared secret into a value-carrying [`ResolveResponse`],
@@ -2006,31 +2037,38 @@ impl Secrets {
         self.resolve_impl(true)
     }
 
-    /// Like [`Self::resolve`], but never materializes secret values: every
-    /// `value`/`path` in the response is `None`, no `as_path` temp file is
-    /// persisted, and no secret byte is ever copied into the response. Structure
+    /// Like [`Self::resolve`], but value-free and side-effect-free: every
+    /// `value`/`path` in the response is `None`, no `as_path` temp file is ever
+    /// written, and no missing generatable secret is minted or stored. Structure
     /// and provenance (`as_path`, `source`, `source_provider`,
     /// `missing_optional`) are still populated. This backs the `no_values`
-    /// request path, so a policy/preflight consumer that wants only the resolve
-    /// shape never pulls secret values into its process, and `as_path`
-    /// resolution leaves no temp file behind. Resolution still runs (providers
-    /// are still queried) so provenance can be reported; a missing required
-    /// secret still fails the same way as [`Self::resolve`]. For a value-free
-    /// view that tolerates missing required secrets, use [`Self::report`].
+    /// request path, so a policy/preflight consumer gets the resolve shape
+    /// without persisting a secret to disk or mutating a provider. Resolution
+    /// still queries providers so provenance can be reported — a value may
+    /// transit memory transiently to learn whether it is present — but nothing
+    /// is materialized; a missing required secret still fails the same way as
+    /// [`Self::resolve`]. For a value-free view that tolerates missing required
+    /// secrets, use [`Self::report`].
     pub fn resolve_without_values(&self) -> Result<ResolveResponse> {
         self.resolve_impl(false)
     }
 
     /// Shared core of [`Self::resolve`]/[`Self::resolve_without_values`].
     /// `include_values` gates whether resolved secret values are copied into the
-    /// response (and whether `as_path` temp files are persisted past the call).
+    /// response and, in turn, whether the underlying pass mints generated
+    /// secrets and writes `as_path` temp files at all.
     fn resolve_impl(&self, include_values: bool) -> Result<ResolveResponse> {
-        match self.validate()? {
+        let materialize = if include_values {
+            Materialize::Values
+        } else {
+            Materialize::None
+        };
+        match self.validate_audited(true, materialize)? {
             Ok(mut validated) => {
                 // Persist as_path temp files so returned paths outlive this call.
-                // Only needed when we actually return paths: under
-                // `!include_values` the temp files are dropped (auto-deleted)
-                // together with `validated`, so nothing is left on disk.
+                // Only the full pass writes any: under `Materialize::None` no
+                // temp file is ever created, so there is nothing to persist and
+                // nothing is left on disk.
                 if include_values {
                     validated.keep_temp_files()?;
                 }
@@ -2114,8 +2152,14 @@ impl Secrets {
     /// declared and how would each secret resolve" even for a profile whose
     /// secrets the caller cannot fully provide. It is the same report the CLI
     /// surfaces as `check --json` / `check --explain`, exposed to the SDKs.
+    ///
+    /// This pass is value-free and side-effect-free: it never mints or stores a
+    /// generatable secret and never writes an `as_path` temp file. A secret that
+    /// *would* be generated on a real resolve is reported as resolved
+    /// (`generated`), so the report still answers "would this resolve" without
+    /// mutating any provider or touching disk.
     pub fn report(&self) -> Result<ResolutionReport> {
-        Ok(match self.validate()? {
+        Ok(match self.validate_audited(true, Materialize::None)? {
             Ok(validated) => validated.report(),
             Err(errors) => errors.report(),
         })
@@ -2131,9 +2175,16 @@ impl Secrets {
     /// not also recorded as a `Check`. The trade-off: a direct
     /// `ensure_secrets` call (rare; not the path `secretspec-derive` uses) does
     /// not emit a `Check` read event, though any writes it performs are audited.
+    ///
+    /// `materialize` gates the pass's two side effects (minting+storing a
+    /// generated secret, and writing `as_path` temp files). [`Materialize::None`]
+    /// runs the identical resolution but skips both, so the value-free entry
+    /// points reach the same per-secret status without mutating a provider or
+    /// touching disk; see [`Materialize`].
     fn validate_audited(
         &self,
         emit_check: bool,
+        materialize: Materialize,
     ) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
         // Enforce the reason policy. For the top-level read (`emit_check`) a denial
         // is itself audited; internal re-validations (emit_check=false) re-check the
@@ -2282,13 +2333,18 @@ impl Secrets {
                     match fetched_values.remove(&name) {
                         Some(value) => {
                             source_provider = group_uris.get(&secret_primary_uris[&name]).cloned();
-                            self.insert_resolved(
-                                &mut secrets,
-                                &mut temp_files,
-                                name,
-                                value,
-                                as_path,
-                            )?;
+                            // Copy the value into the response only on a full
+                            // pass; a value-free pass has the status it needs and
+                            // never materializes a value or writes a temp file.
+                            if materialize == Materialize::Values {
+                                self.insert_resolved(
+                                    &mut secrets,
+                                    &mut temp_files,
+                                    name,
+                                    value,
+                                    as_path,
+                                )?;
+                            }
                             status = ResolutionStatus::Resolved;
                         }
                         None => {
@@ -2301,13 +2357,31 @@ impl Secrets {
                                     (None, Some(providers)) if providers.len() > 1 => {
                                         let fallback_uris =
                                             self.resolve_provider_aliases(Some(&providers[1..]))?;
-                                        self.get_secret_from_providers(
+                                        let resolved = self.get_secret_from_providers(
                                             &self.config.project.name,
                                             &name,
                                             &profile_name,
                                             fallback_uris.as_deref(),
                                             None,
-                                        )?
+                                        )?;
+                                        // A primary that *errored* (not merely
+                                        // lacked the secret) plus an empty
+                                        // fallback chain is not "missing": the
+                                        // authoritative provider is unreachable
+                                        // and might hold the value. Surface the
+                                        // primary error, exactly as the
+                                        // single-provider arm below does, instead
+                                        // of silently downgrading to
+                                        // missing_required — a machine consumer
+                                        // must be able to tell an outage from an
+                                        // unprovisioned secret.
+                                        if resolved.0.is_none() && primary_failed {
+                                            let err = failed_primary_uris
+                                                .remove(primary_uri)
+                                                .expect("primary_failed implies entry present");
+                                            return Err(err);
+                                        }
+                                        resolved
                                     }
                                     // No alternative chain to try and the primary failed: surface the
                                     // original error rather than reporting the secret as merely
@@ -2324,36 +2398,48 @@ impl Secrets {
 
                             if let Some(value) = fallback_value {
                                 source_provider = fallback_uri;
-                                self.insert_resolved(
-                                    &mut secrets,
-                                    &mut temp_files,
-                                    name,
-                                    value,
-                                    as_path,
-                                )?;
+                                if materialize == Materialize::Values {
+                                    self.insert_resolved(
+                                        &mut secrets,
+                                        &mut temp_files,
+                                        name,
+                                        value,
+                                        as_path,
+                                    )?;
+                                }
                                 status = ResolutionStatus::Resolved;
-                            } else if let Some(generated_value) =
-                                self.try_generate_secret(&name, secret_config, &profile_name)?
-                            {
+                            } else if Self::would_generate(secret_config) {
+                                // The secret would be auto-generated. A full pass
+                                // mints and stores it (writing a temp file when
+                                // `as_path`); a value-free pass reports that it
+                                // would resolve without minting or storing
+                                // anything.
                                 generated = true;
-                                self.insert_resolved(
-                                    &mut secrets,
-                                    &mut temp_files,
-                                    name,
-                                    generated_value,
-                                    as_path,
-                                )?;
+                                if materialize == Materialize::Values {
+                                    let generated_value = self
+                                        .try_generate_secret(&name, secret_config, &profile_name)?
+                                        .expect("would_generate implies a generated value");
+                                    self.insert_resolved(
+                                        &mut secrets,
+                                        &mut temp_files,
+                                        name,
+                                        generated_value,
+                                        as_path,
+                                    )?;
+                                }
                                 status = ResolutionStatus::Resolved;
                             } else if let Some(default_value) = default {
                                 default_applied = true;
-                                self.insert_resolved(
-                                    &mut secrets,
-                                    &mut temp_files,
-                                    name.clone(),
-                                    SecretString::new(default_value.clone().into()),
-                                    as_path,
-                                )?;
-                                with_defaults.push((name, default_value));
+                                if materialize == Materialize::Values {
+                                    self.insert_resolved(
+                                        &mut secrets,
+                                        &mut temp_files,
+                                        name.clone(),
+                                        SecretString::new(default_value.clone().into()),
+                                        as_path,
+                                    )?;
+                                    with_defaults.push((name, default_value));
+                                }
                                 status = ResolutionStatus::Resolved;
                             } else if required {
                                 missing_required.push(name);

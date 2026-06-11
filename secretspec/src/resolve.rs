@@ -14,6 +14,11 @@
 //! is empty and `missing_required` is populated, mirroring the derive crate's
 //! `load()` which fails rather than returning partial secrets.
 //!
+//! The `no_values` request variant (and [`crate::Secrets::resolve_without_values`])
+//! produces the same shape with every `value`/`path` set to `None`, and is
+//! additionally side-effect-free: it never mints a generated secret and never
+//! writes an `as_path` temp file.
+//!
 //! The shape is versioned via [`RESOLVE_SCHEMA_VERSION`]. The canonical JSON
 //! Schema lives at `schema/resolve-response.schema.json`.
 

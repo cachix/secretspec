@@ -13,10 +13,12 @@ on:
   push:
     tags:
       - v**
+  # PR runs are scoped to changes in the Node SDK or this workflow. Core
+  # resolver changes are verified on PRs by the devenv-based test.yml and
+  # sdks.yml; the full matrix here still runs on tags and manual dispatch.
   pull_request:
     paths:
       - "secretspec-node/**"
-      - "secretspec/**"
       - ".github/workflows/node-addon.yml"
 
 jobs:
@@ -40,7 +42,8 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

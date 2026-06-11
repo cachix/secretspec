@@ -103,6 +103,14 @@ impl TryFrom<&ProviderUrl> for DotEnvConfig {
             ".env".to_string()
         };
 
+        // URL paths are always absolute, so a Windows drive-letter path
+        // arrives as "/C:/...": drop the leading slash to make it a valid
+        // Windows path.
+        let path = match path.as_bytes() {
+            [b'/', drive, b':', b'/', ..] if drive.is_ascii_alphabetic() => path[1..].to_string(),
+            _ => path,
+        };
+
         Ok(Self {
             path: PathBuf::from(path),
         })
@@ -328,6 +336,13 @@ mod tests {
         let url = ProviderUrl::new(Url::parse("dotenv://foobar/custom/path/.env").unwrap());
         let config: DotEnvConfig = (&url).try_into().unwrap();
         assert_eq!(config.path.to_str().unwrap(), "foobar/custom/path/.env");
+
+        // Windows drive-letter path: TryFrom<&str> turns "dotenv://C:\a\.env"
+        // into "dotenv:///C:/a/.env"; the leading slash must not survive into
+        // the filesystem path.
+        let url = ProviderUrl::new(Url::parse("dotenv:///C:/Users/me/.env").unwrap());
+        let config: DotEnvConfig = (&url).try_into().unwrap();
+        assert_eq!(config.path.to_str().unwrap(), "C:/Users/me/.env");
     }
 
     #[test]

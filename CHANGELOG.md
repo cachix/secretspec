@@ -151,6 +151,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SecretResolution`, and `ResolutionStatus` types.
 
 ### Fixed
+- Provider specifications containing Windows drive-letter paths (e.g.
+  `dotenv://C:\Users\me\.env`) now parse correctly. Previously `C:` was
+  interpreted as a URL `host:port` pair and rejected with "invalid port
+  number"; the path is now carried in the URL path component (with
+  forward-slash separators, which Windows accepts) and the dotenv provider
+  strips the URL's leading slash from drive-letter paths.
 - The value-free resolution surfaces — `Secrets::report()`, `resolve_without_values()`
   / the FFI `{"no_values": true}` and `{"mode": "report"}` requests, and
   `check --json`/`--explain` (now routed through `report()`) — are side-effect-free.

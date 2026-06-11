@@ -113,7 +113,7 @@ func ensureLoaded() error {
 			loadErr = err
 			return
 		}
-		handle, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+		handle, err := openLibrary(path)
 		if err != nil {
 			loadErr = err
 			return

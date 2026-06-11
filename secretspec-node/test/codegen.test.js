@@ -64,10 +64,11 @@ test('quicktype-generated converter consumes fieldsJson()', { skip: !hasNpx() },
   execFileSync(bin, ['-f', manifest, 'schema', '-o', schema]);
 
   const generated = path.join(dir, 'gen.js');
+  // On Windows npx is npx.cmd, which spawn only reaches through a shell.
   execFileSync('npx', [
     '--yes', 'quicktype', '-s', 'schema', schema,
     '--top-level', 'SecretSpec', '--lang', 'javascript', '-o', generated,
-  ]);
+  ], { shell: process.platform === 'win32' });
 
   const { toSecretSpec } = require(generated);
 

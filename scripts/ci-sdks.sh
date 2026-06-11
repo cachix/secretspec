@@ -33,8 +33,10 @@ echo "==> Ruby"
 ( cd secretspec-rb && ruby -e 'Dir["test/test_*.rb"].sort.each { |f| require File.expand_path(f) }' )
 
 echo "==> Node"
-# The Node SDK uses a napi-rs addon (built by its test harness), not the cdylib,
-# and has no npm dependencies.
+# The Node SDK uses a napi-rs addon (not the cdylib) and has no npm
+# dependencies. Build the addon once up front: the test files each ensure it
+# exists and would otherwise race to build it in parallel processes.
+bash secretspec-node/scripts/build-addon.sh
 ( cd secretspec-node && node --test )
 
 echo "==> Haskell"

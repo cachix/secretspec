@@ -18,5 +18,9 @@ case "$(uname -s)" in
   *)                       src="libsecretspec_node_native.so" ;;
 esac
 
-cp "$target_dir/release/$src" "$pkg_dir/secretspec.node"
+# Install atomically: node --test runs test files in parallel processes that
+# may build concurrently, and overwriting in place SIGBUSes a process that has
+# already mapped the addon. A rename keeps the old inode valid for them.
+cp "$target_dir/release/$src" "$pkg_dir/secretspec.node.tmp.$$"
+mv -f "$pkg_dir/secretspec.node.tmp.$$" "$pkg_dir/secretspec.node"
 echo "built secretspec.node"

@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subdirectory previously failed to find the referenced `.env` file because it
   was looked up relative to the working directory rather than the project root
   (#59). Absolute `dotenv` paths are unaffected.
+- The `protonpass` provider now works with Proton Pass CLI `pass-cli >= 2.0.3`.
+  The `item list --output json` payload changed shape in 2.0.3 (the item title
+  moved from a nested `content.title` to a top-level `title`, and `content` was
+  dropped from list output), which made `secretspec` report active secrets as
+  missing. Both the old (`<= 2.0.2`) and new (`>= 2.0.3`) list shapes are now
+  accepted. ([#104](https://github.com/cachix/secretspec/issues/104))
 
 ## [0.12.0] - 2026-06-08
 

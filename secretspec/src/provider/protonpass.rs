@@ -28,7 +28,8 @@ const DEFAULT_AGENT_REASON: &str = concat!(
 //
 // or:
 // $ pass-cli item list <vault> --output json
-//   {"items": [{"id": "...", "share_id": "...", "content": {"title": "...", "note": "..."}}]}
+//   pass-cli <= 2.0.2: {"items": [{"id": "...", "share_id": "...", "content": {"title": "..."}}]}
+//   pass-cli >= 2.0.3: {"items": [{"id": "...", "share_id": "...", "title": "...", "item_type": "note"}]}
 //
 // We only use a limited subset of the full data.
 
@@ -40,8 +41,6 @@ struct ProtonPassItemContent {
 
 #[derive(Deserialize)]
 struct ProtonPassItemData {
-    id: String,
-    share_id: String,
     content: ProtonPassItemContent,
 }
 
@@ -50,9 +49,37 @@ struct ProtonPassViewResponse {
     item: ProtonPassItemData,
 }
 
+/// A single entry from `pass-cli item list ... --output json`.
+///
+/// The list payload changed shape in pass-cli 2.0.3 (protonpass/pass-cli commit
+/// 1c09fd8): the title moved from a nested `content.title` to a top-level
+/// `title`, and the per-item `content` object was dropped entirely from list
+/// output (it no longer carries any secret material). `id`/`share_id` remain
+/// top-level in both shapes, and only those plus the title are used here, so we
+/// accept either layout and keep working across pass-cli versions.
+#[derive(Deserialize)]
+struct ProtonPassListItem {
+    id: String,
+    share_id: String,
+    /// Top-level title (pass-cli >= 2.0.3).
+    title: Option<String>,
+    /// Legacy nested content carrying the title (pass-cli <= 2.0.2).
+    content: Option<ProtonPassItemContent>,
+}
+
+impl ProtonPassListItem {
+    /// The item title regardless of pass-cli version, preferring the top-level
+    /// field and falling back to the legacy nested `content.title`.
+    fn title(&self) -> Option<&str> {
+        self.title
+            .as_deref()
+            .or_else(|| self.content.as_ref().map(|c| c.title.as_str()))
+    }
+}
+
 #[derive(Deserialize)]
 struct ProtonPassListResponse {
-    items: Vec<ProtonPassItemData>,
+    items: Vec<ProtonPassListItem>,
 }
 
 // You can get the JSON template for this struct via:
@@ -336,7 +363,7 @@ impl Provider for ProtonPassProvider {
             response
                 .items
                 .into_iter()
-                .find(|item| item.content.title == title)
+                .find(|item| item.title() == Some(title.as_str()))
         };
 
         if let Some(existing_item) = maybe_existing_item {
@@ -396,7 +423,10 @@ impl Provider for ProtonPassProvider {
         let item_map: HashMap<String, (String, String)> = list_response
             .items
             .into_iter()
-            .map(|item| (item.content.title, (item.share_id, item.id)))
+            .filter_map(|item| {
+                let title = item.title()?.to_string();
+                Some((title, (item.share_id, item.id)))
+            })
             .collect();
 
         let keys_to_fetch: Vec<(&str, String, String)> = keys
@@ -522,6 +552,31 @@ mod tests {
             k.to_str() == Some(AGENT_REASON_ENV) && v.and_then(|v| v.to_str()) == Some("deploy web")
         });
         assert!(found, "PROTON_PASS_AGENT_REASON must be set on the command");
+    }
+
+    #[test]
+    fn list_response_parses_legacy_nested_title() {
+        // pass-cli <= 2.0.2: the title lives under a nested `content` object.
+        let json =
+            r#"{"items":[{"id":"i1","share_id":"s1","content":{"title":"proj/default/KEY"}}]}"#;
+        let response: ProtonPassListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.items.len(), 1);
+        assert_eq!(response.items[0].title(), Some("proj/default/KEY"));
+        assert_eq!(response.items[0].id, "i1");
+        assert_eq!(response.items[0].share_id, "s1");
+    }
+
+    #[test]
+    fn list_response_parses_top_level_title() {
+        // pass-cli >= 2.0.3: the title is top-level and `content` is gone from
+        // list output. Regression test for the issue where active secrets were
+        // reported as missing because this shape failed to deserialize.
+        let json = r#"{"items":[{"id":"i1","share_id":"s1","title":"proj/default/KEY","item_type":"note"}]}"#;
+        let response: ProtonPassListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.items.len(), 1);
+        assert_eq!(response.items[0].title(), Some("proj/default/KEY"));
+        assert_eq!(response.items[0].id, "i1");
+        assert_eq!(response.items[0].share_id, "s1");
     }
 
     #[test]

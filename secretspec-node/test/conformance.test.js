@@ -43,8 +43,12 @@ for (const fixture of fs.readdirSync(FIXTURES).sort()) {
   test(`conformance: ${fixture}`, () => {
     const expected = JSON.parse(fs.readFileSync(path.join(dir, 'expected.json'), 'utf8'));
     const resolved = builder(dir).load();
-
-    assert.deepStrictEqual(canonical(resolved), expected);
+    try {
+      assert.deepStrictEqual(canonical(resolved), expected);
+    } finally {
+      // Remove any as_path temp files this value-carrying resolve materialized.
+      resolved.dispose();
+    }
   });
 
   test(`conformance no_values: ${fixture}`, () => {

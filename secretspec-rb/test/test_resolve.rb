@@ -112,16 +112,18 @@ class ResolveTest < Minitest::Test
       TOML
       manifest_path, provider = project(dir, "TLS_CERT=----cert----\n", manifest: manifest)
 
-      resolved = Secretspec::SecretSpec.builder
-                                       .with_path(manifest_path)
-                                       .with_provider(provider)
-                                       .with_reason("rb test")
-                                       .load
-
-      cert = resolved.secrets["TLS_CERT"]
-      assert cert.as_path
-      assert_nil cert.value
-      assert_equal "----cert----", File.read(cert.get)
+      # Block form closes the Resolved (removing the 0400 as_path temp file) so
+      # the test leaves no secret-bearing file behind in the temp dir.
+      Secretspec::SecretSpec.builder
+                            .with_path(manifest_path)
+                            .with_provider(provider)
+                            .with_reason("rb test")
+                            .load do |resolved|
+        cert = resolved.secrets["TLS_CERT"]
+        assert cert.as_path
+        assert_nil cert.value
+        assert_equal "----cert----", File.read(cert.get)
+      end
     end
   end
 
@@ -185,7 +187,10 @@ class ConformanceTest < Minitest::Test
 
     define_method("test_conformance_#{name}") do
       expected = JSON.parse(File.read(File.join(dir, "expected.json")))
-      assert_equal expected, canonical(conformance_builder(dir).load)
+      # Block form closes the Resolved so as_path temp files do not accumulate.
+      conformance_builder(dir).load do |resolved|
+        assert_equal expected, canonical(resolved)
+      end
     end
 
     # Under no_values every SDK must emit the same all-null fields map: a

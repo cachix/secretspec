@@ -112,10 +112,15 @@ TLS_CERT = { description = "cert", required = true, as_path = true }
         .load()
     )
 
-    cert = resolved.secrets["TLS_CERT"]
-    assert cert.as_path
-    assert cert.value is None
-    assert pathlib.Path(cert.get).read_text() == "----cert-bytes----"
+    try:
+        cert = resolved.secrets["TLS_CERT"]
+        assert cert.as_path
+        assert cert.value is None
+        assert pathlib.Path(cert.get).read_text() == "----cert-bytes----"
+    finally:
+        # as_path materializes a 0400 temp file the caller owns; remove it so
+        # the test leaves no secret-bearing file behind in the temp dir.
+        resolved.close()
 
 
 def test_invalid_manifest_raises_secretspec_error(tmp_path):

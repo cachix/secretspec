@@ -68,8 +68,12 @@ def test_conformance(fixture):
     expected = json.loads((directory / "expected.json").read_text())
 
     resolved = _builder(directory).load()
-
-    assert _canonical(resolved) == expected
+    try:
+        assert _canonical(resolved) == expected
+    finally:
+        # Remove any as_path temp files this value-carrying resolve materialized,
+        # so repeated runs do not accumulate secret files in the temp dir.
+        resolved.close()
 
 
 @pytest.mark.parametrize("fixture", _fixtures())

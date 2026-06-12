@@ -54,7 +54,15 @@ fn warn_primary_provider_failure(display_uri: Option<&str>, err: &SecretSpecErro
 
 /// Walks up from the current directory looking for `secretspec.toml`.
 fn find_config_file() -> Result<PathBuf> {
-    let mut dir = std::env::current_dir()?;
+    find_config_file_from(std::env::current_dir()?)
+}
+
+/// Walks up from `start` looking for `secretspec.toml`, returning the path to the
+/// nearest one. Factored out of [`find_config_file`] so the walk can be tested
+/// against an explicit starting directory without mutating the process-global
+/// current directory (which is racy under `cargo test`).
+fn find_config_file_from(start: PathBuf) -> Result<PathBuf> {
+    let mut dir = start;
     loop {
         let candidate = dir.join("secretspec.toml");
         if candidate.exists() {
@@ -2413,5 +2421,103 @@ mod policy_tests {
             Some("clean_value")
         );
         assert_eq!(env.len(), 1);
+    }
+}
+
+/// Serializes tests that mutate the process-global current directory. The current
+/// directory is shared across all threads, so two `set_current_dir` tests running
+/// concurrently (the default under `cargo test`) would corrupt each other. Any test
+/// that calls `set_current_dir` must hold this guard for its whole body. Poisoning
+/// is recovered from (a panicking test leaves the lock poisoned but the data — unit
+/// — is meaningless), so one failing test does not cascade into the others.
+#[cfg(test)]
+pub(crate) static CWD_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Locks [`CWD_GUARD`], recovering from a previous test's poison.
+#[cfg(test)]
+pub(crate) fn lock_cwd() -> std::sync::MutexGuard<'static, ()> {
+    CWD_GUARD.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
+mod config_discovery_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Walking up from a nested subdirectory finds the nearest ancestor
+    /// `secretspec.toml`. This is the library half of "run secretspec from a
+    /// subdirectory" (issue #59). It exercises `find_config_file_from` directly so
+    /// no current-directory mutation is needed — the walk is fully deterministic.
+    #[test]
+    fn find_config_file_walks_up_to_nearest_ancestor() {
+        let root = TempDir::new().unwrap();
+        let manifest = root.path().join("secretspec.toml");
+        fs::write(&manifest, "[project]\nname=\"x\"\nrevision=\"1.0\"\n").unwrap();
+
+        let nested = root.path().join("a").join("b").join("c");
+        fs::create_dir_all(&nested).unwrap();
+
+        let found = find_config_file_from(nested).unwrap();
+        // Compare canonicalized paths: on macOS the temp dir lives under a
+        // `/var -> /private/var` symlink, so the raw paths differ.
+        assert_eq!(
+            found.canonicalize().unwrap(),
+            manifest.canonicalize().unwrap()
+        );
+    }
+
+    /// With no `secretspec.toml` anywhere up the tree, the walk reports a missing
+    /// manifest rather than looping or panicking. (Assumes the temp dir's ancestors
+    /// contain no `secretspec.toml`, which holds for the OS temp directory.)
+    #[test]
+    fn find_config_file_reports_missing_manifest() {
+        let empty = TempDir::new().unwrap();
+        assert!(matches!(
+            find_config_file_from(empty.path().to_path_buf()),
+            Err(SecretSpecError::NoManifest)
+        ));
+    }
+
+    /// Loading via an explicit **relative** path resolves against the current
+    /// directory — both a bare filename and a `../`-relative parent path. This is
+    /// the `-f ../secretspec.toml` form from issue #59, and it is the case that
+    /// regressed on Windows: `Config::try_from` calls `Path::canonicalize`, whose
+    /// behavior on relative paths differs from Unix. Mutates the current directory,
+    /// so it holds [`CWD_GUARD`].
+    #[test]
+    fn try_from_resolves_relative_paths_against_cwd() {
+        let _cwd = lock_cwd();
+
+        let root = TempDir::new().unwrap();
+        fs::write(
+            root.path().join("secretspec.toml"),
+            "[project]\nname=\"x\"\nrevision=\"1.0\"\n\n[profiles.default]\n",
+        )
+        .unwrap();
+        let sub = root.path().join("sub");
+        fs::create_dir_all(&sub).unwrap();
+
+        let original = env::current_dir().unwrap();
+
+        // Bare filename from the manifest's own directory (the working case).
+        env::set_current_dir(root.path()).unwrap();
+        let from_cwd = Config::try_from(Path::new("secretspec.toml"));
+
+        // `../`-relative path from a subdirectory (the case that failed on Windows).
+        env::set_current_dir(&sub).unwrap();
+        let from_parent = Config::try_from(Path::new("../secretspec.toml"));
+
+        // Restore the current directory before any assertion (and before the
+        // TempDir is dropped) so a failure cannot leave the process — or TempDir
+        // cleanup, which cannot remove the current directory on Windows — wedged.
+        env::set_current_dir(&original).unwrap();
+
+        assert!(from_cwd.is_ok(), "bare filename: {:?}", from_cwd.err());
+        assert!(
+            from_parent.is_ok(),
+            "../ relative path: {:?}",
+            from_parent.err()
+        );
     }
 }

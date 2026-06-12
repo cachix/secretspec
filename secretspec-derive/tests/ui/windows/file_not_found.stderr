@@ -1,0 +1,7 @@
+error: Failed to parse TOML: I/O error: Failed to resolve path $WORKSPACE/target/tests/trybuild/secretspec-derive/this/file/does/not/exist.toml: The system cannot find the path specified. (os error 3)
+ --> tests/ui/windows/file_not_found.rs:4:1
+  |
+4 | declare_secrets!("this/file/does/not/exist.toml");
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `declare_secrets` (in Nightly builds, run with -Z macro-backtrace for more info)

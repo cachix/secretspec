@@ -1516,6 +1516,10 @@ fn test_set_with_defined_secret() {
     use std::env;
     use tempfile::TempDir;
 
+    // Serialize against other current-directory-mutating tests (the current
+    // directory is process-global and shared across test threads).
+    let _cwd = crate::secrets::lock_cwd();
+
     // Create a temporary directory for dotenv file
     let temp_dir = TempDir::new().unwrap();
     let original_dir = env::current_dir().unwrap();

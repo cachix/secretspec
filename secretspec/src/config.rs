@@ -1162,12 +1162,16 @@ mod audit_config_tests {
 
     #[test]
     fn resolved_path_keeps_absolute_and_rejects_relative() {
-        // An absolute configured path is honored verbatim.
-        let abs = with_path("/var/log/secretspec/audit.log");
-        assert_eq!(
-            abs.resolved_path(),
-            Some(PathBuf::from("/var/log/secretspec/audit.log"))
-        );
+        // An absolute configured path is honored verbatim. What counts as absolute
+        // is platform-specific (Windows requires a drive prefix), so pick one that
+        // `Path::is_absolute` accepts on the host.
+        let abs_path = if cfg!(windows) {
+            r"C:\var\log\secretspec\audit.log"
+        } else {
+            "/var/log/secretspec/audit.log"
+        };
+        let abs = with_path(abs_path);
+        assert_eq!(abs.resolved_path(), Some(PathBuf::from(abs_path)));
         assert!(!abs.has_relative_path());
 
         // A relative path (bare filename or nested) is rejected: it would resolve

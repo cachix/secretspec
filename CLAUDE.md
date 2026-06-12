@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-When commiting changes related to Rust, make sure to update /CHANGELOG.md with one entry (can be multi-line).
+When commiting changes related to Rust, make sure to update /CHANGELOG.md with one entry (can be multi-line). Don't create new release subsections; add the entry under the existing unreleased section. Keep entries user facing: leave out development and testing notes.
 
 
 ## Project Overview

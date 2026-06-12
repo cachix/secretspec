@@ -7,8 +7,9 @@ name: "Python wheels"
 # with auditwheel so the bundled cdylib's system deps (notably libdbus from the
 # keyring provider) are vendored. macOS/Windows build natively.
 #
-# UNVALIDATED: this pipeline has not been run; it needs a CI run to debug and,
-# for publishing, PyPI Trusted Publishing configured for this repo/environment.
+# The build/repair pipeline is validated in CI; the publish job additionally
+# needs PyPI Trusted Publishing configured for this repo's "pypi" environment
+# before the first version tag.
 
 on:
   workflow_dispatch:

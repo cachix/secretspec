@@ -241,6 +241,25 @@ impl JsonlSink {
             max_size_bytes,
         })
     }
+
+    /// Resets the log file to empty at the size cap. The append handle's next
+    /// write then lands at the new end-of-file (offset 0).
+    #[cfg(not(windows))]
+    fn truncate(&self, file: &std::fs::File) -> std::io::Result<()> {
+        file.set_len(0)
+    }
+
+    /// On Windows an append-only handle lacks `FILE_WRITE_DATA`, so `set_len`
+    /// fails with "access is denied". Truncate through a separate write handle
+    /// instead; the caller still holds the mutex, so no other writer races us.
+    #[cfg(windows)]
+    fn truncate(&self, _file: &std::fs::File) -> std::io::Result<()> {
+        OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&self.path)
+            .map(|_| ())
+    }
 }
 
 impl AuditSink for JsonlSink {
@@ -257,7 +276,7 @@ impl AuditSink for JsonlSink {
         match guard.metadata().map(|m| m.len()) {
             Ok(size) if size > 0 && size + projected > self.max_size_bytes => {
                 // With O_APPEND the next write lands at the new end-of-file (0).
-                if let Err(e) = guard.set_len(0) {
+                if let Err(e) = self.truncate(&guard) {
                     warn_audit_failure(&self.path, &e);
                 }
             }

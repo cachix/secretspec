@@ -328,6 +328,13 @@ mod tests {
         let url = ProviderUrl::new(Url::parse("dotenv://foobar/custom/path/.env").unwrap());
         let config: DotEnvConfig = (&url).try_into().unwrap();
         assert_eq!(config.path.to_str().unwrap(), "foobar/custom/path/.env");
+
+        // A Windows absolute path is carried as a percent-encoded opaque host (the
+        // form produced by `Box::<dyn Provider>::try_from` for `dotenv://C:\...`)
+        // and decoded back to the original path.
+        let url = ProviderUrl::new(Url::parse("dotenv://C%3A%5CUsers%5Cfoo%5C.env").unwrap());
+        let config: DotEnvConfig = (&url).try_into().unwrap();
+        assert_eq!(config.path.to_str().unwrap(), r"C:\Users\foo\.env");
     }
 
     #[test]

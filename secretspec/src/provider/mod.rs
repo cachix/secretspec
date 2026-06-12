@@ -72,6 +72,17 @@ pub(crate) const URI_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b'^')
     .add(b'\\');
 
+/// Like [`URI_ENCODE_SET`] but also encodes `:`. Used for Windows absolute paths
+/// (e.g. `C:\path`) where the drive-letter colon would otherwise be read as a
+/// `host:port` separator and fail parsing with "invalid port number".
+const WINDOWS_PATH_ENCODE_SET: &AsciiSet = &URI_ENCODE_SET.add(b':');
+
+/// Detects a Windows-style absolute path such as `C:\path` or `C:/path`.
+fn is_windows_abs_path(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
+}
+
 /// A URL wrapper that automatically percent-decodes all accessors.
 ///
 /// Providers receive `&ProviderUrl` instead of `&Url`, ensuring they always
@@ -617,21 +628,35 @@ impl TryFrom<&str> for Box<dyn Provider> {
             }
         }
 
-        // Build a proper URL with the correct scheme
-        let url_string = match rest {
-            // Just scheme name (e.g., "keyring")
-            "" | ":" => format!("{}://", scheme),
-            // Standard URI format already has // (e.g., "onepassword://vault/path")
-            s if s.starts_with("//") => format!("{}:{}", scheme, s),
-            // Path only format (e.g., "dotenv:/path/to/.env")
-            s if s.starts_with('/') => format!("{}://{}", scheme, s),
-            // Everything else - assume it's a host or path component
-            s => format!("{}://{}", scheme, s),
-        };
+        // Build a proper URL with the correct scheme.
+        //
+        // Windows absolute paths (e.g. `dotenv://C:\path\.env`) need special care:
+        // the drive-letter colon looks like a `host:port` separator and parsing
+        // fails with "invalid port number". Encode the whole path (drive colon and
+        // backslashes included) into an opaque host so it round-trips back out via
+        // `ProviderUrl::host()`. A Unix absolute path stays in the authority-less
+        // `scheme:///abs/path` form, which already parses cleanly.
+        let path_candidate = rest.trim_start_matches('/');
+        let url_string = if is_windows_abs_path(path_candidate) {
+            format!(
+                "{}://{}",
+                scheme,
+                percent_encode(path_candidate.as_bytes(), WINDOWS_PATH_ENCODE_SET)
+            )
+        } else {
+            let url_string = match rest {
+                // Just scheme name (e.g., "keyring")
+                "" | ":" => format!("{}://", scheme),
+                // Standard URI format already has // (e.g., "onepassword://vault/path")
+                s if s.starts_with("//") => format!("{}:{}", scheme, s),
+                // Path only format (e.g., "dotenv:/path/to/.env")
+                s if s.starts_with('/') => format!("{}://{}", scheme, s),
+                // Everything else - assume it's a host or path component
+                s => format!("{}://{}", scheme, s),
+            };
 
-        // Percent-encode characters that are invalid in URIs but might appear in
-        // provider config values (e.g., spaces in 1Password vault names like "Home Lab")
-        let url_string = {
+            // Percent-encode characters that are invalid in URIs but might appear in
+            // provider config values (e.g., spaces in 1Password vault names like "Home Lab")
             let scheme_end = url_string.find("://").unwrap() + 3;
             let (prefix, rest) = url_string.split_at(scheme_end);
             format!(
@@ -713,6 +738,29 @@ mod url_tests {
     #[test]
     fn port_is_parsed_when_present() {
         assert_eq!(url("https://example.com:8200/").port(), Some(8200));
+    }
+
+    #[test]
+    fn detects_windows_absolute_paths() {
+        assert!(is_windows_abs_path(r"C:\Users\foo"));
+        assert!(is_windows_abs_path("C:/Users/foo"));
+        assert!(is_windows_abs_path(r"d:\x"));
+        // Not absolute Windows paths:
+        assert!(!is_windows_abs_path("/tmp/foo"));
+        assert!(!is_windows_abs_path("relative/path"));
+        assert!(!is_windows_abs_path("C:"));
+        assert!(!is_windows_abs_path("vault"));
+    }
+
+    #[test]
+    fn windows_dotenv_path_parses_instead_of_failing_on_port() {
+        // The drive-letter colon must not be read as a `host:port` separator.
+        let provider = Box::<dyn Provider>::try_from(r"dotenv://C:\Users\foo\.env");
+        assert!(
+            provider.is_ok(),
+            "Windows dotenv path should parse, got {:?}",
+            provider.err()
+        );
     }
 
     #[test]

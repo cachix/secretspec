@@ -1,0 +1,23 @@
+[package]
+name = "secretspec-ffi"
+version.workspace = true
+edition.workspace = true
+repository = "https://github.com/cachix/secretspec"
+description = "C ABI for SecretSpec: resolve secrets from any language"
+license = "Apache-2.0"
+
+[lib]
+name = "secretspec_ffi"
+# cdylib for dynamic loading (the SDK distribution target); staticlib for
+# embedding; lib (rlib) so Rust integration tests can call the entry points.
+# All expose the same narrow C ABI.
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[dependencies]
+# The envelope/resolve logic lives in the secretspec crate (resolve_json); this
+# crate is only the C ABI wrapper.
+secretspec = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }

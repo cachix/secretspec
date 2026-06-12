@@ -179,6 +179,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 See the [Rust SDK documentation](https://secretspec.dev/sdk/rust) for advanced usage including profile-specific types.
 
+## Language SDKs
+
+Beyond Rust, SecretSpec ships SDKs for other languages. Each is a thin client
+over the same native core (the `secretspec-ffi` C ABI), so every provider, chain,
+profile, and generator works identically with no per-language resolution logic:
+
+- [Python](https://secretspec.dev/sdk/python) (via cffi)
+- [Go](https://secretspec.dev/sdk/go) (via purego, no cgo)
+- [Ruby](https://secretspec.dev/sdk/ruby) (via stdlib Fiddle)
+- [Node.js / TypeScript](https://secretspec.dev/sdk/nodejs) (napi-rs addon)
+- [Haskell](https://secretspec.dev/sdk/haskell) (build-time FFI link)
+
+```python
+from secretspec import SecretSpec
+
+resolved = SecretSpec.builder().with_provider("keyring://").with_reason("boot").load()
+print(resolved.secrets["DATABASE_URL"].get)
+```
+
+For typed access, `secretspec schema` emits a JSON Schema you feed to
+[quicktype](https://quicktype.io) to generate typed classes for any language,
+built from the SDK's `fields()` map.
+
 ## CLI Reference
 
 Common commands:

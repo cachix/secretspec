@@ -621,6 +621,14 @@ impl TryFrom<&str> for Box<dyn Provider> {
         let url_string = match rest {
             // Just scheme name (e.g., "keyring")
             "" | ":" => format!("{}://", scheme),
+            // A Windows drive-letter path (e.g. "dotenv://C:\Users\me\.env")
+            // cannot travel in the URL authority: "C:" would parse as
+            // host:port. Carry it in the path component with an empty
+            // authority and forward-slash separators (valid in Windows paths).
+            s if is_windows_drive_path(s.strip_prefix("//").unwrap_or(s)) => {
+                let path = s.strip_prefix("//").unwrap_or(s).replace('\\', "/");
+                format!("{}:///{}", scheme, path)
+            }
             // Standard URI format already has // (e.g., "onepassword://vault/path")
             s if s.starts_with("//") => format!("{}:{}", scheme, s),
             // Path only format (e.g., "dotenv:/path/to/.env")
@@ -658,6 +666,13 @@ impl TryFrom<&Url> for Box<dyn Provider> {
     fn try_from(url: &Url) -> Result<Self> {
         provider_from_url(&ProviderUrl::new(url.clone()))
     }
+}
+
+/// Returns true for paths that start with a Windows drive designator followed
+/// by a separator (e.g. `C:\...` or `C:/...`).
+fn is_windows_drive_path(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'/' || b[2] == b'\\')
 }
 
 fn provider_from_url(url: &ProviderUrl) -> Result<Box<dyn Provider>> {
@@ -730,6 +745,25 @@ mod url_tests {
     fn encode_escapes_spaces_but_keeps_plain() {
         assert_eq!(ProviderUrl::encode("plain"), "plain");
         assert_eq!(ProviderUrl::encode("Home Lab"), "Home%20Lab");
+    }
+
+    #[test]
+    fn windows_drive_paths_parse_as_provider_specs() {
+        // "C:" must not be treated as host:port ("invalid port number").
+        for spec in [
+            r"dotenv://C:\Users\me\.env",
+            r"dotenv://C:/Users/me/.env",
+            r"dotenv:C:\Users\me\.env",
+        ] {
+            assert!(
+                Box::<dyn Provider>::try_from(spec).is_ok(),
+                "should parse: {}",
+                spec
+            );
+        }
+        // Unix and relative forms are unaffected.
+        assert!(Box::<dyn Provider>::try_from("dotenv:///tmp/.env").is_ok());
+        assert!(Box::<dyn Provider>::try_from("dotenv://.env").is_ok());
     }
 
     #[test]

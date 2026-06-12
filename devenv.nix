@@ -1,9 +1,9 @@
 { pkgs, ... }: {
   languages.rust = {
     enable = true;
-    # Pinned to >= 1.92 for the detect-coding-agent dependency's MSRV.
-    channel = "stable";
-    version = "1.92.0";
+    # The Rust version is pinned in rust-toolchain.toml, which the native CI
+    # runners (artifact workflows that cannot use devenv) read via rustup.
+    toolchainFile = ./rust-toolchain.toml;
   };
   languages.javascript = {
     enable = true;
@@ -12,6 +12,24 @@
       install.enable = true;
     };
   };
+  # Python is used by the reference SDK (secretspec-py), which binds the
+  # secretspec-ffi C ABI via cffi (dlopen) over the prebuilt cdylib.
+  languages.python = {
+    enable = true;
+    venv = {
+      enable = true;
+      requirements = ''
+        cffi
+        pytest
+      '';
+    };
+  };
+  # Go SDK (secretspec-go) binds the C ABI via purego (dlopen, no cgo).
+  languages.go.enable = true;
+  # Ruby SDK (secretspec-rb) binds the C ABI via stdlib Fiddle (dlopen).
+  languages.ruby.enable = true;
+  # Haskell SDK (secretspec-hs) links the C ABI at build time via the FFI.
+  languages.haskell.enable = true;
 
   packages = [
     # keyring
@@ -20,6 +38,8 @@
     pkgs.cargo-tarpaulin
     # installers
     pkgs.cargo-dist
+    # packaging the Python SDK wheel that bundles the cdylib
+    pkgs.maturin
   ];
 
   git-hooks.hooks = {

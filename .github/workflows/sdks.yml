@@ -1,0 +1,33 @@
+name: "SDKs"
+
+# Runs every language SDK's full test suite (unit + cross-language conformance +
+# the schema/quicktype codegen pipeline) against a freshly built cdylib, so the
+# Python/Go/Ruby/Node bindings cannot silently rot.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  sdks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # The full workspace debug build (AWS/GCP/Bitwarden providers) plus the
+      # Nix store overflows the ~14GB free on a hosted runner.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /opt/ghc \
+            /usr/local/share/boost /usr/local/share/powershell
+          sudo docker image prune --all --force
+          df -h /
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - name: Install devenv.sh
+        run: nix profile install nixpkgs#devenv
+      - name: Build cdylib and run all SDK suites
+        run: devenv shell -- bash scripts/ci-sdks.sh

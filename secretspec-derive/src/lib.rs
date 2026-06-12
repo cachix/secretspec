@@ -21,7 +21,8 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use secretspec::{Config, Secret};
+use secretspec::Config;
+use secretspec::codegen::{CodegenIr, IrField, build_ir, capitalize};
 use std::collections::{BTreeMap, HashSet};
 use syn::{LitStr, parse_macro_input};
 
@@ -67,6 +68,17 @@ impl FieldInfo {
             is_optional,
             as_path,
         }
+    }
+
+    /// Build a `FieldInfo` from a shared-IR field. The IR is the single source
+    /// of the optionality/as_path decisions; this only maps them to a Rust type.
+    fn from_ir(field: &IrField) -> Self {
+        Self::new(
+            field.name.clone(),
+            ir_field_type(field),
+            field.optional,
+            field.as_path,
+        )
     }
 
     /// Get the field name as a Rust identifier.
@@ -214,7 +226,7 @@ impl ProfileVariant {
     /// // variant.capitalized == "Production"
     /// ```
     fn new(name: String) -> Self {
-        let capitalized = capitalize_first(&name);
+        let capitalized = capitalize(&name);
         Self { name, capitalized }
     }
 
@@ -444,7 +456,7 @@ fn is_valid_rust_identifier(s: &str) -> bool {
 /// - Profile names with invalid characters (e.g., "prod-env")
 fn validate_profile_identifiers(config: &Config, errors: &mut Vec<String>) {
     for profile_name in config.profiles.keys() {
-        let variant_name = capitalize_first(profile_name);
+        let variant_name = capitalize(profile_name);
         if !is_valid_rust_identifier(&variant_name) {
             errors.push(format!(
                 "Profile '{}' produces invalid Rust enum variant '{}'",
@@ -478,80 +490,17 @@ fn field_name_ident(name: &str) -> proc_macro2::Ident {
     format_ident!("{}", name.to_lowercase())
 }
 
-/// Helper function to check if a secret is optional.
+/// Map a shared-IR field's optionality and path-ness to its Rust type.
 ///
-/// A secret is considered optional only if:
-/// - It has `required = false` in the config
-///
-/// Having a default value does not make a secret optional.
-///
-/// # Arguments
-///
-/// * `secret_config` - The secret's configuration
-///
-/// # Returns
-///
-/// `true` if the secret is optional, `false` if required
-fn is_secret_optional(secret_config: &Secret) -> bool {
-    secret_config.required != Some(true)
-}
-
-/// Determines if a field should be optional across all profiles.
-///
-/// For the union struct (SecretSpec), a field is optional if it's optional
-/// in ANY profile or missing from ANY profile. This ensures the union type
-/// can safely represent secrets from any profile.
-///
-/// # Arguments
-///
-/// * `secret_name` - The name of the secret to check
-/// * `config` - The project configuration
-///
-/// # Returns
-///
-/// `true` if the field should be Option<String> in the union struct
-///
-/// # Logic
-///
-/// - If the secret is missing from any profile → optional
-/// - If the secret is optional in any profile → optional
-/// - Only if required in ALL profiles → not optional
-fn is_field_optional_across_profiles(secret_name: &str, config: &Config) -> bool {
-    // Check each profile
-    for profile_config in config.profiles.values() {
-        if let Some(secret_config) = profile_config.secrets.get(secret_name) {
-            if is_secret_optional(secret_config) {
-                return true;
-            }
-        } else {
-            // Secret doesn't exist in this profile, so it's optional
-            return true;
-        }
+/// This is the only typing decision the derive macro still makes locally; the
+/// underlying optional/as_path facts come from [`secretspec::codegen`].
+fn ir_field_type(field: &IrField) -> proc_macro2::TokenStream {
+    match (field.optional, field.as_path) {
+        (true, true) => quote! { Option<std::path::PathBuf> },
+        (true, false) => quote! { Option<String> },
+        (false, true) => quote! { std::path::PathBuf },
+        (false, false) => quote! { String },
     }
-    false
-}
-
-/// Check if a field should be represented as a path across all profiles.
-///
-/// A field is considered `as_path` if any profile defines it with `as_path = true`.
-///
-/// # Arguments
-///
-/// * `secret_name` - The name of the secret to check
-/// * `config` - The configuration to analyze
-///
-/// # Returns
-///
-/// `true` if any profile has this secret with `as_path = true`, `false` otherwise
-fn is_field_as_path(secret_name: &str, config: &Config) -> bool {
-    for profile_config in config.profiles.values() {
-        if let Some(secret_config) = profile_config.secrets.get(secret_name)
-            && secret_config.as_path == Some(true)
-        {
-            return true;
-        }
-    }
-    false
 }
 
 /// Generate a unified secret assignment from a HashMap.
@@ -630,78 +579,27 @@ fn generate_secret_assignment(
     }
 }
 
-/// Analyzes all profiles to determine field types for the union struct.
+/// Build the union struct's fields from the shared IR.
 ///
-/// This function examines all secrets across all profiles to determine:
-/// - Which secrets exist across profiles
-/// - Whether each secret should be optional in the union type
-/// - The appropriate Rust type for each field
-///
-/// # Arguments
-///
-/// * `config` - The project configuration
-///
-/// # Returns
-///
-/// A BTreeMap (for consistent ordering) mapping secret names to their FieldInfo
-///
-/// # Algorithm
-///
-/// 1. Collect all unique secret names from all profiles
-/// 2. For each secret, determine if it's optional across profiles
-/// 3. Generate appropriate type (String or Option<String>)
-/// 4. Create FieldInfo with all metadata needed for code generation
-fn analyze_field_types(config: &Config) -> BTreeMap<String, FieldInfo> {
-    let mut field_info = BTreeMap::new();
-
-    // Collect all unique secrets across all profiles
-    for profile_config in config.profiles.values() {
-        for secret_name in profile_config.secrets.keys() {
-            field_info.entry(secret_name.clone()).or_insert_with(|| {
-                let is_optional = is_field_optional_across_profiles(secret_name, config);
-                let as_path = is_field_as_path(secret_name, config);
-                let field_type = match (is_optional, as_path) {
-                    (true, true) => quote! { Option<std::path::PathBuf> },
-                    (true, false) => quote! { Option<String> },
-                    (false, true) => quote! { std::path::PathBuf },
-                    (false, false) => quote! { String },
-                };
-                FieldInfo::new(secret_name.clone(), field_type, is_optional, as_path)
-            });
-        }
-    }
-
-    field_info
+/// The IR already determined the union field set and each field's
+/// optionality/as_path; this just maps them to `FieldInfo`, keyed and ordered
+/// by name (the IR union is pre-sorted).
+fn union_field_info(ir: &CodegenIr) -> BTreeMap<String, FieldInfo> {
+    ir.union
+        .iter()
+        .map(|field| (field.name.clone(), FieldInfo::from_ir(field)))
+        .collect()
 }
 
-/// Get normalized profile variants for enum generation.
+/// Profile variants for enum generation, taken from the shared IR.
 ///
-/// Converts profile names into ProfileVariant structs, handling the special
-/// case of empty profiles (generates a "Default" variant).
-///
-/// # Arguments
-///
-/// * `profiles` - Set of profile names from the configuration
-///
-/// # Returns
-///
-/// A sorted vector of ProfileVariant structs
-///
-/// # Special Cases
-///
-/// - Empty profiles → returns vec![ProfileVariant("default", "Default")]
-/// - Otherwise → sorted list of profile variants
-fn get_profile_variants(profiles: &HashSet<String>) -> Vec<ProfileVariant> {
-    if profiles.is_empty() {
-        vec![ProfileVariant::new("default".to_string())]
-    } else {
-        let mut variants: Vec<_> = profiles
-            .iter()
-            .map(|name| ProfileVariant::new(name.clone()))
-            .collect();
-        variants.sort_by(|a, b| a.name.cmp(&b.name));
-        variants
-    }
+/// The IR's profile list is already sorted and already substitutes a single
+/// `default` profile when the manifest declares none, so this is a direct map.
+fn profile_variants_from_ir(ir: &CodegenIr) -> Vec<ProfileVariant> {
+    ir.profiles
+        .iter()
+        .map(|name| ProfileVariant::new(name.clone()))
+        .collect()
 }
 
 // ===== Profile Generation Module =====
@@ -953,51 +851,27 @@ mod secret_spec_generation {
     ///
     /// - Empty profiles → generates a Default variant with all fields
     /// - Each profile → generates variant with profile-specific fields
-    pub fn generate_profile_enum_variants(
-        config: &Config,
-        field_info: &BTreeMap<String, FieldInfo>,
-        variants: &[ProfileVariant],
-    ) -> Vec<proc_macro2::TokenStream> {
-        if config.profiles.is_empty() {
-            // If no profiles, create a Default variant with all fields
-            let fields = field_info.values().map(|info| info.generate_struct_field());
-            vec![quote! {
-                Default {
-                    #(#fields,)*
+    pub fn generate_profile_enum_variants(ir: &CodegenIr) -> Vec<proc_macro2::TokenStream> {
+        // The IR's per-profile field sets already handle the empty-profiles case
+        // (a single `default` profile carrying the union), so there is no special
+        // branch here: one variant per IR profile, with that profile's exact
+        // (raw, non-merged) fields.
+        ir.profile_fields
+            .iter()
+            .map(|profile| {
+                let variant_ident = ProfileVariant::new(profile.name.clone()).as_ident();
+                let fields = profile.fields.iter().map(|field| {
+                    let field_name = field_name_ident(&field.name);
+                    let field_type = ir_field_type(field);
+                    quote! { #field_name: #field_type }
+                });
+                quote! {
+                    #variant_ident {
+                        #(#fields,)*
+                    }
                 }
-            }]
-        } else {
-            variants
-                .iter()
-                .filter_map(|variant| {
-                    config.profiles.get(&variant.name).map(|profile_config| {
-                        let variant_ident = variant.as_ident();
-                        let fields =
-                            profile_config
-                                .secrets
-                                .iter()
-                                .map(|(secret_name, secret_config)| {
-                                    let field_name = field_name_ident(secret_name);
-                                    let is_optional = is_secret_optional(secret_config);
-                                    let as_path = secret_config.as_path.unwrap_or(false);
-                                    let field_type = match (is_optional, as_path) {
-                                        (true, true) => quote! { Option<std::path::PathBuf> },
-                                        (true, false) => quote! { Option<String> },
-                                        (false, true) => quote! { std::path::PathBuf },
-                                        (false, false) => quote! { String },
-                                    };
-                                    quote! { #field_name: #field_type }
-                                });
-
-                        quote! {
-                            #variant_ident {
-                                #(#fields,)*
-                            }
-                        }
-                    })
-                })
-                .collect()
-        }
+            })
+            .collect()
     }
 
     /// Generate load_profile match arms.
@@ -1025,52 +899,29 @@ mod secret_spec_generation {
     ///     api_key: secrets.get("API_KEY").cloned(),
     /// })
     /// ```
-    pub fn generate_load_profile_arms(
-        config: &Config,
-        field_info: &BTreeMap<String, FieldInfo>,
-        variants: &[ProfileVariant],
-    ) -> Vec<proc_macro2::TokenStream> {
-        if config.profiles.is_empty() {
-            // Handle Default profile
-            let assignments = field_info
-                .values()
-                .map(|info| info.generate_assignment(quote! { secrets }));
-
-            vec![quote! {
-                Profile::Default => Ok(SecretSpecProfile::Default {
-                    #(#assignments,)*
-                })
-            }]
-        } else {
-            variants
-                .iter()
-                .filter_map(|variant| {
-                    config.profiles.get(&variant.name).map(|profile_config| {
-                        let variant_ident = variant.as_ident();
-                        let assignments =
-                            profile_config
-                                .secrets
-                                .iter()
-                                .map(|(secret_name, secret_config)| {
-                                    let field_name = field_name_ident(secret_name);
-                                    generate_secret_assignment(
-                                        &field_name,
-                                        secret_name,
-                                        quote! { secrets },
-                                        is_secret_optional(secret_config),
-                                        secret_config.as_path.unwrap_or(false),
-                                    )
-                                });
-
-                        quote! {
-                            Profile::#variant_ident => Ok(SecretSpecProfile::#variant_ident {
-                                #(#assignments,)*
-                            })
-                        }
+    pub fn generate_load_profile_arms(ir: &CodegenIr) -> Vec<proc_macro2::TokenStream> {
+        // One arm per IR profile, assigning that profile's exact fields. The
+        // empty-profiles case is already a single `default` profile in the IR.
+        ir.profile_fields
+            .iter()
+            .map(|profile| {
+                let variant_ident = ProfileVariant::new(profile.name.clone()).as_ident();
+                let assignments = profile.fields.iter().map(|field| {
+                    generate_secret_assignment(
+                        &field_name_ident(&field.name),
+                        &field.name,
+                        quote! { secrets },
+                        field.optional,
+                        field.as_path,
+                    )
+                });
+                quote! {
+                    Profile::#variant_ident => Ok(SecretSpecProfile::#variant_ident {
+                        #(#assignments,)*
                     })
-                })
-                .collect()
-        }
+                }
+            })
+            .collect()
     }
 
     /// Generate the shared load_internal implementation.
@@ -1507,12 +1358,15 @@ mod builder_generation {
 /// 5. Generate builder pattern implementation
 /// 6. Combine all components with necessary imports
 fn generate_secret_spec_code(config: Config) -> proc_macro2::TokenStream {
-    // Collect all profiles
-    let all_profiles: HashSet<String> = config.profiles.keys().cloned().collect();
-    let profile_variants = get_profile_variants(&all_profiles);
+    // Reduce the manifest to the shared codegen IR once. Every typing decision
+    // (union vs per-profile fields, optionality, as_path, profile list) comes
+    // from here, so this macro and the other-language emitters cannot drift.
+    let ir = build_ir(&config);
 
-    // Analyze field types
-    let field_info = analyze_field_types(&config);
+    let profile_variants = profile_variants_from_ir(&ir);
+
+    // Union struct fields.
+    let field_info = union_field_info(&ir);
 
     // Generate field assignments for load()
     let load_assignments: Vec<_> = field_info
@@ -1531,15 +1385,10 @@ fn generate_secret_spec_code(config: Config) -> proc_macro2::TokenStream {
 
     // Generate SecretSpec components
     let secret_spec_struct = secret_spec_generation::generate_struct(&field_info);
-    let profile_enum_variants = secret_spec_generation::generate_profile_enum_variants(
-        &config,
-        &field_info,
-        &profile_variants,
-    );
+    let profile_enum_variants = secret_spec_generation::generate_profile_enum_variants(&ir);
     let secret_spec_profile_enum =
         secret_spec_generation::generate_profile_enum(&profile_enum_variants);
-    let load_profile_arms =
-        secret_spec_generation::generate_load_profile_arms(&config, &field_info, &profile_variants);
+    let load_profile_arms = secret_spec_generation::generate_load_profile_arms(&ir);
     let load_internal = secret_spec_generation::generate_load_internal();
     let secret_spec_impl =
         secret_spec_generation::generate_impl(&load_assignments, env_setters, &field_info);
@@ -1573,33 +1422,6 @@ fn generate_secret_spec_code(config: Config) -> proc_macro2::TokenStream {
         #load_internal
         #builder_code
         #secret_spec_impl
-    }
-}
-
-/// Capitalize the first character of a string.
-///
-/// Used to convert profile names to enum variant names.
-///
-/// # Arguments
-///
-/// * `s` - The string to capitalize
-///
-/// # Returns
-///
-/// A new string with the first character capitalized
-///
-/// # Examples
-///
-/// ```ignore
-/// assert_eq!(capitalize_first("production"), "Production");
-/// assert_eq!(capitalize_first("test_env"), "Test_env");
-/// assert_eq!(capitalize_first(""), "");
-/// ```
-fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
     }
 }
 

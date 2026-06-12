@@ -1,0 +1,8 @@
+# Single source of truth for the Rust version. Consumed by:
+#   - devenv (languages.rust.toolchainFile in devenv.nix), covering local
+#     shells and the devenv-based workflows
+#   - rustup on the native CI runners (artifact workflows that cannot use
+#     devenv because their outputs must not link the Nix store)
+# Pinned to >= 1.92 for the detect-coding-agent dependency's MSRV.
+[toolchain]
+channel = "1.92.0"

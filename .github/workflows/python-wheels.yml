@@ -1,0 +1,100 @@
+name: "Python wheels"
+
+# Builds portable wheels for the Python SDK that bundle the secretspec-ffi
+# cdylib, and publishes them to PyPI on a version tag.
+#
+# Linux wheels are built inside a manylinux container (old glibc) and repaired
+# with auditwheel so the bundled cdylib's system deps (notably libdbus from the
+# keyring provider) are vendored. macOS/Windows build natively.
+#
+# The build/repair pipeline is validated in CI; the publish job additionally
+# needs PyPI Trusted Publishing configured for this repo's "pypi" environment
+# before the first version tag.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - v**
+  # PR runs are scoped to changes in the Python SDK or this workflow. Core
+  # resolver and FFI changes are verified on PRs by the devenv-based test.yml,
+  # sdks.yml, and ffi-build.yml; the full matrix here still runs on tags and
+  # manual dispatch.
+  pull_request:
+    paths:
+      - "secretspec-py/**"
+      - ".github/workflows/python-wheels.yml"
+
+jobs:
+  linux:
+    name: wheel ${{ matrix.arch }} (manylinux)
+    runs-on: ${{ matrix.runner }}
+    container: quay.io/pypa/manylinux_2_28_${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-latest }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install build deps (rust, dbus)
+        run: |
+          yum install -y dbus-devel
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # Installs the version pinned in rust-toolchain.toml
+          "$HOME/.cargo/bin/rustup" toolchain install
+      - name: Build wheel and repair to manylinux
+        run: |
+          bash secretspec-py/scripts/stage-cdylib.sh
+          python3.11 -m build --wheel --outdir dist_raw secretspec-py
+          auditwheel repair --wheel-dir wheelhouse dist_raw/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+
+  native:
+    name: wheel ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: macos-aarch64, runner: macos-latest }
+          - { target: windows-x86_64, runner: windows-latest }
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build wheel
+        shell: bash
+        run: |
+          python -m pip install --upgrade build
+          bash secretspec-py/scripts/stage-cdylib.sh
+          ( cd secretspec-py && python -m build --wheel --outdir "$GITHUB_WORKSPACE/wheelhouse" )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: wheelhouse/*.whl
+
+  publish:
+    name: publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, native]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # PyPI Trusted Publishing (OIDC), no token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

@@ -1,0 +1,3 @@
+# Per-platform cdylibs are staged here for local `-tags embed_lib` builds and
+# never committed (see .gitattributes / RELEASE.md).
+lib/

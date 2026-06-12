@@ -1,0 +1,85 @@
+name: "Go embedded lib"
+
+# Builds the per-platform cdylib the Go SDK embeds (go:embed, behind the
+# `embed_lib` build tag) and verifies the embedded build works with no
+# SECRETSPEC_FFI_LIB set. The libraries are uploaded as artifacts and attached to
+# GitHub releases for users who want a self-contained `-tags embed_lib` build;
+# they are never committed to the repo (the Go module proxy does not carry binary
+# assets — see RELEASE.md).
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - v**
+  # PR runs are scoped to changes in the Go SDK or this workflow. Core
+  # resolver and FFI changes are verified on PRs by the devenv-based test.yml,
+  # sdks.yml, and ffi-build.yml; the full matrix here still runs on tags and
+  # manual dispatch.
+  pull_request:
+    paths:
+      - "secretspec-go/**"
+      - ".github/workflows/go-embed.yml"
+
+jobs:
+  embed:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux_amd64, runner: ubuntu-latest }
+          - { target: linux_arm64, runner: ubuntu-24.04-arm }
+          - { target: darwin_arm64, runner: macos-latest }
+          - { target: windows_amd64, runner: windows-latest }
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux system dependencies (dbus for keyring)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Stage the embedded cdylib
+        shell: bash
+        run: bash secretspec-go/scripts/stage-cdylib.sh
+
+      - name: Build and smoke test the embedded SDK (no SECRETSPEC_FFI_LIB)
+        shell: bash
+        run: |
+          smoke="$RUNNER_TEMP/embedsmoke"
+          mkdir -p "$smoke"
+          cat > "$smoke/main.go" <<'EOF'
+          package main
+          import (
+            "fmt"
+            secretspec "github.com/cachix/secretspec/secretspec-go"
+          )
+          func main() {
+            v, err := secretspec.ABIVersion()
+            if err != nil { panic(err) }
+            fmt.Println("abi", v)
+          }
+          EOF
+          cat > "$smoke/go.mod" <<EOF
+          module example.com/embedsmoke
+          go 1.23
+          require github.com/cachix/secretspec/secretspec-go v0.0.0
+          replace github.com/cachix/secretspec/secretspec-go => $GITHUB_WORKSPACE/secretspec-go
+          EOF
+          cd "$smoke"
+          go mod tidy
+          unset SECRETSPEC_FFI_LIB
+          go run -tags embed_lib .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-embed-${{ matrix.target }}
+          path: secretspec-go/lib/*

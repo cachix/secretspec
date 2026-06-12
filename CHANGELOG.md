@@ -5,6 +5,266 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- New `secretspec` Haskell SDK (`secretspec-hs`): a thin client over the
+  `secretspec-ffi` C ABI, linked at build time via the GHC FFI, so Haskell apps
+  inherit every provider with no Haskell-side resolution logic. Mirrors the
+  derive crate's vocabulary (`builder` with `withProvider`/`withProfile`/
+  `withReason`/`withNoValues`, then `load`/`report`), returning a `Resolved`
+  (`get`/`fields`/`fieldsJson`/`setAsEnv`/`close`) or a value-free `Report`. A
+  missing required secret throws `MissingRequiredError`; other failures throw
+  `SecretSpecError` with a stable `errorKind`. `as_path` secrets come back as a
+  readable file path. Wired into the cross-language conformance suite (all three
+  dimensions), the `schema -> quicktype -> typed` codegen e2e test (using
+  quicktype's Haskell target), and a `Haskell SDK` CI workflow that also publishes
+  to Hackage on a version tag. The `secretspec-ffi` `cdylib` is linked at build
+  time (`--extra-lib-dirs`) and must be on the runtime loader path.
+- New cross-language conformance suite (`conformance/`): shared fixtures
+  (manifest + `.env` + a canonical `expected.json`) that every SDK resolves and
+  must reduce to the identical canonical result, guaranteeing the Python, Go,
+  Ruby, and Node SDKs agree. Each SDK runs the fixtures inside its own native
+  test runner. For `as_path` secrets the canonical value is the materialized
+  file's contents, so the comparison is deterministic across languages.
+- New `secretspec::resolve_json(&str) -> String`: the shared JSON-in/JSON-out
+  resolution boundary (request to response envelope), so every native binding
+  (the `secretspec-ffi` C ABI and the napi-rs Node addon) defines the envelope
+  contract in exactly one place. `secretspec-ffi` is now a thin wrapper over it.
+- New `secretspec` Node.js / TypeScript SDK (`secretspec-node`): a thin wrapper
+  over a napi-rs native addon that embeds the resolver, so Node apps inherit
+  every provider with no JS-side resolution logic. The native addon is built from
+  the Rust core with `scripts/build-addon.sh`; prebuilt per-platform npm packages
+  are a follow-up. Mirrors the derive crate's vocabulary
+  (`SecretSpec.builder().withProvider(...).withProfile(...).withReason(...).load()`
+  returning a `Resolved` with `provider`/`profile`/`secrets`, plus `setAsEnv()`).
+  A missing required secret throws `MissingRequiredError`; other failures throw
+  `SecretSpecError` with a stable `.kind`. `as_path` secrets are returned as a
+  readable file path. TypeScript declarations ship in `index.d.ts`. The library
+  is found via `SECRETSPEC_FFI_LIB` or a Cargo target directory.
+- New `secretspec-rb` Ruby SDK: a thin client over the `secretspec-ffi` C ABI,
+  loaded at runtime via the stdlib Fiddle (dlopen, no native gem), so Ruby apps
+  inherit every provider with no Ruby-side resolution logic. Mirrors the derive
+  crate's vocabulary (`Secretspec::SecretSpec.builder.with_provider(...).with_profile(...).with_reason(...).load`
+  returning a `Resolved` with `#provider`/`#profile`/`#secrets`, plus
+  `set_as_env!`). A missing required secret raises
+  `Secretspec::MissingRequiredError`; other failures raise `Secretspec::Error`
+  with a stable `#kind`. `as_path` secrets are returned as a readable file path.
+  The library is found via `SECRETSPEC_FFI_LIB` or a Cargo target directory.
+  `devenv.nix` now provides Ruby.
+- New `secretspec-go` Go SDK: a thin client over the `secretspec-ffi` C ABI,
+  loaded at runtime via purego (dlopen, no cgo), so Go apps inherit every
+  provider with no Go-side resolution logic. Mirrors the derive crate's
+  vocabulary (`secretspec.New().WithProvider(...).WithProfile(...).WithReason(...).Load()`
+  returning a `*Resolved` with `Provider`/`Profile`/`Secrets`, plus `SetAsEnv()`).
+  A missing required secret returns `*MissingRequiredError`; other failures
+  return `*Error` with a stable `.Kind`. `as_path` secrets are returned as a
+  readable file path. The library is found via `SECRETSPEC_FFI_LIB` or a Cargo
+  target directory. `devenv.nix` now provides Go.
+- New `secretspec-py` Python SDK: a thin client over the `secretspec-ffi` C ABI
+  (loaded via cffi), so Python apps inherit every provider with no Python-side
+  resolution logic. Mirrors the derive crate's vocabulary
+  (`SecretSpec.builder().with_provider(...).with_profile(...).with_reason(...).load()`
+  returning a `Resolved` with `.secrets`/`.provider`/`.profile`, plus
+  `set_as_env()`). A missing required secret raises `MissingRequiredError`; other
+  failures raise `SecretSpecError` with a stable `.kind`. `as_path` secrets are
+  returned as a readable file path. The native library is found via
+  `SECRETSPEC_FFI_LIB`, a wheel-bundled copy, or a Cargo target directory.
+  `devenv.nix` now provides Python, cffi, pytest, and maturin.
+- New `secretspec::codegen` module: a shared, language-neutral intermediate
+  representation (IR) that reduces a manifest to the typed-accessor decisions
+  (union vs per-profile field sets, optionality, `as_path`, profile list). It is
+  the single source of truth those decisions are computed in, so the Rust derive
+  macro and the JSON Schema emitter cannot drift. `build_ir(&Config) -> CodegenIr`.
+- New `secretspec schema` command: emits a single-root JSON Schema for the
+  manifest's typed shape (the union `SecretSpec` by default, or a profile's
+  fields with `--profile`). Rather than hand-write a typed-accessor generator per
+  language, feed this to [quicktype](https://quicktype.io) (`--top-level
+  SecretSpec`) to generate an idiomatic type and deserializer for any language,
+  then hand the deserializer the flat `{SECRET_NAME: value}` map from each SDK's
+  new `fields()` helper (e.g. in Python, `SecretSpec.from_dict(resolved.fields())`).
+  This keeps the per-language maintenance to the small `fields()` method.
+  `fields()` (and a JSON variant for Go/Node) is available on the resolved result
+  in every SDK, and the full `schema -> quicktype -> typed` pipeline is e2e-tested
+  in all five SDK suites. Value-free: `schema` reads only the manifest.
+- New `Secrets::report()` and a `mode: "report"` request on the shared
+  `resolve_json` boundary: a value-free `ResolutionReport` (per-secret status and
+  provenance, never a value) that, unlike resolve, reports a missing required
+  secret as a `missing_required` status instead of failing the whole call. This
+  is the inventory/preflight view the CLI already exposes as
+  `check --json`/`--explain`, now reachable from every language SDK via a
+  `report()` builder method (Node also has `reportAsync()`) returning a `Report`
+  of `SecretReport` entries. Exercised by a new `report` conformance dimension so
+  the four SDKs stay byte-identical.
+- Every language SDK gains a cleanup affordance for the temp files that back
+  `as_path` secrets, which the resolver persists (mode 0400) so their paths stay
+  valid after resolve returns: Go `Resolved.Close()`, Python `Resolved.close()`
+  (and `with` context-manager support), Ruby `Resolved#close` (and a block form
+  of `Builder#load` that closes automatically), and Node `Resolved.dispose()`
+  (plus `Symbol.dispose` for `using`). Previously a long-running SDK consumer
+  that resolved `as_path` secrets in a loop leaked one owner-readable file per
+  resolve into the temp dir with no way to clean them up.
+
+### Changed
+- The `secretspec-derive` macro now computes all of its typing decisions through
+  the shared `secretspec::codegen` IR instead of its own duplicated logic. The
+  generated `SecretSpec`/`SecretSpecProfile`/`Profile` API and builder are
+  unchanged (verified by the existing integration and trybuild tests); this
+  guarantees the macro and the future other-language emitters stay consistent.
+- New `secretspec-ffi` crate exposing a deliberately narrow C ABI for resolving
+  secrets from any language. The entire native surface is three functions
+  (`secretspec_resolve`, `secretspec_free`, `secretspec_abi_version`); all
+  richness lives in the versioned JSON contract, so language bindings stay thin.
+  `secretspec_resolve` takes a JSON request (`path`, `provider`, `profile`,
+  `reason`, `no_values`, all optional) and returns a JSON envelope that
+  separates transport failure (`{"ok": false, "error": {...}}`) from a
+  successful resolution (`{"ok": true, "response": {...}}`), which still reports
+  domain results like `missing_required` in its own fields. Panics are caught at
+  the boundary; returned strings are owned by the caller and freed with
+  `secretspec_free`. A C header ships at `secretspec-ffi/include/secretspec.h`.
+  `SecretSpecError::kind()` is now public so SDKs can do typed error handling.
+- `Secrets::resolve()` resolves every declared secret into a versioned,
+  value-carrying `ResolveResponse`: the SDK boundary other-language clients
+  consume over the `secretspec-ffi` C ABI. Each entry reports the value (or,
+  for `as_path` secrets, the path to a persisted temp file), its `source`
+  (`provider`, `generated`, `default`), and the serving provider's
+  credential-free URI. When a required secret is missing the resolution fails
+  with an empty `secrets` object and a populated `missing_required` list,
+  mirroring the derive crate's `load()`. The new `ResolveResponse`,
+  `ResolvedSecret`, and `ResolvedSource` types are public; the payload's JSON
+  Schema is committed at `schema/resolve-response.schema.json`. The contract is
+  deliberately not exposed as a CLI subcommand: `check` never prints a value,
+  `get` prints exactly one, and bulk value extraction stays in-process behind
+  the C ABI.
+- `secretspec check --json` and `secretspec check --explain` surface a
+  value-free resolution report describing how every declared secret resolved
+  for the active profile: its status (`resolved`, `missing_required`,
+  `missing_optional`), whether the value came from a provider (with the serving
+  provider's credential-free URI), a generator, or a committed default, and
+  whether it is exposed `as_path`. Secret values are never included. Both flags
+  skip the interactive prompt-for-missing flow and exit non-zero when a required
+  secret is missing, so CI can gate on them. `--json` emits a versioned
+  (`schema_version`) machine-readable object; its canonical JSON Schema is
+  committed at `schema/resolution-report.schema.json`. The same report is
+  available to the Rust SDK via `ValidatedSecrets::report()` /
+  `ValidationErrors::report()`, returning the new public `ResolutionReport`,
+  `SecretResolution`, and `ResolutionStatus` types.
+
+### Fixed
+- Provider specifications containing Windows drive-letter paths (e.g.
+  `dotenv://C:\Users\me\.env`) now parse correctly. Previously `C:` was
+  interpreted as a URL `host:port` pair and rejected with "invalid port
+  number"; the path is now carried in the URL path component (with
+  forward-slash separators, which Windows accepts) and the dotenv provider
+  strips the URL's leading slash from drive-letter paths.
+- The value-free resolution surfaces — `Secrets::report()`, `resolve_without_values()`
+  / the FFI `{"no_values": true}` and `{"mode": "report"}` requests, and
+  `check --json`/`--explain` (now routed through `report()`) — are side-effect-free.
+  Previously they ran the full resolution, which **minted and stored a brand-new
+  secret in the provider** for any declared `generate` secret that was not yet
+  set (and failed outright on a read-only provider like `env://`). A read-only
+  preflight no longer writes to a provider: a generatable-but-absent secret is
+  reported as it *would* resolve (`generated`) without being created.
+- The value-free path no longer writes `as_path` secrets to a temp file. It used
+  to materialize every secret to disk (a 0400 file in the temp dir) only to delete
+  it on drop, contrary to its documented "leaves no temp file behind" contract;
+  a `no_values` resolve now never touches disk.
+- A per-secret provider chain whose **primary provider errors** (e.g. an
+  unreachable vault) and whose fallback chain has no value now surfaces that
+  provider error, exactly as a single-provider failure already did, instead of
+  silently reporting the secret as `missing_required`. Machine consumers
+  (`check --json`, the SDKs) can again distinguish a provider outage from an
+  unprovisioned secret.
+- The Haskell SDK no longer leaks the native (secret-bearing) response buffer
+  when an asynchronous exception — e.g. a `System.Timeout.timeout` around
+  `load`/`report` — arrives mid-resolve: the free is now installed under `mask`
+  and runs via `finally`.
+- The Go SDK no longer panics when the loaded library is missing a symbol (an
+  incompatible/old cdylib): `purego.RegisterLibFunc` panics are recovered and
+  returned as a `load` `*Error`, instead of escaping `sync.Once` and leaving the
+  loader permanently poisoned with nil function pointers.
+- A zero-value Go `Builder` (`var b secretspec.Builder` / `&Builder{}`, not via
+  `New()`) no longer panics with a nil-map write in its `WithX` setters; the
+  request map is initialized lazily.
+- The Go SDK extracts an embedded (`-tags embed_lib`) cdylib into a per-user,
+  owner-only cache directory (under `os.UserCacheDir()`) and verifies the
+  directory is private before use, instead of a predictably-named directory under
+  the shared system temp dir. This closes a local-attacker file-swap (TOCTOU)
+  that could run attacker code in the process on a shared host, and avoids
+  `noexec` temp mounts. An embedded git-LFS pointer (from a botched release) is
+  now rejected with a clear error rather than fed to `dlopen`. Distribution
+  switched to the system-library model (provide the cdylib via
+  `SECRETSPEC_FFI_LIB`, or vendor it for an `embed_lib` build); git-LFS + module
+  proxy cannot ship a working library, so it is no longer prescribed.
+- The `provider` field of the resolution report (`check --json`/`--explain`) and
+  the resolve response (`resolve --json`, every SDK's `response.provider`) is now
+  run through `redact_uri_strict`, so a user-authored provider alias or
+  `--provider` override that embeds a credential
+  (`vault+token:s3cr3t@host`, `vault://host?token=...`) no longer leaks that
+  credential into machine-readable output or across the FFI boundary. The
+  per-secret `source_provider` was already credential-free; this aligns the
+  top-level field with it.
+- The Node SDK gains `Builder.loadAsync()` (backed by a new `resolveAsync` napi
+  binding that runs on the libuv threadpool), so resolving from a network-backed
+  provider no longer blocks the Node event loop. The synchronous `load()` is
+  unchanged.
+- The Go, Python, and Ruby SDKs now load the most recently built `cdylib` when
+  walking up to a Cargo `target/` directory, instead of always preferring
+  `release`, so a stale release build no longer shadows the debug build a
+  developer just produced.
+- `secretspec::resolve_json` now catches panics itself, so both native
+  boundaries that funnel through it (the `secretspec-ffi` C ABI and the napi-rs
+  Node addon) return the same `{"ok": false, "error": {...}}` envelope on an
+  internal panic. Previously only the C ABI caught panics, so a panic in the
+  Node addon surfaced as an opaque thrown error instead of the documented
+  envelope.
+- A `no_values` resolution (every SDK's no-values path) no longer copies
+  secret values into the response or
+  persists `as_path` temp files. It now routes through a new
+  `Secrets::resolve_without_values`, which never calls `expose_secret` and never
+  keeps a temp file, so no secret byte crosses the boundary and an `as_path`
+  secret leaves nothing on disk. Previously the resolver fully materialized every
+  value (and persisted every `as_path` temp file) and only then stripped them.
+- The Go SDK's `Resolved.Fields()`/`FieldsJSON()` now emit JSON `null` for a
+  value-less secret (e.g. under `no_values`) instead of the empty string `""`,
+  matching the `null` the Python, Ruby, and Node SDKs already emit; `Fields()`
+  now returns `map[string]*string` and a new `Usable()` accessor distinguishes an
+  absent value from an empty one. Node's `index.d.ts` types `fields()` as
+  `Record<string, string | null>` (was `Record<string, string>`, which a
+  `no_values` result violated). A new `no_values` conformance dimension asserts
+  all five SDKs produce the identical all-null fields map.
+- A per-profile JSON Schema (`secretspec schema --profile <p>`) now allows
+  additional properties. Resolving with a profile returns the
+  profile's own secrets plus those inherited from the `default` profile (the
+  runtime resolver merges them; the per-profile type intentionally does not,
+  matching the derive macro), so a strict quicktype-generated deserializer would
+  otherwise reject a valid resolve result over the inherited keys. The union
+  schema stays exhaustive (`additionalProperties: false`).
+- The SDKs no longer export an empty or
+  literal-`"null"` environment variable for a secret with no usable value
+  (e.g. under `no_values`): the Go, Node, and Ruby SDKs now skip such secrets in
+  `set_as_env`, matching Python. Ruby previously *deleted* the variable
+  (`ENV[name] = nil`); Node set the string `"null"`; Go set `""`.
+- The Go, Python, Ruby, and Node SDKs now validate the response
+  `schema_version` against the version they were built for and surface a clear
+  error on mismatch, instead of silently misparsing a skewed `secretspec-ffi`
+  library. They also no longer panic / raise an opaque error when a successful
+  envelope is missing its `response` object.
+- The Go SDK extracts the embedded `cdylib` into an owner-only (`0o700`) temp
+  directory and re-extracts when the cached file's content hash (not just its
+  size) differs, closing a predictable-path load and a stale-file reuse.
+
+### Changed
+- `secretspec::codegen` exposes a single `capitalize` helper now shared by both
+  the JSON Schema emitter and the `secretspec-derive` macro (previously a
+  byte-identical copy in each), so profile type-name casing can never drift.
+- `secretspec::codegen::build_ir` computes the union field set in one pass over
+  all profiles instead of re-scanning every profile per field, and
+  `validate`/`resolve` resolve each secret's merged config once per pass instead
+  of twice.
+- The Python, Ruby, and Node SDK builders gained `with_no_values` /
+  `withNoValues` for parity with the Go SDK and the underlying request contract.
+
 ## [0.12.0] - 2026-06-08
 
 ### Added

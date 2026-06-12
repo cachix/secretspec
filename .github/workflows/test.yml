@@ -23,3 +23,16 @@ jobs:
 
     - name: Build the devenv shell and run any pre-commit hooks
       run: devenv test
+
+  # Windows runners can't run Nix/devenv, so the suite runs here natively via
+  # rustup + cargo. This exists specifically to catch Windows-only path handling
+  # regressions (e.g. config discovery and relative `-f` paths, issue #59), which
+  # the Ubuntu/macOS devenv job above can never observe.
+  windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v5
+    - name: Install Rust
+      run: rustup toolchain install stable --profile minimal
+    - name: cargo test
+      run: cargo test --all

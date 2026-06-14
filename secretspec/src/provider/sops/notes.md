@@ -1,0 +1,42 @@
+# SOPS Provider Notes
+
+## Environment Variables mentioned in SOPS documentation
+
+| Name                          | Addressed | Comments |
+| ----------------------------- | --------- | -------- |
+| AES_GCM                       | [ ]       |          |
+| AWS_ACCESS_KEY_ID             | [ ]       |          |
+| AWS_SECRET_ACCESS_KEY         | [ ]       |          |
+| AWS_SECRET_KEY                | [ ]       |          |
+| AZURE_CLIENT_ID               | [ ]       |          |
+| AZURE_CLIENT_SECRET           | [ ]       |          |
+| AZURE_TENANT_ID               | [ ]       |          |
+| ENCRYPT_DECRYPT               | [ ]       |          |
+| GOOGLE_OAUTH_ACCESS_TOKEN     | [ ]       |          |
+| HUAWEICLOUD_SDK_AK            | [ ]       |          |
+| HUAWEICLOUD_SDK_PROJECT_ID    | [ ]       |          |
+| HUAWEICLOUD_SDK_SK            | [ ]       |          |
+| SOPS_AGE_KEY                  | [ ]       |          |
+| SOPS_AGE_KEY_CMD              | [ ]       |          |
+| SOPS_AGE_KEY_FILE             | [ ]       |          |
+| SOPS_AGE_RECIPIENT            | [ ]       |          |
+| SOPS_AGE_RECIPIENTS           | [ ]       |          |
+| SOPS_AGE_SSH_PRIVATE_KEY_CMD  | [ ]       |          |
+| SOPS_AGE_SSH_PRIVATE_KEY_FILE | [ ]       |          |
+| SOPS_AZURE_KEYVAULT_URLS      | [ ]       |          |
+| SOPS_CONFIG                   | [ ]       |          |
+| SOPS_DECRYPTION_ORDER         | [ ]       |          |
+| SOPS_EDITOR                   | [ ]       |          |
+| SOPS_ENABLE_LOCAL_KEYSERVICE  | [ ]       |          |
+| SOPS_GCP_KMS_CLIENT_TYPE      | [ ]       |          |
+| SOPS_GCP_KMS_ENDPOINT         | [ ]       |          |
+| SOPS_GCP_KMS_IDS              | [ ]       |          |
+| SOPS_GCP_KMS_UNIVERSE_DOMAIN  | [ ]       |          |
+| SOPS_GPG_EXEC                 | [ ]       |          |
+| SOPS_HC_VAULT_ALLOWLIST       | [ ]       |          |
+| SOPS_HUAWEICLOUD_KMS_IDS      | [ ]       |          |
+| SOPS_KEYSERVICE               | [ ]       |          |
+| SOPS_KMS_ARN                  | [ ]       |          |
+| SOPS_PGP_FP                   | [ ]       |          |
+| VAULT_ADDR                    | [ ]       |          |
+| VAULT_TOKEN                   | [ ]       |          |

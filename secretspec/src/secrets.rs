@@ -91,6 +91,12 @@ fn find_config_file_from(start: PathBuf) -> Result<PathBuf> {
 pub struct Secrets {
     /// The project-specific configuration
     config: Config,
+    /// Directory containing the loaded `secretspec.toml`. Relative filesystem
+    /// paths held by file-backed providers (e.g. `dotenv`) are resolved against
+    /// this rather than the process's current working directory, so running
+    /// from a subdirectory with `--file ../secretspec.toml` still finds the
+    /// `.env` files next to the config.
+    config_dir: PathBuf,
     /// Optional global user configuration
     global_config: Option<GlobalConfig>,
     /// The provider to use (if set via builder)
@@ -242,6 +248,7 @@ impl Secrets {
     ) -> Self {
         Self {
             config,
+            config_dir: PathBuf::from("."),
             global_config,
             provider,
             profile,
@@ -300,9 +307,20 @@ impl Secrets {
                 .and_then(|g| g.audit.clone())
                 .unwrap_or_default(),
         );
+        // Directory the config lives in, used to resolve relative provider
+        // paths (e.g. `dotenv:.config/.env`) against the project root instead
+        // of the current working directory. Kept logical (not canonicalized) so
+        // a relative `--file` stays relative to the CWD and Windows extended
+        // (`\\?\`) prefixes are never introduced.
+        let config_dir = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+
         Ok(Self {
             require_reason: project_config.project.require_reason.unwrap_or_default(),
             config: project_config,
+            config_dir,
             global_config,
             provider: None,
             profile: None,
@@ -409,7 +427,8 @@ impl Secrets {
     /// All provider construction in this module goes through here so that the
     /// reason set via [`Secrets::with_reason`] reaches every provider instance.
     fn build_provider(&self, spec: String) -> Result<Box<dyn ProviderTrait>> {
-        let provider = Box::<dyn ProviderTrait>::try_from(spec)?;
+        let mut provider = Box::<dyn ProviderTrait>::try_from(spec)?;
+        provider.with_base_dir(&self.config_dir);
         provider.set_reason(self.reason.clone());
         Ok(provider)
     }

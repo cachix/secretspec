@@ -180,6 +180,19 @@ impl Provider for DotEnvProvider {
         }
     }
 
+    /// Resolves a relative `.env` path against the project root (the directory
+    /// containing `secretspec.toml`) rather than the current working directory.
+    ///
+    /// Without this, `secretspec run --file ../secretspec.toml` invoked from a
+    /// subdirectory would look for the `.env` file under the subdirectory
+    /// instead of next to the config that referenced it. Absolute paths are
+    /// left untouched.
+    fn with_base_dir(&mut self, base_dir: &std::path::Path) {
+        if self.config.path.is_relative() {
+            self.config.path = base_dir.join(&self.config.path);
+        }
+    }
+
     /// Retrieves a secret value from the .env file.
     ///
     /// Reads the .env file and returns the value for the specified key.
@@ -341,6 +354,53 @@ mod tests {
     fn test_default_config() {
         let config = DotEnvConfig::default();
         assert_eq!(config.path.to_str().unwrap(), ".env");
+    }
+
+    #[test]
+    fn test_with_base_dir_rebases_relative_paths() {
+        let base = std::path::Path::new("/project/root");
+
+        // A relative path is resolved against the project root.
+        let mut provider = DotEnvProvider::new(DotEnvConfig {
+            path: PathBuf::from(".config/.env"),
+        });
+        provider.with_base_dir(base);
+        assert_eq!(provider.config.path, base.join(".config/.env"));
+
+        // The bare default `.env` is rebased too.
+        let mut provider = DotEnvProvider::new(DotEnvConfig::default());
+        provider.with_base_dir(base);
+        assert_eq!(provider.config.path, base.join(".env"));
+
+        // Absolute paths are left untouched.
+        let absolute = PathBuf::from("/etc/secrets/.env");
+        let mut provider = DotEnvProvider::new(DotEnvConfig {
+            path: absolute.clone(),
+        });
+        provider.with_base_dir(base);
+        assert_eq!(provider.config.path, absolute);
+    }
+
+    #[test]
+    fn test_get_reads_relative_path_from_base_dir_not_cwd() {
+        use std::io::Write;
+
+        // Reproduces issue #59: a config at `<root>/secretspec.toml` referencing
+        // `dotenv:.config/.env` must read `<root>/.config/.env` regardless of the
+        // process's current working directory.
+        let root = tempfile::tempdir().unwrap();
+        let env_dir = root.path().join(".config");
+        std::fs::create_dir(&env_dir).unwrap();
+        let mut file = std::fs::File::create(env_dir.join(".env")).unwrap();
+        writeln!(file, "USER=hello").unwrap();
+
+        let mut provider = DotEnvProvider::new(DotEnvConfig {
+            path: PathBuf::from(".config/.env"),
+        });
+        provider.with_base_dir(root.path());
+
+        let value = provider.get("hello-world", "USER", "default").unwrap();
+        assert_eq!(value.unwrap().expose_secret(), "hello");
     }
 
     #[test]

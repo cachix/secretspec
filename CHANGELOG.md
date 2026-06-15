@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows: the audit log no longer fails to reset at its size cap. Truncation on
   the append-only handle was denied by the OS; it now truncates through a
   separate write handle.
+- Relative `dotenv` paths (e.g. `dotenv:.config/.env`) now resolve against the
+  directory containing `secretspec.toml` instead of the current working
+  directory. Running `secretspec run --file ../secretspec.toml` from a
+  subdirectory previously failed to find the referenced `.env` file because it
+  was looked up relative to the working directory rather than the project root
+  (#59). Absolute `dotenv` paths are unaffected.
 
 ## [0.12.0] - 2026-06-08
 

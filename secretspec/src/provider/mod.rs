@@ -377,6 +377,21 @@ pub trait Provider: Send + Sync {
     /// [`Secrets::with_reason`]: crate::Secrets::with_reason
     fn set_reason(&self, _reason: Option<String>) {}
 
+    /// Rebases any relative filesystem paths the provider holds against
+    /// `base_dir`, the directory containing the `secretspec.toml` that
+    /// configured it.
+    ///
+    /// File-backed providers (e.g. `dotenv`) take paths from the config or its
+    /// provider aliases. Those paths must resolve relative to the project root,
+    /// not the process's current working directory — otherwise running from a
+    /// subdirectory with `--file ../secretspec.toml` looks for the `.env` file
+    /// in the wrong place. [`Secrets`] calls this once at construction, before
+    /// the provider performs any I/O. The default implementation does nothing,
+    /// which is correct for providers that hold no relative paths.
+    ///
+    /// [`Secrets`]: crate::Secrets
+    fn with_base_dir(&mut self, _base_dir: &std::path::Path) {}
+
     /// Discovers and returns all secrets available in this provider.
     ///
     /// This method is used to introspect the provider and find all available secrets.
@@ -536,6 +551,10 @@ impl Provider for PreflightGuard {
 
     fn set_reason(&self, reason: Option<String>) {
         self.inner.set_reason(reason);
+    }
+
+    fn with_base_dir(&mut self, base_dir: &std::path::Path) {
+        self.inner.with_base_dir(base_dir);
     }
 
     fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {

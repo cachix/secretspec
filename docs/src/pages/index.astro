@@ -9,33 +9,42 @@ const posts = (await getCollection('docs'))
     (a, b) =>
       (b.data.date?.valueOf() ?? 0) - (a.data.date?.valueOf() ?? 0),
   );
+
 const latestPost = posts[0];
+
 const latestPostDate = latestPost?.data.date
   ? new Intl.DateTimeFormat('en', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      timeZone: 'UTC',
-    }).format(latestPost.data.date)
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  }).format(latestPost.data.date)
   : null;
 
-// simpleicons CDN — { slug, label }. slug=null renders the generic lock fallback.
-const providerIcons = [
-  ['apple', 'macOS Keychain'],
-  ['1password', '1Password'],
-  ['lastpass', 'LastPass'],
-  ['bitwarden', 'Bitwarden'],
-  ['vault', 'Vault / OpenBao'],
-  [null, 'AWS Secrets Manager'],
-  ['googlecloud', 'Google Cloud Secret Manager'],
-  [null, 'Proton Pass'],
-  ['gnuprivacyguard', 'Pass (GPG)'],
-  ['dotenv', '.env files'],
-  ['linux', 'Secret Service'],
-  [null, 'Credential Manager'],
+type ProviderMetadata = {
+  /** simpleicons CDN icon name, if not provided renders the generic lock icon as fallback */
+  icon?: string;
+  label: string;
+  slug: string
+};
+
+const providerMetadata: ProviderMetadata[] = [
+  { icon: 'apple', slug: 'keyring', label: 'macOS Keychain' },
+  { icon: '1password', slug: 'onepassword', label: '1Password' },
+  { icon: 'lastpass', slug: 'lastpass', label: 'LastPass' },
+  { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden' },
+  { icon: 'vault', slug: 'vault', label: 'Vault / OpenBao' },
+  { slug: 'awssm', label: 'AWS Secrets Manager' },
+  { icon: 'googlecloud', slug: 'gcsm', label: 'Google Cloud Secret Manager' },
+  { slug: 'protonpass', label: 'Proton Pass' },
+  { icon: 'gnuprivacyguard', slug: 'pass', label: 'Pass (GPG)' },
+  { icon: 'dotenv', slug: 'dotenv', label: '.env files' },
+  { icon: 'linux', slug: 'keyring', label: 'Secret Service' },
+  { slug: 'keyring', label: 'Credential Manager' },
 ];
 
-const dup = (arr) => [...arr, ...arr];
+
+const dup = <T,>(arr: T[]) => [...arr, ...arr];
 ---
 
 <StarlightPage
@@ -141,15 +150,15 @@ $ secretspec run --profile production -- npm start
 
   <div class="landing-marquee">
     <div class="landing-marquee-track">
-      {dup(providerIcons).map(([slug, label]) => (
-        <div class="landing-marquee-item">
-          {slug ? (
-            <img class="landing-marquee-icon" src={`https://cdn.simpleicons.org/${slug}/888888`} alt="" loading="lazy" width="18" height="18" onerror="this.outerHTML='<svg class=&quot;landing-marquee-icon&quot; viewBox=&quot;0 0 24 24&quot; fill=&quot;none&quot; stroke=&quot;currentColor&quot; stroke-width=&quot;2&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; aria-hidden=&quot;true&quot;><rect x=&quot;3&quot; y=&quot;11&quot; width=&quot;18&quot; height=&quot;11&quot; rx=&quot;2&quot;/><path d=&quot;M7 11V7a5 5 0 0 1 10 0v4&quot;/></svg>'" />
+      {dup(providerMetadata).map(({ icon, label, slug }: ProviderMetadata) => (
+        <a href={`/providers/${slug}`} class="landing-marquee-item">
+          {icon ? (
+            <img class="landing-marquee-icon" src={`https://cdn.simpleicons.org/${icon}/888888`} alt="" loading="lazy" width="18" height="18" onerror="this.outerHTML='<svg class=&quot;landing-marquee-icon&quot; viewBox=&quot;0 0 24 24&quot; fill=&quot;none&quot; stroke=&quot;currentColor&quot; stroke-width=&quot;2&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; aria-hidden=&quot;true&quot;><rect x=&quot;3&quot; y=&quot;11&quot; width=&quot;18&quot; height=&quot;11&quot; rx=&quot;2&quot;/><path d=&quot;M7 11V7a5 5 0 0 1 10 0v4&quot;/></svg>'" />
           ) : (
             <svg class="landing-marquee-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           )}
           <span>{label}</span>
-        </div>
+        </a>
       ))}
     </div>
   </div>
@@ -625,10 +634,13 @@ REDIS_URL=redis://…</code></pre>
 <script>
   // ── Provider switcher ──
   (function () {
-    var tabs = document.querySelectorAll('#secret-tabs .landing-provider-tab');
-    var name = document.getElementById('secret-provider-name');
+    const tabs = document.querySelectorAll('#secret-tabs .landing-provider-tab');
+
+    const name = document.getElementById('secret-provider-name');
+
     if (!tabs.length || !name) return;
-    var labels = {
+
+    const labels = {
       keyring:     'System keyring',
       onepassword: '1Password vault',
       vault:       'HashiCorp Vault',
@@ -637,12 +649,16 @@ REDIS_URL=redis://…</code></pre>
       dotenv:      '.env file',
       env:         'Environment variables',
     };
+
     tabs.forEach(function (tab) {
       tab.addEventListener('click', function () {
         tabs.forEach(function (t) { t.classList.remove('is-active'); });
+
         tab.classList.add('is-active');
-        var key = tab.getAttribute('data-provider') || 'keyring';
-        name.textContent = labels[key] || key;
+
+        const key = (tab.getAttribute('data-provider') ?? 'keyring') as keyof typeof labels;
+
+        name.textContent = labels[key] ?? key;
       });
     });
   })();

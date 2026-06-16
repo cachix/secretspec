@@ -1,0 +1,95 @@
+name: "Go static lib"
+
+# Builds the fully-static (musl) Go binary for the `-tags static` binding: cgo
+# links libsecretspec_ffi.a directly into the executable, so the Rust resolver is
+# embedded and the binary has no dynamic dependencies at all. Built via devenv,
+# which provides the musl C cross-toolchain (for the sqlite3/aws-lc-sys build
+# scripts and the cgo link) and static libdbus/libunwind.
+#
+# The default `go get` path stays purego/dlopen (no cgo); this artifact is for
+# users who want a self-contained static binary. The staticlib + header are
+# uploaded for linking; they are never committed (the Go module proxy carries no
+# binary assets -- see RELEASE.md). aarch64-musl and the macOS self-contained
+# static build are follow-ups; the static binding itself is exercised on every PR
+# by sdks.yml's `-tags static` leg.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - v**
+  pull_request:
+    paths:
+      - "secretspec-go/**"
+      - "secretspec-ffi/**"
+      - ".github/workflows/go-static.yml"
+
+jobs:
+  static:
+    name: x86_64-linux-musl (fully static)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # The musl rebuild of the full provider stack plus the Nix store overflows
+      # the ~14GB free on a hosted runner.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /opt/ghc \
+            /usr/local/share/boost /usr/local/share/powershell
+          sudo docker image prune --all --force
+          df -h /
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - name: Install devenv.sh
+        run: nix profile install nixpkgs#devenv
+
+      - name: Build and smoke test the fully-static binary
+        run: |
+          devenv shell -- bash -c '
+            set -euo pipefail
+            # Stage the release musl archive + header + generated cgo LDFLAGS
+            # (cargo compiles the C deps with the musl cc via the CC_/linker env).
+            ( cd secretspec-go && SECRETSPEC_FFI_TARGET=x86_64-unknown-linux-musl \
+                SECRETSPEC_FFI_PROFILE=release bash scripts/stage-staticlib.sh )
+
+            # A self-contained smoke program: build it fully static and assert it.
+            smoke="$RUNNER_TEMP/ssstatic"
+            mkdir -p "$smoke"
+            cat > "$smoke/main.go" <<EOF
+          package main
+          import (
+            "fmt"
+            secretspec "github.com/cachix/secretspec/secretspec-go"
+          )
+          func main() {
+            v, err := secretspec.ABIVersion()
+            if err != nil { panic(err) }
+            fmt.Println("abi", v)
+          }
+          EOF
+            cat > "$smoke/go.mod" <<EOF
+          module example.com/ssstatic
+          go 1.23
+          require github.com/cachix/secretspec/secretspec-go v0.0.0
+          replace github.com/cachix/secretspec/secretspec-go => $GITHUB_WORKSPACE/secretspec-go
+          EOF
+            cd "$smoke"
+            GOFLAGS=-mod=mod CGO_ENABLED=1 CC="$MUSL_CC" CGO_LDFLAGS="$MUSL_STATIC_LDFLAGS" \
+              go build -buildvcs=false -tags static \
+                -ldflags "-linkmode external -extldflags \"-static\"" -o ssstatic .
+            file ssstatic
+            file ssstatic | grep -q "statically linked"
+            ldd ssstatic 2>&1 | grep -q "not a dynamic executable"
+            ./ssstatic
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-static-x86_64-linux-musl
+          path: |
+            secretspec-go/lib/*.a
+            secretspec-go/include/secretspec.h
+            secretspec-go/cgo_ldflags_*.go

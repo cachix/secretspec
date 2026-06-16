@@ -1,10 +1,11 @@
 # secretspec (Go SDK)
 
 Go bindings for [SecretSpec](https://secretspec.dev/), a declarative secrets
-manager. A thin client over the `secretspec-ffi` C ABI, loaded at runtime via
-[purego](https://github.com/ebitengine/purego) (dlopen, no cgo). Resolution
-happens in the Rust core, so the SDK inherits every provider with no Go-side
-logic.
+manager. A thin client over the `secretspec-ffi` C ABI. Resolution happens in the
+Rust core, so the SDK inherits every provider with no Go-side logic. By default
+the resolver is loaded at runtime via
+[purego](https://github.com/ebitengine/purego) (dlopen, no cgo), keeping `go get`
+toolchain-free; `-tags static` instead links it in statically (see below).
 
 ```go
 package main
@@ -56,23 +57,46 @@ for _, s := range report.Secrets {
 }
 ```
 
-## Library discovery
+## Binding the native resolver
 
-The native `secretspec-ffi` cdylib is resolved at runtime, in order:
+### Default: purego (dlopen, no cgo)
+
+The `secretspec-ffi` cdylib is resolved at runtime, in order:
 
 1. The `SECRETSPEC_FFI_LIB` environment variable (an explicit path).
-2. A library embedded at build time with `-tags embed_lib` (see below).
+2. A library embedded at build time with `-tags embed_lib`.
 3. A Cargo `target` directory found by searching up from the working directory
    (the development path).
 
-This SDK uses [purego](https://github.com/ebitengine/purego), so the cdylib is
-loaded at runtime rather than linked. Provide it one of two ways:
+This keeps `go get` toolchain-free; the cdylib is loaded at runtime rather than
+linked. Provide it via `SECRETSPEC_FFI_LIB` / a Cargo checkout, or stage the
+per-platform library into `lib/` and build `-tags embed_lib` (embedded via
+`go:embed`, extracted to a per-user, owner-only cache directory at first use).
+Neither the cdylib nor the archive is shipped through the Go module proxy (which
+does not carry binary assets); they are attached to GitHub releases.
 
-- **System library:** install/build `libsecretspec_ffi` and point
-  `SECRETSPEC_FFI_LIB` at it (or run inside a Cargo checkout, which the search in
-  step 3 finds automatically).
-- **Vendored/embedded:** stage the per-platform library into `lib/` and build
-  with `go build -tags embed_lib`. The library is then embedded via `go:embed`
-  and extracted to a per-user, owner-only cache directory at first use. This is
-  an opt-in for self-contained builds; it is **not** shipped through the Go
-  module proxy (which does not carry binary assets).
+### `-tags static`: cgo, statically linked
+
+For a self-contained binary with no runtime library to locate, link the resolver
+statically. This uses **cgo** (a C toolchain is required) and links
+`libsecretspec_ffi.a` directly into the Go binary:
+
+```bash
+# Stage the archive + header + generated cgo LDFLAGS, then build with cgo.
+bash scripts/stage-staticlib.sh
+CGO_ENABLED=1 go build -tags static ./...
+```
+
+On Linux this can be made **fully static** (no dynamic libraries at all) by
+building the archive for a musl target and passing the static link flags:
+
+```bash
+SECRETSPEC_FFI_TARGET=x86_64-unknown-linux-musl \
+  SECRETSPEC_FFI_PROFILE=release bash scripts/stage-staticlib.sh
+CGO_ENABLED=1 go build -tags static \
+  -ldflags '-linkmode external -extldflags "-static"' ./...
+```
+
+macOS links the archive in but stays self-contained-except-system-frameworks (no
+static libSystem). Windows stays on the default purego path. The prebuilt
+archives are attached to GitHub releases (`go-static.yml`).

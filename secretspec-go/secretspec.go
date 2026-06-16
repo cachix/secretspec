@@ -1,27 +1,26 @@
 // Package secretspec is a Go SDK for SecretSpec, a declarative secrets manager.
 //
-// It is a thin client over the secretspec-ffi C ABI, loaded at runtime via
-// purego (dlopen, no cgo). Resolution (providers, chains, profiles, generation,
-// as_path) happens entirely in the Rust core; this package marshals a JSON
-// request to secretspec_resolve, parses the response envelope, and exposes it
-// with the same vocabulary as the Rust derive crate.
+// It is a thin client over the secretspec-ffi C ABI. Resolution (providers,
+// chains, profiles, generation, as_path) happens entirely in the Rust core; this
+// package marshals a JSON request to secretspec_resolve, parses the response
+// envelope, and exposes it with the same vocabulary as the Rust derive crate.
 //
-// The native library is located via, in order: the SECRETSPEC_FFI_LIB
-// environment variable, or a Cargo target directory found by searching up from
-// the working directory.
+// Two bindings select the native resolver at build time:
+//   - default (no build tag): purego (dlopen, no cgo). The library is located via
+//     the SECRETSPEC_FFI_LIB environment variable, an embedded copy, or a Cargo
+//     target directory. This keeps `go get` toolchain-free.
+//   - `-tags static`: cgo statically links libsecretspec_ffi.a, so the resolver
+//     is embedded in the Go binary (fully static on Linux/musl). See README.
+//
+// Both bindings implement the same hooks (ensureLoaded, nativeResolve,
+// nativeABIVersion); the code below is binding-agnostic.
 package secretspec
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
-	"sync"
-	"unsafe"
-
-	"github.com/ebitengine/purego"
 )
 
 // resolveSchemaVersion is the response wire-format version this SDK understands.
@@ -29,117 +28,6 @@ import (
 // library is incompatible with this SDK, so Load reports it rather than silently
 // misparsing.
 const resolveSchemaVersion = 1
-
-var (
-	loadOnce sync.Once
-	loadErr  error
-	cResolve func(string) uintptr
-	cFree    func(uintptr)
-	cABI     func() uintptr
-)
-
-func libNames() []string {
-	switch runtime.GOOS {
-	case "darwin":
-		return []string{"libsecretspec_ffi.dylib"}
-	case "windows":
-		return []string{"secretspec_ffi.dll"}
-	default:
-		return []string{"libsecretspec_ffi.so"}
-	}
-}
-
-func findLibrary() (string, error) {
-	if p := os.Getenv("SECRETSPEC_FFI_LIB"); p != "" {
-		return p, nil
-	}
-	// A library embedded at build time (go:embed, per platform) is extracted to
-	// a temp file and used, so `go get` works with no native build.
-	if len(embeddedLib) > 0 {
-		return extractEmbedded()
-	}
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	for {
-		// Within the nearest ancestor target/, pick the most recently built
-		// library rather than always preferring release: a stale release build
-		// must not shadow the debug build the developer just produced.
-		var bestPath string
-		var best os.FileInfo
-		for _, profile := range []string{"release", "debug"} {
-			for _, name := range libNames() {
-				candidate := filepath.Join(dir, "target", profile, name)
-				if info, err := os.Stat(candidate); err == nil {
-					if best == nil || info.ModTime().After(best.ModTime()) {
-						best, bestPath = info, candidate
-					}
-				}
-			}
-		}
-		if bestPath != "" {
-			return bestPath, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return "", &Error{
-		Kind:    "load",
-		Message: "could not locate the secretspec-ffi library; set SECRETSPEC_FFI_LIB",
-	}
-}
-
-func ensureLoaded() error {
-	loadOnce.Do(func() {
-		// purego.RegisterLibFunc panics (it does not return an error) when a
-		// symbol is missing. Recover so an incompatible library yields a returned
-		// *Error instead of a panic that escapes the Once — which would otherwise
-		// mark it done with loadErr nil and the function pointers nil, turning
-		// every later call into a nil-pointer panic for the process lifetime.
-		defer func() {
-			if r := recover(); r != nil {
-				loadErr = &Error{
-					Kind:    "load",
-					Message: fmt.Sprintf("failed to bind secretspec-ffi symbols (incompatible library?): %v", r),
-				}
-			}
-		}()
-		path, err := findLibrary()
-		if err != nil {
-			loadErr = err
-			return
-		}
-		handle, err := openLibrary(path)
-		if err != nil {
-			loadErr = err
-			return
-		}
-		purego.RegisterLibFunc(&cResolve, handle, "secretspec_resolve")
-		purego.RegisterLibFunc(&cFree, handle, "secretspec_free")
-		purego.RegisterLibFunc(&cABI, handle, "secretspec_abi_version")
-	})
-	return loadErr
-}
-
-// goString copies a NUL-terminated C string at ptr into a Go string. The
-// pointer comes from the C ABI (a Rust allocation), not Go's heap, so this is a
-// legitimate FFI read; `go vet`'s unsafeptr check flags it as a false positive
-// (it is not part of the `go test` vet subset).
-func goString(ptr uintptr) string {
-	if ptr == 0 {
-		return ""
-	}
-	base := unsafe.Pointer(ptr)
-	length := 0
-	for *(*byte)(unsafe.Add(base, length)) != 0 {
-		length++
-	}
-	return string(unsafe.Slice((*byte)(base), length))
-}
 
 // Error is a resolution failure (bad manifest, provider error, reason policy).
 type Error struct {
@@ -259,12 +147,12 @@ func (r *Resolved) Close() error {
 	return firstErr
 }
 
-// ABIVersion returns the version reported by the loaded library.
+// ABIVersion returns the version reported by the native resolver.
 func ABIVersion() (string, error) {
 	if err := ensureLoaded(); err != nil {
 		return "", err
 	}
-	return goString(cABI()), nil
+	return nativeABIVersion()
 }
 
 // Builder configures a resolution, mirroring the derive crate's SecretSpec::builder().
@@ -333,12 +221,10 @@ func (b *Builder) Load() (*Resolved, error) {
 		return nil, err
 	}
 
-	ptr := cResolve(string(payload))
-	if ptr == 0 {
-		return nil, &Error{Kind: "ffi", Message: "secretspec_resolve returned null"}
+	raw, err := nativeResolve(string(payload))
+	if err != nil {
+		return nil, err
 	}
-	raw := goString(ptr)
-	cFree(ptr)
 
 	var env envelopeJSON
 	if err := json.Unmarshal([]byte(raw), &env); err != nil {
@@ -451,12 +337,10 @@ func (b *Builder) Report() (*Report, error) {
 		return nil, err
 	}
 
-	ptr := cResolve(string(payload))
-	if ptr == 0 {
-		return nil, &Error{Kind: "ffi", Message: "secretspec_resolve returned null"}
+	raw, err := nativeResolve(string(payload))
+	if err != nil {
+		return nil, err
 	}
-	raw := goString(ptr)
-	cFree(ptr)
 
 	var env reportEnvelopeJSON
 	if err := json.Unmarshal([]byte(raw), &env); err != nil {

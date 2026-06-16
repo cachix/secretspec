@@ -106,6 +106,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolve into the temp dir with no way to clean them up.
 
 ### Changed
+- The language SDKs are migrating from dlopening the `secretspec-ffi` `cdylib` at
+  runtime to **statically linking** the `secretspec-ffi` `staticlib`
+  (`libsecretspec_ffi.a`), so the Rust resolver is embedded in each artifact with
+  no separate library to locate and no loader path. `scripts/ci-sdks.sh` and
+  `conformance/run.sh` now export a build-time link contract —
+  `SECRETSPEC_FFI_STATICLIB`, `SECRETSPEC_FFI_INCLUDE`, and
+  `SECRETSPEC_FFI_NATIVE_LIBS` (the archive's transitive system libs, captured
+  from `rustc --print native-static-libs`, never hardcoded). The **Haskell SDK**
+  is the first converted: it links the archive (staged alone on `--extra-lib-dirs`,
+  native deps passed via `--ghc-options=-optl…`) and no longer needs
+  `LD_LIBRARY_PATH` at build or run time.
+- The **Python SDK** now statically links `libsecretspec_ffi.a` into a compiled
+  CPython extension (cffi out-of-line API mode) instead of dlopening the cdylib:
+  no bundled `_lib/*`, no `SECRETSPEC_FFI_LIB`, no runtime discovery. The
+  extension targets the limited API (`py_limited_api`), so one `cp39-abi3`
+  wheel per platform serves all CPython >= 3.9. Building a wheel now needs a Rust
+  toolchain and a C compiler (`cffi`/`setuptools` are build-system requires).
+- The **Ruby SDK** now compiles an mkmf C extension (`secretspec_ext`) that
+  statically links `libsecretspec_ffi.a` instead of dlopening the cdylib via
+  Fiddle: nothing to locate at runtime, no `SECRETSPEC_FFI_LIB`. Distributed as a
+  platform gem bundling the prebuilt archive + header + native-libs manifest;
+  `gem install` compiles only the ~40-line C glue, so one platform gem serves all
+  Ruby ABIs (>= 3.0). Install now needs a C compiler + Ruby headers (+ libdbus).
+- The **Node SDK** README is corrected to describe the napi-rs addon (which
+  already statically embeds the resolver); it never used the cdylib/dlopen path.
+- The **Go SDK** gains an opt-in `-tags static` binding that uses cgo to
+  statically link `libsecretspec_ffi.a` into the Go binary (the resolver is
+  embedded, no runtime library to locate). On Linux this is built for a musl
+  target and combined with `-ldflags '-linkmode external -extldflags "-static"'`
+  for a fully-static executable. The default `go get` path is unchanged —
+  purego/dlopen, no cgo, toolchain-free — so the static build is strictly
+  additive (`scripts/stage-staticlib.sh` stages the archive + header + generated
+  cgo LDFLAGS). The `rust-toolchain.toml` pins the musl targets.
 - The `secretspec-derive` macro now computes all of its typing decisions through
   the shared `secretspec::codegen` IR instead of its own duplicated logic. The
   generated `SecretSpec`/`SecretSpecProfile`/`Profile` API and builder are

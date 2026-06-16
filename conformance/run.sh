@@ -26,7 +26,15 @@ case "$(uname -s)" in
   *)                     lib_name="libsecretspec_ffi.so" ;;
 esac
 export SECRETSPEC_FFI_LIB="$target_dir/debug/$lib_name"
+# Static-link contract (see scripts/ci-sdks.sh): the .a plus the archive's
+# transitive native deps, for SDKs that link statically instead of dlopening.
+export SECRETSPEC_FFI_STATICLIB="$target_dir/debug/libsecretspec_ffi.a"
+export SECRETSPEC_FFI_INCLUDE="$repo_root/secretspec-ffi/include"
+SECRETSPEC_FFI_NATIVE_LIBS="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
+  --print native-static-libs 2>&1 | sed -n 's/^note: native-static-libs: //p' | tail -1)"
+export SECRETSPEC_FFI_NATIVE_LIBS
 echo "==> SECRETSPEC_FFI_LIB=$SECRETSPEC_FFI_LIB"
+echo "==> SECRETSPEC_FFI_STATICLIB=$SECRETSPEC_FFI_STATICLIB"
 
 names=()
 statuses=()
@@ -56,11 +64,14 @@ run_node()   { (
 ); }
 run_haskell() { (
   cd secretspec-hs
-  # The Haskell SDK links the cdylib at build time, so its directory must be on
-  # both the linker path (--extra-lib-dirs) and the runtime loader path.
-  lib_dir="$(dirname "$SECRETSPEC_FFI_LIB")"
-  export LD_LIBRARY_PATH="$lib_dir:${LD_LIBRARY_PATH:-}"
-  cabal test --extra-lib-dirs="$lib_dir" --test-show-details=streaming
+  # The Haskell SDK statically links the secretspec-ffi archive at build time, so
+  # there is no runtime loader path. Stage the .a alone (target/debug also holds
+  # the .so) and pass its transitive native deps as linker options.
+  hs_lib_dir="$(mktemp -d)"
+  cp "$SECRETSPEC_FFI_STATICLIB" "$hs_lib_dir/"
+  ghc_optl=()
+  for l in $SECRETSPEC_FFI_NATIVE_LIBS; do ghc_optl+=("--ghc-options=-optl$l"); done
+  cabal test --extra-lib-dirs="$hs_lib_dir" "${ghc_optl[@]}" --test-show-details=streaming
 ); }
 
 run "Python"  python run_python

@@ -1,9 +1,9 @@
 name: "Haskell SDK"
 
 # Builds and tests the Haskell SDK (secretspec-hs) against a freshly built
-# cdylib. The SDK links the secretspec-ffi C ABI at build time via the FFI, so
-# the cdylib's directory goes on both the linker path (--extra-lib-dirs) and the
-# runtime loader path.
+# secretspec-ffi staticlib. The SDK statically links the C ABI archive at build
+# time, so the Rust resolver is embedded in the binary and there is no runtime
+# loader path (no LD_LIBRARY_PATH).
 
 on:
   workflow_dispatch:
@@ -38,22 +38,29 @@ jobs:
           name: devenv
       - name: Install devenv.sh
         run: nix profile install nixpkgs#devenv
-      - name: Build cdylib + CLI and run the Haskell SDK test-suite
+      - name: Build staticlib + CLI and run the Haskell SDK test-suite
         run: |
           devenv shell -- bash -c '
             set -euo pipefail
             cargo build -p secretspec-ffi -p secretspec
             target_dir="$(cargo metadata --no-deps --format-version 1 \
               | grep -o "\"target_directory\":\"[^\"]*\"" | head -1 | sed "s/.*:\"\(.*\)\"/\1/")"
-            lib_dir="$target_dir/debug"
-            export SECRETSPEC_BIN="$lib_dir/secretspec"
+            export SECRETSPEC_BIN="$target_dir/debug/secretspec"
+            # Capture the staticlib archive plus its transitive native deps. Stage
+            # the .a alone so -lsecretspec_ffi resolves to the archive (target/debug
+            # also holds the .so) and the resolver is embedded with no loader path.
+            native_libs="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
+              --print native-static-libs 2>&1 | sed -n "s/^note: native-static-libs: //p" | tail -1)"
+            hs_lib_dir="$(mktemp -d)"
+            cp "$target_dir/debug/libsecretspec_ffi.a" "$hs_lib_dir/"
+            ghc_optl=()
+            for l in $native_libs; do ghc_optl+=("--ghc-options=-optl$l"); done
             cd secretspec-hs
             cabal update
             # --write-ghc-environment-files lets the codegen test compile the
             # quicktype-generated module; SECRETSPEC_BIN lets it run the CLI.
-            LD_LIBRARY_PATH="$lib_dir:${LD_LIBRARY_PATH:-}" \
-              cabal test --extra-lib-dirs="$lib_dir" \
-                --write-ghc-environment-files=always --test-show-details=streaming
+            cabal test --extra-lib-dirs="$hs_lib_dir" "${ghc_optl[@]}" \
+              --write-ghc-environment-files=always --test-show-details=streaming
           '
 
   publish:
@@ -70,9 +77,10 @@ jobs:
       - name: Install devenv.sh
         run: nix profile install nixpkgs#devenv
       - name: sdist and upload to Hackage
-        # Requires the HACKAGE_TOKEN secret. The package links secretspec-ffi at
-        # build time, so Hackage's build bots cannot compile it (no cdylib); the
-        # upload still succeeds and the README documents the link requirement.
+        # Requires the HACKAGE_TOKEN secret. The package statically links
+        # secretspec-ffi at build time, so Hackage's build bots cannot compile it
+        # (no staticlib, no Rust toolchain); the upload still succeeds and the
+        # README documents the link requirement.
         env:
           HACKAGE_TOKEN: ${{ secrets.HACKAGE_TOKEN }}
         run: |

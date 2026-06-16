@@ -1,10 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Unit + cross-language conformance tests for the Haskell SDK. Run with the
--- cdylib on the linker and loader paths:
+-- | Unit + cross-language conformance tests for the Haskell SDK. The native
+-- resolver is statically linked, so no loader path is needed -- stage the
+-- archive alone and pass its transitive native deps:
 --
--- > cabal test --extra-lib-dirs="$TARGET/debug"   # with LD_LIBRARY_PATH set
+-- > cabal test --extra-lib-dirs="$DIR_WITH_ONLY_THE_A" \
+-- >   --ghc-options=-optl-ldbus-1 ...   # libs from `--print native-static-libs`
 module Main (main) where
 
 import           Control.Exception (SomeException, try)

@@ -62,7 +62,8 @@ import           Foreign.Ptr (nullPtr)
 import           System.Directory (doesFileExist, removeFile)
 import           System.Environment (setEnv)
 
--- The three C ABI functions, linked at build time (-lsecretspec_ffi). They are
+-- The three C ABI functions, statically linked at build time (the archive
+-- libsecretspec_ffi.a is embedded; -lsecretspec_ffi resolves to it). They are
 -- declared @safe@ because @secretspec_resolve@ may block on provider I/O
 -- (1Password, LastPass), and a @safe@ call lets other Haskell threads run.
 foreign import ccall safe "secretspec_resolve"

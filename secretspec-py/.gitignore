@@ -4,4 +4,7 @@ __pycache__/
 build/
 dist/
 *.egg-info/
-secretspec/_lib/
+# Compiled cffi extension + its generated C glue (built from libsecretspec_ffi.a).
+secretspec/_secretspec_cffi*
+*.so
+*.o

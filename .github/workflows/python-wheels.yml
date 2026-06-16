@@ -1,11 +1,14 @@
 name: "Python wheels"
 
-# Builds portable wheels for the Python SDK that bundle the secretspec-ffi
-# cdylib, and publishes them to PyPI on a version tag.
+# Builds portable abi3 wheels for the Python SDK and publishes them to PyPI on a
+# version tag. The Rust resolver is statically linked into a compiled CPython
+# extension (cffi API mode over libsecretspec_ffi.a) -- there is no separate
+# cdylib bundled. The extension targets the limited API, so one cp39-abi3 wheel
+# per platform serves all CPython >= 3.9.
 #
 # Linux wheels are built inside a manylinux container (old glibc) and repaired
-# with auditwheel so the bundled cdylib's system deps (notably libdbus from the
-# keyring provider) are vendored. macOS/Windows build natively.
+# with auditwheel so the extension's dynamic system deps (notably libdbus from
+# the keyring provider) are vendored. macOS/Windows build natively.
 #
 # The build/repair pipeline is validated in CI; the publish job additionally
 # needs PyPI Trusted Publishing configured for this repo's "pypi" environment
@@ -47,7 +50,9 @@ jobs:
           "$HOME/.cargo/bin/rustup" toolchain install
       - name: Build wheel and repair to manylinux
         run: |
-          bash secretspec-py/scripts/stage-cdylib.sh
+          # build isolation installs setuptools + cffi (build-system.requires);
+          # cffi compiles the extension, statically linking libsecretspec_ffi.a
+          # (cargo builds the release archive). auditwheel vendors libdbus.
           python3.11 -m build --wheel --outdir dist_raw secretspec-py
           auditwheel repair --wheel-dir wheelhouse dist_raw/*.whl
       - uses: actions/upload-artifact@v4
@@ -75,7 +80,8 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade build
-          bash secretspec-py/scripts/stage-cdylib.sh
+          # cffi compiles the extension and statically links libsecretspec_ffi.a
+          # (cargo builds the release archive) during the isolated wheel build.
           ( cd secretspec-py && python -m build --wheel --outdir "$GITHUB_WORKSPACE/wheelhouse" )
       - uses: actions/upload-artifact@v4
         with:

@@ -1,13 +1,10 @@
-"""Build a platform-specific wheel that bundles the secretspec-ffi cdylib.
+"""Build a platform-specific ``abi3`` wheel with the Rust resolver linked in.
 
-Project metadata lives in ``pyproject.toml``; this file only (a) forces a
-platform (non-pure) wheel so pip installs the right native library per OS/arch,
-and (b) tags it ``py3-none-<platform>`` because the package is pure Python apart
-from the bundled library, which works on any Python 3.
-
-The native library must be staged into ``secretspec/_lib/`` before building it
-(see ``scripts/stage-cdylib.sh``); it is declared as package data in
-``pyproject.toml``.
+Project metadata lives in ``pyproject.toml``. This file wires the cffi
+out-of-line extension (``secretspec/_build_ffi.py``), which compiles a CPython
+extension that statically links ``libsecretspec_ffi.a``. The extension targets
+the CPython limited API (``py_limited_api=True``), so one ``cp39-abi3-<platform>``
+wheel serves every CPython >= 3.9 on that platform.
 """
 
 from setuptools import setup
@@ -20,7 +17,7 @@ except ImportError:  # pragma: no cover - older setuptools
 
 
 class BinaryDistribution(Distribution):
-    """Marks the distribution as containing a native library, so the wheel is
+    """Marks the distribution as containing a native extension, so the wheel is
     platform-specific rather than ``any``."""
 
     def has_ext_modules(self) -> bool:
@@ -28,12 +25,15 @@ class BinaryDistribution(Distribution):
 
 
 class PlatformWheel(bdist_wheel):
-    def get_tag(self):
-        _, _, platform = super().get_tag()
-        return "py3", "none", platform
+    def finalize_options(self) -> None:
+        # Emit a single abi3 wheel (cp39-abi3-<platform>) for the limited-API
+        # extension instead of one wheel per CPython minor version.
+        super().finalize_options()
+        self.py_limited_api = "cp39"
 
 
 setup(
     distclass=BinaryDistribution,
     cmdclass={"bdist_wheel": PlatformWheel},
+    cffi_modules=["secretspec/_build_ffi.py:ffibuilder"],
 )

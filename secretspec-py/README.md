@@ -44,9 +44,11 @@ for s in report.secrets:
     print(s.name, s.status, s.required)
 ```
 
-## Library discovery
+## Native library
 
-The SDK loads the native library from, in order: the `SECRETSPEC_FFI_LIB`
-environment variable, a copy bundled in the installed wheel, or a Cargo `target`
-directory found by searching up from the working directory (useful in a source
-checkout).
+The Rust resolver is statically linked into a compiled extension
+(`secretspec._secretspec_cffi`) inside the installed wheel, so there is nothing
+to locate at runtime and no `SECRETSPEC_FFI_LIB` to set. The prebuilt `abi3`
+wheels are self-contained (`pip install secretspec`). From a source checkout the
+extension is compiled on demand by the test harness, which needs a Rust
+toolchain and a C compiler on `PATH`.

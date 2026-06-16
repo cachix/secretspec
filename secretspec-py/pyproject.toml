@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools>=68"]
+# cffi compiles the out-of-line extension (secretspec/_build_ffi.py) at build
+# time, statically linking libsecretspec_ffi.a; a Rust toolchain must be on PATH.
+requires = ["setuptools>=68", "cffi>=1.15"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -17,8 +19,3 @@ Repository = "https://github.com/cachix/secretspec"
 
 [tool.setuptools]
 packages = ["secretspec"]
-
-[tool.setuptools.package-data]
-# The cdylib is bundled here by the packaging step; absent in a source checkout,
-# where the SDK falls back to SECRETSPEC_FFI_LIB or a Cargo target directory.
-secretspec = ["_lib/*"]

@@ -7,21 +7,23 @@ envelope, and exposes it with the same vocabulary as the Rust derive crate
 (a builder with ``with_provider``/``with_profile``/``with_reason`` and ``load``,
 returning a ``Resolved`` with ``.secrets``/``.provider``/``.profile``).
 
-The library is loaded via cffi (dlopen) from, in order: the ``SECRETSPEC_FFI_LIB``
-environment variable, a copy bundled in the wheel, or a Cargo target directory.
+The Rust resolver is statically linked into a compiled CPython extension
+(``secretspec._secretspec_cffi``, built by ``_build_ffi.py`` via cffi API mode),
+so there is no separate library to locate, no ``SECRETSPEC_FFI_LIB``, and no
+runtime dlopen.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import sys
-import threading
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Optional
 
-from cffi import FFI
+# The compiled extension statically embeds the secretspec-ffi C ABI. ``_lib``
+# exposes secretspec_resolve / secretspec_free / secretspec_abi_version; ``_ffi``
+# provides the string/NULL helpers.
+from secretspec._secretspec_cffi import ffi as _ffi, lib as _lib
 
 # Response wire-format version this SDK understands. Tracks secretspec-ffi's
 # RESOLVE_SCHEMA_VERSION; a mismatch means the loaded library is incompatible.
@@ -43,77 +45,6 @@ __all__ = [
     "report",
     "abi_version",
 ]
-
-# The narrow C ABI. Mirrors secretspec-ffi/include/secretspec.h.
-_ffi = FFI()
-_ffi.cdef(
-    """
-    char *secretspec_resolve(const char *request_json);
-    void secretspec_free(char *ptr);
-    const char *secretspec_abi_version(void);
-    """
-)
-
-
-def _candidate_lib_names() -> list[str]:
-    if sys.platform == "darwin":
-        return ["libsecretspec_ffi.dylib"]
-    if sys.platform == "win32":
-        return ["secretspec_ffi.dll"]
-    return ["libsecretspec_ffi.so"]
-
-
-def _find_library() -> str:
-    # 1. Explicit override (used in development and tests).
-    override = os.environ.get("SECRETSPEC_FFI_LIB")
-    if override:
-        return override
-
-    names = _candidate_lib_names()
-
-    # 2. Bundled next to this package (the wheel distribution layout).
-    here = Path(__file__).resolve().parent
-    for name in names:
-        bundled = here / "_lib" / name
-        if bundled.exists():
-            return str(bundled)
-
-    # 3. A Cargo target directory, searching up from the current directory.
-    #    Within the nearest target/, pick the most recently built library rather
-    #    than always preferring release, so a stale release build does not shadow
-    #    the debug build just produced.
-    for base in [Path.cwd(), *Path.cwd().parents]:
-        target = base / "target"
-        if target.is_dir():
-            existing = [
-                target / profile / name
-                for profile in ("release", "debug")
-                for name in names
-                if (target / profile / name).exists()
-            ]
-            if existing:
-                return str(max(existing, key=lambda p: p.stat().st_mtime))
-
-    raise SecretSpecError(
-        "load",
-        "could not locate the secretspec-ffi library; set SECRETSPEC_FFI_LIB "
-        "to its path",
-    )
-
-
-_lib = None
-_lib_lock = threading.Lock()
-
-
-def _load() -> object:
-    # Double-checked locking so concurrent first callers do not race to dlopen.
-    global _lib
-    if _lib is None:
-        with _lib_lock:
-            if _lib is None:
-                _lib = _ffi.dlopen(_find_library())
-    return _lib
-
 
 class SecretSpecError(Exception):
     """A resolution call failed (bad manifest, provider error, reason policy)."""
@@ -227,21 +158,20 @@ class Report:
 
 
 def abi_version() -> str:
-    """The ABI version reported by the loaded library."""
-    ptr = _load().secretspec_abi_version()
+    """The ABI version reported by the statically linked library."""
+    ptr = _lib.secretspec_abi_version()
     return _ffi.string(ptr).decode()
 
 
 def _resolve_envelope(request: dict) -> dict:
-    lib = _load()
     payload = json.dumps(request).encode("utf-8")
-    ptr = lib.secretspec_resolve(payload)
+    ptr = _lib.secretspec_resolve(payload)
     if ptr == _ffi.NULL:
         raise SecretSpecError("ffi", "secretspec_resolve returned null")
     try:
         raw = _ffi.string(ptr).decode("utf-8")
     finally:
-        lib.secretspec_free(ptr)
+        _lib.secretspec_free(ptr)
     return json.loads(raw)
 
 

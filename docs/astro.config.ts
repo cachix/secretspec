@@ -1,4 +1,4 @@
-// @ts-check
+import type {PluginOption} from "vite";
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import starlightLlmsTxt from "starlight-llms-txt";
@@ -8,7 +8,7 @@ import starlightBlog from "starlight-blog";
 // /api/stars would 404 and the star pill would stay hidden locally. Mirror the
 // worker's GitHub proxy here so the pill populates during local development.
 // Production is unaffected — it is served by worker.js.
-const devStarsApi = {
+const devStarsApi: PluginOption = {
   name: "dev-stars-api",
   apply: "serve",
   enforce: "pre",

@@ -1,14 +1,15 @@
 name: "Ruby gems"
 
-# Builds platform-specific gems for the Ruby SDK that bundle the secretspec-ffi
-# cdylib (into vendor/), so `gem install secretspec` works without a separate
-# native build.
+# Builds platform-specific gems for the Ruby SDK. Each gem bundles the
+# secretspec-ffi staticlib (into vendor/); at `gem install` mkmf compiles a tiny
+# C glue and statically links that archive, so the resolver is embedded in the
+# extension and one platform gem serves every Ruby ABI.
 #
 # NOTE: as with the Python wheels, the Linux gem here links the runner's glibc
 # and system libraries (notably libdbus, via the keyring provider). A portable
-# release build should use a baseline toolchain (e.g. rake-compiler-dock) and
-# vendor those deps. That is the remaining follow-up; the build + bundling
-# mechanism below is what is validated.
+# release build should use a baseline toolchain and vendor those deps. That is
+# the remaining follow-up; the build + bundling mechanism below is what is
+# validated. Install requires a C compiler + Ruby headers (+ libdbus-1-dev).
 
 on:
   workflow_dispatch:
@@ -50,19 +51,20 @@ jobs:
         with:
           ruby-version: "3.3"
 
-      - name: Stage the cdylib and build the platform gem
+      - name: Stage the staticlib and build the platform gem
         shell: bash
         run: |
-          bash secretspec-rb/scripts/stage-cdylib.sh
+          bash secretspec-rb/scripts/stage-staticlib.sh
           ( cd secretspec-rb && gem build secretspec.gemspec )
 
       - name: Smoke test the gem
         shell: bash
         run: |
           cd secretspec-rb
+          # Installing compiles the extension (spec.extensions) against the
+          # bundled vendor/libsecretspec_ffi.a -- no Rust toolchain needed here.
           gem install --no-document --install-dir "$RUNNER_TEMP/gemhome" secretspec-*.gem
-          # Run outside the repo with no SECRETSPEC_FFI_LIB so only the bundled
-          # library can satisfy the require.
+          # Run outside the repo so only the installed extension satisfies require.
           cd "$RUNNER_TEMP"
           GEM_HOME="$RUNNER_TEMP/gemhome" GEM_PATH="$RUNNER_TEMP/gemhome" \
             ruby -e 'require "secretspec"; puts "abi " + Secretspec.abi_version'

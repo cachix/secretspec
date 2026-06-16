@@ -1,23 +1,19 @@
 # frozen_string_literal: true
 
 require "json"
-require "rbconfig"
 require "tmpdir"
 require "minitest/autorun"
 
-# Build the secretspec-ffi cdylib and point the SDK at it, unless
-# SECRETSPEC_FFI_LIB is already set.
-def ensure_lib
-  return if ENV["SECRETSPEC_FFI_LIB"] && !ENV["SECRETSPEC_FFI_LIB"].empty?
+# Compile the native extension (statically linking libsecretspec_ffi.a) unless it
+# is already built. ci-sdks.sh builds it explicitly; this covers standalone runs.
+def ensure_ext
+  pkg = File.expand_path("..", __dir__)
+  return unless Dir[File.join(pkg, "lib", "secretspec", "secretspec_ext.{so,bundle}")].empty?
 
-  repo = File.expand_path("../..", __dir__)
-  system("cargo", "build", "-p", "secretspec-ffi", chdir: repo) || raise("cargo build failed")
-  meta = JSON.parse(`cd #{repo} && cargo metadata --no-deps --format-version 1`)
-  name = RbConfig::CONFIG["host_os"] =~ /darwin/ ? "libsecretspec_ffi.dylib" : "libsecretspec_ffi.so"
-  ENV["SECRETSPEC_FFI_LIB"] = File.join(meta["target_directory"], "debug", name)
+  system("bash", File.join(pkg, "scripts", "build-ext.sh")) || raise("build-ext.sh failed")
 end
 
-ensure_lib
+ensure_ext
 require_relative "../lib/secretspec"
 
 MANIFEST = <<~TOML

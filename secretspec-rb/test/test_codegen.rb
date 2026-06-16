@@ -16,22 +16,26 @@ def npx?
   system("bash", "-lc", "command -v npx", out: File::NULL, err: File::NULL)
 end
 
+# Build the CLI (for `secretspec schema`) and compile the native extension (the
+# resolver, statically linked). Returns the CLI path; the SDK loads the resolver
+# from the compiled extension, not a runtime library.
 def build_artifacts
   unless system("cargo", "build", "-p", "secretspec-ffi", "-p", "secretspec", chdir: REPO)
     raise "cargo build failed"
   end
+  pkg = File.expand_path("..", __dir__)
+  if Dir[File.join(pkg, "lib", "secretspec", "secretspec_ext.{so,bundle}")].empty?
+    system("bash", File.join(pkg, "scripts", "build-ext.sh")) || raise("build-ext.sh failed")
+  end
   meta = JSON.parse(`cd #{REPO} && cargo metadata --no-deps --format-version 1`)
-  target = meta["target_directory"]
-  lib = RbConfig::CONFIG["host_os"] =~ /darwin/ ? "libsecretspec_ffi.dylib" : "libsecretspec_ffi.so"
-  [File.join(target, "debug", lib), File.join(target, "debug", "secretspec")]
+  File.join(meta["target_directory"], "debug", "secretspec")
 end
 
 class CodegenTest < Minitest::Test
   def test_quicktype_ruby_consumes_fields
     skip "npx (quicktype) not available" unless npx?
 
-    lib, bin = build_artifacts
-    ENV["SECRETSPEC_FFI_LIB"] = lib
+    bin = build_artifacts
 
     Dir.mktmpdir do |dir|
       manifest = File.join(dir, "secretspec.toml")

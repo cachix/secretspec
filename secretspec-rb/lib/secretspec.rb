@@ -2,17 +2,19 @@
 
 # Ruby SDK for SecretSpec, a declarative secrets manager.
 #
-# A thin client over the secretspec-ffi C ABI, loaded at runtime via the stdlib
-# Fiddle (dlopen, no native gem). Resolution happens entirely in the Rust core,
-# so the SDK inherits every provider with no Ruby-side logic. Mirrors the Rust
-# derive crate's vocabulary.
-#
-# The native library is located via SECRETSPEC_FFI_LIB, or a Cargo target
-# directory found by searching up from the working directory.
+# A thin client over the secretspec-ffi C ABI. The Rust resolver is statically
+# linked into a native extension (secretspec_ext), so the SDK inherits every
+# provider with no Ruby-side logic and there is nothing to locate at runtime.
+# Mirrors the Rust derive crate's vocabulary.
 
-require "fiddle"
 require "json"
-require "rbconfig"
+
+# The compiled extension lives next to this file in a source/dev checkout, but in
+# an installed gem RubyGems places it in a separate extensions dir already on
+# $LOAD_PATH. Put this file's dir on the path so the absolute require resolves in
+# both layouts.
+$LOAD_PATH.unshift(__dir__) unless $LOAD_PATH.include?(__dir__)
+require "secretspec/secretspec_ext"
 
 module Secretspec
   # Response wire-format version this SDK understands. Tracks secretspec-ffi's
@@ -97,88 +99,20 @@ module Secretspec
   # profile even when its secrets are not all available.
   Report = Struct.new(:provider, :profile, :secrets)
 
-  # The narrow C ABI, loaded lazily via Fiddle.
+  # The narrow C ABI, statically linked into the secretspec_ext extension. The
+  # Native.c_resolve / c_abi_version C functions are defined in
+  # ext/secretspec/secretspec_ext.c; these wrappers add the Ruby-side error type.
   module Native
-    # Guards the one-time dlopen so concurrent first callers do not race.
-    @load_mutex = Mutex.new
-
     class << self
       def resolve(request_json)
-        ensure_loaded
-        ptr = @resolve.call(request_json)
-        raise Error.new("ffi", "secretspec_resolve returned null") if ptr.null?
+        result = c_resolve(request_json)
+        raise Error.new("ffi", "secretspec_resolve returned null") if result.nil?
 
-        begin
-          ptr.to_s
-        ensure
-          @free.call(ptr)
-        end
+        result
       end
 
       def abi_version
-        ensure_loaded
-        @abi.call.to_s
-      end
-
-      private
-
-      def ensure_loaded
-        return if @loaded
-
-        @load_mutex.synchronize do
-          # Re-check inside the lock: another thread may have loaded while we
-          # waited, and @loaded is only set after every function is registered.
-          next if @loaded
-
-          handle = Fiddle.dlopen(find_library)
-          @resolve = Fiddle::Function.new(
-            handle["secretspec_resolve"], [Fiddle::TYPE_VOIDP], Fiddle::TYPE_VOIDP
-          )
-          @free = Fiddle::Function.new(
-            handle["secretspec_free"], [Fiddle::TYPE_VOIDP], Fiddle::TYPE_VOID
-          )
-          @abi = Fiddle::Function.new(
-            handle["secretspec_abi_version"], [], Fiddle::TYPE_VOIDP
-          )
-          @loaded = true
-        end
-      end
-
-      def lib_names
-        case RbConfig::CONFIG["host_os"]
-        when /darwin/ then ["libsecretspec_ffi.dylib"]
-        when /mswin|mingw/ then ["secretspec_ffi.dll"]
-        else ["libsecretspec_ffi.so"]
-        end
-      end
-
-      def find_library
-        env = ENV["SECRETSPEC_FFI_LIB"]
-        return env if env && !env.empty?
-
-        # A copy bundled in a platform gem (staged into vendor/ at build time).
-        lib_names.each do |name|
-          bundled = File.expand_path("../../vendor/#{name}", __FILE__)
-          return bundled if File.exist?(bundled)
-        end
-
-        dir = Dir.pwd
-        loop do
-          # Within the nearest target/, pick the most recently built library
-          # rather than always preferring release, so a stale release build does
-          # not shadow the debug build just produced.
-          candidates = %w[release debug].flat_map do |profile|
-            lib_names.map { |name| File.join(dir, "target", profile, name) }
-          end.select { |c| File.exist?(c) }
-          return candidates.max_by { |c| File.mtime(c) } unless candidates.empty?
-
-          parent = File.dirname(dir)
-          break if parent == dir
-
-          dir = parent
-        end
-        raise Error.new("load",
-                        "could not locate the secretspec-ffi library; set SECRETSPEC_FFI_LIB")
+        c_abi_version
       end
     end
   end

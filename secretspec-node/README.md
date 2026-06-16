@@ -1,9 +1,10 @@
 # secretspec (Node.js SDK)
 
 Node.js / TypeScript bindings for [SecretSpec](https://secretspec.dev/), a
-declarative secrets manager. A thin client over the `secretspec-ffi` C ABI,
-loaded at runtime via [koffi](https://koffi.dev/) (dlopen). Resolution happens
-in the Rust core, so the SDK inherits every provider with no JS-side logic.
+declarative secrets manager. A thin wrapper over a napi-rs native addon
+(`secretspec.node`) that statically embeds the Rust resolver, so the SDK inherits
+every provider with no JS-side logic and nothing to load at runtime. Resolution
+happens in the Rust core.
 
 ```js
 const { SecretSpec } = require('secretspec');
@@ -42,7 +43,9 @@ const report = SecretSpec.builder().withProfile('production').report();
 for (const s of report.secrets) console.log(s.name, s.status, s.required);
 ```
 
-## Library discovery
+## Native addon
 
-The native library is found via the `SECRETSPEC_FFI_LIB` environment variable,
-or a Cargo `target` directory found by searching up from the working directory.
+The resolver is compiled into the napi-rs addon (`secretspec.node`), so there is
+no separate library to locate and no `SECRETSPEC_FFI_LIB` to set. Prebuilt
+per-platform addons are published as npm packages (no install-time native build);
+from a source checkout the addon is built by `scripts/build-addon.sh`.

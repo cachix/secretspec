@@ -10,6 +10,13 @@ name: "Ruby gems"
 # release build should use a baseline toolchain and vendor those deps. That is
 # the remaining follow-up; the build + bundling mechanism below is what is
 # validated. Install requires a C compiler + Ruby headers (+ libdbus-1-dev).
+#
+# A Windows (x64-mingw) gem is a follow-up: the staging script and the gem's
+# mkmf extension assume the Unix `lib<name>.a` archive, but the MinGW Ruby
+# devkit needs an archive from the `x86_64-pc-windows-gnu` Rust target (the
+# default Windows toolchain is MSVC, which emits `<name>.lib`). The SDK itself
+# is exercised on every PR by the devenv-based sdks.yml; this workflow only
+# builds the distributable gems.
 
 on:
   workflow_dispatch:
@@ -36,7 +43,6 @@ jobs:
           - { target: x86_64-linux, runner: ubuntu-latest }
           - { target: aarch64-linux, runner: ubuntu-24.04-arm }
           - { target: arm64-darwin, runner: macos-latest }
-          - { target: x64-mingw, runner: windows-latest }
 
     steps:
       - uses: actions/checkout@v5

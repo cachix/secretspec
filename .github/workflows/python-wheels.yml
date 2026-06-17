@@ -8,7 +8,13 @@ name: "Python wheels"
 #
 # Linux wheels are built inside a manylinux container (old glibc) and repaired
 # with auditwheel so the extension's dynamic system deps (notably libdbus from
-# the keyring provider) are vendored. macOS/Windows build natively.
+# the keyring provider) are vendored. macOS builds natively.
+#
+# A Windows wheel is a follow-up: the cffi build statically links the Unix
+# `lib<name>.a` archive, but the default Windows toolchain is MSVC, whose linker
+# wants `<name>.lib` (and the wheel build would have to vendor the provider
+# system deps). The SDK itself is exercised on every PR by the devenv-based
+# sdks.yml; this workflow only builds the distributable wheels.
 #
 # The build/repair pipeline is validated in CI; the publish job additionally
 # needs PyPI Trusted Publishing configured for this repo's "pypi" environment
@@ -68,7 +74,6 @@ jobs:
       matrix:
         include:
           - { target: macos-aarch64, runner: macos-latest }
-          - { target: windows-x86_64, runner: windows-latest }
     steps:
       - uses: actions/checkout@v5
       - name: Install Rust (pinned by rust-toolchain.toml)

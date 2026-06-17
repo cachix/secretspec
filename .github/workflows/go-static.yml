@@ -82,7 +82,12 @@ jobs:
                 -ldflags "-linkmode external -extldflags \"-static\"" -o ssstatic .
             file ssstatic
             file ssstatic | grep -q "statically linked"
-            ldd ssstatic 2>&1 | grep -q "not a dynamic executable"
+            # ldd exits non-zero on a fully static binary, and pipefail would
+            # propagate that through the pipe (aborting under set -e even when
+            # grep matched), so capture its output first, then assert it reports
+            # no dynamic dependencies.
+            ldd_out="$(ldd ssstatic 2>&1 || true)"
+            echo "$ldd_out" | grep -qE "not a dynamic executable|statically linked"
             ./ssstatic
           '
 

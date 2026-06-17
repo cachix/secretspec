@@ -218,7 +218,12 @@ mod tests {
     fn serializes_to_golden_wire_format() {
         let golden = include_str!("../tests/fixtures/resolution_report.golden.json");
         let actual = serde_json::to_string_pretty(&sample()).unwrap();
-        assert_eq!(actual.trim(), golden.trim());
+        // Normalize line endings: on Windows the golden file is checked out with
+        // CRLF, while serde always emits LF.
+        assert_eq!(
+            actual.replace("\r\n", "\n").trim(),
+            golden.replace("\r\n", "\n").trim()
+        );
     }
 
     #[test]

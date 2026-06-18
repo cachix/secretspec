@@ -13,6 +13,7 @@ on:
       - "secretspec-ffi/**"
       - "secretspec/**"
       - ".github/workflows/haskell-build.yml"
+      - "scripts/sync-sdk-versions.sh"
   push:
     branches: [main]
     tags:
@@ -23,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
       # The cdylib + CLI debug build (AWS/GCP/Bitwarden providers) plus the
       # Nix store overflows the ~14GB free on a hosted runner.
       - name: Free up disk space
@@ -70,6 +73,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
         with:

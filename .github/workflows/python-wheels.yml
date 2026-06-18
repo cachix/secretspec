@@ -33,6 +33,7 @@ on:
     paths:
       - "secretspec-py/**"
       - ".github/workflows/python-wheels.yml"
+      - "scripts/sync-sdk-versions.sh"
 
 jobs:
   linux:
@@ -47,6 +48,8 @@ jobs:
           - { arch: aarch64, runner: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
       - name: Install build deps (rust, dbus)
         run: |
           yum install -y dbus-devel
@@ -56,10 +59,12 @@ jobs:
           "$HOME/.cargo/bin/rustup" toolchain install
       - name: Build wheel and repair to manylinux
         run: |
+          PYTHON=/opt/python/cp311-cp311/bin/python
+          "$PYTHON" -m pip install --upgrade build
           # build isolation installs setuptools + cffi (build-system.requires);
           # cffi compiles the extension, statically linking libsecretspec_ffi.a
           # (cargo builds the release archive). auditwheel vendors libdbus.
-          python3.11 -m build --wheel --outdir dist_raw secretspec-py
+          "$PYTHON" -m build --wheel --outdir dist_raw secretspec-py
           auditwheel repair --wheel-dir wheelhouse dist_raw/*.whl
       - uses: actions/upload-artifact@v4
         with:
@@ -76,6 +81,8 @@ jobs:
           - { target: macos-aarch64, runner: macos-latest }
     steps:
       - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
       - uses: actions/setup-python@v5

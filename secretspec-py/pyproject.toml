@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "secretspec"
-version = "0.12.0"
+version = "0.12.1"
 description = "Declarative secrets, every environment, any provider (Python SDK)"
 readme = "README.md"
 requires-python = ">=3.9"

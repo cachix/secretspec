@@ -31,6 +31,7 @@ on:
     paths:
       - "secretspec-rb/**"
       - ".github/workflows/ruby-gems.yml"
+      - "scripts/sync-sdk-versions.sh"
 
 jobs:
   gems:
@@ -46,6 +47,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
 
       - name: Install Linux system dependencies (dbus for keyring)
         if: runner.os == 'Linux'

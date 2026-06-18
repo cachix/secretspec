@@ -20,6 +20,7 @@ on:
     paths:
       - "secretspec-node/**"
       - ".github/workflows/node-addon.yml"
+      - "scripts/sync-sdk-versions.sh"
 
 jobs:
   addon:
@@ -36,6 +37,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
 
       - name: Install Linux system dependencies (dbus for keyring)
         if: runner.os == 'Linux'

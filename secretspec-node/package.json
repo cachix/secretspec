@@ -1,6 +1,6 @@
 {
   "name": "secretspec",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Declarative secrets, every environment, any provider (Node.js SDK)",
   "license": "Apache-2.0",
   "homepage": "https://secretspec.dev/",

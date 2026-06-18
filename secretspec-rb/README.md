@@ -1,10 +1,10 @@
 # secretspec (Ruby SDK)
 
 Ruby bindings for [SecretSpec](https://secretspec.dev/), a declarative secrets
-manager. A thin client over the `secretspec-ffi` C ABI, loaded at runtime via
-the stdlib [Fiddle](https://docs.ruby-lang.org/en/master/Fiddle.html) (dlopen,
-no native gem). Resolution happens in the Rust core, so the SDK inherits every
-provider with no Ruby-side logic.
+manager. A thin client over the `secretspec-ffi` C ABI, statically linked into a
+native C extension at build time (no runtime library to locate). Resolution
+happens in the Rust core, so the SDK inherits every provider with no Ruby-side
+logic.
 
 ```ruby
 require "secretspec"

@@ -15,8 +15,9 @@ that core rather than a reimplementation:
 
 - **Rust** uses the library directly, with a compile-time derive macro for
   strongly-typed access.
-- **Python** (cffi), **Go** (purego), and **Ruby** (Fiddle) load the
-  `secretspec-ffi` C ABI and exchange a small JSON request/response with it.
+- **Python** (cffi) and **Ruby** (a native C extension) statically link the
+  `secretspec-ffi` C ABI at build time; **Go** (purego) loads it at runtime with
+  no cgo. All exchange a small JSON request/response with the core.
 - **Haskell** links the same C ABI at build time via the GHC FFI.
 - **Node.js/TypeScript** uses a [napi-rs](https://napi.rs/) native addon that
   embeds the same resolver.

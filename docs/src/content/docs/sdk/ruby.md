@@ -4,9 +4,9 @@ description: Resolve SecretSpec secrets from Ruby
 ---
 
 The Ruby SDK (`secretspec`) is a thin client over the `secretspec-ffi` C ABI,
-loaded via the stdlib [Fiddle](https://docs.ruby-lang.org/en/master/Fiddle.html)
-(dlopen, no native gem). Resolution happens in the Rust core, so the SDK
-inherits every provider with no Ruby-side logic.
+statically linked into a native C extension at build time (no runtime library to
+locate). Resolution happens in the Rust core, so the SDK inherits every provider
+with no Ruby-side logic.
 
 ## Quick start
 

@@ -187,7 +187,7 @@ profile, and generator works identically with no per-language resolution logic:
 
 - [Python](https://secretspec.dev/sdk/python) (via cffi)
 - [Go](https://secretspec.dev/sdk/go) (via purego, no cgo)
-- [Ruby](https://secretspec.dev/sdk/ruby) (via stdlib Fiddle)
+- [Ruby](https://secretspec.dev/sdk/ruby) (via a native C extension)
 - [Node.js / TypeScript](https://secretspec.dev/sdk/nodejs) (napi-rs addon)
 - [Haskell](https://secretspec.dev/sdk/haskell) (build-time FFI link)
 

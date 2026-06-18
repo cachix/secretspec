@@ -182,10 +182,12 @@ func (b *Builder) WithProfile(p string) *Builder     { return b.set("profile", p
 func (b *Builder) WithReason(reason string) *Builder { return b.set("reason", reason) }
 func (b *Builder) WithNoValues(v bool) *Builder      { return b.set("no_values", v) }
 
-type envelopeJSON struct {
-	OK       bool          `json:"ok"`
-	Response *responseJSON `json:"response"`
-	Error    *errorJSON    `json:"error"`
+// envelope is the response wrapper shared by the resolve and report paths,
+// generic over its inner response type R.
+type envelope[R any] struct {
+	OK       bool       `json:"ok"`
+	Response *R         `json:"response"`
+	Error    *errorJSON `json:"error"`
 }
 
 type errorJSON struct {
@@ -210,28 +212,32 @@ type responseJSON struct {
 	MissingOptional []string              `json:"missing_optional"`
 }
 
-// checkEnvelope validates the envelope-level fields shared by the resolve and
-// report responses. schemaVersion is the response's schema_version, or nil when
-// the envelope carried no response. kind ("resolve" or "report") labels the
-// version-mismatch message.
-func checkEnvelope(ok bool, errJSON *errorJSON, schemaVersion *int, kind string, expected int) error {
-	if !ok {
+// parseEnvelope unmarshals a response envelope, validates the envelope-level
+// fields shared by the resolve and report responses, and returns the inner
+// response. kind ("resolve" or "report") labels the version-mismatch message;
+// schemaOf reads the response's schema_version for the version check.
+func parseEnvelope[R any](raw, kind string, expected int, schemaOf func(*R) int) (*R, error) {
+	var env envelope[R]
+	if err := json.Unmarshal([]byte(raw), &env); err != nil {
+		return nil, err
+	}
+	if !env.OK {
 		errKind, message := "unknown", ""
-		if errJSON != nil {
-			errKind, message = errJSON.Kind, errJSON.Message
+		if env.Error != nil {
+			errKind, message = env.Error.Kind, env.Error.Message
 		}
-		return &Error{Kind: errKind, Message: message}
+		return nil, &Error{Kind: errKind, Message: message}
 	}
-	if schemaVersion == nil {
-		return &Error{Kind: "ffi", Message: "secretspec_resolve reported ok with no response"}
+	if env.Response == nil {
+		return nil, &Error{Kind: "ffi", Message: "secretspec_resolve reported ok with no response"}
 	}
-	if *schemaVersion != expected {
-		return &Error{Kind: "version", Message: fmt.Sprintf(
+	if v := schemaOf(env.Response); v != expected {
+		return nil, &Error{Kind: "version", Message: fmt.Sprintf(
 			"unsupported %s schema version %d (expected %d); the secretspec-ffi library and this SDK are out of sync",
-			kind, *schemaVersion, expected,
+			kind, v, expected,
 		)}
 	}
-	return nil
+	return env.Response, nil
 }
 
 // Load resolves the secrets. It returns *MissingRequiredError if a required
@@ -250,16 +256,8 @@ func (b *Builder) Load() (*Resolved, error) {
 		return nil, err
 	}
 
-	var env envelopeJSON
-	if err := json.Unmarshal([]byte(raw), &env); err != nil {
-		return nil, err
-	}
-	resp := env.Response
-	var schemaVersion *int
-	if resp != nil {
-		schemaVersion = &resp.SchemaVersion
-	}
-	if err := checkEnvelope(env.OK, env.Error, schemaVersion, "resolve", resolveSchemaVersion); err != nil {
+	resp, err := parseEnvelope(raw, "resolve", resolveSchemaVersion, func(r *responseJSON) int { return r.SchemaVersion })
+	if err != nil {
 		return nil, err
 	}
 	if len(resp.MissingRequired) > 0 {
@@ -327,12 +325,6 @@ type reportResponseJSON struct {
 	Secrets       []secretReportJSON `json:"secrets"`
 }
 
-type reportEnvelopeJSON struct {
-	OK       bool                `json:"ok"`
-	Response *reportResponseJSON `json:"response"`
-	Error    *errorJSON          `json:"error"`
-}
-
 // Report resolves the value-free report (the inventory/preflight view, the same
 // one the CLI exposes as `check --json`). It never returns
 // *MissingRequiredError: a missing required secret appears as a SecretReport
@@ -356,16 +348,8 @@ func (b *Builder) Report() (*Report, error) {
 		return nil, err
 	}
 
-	var env reportEnvelopeJSON
-	if err := json.Unmarshal([]byte(raw), &env); err != nil {
-		return nil, err
-	}
-	resp := env.Response
-	var schemaVersion *int
-	if resp != nil {
-		schemaVersion = &resp.SchemaVersion
-	}
-	if err := checkEnvelope(env.OK, env.Error, schemaVersion, "report", reportSchemaVersion); err != nil {
+	resp, err := parseEnvelope(raw, "report", reportSchemaVersion, func(r *reportResponseJSON) int { return r.SchemaVersion })
+	if err != nil {
 		return nil, err
 	}
 

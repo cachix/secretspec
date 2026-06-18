@@ -184,8 +184,12 @@ class Builder {
     return this._parse(await native.resolveAsync(JSON.stringify(this._request)));
   }
 
-  /** Parse a JSON response envelope string into a Resolved (or throw). */
-  _parse(raw) {
+  /**
+   * Validate a JSON response envelope string and return its `response` (or
+   * throw). `kind` is "resolve" or "report"; it selects the schema version to
+   * enforce and labels the version-mismatch message.
+   */
+  _parseEnvelope(raw, kind, expectedSchemaVersion) {
     const envelope = JSON.parse(raw);
     if (!envelope.ok) {
       const err = envelope.error || {};
@@ -195,13 +199,19 @@ class Builder {
     if (response == null) {
       throw new SecretSpecError('ffi', 'secretspec_resolve reported ok with no response');
     }
-    if (response.schema_version !== RESOLVE_SCHEMA_VERSION) {
+    if (response.schema_version !== expectedSchemaVersion) {
       throw new SecretSpecError(
         'version',
-        `unsupported resolve schema version ${response.schema_version} (expected ` +
-          `${RESOLVE_SCHEMA_VERSION}); the native addon and this SDK are out of sync`,
+        `unsupported ${kind} schema version ${response.schema_version} (expected ` +
+          `${expectedSchemaVersion}); the native addon and this SDK are out of sync`,
       );
     }
+    return response;
+  }
+
+  /** Parse a JSON response envelope string into a Resolved (or throw). */
+  _parse(raw) {
+    const response = this._parseEnvelope(raw, 'resolve', RESOLVE_SCHEMA_VERSION);
     const missing = response.missing_required || [];
     if (missing.length) {
       throw new MissingRequiredError(missing);
@@ -237,23 +247,7 @@ class Builder {
 
   /** Parse a JSON report envelope string into a Report (or throw). */
   _parseReport(raw) {
-    const envelope = JSON.parse(raw);
-    if (!envelope.ok) {
-      const err = envelope.error || {};
-      throw new SecretSpecError(err.kind || 'unknown', err.message || '');
-    }
-    const response = envelope.response;
-    if (response == null) {
-      throw new SecretSpecError('ffi', 'secretspec_resolve reported ok with no response');
-    }
-    if (response.schema_version !== REPORT_SCHEMA_VERSION) {
-      throw new SecretSpecError(
-        'version',
-        `unsupported report schema version ${response.schema_version} (expected ` +
-          `${REPORT_SCHEMA_VERSION}); the native addon and this SDK are out of sync`,
-      );
-    }
-    return new Report(response);
+    return new Report(this._parseEnvelope(raw, 'report', REPORT_SCHEMA_VERSION));
   }
 }
 

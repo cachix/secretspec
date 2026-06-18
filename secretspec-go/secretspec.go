@@ -210,6 +210,30 @@ type responseJSON struct {
 	MissingOptional []string              `json:"missing_optional"`
 }
 
+// checkEnvelope validates the envelope-level fields shared by the resolve and
+// report responses. schemaVersion is the response's schema_version, or nil when
+// the envelope carried no response. kind ("resolve" or "report") labels the
+// version-mismatch message.
+func checkEnvelope(ok bool, errJSON *errorJSON, schemaVersion *int, kind string, expected int) error {
+	if !ok {
+		errKind, message := "unknown", ""
+		if errJSON != nil {
+			errKind, message = errJSON.Kind, errJSON.Message
+		}
+		return &Error{Kind: errKind, Message: message}
+	}
+	if schemaVersion == nil {
+		return &Error{Kind: "ffi", Message: "secretspec_resolve reported ok with no response"}
+	}
+	if *schemaVersion != expected {
+		return &Error{Kind: "version", Message: fmt.Sprintf(
+			"unsupported %s schema version %d (expected %d); the secretspec-ffi library and this SDK are out of sync",
+			kind, *schemaVersion, expected,
+		)}
+	}
+	return nil
+}
+
 // Load resolves the secrets. It returns *MissingRequiredError if a required
 // secret is missing, and *Error for any other failure.
 func (b *Builder) Load() (*Resolved, error) {
@@ -230,23 +254,13 @@ func (b *Builder) Load() (*Resolved, error) {
 	if err := json.Unmarshal([]byte(raw), &env); err != nil {
 		return nil, err
 	}
-	if !env.OK {
-		kind, message := "unknown", ""
-		if env.Error != nil {
-			kind, message = env.Error.Kind, env.Error.Message
-		}
-		return nil, &Error{Kind: kind, Message: message}
-	}
-
 	resp := env.Response
-	if resp == nil {
-		return nil, &Error{Kind: "ffi", Message: "secretspec_resolve reported ok with no response"}
+	var schemaVersion *int
+	if resp != nil {
+		schemaVersion = &resp.SchemaVersion
 	}
-	if resp.SchemaVersion != resolveSchemaVersion {
-		return nil, &Error{Kind: "version", Message: fmt.Sprintf(
-			"unsupported resolve schema version %d (expected %d); the secretspec-ffi library and this SDK are out of sync",
-			resp.SchemaVersion, resolveSchemaVersion,
-		)}
+	if err := checkEnvelope(env.OK, env.Error, schemaVersion, "resolve", resolveSchemaVersion); err != nil {
+		return nil, err
 	}
 	if len(resp.MissingRequired) > 0 {
 		return nil, &MissingRequiredError{Missing: resp.MissingRequired}
@@ -346,22 +360,13 @@ func (b *Builder) Report() (*Report, error) {
 	if err := json.Unmarshal([]byte(raw), &env); err != nil {
 		return nil, err
 	}
-	if !env.OK {
-		kind, message := "unknown", ""
-		if env.Error != nil {
-			kind, message = env.Error.Kind, env.Error.Message
-		}
-		return nil, &Error{Kind: kind, Message: message}
-	}
 	resp := env.Response
-	if resp == nil {
-		return nil, &Error{Kind: "ffi", Message: "secretspec_resolve reported ok with no response"}
+	var schemaVersion *int
+	if resp != nil {
+		schemaVersion = &resp.SchemaVersion
 	}
-	if resp.SchemaVersion != reportSchemaVersion {
-		return nil, &Error{Kind: "version", Message: fmt.Sprintf(
-			"unsupported report schema version %d (expected %d); the secretspec-ffi library and this SDK are out of sync",
-			resp.SchemaVersion, reportSchemaVersion,
-		)}
+	if err := checkEnvelope(env.OK, env.Error, schemaVersion, "report", reportSchemaVersion); err != nil {
+		return nil, err
 	}
 
 	secrets := make([]SecretReport, len(resp.Secrets))

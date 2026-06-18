@@ -163,23 +163,7 @@ module Secretspec
     # done to clean up any as_path temp files). With a block, yields the Resolved
     # and closes it afterwards, returning the block's value.
     def load
-      envelope = JSON.parse(Native.resolve(JSON.generate(@request)))
-
-      unless envelope["ok"]
-        err = envelope["error"] || {}
-        raise Error.new(err["kind"] || "unknown", err["message"] || "")
-      end
-
-      response = envelope["response"]
-      raise Error.new("ffi", "secretspec_resolve reported ok with no response") if response.nil?
-
-      version = response["schema_version"]
-      unless version == RESOLVE_SCHEMA_VERSION
-        raise Error.new("version",
-                        "unsupported resolve schema version #{version} " \
-                        "(expected #{RESOLVE_SCHEMA_VERSION}); the secretspec-ffi " \
-                        "library and this SDK are out of sync")
-      end
+      response = parse_response(JSON.generate(@request), "resolve", RESOLVE_SCHEMA_VERSION)
 
       missing = response["missing_required"] || []
       raise MissingRequiredError.new(missing) unless missing.empty?
@@ -211,7 +195,23 @@ module Secretspec
     # with status "missing_required".
     def report
       request = @request.merge("mode" => "report")
-      envelope = JSON.parse(Native.resolve(JSON.generate(request)))
+      response = parse_response(JSON.generate(request), "report", REPORT_SCHEMA_VERSION)
+
+      secrets = (response["secrets"] || []).map do |s|
+        SecretReport.new(s["name"], s["status"], s["required"],
+                         s["source_provider"], s["default_applied"],
+                         s["generated"], s["as_path"])
+      end
+      Report.new(response["provider"], response["profile"], secrets)
+    end
+
+    private
+
+    # Resolve a JSON request payload and return the validated "response" hash, or
+    # raise. +kind+ is "resolve" or "report"; it selects the schema version to
+    # enforce and labels the version-mismatch message.
+    def parse_response(payload, kind, expected_version)
+      envelope = JSON.parse(Native.resolve(payload))
 
       unless envelope["ok"]
         err = envelope["error"] || {}
@@ -222,19 +222,14 @@ module Secretspec
       raise Error.new("ffi", "secretspec_resolve reported ok with no response") if response.nil?
 
       version = response["schema_version"]
-      unless version == REPORT_SCHEMA_VERSION
+      unless version == expected_version
         raise Error.new("version",
-                        "unsupported report schema version #{version} " \
-                        "(expected #{REPORT_SCHEMA_VERSION}); the secretspec-ffi " \
+                        "unsupported #{kind} schema version #{version} " \
+                        "(expected #{expected_version}); the secretspec-ffi " \
                         "library and this SDK are out of sync")
       end
 
-      secrets = (response["secrets"] || []).map do |s|
-        SecretReport.new(s["name"], s["status"], s["required"],
-                         s["source_provider"], s["default_applied"],
-                         s["generated"], s["as_path"])
-      end
-      Report.new(response["provider"], response["profile"], secrets)
+      response
     end
   end
 

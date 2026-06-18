@@ -175,7 +175,12 @@ def _resolve_envelope(request: dict) -> dict:
     return json.loads(raw)
 
 
-def _resolve_response(request: dict) -> dict:
+def _checked_response(request: dict, kind: str, expected_version: int) -> dict:
+    """Resolve ``request`` and return the validated ``response`` envelope.
+
+    ``kind`` is ``"resolve"`` or ``"report"``; it selects the schema version to
+    enforce and labels the version-mismatch message.
+    """
     envelope = _resolve_envelope(request)
     if not envelope.get("ok", False):
         err = envelope.get("error", {})
@@ -184,30 +189,11 @@ def _resolve_response(request: dict) -> dict:
     if response is None:
         raise SecretSpecError("ffi", "secretspec_resolve reported ok with no response")
     version = response.get("schema_version")
-    if version != _RESOLVE_SCHEMA_VERSION:
+    if version != expected_version:
         raise SecretSpecError(
             "version",
-            f"unsupported resolve schema version {version} (expected "
-            f"{_RESOLVE_SCHEMA_VERSION}); the secretspec-ffi library and this SDK "
-            "are out of sync",
-        )
-    return response
-
-
-def _report_response(request: dict) -> dict:
-    envelope = _resolve_envelope(request)
-    if not envelope.get("ok", False):
-        err = envelope.get("error", {})
-        raise SecretSpecError(err.get("kind", "unknown"), err.get("message", ""))
-    response = envelope.get("response")
-    if response is None:
-        raise SecretSpecError("ffi", "secretspec_resolve reported ok with no response")
-    version = response.get("schema_version")
-    if version != _REPORT_SCHEMA_VERSION:
-        raise SecretSpecError(
-            "version",
-            f"unsupported report schema version {version} (expected "
-            f"{_REPORT_SCHEMA_VERSION}); the secretspec-ffi library and this SDK "
+            f"unsupported {kind} schema version {version} (expected "
+            f"{expected_version}); the secretspec-ffi library and this SDK "
             "are out of sync",
         )
     return response
@@ -286,7 +272,7 @@ class _Builder:
         return self
 
     def load(self) -> Resolved:
-        response = _resolve_response(self._request)
+        response = _checked_response(self._request, "resolve", _RESOLVE_SCHEMA_VERSION)
 
         missing_required = response.get("missing_required", [])
         if missing_required:
@@ -318,7 +304,7 @@ class _Builder:
         """
         request = dict(self._request)
         request["mode"] = "report"
-        response = _report_response(request)
+        response = _checked_response(request, "report", _REPORT_SCHEMA_VERSION)
         secrets = [
             SecretReport(
                 name=s["name"],

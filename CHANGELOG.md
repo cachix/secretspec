@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- SOPS provider (`sops://`, `sops` build feature) for reading and writing
+  YAML, JSON, dotenv, and INI files through the SOPS CLI, including templated
+  per-project/profile paths and provider-credential injection for encryption
+  keys and cloud authentication.
 - `secretspec config init --provider <PROVIDER> --profile <PROFILE>` can save
   global defaults without interactive prompts, including `--profile none` to
   clear the default profile.

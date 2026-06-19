@@ -776,6 +776,30 @@ mod integration_tests {
 
     #[cfg(feature = "vault")]
     #[test]
+    fn test_openbao_flat_layout_uri() {
+        let provider = Box::<dyn Provider>::try_from(
+            "openbao://vault.red-wiz.stream/kv/personal/adrian/hebe/obp-dev?layout=flat",
+        )
+        .unwrap();
+        assert_eq!(provider.name(), "vault");
+        assert_eq!(
+            provider.uri(),
+            "vault://vault.red-wiz.stream/kv/personal/adrian/hebe/obp-dev?layout=flat"
+        );
+    }
+
+    #[cfg(feature = "vault")]
+    #[test]
+    fn test_vault_flat_layout_defaults_document_path() {
+        let provider =
+            Box::<dyn Provider>::try_from("vault://vault.example.com:8200/secret?layout=flat")
+                .unwrap();
+        assert_eq!(provider.name(), "vault");
+        assert_eq!(provider.uri(), "vault://vault.example.com:8200?layout=flat");
+    }
+
+    #[cfg(feature = "vault")]
+    #[test]
     fn test_vault_provider_requires_address() {
         // Test that Vault provider requires an address when VAULT_ADDR is not set
         let had_vault_addr = std::env::var("VAULT_ADDR").ok();

@@ -26,6 +26,7 @@ openbao://[namespace@]host[:port][/mount][?key=value&...]
 - `namespace@`: Optional Vault namespace (also reads `VAULT_NAMESPACE` env var)
 - `?auth=approle`: Use AppRole authentication (default: `token`)
 - `?kv=1`: Use KV v1 engine (default: v2)
+- `?layout=flat`: Read/write one KV document whose fields are secret names
 - `?tls=false`: Disable TLS (for development servers)
 
 ### Examples
@@ -86,6 +87,24 @@ Secrets are stored at the KV path: `secretspec/{project}/{profile}/{key}`
 Each secret is stored as a KV entry with a `value` field.
 
 Example for KV v2: `GET /v1/secret/data/secretspec/myapp/production/DATABASE_URL`
+
+### Flat KV Documents
+
+Some teams already keep one environment's secrets as fields in a single KV
+document. Use `layout=flat` for that shape:
+
+```bash
+# KV v2 document path: kv/data/personal/adrian/hebe/obp-dev
+$ secretspec run \
+  --provider "openbao://vault.example.com/kv/personal/adrian/hebe/obp-dev?layout=flat" \
+  --profile obp-dev \
+  -- make bruno-run-dev
+```
+
+With this layout, SecretSpec key `OBP_OAUTH2_CLIENT_CREDENTIALS_CLIENT_SECRET`
+is read from the field named `OBP_OAUTH2_CLIENT_CREDENTIALS_CLIENT_SECRET` in
+that document. If no document path is supplied after the mount, the provider
+uses `secretspec/{project}/{profile}` as the document path.
 
 ### Development Mode
 

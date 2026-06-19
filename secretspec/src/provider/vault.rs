@@ -19,6 +19,7 @@
 //! Query parameters:
 //! - `auth` -- authentication method: `token` (default) or `approle`
 //! - `kv` -- KV engine version: `1` or `2` (default)
+//! - `layout` -- storage layout: `secretspec` (default) or `flat`
 //! - `tls` -- enable TLS: `true` (default) or `false`
 //!
 //! # Examples
@@ -36,6 +37,15 @@
 //!
 //! Secrets are stored at the path: `secretspec/{project}/{profile}/{key}`
 //! Each secret is stored as a KV entry with a `value` field.
+//!
+//! With `layout=flat`, the provider reads and writes a single KV document whose
+//! fields are secret names. If the URI path includes segments after the mount,
+//! those segments are the document path:
+//!
+//! `openbao://vault.example.com:8200/kv/team/app/dev?layout=flat`
+//!
+//! In this example, secret `DATABASE_URL` is read from the `DATABASE_URL` field
+//! in KV v2 document `kv/data/team/app/dev`.
 //!
 //! # Example
 //!
@@ -78,6 +88,16 @@ pub enum AuthMethod {
     AppRole,
 }
 
+/// Storage layout for Vault / OpenBao secrets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum VaultLayout {
+    /// Store one KV entry per SecretSpec key at `secretspec/{project}/{profile}/{key}`.
+    #[default]
+    SecretSpec,
+    /// Store all keys as fields in one KV document.
+    Flat,
+}
+
 /// Configuration for the Vault / OpenBao provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultConfig {
@@ -85,12 +105,16 @@ pub struct VaultConfig {
     pub endpoint: String,
     /// The KV secrets engine mount path (default: `secret`).
     pub mount: String,
+    /// Optional path prefix or flat document path under the KV mount.
+    pub path: Option<String>,
     /// The KV engine version (default: V2).
     pub kv_version: KvVersion,
     /// Optional Vault namespace.
     pub namespace: Option<String>,
     /// Authentication method (default: Token).
     pub auth: AuthMethod,
+    /// Storage layout (default: one KV entry per SecretSpec key).
+    pub layout: VaultLayout,
 }
 
 impl Default for VaultConfig {
@@ -98,9 +122,11 @@ impl Default for VaultConfig {
         Self {
             endpoint: "https://127.0.0.1:8200".to_string(),
             mount: "secret".to_string(),
+            path: None,
             kv_version: KvVersion::default(),
             namespace: None,
             auth: AuthMethod::default(),
+            layout: VaultLayout::default(),
         }
     }
 }
@@ -148,15 +174,23 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
                 })?,
         };
 
-        // Mount path from URL path (strip leading slash, default to "secret")
+        // Mount path from URL path (strip leading slash, default to "secret").
+        // Additional path segments are used by `layout=flat` as the KV document
+        // path, allowing one existing KV document to expose many SecretSpec keys.
         let path = url.path();
-        let mount = path
+        let mut path_segments = path
             .trim_start_matches('/')
             .split('/')
-            .next()
-            .filter(|s| !s.is_empty())
-            .unwrap_or("secret")
-            .to_string();
+            .filter(|s| !s.is_empty());
+        let mount = path_segments.next().unwrap_or("secret").to_string();
+        let path = {
+            let remaining = path_segments.collect::<Vec<_>>().join("/");
+            if remaining.is_empty() {
+                None
+            } else {
+                Some(remaining)
+            }
+        };
 
         // KV version from query parameter (default: V2)
         let kv_version = url
@@ -194,12 +228,28 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
             .transpose()?
             .unwrap_or_default();
 
+        let layout = url
+            .query_pairs()
+            .find(|(k, _)| k == "layout")
+            .map(|(_, v)| match v.as_ref() {
+                "secretspec" | "default" => Ok(VaultLayout::SecretSpec),
+                "flat" => Ok(VaultLayout::Flat),
+                other => Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "Unknown Vault layout '{}'. Expected 'secretspec' or 'flat'.",
+                    other
+                ))),
+            })
+            .transpose()?
+            .unwrap_or_default();
+
         Ok(Self {
             endpoint,
             mount,
+            path,
             kv_version,
             namespace,
             auth,
+            layout,
         })
     }
 }
@@ -227,10 +277,8 @@ impl VaultProvider {
         Self { config }
     }
 
-    /// Formats the secret path within the KV engine.
-    ///
-    /// Uses the pattern: `secretspec/{project}/{profile}/{key}`
-    fn format_secret_path(project: &str, profile: &str, key: &str) -> Result<String> {
+    /// Formats the SecretSpec one-entry-per-key path within the KV engine.
+    fn format_secretspec_path(project: &str, profile: &str, key: &str) -> Result<String> {
         if project.is_empty() {
             return Err(SecretSpecError::ProviderOperationFailed(
                 "project cannot be empty".to_string(),
@@ -248,6 +296,25 @@ impl VaultProvider {
         }
 
         Ok(format!("secretspec/{}/{}/{}", project, profile, key))
+    }
+
+    /// Formats the flat-layout KV document path.
+    fn format_flat_path(&self, project: &str, profile: &str) -> Result<String> {
+        if let Some(path) = &self.config.path {
+            return Ok(path.clone());
+        }
+        if project.is_empty() {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "project cannot be empty".to_string(),
+            ));
+        }
+        if profile.is_empty() {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "profile cannot be empty".to_string(),
+            ));
+        }
+
+        Ok(format!("secretspec/{}/{}", project, profile))
     }
 
     /// Resolves the Vault token using the configured authentication method.
@@ -375,6 +442,19 @@ impl VaultProvider {
         }
     }
 
+    fn extract_kv_data<'a>(
+        &self,
+        body: &'a serde_json::Value,
+    ) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
+        match self.config.kv_version {
+            KvVersion::V2 => body
+                .get("data")
+                .and_then(|d| d.get("data"))
+                .and_then(|d| d.as_object()),
+            KvVersion::V1 => body.get("data").and_then(|d| d.as_object()),
+        }
+    }
+
     /// Retrieves a secret from Vault asynchronously.
     async fn get_secret_async(
         &self,
@@ -382,7 +462,10 @@ impl VaultProvider {
         key: &str,
         profile: &str,
     ) -> Result<Option<SecretString>> {
-        let secret_path = Self::format_secret_path(project, profile, key)?;
+        let secret_path = match self.config.layout {
+            VaultLayout::SecretSpec => Self::format_secretspec_path(project, profile, key)?,
+            VaultLayout::Flat => self.format_flat_path(project, profile)?,
+        };
         let url = self.build_url(&secret_path);
         let token = self.resolve_token()?;
         let headers = Self::build_headers(&token, &self.config.namespace)?;
@@ -409,15 +492,14 @@ impl VaultProvider {
                     ))
                 })?;
 
-                let value = match self.config.kv_version {
-                    KvVersion::V2 => body
-                        .get("data")
-                        .and_then(|d| d.get("data"))
+                let value = match self.config.layout {
+                    VaultLayout::SecretSpec => self
+                        .extract_kv_data(&body)
                         .and_then(|d| d.get("value"))
                         .and_then(|v| v.as_str()),
-                    KvVersion::V1 => body
-                        .get("data")
-                        .and_then(|d| d.get("value"))
+                    VaultLayout::Flat => self
+                        .extract_kv_data(&body)
+                        .and_then(|d| d.get(key))
                         .and_then(|v| v.as_str()),
                 };
 
@@ -447,17 +529,33 @@ impl VaultProvider {
         value: &SecretString,
         profile: &str,
     ) -> Result<()> {
-        let secret_path = Self::format_secret_path(project, profile, key)?;
+        let secret_path = match self.config.layout {
+            VaultLayout::SecretSpec => Self::format_secretspec_path(project, profile, key)?,
+            VaultLayout::Flat => self.format_flat_path(project, profile)?,
+        };
         let url = self.build_url(&secret_path);
         let token = self.resolve_token()?;
         let headers = Self::build_headers(&token, &self.config.namespace)?;
 
-        let body = match self.config.kv_version {
-            KvVersion::V2 => {
-                serde_json::json!({ "data": { "value": value.expose_secret() } })
-            }
-            KvVersion::V1 => {
-                serde_json::json!({ "value": value.expose_secret() })
+        let body = match self.config.layout {
+            VaultLayout::SecretSpec => match self.config.kv_version {
+                KvVersion::V2 => {
+                    serde_json::json!({ "data": { "value": value.expose_secret() } })
+                }
+                KvVersion::V1 => {
+                    serde_json::json!({ "value": value.expose_secret() })
+                }
+            },
+            VaultLayout::Flat => {
+                let mut data = self.read_flat_document(&url, &headers).await?;
+                data.insert(
+                    key.to_string(),
+                    serde_json::Value::String(value.expose_secret().to_string()),
+                );
+                match self.config.kv_version {
+                    KvVersion::V2 => serde_json::json!({ "data": data }),
+                    KvVersion::V1 => serde_json::Value::Object(data),
+                }
             }
         };
 
@@ -491,6 +589,50 @@ impl VaultProvider {
             }
         }
     }
+
+    async fn read_flat_document(
+        &self,
+        url: &str,
+        headers: &HeaderMap,
+    ) -> Result<serde_json::Map<String, serde_json::Value>> {
+        let client = reqwest::Client::new();
+        let response = client
+            .get(url)
+            .headers(headers.clone())
+            .send()
+            .await
+            .map_err(|e| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to connect to Vault at {}: {}",
+                    self.config.endpoint, e
+                ))
+            })?;
+
+        match response.status().as_u16() {
+            200 => {
+                let body: serde_json::Value = response.json().await.map_err(|e| {
+                    SecretSpecError::ProviderOperationFailed(format!(
+                        "Failed to parse Vault response: {}",
+                        e
+                    ))
+                })?;
+                Ok(self.extract_kv_data(&body).cloned().unwrap_or_default())
+            }
+            404 => Ok(serde_json::Map::new()),
+            403 => Err(SecretSpecError::ProviderOperationFailed(
+                "Vault authentication failed (403 Forbidden). \
+                 Check your VAULT_TOKEN and ensure it has the required permissions."
+                    .to_string(),
+            )),
+            status => {
+                let body = response.text().await.unwrap_or_default();
+                Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "Vault returned HTTP {} while reading existing flat secret document: {}",
+                    status, body
+                )))
+            }
+        }
+    }
 }
 
 impl Provider for VaultProvider {
@@ -506,9 +648,27 @@ impl Provider for VaultProvider {
                 .trim_start_matches("https://")
                 .trim_start_matches("http://")
         );
-        if self.config.mount != "secret" {
+        if self.config.mount != "secret" || self.config.path.is_some() {
             uri.push('/');
             uri.push_str(&self.config.mount);
+            if let Some(path) = &self.config.path {
+                uri.push('/');
+                uri.push_str(path);
+            }
+        }
+        let mut query = Vec::new();
+        if self.config.layout == VaultLayout::Flat {
+            query.push("layout=flat");
+        }
+        if self.config.kv_version == KvVersion::V1 {
+            query.push("kv=1");
+        }
+        if self.config.auth == AuthMethod::AppRole {
+            query.push("auth=approle");
+        }
+        if !query.is_empty() {
+            uri.push('?');
+            uri.push_str(&query.join("&"));
         }
         uri
     }

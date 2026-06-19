@@ -190,3 +190,4 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |
 | Vault/OpenBao | ✅ Vault encryption | Vault/OpenBao server | ✅ Yes |
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
+| SOPS | ✅ Assorted | Local Filesystem | ✅ Yes |

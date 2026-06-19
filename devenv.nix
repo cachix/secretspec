@@ -5,6 +5,7 @@
     channel = "stable";
     version = "1.92.0";
   };
+
   languages.javascript = {
     directory = "./docs";
     enable = true;
@@ -21,6 +22,8 @@
     pkgs.cargo-tarpaulin
     # installers
     pkgs.cargo-dist
+    # For development of the SOPS provider
+    pkgs.sops
   ];
 
   git-hooks.hooks = {
@@ -38,7 +41,7 @@
     # Build the CLI for integration tests
     cargo build --release
     export PATH="$PWD/target/release:$PATH"
-    
+
     # Run CLI integration tests
     bash tests/cli-integration.sh
   '';

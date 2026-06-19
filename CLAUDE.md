@@ -66,7 +66,7 @@ When adding a new provider, update **every** location below — provider names a
 2. `docs/astro.config.ts` - Add to sidebar navigation under "Providers" **and** to the providers sentence in the `starlightLlmsTxt` description block
 3. `docs/src/content/docs/concepts/providers.md` - Add a row to the "Available Providers" table
 4. `docs/src/content/docs/reference/providers.md` - Add a provider section **and** a row in the "Security Considerations" table
-5. `docs/src/pages/index.astro` - Add to the `providerMetadata` array (top of file) **and** to the `secretspec config init` mini-terminal in the hero
+5. `docs/src/pages/index.astro` - Add to the `providerMetadata` array (top of file).
 6. `docs/src/content/docs/quick-start.mdx` - Update the `secretspec config init` example output to include the new provider
 7. `README.md` (symlink to `secretspec/README.md`) - Add to the "Providers" bullet list **and** to the `secretspec config init` example output
 

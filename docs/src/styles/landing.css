@@ -456,6 +456,7 @@
   align-items: center;
   gap: 0.6rem;
   padding: 0.6rem 1.1rem;
+  margin: 1px 0px;
   border: 1px solid var(--color-gray-200);
   border-radius: 999px;
   background: var(--sl-color-bg-nav);

@@ -173,6 +173,12 @@ impl ProviderUrl {
     }
 }
 
+impl std::fmt::Display for ProviderUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Executes an async future in a blocking context.
 ///
 /// If already inside a tokio runtime, uses `block_in_place` with the
@@ -203,8 +209,11 @@ pub mod lastpass;
 pub mod onepassword;
 pub mod pass;
 pub mod protonpass;
+#[cfg(feature = "sops")]
+pub mod sops;
 #[cfg(feature = "vault")]
 pub mod vault;
+
 #[macro_use]
 pub mod macros;
 

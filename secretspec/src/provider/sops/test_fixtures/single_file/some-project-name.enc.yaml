@@ -1,0 +1,20 @@
+some-project-name:
+    development:
+        foobar: ENC[AES256_GCM,data:AOJg,iv:3OyAq3nKrBYyWrjN4Ix+LWQ0V1eMZYAC3HViLR/k0eU=,tag:dKk8epPsdJPkqmrz5inN0Q==,type:str]
+    production:
+        foobar: ENC[AES256_GCM,data:YtF7,iv:H3YL5P1aWDmK/hk1y6VxWDb42G9tObV3GkX9cRFLkR8=,tag:jex4dc7nSGSiXfClAVENqg==,type:str]
+sops:
+    age:
+        - recipient: age1jpa8rf5qmrg6pw444fcgpkaxg8x4neueszrexzagdjpunjlgeyzq304w34
+          enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBMME1QZzJrcUs1cnVpUk9E
+            SXpqZCtJRVdudk9HMmlzUEIzNWJ5bC9tbHhvCmpuTll6L1B3Y0cyLytGSWt5Y3JV
+            azhPMzZMZkFndUYwWlVzclRNRE41Q0kKLS0tIFNIYzB4QXJ1dlVtbjQwUVo3S2NF
+            YzN1TVB3d3F2dDVqVUNJMG0zMndlZkUKCc4dSqvIk7d/MkigeOaP7HHYXd38w3yo
+            OPG33e4JfWOOw5EcgHNNhkuBiPvJaMz5Xm3HjjzhboK+7dLK+bIwQA==
+            -----END AGE ENCRYPTED FILE-----
+    lastmodified: "2026-06-10T21:22:08Z"
+    mac: ENC[AES256_GCM,data:RxAXaU3pfEGK7nAY9IGKia/lcXdDv05DvkpYvIfBBYM0lO8oWPR5zJwAaxX1C/vTMgvANdAfb0u+rJbVENgE4U7r/elTJD4nchIzsKCC1vHlCNCZRLxYw4dVdjCRr7tL98W2nEA+8edTG4PbC8q+bARYHHkJc+7o7yXfa0ZLC1A=,iv:Dm2TW4nMaISSi9OG/L6qjX+v0B+N7T6oS7CsNUnF/is=,tag:lCn9yhUtD04igmGxuUoMgQ==,type:str]
+    unencrypted_suffix: _unencrypted
+    version: 3.12.1

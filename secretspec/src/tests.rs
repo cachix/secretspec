@@ -4636,6 +4636,35 @@ fn test_provider_override_resolves_global_alias_when_project_providers_present()
 }
 
 #[test]
+fn test_import_source_expands_project_alias() {
+    let temp_dir = TempDir::new().unwrap();
+    let source_env_path = temp_dir.path().join(".env.source");
+    let target_env_path = temp_dir.path().join(".env.target");
+    fs::write(&source_env_path, "API_KEY=from-source\n").unwrap();
+
+    let source_uri = format!("dotenv://{}", source_env_path.display());
+    let target_uri = format!("dotenv://{}", target_env_path.display());
+
+    let config = config_with_project_alias_secret("source_env", &source_uri, None);
+    let global = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(target_uri),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let spec = Secrets::new(config, Some(global), None, None);
+
+    spec.import("source_env")
+        .expect("import source alias should resolve from project [providers]");
+
+    assert_eq!(
+        read_env_var(&target_env_path, "API_KEY").as_deref(),
+        Some("from-source")
+    );
+}
+
+#[test]
 fn test_validate_project_provider_chain_without_global_default() {
     let temp_dir = TempDir::new().unwrap();
     let env_file = temp_dir.path().join(".env.project");

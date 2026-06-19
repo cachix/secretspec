@@ -749,6 +749,10 @@ impl Secrets {
             .cloned()
     }
 
+    fn resolve_provider_spec(&self, spec: String) -> String {
+        self.lookup_provider_alias(&spec).unwrap_or(spec)
+    }
+
     /// Returns the union of alias names known across all sources, sorted.
     fn known_provider_aliases(&self) -> Vec<String> {
         let mut names: Vec<String> = self
@@ -807,8 +811,9 @@ impl Secrets {
     /// Used as the shared head of provider resolution so the precedence between
     /// the `--provider` flag (forwarded via `set_provider`) and the
     /// `SECRETSPEC_PROVIDER` env var stays consistent across resolvers.
-    fn explicit_provider_spec(&self, override_arg: Option<String>) -> Option<String> {
+    fn explicit_provider_spec(&self, override_arg: Option<&str>) -> Option<String> {
         override_arg
+            .map(|spec| spec.to_string())
             .or_else(|| self.provider.clone())
             .or_else(|| env::var("SECRETSPEC_PROVIDER").ok())
     }
@@ -818,8 +823,8 @@ impl Secrets {
     /// Resolves the explicit spec via [`Self::explicit_provider_spec`], then
     /// expands any matching alias via [`Self::lookup_provider_alias`].
     pub(crate) fn resolve_provider_override(&self, override_arg: Option<&str>) -> Option<String> {
-        let spec = self.explicit_provider_spec(override_arg.map(|s| s.to_string()))?;
-        Some(self.lookup_provider_alias(&spec).unwrap_or(spec))
+        let spec = self.explicit_provider_spec(override_arg)?;
+        Some(self.resolve_provider_spec(spec))
     }
 
     /// Resolves the write target for a secret.
@@ -891,7 +896,7 @@ impl Secrets {
     /// - The specified provider is not found
     pub(crate) fn get_provider(
         &self,
-        provider_arg: Option<String>,
+        provider_arg: Option<&str>,
     ) -> Result<Box<dyn ProviderTrait>> {
         let provider_spec = self
             .explicit_provider_spec(provider_arg)
@@ -900,7 +905,7 @@ impl Secrets {
                     .as_ref()
                     .and_then(|gc| gc.defaults.provider.clone())
             })
-            .map(|spec| self.lookup_provider_alias(&spec).unwrap_or(spec))
+            .map(|spec| self.resolve_provider_spec(spec))
             .ok_or(SecretSpecError::NoProviderConfigured)?;
 
         let provider = self.build_provider(provider_spec)?;
@@ -967,7 +972,7 @@ impl Secrets {
         secret_name: &str,
         profile_name: &str,
         provider_uris: Option<&[String]>,
-        default_provider_arg: Option<String>,
+        default_provider_arg: Option<&str>,
     ) -> Result<(Option<SecretString>, Option<String>)> {
         // If provider URIs are specified, try them in order
         if let Some(uris) = provider_uris {
@@ -1355,7 +1360,7 @@ impl Secrets {
 
                     let missing = &validation_errors.missing_required;
                     let total = missing.len();
-                    let default_backend = self.get_provider(provider_arg.clone())?;
+                    let default_backend = self.get_provider(provider_arg.as_deref())?;
 
                     // List all missing secrets upfront
                     eprintln!(
@@ -1676,7 +1681,8 @@ impl Secrets {
         let mut source_uri: Option<String> = None;
         let copy_result = (|| -> Result<()> {
             // Create the "from" provider and check availability
-            let from_provider_instance = self.build_provider(from_provider.to_string())?;
+            let from_provider_instance =
+                self.build_provider(self.resolve_provider_spec(from_provider.to_string()))?;
             source_uri = Some(from_provider_instance.uri());
 
             eprintln!(

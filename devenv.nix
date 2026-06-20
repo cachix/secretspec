@@ -8,6 +8,7 @@
     toolchainFile = ./rust-toolchain.toml;
   };
   languages.javascript = {
+    directory = "./docs";
     enable = true;
     # Node 22 (the plain nixpkgs default) bundles npm 10.x, which mishandles
     # npm Trusted Publishing's OIDC handshake and can even misreport a brand

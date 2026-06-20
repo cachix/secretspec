@@ -16,6 +16,13 @@ pub struct PassConfig {
     /// Supports placeholders: {project}, {profile}, and {key}.
     /// Defaults to "secretspec/{project}/{profile}/{key}" if not specified.
     pub folder_prefix: Option<String>,
+
+    /// Optional password store directory.
+    ///
+    /// When set, exported as `PASSWORD_STORE_DIR` for every `pass` invocation,
+    /// overriding the default `~/.password-store`. Configured via the
+    /// `store_dir` query parameter (e.g. `pass://?store_dir=/path/to/store`).
+    pub store_dir: Option<String>,
 }
 
 impl TryFrom<&ProviderUrl> for PassConfig {
@@ -39,6 +46,8 @@ impl TryFrom<&ProviderUrl> for PassConfig {
             let path = url.path();
             config.folder_prefix = Some(format!("{}{}", host, path));
         }
+
+        config.store_dir = url.query_value("store_dir");
 
         Ok(config)
     }
@@ -72,7 +81,7 @@ crate::register_provider! {
     name: "pass",
     description: "Unix password manager with GPG encryption",
     schemes: ["pass"],
-    examples: ["pass://", "pass://secretspec/shared/{profile}/{key}"],
+    examples: ["pass://", "pass://secretspec/shared/{profile}/{key}", "pass://?store_dir=/path/to/store"],
 }
 
 impl PassProvider {
@@ -97,6 +106,16 @@ impl PassProvider {
             .replace("{profile}", profile)
             .replace("{key}", key)
     }
+
+    /// Creates a `pass` command, applying `PASSWORD_STORE_DIR` when a custom
+    /// store directory is configured.
+    fn command(&self) -> Command {
+        let mut command = Command::new("pass");
+        if let Some(ref store_dir) = self.config.store_dir {
+            command.env("PASSWORD_STORE_DIR", store_dir);
+        }
+        command
+    }
 }
 
 impl Provider for PassProvider {
@@ -105,10 +124,22 @@ impl Provider for PassProvider {
     }
 
     fn uri(&self) -> String {
-        if let Some(ref prefix) = self.config.folder_prefix {
-            format!("pass://{}", ProviderUrl::encode(prefix))
-        } else {
-            "pass".to_string()
+        let prefix = self
+            .config
+            .folder_prefix
+            .as_deref()
+            .map(ProviderUrl::encode)
+            .unwrap_or_default();
+        match self.config.store_dir {
+            Some(ref store_dir) => {
+                format!(
+                    "pass://{}?store_dir={}",
+                    prefix,
+                    ProviderUrl::encode_query(store_dir)
+                )
+            }
+            None if prefix.is_empty() => "pass".to_string(),
+            None => format!("pass://{}", prefix),
         }
     }
 
@@ -128,7 +159,8 @@ impl Provider for PassProvider {
     fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
         let entry_name = self.format_entry_name(project, profile, key);
 
-        let output = Command::new("pass")
+        let output = self
+            .command()
             .arg("show")
             .arg(&entry_name)
             .output()
@@ -181,7 +213,8 @@ impl Provider for PassProvider {
     fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
         let entry_name = self.format_entry_name(project, profile, key);
 
-        let mut child = Command::new("pass")
+        let mut child = self
+            .command()
             .args(["insert", "-m", "-f", &entry_name])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -254,11 +287,33 @@ mod tests {
     fn format_entry_name_custom_prefix() {
         let provider = PassProvider::new(PassConfig {
             folder_prefix: Some("vault/{profile}/{key}".to_string()),
+            store_dir: None,
         });
         assert_eq!(
             provider.format_entry_name("myproj", "prod", "API_KEY"),
             "vault/prod/API_KEY"
         );
+    }
+
+    #[test]
+    fn try_from_parses_store_dir_query() {
+        let config =
+            PassConfig::try_from(&provider_url("pass://?store_dir=/custom/store")).unwrap();
+        assert_eq!(config.folder_prefix, None);
+        assert_eq!(config.store_dir.as_deref(), Some("/custom/store"));
+    }
+
+    #[test]
+    fn try_from_parses_store_dir_with_folder_prefix() {
+        let config = PassConfig::try_from(&provider_url(
+            "pass://secretspec/{profile}/{key}?store_dir=/custom/store",
+        ))
+        .unwrap();
+        assert_eq!(
+            config.folder_prefix.as_deref(),
+            Some("secretspec/{profile}/{key}")
+        );
+        assert_eq!(config.store_dir.as_deref(), Some("/custom/store"));
     }
 
     #[test]
@@ -283,7 +338,62 @@ mod tests {
         assert_eq!(PassProvider::new(PassConfig::default()).uri(), "pass");
         let provider = PassProvider::new(PassConfig {
             folder_prefix: Some("my vault/{key}".to_string()),
+            store_dir: None,
         });
         assert_eq!(provider.uri(), "pass://my%20vault/{key}");
+    }
+
+    #[test]
+    fn uri_round_trips_store_dir() {
+        let store_dir_only = PassProvider::new(PassConfig {
+            folder_prefix: None,
+            store_dir: Some("/custom/store".to_string()),
+        });
+        assert_eq!(store_dir_only.uri(), "pass://?store_dir=/custom/store");
+
+        let with_prefix = PassProvider::new(PassConfig {
+            folder_prefix: Some("shared/{key}".to_string()),
+            store_dir: Some("/custom/store".to_string()),
+        });
+        assert_eq!(
+            with_prefix.uri(),
+            "pass://shared/{key}?store_dir=/custom/store"
+        );
+    }
+
+    #[test]
+    fn uri_round_trips_store_dir_with_special_chars() {
+        // Characters that are structurally significant inside a query string
+        // (`&`, `+`, `#`, `%`, space) must survive uri() -> TryFrom. Plain
+        // path/host encoding leaves them unescaped, which would silently corrupt
+        // the store directory; encode_query escapes them so they round-trip.
+        for store_dir in [
+            "/custom/store",
+            "/srv/store+1",
+            "/data/a&b",
+            "/data/a#b",
+            "/has space",
+            "/pct%20literal",
+            "/q?x=y",
+            "/all/&+#%=? mix",
+        ] {
+            let provider = PassProvider::new(PassConfig {
+                folder_prefix: Some("shared/{key}".to_string()),
+                store_dir: Some(store_dir.to_string()),
+            });
+            let uri = provider.uri();
+            let reparsed = PassConfig::try_from(&provider_url(&uri))
+                .unwrap_or_else(|e| panic!("uri {uri:?} failed to reparse: {e}"));
+            assert_eq!(
+                reparsed.store_dir.as_deref(),
+                Some(store_dir),
+                "store_dir {store_dir:?} did not round-trip via uri {uri:?}"
+            );
+            assert_eq!(
+                reparsed.folder_prefix.as_deref(),
+                Some("shared/{key}"),
+                "folder_prefix corrupted by store_dir {store_dir:?} via uri {uri:?}"
+            );
+        }
     }
 }

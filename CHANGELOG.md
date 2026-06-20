@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `secretspec import <FROM>` now accepts a provider alias (from `[providers]` or
+  the global `[defaults.providers]`) as its source, not just a literal provider
+  URI. Passing an unknown provider or alias now reports the available aliases.
+
 ## [0.12.1] - 2026-06-15
 
 ### Fixed

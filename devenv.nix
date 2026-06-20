@@ -6,6 +6,7 @@
     version = "1.92.0";
   };
   languages.javascript = {
+    directory = "./docs";
     enable = true;
     npm = {
       enable = true;

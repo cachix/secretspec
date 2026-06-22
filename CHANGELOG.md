@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The `pass` provider accepts a `store_dir` query parameter (e.g.
+  `pass://?store_dir=/path/to/store`) to use a password store directory other
+  than the default `~/.password-store`. It is applied as `PASSWORD_STORE_DIR`
+  scoped to each `pass` invocation.
+
 ### Fixed
+- Provider URIs now correctly round-trip query parameters whose values contain
+  characters that are significant in a query string (`&`, `+`, `#`, `%`, and
+  spaces). Previously such characters in the `awssm` `prefix` (and the new `pass`
+  `store_dir`) were emitted unescaped, so the value could be silently truncated
+  or altered when the URI was parsed back.
 - `secretspec import <FROM>` now accepts a provider alias (from `[providers]` or
   the global `[defaults.providers]`) as its source, not just a literal provider
   URI. Passing an unknown provider or alias now reports the available aliases.

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-06-22
+
 ### Added
 - The `pass` provider accepts a `store_dir` query parameter (e.g.
   `pass://?store_dir=/path/to/store`) to use a password store directory other

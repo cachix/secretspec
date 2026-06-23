@@ -91,6 +91,7 @@ jobs:
           export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_COMMIT_TOKEN" | base64 -w 0)"
           monochange --log-level=debug step prepare-release --format json
+          fix:format
           monochange --log-level=debug step commit-release --stage-all --no-verify
           monochange --log-level=debug step open-release-request --stage-all --no-verify
         shell: devenv shell -- bash -e {0}

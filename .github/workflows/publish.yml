@@ -101,7 +101,7 @@ jobs:
           RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
         run: |
           set -euo pipefail
-          pnpm build:rust
+          build:dist
           pnpm node scripts/npm/build-packages.js \
             --release-tag "$RELEASE_TAG" \
             --assets-dir "$RUNNER_TEMP/release-assets"

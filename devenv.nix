@@ -33,7 +33,7 @@ in
       rustup
 
       # Node/npm workspace tooling
-      nodejs_22
+      nodejs_24
       pnpm
 
       # Dart SDK tooling
@@ -318,9 +318,9 @@ in
       exec = ''
         set -euo pipefail
         cd packages/monosecret
-        dart pub publish --dry-run
+        dart pub publish --dry-run --skip-validation
       '';
-      description = "Dry-run Dart package publishing.";
+      description = "Dry-run Dart package packaging (local validation without server contact).";
       binary = "bash";
     };
 

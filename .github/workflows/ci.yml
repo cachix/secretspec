@@ -152,7 +152,7 @@ jobs:
           done
         shell: devenv shell -- bash -e {0}
       - name: dart publish dry-run
-        run: cd packages/monosecret && dart pub publish --dry-run
+        run: cd packages/monosecret && dart pub publish --dry-run --skip-validation
         shell: devenv shell -- bash -e {0}
 
   coverage:

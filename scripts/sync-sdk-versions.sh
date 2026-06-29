@@ -76,7 +76,15 @@ update_file() {
       ' "$file" > "$tmp"
       ;;
     cabal)
-      awk -v version="$workspace_version" '
+      # Cabal's version: field is PVP — dot-separated integers only — and rejects
+      # the semver prerelease/build suffixes the validation above accepts (e.g.
+      # v0.13.0-rc.1). Strip the suffix so a prerelease tag still produces a cabal
+      # file that builds; the X.Y.Z prefix is what PVP cares about.
+      local cabal_version="${workspace_version%%[-+]*}"
+      if [[ "$cabal_version" != "$workspace_version" ]]; then
+        echo "stripping semver suffix for cabal version: $workspace_version -> $cabal_version" >&2
+      fi
+      awk -v version="$cabal_version" '
         !changed && /^version:[[:space:]]*/ {
           print "version:            " version
           changed = 1

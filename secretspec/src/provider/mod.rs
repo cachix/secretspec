@@ -704,8 +704,6 @@ impl TryFrom<&Url> for Box<dyn Provider> {
     }
 }
 
-/// Returns true for paths that start with a Windows drive designator followed
-/// by a separator (e.g. `C:\...` or `C:/...`).
 fn provider_from_url(url: &ProviderUrl) -> Result<Box<dyn Provider>> {
     let scheme = url.scheme();
 

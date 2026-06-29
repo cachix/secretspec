@@ -64,13 +64,16 @@ quicktype owns the type generation.
 
 ## Distribution
 
-The SDKs are designed to install with no native build: the C ABI library is
-bundled in the Python wheel and the Ruby gem, embedded in the Go module, and
-built as a napi-rs addon for Node (prebuilt per-platform npm packages are a
-follow-up). The native library is otherwise discovered from the
-`SECRETSPEC_FFI_LIB` environment variable or a Cargo `target` directory, which
-is how it works from a source checkout.
+The resolver ships inside each package, so there is nothing extra to install and
+no runtime library path to set:
 
-The Haskell SDK is the exception: it links the C ABI at build time, so the
-`secretspec-ffi` `cdylib` must be on the linker path (`--extra-lib-dirs`) and the
-runtime loader path when building and running it.
+- **Python** statically links the `secretspec-ffi` archive into a `cp39-abi3`
+  wheel, and **Ruby** statically links it into a native C extension in the gem.
+- **Haskell** statically links the same archive at build time via the GHC FFI.
+- **Go** embeds the `cdylib` in the module and loads it at runtime via purego
+  (no cgo); an opt-in `-tags static` build links it statically instead.
+- **Node.js** builds the resolver into a napi-rs addon.
+
+Because the resolver is linked or embedded directly, none of the SDKs depend on a
+separately installed `cdylib` or an `LD_LIBRARY_PATH`/`SECRETSPEC_FFI_LIB`
+override at runtime.

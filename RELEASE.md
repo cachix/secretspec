@@ -11,24 +11,31 @@ Version tags are `vX.Y.Z`; the publish jobs trigger on them.
 
 ## Python (PyPI) — `python-wheels.yml`
 
-- **Build:** Linux wheels are built inside a `manylinux_2_28` container (old
-  glibc) and repaired with `auditwheel`, which vendors the cdylib's system
-  dependencies (notably `libdbus`, pulled in by the keyring provider) and retags
-  to `manylinux`. macOS/Windows build natively. The wheel is `py3-none-<platform>`
-  and bundles the cdylib in `secretspec/_lib/`.
+- **Build:** the Rust resolver is statically linked into a compiled CPython
+  extension (cffi API mode over `libsecretspec_ffi.a`) — there is no separate
+  cdylib bundled. The extension targets the limited API, so one
+  `cp39-abi3-<platform>` wheel per platform serves all CPython >= 3.9. Linux
+  wheels are built inside a `manylinux_2_28` container (old glibc) and repaired
+  with `auditwheel`, which vendors the extension's dynamic system dependencies
+  (notably `libdbus`, pulled in by the keyring provider) and retags to
+  `manylinux`. macOS builds natively; a Windows wheel is a follow-up.
 - **Publish:** `pypa/gh-action-pypi-publish` via **PyPI Trusted Publishing**
   (OIDC). Configure a trusted publisher for this repo + a `pypi` environment; no
   token needed.
 
 ## Ruby (RubyGems) — `ruby-gems.yml`
 
-- **Build:** a platform gem (`Gem::Platform::CURRENT`) bundling the cdylib in
-  `vendor/`.
+- **Build:** a platform gem (`Gem::Platform::CURRENT`) bundling the
+  `secretspec-ffi` staticlib in `vendor/`. At `gem install`, mkmf compiles a tiny
+  C glue and statically links that archive, so the resolver is embedded in the
+  extension and one platform gem serves every Ruby ABI (install needs a C
+  compiler + Ruby headers, plus `libdbus-1-dev` for the keyring provider).
 - **Publish:** `gem push` for each platform gem.
 - **Secret:** `RUBYGEMS_API_KEY` (or configure RubyGems Trusted Publishing).
 - **Gap:** the Linux gem currently links the runner's glibc; for a portable gem,
-  build the cdylib on an old-glibc baseline (e.g. a `manylinux` container, as the
-  Python job does, or `rake-compiler-dock`) and bundle that. Tracked follow-up.
+  build the staticlib on an old-glibc baseline (e.g. a `manylinux` container, as
+  the Python job does, or `rake-compiler-dock`) and bundle that. Tracked
+  follow-up.
 
 ## Go (system library) — `go-embed.yml`
 

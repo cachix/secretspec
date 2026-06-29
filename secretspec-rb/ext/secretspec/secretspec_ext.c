@@ -7,7 +7,15 @@
  * this extension object, so there is no separate cdylib to ship or dlopen.
  */
 #include <ruby.h>
+#include <ruby/thread.h>
+#include <stdlib.h>
 #include "secretspec.h"
+
+static void *
+resolve_nogvl(void *arg)
+{
+    return secretspec_resolve((const char *)arg);
+}
 
 /*
  * Secretspec::Native.c_resolve(request_json) -> String or nil
@@ -15,12 +23,22 @@
  * Marshals the JSON request to the Rust resolver and copies the owned response
  * into a Ruby String before freeing it. Returns nil if the resolver returns NULL
  * (catastrophic allocation failure); the Ruby wrapper turns that into an Error.
+ *
+ * The resolver may block on network-backed providers (1Password, LastPass,
+ * Vault), so it runs with the GVL released — otherwise the round-trip would
+ * freeze every other Ruby thread. The request bytes are copied into a C-owned
+ * buffer first: the Ruby string may move once the GVL is released.
  */
 static VALUE
 native_resolve(VALUE self, VALUE request_json)
 {
-    const char *request = StringValueCStr(request_json);
-    char *result = secretspec_resolve(request);
+    char *request = strdup(StringValueCStr(request_json));
+    if (request == NULL) {
+        return Qnil;
+    }
+    char *result = rb_thread_call_without_gvl(
+        resolve_nogvl, request, RUBY_UBF_IO, NULL);
+    free(request);
     if (result == NULL) {
         return Qnil;
     }

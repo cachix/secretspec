@@ -42,7 +42,8 @@ typed = SecretSpec.from_dynamic!(resolved.fields) # typed, generated
 puts typed.database_url
 ```
 
-## Library discovery
+## Native library
 
-The native library is found via the `SECRETSPEC_FFI_LIB` environment variable,
-or a Cargo `target` directory found by searching up from the working directory.
+The resolver is statically linked into a native C extension built by mkmf, so the
+published platform gem is self-contained — there is no separate `cdylib` to
+locate and no `SECRETSPEC_FFI_LIB` to set at runtime.

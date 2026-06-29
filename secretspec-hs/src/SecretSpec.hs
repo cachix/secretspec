@@ -60,7 +60,7 @@ import qualified Data.Text as T
 import           Foreign.C.String (CString, peekCString)
 import           Foreign.Ptr (nullPtr)
 import           System.Directory (doesFileExist, removeFile)
-import           System.Environment (setEnv)
+import qualified System.Environment.Blank as Env
 
 -- The three C ABI functions, statically linked at build time (the archive
 -- libsecretspec_ffi.a is embedded; -lsecretspec_ffi resolves to it). They are
@@ -215,7 +215,11 @@ setAsEnv :: Resolved -> IO ()
 setAsEnv r =
   forM_ (Map.toList (resolvedSecrets r)) $ \(name, secret) ->
     case get secret of
-      Just v  -> setEnv (T.unpack name) (T.unpack v)
+      -- System.Environment.setEnv treats setEnv name "" as unsetEnv name, which
+      -- would *delete* a secret that resolves to "" (e.g. `.env` line `FOO=` or
+      -- `default = ""`). System.Environment.Blank.setEnv with overwrite=True sets
+      -- the empty string, matching the Go/Python/Ruby/Node SDKs.
+      Just v  -> Env.setEnv (T.unpack name) (T.unpack v) True
       Nothing -> pure ()
 
 -- | Remove the temp files backing any @as_path@ secrets in this result. The

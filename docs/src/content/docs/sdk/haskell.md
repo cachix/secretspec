@@ -60,13 +60,24 @@ secretspec schema | quicktype -s schema --top-level SecretSpec --lang haskell -o
 
 ## Building
 
-The native `secretspec-ffi` library is linked at build time, so point cabal at
-the built `cdylib` and put the same directory on the runtime loader path:
+The `secretspec-ffi` archive is statically linked at build time, so the resolver
+is embedded in the binary and there is no `cdylib` or `LD_LIBRARY_PATH` at
+runtime. Stage the `.a` in a directory of its own — so `-lsecretspec_ffi`
+resolves to the archive and not the co-located `.so` in `target/debug` — and pass
+the archive's transitive native dependencies through to the linker:
 
 ```bash
 cargo build -p secretspec-ffi
 TARGET="$(cargo metadata --no-deps --format-version 1 \
   | grep -o '"target_directory":"[^"]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/')"
-cabal build --extra-lib-dirs="$TARGET/debug"
-LD_LIBRARY_PATH="$TARGET/debug" cabal test --extra-lib-dirs="$TARGET/debug"
+
+# Stage the staticlib alone, and capture its native-static-libs for the linker.
+LIBDIR="$(mktemp -d)"
+cp "$TARGET/debug/libsecretspec_ffi.a" "$LIBDIR/"
+NATIVE_LIBS="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
+  --print native-static-libs 2>&1 | sed -n 's/^note: native-static-libs: //p' | tail -1)"
+OPTL=(); for l in $NATIVE_LIBS; do OPTL+=("--ghc-options=-optl$l"); done
+
+cabal build --extra-lib-dirs="$LIBDIR" "${OPTL[@]}"
+cabal test  --extra-lib-dirs="$LIBDIR" "${OPTL[@]}"
 ```

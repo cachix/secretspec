@@ -46,8 +46,8 @@ typed = Secrets.from_dict(resolved.fields())
 print(typed.database_url)  # typed str
 ```
 
-## Library discovery
+## Native library
 
-The native library is found via the `SECRETSPEC_FFI_LIB` environment variable, a
-copy bundled in the installed wheel, or a Cargo `target` directory found by
-searching up from the working directory.
+The resolver is statically linked into the extension module via cffi's API mode,
+so the published `cp39-abi3` wheel is self-contained — there is no separate
+`cdylib` to locate and no `SECRETSPEC_FFI_LIB` to set at runtime.

@@ -1892,11 +1892,6 @@ impl Secrets {
         Ok(backend)
     }
 
-    /// Attempts to generate a secret if it has generation config.
-    ///
-    /// Returns `Ok(Some(value))` if generation succeeded,
-    /// `Ok(None)` if generation is not configured,
-    /// or `Err` if generation was configured but failed.
     /// Whether an absent secret would be auto-generated on a full resolve: it
     /// declares an enabled `generate` config. Lets the value-free pass report
     /// that a missing secret *would* resolve via generation without minting and
@@ -1908,6 +1903,11 @@ impl Secrets {
         matches!(&secret_config.generate, Some(g) if g.is_enabled())
     }
 
+    /// Attempts to generate a secret if it has generation config.
+    ///
+    /// Returns `Ok(Some(value))` if generation succeeded,
+    /// `Ok(None)` if generation is not configured,
+    /// or `Err` if generation was configured but failed.
     fn try_generate_secret(
         &self,
         name: &str,

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://secretspec.dev/schema/resolve-response.schema.json",
   "title": "SecretSpec resolve response",
-  "description": "Value-carrying resolution result for one profile, emitted by `secretspec resolve --json` and the C ABI. CARRIES SECRET VALUES; treat as sensitive. When a required secret is missing, `secrets` is empty and `missing_required` is populated.",
+  "description": "Value-carrying resolution result for one profile, emitted by the secretspec-ffi C ABI. CARRIES SECRET VALUES; treat as sensitive. When a required secret is missing, `secrets` is empty and `missing_required` is populated.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "provider", "profile", "secrets", "missing_required", "missing_optional"],

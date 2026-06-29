@@ -1,8 +1,8 @@
 # Cross-language conformance suite
 
-Every SecretSpec SDK (Python, Go, Ruby, Node) is a thin client over the same
-`secretspec-ffi` C ABI. This suite proves they agree: each SDK resolves the same
-fixtures and must produce the identical **canonical** result.
+Every SecretSpec SDK (Python, Go, Ruby, Node.js, Haskell) is a thin client over
+the same `secretspec-ffi` C ABI. This suite proves they agree: each SDK resolves
+the same fixtures and must produce the identical **canonical** result.
 
 ## Fixtures
 
@@ -40,9 +40,10 @@ the comparison is deterministic and meaningful across languages.
 ## Running
 
 Run everything with the aggregate runner (inside the project devenv shell). It
-builds the `secretspec-ffi` cdylib once, points every SDK at it via
-`SECRETSPEC_FFI_LIB`, runs each language's conformance suite, and prints a
-combined PASS/FAIL/SKIP summary (exiting non-zero if any language fails):
+builds the `secretspec-ffi` library once, points the runtime-loading SDKs at the
+cdylib via `SECRETSPEC_FFI_LIB` and stages the staticlib for the SDKs that link
+it (Haskell), runs each language's conformance suite, and prints a combined
+PASS/FAIL/SKIP summary (exiting non-zero if any language fails):
 
 ```sh
 devenv shell -- bash conformance/run.sh
@@ -55,3 +56,5 @@ relative to the repo root:
 - Go: `cd secretspec-go && go test ./...`
 - Ruby: `cd secretspec-rb && ruby test/test_resolve.rb`
 - Node: `cd secretspec-node && node --test`
+- Haskell: `cd secretspec-hs && cabal test` (needs the `secretspec-ffi`
+  staticlib staged on `--extra-lib-dirs`; see the Haskell SDK build steps)

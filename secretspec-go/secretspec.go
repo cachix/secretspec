@@ -246,6 +246,12 @@ func (b *Builder) Load() (*Resolved, error) {
 	if err := ensureLoaded(); err != nil {
 		return nil, err
 	}
+	// A zero-value Builder (var b Builder; b.Load()) has a nil req, which marshals
+	// to the literal `null` that serde rejects as an invalid JsonRequest. The WithX
+	// setters lazily allocate req, but Load may run before any of them.
+	if b.req == nil {
+		b.req = map[string]any{}
+	}
 	payload, err := json.Marshal(b.req)
 	if err != nil {
 		return nil, err

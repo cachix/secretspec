@@ -38,7 +38,7 @@ func extractEmbedded() (string, error) {
 
 	sum := sha256.Sum256(embeddedLib)
 
-	base, err := extractBaseDir()
+	base, baseIsPrivate, err := extractBaseDir()
 	if err != nil {
 		return "", err
 	}
@@ -49,6 +49,21 @@ func extractEmbedded() (string, error) {
 	}
 	// MkdirAll is a no-op on a pre-existing directory regardless of its owner or
 	// mode, so verify the leaf is private before writing into or reading from it.
+	//
+	// The leaf alone is not enough in the world-writable temp fallback: an
+	// attacker can pre-create the euid-scoped base as their own 0777 dir, and
+	// MkdirAll then nests our 0700 leaf inside it — the leaf check passes, yet the
+	// attacker owns an ancestor and can rename `secretspec-ffi/` between extraction
+	// and dlopen to swap the library. Verify the first directory this code is
+	// responsible for; once it is confirmed ours and 0700, no other user can reach
+	// the tree below it. The primary cache base ($HOME/.cache) is created by the OS
+	// and commonly 0755, so it is not verified — its containing $HOME already keeps
+	// other users out.
+	if baseIsPrivate {
+		if err := verifyPrivateDir(base); err != nil {
+			return "", err
+		}
+	}
 	if err := verifyPrivateDir(dir); err != nil {
 		return "", err
 	}
@@ -88,26 +103,28 @@ func extractEmbedded() (string, error) {
 	return path, nil
 }
 
-// extractBaseDir returns the per-user base directory to extract under. The user
-// cache directory ($XDG_CACHE_HOME or ~/.cache, %LocalAppData% on Windows) is
-// inside the user's own home, so no other user can write to it — unlike the
-// shared system temp dir. It is also usually not mounted `noexec`, which the
-// system temp dir sometimes is. Falls back to a euid-scoped temp directory only
-// when no cache dir is resolvable; `verifyPrivateDir` still guards either way.
-func extractBaseDir() (string, error) {
+// extractBaseDir returns the per-user base directory to extract under and whether
+// that base must itself be verified private. The user cache directory
+// ($XDG_CACHE_HOME or ~/.cache, %LocalAppData% on Windows) is inside the user's
+// own home, so no other user can write to it — unlike the shared system temp dir.
+// It is also usually not mounted `noexec`, which the system temp dir sometimes
+// is. Falls back to a euid-scoped temp directory only when no cache dir is
+// resolvable; that base lives in a world-writable dir and so is flagged for
+// verification, while the cache base is trusted via its containing $HOME.
+func extractBaseDir() (string, bool, error) {
 	if cache, err := os.UserCacheDir(); err == nil && cache != "" {
-		return cache, nil
+		return cache, false, nil
 	}
 	tmp := os.TempDir()
 	if tmp == "" {
-		return "", &Error{
+		return "", false, &Error{
 			Kind:    "load",
 			Message: "no user cache or temp directory available to extract the embedded library",
 		}
 	}
 	// euid-scope the fallback name so a foreign-owned squat on a shared temp dir
-	// does not permanently block us; verifyPrivateDir rejects the foreign dir.
-	return filepath.Join(tmp, "secretspec-"+strconv.Itoa(geteuid())), nil
+	// does not permanently block us; the caller verifies this base is ours.
+	return filepath.Join(tmp, "secretspec-"+strconv.Itoa(geteuid())), true, nil
 }
 
 // isLFSPointer reports whether b is a git-LFS pointer file rather than a real

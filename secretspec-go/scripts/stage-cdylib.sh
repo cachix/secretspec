@@ -4,9 +4,11 @@
 # build-tagged name the embedded_<os>_<arch>.go files reference, so `go build`
 # embeds it. Run before building/releasing the Go module.
 #
-# NOTE: the embedded libraries are large (tens of MB each); a release should
-# commit them via git-LFS (or stage them into a release tag) rather than plain
-# git. They are gitignored here.
+# NOTE: the embedded libraries are large (tens of MB each) and are gitignored —
+# do not commit them, in plain git or git-LFS. The module proxy does not run LFS
+# smudge filters, so an LFS-committed lib reaches `go get` consumers as pointer
+# text, not a library. Stage them at build time for a self-contained `-tags
+# embed_lib` build, or attach the per-platform libs to the GitHub release.
 set -euo pipefail
 
 pkg_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

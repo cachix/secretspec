@@ -182,11 +182,11 @@ See the [Rust SDK documentation](https://secretspec.dev/sdk/rust) for advanced u
 ## Language SDKs
 
 Beyond Rust, SecretSpec ships SDKs for other languages. Each is a thin client
-over the same native core (the `secretspec-ffi` C ABI), so every provider, chain,
-profile, and generator works identically with no per-language resolution logic:
+over the same native core, so every provider, chain, profile, and generator
+works identically with no per-language resolution logic:
 
-- [Python](https://secretspec.dev/sdk/python) (via cffi)
-- [Go](https://secretspec.dev/sdk/go) (via purego, no cgo)
+- [Python](https://secretspec.dev/sdk/python) (via a pyo3 extension)
+- [Go](https://secretspec.dev/sdk/go) (via purego, no cgo, over the `secretspec-ffi` C ABI)
 - [Ruby](https://secretspec.dev/sdk/ruby) (via a native C extension)
 - [Node.js / TypeScript](https://secretspec.dev/sdk/nodejs) (napi-rs addon)
 - [Haskell](https://secretspec.dev/sdk/haskell) (build-time FFI link)

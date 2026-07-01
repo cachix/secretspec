@@ -14,18 +14,15 @@
       install.enable = true;
     };
   };
-  # Python is used by the reference SDK (secretspec-py), which binds the
-  # secretspec-ffi C ABI via cffi (dlopen) over the prebuilt cdylib.
+  # Python is used by the reference SDK (secretspec-py), a pyo3 extension
+  # (secretspec-py-native) that statically links the resolver in directly.
   languages.python = {
     enable = true;
     venv = {
       enable = true;
       requirements = ''
-        cffi
+        maturin
         pytest
-        # cffi's out-of-line compile (API mode) shells out to setuptools to build
-        # the extension that statically links libsecretspec_ffi.a.
-        setuptools
       '';
     };
   };

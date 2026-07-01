@@ -1,9 +1,10 @@
 # secretspec (Python SDK)
 
 Python bindings for [SecretSpec](https://secretspec.dev/), a declarative secrets
-manager. This package is a thin client over the `secretspec-ffi` C ABI:
-resolution (providers, chains, profiles, generation, `as_path`) happens in the
-Rust core, so the SDK inherits every provider with no Python-side logic.
+manager. This package is a thin client over a pyo3 extension that calls
+`secretspec::resolve_json` directly: resolution (providers, chains, profiles,
+generation, `as_path`) happens in the Rust core, so the SDK inherits every
+provider with no Python-side logic.
 
 ```python
 from secretspec import SecretSpec
@@ -46,9 +47,9 @@ for s in report.secrets:
 
 ## Native library
 
-The Rust resolver is statically linked into a compiled extension
-(`secretspec._secretspec_cffi`) inside the installed wheel, so there is nothing
-to locate at runtime and no `SECRETSPEC_FFI_LIB` to set. The prebuilt `abi3`
-wheels are self-contained (`pip install secretspec`). From a source checkout the
-extension is compiled on demand by the test harness, which needs a Rust
-toolchain and a C compiler on `PATH`.
+The Rust resolver is statically linked into a compiled pyo3 extension
+(`secretspec._native`, built from the `secretspec-py-native` crate) inside the
+installed wheel, so there is nothing to locate at runtime. The prebuilt `abi3`
+wheels are self-contained (`pip install secretspec`). From a source checkout
+the extension is built on demand by the test harness via `maturin develop`,
+which needs `maturin` and a Rust toolchain on `PATH`.

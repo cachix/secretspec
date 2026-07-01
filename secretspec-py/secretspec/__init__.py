@@ -1,16 +1,16 @@
 """SecretSpec Python SDK.
 
-A thin client over the ``secretspec-ffi`` C ABI. Resolution (providers, chains,
-profiles, generation, ``as_path``) happens entirely in the Rust core; this
-package marshals a JSON request to ``secretspec_resolve``, parses the response
-envelope, and exposes it with the same vocabulary as the Rust derive crate
-(a builder with ``with_provider``/``with_profile``/``with_reason`` and ``load``,
-returning a ``Resolved`` with ``.secrets``/``.provider``/``.profile``).
+A thin client over a pyo3 extension (``secretspec._native``) that calls
+``secretspec::resolve_json`` directly. Resolution (providers, chains, profiles,
+generation, ``as_path``) happens entirely in the Rust core; this package
+marshals a JSON request, parses the response envelope, and exposes it with the
+same vocabulary as the Rust derive crate (a builder with
+``with_provider``/``with_profile``/``with_reason`` and ``load``, returning a
+``Resolved`` with ``.secrets``/``.provider``/``.profile``).
 
-The Rust resolver is statically linked into a compiled CPython extension
-(``secretspec._secretspec_cffi``, built by ``_build_ffi.py`` via cffi API mode),
-so there is no separate library to locate, no ``SECRETSPEC_FFI_LIB``, and no
-runtime dlopen.
+The Rust resolver is statically linked into the compiled extension (built from
+``secretspec-py-native``, see ``Cargo.toml``), so there is no separate library
+to locate and no runtime dlopen.
 """
 
 from __future__ import annotations
@@ -20,10 +20,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
-# The compiled extension statically embeds the secretspec-ffi C ABI. ``_lib``
-# exposes secretspec_resolve / secretspec_free / secretspec_abi_version; ``_ffi``
-# provides the string/NULL helpers.
-from secretspec._secretspec_cffi import ffi as _ffi, lib as _lib
+from secretspec import _native
 
 # Response wire-format version this SDK understands. Tracks secretspec-ffi's
 # RESOLVE_SCHEMA_VERSION; a mismatch means the loaded library is incompatible.
@@ -158,20 +155,12 @@ class Report:
 
 
 def abi_version() -> str:
-    """The ABI version reported by the statically linked library."""
-    ptr = _lib.secretspec_abi_version()
-    return _ffi.string(ptr).decode()
+    """The version reported by the statically linked extension."""
+    return _native.abi_version()
 
 
 def _resolve_envelope(request: dict) -> dict:
-    payload = json.dumps(request).encode("utf-8")
-    ptr = _lib.secretspec_resolve(payload)
-    if ptr == _ffi.NULL:
-        raise SecretSpecError("ffi", "secretspec_resolve returned null")
-    try:
-        raw = _ffi.string(ptr).decode("utf-8")
-    finally:
-        _lib.secretspec_free(ptr)
+    raw = _native.resolve(json.dumps(request))
     return json.loads(raw)
 
 

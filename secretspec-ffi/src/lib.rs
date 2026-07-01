@@ -1,10 +1,13 @@
 //! The SecretSpec C ABI: a deliberately narrow, JSON-in/JSON-out boundary.
 //!
 //! The entire native surface is three functions. Richness lives in the
-//! versioned JSON contract, not in a wide C API, so that every language binding
-//! (Python via cffi, Go via purego, Ruby via ffi, Node via napi-rs) stays a
+//! versioned JSON contract, not in a wide C API, so that every consumer of
+//! this ABI (Go via purego, Ruby via ffi, Haskell via the GHC FFI) stays a
 //! thin shell: marshal a request string in, get a response string out, free it.
-//! Resolution logic lives only in the `secretspec` crate; this is a wrapper.
+//! Python (pyo3) and Node (napi-rs) skip this C ABI and call
+//! `secretspec::resolve_json` directly, but share the same JSON envelope
+//! contract. Resolution logic lives only in the `secretspec` crate; this is a
+//! wrapper.
 //!
 //! # Contract
 //!

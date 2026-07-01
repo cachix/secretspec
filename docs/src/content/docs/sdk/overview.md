@@ -15,12 +15,14 @@ that core rather than a reimplementation:
 
 - **Rust** uses the library directly, with a compile-time derive macro for
   strongly-typed access.
-- **Python** (cffi) and **Ruby** (a native C extension) statically link the
-  `secretspec-ffi` C ABI at build time; **Go** (purego) loads it at runtime with
-  no cgo. All exchange a small JSON request/response with the core.
+- **Ruby** (a native C extension) statically links the `secretspec-ffi` C ABI
+  at build time; **Go** (purego) loads it at runtime with no cgo. Both exchange
+  a small JSON request/response with the core.
 - **Haskell** links the same C ABI at build time via the GHC FFI.
-- **Node.js/TypeScript** uses a [napi-rs](https://napi.rs/) native addon that
-  embeds the same resolver.
+- **Python** uses a [pyo3](https://pyo3.rs/) native extension, and
+  **Node.js/TypeScript** uses a [napi-rs](https://napi.rs/) native addon; both
+  embed the same resolver directly and exchange the same JSON request/response
+  shape as the C ABI.
 
 Because resolution happens in one place, every provider, chain, profile, and
 generator works the same in every language, and a new provider added to the core
@@ -67,8 +69,9 @@ quicktype owns the type generation.
 The resolver ships inside each package, so there is nothing extra to install and
 no runtime library path to set:
 
-- **Python** statically links the `secretspec-ffi` archive into a `cp39-abi3`
-  wheel, and **Ruby** statically links it into a native C extension in the gem.
+- **Python** builds the resolver into a pyo3 extension shipped as a `cp39-abi3`
+  wheel, and **Ruby** statically links the `secretspec-ffi` archive into a
+  native C extension in the gem.
 - **Haskell** statically links the same archive at build time via the GHC FFI.
 - **Go** embeds the `cdylib` in the module and loads it at runtime via purego
   (no cgo); an opt-in `-tags static` build links it statically instead.

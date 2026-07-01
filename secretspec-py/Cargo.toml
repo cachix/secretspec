@@ -1,0 +1,15 @@
+[package]
+name = "secretspec-py-native"
+version.workspace = true
+edition.workspace = true
+repository = "https://github.com/cachix/secretspec"
+description = "pyo3 extension for the Python SDK"
+license = "Apache-2.0"
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
+secretspec = { workspace = true }

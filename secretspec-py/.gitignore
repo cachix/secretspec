@@ -4,7 +4,6 @@ __pycache__/
 build/
 dist/
 *.egg-info/
-# Compiled cffi extension + its generated C glue (built from libsecretspec_ffi.a).
-secretspec/_secretspec_cffi*
+# Compiled pyo3 extension (secretspec/_native.abi3.so), built by maturin.
 *.so
 *.o

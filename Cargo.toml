@@ -4,6 +4,7 @@ members = [
   "secretspec-derive",
   "secretspec-ffi",
   "secretspec-node",
+  "secretspec-py",
   "examples/derive",
 ]
 resolver = "2"

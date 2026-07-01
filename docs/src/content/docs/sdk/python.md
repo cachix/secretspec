@@ -3,10 +3,10 @@ title: Python SDK
 description: Resolve SecretSpec secrets from Python
 ---
 
-The Python SDK (`secretspec`) is a thin client over the `secretspec-ffi` C ABI,
-loaded via cffi. Resolution (providers, chains, profiles, generation, `as_path`)
-happens in the Rust core, so the SDK inherits every provider with no Python-side
-logic.
+The Python SDK (`secretspec`) is a thin client over a pyo3 extension that calls
+`secretspec::resolve_json` directly. Resolution (providers, chains, profiles,
+generation, `as_path`) happens in the Rust core, so the SDK inherits every
+provider with no Python-side logic.
 
 ## Quick start
 
@@ -48,6 +48,7 @@ print(typed.database_url)  # typed str
 
 ## Native library
 
-The resolver is statically linked into the extension module via cffi's API mode,
+The resolver is statically linked into a pyo3 extension (`secretspec._native`,
+built from the `secretspec-py-native` crate) using pyo3's `abi3-py39` feature,
 so the published `cp39-abi3` wheel is self-contained — there is no separate
-`cdylib` to locate and no `SECRETSPEC_FFI_LIB` to set at runtime.
+`cdylib` to locate and no runtime dlopen.

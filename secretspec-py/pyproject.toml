@@ -1,8 +1,9 @@
 [build-system]
-# cffi compiles the out-of-line extension (secretspec/_build_ffi.py) at build
-# time, statically linking libsecretspec_ffi.a; a Rust toolchain must be on PATH.
-requires = ["setuptools>=68", "cffi>=1.15"]
-build-backend = "setuptools.build_meta"
+# maturin compiles the pyo3 extension (secretspec-py-native, see Cargo.toml)
+# and statically links it in as secretspec._native; a Rust toolchain must be
+# on PATH.
+requires = ["maturin>=1,<2"]
+build-backend = "maturin"
 
 [project]
 name = "secretspec"
@@ -11,11 +12,10 @@ description = "Declarative secrets, every environment, any provider (Python SDK)
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
-dependencies = ["cffi>=1.15"]
 
 [project.urls]
 Homepage = "https://secretspec.dev/"
 Repository = "https://github.com/cachix/secretspec"
 
-[tool.setuptools]
-packages = ["secretspec"]
+[tool.maturin]
+module-name = "secretspec._native"

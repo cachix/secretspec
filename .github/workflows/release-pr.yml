@@ -42,23 +42,10 @@ jobs:
         run: scripts/ci/load-monosecret-secret.sh RELEASE_PR_MERGE_TOKEN
         shell: devenv shell -- bash -e {0}
 
-      - name: configure git
-        run: |
-          set -euo pipefail
-          export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
-          if user_info="$(gh api user --jq '{id: .id, login: .login, name: .name}')"; then
-            user_id="$(echo "$user_info" | jq -r '.id')"
-            user_login="$(echo "$user_info" | jq -r '.login')"
-            user_name="$(echo "$user_info" | jq -r '.name // .login')"
-          else
-            user_id="41898282"
-            user_login="github-actions[bot]"
-            user_name="github-actions[bot]"
-          fi
-
-          git config user.name "$user_name"
-          git config user.email "${user_id}+${user_login}@users.noreply.github.com"
-          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$RELEASE_PR_MERGE_TOKEN" | base64 -w 0)"
+      - name: configure release git credentials
+        env:
+          FALLBACK_RELEASE_PR_MERGE_TOKEN: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
+        run: scripts/ci/configure-release-git.sh
         shell: devenv shell -- bash -e {0}
 
       - name: refresh tags from origin
@@ -130,6 +117,12 @@ jobs:
           FALLBACK_RELEASE_PR_MERGE_TOKEN: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
           MONOSECRET_REASON: Load RELEASE_PR_MERGE_TOKEN to create release tags and dispatch publishing.
         run: scripts/ci/load-monosecret-secret.sh RELEASE_PR_MERGE_TOKEN
+        shell: devenv shell -- bash -e {0}
+
+      - name: configure release git credentials
+        env:
+          FALLBACK_RELEASE_PR_MERGE_TOKEN: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
+        run: scripts/ci/configure-release-git.sh
         shell: devenv shell -- bash -e {0}
 
       - name: detect release commit and create tags

@@ -5090,6 +5090,86 @@ fn test_provider_override_resolves_global_alias_when_project_providers_present()
 }
 
 #[test]
+fn test_import_source_expands_project_alias() {
+    let temp_dir = TempDir::new().unwrap();
+    let source_env_path = temp_dir.path().join(".env.source");
+    let target_env_path = temp_dir.path().join(".env.target");
+    fs::write(&source_env_path, "API_KEY=from-source\n").unwrap();
+
+    let source_uri = format!("dotenv://{}", source_env_path.display());
+    let target_uri = format!("dotenv://{}", target_env_path.display());
+
+    let config = config_with_project_alias_secret("source_env", &source_uri, None);
+    let global = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(target_uri),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let spec = Secrets::new(config, Some(global), None, None);
+
+    spec.import("source_env")
+        .expect("import source alias should resolve from project [providers]");
+
+    assert_eq!(
+        read_env_var(&target_env_path, "API_KEY").as_deref(),
+        Some("from-source")
+    );
+}
+
+#[test]
+fn test_import_source_literal_uri_still_works() {
+    let temp_dir = TempDir::new().unwrap();
+    let source_env_path = temp_dir.path().join(".env.source");
+    let target_env_path = temp_dir.path().join(".env.target");
+    fs::write(&source_env_path, "API_KEY=from-source\n").unwrap();
+
+    let source_uri = format!("dotenv://{}", source_env_path.display());
+    let target_uri = format!("dotenv://{}", target_env_path.display());
+
+    // The project defines an unrelated alias; the import source is a literal URI,
+    // which must still build after alias resolution moved into build_provider.
+    let config = config_with_project_alias_secret("unused", "dotenv://.env.unused", None);
+    let global = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(target_uri),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let spec = Secrets::new(config, Some(global), None, None);
+
+    spec.import(&source_uri)
+        .expect("import from a literal provider URI should still work");
+
+    assert_eq!(
+        read_env_var(&target_env_path, "API_KEY").as_deref(),
+        Some("from-source")
+    );
+}
+
+#[test]
+fn test_import_unknown_source_lists_available_aliases() {
+    let temp_dir = TempDir::new().unwrap();
+    let source_uri = format!("dotenv://{}", temp_dir.path().join(".env.source").display());
+
+    let config = config_with_project_alias_secret("source_env", &source_uri, None);
+    let spec = Secrets::new(config, None, None, None);
+
+    let err = spec
+        .import("source_emv")
+        .expect_err("import from an unknown provider/alias must error");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("source_env") && msg.contains("available aliases"),
+        "unknown import source should list the defined aliases, got: {}",
+        msg
+    );
+}
+
+#[test]
 fn test_validate_project_provider_chain_without_global_default() {
     let temp_dir = TempDir::new().unwrap();
     let env_file = temp_dir.path().join(".env.project");

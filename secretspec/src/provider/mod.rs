@@ -77,6 +77,17 @@ pub(crate) const URI_ENCODE_SET: &AsciiSet = &CONTROLS
 /// `host:port` separator and fail parsing with "invalid port number".
 const WINDOWS_PATH_ENCODE_SET: &AsciiSet = &URI_ENCODE_SET.add(b':');
 
+/// Like [`URI_ENCODE_SET`] but also encodes the characters that are structurally
+/// significant inside a URI query string. Query *values* (e.g. the `V` in
+/// `?key=V`) are read back with `application/x-www-form-urlencoded` semantics via
+/// [`ProviderUrl::query_pairs`], which treats `&` as a pair separator, `+` as a
+/// space and `%` as an escape, while `#` ends the query at the URL level. Leaving
+/// those unencoded (as plain [`URI_ENCODE_SET`] does) makes a value like
+/// `/a&b` or `/a+b` decode to something different on the way back. Encoding them
+/// makes [`ProviderUrl::encode_query`] a true inverse of that parsing, so query
+/// values round-trip. Path and host components keep using [`URI_ENCODE_SET`].
+const QUERY_ENCODE_SET: &AsciiSet = &URI_ENCODE_SET.add(b'%').add(b'#').add(b'&').add(b'+');
+
 /// Detects a Windows-style absolute path such as `C:\path` or `C:/path`.
 fn is_windows_abs_path(s: &str) -> bool {
     let b = s.as_bytes();
@@ -135,9 +146,30 @@ impl ProviderUrl {
         self.0.query_pairs()
     }
 
-    /// Percent-encode a value for use in a URI (e.g., in `uri()` methods).
+    /// Returns the value of the first `key=value` query pair matching `key`,
+    /// treating an empty value as absent. The owned `String` is the inverse of
+    /// [`encode_query`](Self::encode_query).
+    pub fn query_value(&self, key: &str) -> Option<String> {
+        self.0
+            .query_pairs()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.into_owned())
+            .filter(|v| !v.is_empty())
+    }
+
+    /// Percent-encode a value for use in a URI path or host component (e.g., in
+    /// `uri()` methods).
     pub fn encode(value: &str) -> String {
         percent_encode(value.as_bytes(), URI_ENCODE_SET).to_string()
+    }
+
+    /// Percent-encode a value for use as a URI query-string value (the `V` in
+    /// `?key=V`). Unlike [`encode`](Self::encode), this also escapes the
+    /// characters that `application/x-www-form-urlencoded` parsing treats
+    /// specially, so the value survives a round-trip through
+    /// [`query_pairs`](Self::query_pairs).
+    pub fn encode_query(value: &str) -> String {
+        percent_encode(value.as_bytes(), QUERY_ENCODE_SET).to_string()
     }
 }
 
@@ -816,6 +848,29 @@ mod url_tests {
         // Unix and relative forms are unaffected.
         assert!(Box::<dyn Provider>::try_from("dotenv:///tmp/.env").is_ok());
         assert!(Box::<dyn Provider>::try_from("dotenv://.env").is_ok());
+    }
+
+    #[test]
+    fn encode_query_escapes_query_significant_chars() {
+        // Unlike `encode`, the query encoder must escape the bytes that
+        // form-urlencoded parsing treats specially, so values round-trip through
+        // `query_pairs`. Path separators stay readable.
+        assert_eq!(ProviderUrl::encode_query("/a/b"), "/a/b");
+        assert_eq!(ProviderUrl::encode_query("a&b"), "a%26b");
+        assert_eq!(ProviderUrl::encode_query("a+b"), "a%2Bb");
+        assert_eq!(ProviderUrl::encode_query("a#b"), "a%23b");
+        assert_eq!(ProviderUrl::encode_query("a%b"), "a%25b");
+        assert_eq!(ProviderUrl::encode_query("a b"), "a%20b");
+
+        // Round-trips back through form-urlencoded parsing.
+        let value = "/srv/a&b+c#d%e f";
+        let encoded = ProviderUrl::encode_query(value);
+        let u = url(&format!("keyring://?store_dir={encoded}"));
+        let decoded = u
+            .query_pairs()
+            .find(|(k, _)| k == "store_dir")
+            .map(|(_, v)| v.into_owned());
+        assert_eq!(decoded.as_deref(), Some(value));
     }
 
     #[test]

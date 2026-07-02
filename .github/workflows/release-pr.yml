@@ -58,6 +58,7 @@ jobs:
 
           git config user.name "$user_name"
           git config user.email "${user_id}+${user_login}@users.noreply.github.com"
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$RELEASE_PR_MERGE_TOKEN" | base64 -w 0)"
         shell: devenv shell -- bash -e {0}
 
       - name: refresh tags from origin
@@ -88,13 +89,9 @@ jobs:
 
       - name: refresh release pull request
         if: steps.release_record.outputs.is_release_commit != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
         run: |
           set -euo pipefail
-          export GIT_CONFIG_COUNT=1
-          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$RELEASE_PR_MERGE_TOKEN" | base64 -w 0)"
+          export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
           monochange --log-level=debug step prepare-release --format json
           fix:format
           monochange --log-level=debug step commit-release --stage-all --no-verify
@@ -137,12 +134,11 @@ jobs:
 
       - name: detect release commit and create tags
         id: tag_release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_COMMIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: devenv shell -- bash -e {0}
         run: |
           set -euo pipefail
+          export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
+          export GITHUB_COMMIT_TOKEN="$RELEASE_PR_MERGE_TOKEN"
 
           if is_release_commit="$(monochange --log-level=debug step release-record --from HEAD --format json --jq '.resolved_commit == .record_commit')"; then
             echo "is_release_commit=${is_release_commit}" >> "$GITHUB_OUTPUT"
@@ -164,9 +160,10 @@ jobs:
 
       - name: create draft releases
         if: steps.tag_release.outputs.is_release_commit == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: monochange --log-level=debug step publish-release --from-ref="HEAD" --draft --format json | tee /tmp/publish-release.json
+        run: |
+          set -euo pipefail
+          export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
+          monochange --log-level=debug step publish-release --from-ref="HEAD" --draft --format json | tee /tmp/publish-release.json
         shell: devenv shell -- bash -e {0}
 
       - name: comment on released issues
@@ -179,10 +176,9 @@ jobs:
 
       - name: trigger release workflow
         if: steps.tag_release.outputs.is_release_commit == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
           tag="$(jq -r '.tags.monosecret // empty' /tmp/tag-report.json)"
           if [ -z "$tag" ]; then
             echo "No monosecret group tag found in tag-report.json, skipping release trigger"

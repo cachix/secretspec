@@ -22,7 +22,7 @@ write_github_env() {
 }
 
 if [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
-	cargo run -p monosecret -- --reason "$reason" run --profile "$profile" --include "$secret_name" -- bash -c '
+	if cargo run -p monosecret -- --reason "$reason" run --profile "$profile" --include "$secret_name" -- bash -c '
     set -euo pipefail
     secret_name="$1"
     value="${!secret_name}"
@@ -34,8 +34,15 @@ if [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
       printf "%s\n" "$value"
       echo "$delimiter"
     } >> "$GITHUB_ENV"
-  ' bash "$secret_name"
-	exit 0
+  ' bash "$secret_name"; then
+		exit 0
+	fi
+
+	if [ -n "$fallback_value" ]; then
+		echo "::notice::Monosecret could not load ${secret_name}; using fallback GitHub secret."
+		write_github_env "$secret_name" "$fallback_value"
+		exit 0
+	fi
 fi
 
 if [ -n "$fallback_value" ]; then

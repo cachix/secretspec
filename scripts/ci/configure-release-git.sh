@@ -1,41 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-primary_token="${RELEASE_PR_MERGE_TOKEN:-}"
-fallback_token="${FALLBACK_RELEASE_PR_MERGE_TOKEN:-}"
+token="${RELEASE_PR_MERGE_TOKEN:-}"
 
 validate_token() {
-	local token="$1"
 	GH_TOKEN="$token" gh api user --jq '{id: .id, login: .login, name: .name}'
 }
 
-write_github_env() {
-	local name="$1"
-	local value="$2"
-	local delimiter="__MONOSECRET_${name}__"
-
-	echo "::add-mask::$value"
-	{
-		echo "${name}<<${delimiter}"
-		printf '%s\n' "$value"
-		echo "$delimiter"
-	} >>"$GITHUB_ENV"
-}
-
-if [ -z "$primary_token" ]; then
-	echo "::error::RELEASE_PR_MERGE_TOKEN was not loaded." >&2
+if [ -z "$token" ]; then
+	echo "::error::RELEASE_PR_MERGE_TOKEN was not loaded from Monosecret." >&2
 	exit 1
 fi
 
-if user_info="$(validate_token "$primary_token")"; then
-	token="$primary_token"
-elif [ -n "$fallback_token" ] && [ "$fallback_token" != "$primary_token" ]; then
-	echo "::notice::Loaded RELEASE_PR_MERGE_TOKEN is not valid for GitHub; using fallback GitHub secret."
-	user_info="$(validate_token "$fallback_token")"
-	token="$fallback_token"
-	write_github_env RELEASE_PR_MERGE_TOKEN "$token"
-else
-	echo "::error::Loaded RELEASE_PR_MERGE_TOKEN is not valid for GitHub and no fallback is available." >&2
+if ! user_info="$(validate_token)"; then
+	echo "::error::Monosecret-loaded RELEASE_PR_MERGE_TOKEN is not valid for GitHub." >&2
 	exit 1
 fi
 

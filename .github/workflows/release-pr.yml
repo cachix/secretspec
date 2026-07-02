@@ -37,14 +37,11 @@ jobs:
       - name: load release automation secrets
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          FALLBACK_RELEASE_PR_MERGE_TOKEN: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
           MONOSECRET_REASON: Load RELEASE_PR_MERGE_TOKEN to refresh the release pull request.
         run: scripts/ci/load-monosecret-secret.sh RELEASE_PR_MERGE_TOKEN
         shell: devenv shell -- bash -e {0}
 
       - name: configure release git credentials
-        env:
-          FALLBACK_RELEASE_PR_MERGE_TOKEN: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
         run: scripts/ci/configure-release-git.sh
         shell: devenv shell -- bash -e {0}
 
@@ -114,14 +111,11 @@ jobs:
       - name: load release automation secrets
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          FALLBACK_RELEASE_PR_MERGE_TOKEN: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
           MONOSECRET_REASON: Load RELEASE_PR_MERGE_TOKEN to create release tags and dispatch publishing.
         run: scripts/ci/load-monosecret-secret.sh RELEASE_PR_MERGE_TOKEN
         shell: devenv shell -- bash -e {0}
 
       - name: configure release git credentials
-        env:
-          FALLBACK_RELEASE_PR_MERGE_TOKEN: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
         run: scripts/ci/configure-release-git.sh
         shell: devenv shell -- bash -e {0}
 

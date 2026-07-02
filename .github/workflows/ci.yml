@@ -198,15 +198,7 @@ jobs:
             packages/monosecret/coverage/lcov.info
           if-no-files-found: error
           retention-days: 7
-      - name: load coverage secrets
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-        run: |
-          cargo run -p monosecret -- \
-            --reason "Load CODECOV_TOKEN for the CI coverage upload." \
-            env --shell github --profile ci --include CODECOV_TOKEN
-        shell: devenv shell -- bash -e {0}
+
       - name: upload coverage to codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: codecov/codecov-action@v5

@@ -27,7 +27,6 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.1
         with:
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
           persist-credentials: false
 
       - name: setup
@@ -35,11 +34,29 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: configure git
+      - name: install 1Password CLI
+        uses: 1password/install-cli-action@9b82e19ce89f957763220d632ec1de246084f78a # v1
+
+      - name: load release automation secrets
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
         run: |
           set -euo pipefail
+          cargo run -p monosecret -- run --profile ci --include RELEASE_PR_MERGE_TOKEN -- bash <<'BASH'
+          set -euo pipefail
+          echo "::add-mask::$RELEASE_PR_MERGE_TOKEN"
+          {
+            echo "RELEASE_PR_MERGE_TOKEN<<__MONOSECRET_RELEASE_PR_MERGE_TOKEN__"
+            printf '%s\n' "$RELEASE_PR_MERGE_TOKEN"
+            echo "__MONOSECRET_RELEASE_PR_MERGE_TOKEN__"
+          } >> "$GITHUB_ENV"
+          BASH
+        shell: devenv shell -- bash -e {0}
+
+      - name: configure git
+        run: |
+          set -euo pipefail
+          export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
           if user_info="$(gh api user --jq '{id: .id, login: .login, name: .name}')"; then
             user_id="$(echo "$user_info" | jq -r '.id')"
             user_login="$(echo "$user_info" | jq -r '.login')"
@@ -84,12 +101,11 @@ jobs:
         if: steps.release_record.outputs.is_release_commit != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
-          GITHUB_COMMIT_TOKEN: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
         run: |
           set -euo pipefail
           export GIT_CONFIG_COUNT=1
           export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_COMMIT_TOKEN" | base64 -w 0)"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$RELEASE_PR_MERGE_TOKEN" | base64 -w 0)"
           monochange --log-level=debug step prepare-release --format json
           fix:format
           monochange --log-level=debug step commit-release --stage-all --no-verify
@@ -121,6 +137,25 @@ jobs:
         uses: ./.github/actions/devenv
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: install 1Password CLI
+        uses: 1password/install-cli-action@9b82e19ce89f957763220d632ec1de246084f78a # v1
+
+      - name: load release automation secrets
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          set -euo pipefail
+          cargo run -p monosecret -- run --profile ci --include RELEASE_PR_MERGE_TOKEN -- bash <<'BASH'
+          set -euo pipefail
+          echo "::add-mask::$RELEASE_PR_MERGE_TOKEN"
+          {
+            echo "RELEASE_PR_MERGE_TOKEN<<__MONOSECRET_RELEASE_PR_MERGE_TOKEN__"
+            printf '%s\n' "$RELEASE_PR_MERGE_TOKEN"
+            echo "__MONOSECRET_RELEASE_PR_MERGE_TOKEN__"
+          } >> "$GITHUB_ENV"
+          BASH
+        shell: devenv shell -- bash -e {0}
 
       - name: detect release commit and create tags
         id: tag_release
@@ -158,9 +193,10 @@ jobs:
 
       - name: comment on released issues
         if: steps.tag_release.outputs.is_release_commit == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
-        run: monochange --log-level=debug step comment-released-issues --from-ref="HEAD" --auto-close-issues
+        run: |
+          set -euo pipefail
+          export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
+          monochange --log-level=debug step comment-released-issues --from-ref="HEAD" --auto-close-issues
         shell: devenv shell -- bash -e {0}
 
       - name: trigger release workflow

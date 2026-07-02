@@ -73,6 +73,25 @@ jobs:
           free-runner-space: "true"
           activate: "true"
 
+      - name: install 1Password CLI
+        uses: 1password/install-cli-action@9b82e19ce89f957763220d632ec1de246084f78a # v1
+
+      - name: load publish secrets
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          set -euo pipefail
+          cargo run -p monosecret -- run --profile ci --include PUB_TOKEN -- bash <<'BASH'
+          set -euo pipefail
+          echo "::add-mask::$PUB_TOKEN"
+          {
+            echo "PUB_TOKEN<<__MONOSECRET_PUB_TOKEN__"
+            printf '%s\n' "$PUB_TOKEN"
+            echo "__MONOSECRET_PUB_TOKEN__"
+          } >> "$GITHUB_ENV"
+          BASH
+        shell: devenv shell -- bash -e {0}
+
       - name: get crates oidc auth token
         uses: rust-lang/crates-io-auth-action@v1
         id: crates-oidc
@@ -121,7 +140,6 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-oidc.outputs.token }}
           NPM_CONFIG_PROVENANCE: "true"
-          PUB_TOKEN: ${{ secrets.PUB_TOKEN }}
         run: monochange step publish-readiness --from HEAD --output "$RUNNER_TEMP/publish-readiness.json" --format json
         shell: devenv shell -- bash -e {0}
 
@@ -129,7 +147,6 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-oidc.outputs.token }}
           NPM_CONFIG_PROVENANCE: "true"
-          PUB_TOKEN: ${{ secrets.PUB_TOKEN }}
         run: |
           monochange step publish-packages \
             --log-level info \

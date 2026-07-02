@@ -198,6 +198,25 @@ jobs:
             packages/monosecret/coverage/lcov.info
           if-no-files-found: error
           retention-days: 7
+      - name: install 1Password CLI
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: 1password/install-cli-action@9b82e19ce89f957763220d632ec1de246084f78a # v1
+      - name: load coverage secrets
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          set -euo pipefail
+          cargo run -p monosecret -- run --profile ci --include CODECOV_TOKEN -- bash <<'BASH'
+          set -euo pipefail
+          echo "::add-mask::$CODECOV_TOKEN"
+          {
+            echo "CODECOV_TOKEN<<__MONOSECRET_CODECOV_TOKEN__"
+            printf '%s\n' "$CODECOV_TOKEN"
+            echo "__MONOSECRET_CODECOV_TOKEN__"
+          } >> "$GITHUB_ENV"
+          BASH
+        shell: devenv shell -- bash -e {0}
       - name: upload coverage to codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: codecov/codecov-action@v5
@@ -206,6 +225,5 @@ jobs:
           disable_search: true
           fail_ci_if_error: false
           name: monosecret-workspace
-          token: ${{ secrets.CODECOV_TOKEN }}
           use_oidc: true
           verbose: true

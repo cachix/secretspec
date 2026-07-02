@@ -914,6 +914,12 @@ pub struct GlobalConfig {
 	/// Default settings
 	#[serde(default)]
 	pub defaults: GlobalDefaults,
+	/// Audit logging configuration (top-level `[audit]` table). Auditing is a
+	/// per-machine/operator concern, so it lives here rather than in the project's
+	/// `monosecret.toml`. `None` means "unspecified" and resolves to
+	/// [`AuditConfig::default`] (auditing on).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub audit: Option<AuditConfig>,
 }
 
 /// Default settings in the global configuration.

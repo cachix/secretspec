@@ -88,11 +88,7 @@ impl TryFrom<&ProviderUrl> for AwssmConfig {
 
 		let region = url.host().filter(|s| !s.is_empty());
 
-		let prefix = url
-			.query_pairs()
-			.find(|(k, _)| k == "prefix")
-			.map(|(_, v)| v.into_owned())
-			.filter(|v| !v.is_empty());
+		let prefix = url.query_value("prefix");
 
 		Ok(Self {
 			region,
@@ -355,7 +351,12 @@ impl Provider for AwssmProvider {
 		match &self.config.prefix {
 			Some(prefix) => {
 				let sep = if base.contains("://") { "?" } else { "://?" };
-				format!("{}{}prefix={}", base, sep, ProviderUrl::encode(prefix))
+				format!(
+					"{}{}prefix={}",
+					base,
+					sep,
+					ProviderUrl::encode_query(prefix)
+				)
 			}
 			None => base,
 		}

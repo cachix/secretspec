@@ -26,10 +26,11 @@ $ brew install pass
 ### URI Format
 
 ```
-pass://[folder_prefix]
+pass://[folder_prefix][?store_dir=/path/to/store]
 ```
 
 - `folder_prefix`: Optional path prefix supporting `{project}`, `{profile}`, and `{key}` placeholders. Defaults to `monosecret/{project}/{profile}/{key}`.
+- `store_dir`: Optional password store directory. When set, it is exported as `PASSWORD_STORE_DIR` for every `pass` invocation, overriding the default `~/.password-store`. The variable is scoped to the spawned `pass` process and does not affect monosecret's own environment.
 
 ### Examples
 
@@ -39,6 +40,9 @@ $ monosecret set DATABASE_URL --provider pass
 
 # Custom folder prefix (e.g., to share secrets across projects — see below)
 $ monosecret set DATABASE_URL --provider "pass://shared/{profile}/{key}"
+
+# Custom password store directory
+$ monosecret set DATABASE_URL --provider "pass://?store_dir=/path/to/store"
 ```
 
 ## Usage

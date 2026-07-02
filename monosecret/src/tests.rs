@@ -128,6 +128,7 @@ fn test_new_with_default_overrides() {
 
 	// Create a global config with specific defaults
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("dotenv".to_string()),
 			profile: Some("production".to_string()),
@@ -281,6 +282,7 @@ fn test_monosecret_new() {
 	};
 
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("keyring".to_string()),
 			profile: Some("dev".to_string()),
@@ -303,6 +305,7 @@ fn test_monosecret_new() {
 #[test]
 fn test_resolve_profile() {
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("keyring".to_string()),
 			profile: Some("development".to_string()),
@@ -479,6 +482,7 @@ fn test_get_provider_error_cases() {
 #[test]
 fn test_get_provider_with_global_config() {
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("keyring".to_string()),
 			profile: None,
@@ -1440,6 +1444,7 @@ fn test_set_with_undefined_secret() {
 	};
 
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("env".to_string()),
 			profile: None,
@@ -1510,6 +1515,7 @@ fn test_set_with_defined_secret() {
 	};
 
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("dotenv".to_string()),
 			profile: None,
@@ -1566,6 +1572,7 @@ fn test_set_with_readonly_provider() {
 	};
 
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("env".to_string()),
 			profile: None,
@@ -1678,6 +1685,7 @@ fn test_import_between_dotenv_files() {
 
 	// Create global config with target dotenv as default provider
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some(format!("dotenv://{}", target_env_path.display())),
 			profile: Some("default".to_string()),
@@ -1807,6 +1815,7 @@ fn test_import_edge_cases() {
 
 	let target_env_path = project_path.join(".env.target");
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some(format!("dotenv://{}", target_env_path.display())),
 			profile: Some("default".to_string()),
@@ -1886,6 +1895,7 @@ API_KEY = { description = "Dev API key", required = true }
 
 	// Create a global config with env provider
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("env".to_string()),
 			profile: None,
@@ -2073,6 +2083,7 @@ fn test_import_with_profiles() {
 
 	let target_env_path = project_path.join(".env.dev");
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some(format!("dotenv://{}", target_env_path.display())),
 			profile: Some("development".to_string()),
@@ -2134,6 +2145,7 @@ fn test_run_with_empty_command() {
 			groups: None,
 		},
 		Some(GlobalConfig {
+			audit: None,
 			defaults: GlobalDefaults {
 				provider: Some(format!("dotenv://{}", env_file.display())),
 				profile: None,
@@ -2199,6 +2211,7 @@ fn test_run_with_missing_required_secrets() {
 			groups: None,
 		},
 		Some(GlobalConfig {
+			audit: None,
 			defaults: GlobalDefaults {
 				provider: Some(format!("dotenv://{}", env_file.display())),
 				profile: None,
@@ -2262,6 +2275,7 @@ fn test_get_existing_secret() {
 			groups: None,
 		},
 		Some(GlobalConfig {
+			audit: None,
 			defaults: GlobalDefaults {
 				provider: Some(format!("dotenv://{}", env_file.display())),
 				profile: None,
@@ -2319,6 +2333,7 @@ fn test_get_secret_with_default() {
 			groups: None,
 		},
 		Some(GlobalConfig {
+			audit: None,
 			defaults: GlobalDefaults {
 				provider: Some(format!("dotenv://{}", env_file.display())),
 				profile: None,
@@ -2375,6 +2390,7 @@ fn test_get_nonexistent_secret() {
 			groups: None,
 		},
 		Some(GlobalConfig {
+			audit: None,
 			defaults: GlobalDefaults {
 				provider: Some(format!("dotenv://{}", env_file.display())),
 				profile: None,
@@ -2422,6 +2438,7 @@ fn test_import_dotenv_profile_issue_36() {
 
 	// Create global config with development profile and mock provider as target
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some(format!("dotenv://{}", target_env_path.display())),
 			profile: Some("development".to_string()),
@@ -2549,6 +2566,7 @@ fn test_per_secret_provider_configuration() {
 	providers_map.insert("shared".to_string(), "keyring://".to_string());
 
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("env".to_string()),
 			profile: None,
@@ -2584,6 +2602,7 @@ fn test_provider_alias_resolution() {
 	);
 
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("keyring".to_string()),
 			profile: None,
@@ -2651,6 +2670,7 @@ fn test_provider_alias_not_found() {
 	providers_map.insert("existing".to_string(), "dotenv://.env".to_string());
 
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("keyring".to_string()),
 			profile: None,
@@ -2764,6 +2784,7 @@ fn test_per_secret_provider_with_fallback_chain() {
 	);
 
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: None,
 			profile: None,
@@ -2876,6 +2897,7 @@ fn test_get_secret_with_fallback_chain() {
 	);
 
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("keyring".to_string()), // Default fallback provider
 			profile: None,
@@ -2964,6 +2986,7 @@ fn test_validate_falls_back_on_primary_provider_error() {
 	);
 
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("keyring".to_string()),
 			profile: None,
@@ -3034,6 +3057,7 @@ fn test_validate_surfaces_error_when_all_providers_fail() {
 	providers_map.insert("b".to_string(), format!("dotenv://{}", broken_b.display()));
 
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("keyring".to_string()),
 			profile: None,
@@ -3136,6 +3160,7 @@ fn test_validate_with_per_secret_providers() {
 	);
 
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("env".to_string()),
 			profile: None,
@@ -3478,6 +3503,7 @@ REGULAR_SECRET = { description = "Regular secret", as_path = false }
 	// Load and validate
 	let config = Config::try_from(config_file.as_path()).unwrap();
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some(format!("dotenv://{}", env_file.display())),
 			profile: None,
@@ -3557,6 +3583,7 @@ CERT_DATA = { description = "Certificate data", as_path = true }
 	// Load and validate
 	let config = Config::try_from(config_file.as_path()).unwrap();
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some(format!("dotenv://{}", env_file.display())),
 			profile: None,
@@ -3626,6 +3653,7 @@ CERT_DATA = { description = "Certificate data", as_path = true }
 
 	let config = Config::try_from(config_file.as_path()).unwrap();
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some(format!("dotenv://{}", env_file.display())),
 			profile: None,
@@ -3858,6 +3886,7 @@ DB_PASSWORD = { description = "Database password", type = "password", generate =
 
 	let config = Config::try_from(config_file.as_path()).unwrap();
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some(format!("dotenv://{}", env_file.display())),
 			profile: None,
@@ -3899,6 +3928,7 @@ DB_PASSWORD = { description = "Database password", type = "password", generate =
 
 	let config = Config::try_from(config_file.as_path()).unwrap();
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some(format!("dotenv://{}", env_file.display())),
 			profile: None,
@@ -3942,6 +3972,7 @@ DB_PASSWORD = { description = "Database password", type = "password", generate =
 
 	let config = Config::try_from(config_file.as_path()).unwrap();
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some(format!("dotenv://{}", env_file.display())),
 			profile: None,
@@ -3998,6 +4029,7 @@ REQUEST_ID = { description = "ID", type = "uuid", generate = true }
 
 	let config = Config::try_from(config_file.as_path()).unwrap();
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some(format!("dotenv://{}", env_file.display())),
 			profile: None,
@@ -4064,6 +4096,7 @@ PROD_KEY = { description = "Production key", type = "hex", generate = { bytes = 
 
 	let config = Config::try_from(config_file.as_path()).unwrap();
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some(format!("dotenv://{}", env_file.display())),
 			profile: None,
@@ -4219,6 +4252,7 @@ fn build_chain_scenario(
 		format!("dotenv://{}", team_path.display()),
 	);
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some("keyring".to_string()),
 			profile: Some("development".to_string()),
@@ -4379,6 +4413,7 @@ OPTIONAL_MISSING = { description = "optional, not set", required = false }
 
 	let config = Config::try_from(config_file.as_path()).unwrap();
 	let global_config = GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: Some(format!("dotenv://{}", env_file.display())),
 			profile: None,
@@ -4437,6 +4472,7 @@ fn config_with_project_aliases(aliases: &[(&str, &str)]) -> Config {
 
 fn global_config_with_aliases(aliases: &[(&str, &str)]) -> GlobalConfig {
 	GlobalConfig {
+		audit: None,
 		defaults: GlobalDefaults {
 			provider: None,
 			profile: None,
@@ -4787,6 +4823,7 @@ fn dotenv_spec(
 			groups: None,
 		},
 		Some(GlobalConfig {
+			audit: None,
 			defaults: GlobalDefaults {
 				provider: Some(format!("dotenv://{}", env_file.display())),
 				profile: None,
@@ -5949,6 +5986,7 @@ fn test_ensure_secrets_public_wrapper_delegates_to_unfiltered_validation() {
 			groups: None,
 		},
 		Some(GlobalConfig {
+			audit: None,
 			defaults: GlobalDefaults {
 				provider: Some("env".to_string()),
 				profile: None,
@@ -6012,6 +6050,7 @@ fn test_set_uses_first_per_secret_provider_alias() {
 			groups: None,
 		},
 		Some(GlobalConfig {
+			audit: None,
 			defaults: GlobalDefaults {
 				provider: Some("env".to_string()),
 				profile: None,
@@ -6131,6 +6170,7 @@ fn test_set_propagates_per_secret_provider_write_error() {
 			groups: None,
 		},
 		Some(GlobalConfig {
+			audit: None,
 			defaults: GlobalDefaults {
 				provider: Some("env".to_string()),
 				profile: None,

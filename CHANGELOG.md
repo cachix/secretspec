@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without code changes), and `Secrets::with_reason(...)` sets it explicitly, taking
   precedence. Blank or whitespace-only reasons are ignored so they cannot satisfy the
   policy. Backed by a new `Provider::set_reason` trait method (default no-op).
+- The `pass` provider accepts a `store_dir` query parameter (e.g.
+  `pass://?store_dir=/path/to/store`) to use a password store directory other
+  than the default `~/.password-store`. It is applied as `PASSWORD_STORE_DIR`
+  scoped to each `pass` invocation.
 - `[project] require_reason` policy in `monosecret.toml`, controlling when secret
   access must supply an explicit reason. Accepts `"agents"` (the default — require
   a reason only when an AI agent is detected), `true` (require it from every
@@ -34,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Provider URIs now correctly round-trip query parameters whose values contain
+  characters that are significant in a query string (`&`, `+`, `#`, `%`, and
+  spaces). Previously such characters in the `awssm` `prefix` (and the new `pass`
+  `store_dir`) were emitted unescaped, so the value could be silently truncated
+  or altered when the URI was parsed back.
 - Cargo workspace metadata now keeps `monosecret_derive` on the workspace `monosecret`
   dependency with default features disabled during package validation.
 - Proton Pass provider now works with `pass-cli` >= 2.1.0 agent sessions. Since

@@ -3,6 +3,7 @@ set -euo pipefail
 
 secret_name="${1:?usage: load-monosecret-secret.sh SECRET_NAME}"
 profile="${MONOSECRET_PROFILE:-ci}"
+reason="${MONOSECRET_REASON:-${MONOSECRET_LOAD_REASON:-GitHub Actions loading ${secret_name}}}"
 fallback_var="FALLBACK_${secret_name}"
 fallback_value="${!fallback_var:-}"
 optional="${MONOSECRET_LOAD_OPTIONAL:-false}"
@@ -21,7 +22,7 @@ write_github_env() {
 }
 
 if [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
-	cargo run -p monosecret -- run --profile "$profile" --include "$secret_name" -- bash -c '
+	cargo run -p monosecret -- --reason "$reason" run --profile "$profile" --include "$secret_name" -- bash -c '
     set -euo pipefail
     secret_name="$1"
     value="${!secret_name}"

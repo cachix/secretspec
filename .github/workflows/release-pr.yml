@@ -34,13 +34,11 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: install 1Password CLI
-        uses: 1password/install-cli-action@9b82e19ce89f957763220d632ec1de246084f78a # v1
-
       - name: load release automation secrets
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           FALLBACK_RELEASE_PR_MERGE_TOKEN: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
+          MONOSECRET_REASON: Load RELEASE_PR_MERGE_TOKEN to refresh the release pull request.
         run: scripts/ci/load-monosecret-secret.sh RELEASE_PR_MERGE_TOKEN
         shell: devenv shell -- bash -e {0}
 
@@ -129,13 +127,11 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: install 1Password CLI
-        uses: 1password/install-cli-action@9b82e19ce89f957763220d632ec1de246084f78a # v1
-
       - name: load release automation secrets
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           FALLBACK_RELEASE_PR_MERGE_TOKEN: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
+          MONOSECRET_REASON: Load RELEASE_PR_MERGE_TOKEN to create release tags and dispatch publishing.
         run: scripts/ci/load-monosecret-secret.sh RELEASE_PR_MERGE_TOKEN
         shell: devenv shell -- bash -e {0}
 

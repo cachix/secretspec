@@ -73,13 +73,11 @@ jobs:
           free-runner-space: "true"
           activate: "true"
 
-      - name: install 1Password CLI
-        uses: 1password/install-cli-action@9b82e19ce89f957763220d632ec1de246084f78a # v1
-
       - name: load publish secrets
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           FALLBACK_PUB_TOKEN: ${{ secrets.PUB_TOKEN }}
+          MONOSECRET_REASON: Load PUB_TOKEN for Dart package publishing.
         run: scripts/ci/load-monosecret-secret.sh PUB_TOKEN
         shell: devenv shell -- bash -e {0}
 

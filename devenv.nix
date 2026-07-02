@@ -16,6 +16,7 @@ in
     [
       cargo-dist
       custom.monochange
+      custom.op
       rustup
       nodejs_24
       pnpm

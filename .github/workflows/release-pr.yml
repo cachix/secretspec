@@ -129,14 +129,10 @@ jobs:
         run: |
           set -euo pipefail
           export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
-          export GITHUB_COMMIT_TOKEN="$RELEASE_PR_MERGE_TOKEN"
 
           if is_release_commit="$(monochange --log-level=debug step release-record --from HEAD --format json --jq '.resolved_commit == .record_commit')"; then
             echo "is_release_commit=${is_release_commit}" >> "$GITHUB_OUTPUT"
             if [ "${is_release_commit}" = "true" ]; then
-              export GIT_CONFIG_COUNT=1
-              export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
-              export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_COMMIT_TOKEN" | base64 -w 0)"
               monochange --log-level=debug step tag-release --from HEAD --push=true --format json | tee /tmp/tag-report.json
             fi
           else

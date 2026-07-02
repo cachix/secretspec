@@ -32,6 +32,15 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v5
+    - name: Download latest SOPS release
+      uses: robinraju/release-downloader@28fc21f50d76778e7023361aa1f863e717d3d56f
+      with:
+        repository: getsops/sops
+        latest: true
+        fileName: "sops-*.amd64.exe"
+
+    - name: Rename SOPS binary
+      run: ren sops-*.amd64.exe sops.exe
     - name: Install Rust
       run: rustup toolchain install stable --profile minimal
     - name: cargo test

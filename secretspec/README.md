@@ -61,6 +61,7 @@ $ secretspec config init
   awssm: AWS Secrets Manager
   vault: HashiCorp Vault / OpenBao secret management
   bws: Bitwarden Secrets Manager
+  sops: Secrets OPerationS
 ? Select your default profile:
 > development
   default
@@ -143,6 +144,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
 - **[Vault / OpenBao](https://secretspec.dev/providers/vault)** - HashiCorp Vault and OpenBao KV engine
 - **[Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)** - Bitwarden Secrets Manager integration
+- **[SOPS: Secrets OPerationS](https://secretspec.dev/providers/sops)** - SOPS integration
 
 ```bash
 $ secretspec run --provider keyring -- npm start

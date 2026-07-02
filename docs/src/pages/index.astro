@@ -1,6 +1,8 @@
 ---
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { Image } from 'astro:assets';
 import { getCollection } from 'astro:content';
+import sopsLogo from '../assets/sops-logo.svg';
 
 // Latest blog post — surfaced in a banner near the top of the landing page.
 const posts = (await getCollection('docs'))
@@ -22,8 +24,12 @@ const latestPostDate = latestPost?.data.date
   : null;
 
 type ProviderMetadata = {
-  /** simpleicons CDN icon name, if not provided renders the generic lock icon as fallback */
-  icon?: string;
+  /** One of:
+   * - simpleicons CDN icon name
+   * - object specifying image source and type
+   * - if not provided renders the generic lock icon as fallback
+   */
+  icon?: string | { src: typeof sopsLogo; type: 'bundled'};
   label: string;
   slug: string
 };
@@ -41,6 +47,7 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'dotenv', slug: 'dotenv', label: '.env files' },
   { icon: 'linux', slug: 'keyring', label: 'Secret Service' },
   { slug: 'keyring', label: 'Credential Manager' },
+  { icon: { src: sopsLogo, type: 'bundled' }, slug: 'sops', label: 'SOPS: Secrets OPerationS' },
 ];
 
 
@@ -50,7 +57,7 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
 <StarlightPage
   frontmatter={{
     title: 'Declare secrets once. Store them anywhere.',
-    description: 'Declare what your application needs in secretspec.toml — store the values in any of 11 backends. No secrets in git. Same code, every environment.',
+    description: 'Declare what your application needs in secretspec.toml — store the values in any of 12 backends. No secrets in git. Same code, every environment.',
     template: 'splash',
     hero: { tagline: '' },
   }}
@@ -82,7 +89,7 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
       <p class="landing-badge">Declarative secrets manager</p>
       <h1 id="_top" class="landing-hero-title">Declare secrets once.<br>Store them anywhere.</h1>
       <p class="landing-hero-subtitle">
-        Stop leaking <code class="inline-code">.env</code> files. Define what your application needs in <code class="inline-code">secretspec.toml</code>, then plug in keyring, 1Password, Vault, AWS, or any of 11 backends — same code, every environment.
+        Stop leaking <code class="inline-code">.env</code> files. Define what your application needs in <code class="inline-code">secretspec.toml</code>, then plug in keyring, 1Password, Vault, AWS, or any of 12 backends — same code, every environment.
       </p>
       <div class="landing-hero-actions">
         <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
@@ -152,8 +159,18 @@ $ secretspec run --profile production -- npm start
     <div class="landing-marquee-track">
       {dup(providerMetadata).map(({ icon, label, slug }: ProviderMetadata) => (
         <a href={`/providers/${slug}`} class="landing-marquee-item">
-          {icon ? (
+          {typeof icon === 'string' ? (
             <img class="landing-marquee-icon" src={`https://cdn.simpleicons.org/${icon}/888888`} alt="" loading="lazy" width="18" height="18" onerror="this.outerHTML='<svg class=&quot;landing-marquee-icon&quot; viewBox=&quot;0 0 24 24&quot; fill=&quot;none&quot; stroke=&quot;currentColor&quot; stroke-width=&quot;2&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; aria-hidden=&quot;true&quot;><rect x=&quot;3&quot; y=&quot;11&quot; width=&quot;18&quot; height=&quot;11&quot; rx=&quot;2&quot;/><path d=&quot;M7 11V7a5 5 0 0 1 10 0v4&quot;/></svg>'" />
+          ) : typeof icon === 'object' && icon.type === 'bundled' ? (
+            <Image
+              alt="provider logo"
+              class="landing-marquee-icon"
+              decoding="async"
+              height="18"
+              loading="lazy"
+              src={icon.src}
+              width="18"
+            />
           ) : (
             <svg class="landing-marquee-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           )}
@@ -270,7 +287,7 @@ println!("{}", s.secrets.database_url);</code></pre>
       <span class="landing-showcase-eyebrow">Declaration vs storage</span>
       <h2 class="landing-section-title">Declare a secret. Swap the source.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Your <code class="inline-code">secretspec.toml</code> never changes. The same code reads from Keychain, 1Password, Vault, AWS, or any of 11 backends.
+        Your <code class="inline-code">secretspec.toml</code> never changes. The same code reads from Keychain, 1Password, Vault, AWS, or any of 12 backends.
       </p>
     </div>
 

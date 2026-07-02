@@ -47,12 +47,16 @@ rsa.workspace = true
 uuid.workspace = true
 data-encoding.workspace = true
 detect-coding-agent.workspace = true
+regex = { workspace = true, optional = true }
+rust-ini = { workspace = true, optional = true }
+saphyr = { workspace = true, optional = true }
 
 [features]
-default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws"]
+default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws", "sops"]
 cli = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]
 awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
 vault = ["dep:reqwest"]
 bws = ["dep:bitwarden", "dep:rustls"]
+sops = ["dep:regex", "dep:rust-ini", "dep:saphyr"]

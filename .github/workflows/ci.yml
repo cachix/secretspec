@@ -205,17 +205,9 @@ jobs:
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-        run: |
-          set -euo pipefail
-          cargo run -p monosecret -- run --profile ci --include CODECOV_TOKEN -- bash <<'BASH'
-          set -euo pipefail
-          echo "::add-mask::$CODECOV_TOKEN"
-          {
-            echo "CODECOV_TOKEN<<__MONOSECRET_CODECOV_TOKEN__"
-            printf '%s\n' "$CODECOV_TOKEN"
-            echo "__MONOSECRET_CODECOV_TOKEN__"
-          } >> "$GITHUB_ENV"
-          BASH
+          FALLBACK_CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          MONOSECRET_LOAD_OPTIONAL: "true"
+        run: scripts/ci/load-monosecret-secret.sh CODECOV_TOKEN
         shell: devenv shell -- bash -e {0}
       - name: upload coverage to codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

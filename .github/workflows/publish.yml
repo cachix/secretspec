@@ -79,17 +79,8 @@ jobs:
       - name: load publish secrets
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-        run: |
-          set -euo pipefail
-          cargo run -p monosecret -- run --profile ci --include PUB_TOKEN -- bash <<'BASH'
-          set -euo pipefail
-          echo "::add-mask::$PUB_TOKEN"
-          {
-            echo "PUB_TOKEN<<__MONOSECRET_PUB_TOKEN__"
-            printf '%s\n' "$PUB_TOKEN"
-            echo "__MONOSECRET_PUB_TOKEN__"
-          } >> "$GITHUB_ENV"
-          BASH
+          FALLBACK_PUB_TOKEN: ${{ secrets.PUB_TOKEN }}
+        run: scripts/ci/load-monosecret-secret.sh PUB_TOKEN
         shell: devenv shell -- bash -e {0}
 
       - name: get crates oidc auth token

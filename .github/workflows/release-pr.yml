@@ -40,17 +40,8 @@ jobs:
       - name: load release automation secrets
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-        run: |
-          set -euo pipefail
-          cargo run -p monosecret -- run --profile ci --include RELEASE_PR_MERGE_TOKEN -- bash <<'BASH'
-          set -euo pipefail
-          echo "::add-mask::$RELEASE_PR_MERGE_TOKEN"
-          {
-            echo "RELEASE_PR_MERGE_TOKEN<<__MONOSECRET_RELEASE_PR_MERGE_TOKEN__"
-            printf '%s\n' "$RELEASE_PR_MERGE_TOKEN"
-            echo "__MONOSECRET_RELEASE_PR_MERGE_TOKEN__"
-          } >> "$GITHUB_ENV"
-          BASH
+          FALLBACK_RELEASE_PR_MERGE_TOKEN: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
+        run: scripts/ci/load-monosecret-secret.sh RELEASE_PR_MERGE_TOKEN
         shell: devenv shell -- bash -e {0}
 
       - name: configure git
@@ -144,17 +135,8 @@ jobs:
       - name: load release automation secrets
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-        run: |
-          set -euo pipefail
-          cargo run -p monosecret -- run --profile ci --include RELEASE_PR_MERGE_TOKEN -- bash <<'BASH'
-          set -euo pipefail
-          echo "::add-mask::$RELEASE_PR_MERGE_TOKEN"
-          {
-            echo "RELEASE_PR_MERGE_TOKEN<<__MONOSECRET_RELEASE_PR_MERGE_TOKEN__"
-            printf '%s\n' "$RELEASE_PR_MERGE_TOKEN"
-            echo "__MONOSECRET_RELEASE_PR_MERGE_TOKEN__"
-          } >> "$GITHUB_ENV"
-          BASH
+          FALLBACK_RELEASE_PR_MERGE_TOKEN: ${{ secrets.RELEASE_PR_MERGE_TOKEN }}
+        run: scripts/ci/load-monosecret-secret.sh RELEASE_PR_MERGE_TOKEN
         shell: devenv shell -- bash -e {0}
 
       - name: detect release commit and create tags

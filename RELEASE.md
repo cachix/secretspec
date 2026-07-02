@@ -1,24 +1,123 @@
 # Releasing the language SDKs
 
-Each SDK is a thin client over the Rust core (the `secretspec-ffi` cdylib, or the
-napi-rs addon for Node). A release builds the native artifact per platform and
-publishes it through that ecosystem's registry, so users install with no native
-build. The per-platform build workflows are drafted under `.github/workflows/`;
-they have **not been run end to end** and need a CI iteration plus the secrets
-below.
+Each SDK is a thin client over the Rust core (the `secretspec-ffi` cdylib, a
+pyo3 extension for Python, or the napi-rs addon for Node). A release builds
+the native artifact per platform and publishes it through that ecosystem's
+registry, so users install with no native build. The per-platform build
+workflows are drafted under `.github/workflows/`; the Python build (wheel
+build + install) has been verified running end to end in CI, but the actual
+publish steps below have not (they need the one-time external Trusted
+Publisher / secret setup described per language first).
 
 Version tags are `vX.Y.Z`; the publish jobs trigger on them.
 
+## Before your first release
+
+Trusted Publishing works differently per registry. PyPI and RubyGems let you
+register a **pending publisher** before anything is published — the first
+tagged release creates the project/gem automatically, no manual publish step.
+npm has no such mechanism: the package must already exist before you can
+attach a Trusted Publisher to it, so the very first version has to go up with
+a temporary token. Do each of these once; every release after it needs no
+secrets (except Hackage, which has no Trusted Publishing at all yet).
+
+### crates.io — already done
+
+`secretspec` and `secretspec-derive` already exist on crates.io and Trusted
+Publishing is already wired up in `publish.yml` (this predates the SDK work
+that added the other languages). Nothing to do, beyond confirming the linked
+GitHub repo is still correct at
+https://crates.io/crates/secretspec/settings if this repo is ever renamed or
+transferred.
+
+### PyPI — pending publisher, no manual publish needed
+
+1. Create a `pypi` GitHub Environment on this repo (Settings → Environments →
+   New environment, name it `pypi`) — `python-wheels.yml`'s publish job
+   targets it.
+2. On PyPI (https://pypi.org/manage/account/publishing/), add a **pending
+   publisher**: project name `secretspec`, owner `cachix`, repo `secretspec`,
+   workflow `python-wheels.yml`, environment `pypi`.
+3. Push a `vX.Y.Z` tag. The first successful OIDC-authenticated publish
+   creates the `secretspec` project on PyPI automatically and converts the
+   pending publisher into a normal one — nothing to publish by hand.
+   ⚠️ if someone else registers the `secretspec` name on PyPI before your
+   first tag, the pending publisher is invalidated and the project would need
+   a different name.
+
+### RubyGems — pending publisher, no manual push needed
+
+1. On rubygems.org, from your account (not an existing gem's page, since the
+   gem doesn't exist yet): Edit Profile → Trusted Publishers → add a
+   **pending trusted publisher**. Gem name `secretspec`, owner `cachix`, repo
+   `secretspec`, workflow `ruby-gems.yml`.
+2. This produces a `role-to-assume` value (`rg_oidc_akr_...`) — put it in
+   `ruby-gems.yml`'s publish job, replacing the `rg_oidc_akr_REPLACE_ME`
+   placeholder. It's an identifier, not a secret — safe to commit.
+3. Push a `vX.Y.Z` tag. The first successful push creates the gem and makes
+   the publishing workflow its owner automatically.
+
+### npm — manual first publish required, then configure Trusted Publishing
+
+npm has no pending-publisher mechanism, and this applies to the main
+`secretspec` package **and every platform sub-package**
+(`secretspec-linux-x64-gnu`, `secretspec-linux-arm64-gnu`,
+`secretspec-darwin-arm64`, `secretspec-win32-x64-msvc`) — 5 packages that each
+need to exist before a Trusted Publisher can be attached to them.
+
+1. Generate a temporary granular access token (write access, short expiry) at
+   https://www.npmjs.com/settings/<you>/tokens.
+2. Bootstrap-publish once with that token — build all 4 platform addons (or
+   download them from a `node-addon.yml` run), stage them, and run the same
+   sequence the `publish` job runs, authenticated with `NPM_TOKEN` instead of
+   OIDC:
+   ```
+   cd secretspec-node
+   npm ci
+   node_modules/.bin/napi create-npm-dirs
+   # copy each built secretspec.<platform>.node into npm/<platform>/ — see
+   # node-addon.yml's "Place each addon into its npm package dir" step for
+   # the target -> platform mapping
+   npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+   node_modules/.bin/napi pre-publish --tag-style npm --no-gh-release
+   npm publish
+   ```
+3. Once all 5 packages exist, open each one's npm package settings → Trusted
+   Publisher → GitHub Actions, and set repo `cachix/secretspec`, workflow
+   `node-addon.yml` (no environment). Then revoke the temporary token from
+   step 1.
+4. Every release after this publishes via OIDC with no token stored anywhere.
+
+### Hackage — token only, no Trusted Publishing
+
+Hackage doesn't support OIDC yet (tracked upstream:
+[haskell/hackage-server#1443](https://github.com/haskell/hackage-server/issues/1443),
+open as of this writing).
+
+1. Generate an API token from your Hackage account
+   (https://hackage.haskell.org/user/<you>/manage).
+2. Add it as the `HACKAGE_TOKEN` repo secret (Settings → Secrets and
+   variables → Actions).
+3. Push a `vX.Y.Z` tag — `haskell-build.yml`'s publish job uploads with this
+   token, first release included. No separate bootstrap step.
+
+### Go — nothing to set up
+
+No registry involved. `go get` reads the tag directly from git; `go-embed.yml`
+just attaches per-platform cdylibs to the GitHub Release for the optional
+self-contained build.
+
 ## Python (PyPI) — `python-wheels.yml`
 
-- **Build:** the Rust resolver is statically linked into a compiled CPython
-  extension (cffi API mode over `libsecretspec_ffi.a`) — there is no separate
-  cdylib bundled. The extension targets the limited API, so one
-  `cp39-abi3-<platform>` wheel per platform serves all CPython >= 3.9. Linux
-  wheels are built inside a `manylinux_2_28` container (old glibc) and repaired
-  with `auditwheel`, which vendors the extension's dynamic system dependencies
-  (notably `libdbus`, pulled in by the keyring provider) and retags to
-  `manylinux`. macOS builds natively; a Windows wheel is a follow-up.
+- **Build:** the Rust resolver is statically linked into a pyo3 extension
+  (`secretspec._native`, built from the `secretspec-py-native` crate via
+  maturin) — there is no separate cdylib bundled. The extension targets
+  pyo3's `abi3-py39` feature, so one `cp39-abi3-<platform>` wheel per platform
+  serves all CPython >= 3.9. Linux wheels are built via `PyO3/maturin-action`
+  inside a `manylinux_2_28` container (old glibc); maturin vendors the
+  extension's dynamic system dependencies itself (notably `libdbus`, pulled in
+  by the keyring provider), no separate `auditwheel` step needed. macOS builds
+  natively; a Windows wheel is a follow-up.
 - **Publish:** `pypa/gh-action-pypi-publish` via **PyPI Trusted Publishing**
   (OIDC). Configure a trusted publisher for this repo + a `pypi` environment; no
   token needed.
@@ -30,8 +129,11 @@ Version tags are `vX.Y.Z`; the publish jobs trigger on them.
   C glue and statically links that archive, so the resolver is embedded in the
   extension and one platform gem serves every Ruby ABI (install needs a C
   compiler + Ruby headers, plus `libdbus-1-dev` for the keyring provider).
-- **Publish:** `gem push` for each platform gem.
-- **Secret:** `RUBYGEMS_API_KEY` (or configure RubyGems Trusted Publishing).
+- **Publish:** `gem push` for each platform gem, authenticated via **RubyGems
+  Trusted Publishing** (OIDC) through `rubygems/configure-rubygems-credentials`
+  — no token stored in CI. See "Before your first release" above for the
+  one-time pending-publisher setup that produces the `role-to-assume` ID
+  `ruby-gems.yml`'s publish job needs.
 - **Gap:** the Linux gem currently links the runner's glibc; for a portable gem,
   build the staticlib on an old-glibc baseline (e.g. a `manylinux` container, as
   the Python job does, or `rake-compiler-dock`) and bundle that. Tracked
@@ -61,14 +163,32 @@ self-contained, vendored build — not a module-proxy install).
 > The loader rejects an embedded git-LFS pointer with a clear error, so a botched
 > LFS-based build fails loudly instead of feeding pointer text to `dlopen`.
 
+## Haskell (Hackage) — `haskell-build.yml`
+
+- **Build:** statically links the `secretspec-ffi` archive at build time via
+  the GHC FFI, so the Rust resolver is embedded in the binary with no runtime
+  loader path.
+- **Publish:** `cabal upload --publish` with the `HACKAGE_TOKEN` secret — see
+  "Before your first release" above. Hackage has no Trusted Publishing yet
+  ([haskell/hackage-server#1443](https://github.com/haskell/hackage-server/issues/1443)),
+  so this stays a long-lived token.
+- **Note:** Hackage's own build bots cannot compile this package (it statically
+  links a Rust archive Hackage doesn't build); the upload still succeeds, it
+  just won't show as "buildable" in Hackage's UI. The README documents the
+  link requirement for anyone installing from source.
+
 ## Node.js (npm) — `node-addon.yml`
 
 - **Build:** `node-addon.yml` builds the napi-rs addon (`secretspec.node`) per
-  platform and uploads it as an artifact.
-- **Publish gap:** multi-platform npm distribution uses per-platform optional
-  packages (`@secretspec/<os>-<arch>`) that the main package `optionalDependencies`
-  and loads at runtime. This is the pattern `@napi-rs/cli` automates. Adopting
-  the `@napi-rs/cli` project layout (so `napi build` / `napi prepublish` emit and
-  publish those packages) is the remaining follow-up; the current addon build is
-  what such a setup would publish.
-- **Secret:** `NPM_TOKEN`.
+  platform via `@napi-rs/cli` (`scripts/build-addon.sh` wraps `napi build`) and
+  runs the SDK tests against it.
+- **Publish:** multi-platform npm distribution uses per-platform optional
+  packages (`secretspec-<platform>`, e.g. `secretspec-linux-x64-gnu`) that the
+  main `secretspec` package references via `optionalDependencies` and loads at
+  runtime — the layout `@napi-rs/cli` automates (`napi create-npm-dirs` /
+  `napi pre-publish`). Authenticated via **npm Trusted Publishing** (OIDC); no
+  token stored in CI.
+- **One-time setup:** unlike PyPI/RubyGems, npm has no pending-publisher
+  mechanism — see "Before your first release" above for the manual
+  bootstrap-publish-then-configure-Trusted-Publisher sequence, needed for the
+  main `secretspec` package and all 4 platform sub-packages.

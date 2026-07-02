@@ -10,17 +10,40 @@ const fs = require('node:fs');
 // as_path) happens entirely in the Rust core; this layer marshals JSON and
 // exposes the builder API. TypeScript declarations ship in index.d.ts.
 
-let native;
-try {
-  // The prebuilt addon for this platform. napi-rs publishes it per platform;
-  // in a source checkout, build it with scripts/build-addon.sh.
-  native = require('./secretspec.node');
-} catch (err) {
-  throw new Error(
-    'failed to load the secretspec native addon (secretspec.node); build it ' +
-      `with scripts/build-addon.sh. Underlying error: ${err.message}`,
-  );
+// Maps process.platform-process.arch to the optionalDependency package that
+// carries the addon for that platform (see napi.targets in package.json and
+// the generated npm/<platform>/ package dirs).
+const PLATFORM_PACKAGES = {
+  'linux-x64': 'secretspec-linux-x64-gnu',
+  'linux-arm64': 'secretspec-linux-arm64-gnu',
+  'darwin-arm64': 'secretspec-darwin-arm64',
+  'win32-x64': 'secretspec-win32-x64-msvc',
+};
+
+function loadNative() {
+  try {
+    // A source checkout's own build, from scripts/build-addon.sh.
+    return require('./secretspec.node');
+  } catch (localErr) {
+    // Installed from npm: the addon lives in a platform-specific
+    // optionalDependency package instead of being bundled here.
+    const key = `${process.platform}-${process.arch}`;
+    const pkg = PLATFORM_PACKAGES[key];
+    if (!pkg) {
+      throw new Error(`secretspec: unsupported platform ${key}`);
+    }
+    try {
+      return require(pkg);
+    } catch (pkgErr) {
+      throw new Error(
+        `failed to load the secretspec native addon for ${key} (tried ./secretspec.node ` +
+          `and the '${pkg}' package). Underlying error: ${pkgErr.message}`,
+      );
+    }
+  }
 }
+
+const native = loadNative();
 
 // Response wire-format version this SDK understands. Tracks secretspec-ffi's
 // RESOLVE_SCHEMA_VERSION; a mismatch means the native addon is out of sync.

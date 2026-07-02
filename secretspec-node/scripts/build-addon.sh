@@ -1,26 +1,21 @@
 #!/usr/bin/env bash
 #
-# Build the napi-rs addon (release) and place it as secretspec.node next to
-# index.js. A napi cdylib is itself a valid Node addon, so this is just a
-# cargo build plus a rename.
+# Build the napi-rs addon (release) via `napi build` and place it as
+# secretspec.node next to index.js.
 set -euo pipefail
 
 pkg_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-repo_root="$(cd "$pkg_dir/.." && pwd)"
+napi_bin="$pkg_dir/node_modules/.bin/napi"
 
-cargo build -p secretspec-node-native --release --manifest-path "$repo_root/Cargo.toml"
-
-target_dir="$(cargo metadata --no-deps --format-version 1 --manifest-path "$repo_root/Cargo.toml" \
-  | grep -o '"target_directory":"[^"]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/')"
-case "$(uname -s)" in
-  Darwin)                  src="libsecretspec_node_native.dylib" ;;
-  MINGW* | MSYS* | CYGWIN*) src="secretspec_node_native.dll" ;;
-  *)                       src="libsecretspec_node_native.so" ;;
-esac
+# --output-dir keeps napi build's generated .d.ts (which would otherwise
+# clobber the hand-maintained index.d.ts) out of pkg_dir entirely.
+tmp_out="$(mktemp -d)"
+trap 'rm -rf "$tmp_out"' EXIT
+( cd "$pkg_dir" && "$napi_bin" build --release --output-dir "$tmp_out" )
 
 # Install atomically: node --test runs test files in parallel processes that
 # may build concurrently, and overwriting in place SIGBUSes a process that has
 # already mapped the addon. A rename keeps the old inode valid for them.
-cp "$target_dir/release/$src" "$pkg_dir/secretspec.node.tmp.$$"
+mv -f "$tmp_out/secretspec.node" "$pkg_dir/secretspec.node.tmp.$$"
 mv -f "$pkg_dir/secretspec.node.tmp.$$" "$pkg_dir/secretspec.node"
 echo "built secretspec.node"

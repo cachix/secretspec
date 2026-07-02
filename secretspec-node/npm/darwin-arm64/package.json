@@ -1,0 +1,17 @@
+{
+  "name": "secretspec-darwin-arm64",
+  "version": "0.12.1",
+  "cpu": [
+    "arm64"
+  ],
+  "main": "secretspec.darwin-arm64.node",
+  "files": [
+    "secretspec.darwin-arm64.node"
+  ],
+  "description": "Declarative secrets, every environment, any provider (Node.js SDK)",
+  "homepage": "https://secretspec.dev/",
+  "license": "Apache-2.0",
+  "os": [
+    "darwin"
+  ]
+}

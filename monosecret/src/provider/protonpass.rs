@@ -23,7 +23,7 @@ fn normalize_agent_reason(reason: &str) -> Option<String> {
 
 fn default_agent_reason() -> String {
 	format!(
-		"monosecret/{} (https://monosecret.dev)",
+		"monosecret/{} (https://ifiokjr.github.io/monosecret)",
 		env!("CARGO_PKG_VERSION")
 	)
 }

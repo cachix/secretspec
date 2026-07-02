@@ -37,7 +37,7 @@ pub(crate) mod shell;
 /// and delegating to the appropriate subcommands for secrets management.
 #[derive(Parser)]
 #[command(name = "monosecret")]
-#[command(about = "Declarative secrets, every environment, any provider - https://monosecret.dev", long_about = None)]
+#[command(about = "Declarative secrets, every environment, any provider - https://ifiokjr.github.io/monosecret", long_about = None)]
 #[command(version)]
 struct Cli {
 	/// Path to monosecret.toml (default: auto-detect by walking up from current directory)

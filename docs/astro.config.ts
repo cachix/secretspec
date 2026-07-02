@@ -1,4 +1,3 @@
-import type { PluginOption } from "vite";
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import starlightLlmsTxt from "starlight-llms-txt";
@@ -8,11 +7,29 @@ import starlightBlog from "starlight-blog";
 // /api/stars would 404 and the star pill would stay hidden locally. Mirror the
 // worker's GitHub proxy here so the pill populates during local development.
 // Production is unaffected — it is served by worker.js.
-const devStarsApi: PluginOption = {
+type DevStarsResponse = {
+  setHeader(name: string, value: string): void;
+  end(body: string): void;
+};
+
+type DevStarsServer = {
+  middlewares: {
+    use: (path: string, handler: (req: unknown, res: DevStarsResponse) => Promise<void>) => void;
+  };
+};
+
+type DevStarsPlugin = {
+  name: string;
+  apply: "serve";
+  enforce: "pre";
+  configureServer(server: DevStarsServer): void;
+};
+
+const devStarsApi: DevStarsPlugin = {
   name: "dev-stars-api",
   apply: "serve",
   enforce: "pre",
-  configureServer(server) {
+  configureServer(server: DevStarsServer) {
     server.middlewares.use("/api/stars", async (_req, res) => {
       let stars = null;
       try {
@@ -32,9 +49,12 @@ const devStarsApi: PluginOption = {
   },
 };
 
+const githubPagesBase = process.env.GITHUB_PAGES_BASE?.trim();
+
 // https://astro.build/config
 export default defineConfig({
-  site: "https://monosecret.dev/",
+  site: process.env.GITHUB_PAGES_SITE ?? "https://ifiokjr.github.io/monosecret/",
+  ...(githubPagesBase ? { base: githubPagesBase } : {}),
   vite: {
     plugins: [devStarsApi],
   },
@@ -140,6 +160,10 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
         {
           label: "Getting Started",
           items: [{ label: "Quick Start", slug: "quick-start" }],
+        },
+        {
+          label: "Guides",
+          items: [{ label: "CI/CD Setup", slug: "guides/ci" }],
         },
         {
           label: "Concepts",

@@ -9,6 +9,7 @@ rules:
       - .github/actions/devenv/action.yaml
       - changeset-policy.yml
       - ci.yml
+      - docs.yml
       - publish.yml
       - release.yml
 

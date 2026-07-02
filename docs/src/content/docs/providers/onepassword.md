@@ -44,7 +44,7 @@ service account token for headless setups.
 
 Set `OP_SERVICE_ACCOUNT_TOKEN` in the environment, or use the
 `onepassword+token://` / `op+token://` URI schemes. See the [CI/CD section](#cicd-with-service-accounts)
-below.
+below, or the [CI/CD setup guide](/guides/ci/) for a complete GitHub Actions workflow.
 
 ### Manual signin (legacy)
 

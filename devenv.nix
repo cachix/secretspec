@@ -192,6 +192,14 @@ in
       description = "Build npm package entry points and TypeScript client.";
       binary = "bash";
     };
+    "build:docs" = {
+      exec = ''
+        set -euo pipefail
+        pnpm --filter docs run build
+      '';
+      description = "Build the Astro/Starlight documentation site.";
+      binary = "bash";
+    };
 
     "test:all" = {
       exec = ''

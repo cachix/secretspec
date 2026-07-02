@@ -60,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   appear missing under an agent session. The provider now sets this variable on
   every `pass-cli` invocation. The reason is resolved as `--reason`/`with_reason`,
   then `PROTON_PASS_AGENT_REASON`, then a secretspec-versioned default
-  (`monosecret/<version> (https://monosecret.dev)`); each source is normalized first,
+  (`monosecret/<version> (https://ifiokjr.github.io/monosecret)`); each source is normalized first,
   so a blank reason falls through to the next rather than masking it. It is ignored by
   older releases and non-agent sessions.
 
@@ -174,7 +174,7 @@ Both features are purely additive at the TOML level — every existing
   `monosecret.toml`), so a cloned repository cannot redirect or silence it. The
   new `monosecret audit` command reads the log, with `--project`, `--action`,
   `--tail`/`-n`, and `--json` filters. See
-  [Audit Logging](https://monosecret.dev/concepts/audit/) for details.
+  [Audit Logging](https://ifiokjr.github.io/monosecret/concepts/audit/) for details.
 - `--reason` CLI flag (and `SECRETSPEC_REASON` env var) records a human-readable
   reason for a session's secret access, forwarded to providers that support audit
   logging. `SECRETSPEC_REASON` is honored across the SDK/library too: it is resolved
@@ -219,7 +219,7 @@ Both features are purely additive at the TOML level — every existing
   appear missing under an agent session. The provider now sets this variable on
   every `pass-cli` invocation. The reason is resolved as `--reason`/`with_reason`,
   then `PROTON_PASS_AGENT_REASON`, then a monosecret-versioned default
-  (`monosecret/<version> (https://monosecret.dev)`); each source is normalized first,
+  (`monosecret/<version> (https://ifiokjr.github.io/monosecret)`); each source is normalized first,
   so a blank reason falls through to the next rather than masking it. It is ignored by
   older releases and non-agent sessions.
 - `monosecret init` now serializes the generated `monosecret.toml` with

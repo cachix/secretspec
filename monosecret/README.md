@@ -11,14 +11,14 @@ Secrets end up in `.env` files that get accidentally committed, shared over Slac
 
 Monosecret fixes this by separating secret **declaration** from secret **storage**. You commit a `monosecret.toml` that declares what secrets your application needs, while the actual values live in a secure provider like your system keyring, 1Password, or any other backend. No secrets in git, no `.env` files to leak.
 
-[Documentation](https://monosecret.dev) | [Quick Start](https://monosecret.dev/quick-start) | [Announcement Blog Post](https://devenv.sh/blog/2025/07/21/announcing-monosecret-declarative-secrets-management)
+[Documentation](https://ifiokjr.github.io/monosecret) | [Quick Start](https://ifiokjr.github.io/monosecret/quick-start) | [Announcement Blog Post](https://devenv.sh/blog/2025/07/21/announcing-monosecret-declarative-secrets-management)
 
 ## Features
 
-- **[Declarative Configuration](https://monosecret.dev/reference/configuration/)**: Define your secrets in `monosecret.toml` with descriptions and requirements
-- **[Multiple Provider Backends](https://monosecret.dev/concepts/providers/)**: [Keyring](https://monosecret.dev/providers/keyring), [.env](https://monosecret.dev/providers/dotenv), [OnePassword](https://monosecret.dev/providers/onepassword), [LastPass](https://monosecret.dev/providers/lastpass), [Pass](https://monosecret.dev/providers/pass), [Proton Pass](https://monosecret.dev/providers/protonpass), [environment variables](https://monosecret.dev/providers/env), [Google Cloud Secret Manager](https://monosecret.dev/providers/gcsm), [AWS Secrets Manager](https://monosecret.dev/providers/awssm), and [Vault/OpenBao](https://monosecret.dev/providers/vault)
-- **[Type-Safe Rust SDK](https://monosecret.dev/sdk/rust/)**: Generate strongly-typed structs from your `monosecret.toml` for compile-time safety
-- **[Profile Support](https://monosecret.dev/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
+- **[Declarative Configuration](https://ifiokjr.github.io/monosecret/reference/configuration/)**: Define your secrets in `monosecret.toml` with descriptions and requirements
+- **[Multiple Provider Backends](https://ifiokjr.github.io/monosecret/concepts/providers/)**: [Keyring](https://ifiokjr.github.io/monosecret/providers/keyring), [.env](https://ifiokjr.github.io/monosecret/providers/dotenv), [OnePassword](https://ifiokjr.github.io/monosecret/providers/onepassword), [LastPass](https://ifiokjr.github.io/monosecret/providers/lastpass), [Pass](https://ifiokjr.github.io/monosecret/providers/pass), [Proton Pass](https://ifiokjr.github.io/monosecret/providers/protonpass), [environment variables](https://ifiokjr.github.io/monosecret/providers/env), [Google Cloud Secret Manager](https://ifiokjr.github.io/monosecret/providers/gcsm), [AWS Secrets Manager](https://ifiokjr.github.io/monosecret/providers/awssm), and [Vault/OpenBao](https://ifiokjr.github.io/monosecret/providers/vault)
+- **[Type-Safe Rust SDK](https://ifiokjr.github.io/monosecret/sdk/rust/)**: Generate strongly-typed structs from your `monosecret.toml` for compile-time safety
+- **[Profile Support](https://ifiokjr.github.io/monosecret/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
 - **Secret Generation**: Auto-generate passwords, tokens, UUIDs, and more when secrets are missing — declarative "generate if absent"
 - **Configuration Inheritance**: Extend and override shared configurations using the `extends` feature
 - **Discovery**: `monosecret init` to discover secrets from existing `.env` files
@@ -65,7 +65,7 @@ $ monosecret run -- npm start
 $ monosecret run --profile production --provider dotenv -- npm start
 ```
 
-See the [Quick Start Guide](https://monosecret.dev/quick-start) for detailed instructions.
+See the [Quick Start Guide](https://ifiokjr.github.io/monosecret/quick-start) for detailed instructions.
 
 ## Installation
 
@@ -73,7 +73,7 @@ See the [Quick Start Guide](https://monosecret.dev/quick-start) for detailed ins
 $ curl -sSL https://install.monosecret.dev | sh
 ```
 
-See the [installation guide](https://monosecret.dev/quick-start#installation) for more options including Nix and Devenv.
+See the [installation guide](https://ifiokjr.github.io/monosecret/quick-start#installation) for more options including Nix and Devenv.
 
 ## Configuration
 
@@ -100,7 +100,7 @@ DATABASE_URL = { description = "PostgreSQL connection string", required = true }
 REDIS_URL = { description = "Redis connection string", required = true }
 ```
 
-See the [configuration reference](https://monosecret.dev/reference/configuration/) for all available options.
+See the [configuration reference](https://ifiokjr.github.io/monosecret/reference/configuration/) for all available options.
 
 ## Profiles
 
@@ -114,23 +114,23 @@ $ monosecret run --profile production -- npm start
 $ monosecret config init
 ```
 
-Learn more about [profiles](https://monosecret.dev/concepts/profiles) and [profile selection](https://monosecret.dev/concepts/profiles#profile-selection).
+Learn more about [profiles](https://ifiokjr.github.io/monosecret/concepts/profiles) and [profile selection](https://ifiokjr.github.io/monosecret/concepts/profiles#profile-selection).
 
 ## Providers
 
 Monosecret supports multiple storage backends for secrets:
 
-- **[Keyring](https://monosecret.dev/providers/keyring)** - System credential store (recommended)
-- **[.env files](https://monosecret.dev/providers/dotenv)** - Traditional dotenv files
-- **[Environment variables](https://monosecret.dev/providers/env)** - Read-only for CI/CD
-- **[Pass](https://monosecret.dev/providers/pass)** - Unix password manager with GPG encryption
-- **[Proton Pass](https://monosecret.dev/providers/protonpass)** - End-to-end encrypted via Proton's official pass-cli
-- **[OnePassword](https://monosecret.dev/providers/onepassword)** - Team secret management; `onepassword://` keeps Monosecret-owned storage while `op://` opts into native 1Password references
-- **[LastPass](https://monosecret.dev/providers/lastpass)** - Cloud password manager
-- **[Google Cloud Secret Manager](https://monosecret.dev/providers/gcsm)** - GCP secret management
-- **[AWS Secrets Manager](https://monosecret.dev/providers/awssm)** - AWS secret management
-- **[Vault / OpenBao](https://monosecret.dev/providers/vault)** - HashiCorp Vault and OpenBao KV engine
-- **[Bitwarden Secrets Manager](https://monosecret.dev/providers/bws)** - Bitwarden Secrets Manager integration
+- **[Keyring](https://ifiokjr.github.io/monosecret/providers/keyring)** - System credential store (recommended)
+- **[.env files](https://ifiokjr.github.io/monosecret/providers/dotenv)** - Traditional dotenv files
+- **[Environment variables](https://ifiokjr.github.io/monosecret/providers/env)** - Read-only for CI/CD
+- **[Pass](https://ifiokjr.github.io/monosecret/providers/pass)** - Unix password manager with GPG encryption
+- **[Proton Pass](https://ifiokjr.github.io/monosecret/providers/protonpass)** - End-to-end encrypted via Proton's official pass-cli
+- **[OnePassword](https://ifiokjr.github.io/monosecret/providers/onepassword)** - Team secret management; `onepassword://` keeps Monosecret-owned storage while `op://` opts into native 1Password references
+- **[LastPass](https://ifiokjr.github.io/monosecret/providers/lastpass)** - Cloud password manager
+- **[Google Cloud Secret Manager](https://ifiokjr.github.io/monosecret/providers/gcsm)** - GCP secret management
+- **[AWS Secrets Manager](https://ifiokjr.github.io/monosecret/providers/awssm)** - AWS secret management
+- **[Vault / OpenBao](https://ifiokjr.github.io/monosecret/providers/vault)** - HashiCorp Vault and OpenBao KV engine
+- **[Bitwarden Secrets Manager](https://ifiokjr.github.io/monosecret/providers/bws)** - Bitwarden Secrets Manager integration
 
 ```bash
 $ monosecret run --provider keyring -- npm start
@@ -146,7 +146,7 @@ $ monosecret run --provider op://Development/dotfiles -- npm start
 $ monosecret config init
 ```
 
-See [provider concepts](https://monosecret.dev/concepts/providers) and [provider reference](https://monosecret.dev/reference/providers) for details.
+See [provider concepts](https://ifiokjr.github.io/monosecret/concepts/providers) and [provider reference](https://ifiokjr.github.io/monosecret/reference/providers) for details.
 
 ## Rust SDK
 
@@ -171,7 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-See the [Rust SDK documentation](https://monosecret.dev/sdk/rust) for advanced usage including profile-specific types.
+See the [Rust SDK documentation](https://ifiokjr.github.io/monosecret/sdk/rust) for advanced usage including profile-specific types.
 
 ## CLI Reference
 
@@ -192,13 +192,13 @@ monosecret import PROVIDER       # Import secrets from another provider
 monosecret run -- command        # Run command with secrets as env vars
 ```
 
-See the [full CLI reference](https://monosecret.dev/reference/cli) for all commands and options.
+See the [full CLI reference](https://ifiokjr.github.io/monosecret/reference/cli) for all commands and options.
 
 ## Contributing
 
 We welcome contributions! Areas where you can help:
 
-- **New provider backends** - See the [provider implementation guide](https://monosecret.dev/reference/adding-providers)
+- **New provider backends** - See the [provider implementation guide](https://ifiokjr.github.io/monosecret/reference/adding-providers)
 - **Language SDKs** - Help us support more languages beyond Rust
 - **Package managers** - Get Monosecret into your favorite package manager
 - **Documentation** - Improve guides and examples

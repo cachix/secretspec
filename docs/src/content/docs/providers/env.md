@@ -3,7 +3,7 @@ title: Environment Variable Provider
 description: Read-only access to environment variables
 ---
 
-The Environment Variable provider reads secrets directly from process environment variables. This is a **read-only** provider designed for CI/CD compatibility and containerized environments.
+The Environment Variable provider reads secrets directly from process environment variables. This is a **read-only** provider designed for CI/CD compatibility and containerized environments. For end-to-end GitHub Actions examples, see the [CI/CD setup guide](/guides/ci/).
 
 ## Configuration
 

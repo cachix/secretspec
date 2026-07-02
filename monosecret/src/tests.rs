@@ -2291,6 +2291,98 @@ fn test_get_existing_secret() {
 }
 
 #[test]
+fn env_vars_resolves_all_secrets_sorted() {
+	use crate::cli::shell;
+
+	let temp_dir = TempDir::new().unwrap();
+	let env_file = temp_dir.path().join(".env");
+	fs::write(
+		&env_file,
+		"DATABASE_URL=postgres://localhost\nAPI_KEY=secret-value\n",
+	)
+	.unwrap();
+
+	let mut secrets = HashMap::new();
+	secrets.insert(
+		"API_KEY".to_string(),
+		Secret {
+			description: Some("API key".to_string()),
+			required: Some(true),
+			default: None,
+			providers: None,
+			groups: None,
+			as_path: None,
+			..Default::default()
+		},
+	);
+	secrets.insert(
+		"DATABASE_URL".to_string(),
+		Secret {
+			description: Some("Database URL".to_string()),
+			required: Some(true),
+			default: None,
+			providers: None,
+			groups: None,
+			as_path: None,
+			..Default::default()
+		},
+	);
+
+	let mut profiles = HashMap::new();
+	profiles.insert(
+		"default".to_string(),
+		Profile {
+			defaults: None,
+			secrets,
+		},
+	);
+
+	let spec = Secrets::new(
+		Config {
+			project: Project {
+				name: "test".to_string(),
+				revision: "1.0".to_string(),
+				extends: None,
+				require_reason: None,
+			},
+			profiles,
+			providers: None,
+			groups: None,
+		},
+		Some(GlobalConfig {
+			audit: None,
+			defaults: GlobalDefaults {
+				provider: Some(format!("dotenv://{}", env_file.display())),
+				profile: None,
+				providers: None,
+			},
+		}),
+		None,
+		None,
+	);
+
+	let pairs = spec.env_vars(&[], &[]).expect("env_vars should resolve");
+	// Sorted by name.
+	assert_eq!(
+		pairs,
+		vec![
+			("API_KEY".to_string(), "secret-value".to_string()),
+			(
+				"DATABASE_URL".to_string(),
+				"postgres://localhost".to_string()
+			),
+		]
+	);
+
+	// And the bash render of those pairs is a valid export block.
+	let rendered = shell::render(shell::Shell::Bash, &pairs);
+	assert_eq!(
+		rendered,
+		"export API_KEY='secret-value';\nexport DATABASE_URL='postgres://localhost';\n"
+	);
+}
+
+#[test]
 fn test_get_secret_with_default() {
 	let temp_dir = TempDir::new().unwrap();
 	let env_file = temp_dir.path().join(".env");

@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pass://?store_dir=/path/to/store`) to use a password store directory other
   than the default `~/.password-store`. It is applied as `PASSWORD_STORE_DIR`
   scoped to each `pass` invocation.
+- `monosecret env` (alias `load-env`) loads resolved secrets into the surrounding
+  shell or a CI environment with one command. `--shell` selects the output format —
+  `bash`/`sh`/`zsh`, `fish`, `powershell`/`pwsh`, `nushell`/`nu`, `github`
+  (appends `KEY<<DELIM` heredoc blocks to `$GITHUB_ENV` and masks values),
+  `gitlab`/`dotenv` (portable `KEY="value"`). Apply the output with
+  `eval "$(monosecret env --shell bash)"`, `monosecret env --shell fish | source`,
+  `monosecret env --shell powershell | iex`, or write to a file with `--output`.
+  Values are escaped per the target's rules; reuses the same resolution path and
+  `require_reason` policy as `monosecret run`.
 - `[project] require_reason` policy in `monosecret.toml`, controlling when secret
   access must supply an explicit reason. Accepts `"agents"` (the default — require
   a reason only when an AI agent is detected), `true` (require it from every

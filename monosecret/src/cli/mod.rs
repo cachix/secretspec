@@ -29,6 +29,8 @@ use crate::Secrets;
 use crate::provider::Provider;
 use crate::provider::providers;
 
+pub(crate) mod shell;
+
 /// Main CLI structure for the monosecret application.
 ///
 /// This is the entry point for the command-line interface, parsing user commands
@@ -148,6 +150,42 @@ enum Commands {
 		/// Output raw JSON Lines instead of a formatted summary
 		#[arg(long)]
 		json: bool,
+	},
+	/// Load resolved secrets into the surrounding shell or a CI environment.
+	///
+	/// Emits shell-native declarations (or appends to `$GITHUB_ENV`) so one
+	/// command can set every secret as environment variables for the current
+	/// shell. Wrap the output so your shell evaluates it:
+	///
+	///   bash/sh/zsh:    eval "$(monosecret env --shell bash)"
+	///   fish:           monosecret env --shell fish | source
+	///   PowerShell:     monosecret env --shell powershell | iex
+	///   Nushell:        monosecret env --shell nushell --output env.nu && nu -c "source env.nu"
+	///
+	/// For GitHub Actions use `--shell github` (appends to `$GITHUB_ENV`); for
+	/// GitLab CI use `--shell gitlab --output deploy.env` with
+	/// `artifacts:reports:dotenv`. `--shell dotenv` emits portable `KEY="value"`.
+	#[command(alias = "load-env")]
+	Env {
+		/// Target shell / format: bash, sh, zsh, fish, powershell, pwsh,
+		/// nushell, nu, github, gitlab, dotenv.
+		#[arg(short = 's', long, value_enum, default_value_t = shell::Shell::Bash)]
+		shell: shell::Shell,
+		/// Provider backend to use
+		#[arg(short, long, env = "MONOSECRET_PROVIDER")]
+		provider: Option<String>,
+		/// Profile to use
+		#[arg(short = 'P', long, env = "MONOSECRET_PROFILE")]
+		profile: Option<String>,
+		/// Write to a file instead of stdout (for github, instead of `$GITHUB_ENV`)
+		#[arg(short = 'o', long)]
+		output: Option<PathBuf>,
+		/// Secret names to include. Can be repeated or comma-separated.
+		#[arg(long = "include")]
+		include: Vec<String>,
+		/// Secret groups to include. Can be repeated or comma-separated.
+		#[arg(long = "group")]
+		group: Vec<String>,
 	},
 }
 
@@ -1039,6 +1077,31 @@ pub fn main() -> Result<()> {
 			tail,
 			json,
 		} => show_audit_log(project, action, tail, json),
+		// Load resolved secrets into the surrounding shell / CI environment
+		Commands::Env {
+			shell,
+			provider,
+			profile,
+			output,
+			include,
+			group,
+		} => {
+			let mut app = load_secrets(&cli.file, cli.reason.as_deref())?;
+			if let Some(p) = provider {
+				app.set_provider(p);
+			}
+			if let Some(p) = profile {
+				app.set_profile(p);
+			}
+			let pairs = app
+				.env_vars(&include, &group)
+				.into_diagnostic()
+				.wrap_err("Failed to resolve secrets for env export")?;
+			shell::emit(shell, &pairs, output.as_deref())
+				.into_diagnostic()
+				.wrap_err_with(|| format!("Failed to emit {} declarations", shell.as_str()))?;
+			Ok(())
+		}
 	}
 }
 
@@ -1439,6 +1502,80 @@ mod tests {
 			}
 			_ => panic!("expected Audit command"),
 		}
+	}
+
+	#[test]
+	fn env_parses_shell_filters_and_output() {
+		let cli = Cli::try_parse_from([
+			"monosecret",
+			"env",
+			"--shell",
+			"fish",
+			"--profile",
+			"production",
+			"--include",
+			"API_KEY,DB_URL",
+			"--group",
+			"deploy",
+			"--output",
+			"/tmp/env.fish",
+		])
+		.unwrap();
+		match cli.command {
+			Commands::Env {
+				shell,
+				provider,
+				profile,
+				output,
+				include,
+				group,
+			} => {
+				assert_eq!(shell, shell::Shell::Fish);
+				assert_eq!(provider, None);
+				assert_eq!(profile.as_deref(), Some("production"));
+				assert_eq!(
+					output.as_deref(),
+					Some(std::path::Path::new("/tmp/env.fish"))
+				);
+				assert_eq!(include, vec!["API_KEY,DB_URL".to_string()]);
+				assert_eq!(group, vec!["deploy".to_string()]);
+			}
+			_ => panic!("expected Env command"),
+		}
+	}
+
+	#[test]
+	fn env_defaults_to_bash_shell() {
+		let cli = Cli::try_parse_from(["monosecret", "env"]).unwrap();
+		match cli.command {
+			Commands::Env { shell, .. } => assert_eq!(shell, shell::Shell::Bash),
+			_ => panic!("expected Env command"),
+		}
+	}
+
+	#[test]
+	fn env_accepts_load_env_alias_and_sh_zsh_aliases() {
+		for name in [
+			"bash",
+			"sh",
+			"zsh",
+			"powershell",
+			"pwsh",
+			"nushell",
+			"nu",
+			"github",
+			"gitlab",
+			"dotenv",
+		] {
+			let cli = Cli::try_parse_from(["monosecret", "env", "--shell", name]).unwrap();
+			match cli.command {
+				Commands::Env { .. } => {}
+				_ => panic!("expected Env command for --shell {name}"),
+			}
+		}
+		// `load-env` is an alias for the `env` subcommand.
+		let cli = Cli::try_parse_from(["monosecret", "load-env", "--shell", "fish"]).unwrap();
+		assert!(matches!(cli.command, Commands::Env { .. }));
 	}
 
 	#[test]

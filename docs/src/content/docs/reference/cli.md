@@ -264,6 +264,71 @@ $ monosecret run -- node app.js  # app.js reads process.env.DATABASE_URL
 
 :::
 
+### env
+
+Load resolved secrets into the surrounding shell or a CI environment. Emits
+shell-native declarations (or appends to `$GITHUB_ENV`) so one command can set
+every secret as environment variables for the current shell.
+
+```bash
+monosecret env [OPTIONS]
+```
+
+**Options:**
+
+- `-s, --shell <SHELL>` - Target shell / format: `bash` (also `sh`, `zsh`),
+  `fish`, `powershell` (also `pwsh`), `nushell` (also `nu`), `github`,
+  `gitlab`, `dotenv`. Default: `bash`.
+- `-p, --provider <PROVIDER>` - Provider backend to use
+- `-P, --profile <PROFILE>` - Profile to use
+- `-o, --output <PATH>` - Write to a file instead of stdout (for `github`,
+  instead of `$GITHUB_ENV`)
+- `--include <SECRET>` - Only emit named secrets. Repeatable and comma-aware.
+- `--group <GROUP>` - Only emit secrets in declared groups. Repeatable and comma-aware.
+
+`load-env` is an alias for this command. Like `run`, `env` honors the
+`require_reason` policy, so coding agents must pass `--reason`
+(`MONOSECRET_REASON`).
+
+**Apply in your shell:**
+
+```bash
+# bash / sh / zsh
+eval "$(monosecret env --shell bash)"
+
+# fish
+monosecret env --shell fish | source
+
+# PowerShell
+monosecret env --shell powershell | iex
+
+# Nushell
+monosecret env --shell nushell --output env.nu && nu -c "source env.nu"
+```
+
+**CI environments:**
+
+```bash
+# GitHub Actions — appends KEY<<DELIM heredoc blocks to $GITHUB_ENV
+# (and prints ::add-mask:: so values are masked in the log)
+monosecret env --shell github
+
+# GitLab CI — emit a dotenv report artifact
+monosecret env --shell gitlab --output deploy.env
+# then in .gitlab-ci.yml:  artifacts: reports: dotenv: deploy.env
+
+# Portable dotenv anywhere
+monosecret env --shell dotenv --output .env
+```
+
+Values are quoted per the target shell's rules, so a value containing spaces,
+quotes, `$`, backslashes, or newlines cannot break out of the declaration.
+For secrets declared with `as_path = true`, prefer `monosecret run` — `env`
+emits the value (a temp-file path) but the temp file is removed when the
+command exits.
+
+:::
+
 ### import
 
 Import secrets from one provider to another.

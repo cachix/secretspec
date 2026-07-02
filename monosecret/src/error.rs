@@ -65,6 +65,8 @@ pub enum MonosecretError {
 		 set it to false to disable.)"
 	)]
 	ReasonRequired,
+	#[error("Could not emit environment: {0}")]
+	EnvEmit(String),
 }
 
 /// A type alias for `Result<T, MonosecretError>`

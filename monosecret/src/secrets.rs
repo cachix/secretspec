@@ -2123,6 +2123,42 @@ impl Secrets {
 		std::process::exit(exit_code);
 	}
 
+	/// Resolves the selected (or all) secrets for the active profile and returns
+	/// them as `(name, value)` pairs, sorted by name. Enforces the
+	/// `require_reason` policy the same way [`Self::run`] does, so coding agents
+	/// must supply a reason.
+	///
+	/// This is the programmatic backing for `monosecret env`, which emits these
+	/// pairs as shell-native `export` / `set` / `$env:` declarations (or appends
+	/// them to `$GITHUB_ENV` / a GitLab dotenv artifact) so a single command can
+	/// load every secret into the surrounding shell or CI environment.
+	///
+	/// # `as_path` secrets
+	///
+	/// Secrets resolved with `as_path = true` are backed by temporary files
+	/// whose lifetime is tied to the [`ValidatedSecrets`] returned by validation.
+	/// This method drops that handle once the values are collected, so the temp
+	/// files are removed before the caller can act on an emitted path. For
+	/// `as_path` secrets, prefer [`Self::run`], which keeps the files alive for
+	/// the child process; use `env` for ordinary value secrets.
+	pub fn env_vars(
+		&self,
+		includes: &[String],
+		groups: &[String],
+	) -> Result<Vec<(String, String)>> {
+		self.ensure_reason()?;
+		let selected = self.selected_secret_names(includes, groups)?;
+		let validation = self.ensure_secrets_selected(None, None, false, selected.as_ref())?;
+		let mut pairs: Vec<(String, String)> = validation
+			.resolved
+			.secrets
+			.iter()
+			.map(|(k, v)| (k.clone(), v.expose_secret().to_string()))
+			.collect();
+		pairs.sort_by(|a, b| a.0.cmp(&b.0));
+		Ok(pairs)
+	}
+
 	/// Runs a command with secrets injected and returns its exit code.
 	///
 	/// Splitting this out from [`Self::run`] ensures that any temporary files

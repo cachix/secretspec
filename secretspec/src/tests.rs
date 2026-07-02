@@ -316,6 +316,7 @@ fn test_validation_result_structure() {
         resolved: Resolved::new(HashMap::new(), "keyring".to_string(), "default".to_string()),
         missing_optional: vec!["optional_secret".to_string()],
         with_defaults: Vec::new(),
+        resolution: Vec::new(),
         temp_files: Vec::new(),
     };
     assert_eq!(valid_result.missing_optional.len(), 1);
@@ -331,6 +332,459 @@ fn test_validation_result_structure() {
     );
     assert!(validation_errors.has_errors());
     assert_eq!(validation_errors.missing_required.len(), 1);
+}
+
+#[test]
+fn test_resolution_report_provenance() {
+    use crate::report::ResolutionStatus;
+
+    let temp_dir = TempDir::new().unwrap();
+    // Only DATABASE_URL is present in the backend; everything else exercises a
+    // different resolution arm (default, missing-optional, missing-required).
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "DATABASE_URL=postgres://localhost/db\n").unwrap();
+
+    let secret = |required: bool, default: Option<&str>| Secret {
+        description: Some("test".to_string()),
+        required: Some(required),
+        default: default.map(String::from),
+        ..Default::default()
+    };
+
+    let mut secrets = HashMap::new();
+    secrets.insert("DATABASE_URL".to_string(), secret(true, None));
+    secrets.insert("LOG_LEVEL".to_string(), secret(false, Some("info")));
+    secrets.insert("SENTRY_DSN".to_string(), secret(false, None));
+    secrets.insert("STRIPE_KEY".to_string(), secret(true, None));
+
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
+
+    let config = Config {
+        project: Project {
+            name: "report-test".to_string(),
+            ..Default::default()
+        },
+        profiles,
+        providers: None,
+    };
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(config, None, Some(provider), None);
+
+    // A required secret (STRIPE_KEY) is missing, so validation reports an error,
+    // but the report still describes every declared secret.
+    let report = match spec.validate().unwrap() {
+        Ok(validated) => validated.report(),
+        Err(errors) => errors.report(),
+    };
+
+    assert_eq!(report.schema_version, 1);
+    assert_eq!(report.profile, "default");
+    assert!(!report.all_required_present());
+
+    // Entries are sorted by name for deterministic output.
+    let names: Vec<&str> = report.secrets.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["DATABASE_URL", "LOG_LEVEL", "SENTRY_DSN", "STRIPE_KEY"]
+    );
+
+    let by_name = |name: &str| {
+        report
+            .secrets
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("missing entry {name}"))
+    };
+
+    let db = by_name("DATABASE_URL");
+    assert_eq!(db.status, ResolutionStatus::Resolved);
+    assert!(db.required);
+    assert!(db.source_provider.is_some(), "provider hit is attributed");
+    assert!(!db.default_applied);
+    assert!(!db.generated);
+
+    let log = by_name("LOG_LEVEL");
+    assert_eq!(log.status, ResolutionStatus::Resolved);
+    assert!(log.default_applied);
+    assert!(log.source_provider.is_none(), "a default has no provider");
+
+    let sentry = by_name("SENTRY_DSN");
+    assert_eq!(sentry.status, ResolutionStatus::MissingOptional);
+    assert!(!sentry.required);
+
+    let stripe = by_name("STRIPE_KEY");
+    assert_eq!(stripe.status, ResolutionStatus::MissingRequired);
+    assert!(stripe.required);
+}
+
+fn resolve_test_config(secrets: HashMap<String, Secret>) -> Config {
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets,
+        },
+    );
+    Config {
+        project: Project {
+            name: "resolve-test".to_string(),
+            ..Default::default()
+        },
+        profiles,
+        providers: None,
+    }
+}
+
+#[test]
+fn test_resolve_carries_values_and_provenance() {
+    use crate::resolve::ResolvedSource;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "DATABASE_URL=postgres://localhost/db\n").unwrap();
+
+    let secret = |required: bool, default: Option<&str>| Secret {
+        description: Some("test".to_string()),
+        required: Some(required),
+        default: default.map(String::from),
+        ..Default::default()
+    };
+
+    let mut secrets = HashMap::new();
+    secrets.insert("DATABASE_URL".to_string(), secret(true, None));
+    secrets.insert("LOG_LEVEL".to_string(), secret(false, Some("info")));
+    secrets.insert("SENTRY_DSN".to_string(), secret(false, None));
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(resolve_test_config(secrets), None, Some(provider), None);
+
+    let response = spec.resolve().unwrap();
+    assert_eq!(response.schema_version, 1);
+    assert_eq!(response.profile, "default");
+    assert!(response.is_ok());
+    assert_eq!(response.missing_optional, vec!["SENTRY_DSN".to_string()]);
+
+    // Provider value is exposed with provenance.
+    let db = &response.secrets["DATABASE_URL"];
+    assert_eq!(db.value.as_deref(), Some("postgres://localhost/db"));
+    assert!(db.path.is_none());
+    assert!(!db.as_path);
+    assert_eq!(db.source, ResolvedSource::Provider);
+    assert!(db.source_provider.is_some());
+
+    // Default value is exposed and attributed to the default source.
+    let log = &response.secrets["LOG_LEVEL"];
+    assert_eq!(log.value.as_deref(), Some("info"));
+    assert_eq!(log.source, ResolvedSource::Default);
+    assert!(log.source_provider.is_none());
+
+    // Optional-missing does not appear in secrets.
+    assert!(!response.secrets.contains_key("SENTRY_DSN"));
+
+    // without_values strips values but keeps structure.
+    let stripped = response.without_values();
+    assert!(stripped.secrets["DATABASE_URL"].value.is_none());
+    assert_eq!(
+        stripped.secrets["DATABASE_URL"].source,
+        ResolvedSource::Provider
+    );
+}
+
+#[test]
+fn test_resolve_missing_required_is_empty_with_error_list() {
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "").unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "STRIPE_KEY".to_string(),
+        Secret {
+            description: Some("stripe".to_string()),
+            required: Some(true),
+            ..Default::default()
+        },
+    );
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(resolve_test_config(secrets), None, Some(provider), None);
+
+    let response = spec.resolve().unwrap();
+    assert!(!response.is_ok());
+    assert_eq!(response.missing_required, vec!["STRIPE_KEY".to_string()]);
+    // A failed resolution returns no values, mirroring the derive crate's load().
+    assert!(response.secrets.is_empty());
+}
+
+#[test]
+fn test_resolve_as_path_returns_persisted_path() {
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "TLS_CERT=----cert-bytes----\n").unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "TLS_CERT".to_string(),
+        Secret {
+            description: Some("cert".to_string()),
+            required: Some(true),
+            as_path: Some(true),
+            ..Default::default()
+        },
+    );
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(resolve_test_config(secrets), None, Some(provider), None);
+
+    let response = spec.resolve().unwrap();
+    let cert = &response.secrets["TLS_CERT"];
+    assert!(cert.as_path);
+    assert!(cert.value.is_none());
+    let path = cert.path.as_deref().expect("as_path yields a path");
+    // The temp file is persisted, so the path is readable after resolve returns.
+    let contents = fs::read_to_string(path).unwrap();
+    assert_eq!(contents, "----cert-bytes----");
+    fs::remove_file(path).ok();
+}
+
+#[test]
+fn test_resolve_without_values_keeps_structure_but_no_value_or_path() {
+    use crate::resolve::ResolvedSource;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(
+        &env_path,
+        "DATABASE_URL=postgres://localhost/db\nTLS_CERT=----cert----\n",
+    )
+    .unwrap();
+
+    let secret = |as_path: bool| Secret {
+        description: Some("t".to_string()),
+        required: Some(true),
+        as_path: Some(as_path),
+        ..Default::default()
+    };
+    let mut secrets = HashMap::new();
+    secrets.insert("DATABASE_URL".to_string(), secret(false));
+    secrets.insert("TLS_CERT".to_string(), secret(true));
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(resolve_test_config(secrets), None, Some(provider), None);
+
+    let response = spec.resolve_without_values().unwrap();
+    assert!(response.is_ok());
+
+    // Plain secret: no value materialized, but structure + provenance preserved.
+    let db = &response.secrets["DATABASE_URL"];
+    assert!(db.value.is_none());
+    assert!(db.path.is_none());
+    assert!(!db.as_path);
+    assert_eq!(db.source, ResolvedSource::Provider);
+
+    // as_path secret: no value AND no path, so no temp file is persisted; the
+    // as_path flag is still reported so the shape is intact.
+    let cert = &response.secrets["TLS_CERT"];
+    assert!(cert.value.is_none());
+    assert!(cert.path.is_none());
+    assert!(cert.as_path);
+}
+
+#[test]
+fn test_report_lists_missing_required_without_failing() {
+    use crate::report::ResolutionStatus;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "PRESENT=here\n").unwrap();
+
+    let secret = || Secret {
+        description: Some("t".to_string()),
+        required: Some(true),
+        ..Default::default()
+    };
+    let mut secrets = HashMap::new();
+    secrets.insert("PRESENT".to_string(), secret());
+    secrets.insert("MISSING".to_string(), secret());
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(resolve_test_config(secrets), None, Some(provider), None);
+
+    // resolve() fails the whole call when a required secret is missing.
+    assert!(!spec.resolve().unwrap().is_ok());
+
+    // report() instead lists every secret with a status and never a value, so an
+    // inventory/preflight consumer still gets the shape back.
+    let report = spec.report().unwrap();
+    let status = |name: &str| {
+        report
+            .secrets
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| s.status.clone())
+    };
+    assert_eq!(status("PRESENT"), Some(ResolutionStatus::Resolved));
+    assert_eq!(status("MISSING"), Some(ResolutionStatus::MissingRequired));
+}
+
+/// A generatable secret with no stored value must be reported by the value-free
+/// surfaces (`report()`, `resolve_without_values()`) as *would-generate* without
+/// actually minting and storing it — a read-only preflight must not mutate the
+/// provider. The full `resolve()` still generates and writes.
+#[test]
+fn test_value_free_surfaces_do_not_generate_or_store() {
+    use crate::config::GenerateConfig;
+    use crate::report::ResolutionStatus;
+    use crate::resolve::ResolvedSource;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "").unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "SESSION_KEY".to_string(),
+        Secret {
+            description: Some("generated".to_string()),
+            required: Some(true),
+            secret_type: Some("hex".to_string()),
+            generate: Some(GenerateConfig::Bool(true)),
+            ..Default::default()
+        },
+    );
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(resolve_test_config(secrets), None, Some(provider), None);
+
+    // report(): the secret would resolve via generation, but nothing is written.
+    let report = spec.report().unwrap();
+    let entry = report
+        .secrets
+        .iter()
+        .find(|s| s.name == "SESSION_KEY")
+        .expect("SESSION_KEY in report");
+    assert_eq!(entry.status, ResolutionStatus::Resolved);
+    assert!(entry.generated);
+    assert_eq!(
+        fs::read_to_string(&env_path).unwrap(),
+        "",
+        "report() must not store a generated secret"
+    );
+
+    // resolve_without_values(): same — provenance says generated, no value, no write.
+    let response = spec.resolve_without_values().unwrap();
+    let resolved = &response.secrets["SESSION_KEY"];
+    assert_eq!(resolved.source, ResolvedSource::Generated);
+    assert!(resolved.value.is_none());
+    assert_eq!(
+        fs::read_to_string(&env_path).unwrap(),
+        "",
+        "resolve_without_values() must not store a generated secret"
+    );
+
+    // The full resolve still generates and persists the value.
+    let full = spec.resolve().unwrap();
+    assert!(full.is_ok());
+    assert!(full.secrets["SESSION_KEY"].value.is_some());
+    assert!(
+        fs::read_to_string(&env_path)
+            .unwrap()
+            .contains("SESSION_KEY"),
+        "resolve() generates and stores the secret"
+    );
+}
+
+/// The value-free `report()` over a read-only provider must succeed (a missing
+/// generatable secret is reported as would-generate) rather than failing because
+/// a generated value cannot be stored. Regression: the value-free path used to
+/// reach the provider write and error on `env://`.
+#[test]
+fn test_value_free_report_tolerates_read_only_provider() {
+    use crate::config::GenerateConfig;
+    use crate::report::ResolutionStatus;
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "SESSION_KEY".to_string(),
+        Secret {
+            description: Some("generated".to_string()),
+            required: Some(true),
+            secret_type: Some("hex".to_string()),
+            generate: Some(GenerateConfig::Bool(true)),
+            ..Default::default()
+        },
+    );
+
+    let spec = Secrets::new(
+        resolve_test_config(secrets),
+        None,
+        Some("env://".to_string()),
+        None,
+    );
+
+    let report = spec.report().expect("report() must not fail on env://");
+    let entry = report
+        .secrets
+        .iter()
+        .find(|s| s.name == "SESSION_KEY")
+        .expect("SESSION_KEY in report");
+    assert_eq!(entry.status, ResolutionStatus::Resolved);
+    assert!(entry.generated);
+}
+
+/// When a per-secret provider chain's primary provider *errors* (not merely
+/// lacks the secret) and the fallback chain has no value, the resolution must
+/// surface the provider error — exactly like a single-provider failure — instead
+/// of silently downgrading to `missing_required`, so a machine consumer can tell
+/// an outage from an unprovisioned secret.
+#[test]
+fn test_chain_primary_error_surfaces_instead_of_missing() {
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    // Fallback provider is reachable but does not hold the secret.
+    fs::write(&env_path, "").unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "DB_PASSWORD".to_string(),
+        Secret {
+            description: Some("db".to_string()),
+            required: Some(true),
+            providers: Some(vec!["primary".to_string(), "fallback".to_string()]),
+            ..Default::default()
+        },
+    );
+
+    // Primary alias resolves to an unbuildable provider (the "outage"); fallback
+    // is a healthy dotenv that simply lacks the key.
+    let mut provider_aliases = HashMap::new();
+    provider_aliases.insert("primary".to_string(), "bogus://unreachable".to_string());
+    provider_aliases.insert(
+        "fallback".to_string(),
+        format!("dotenv://{}", env_path.display()),
+    );
+
+    let mut config = resolve_test_config(secrets);
+    config.providers = Some(provider_aliases);
+
+    // No explicit provider override, so the per-secret chain is used.
+    let spec = Secrets::new(config, None, None, None);
+
+    // The primary provider error must propagate, not be reported as missing.
+    assert!(
+        spec.resolve().is_err(),
+        "a primary provider outage with an empty fallback must surface the error"
+    );
+    assert!(spec.report().is_err());
 }
 
 #[test]

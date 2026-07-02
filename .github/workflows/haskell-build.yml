@@ -1,0 +1,98 @@
+name: "Haskell SDK"
+
+# Builds and tests the Haskell SDK (secretspec-hs) against a freshly built
+# secretspec-ffi staticlib. The SDK statically links the C ABI archive at build
+# time, so the Rust resolver is embedded in the binary and there is no runtime
+# loader path (no LD_LIBRARY_PATH).
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "secretspec-hs/**"
+      - "secretspec-ffi/**"
+      - "secretspec/**"
+      - ".github/workflows/haskell-build.yml"
+      - "scripts/sync-sdk-versions.sh"
+  push:
+    branches: [main]
+    tags:
+      - v**
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+      # The cdylib + CLI debug build (AWS/GCP/Bitwarden providers) plus the
+      # Nix store overflows the ~14GB free on a hosted runner.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /opt/ghc \
+            /usr/local/share/boost /usr/local/share/powershell
+          sudo docker image prune --all --force
+          df -h /
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - name: Install devenv.sh
+        run: nix profile install nixpkgs#devenv
+      - name: Build staticlib + CLI and run the Haskell SDK test-suite
+        run: |
+          devenv shell -- bash -c '
+            set -euo pipefail
+            cargo build -p secretspec-ffi -p secretspec
+            target_dir="$(cargo metadata --no-deps --format-version 1 \
+              | grep -o "\"target_directory\":\"[^\"]*\"" | head -1 | sed "s/.*:\"\(.*\)\"/\1/")"
+            export SECRETSPEC_BIN="$target_dir/debug/secretspec"
+            # Capture the staticlib archive plus its transitive native deps. Stage
+            # the .a alone so -lsecretspec_ffi resolves to the archive (target/debug
+            # also holds the .so) and the resolver is embedded with no loader path.
+            native_libs="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
+              --print native-static-libs 2>&1 | sed -n "s/^note: native-static-libs: //p" | tail -1)"
+            hs_lib_dir="$(mktemp -d)"
+            cp "$target_dir/debug/libsecretspec_ffi.a" "$hs_lib_dir/"
+            ghc_optl=()
+            for l in $native_libs; do ghc_optl+=("--ghc-options=-optl$l"); done
+            cd secretspec-hs
+            cabal update
+            # --write-ghc-environment-files lets the codegen test compile the
+            # quicktype-generated module; SECRETSPEC_BIN lets it run the CLI.
+            cabal test --extra-lib-dirs="$hs_lib_dir" "${ghc_optl[@]}" \
+              --write-ghc-environment-files=always --test-show-details=streaming
+          '
+
+  publish:
+    name: publish to Hackage
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - name: Install devenv.sh
+        run: nix profile install nixpkgs#devenv
+      - name: sdist and upload to Hackage
+        # Requires the HACKAGE_TOKEN secret. The package statically links
+        # secretspec-ffi at build time, so Hackage's build bots cannot compile it
+        # (no staticlib, no Rust toolchain); the upload still succeeds and the
+        # README documents the link requirement.
+        env:
+          HACKAGE_TOKEN: ${{ secrets.HACKAGE_TOKEN }}
+        run: |
+          devenv shell -- bash -c '
+            set -euo pipefail
+            cd secretspec-hs
+            cabal sdist
+            cabal upload --publish --token="$HACKAGE_TOKEN" \
+              dist-newstyle/sdist/secretspec-*.tar.gz
+          '

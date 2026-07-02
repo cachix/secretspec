@@ -1,0 +1,7 @@
+# Per-platform native artifacts are staged here for local `-tags embed_lib`
+# (cdylibs) and `-tags static` (.a archives, the vendored header, and the
+# generated cgo LDFLAGS) builds, and never committed (see .gitattributes /
+# RELEASE.md).
+lib/
+include/
+cgo_ldflags_*.go

@@ -1,0 +1,9 @@
+{
+  "profile": "default",
+  "secrets": {
+    "DATABASE_URL": { "value": "postgres://db", "source": "provider", "as_path": false },
+    "LOG_LEVEL": { "value": "info", "source": "default", "as_path": false }
+  },
+  "missing_required": [],
+  "missing_optional": ["SENTRY_DSN"]
+}

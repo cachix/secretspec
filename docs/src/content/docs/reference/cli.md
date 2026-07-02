@@ -130,6 +130,9 @@ secretspec check [OPTIONS]
 **Options:**
 - `-p, --provider <PROVIDER>` - Provider backend to use
 - `-P, --profile <PROFILE>` - Profile to use
+- `-n, --no-prompt` - Don't prompt for missing secrets (exit with error if any are missing)
+- `--json` - Print a value-free resolution report as JSON instead of prompting
+- `--explain` - Print a value-free, human-readable resolution trace instead of prompting
 
 **Example:**
 ```bash
@@ -138,6 +141,45 @@ $ secretspec check --profile production
 ✗ API_KEY - API key for external service (required)
 Enter value for API_KEY (profile: production): ****
 ✓ Secret 'API_KEY' saved to keyring (profile: production)
+```
+
+#### Resolution report (`--json` / `--explain`)
+
+`--json` and `--explain` report how every declared secret resolved for the
+active profile without prompting and without ever printing a secret value. Both
+exit non-zero when a required secret is missing, so they work as a CI gate.
+
+`--explain` prints a human-readable trace:
+
+```bash
+$ secretspec check --profile production --explain
+profile:  production
+provider: keyring://
+  DATABASE_URL  ok        source keyring://
+  JWT_SECRET    ok        generated
+  LOG_LEVEL     ok        default value
+  SENTRY_DSN    missing   optional
+  STRIPE_KEY    MISSING   required
+```
+
+`--json` emits a versioned, machine-readable object for tooling and CI. Each
+entry reports the `status` (`resolved`, `missing_required`, `missing_optional`),
+whether the value came from a provider (`source_provider`, credential-free), a
+generator (`generated`), or a committed default (`default_applied`), and whether
+it is exposed `as_path`. No secret values appear. The canonical JSON Schema is
+committed at `schema/resolution-report.schema.json`.
+
+```bash
+$ secretspec check --profile production --json
+{
+  "schema_version": 1,
+  "provider": "keyring://",
+  "profile": "production",
+  "secrets": [
+    { "name": "DATABASE_URL", "status": "resolved", "required": true, "source_provider": "keyring://", "default_applied": false, "generated": false, "as_path": false },
+    { "name": "STRIPE_KEY", "status": "missing_required", "required": true, "default_applied": false, "generated": false, "as_path": false }
+  ]
+}
 ```
 
 ### get
@@ -156,6 +198,41 @@ secretspec get [OPTIONS] <NAME>
 $ secretspec get DATABASE_URL --profile production
 postgresql://prod.example.com/mydb
 ```
+
+### schema
+Emit a single-root JSON Schema for the manifest's typed shape: by default the
+union `SecretSpec` (safe for any profile); with `--profile`, that profile's exact
+fields. Value-free: reads only the manifest, never a provider.
+
+```bash
+secretspec schema [OPTIONS]
+```
+
+**Options:**
+- `-P, --profile <PROFILE>` - Emit the schema for this profile's fields instead of the union
+- `-o, --output <FILE>` - Write to this file instead of stdout
+
+Rather than ship a typed-accessor generator per language, feed this schema to
+[quicktype](https://quicktype.io), which generates an idiomatic type **and**
+deserializer for any language. Name the type with `--top-level`. At runtime, hand
+the generated deserializer the flat `{SECRET_NAME: value}` map from the SDK's
+`fields()` helper:
+
+```bash
+$ secretspec schema | quicktype -s schema --top-level SecretSpec --lang python -o secrets_gen.py
+```
+```python
+from secretspec import SecretSpec
+from secrets_gen import SecretSpec as Secrets  # quicktype-generated, typed
+
+resolved = SecretSpec.builder().with_reason("boot").load()
+s = Secrets.from_dict(resolved.fields())
+print(s.database_url)   # typed str
+```
+
+The same pattern works in every SDK: Go `UnmarshalSecretSpec(resolved.FieldsJSON())`,
+TypeScript `Convert.toSecretSpec(resolved.fieldsJson())`, Ruby
+`SecretSpec.from_dynamic!(resolved.fields)`.
 
 ### set
 Set a secret value.

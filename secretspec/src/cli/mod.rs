@@ -94,6 +94,31 @@ enum Commands {
         /// Don't prompt for missing secrets (exit with error if any are missing)
         #[arg(short = 'n', long)]
         no_prompt: bool,
+        /// Print the value-free resolution report as JSON (no secret values).
+        /// Never prompts; exits non-zero if a required secret is missing.
+        #[arg(long, conflicts_with = "explain")]
+        json: bool,
+        /// Print a value-free, human-readable resolution trace (no secret
+        /// values). Never prompts; exits non-zero if a required secret is missing.
+        #[arg(long)]
+        explain: bool,
+    },
+    /// Emit a JSON Schema for the manifest's typed shape.
+    ///
+    /// Feed this to [quicktype](https://quicktype.io) to generate an idiomatic
+    /// typed accessor (plus a deserializer) for any language, then hand the
+    /// deserializer the flat map from each SDK's `fields()` helper. By default it
+    /// describes the union `SecretSpec` (safe for any profile); `--profile` gives
+    /// that profile's exact fields. Value-free: reads only the manifest.
+    ///
+    /// Example: `secretspec schema | quicktype -s schema --top-level SecretSpec --lang typescript`
+    Schema {
+        /// Emit the schema for this profile's fields instead of the union
+        #[arg(short = 'P', long)]
+        profile: Option<String>,
+        /// Write to this file instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
     /// Init or show ~/.config/secretspec/config.toml
     Config {
@@ -617,6 +642,8 @@ pub fn main() -> Result<()> {
             provider,
             profile,
             no_prompt,
+            json,
+            explain,
         } => {
             let mut app = load_secrets(&cli.file, &cli.reason)?;
             if let Some(p) = provider {
@@ -625,6 +652,35 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
+
+            // `--json`/`--explain` surface the value-free resolution report
+            // instead of the interactive prompt-for-missing flow. They report
+            // on every declared secret (including missing required ones) and
+            // exit non-zero when a required secret is missing, so CI can gate.
+            if json || explain {
+                // Value-free report: never mints, stores, or writes a secret as
+                // a side effect of this read-only preflight (unlike `validate()`,
+                // which is the value-injecting path).
+                let report = app
+                    .report()
+                    .into_diagnostic()
+                    .wrap_err("Failed to resolve secrets")?;
+
+                if json {
+                    let rendered = serde_json::to_string_pretty(&report)
+                        .into_diagnostic()
+                        .wrap_err("Failed to serialize resolution report")?;
+                    println!("{}", rendered);
+                } else {
+                    print!("{}", report.to_explain_string());
+                }
+
+                if !report.all_required_present() {
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+
             let mut validated = app
                 .check(no_prompt)
                 .into_diagnostic()
@@ -634,6 +690,20 @@ pub fn main() -> Result<()> {
                 .keep_temp_files()
                 .into_diagnostic()
                 .wrap_err("Failed to persist temporary files")?;
+            Ok(())
+        }
+        // Generate typed accessors for another language (value-free)
+        Commands::Schema { profile, output } => {
+            let app = load_secrets(&cli.file, &cli.reason)?;
+            let ir = crate::codegen::build_ir(app.config());
+            let schema = crate::codegen::schema::emit(&ir, profile.as_deref())
+                .map_err(|e| miette!("{e}"))?;
+            match output {
+                Some(path) => fs::write(&path, schema)
+                    .into_diagnostic()
+                    .wrap_err_with(|| format!("Failed to write {}", path.display()))?,
+                None => print!("{}", schema),
+            }
             Ok(())
         }
         // Import secrets from one provider to another

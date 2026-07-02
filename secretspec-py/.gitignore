@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+# Compiled pyo3 extension (secretspec/_native.abi3.so), built by maturin.
+*.so
+*.o

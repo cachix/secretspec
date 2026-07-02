@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secretspec.dev/schema/resolve-response.schema.json",
+  "title": "SecretSpec resolve response",
+  "description": "Value-carrying resolution result for one profile, emitted by the secretspec-ffi C ABI. CARRIES SECRET VALUES; treat as sensitive. When a required secret is missing, `secrets` is empty and `missing_required` is populated.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "provider", "profile", "secrets", "missing_required", "missing_optional"],
+  "properties": {
+    "schema_version": {
+      "description": "Wire-format version. Consumers should refuse versions they do not understand.",
+      "type": "integer",
+      "const": 1
+    },
+    "provider": {
+      "description": "Credential-free URI of the provider the resolution is reported against.",
+      "type": "string"
+    },
+    "profile": {
+      "description": "The profile that was resolved.",
+      "type": "string"
+    },
+    "secrets": {
+      "description": "Resolved secrets by name. Empty when a required secret is missing.",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/resolvedSecret" }
+    },
+    "missing_required": {
+      "description": "Required secrets not found anywhere. Non-empty means resolution failed.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "missing_optional": {
+      "description": "Optional secrets not found.",
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "resolvedSecret": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["as_path", "source"],
+      "properties": {
+        "value": {
+          "description": "The secret value, present when exposed inline (mutually exclusive with `path`).",
+          "type": "string"
+        },
+        "path": {
+          "description": "Path to the temp file holding the value, present when `as_path` is set (mutually exclusive with `value`).",
+          "type": "string"
+        },
+        "as_path": {
+          "description": "Whether this secret is exposed as a file path rather than inline.",
+          "type": "boolean"
+        },
+        "source": {
+          "description": "Where the value came from.",
+          "type": "string",
+          "enum": ["provider", "generated", "default"]
+        },
+        "source_provider": {
+          "description": "Credential-free URI of the provider that answered, present when `source` is `provider`.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

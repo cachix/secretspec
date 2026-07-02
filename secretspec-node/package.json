@@ -1,0 +1,30 @@
+{
+  "name": "secretspec",
+  "version": "0.12.1",
+  "description": "Declarative secrets, every environment, any provider (Node.js SDK)",
+  "license": "Apache-2.0",
+  "homepage": "https://secretspec.dev/",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "secretspec.node"
+  ],
+  "napi": {
+    "binaryName": "secretspec",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "scripts": {
+    "build": "bash scripts/build-addon.sh",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.7.2"
+  }
+}

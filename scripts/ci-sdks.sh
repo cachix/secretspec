@@ -57,9 +57,11 @@ bash secretspec-rb/scripts/build-ext.sh
 ( cd secretspec-rb && ruby -e 'Dir["test/test_*.rb"].sort.each { |f| require File.expand_path(f) }' )
 
 echo "==> Node"
-# The Node SDK uses a napi-rs addon (not the cdylib) and has no npm
-# dependencies. Build the addon once up front: the test files each ensure it
-# exists and would otherwise race to build it in parallel processes.
+# The Node SDK uses a napi-rs addon (not the cdylib), built via the @napi-rs/cli
+# devDependency. Install it and build the addon once up front: the test files
+# each ensure it exists and would otherwise race to build it in parallel
+# processes.
+( cd secretspec-node && npm ci )
 bash secretspec-node/scripts/build-addon.sh
 ( cd secretspec-node && node --test )
 

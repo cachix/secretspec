@@ -1,6 +1,6 @@
 {
   "name": "@monosecret/cli-darwin-x64",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Prebuilt Monosecret binary for macOS x64",
   "homepage": "https://github.com/ifiokjr/monosecret",
   "bugs": {

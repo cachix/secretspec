@@ -3,7 +3,7 @@ members = ["examples/derive", "monosecret", "monosecret_derive"]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
@@ -23,8 +23,8 @@ apple-native-keyring-store = { version = "1.0.0", features = ["keychain"] }
 keyring-core = "1.0.0"
 linkme = "0.3"
 miette = { version = "7.6", features = ["fancy"] }
-monosecret = { version = "0.0.0", path = "./monosecret", default-features = false }
-monosecret_derive = { version = "0.0.0", path = "./monosecret_derive" }
+monosecret = { version = "0.1.0", path = "./monosecret", default-features = false }
+monosecret_derive = { version = "0.1.0", path = "./monosecret_derive" }
 percent-encoding = "2.3"
 proc-macro2 = "1.0"
 quote = "1.0"

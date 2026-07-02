@@ -1,6 +1,6 @@
 {
   "name": "@monosecret/client",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "description": "TypeScript client for Monosecret declarative secrets management",
   "license": "Apache-2.0",

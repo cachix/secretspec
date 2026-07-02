@@ -1,0 +1,978 @@
+{
+  "schema_version": "0.4",
+  "kind": "monochange.releaseRecord",
+  "created_at": "2026-07-02T12:02:41Z",
+  "command": "step prepare-release",
+  "version": "0.1.0",
+  "versions": {
+    "monosecret": "0.1.0"
+  },
+  "release_targets": [
+    {
+      "id": "monosecret",
+      "kind": "group",
+      "version": "0.1.0",
+      "version_format": "namespaced",
+      "tag": true,
+      "release": true,
+      "tag_name": "monosecret/v0.1.0",
+      "members": [
+        "rust:monosecret",
+        "rust:monosecret_derive",
+        "@monosecret/cli",
+        "@monosecret/client",
+        "@monosecret/skill",
+        "@monosecret/cli-darwin-arm64",
+        "@monosecret/cli-darwin-x64",
+        "@monosecret/cli-linux-arm64-gnu",
+        "@monosecret/cli-linux-arm64-musl",
+        "@monosecret/cli-linux-x64-gnu",
+        "@monosecret/cli-linux-x64-musl",
+        "@monosecret/cli-win32-arm64-msvc",
+        "@monosecret/cli-win32-x64-msvc",
+        "dart"
+      ]
+    }
+  ],
+  "released_packages": [
+    "@monosecret/cli",
+    "@monosecret/cli-darwin-arm64",
+    "@monosecret/cli-darwin-x64",
+    "@monosecret/cli-linux-arm64-gnu",
+    "@monosecret/cli-linux-arm64-musl",
+    "@monosecret/cli-linux-x64-gnu",
+    "@monosecret/cli-linux-x64-musl",
+    "@monosecret/cli-win32-arm64-msvc",
+    "@monosecret/cli-win32-x64-msvc",
+    "@monosecret/client",
+    "@monosecret/skill",
+    "monosecret",
+    "monosecret_derive"
+  ],
+  "changed_files": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "monosecret/Cargo.toml",
+    "monosecret_derive/Cargo.toml",
+    "packages/monosecret/pubspec.yaml",
+    "packages/monosecret__cli/package.json",
+    "packages/monosecret__cli-darwin-arm64/package.json",
+    "packages/monosecret__cli-darwin-x64/package.json",
+    "packages/monosecret__cli-linux-arm64-gnu/package.json",
+    "packages/monosecret__cli-linux-arm64-musl/package.json",
+    "packages/monosecret__cli-linux-x64-gnu/package.json",
+    "packages/monosecret__cli-linux-x64-musl/package.json",
+    "packages/monosecret__cli-win32-arm64-msvc/package.json",
+    "packages/monosecret__cli-win32-x64-msvc/package.json",
+    "packages/monosecret__client/package.json",
+    "packages/monosecret__skill/package.json"
+  ],
+  "package_publications": [
+    {
+      "package": "@monosecret/cli",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.1.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-darwin-arm64",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.1.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-darwin-x64",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.1.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-linux-arm64-gnu",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.1.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-linux-arm64-musl",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.1.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-linux-x64-gnu",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.1.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-linux-x64-musl",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.1.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-win32-arm64-msvc",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.1.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-win32-x64-msvc",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.1.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/client",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.1.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/skill",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.1.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "dart",
+      "ecosystem": "dart",
+      "registry": "pub_dev",
+      "version": "0.1.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "rust:monosecret",
+      "ecosystem": "cargo",
+      "registry": "crates_io",
+      "version": "0.1.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "rust:monosecret_derive",
+      "ecosystem": "cargo",
+      "registry": "crates_io",
+      "version": "0.1.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    }
+  ],
+  "updated_changelogs": [],
+  "deleted_changesets": [
+    ".changeset/1780486946-monosecret.md",
+    ".changeset/1782210681-monosecret-rust.md",
+    ".changeset/fix-release-pr-packaging.md",
+    ".changeset/monosecret-env-command.md",
+    ".changeset/secret-access-reasons-monosecret.md",
+    ".changeset/typescript-client-monosecret.md",
+    ".changeset/upstream-0-12-2-sync.md"
+  ],
+  "changesets": [
+    {
+      "path": ".changeset/1780486946-monosecret.md",
+      "summary": "Rebrand secretspec as monosecret",
+      "details": "Rename crates, CLI, npm packages, and Dart SDK to monosecret while preserving compatibility fallbacks.",
+      "targets": [
+        {
+          "id": "monosecret",
+          "kind": "group",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "major"
+        },
+        {
+          "id": "@monosecret/cli",
+          "kind": "package",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "major"
+        },
+        {
+          "id": "@monosecret/cli-darwin-arm64",
+          "kind": "package",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "major"
+        },
+        {
+          "id": "@monosecret/cli-darwin-x64",
+          "kind": "package",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "major"
+        },
+        {
+          "id": "@monosecret/cli-linux-arm64-gnu",
+          "kind": "package",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "major"
+        },
+        {
+          "id": "@monosecret/cli-linux-arm64-musl",
+          "kind": "package",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "major"
+        },
+        {
+          "id": "@monosecret/cli-linux-x64-gnu",
+          "kind": "package",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "major"
+        },
+        {
+          "id": "@monosecret/cli-linux-x64-musl",
+          "kind": "package",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "major"
+        },
+        {
+          "id": "@monosecret/cli-win32-arm64-msvc",
+          "kind": "package",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "major"
+        },
+        {
+          "id": "@monosecret/cli-win32-x64-msvc",
+          "kind": "package",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "major"
+        },
+        {
+          "id": "@monosecret/skill",
+          "kind": "package",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "major"
+        },
+        {
+          "id": "dart",
+          "kind": "package",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "major"
+        }
+      ],
+      "context": {
+        "provider": "github",
+        "host": "github.com",
+        "capabilities": {
+          "commit_web_urls": true,
+          "actor_profiles": true,
+          "review_request_lookup": true,
+          "related_issues": true,
+          "issue_comments": true
+        },
+        "introduced": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": "ifiokjr",
+            "display_name": "ifiokjr",
+            "url": "https://github.com/ifiokjr",
+            "source": "review_request_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "28a2ad53c5625df4a3aa77bc3e4eacf05fbce65d",
+            "short_sha": "28a2ad5",
+            "url": "https://github.com/ifiokjr/monosecret/commit/28a2ad53c5625df4a3aa77bc3e4eacf05fbce65d",
+            "authored_at": "2026-06-03T12:48:40+01:00",
+            "committed_at": "2026-06-03T12:48:40+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "ifiokotung@gmail.com"
+          },
+          "review_request": {
+            "provider": "github",
+            "host": "github.com",
+            "kind": "pull_request",
+            "id": "#2",
+            "title": "feat: rebrand secretspec as monosecret",
+            "url": "https://github.com/ifiokjr/monosecret/pull/2",
+            "author": {
+              "provider": "github",
+              "host": "github.com",
+              "id": null,
+              "login": "ifiokjr",
+              "display_name": "ifiokjr",
+              "url": "https://github.com/ifiokjr",
+              "source": "review_request_author"
+            }
+          }
+        },
+        "last_updated": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": null,
+            "display_name": "Ifiok Jr.",
+            "url": null,
+            "source": "commit_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "848ba427ee090fa687dd096ee2869be439ae6ba0",
+            "short_sha": "848ba42",
+            "url": "https://github.com/ifiokjr/monosecret/commit/848ba427ee090fa687dd096ee2869be439ae6ba0",
+            "authored_at": "2026-07-01T19:52:03+01:00",
+            "committed_at": "2026-07-01T19:52:03+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "ifiokotung@gmail.com"
+          },
+          "review_request": null
+        },
+        "related_issues": []
+      }
+    },
+    {
+      "path": ".changeset/1782210681-monosecret-rust.md",
+      "summary": "Port upstream audit log support, including structured JSONL events and coding-agent detection.",
+      "details": null,
+      "targets": [
+        {
+          "id": "rust:monosecret",
+          "kind": "package",
+          "bump": "minor",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "feat"
+        }
+      ],
+      "context": {
+        "provider": "github",
+        "host": "github.com",
+        "capabilities": {
+          "commit_web_urls": true,
+          "actor_profiles": true,
+          "review_request_lookup": true,
+          "related_issues": true,
+          "issue_comments": true
+        },
+        "introduced": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": "ifiokjr",
+            "display_name": "ifiokjr",
+            "url": "https://github.com/ifiokjr",
+            "source": "review_request_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "df00247233698e9ea4901f77387d13d22c322f84",
+            "short_sha": "df00247",
+            "url": "https://github.com/ifiokjr/monosecret/commit/df00247233698e9ea4901f77387d13d22c322f84",
+            "authored_at": "2026-06-23T11:31:46+01:00",
+            "committed_at": "2026-06-23T11:31:46+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "ifiokotung@gmail.com"
+          },
+          "review_request": {
+            "provider": "github",
+            "host": "github.com",
+            "kind": "pull_request",
+            "id": "#10",
+            "title": "chore: sync upstream main",
+            "url": "https://github.com/ifiokjr/monosecret/pull/10",
+            "author": {
+              "provider": "github",
+              "host": "github.com",
+              "id": null,
+              "login": "ifiokjr",
+              "display_name": "ifiokjr",
+              "url": "https://github.com/ifiokjr",
+              "source": "review_request_author"
+            }
+          }
+        },
+        "last_updated": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": null,
+            "display_name": "Ifiok Jr.",
+            "url": null,
+            "source": "commit_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "7b706b99fc9de821115129799e8681bc5469425a",
+            "short_sha": "7b706b9",
+            "url": "https://github.com/ifiokjr/monosecret/commit/7b706b99fc9de821115129799e8681bc5469425a",
+            "authored_at": "2026-07-01T19:37:04+01:00",
+            "committed_at": "2026-07-01T19:37:04+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "ifiokotung@gmail.com"
+          },
+          "review_request": null
+        },
+        "related_issues": []
+      }
+    },
+    {
+      "path": ".changeset/fix-release-pr-packaging.md",
+      "summary": "Fix release PR formatting and CI packaging failures so auto-generated release",
+      "details": "PRs always pass checks. Run `fix:format` before committing in the release PR\nworkflow, use `dart pub publish --dry-run --skip-validation` in CI to avoid\nserver-side validation errors, and call `build:dist` directly in the publish\nworkflow instead of nesting devenv shells.",
+      "targets": [
+        {
+          "id": "monosecret",
+          "kind": "group",
+          "bump": "patch",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "fix"
+        }
+      ],
+      "context": {
+        "provider": "github",
+        "host": "github.com",
+        "capabilities": {
+          "commit_web_urls": true,
+          "actor_profiles": true,
+          "review_request_lookup": true,
+          "related_issues": true,
+          "issue_comments": true
+        },
+        "introduced": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": "ifiokjr",
+            "display_name": "ifiokjr",
+            "url": "https://github.com/ifiokjr",
+            "source": "review_request_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "1e7748de2a00b2758b7fa687d9e217561f26314a",
+            "short_sha": "1e7748d",
+            "url": "https://github.com/ifiokjr/monosecret/commit/1e7748de2a00b2758b7fa687d9e217561f26314a",
+            "authored_at": "2026-06-23T15:37:09+01:00",
+            "committed_at": "2026-06-23T15:37:09+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "1160934+ifiokjr@users.noreply.github.com"
+          },
+          "review_request": {
+            "provider": "github",
+            "host": "github.com",
+            "kind": "pull_request",
+            "id": "#11",
+            "title": "fix: release PR formatting and CI packaging failures",
+            "url": "https://github.com/ifiokjr/monosecret/pull/11",
+            "author": {
+              "provider": "github",
+              "host": "github.com",
+              "id": null,
+              "login": "ifiokjr",
+              "display_name": "ifiokjr",
+              "url": "https://github.com/ifiokjr",
+              "source": "review_request_author"
+            }
+          }
+        },
+        "last_updated": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": null,
+            "display_name": "Ifiok Jr.",
+            "url": null,
+            "source": "commit_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "848ba427ee090fa687dd096ee2869be439ae6ba0",
+            "short_sha": "848ba42",
+            "url": "https://github.com/ifiokjr/monosecret/commit/848ba427ee090fa687dd096ee2869be439ae6ba0",
+            "authored_at": "2026-07-01T19:52:03+01:00",
+            "committed_at": "2026-07-01T19:52:03+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "ifiokotung@gmail.com"
+          },
+          "review_request": null
+        },
+        "related_issues": []
+      }
+    },
+    {
+      "path": ".changeset/monosecret-env-command.md",
+      "summary": "`monosecret env`: load secrets into any shell or CI environment",
+      "details": "Add `monosecret env` (alias `load-env`) to load resolved secrets into the\nsurrounding shell or a CI environment with one command. A `--shell` flag\nselects the output format:\n\n- `bash`/`sh`/`zsh` — `export KEY='value';` (apply with `eval \"$(...)\"`)\n- `fish` — `set -gx KEY 'value';` (apply with `| source`)\n- `powershell`/`pwsh` — `$env:KEY='value';` (apply with `| iex`)\n- `nushell`/`nu` — `load-env { KEY: \"value\" }`\n- `github` — appends `KEY<<DELIM` heredoc blocks to `$GITHUB_ENV` and prints\n  `::add-mask::` so values are masked in the run log\n- `gitlab`/`dotenv` — portable `KEY=\"value\"` for `artifacts:reports:dotenv`\n\nValues are escaped per the target shell's rules. Reuses the same secret\nresolution path and `require_reason` policy as `monosecret run`, and supports\n`--include`/`--group` filtering and `--output` to write to a file.",
+      "targets": [
+        {
+          "id": "rust:monosecret",
+          "kind": "package",
+          "bump": "minor",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "feat"
+        }
+      ],
+      "context": {
+        "provider": "github",
+        "host": "github.com",
+        "capabilities": {
+          "commit_web_urls": true,
+          "actor_profiles": true,
+          "review_request_lookup": true,
+          "related_issues": true,
+          "issue_comments": true
+        },
+        "introduced": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": "ifiokjr",
+            "display_name": "ifiokjr",
+            "url": "https://github.com/ifiokjr",
+            "source": "review_request_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "ee15c212ad0d66ef6993bf0c345ba786e5127718",
+            "short_sha": "ee15c21",
+            "url": "https://github.com/ifiokjr/monosecret/commit/ee15c212ad0d66ef6993bf0c345ba786e5127718",
+            "authored_at": "2026-07-02T12:26:34+01:00",
+            "committed_at": "2026-07-02T12:26:34+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "1160934+ifiokjr@users.noreply.github.com"
+          },
+          "review_request": {
+            "provider": "github",
+            "host": "github.com",
+            "kind": "pull_request",
+            "id": "#14",
+            "title": "feat(cli): monosecret env — load secrets into any shell or CI env",
+            "url": "https://github.com/ifiokjr/monosecret/pull/14",
+            "author": {
+              "provider": "github",
+              "host": "github.com",
+              "id": null,
+              "login": "ifiokjr",
+              "display_name": "ifiokjr",
+              "url": "https://github.com/ifiokjr",
+              "source": "review_request_author"
+            }
+          }
+        },
+        "last_updated": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": "ifiokjr",
+            "display_name": "ifiokjr",
+            "url": "https://github.com/ifiokjr",
+            "source": "review_request_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "ee15c212ad0d66ef6993bf0c345ba786e5127718",
+            "short_sha": "ee15c21",
+            "url": "https://github.com/ifiokjr/monosecret/commit/ee15c212ad0d66ef6993bf0c345ba786e5127718",
+            "authored_at": "2026-07-02T12:26:34+01:00",
+            "committed_at": "2026-07-02T12:26:34+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "1160934+ifiokjr@users.noreply.github.com"
+          },
+          "review_request": {
+            "provider": "github",
+            "host": "github.com",
+            "kind": "pull_request",
+            "id": "#14",
+            "title": "feat(cli): monosecret env — load secrets into any shell or CI env",
+            "url": "https://github.com/ifiokjr/monosecret/pull/14",
+            "author": {
+              "provider": "github",
+              "host": "github.com",
+              "id": null,
+              "login": "ifiokjr",
+              "display_name": "ifiokjr",
+              "url": "https://github.com/ifiokjr",
+              "source": "review_request_author"
+            }
+          }
+        },
+        "related_issues": []
+      }
+    },
+    {
+      "path": ".changeset/secret-access-reasons-monosecret.md",
+      "summary": "Port upstream secret-access reason policy into Monosecret, including CLI/SDK reason handling, config enforcement, and Proton Pass audit reason forwarding.",
+      "details": null,
+      "targets": [
+        {
+          "id": "monosecret",
+          "kind": "group",
+          "bump": "patch",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "fix"
+        }
+      ],
+      "context": {
+        "provider": "github",
+        "host": "github.com",
+        "capabilities": {
+          "commit_web_urls": true,
+          "actor_profiles": true,
+          "review_request_lookup": true,
+          "related_issues": true,
+          "issue_comments": true
+        },
+        "introduced": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": "ifiokjr",
+            "display_name": "ifiokjr",
+            "url": "https://github.com/ifiokjr",
+            "source": "review_request_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "b7ebc708064d596272ee593be52efed5a5fbcd6c",
+            "short_sha": "b7ebc70",
+            "url": "https://github.com/ifiokjr/monosecret/commit/b7ebc708064d596272ee593be52efed5a5fbcd6c",
+            "authored_at": "2026-06-04T14:33:51+01:00",
+            "committed_at": "2026-06-04T14:33:51+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "1160934+ifiokjr@users.noreply.github.com"
+          },
+          "review_request": {
+            "provider": "github",
+            "host": "github.com",
+            "kind": "pull_request",
+            "id": "#4",
+            "title": "chore: sync upstream secret access reasons",
+            "url": "https://github.com/ifiokjr/monosecret/pull/4",
+            "author": {
+              "provider": "github",
+              "host": "github.com",
+              "id": null,
+              "login": "ifiokjr",
+              "display_name": "ifiokjr",
+              "url": "https://github.com/ifiokjr",
+              "source": "review_request_author"
+            }
+          }
+        },
+        "last_updated": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": null,
+            "display_name": "Ifiok Jr.",
+            "url": null,
+            "source": "commit_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "848ba427ee090fa687dd096ee2869be439ae6ba0",
+            "short_sha": "848ba42",
+            "url": "https://github.com/ifiokjr/monosecret/commit/848ba427ee090fa687dd096ee2869be439ae6ba0",
+            "authored_at": "2026-07-01T19:52:03+01:00",
+            "committed_at": "2026-07-01T19:52:03+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "ifiokotung@gmail.com"
+          },
+          "review_request": null
+        },
+        "related_issues": []
+      }
+    },
+    {
+      "path": ".changeset/typescript-client-monosecret.md",
+      "summary": "Add the initial TypeScript client package for invoking Monosecret from Node.js applications.",
+      "details": "```ts\nimport { MonosecretClient } from \"@monosecret/client\";\n\nconst monosecret = new MonosecretClient();\nconst databaseUrl = await monosecret.get(\"DATABASE_URL\", {\n  profile: \"development\",\n});\n\nconst environment = await monosecret.loadEnvironment({\n  include: [\"DATABASE_URL\", \"API_KEY\"],\n});\n```",
+      "targets": [
+        {
+          "id": "@monosecret/client",
+          "kind": "package",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "major"
+        }
+      ],
+      "context": {
+        "provider": "github",
+        "host": "github.com",
+        "capabilities": {
+          "commit_web_urls": true,
+          "actor_profiles": true,
+          "review_request_lookup": true,
+          "related_issues": true,
+          "issue_comments": true
+        },
+        "introduced": null,
+        "last_updated": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": null,
+            "display_name": "Ifiok Jr.",
+            "url": null,
+            "source": "commit_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "1562c56073ee0e71b3be3fea84f7d919e765cb8f",
+            "short_sha": "1562c56",
+            "url": "https://github.com/ifiokjr/monosecret/commit/1562c56073ee0e71b3be3fea84f7d919e765cb8f",
+            "authored_at": "2026-06-30T19:32:06+01:00",
+            "committed_at": "2026-06-30T21:11:47+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "ifiokotung@gmail.com"
+          },
+          "review_request": null
+        },
+        "related_issues": []
+      }
+    },
+    {
+      "path": ".changeset/upstream-0-12-2-sync.md",
+      "summary": "Sync upstream secretspec 0.12.2: pass store_dir and the audit CLI command",
+      "details": "Merge upstream/main through 0.12.2.\n\n- Restore the `monosecret audit` CLI command (`show_audit_log`,\n  `filter_audit_entries`, `sanitize_field`, `format_audit_line`) that was\n  dropped during the rebrand merge, plus the `audit` field on `GlobalConfig`\n  so the log path can be resolved from the user-global `[audit]` config.\n- port the `pass` provider `store_dir` query parameter\n  (`PASSWORD_STORE_DIR` scoped per invocation) and the shared\n  `query_value` / `encode_query` / `QUERY_ENCODE_SET` helpers so query\n  values round-trip through form-urlencoded parsing (awssm `prefix` too).",
+      "targets": [
+        {
+          "id": "rust:monosecret",
+          "kind": "package",
+          "bump": "minor",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "feat"
+        }
+      ],
+      "context": {
+        "provider": "github",
+        "host": "github.com",
+        "capabilities": {
+          "commit_web_urls": true,
+          "actor_profiles": true,
+          "review_request_lookup": true,
+          "related_issues": true,
+          "issue_comments": true
+        },
+        "introduced": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": "ifiokjr",
+            "display_name": "ifiokjr",
+            "url": "https://github.com/ifiokjr",
+            "source": "review_request_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "0fa62a412d0cfa666808dfc82769b5f54e95c4a5",
+            "short_sha": "0fa62a4",
+            "url": "https://github.com/ifiokjr/monosecret/commit/0fa62a412d0cfa666808dfc82769b5f54e95c4a5",
+            "authored_at": "2026-07-02T11:24:53+01:00",
+            "committed_at": "2026-07-02T11:24:53+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "1160934+ifiokjr@users.noreply.github.com"
+          },
+          "review_request": {
+            "provider": "github",
+            "host": "github.com",
+            "kind": "pull_request",
+            "id": "#13",
+            "title": "Merge upstream secretspec 0.12.2: pass store_dir + audit CLI command",
+            "url": "https://github.com/ifiokjr/monosecret/pull/13",
+            "author": {
+              "provider": "github",
+              "host": "github.com",
+              "id": null,
+              "login": "ifiokjr",
+              "display_name": "ifiokjr",
+              "url": "https://github.com/ifiokjr",
+              "source": "review_request_author"
+            }
+          }
+        },
+        "last_updated": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": "ifiokjr",
+            "display_name": "ifiokjr",
+            "url": "https://github.com/ifiokjr",
+            "source": "review_request_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "0fa62a412d0cfa666808dfc82769b5f54e95c4a5",
+            "short_sha": "0fa62a4",
+            "url": "https://github.com/ifiokjr/monosecret/commit/0fa62a412d0cfa666808dfc82769b5f54e95c4a5",
+            "authored_at": "2026-07-02T11:24:53+01:00",
+            "committed_at": "2026-07-02T11:24:53+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "1160934+ifiokjr@users.noreply.github.com"
+          },
+          "review_request": {
+            "provider": "github",
+            "host": "github.com",
+            "kind": "pull_request",
+            "id": "#13",
+            "title": "Merge upstream secretspec 0.12.2: pass store_dir + audit CLI command",
+            "url": "https://github.com/ifiokjr/monosecret/pull/13",
+            "author": {
+              "provider": "github",
+              "host": "github.com",
+              "id": null,
+              "login": "ifiokjr",
+              "display_name": "ifiokjr",
+              "url": "https://github.com/ifiokjr",
+              "source": "review_request_author"
+            }
+          }
+        },
+        "related_issues": []
+      }
+    }
+  ],
+  "changelogs": [],
+  "provider": {
+    "kind": "github",
+    "owner": "ifiokjr",
+    "repo": "monosecret",
+    "host": null
+  }
+}

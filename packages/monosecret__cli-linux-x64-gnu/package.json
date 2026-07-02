@@ -1,6 +1,6 @@
 {
   "name": "@monosecret/cli-linux-x64-gnu",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Prebuilt Monosecret binary for Linux x64 (glibc)",
   "homepage": "https://github.com/ifiokjr/monosecret",
   "bugs": {

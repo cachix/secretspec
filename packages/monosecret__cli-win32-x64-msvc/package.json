@@ -1,6 +1,6 @@
 {
   "name": "@monosecret/cli-win32-x64-msvc",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Prebuilt Monosecret binary for Windows x64",
   "homepage": "https://github.com/ifiokjr/monosecret",
   "bugs": {

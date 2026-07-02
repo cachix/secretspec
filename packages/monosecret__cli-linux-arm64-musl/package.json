@@ -1,6 +1,6 @@
 {
   "name": "@monosecret/cli-linux-arm64-musl",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Prebuilt Monosecret binary for Linux arm64 (musl)",
   "homepage": "https://github.com/ifiokjr/monosecret",
   "bugs": {

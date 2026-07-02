@@ -3532,7 +3532,7 @@ dependencies = [
 
 [[package]]
 name = "monosecret"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "apple-native-keyring-store",
  "aws-config",
@@ -3573,7 +3573,7 @@ dependencies = [
 
 [[package]]
 name = "monosecret_derive"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "http 1.4.2",
  "insta",

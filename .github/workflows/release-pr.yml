@@ -37,8 +37,10 @@ jobs:
       - name: load release automation secrets
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          MONOSECRET_REASON: Load RELEASE_PR_MERGE_TOKEN to refresh the release pull request.
-        run: scripts/ci/load-monosecret-secret.sh RELEASE_PR_MERGE_TOKEN
+        run: |
+          cargo run -p monosecret -- \
+            --reason "Load RELEASE_PR_MERGE_TOKEN to refresh the release pull request." \
+            env --shell github --profile ci --include RELEASE_PR_MERGE_TOKEN
         shell: devenv shell -- bash -e {0}
 
       - name: configure release git credentials
@@ -111,8 +113,10 @@ jobs:
       - name: load release automation secrets
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          MONOSECRET_REASON: Load RELEASE_PR_MERGE_TOKEN to create release tags and dispatch publishing.
-        run: scripts/ci/load-monosecret-secret.sh RELEASE_PR_MERGE_TOKEN
+        run: |
+          cargo run -p monosecret -- \
+            --reason "Load RELEASE_PR_MERGE_TOKEN to create release tags and dispatch publishing." \
+            env --shell github --profile ci --include RELEASE_PR_MERGE_TOKEN
         shell: devenv shell -- bash -e {0}
 
       - name: configure release git credentials

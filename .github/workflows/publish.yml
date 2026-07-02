@@ -76,9 +76,10 @@ jobs:
       - name: load publish secrets
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          FALLBACK_PUB_TOKEN: ${{ secrets.PUB_TOKEN }}
-          MONOSECRET_REASON: Load PUB_TOKEN for Dart package publishing.
-        run: scripts/ci/load-monosecret-secret.sh PUB_TOKEN
+        run: |
+          cargo run -p monosecret -- \
+            --reason "Load PUB_TOKEN for Dart package publishing." \
+            env --shell github --profile ci --include PUB_TOKEN
         shell: devenv shell -- bash -e {0}
 
       - name: get crates oidc auth token

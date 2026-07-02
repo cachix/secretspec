@@ -202,10 +202,10 @@ jobs:
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          FALLBACK_CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-          MONOSECRET_LOAD_OPTIONAL: "true"
-          MONOSECRET_REASON: Load CODECOV_TOKEN for the CI coverage upload.
-        run: scripts/ci/load-monosecret-secret.sh CODECOV_TOKEN
+        run: |
+          cargo run -p monosecret -- \
+            --reason "Load CODECOV_TOKEN for the CI coverage upload." \
+            env --shell github --profile ci --include CODECOV_TOKEN
         shell: devenv shell -- bash -e {0}
       - name: upload coverage to codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

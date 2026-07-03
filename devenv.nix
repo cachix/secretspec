@@ -9,6 +9,10 @@
   };
   languages.javascript = {
     enable = true;
+    # Node 22 (the plain nixpkgs default) bundles npm 10.x, which mishandles
+    # npm Trusted Publishing's OIDC handshake and can even misreport a brand
+    # new package's first publish as a 404. Node 24 bundles npm >= 11.5.1.
+    package = pkgs.nodejs_24;
     npm = {
       enable = true;
       install.enable = true;

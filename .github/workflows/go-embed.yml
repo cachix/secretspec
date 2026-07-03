@@ -77,7 +77,13 @@ jobs:
           cd "$smoke"
           go mod tidy
           unset SECRETSPEC_FFI_LIB
-          go run -tags embed_lib .
+          # `go build` + exec instead of `go run`: on macOS, `go run`'s ephemeral
+          # temp-dir binaries intermittently get built without a proper Mach-O
+          # UUID load command, which newer dyld refuses to load ("missing
+          # LC_UUID load command", abort trap). An explicitly built binary
+          # doesn't hit this.
+          go build -tags embed_lib -o embedsmoke .
+          ./embedsmoke
 
       - uses: actions/upload-artifact@v4
         with:

@@ -1,0 +1,17 @@
+{
+  "name": "secretspec-win32-x64-msvc",
+  "version": "0.12.2",
+  "cpu": [
+    "x64"
+  ],
+  "main": "secretspec.win32-x64-msvc.node",
+  "files": [
+    "secretspec.win32-x64-msvc.node"
+  ],
+  "description": "Declarative secrets, every environment, any provider (Node.js SDK)",
+  "homepage": "https://secretspec.dev/",
+  "license": "Apache-2.0",
+  "os": [
+    "win32"
+  ]
+}

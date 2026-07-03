@@ -1,0 +1,113 @@
+name: "Ruby gems"
+
+# Builds platform-specific gems for the Ruby SDK. Each gem bundles the
+# secretspec-ffi staticlib (into vendor/); at `gem install` mkmf compiles a tiny
+# C glue and statically links that archive, so the resolver is embedded in the
+# extension and one platform gem serves every Ruby ABI.
+#
+# NOTE: as with the Python wheels, the Linux gem here links the runner's glibc
+# and system libraries (notably libdbus, via the keyring provider). A portable
+# release build should use a baseline toolchain and vendor those deps. That is
+# the remaining follow-up; the build + bundling mechanism below is what is
+# validated. Install requires a C compiler + Ruby headers (+ libdbus-1-dev).
+#
+# A Windows (x64-mingw) gem is a follow-up: the staging script and the gem's
+# mkmf extension assume the Unix `lib<name>.a` archive, but the MinGW Ruby
+# devkit needs an archive from the `x86_64-pc-windows-gnu` Rust target (the
+# default Windows toolchain is MSVC, which emits `<name>.lib`). The SDK itself
+# is exercised on every PR by the devenv-based sdks.yml; this workflow only
+# builds the distributable gems.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - v**
+  # PR runs are scoped to changes in the Ruby SDK or this workflow. Core
+  # resolver and FFI changes are verified on PRs by the devenv-based test.yml,
+  # sdks.yml, and ffi-build.yml; the full matrix here still runs on tags and
+  # manual dispatch.
+  pull_request:
+    paths:
+      - "secretspec-rb/**"
+      - ".github/workflows/ruby-gems.yml"
+      - "scripts/sync-sdk-versions.sh"
+
+jobs:
+  gems:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-linux, runner: ubuntu-latest }
+          - { target: aarch64-linux, runner: ubuntu-24.04-arm }
+          - { target: arm64-darwin, runner: macos-latest }
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+
+      - name: Install Linux system dependencies (dbus for keyring)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Stage the staticlib and build the platform gem
+        shell: bash
+        run: |
+          bash secretspec-rb/scripts/stage-staticlib.sh
+          ( cd secretspec-rb && gem build secretspec.gemspec )
+
+      - name: Smoke test the gem
+        shell: bash
+        run: |
+          cd secretspec-rb
+          # Installing compiles the extension (spec.extensions) against the
+          # bundled vendor/libsecretspec_ffi.a -- no Rust toolchain needed here.
+          gem install --no-document --install-dir "$RUNNER_TEMP/gemhome" secretspec-*.gem
+          # Run outside the repo so only the installed extension satisfies require.
+          cd "$RUNNER_TEMP"
+          GEM_HOME="$RUNNER_TEMP/gemhome" GEM_PATH="$RUNNER_TEMP/gemhome" \
+            ruby -e 'require "secretspec"; puts "abi " + Secretspec.abi_version'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gem-${{ matrix.target }}
+          path: secretspec-rb/*.gem
+
+  publish:
+    name: publish to RubyGems
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [gems]
+    runs-on: ubuntu-latest
+    # Must match the "Environment" configured on rubygems.org's pending
+    # trusted publisher for the "secretspec" gem (see RELEASE.md) -- RubyGems
+    # matches trusted publishers by repo + workflow filename + environment,
+    # no ID or role value is issued or needed.
+    environment: release
+    permissions:
+      id-token: write # RubyGems Trusted Publishing (OIDC), no token needed
+      contents: read
+    steps:
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - uses: actions/download-artifact@v4
+        with:
+          path: gems
+          merge-multiple: true
+      - name: Configure RubyGems credentials (OIDC trusted publishing)
+        uses: rubygems/configure-rubygems-credentials@v2.1.0
+      - name: gem push
+        run: |
+          for gem in gems/*.gem; do
+            gem push "$gem"
+          done

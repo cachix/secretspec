@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Language SDKs for Python, Go, Ruby, Node.js / TypeScript, and Haskell**
+  (`secretspec-py`, `secretspec-go`, `secretspec-rb`, `secretspec-node`,
+  `secretspec-hs`). Resolve the secrets declared in your `secretspec.toml` from
+  each language using the same providers, profiles, fallback chains, and
+  generators as the CLI and the Rust SDK — no per-language configuration. Each
+  mirrors the Rust derive crate's vocabulary: a builder taking a provider,
+  profile, and access reason; `load()` returns the resolved secrets and can export
+  them into the process environment, while a value-free `report()` previews how
+  each secret would resolve without reading any value. A missing required secret
+  raises a typed error; `as_path` secrets are returned as a readable file path,
+  with an explicit (or scope-based) cleanup that removes the backing temp file.
+- **`secretspec-ffi` crate**: a small, versioned C ABI for resolving secrets from
+  any language, plus the public Rust building blocks the SDKs are built on
+  (`Secrets::resolve()` and `Secrets::report()`). Use it to write a binding for a
+  language we do not ship yet.
+- **`secretspec schema`**: emits a JSON Schema for your manifest's typed shape
+  (the union of all profiles, or one profile via `--profile`). Feed it to
+  [quicktype](https://quicktype.io) to generate idiomatic typed classes in any
+  language, populated from each SDK's `fields()` map — type-safe secret access
+  without hand-writing a generator per language.
+- **`secretspec check --json` / `--explain`**: a value-free report of how every
+  declared secret resolves for the active profile — its status (`resolved`,
+  `missing_required`, `missing_optional`), where the value would come from
+  (a provider, with a credential-free URI; a generator; or a committed default),
+  and whether it is exposed `as_path`. Values are never included, and both flags
+  skip the interactive prompt and exit non-zero when a required secret is missing,
+  so CI can gate on them. The same report is available to the Rust SDK via
+  `ValidatedSecrets::report()` / `ValidationErrors::report()`.
+
+### Fixed
+- A per-secret provider chain whose primary provider errors (e.g. an unreachable
+  vault) and whose fallback chain yields no value now surfaces that provider error
+  instead of silently reporting the secret as `missing_required`, so a provider
+  outage is distinguishable from an unprovisioned secret.
+
 ## [0.12.2] - 2026-06-22
 
 ### Added

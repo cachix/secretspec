@@ -1,5 +1,12 @@
 [workspace]
-members = ["secretspec", "secretspec-derive", "examples/derive"]
+members = [
+  "secretspec",
+  "secretspec-derive",
+  "secretspec-ffi",
+  "secretspec-node",
+  "secretspec-py",
+  "examples/derive",
+]
 resolver = "2"
 
 [workspace.package]

@@ -42,9 +42,12 @@
 
 // Internal modules
 mod audit;
+pub mod codegen;
 mod config;
 mod error;
 pub(crate) mod generator;
+mod report;
+mod resolve;
 mod secrets;
 mod validation;
 
@@ -70,6 +73,12 @@ pub use config::{GenerateConfig, GenerateOptions, Secret};
 // Public API exports
 pub use error::{Result, SecretSpecError};
 pub use provider::Provider;
+pub use report::{
+    RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus, SecretResolution,
+};
+pub use resolve::{
+    RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource, resolve_json,
+};
 pub use secrets::Secrets;
 pub use validation::ValidatedSecrets;
 

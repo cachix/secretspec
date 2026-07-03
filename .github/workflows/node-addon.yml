@@ -1,0 +1,117 @@
+name: "Node addon"
+
+# Builds the napi-rs Node addon (secretspec.node) per platform and smoke tests
+# it. On a version tag, publishes it to npm as per-platform optional packages
+# (secretspec-<platform>, referenced via the main `secretspec` package's
+# optionalDependencies) using @napi-rs/cli, authenticated via npm Trusted
+# Publishing (OIDC) -- no NPM_TOKEN stored in CI.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - v**
+  # PR runs are scoped to changes in the Node SDK or this workflow. Core
+  # resolver changes are verified on PRs by the devenv-based test.yml and
+  # sdks.yml; the full matrix here still runs on tags and manual dispatch.
+  pull_request:
+    paths:
+      - "secretspec-node/**"
+      - ".github/workflows/node-addon.yml"
+      - "scripts/sync-sdk-versions.sh"
+
+jobs:
+  addon:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `platform` is napi-rs's platformArchABI naming (see
+          # secretspec-node/npm/<platform>/), used to name the artifact that
+          # feeds the publish job below.
+          - { target: linux-x64, platform: linux-x64-gnu, runner: ubuntu-latest }
+          - { target: linux-arm64, platform: linux-arm64-gnu, runner: ubuntu-24.04-arm }
+          - { target: darwin-arm64, platform: darwin-arm64, runner: macos-latest }
+          - { target: win32-x64, platform: win32-x64-msvc, runner: windows-latest }
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+
+      - name: Install Linux system dependencies (dbus for keyring)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install napi CLI
+        run: npm ci
+        working-directory: secretspec-node
+
+      - name: Build the addon and run the SDK tests
+        shell: bash
+        run: |
+          bash secretspec-node/scripts/build-addon.sh
+          ( cd secretspec-node && node --test )
+
+      - name: Copy the addon to its platform-specific filename for publishing
+        shell: bash
+        run: cp secretspec-node/secretspec.node "secretspec-node/secretspec.${{ matrix.platform }}.node"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-addon-${{ matrix.target }}
+          path: secretspec-node/secretspec.${{ matrix.platform }}.node
+
+  publish:
+    name: publish to npm
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [addon]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # npm Trusted Publishing (OIDC), no token needed
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - name: Upgrade npm (Trusted Publishing needs npm >= 11.5.1)
+        run: npm install -g npm@latest
+      - name: Install napi CLI
+        run: npm ci
+        working-directory: secretspec-node
+      - name: Scaffold per-platform npm package dirs
+        run: node_modules/.bin/napi create-npm-dirs
+        working-directory: secretspec-node
+      - name: Download platform addons
+        uses: actions/download-artifact@v4
+        with:
+          pattern: node-addon-*
+          path: artifacts
+          merge-multiple: true
+      - name: Place each addon into its npm package dir
+        shell: bash
+        run: |
+          for f in artifacts/secretspec.*.node; do
+            platform="$(basename "$f" .node | sed 's/^secretspec\.//')"
+            cp "$f" "secretspec-node/npm/$platform/$(basename "$f")"
+          done
+      - name: Publish platform packages
+        # --tag-style npm: our tags are `vX.Y.Z`, not lerna's `pkg@X.Y.Z`.
+        # --no-gh-release: release.yml (cargo-dist) already creates the
+        # GitHub Release for this tag; a second one here would conflict.
+        working-directory: secretspec-node
+        run: node_modules/.bin/napi pre-publish --tag-style npm --no-gh-release
+      - name: Publish main package
+        working-directory: secretspec-node
+        run: npm publish

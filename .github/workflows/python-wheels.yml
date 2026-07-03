@@ -1,0 +1,108 @@
+name: "Python wheels"
+
+# Builds portable abi3 wheels for the Python SDK and publishes them to PyPI on a
+# version tag. The Rust resolver is statically linked into a compiled pyo3
+# extension (secretspec-py-native, see secretspec-py/Cargo.toml) -- there is no
+# separate cdylib bundled. The extension targets pyo3's abi3-py39 feature, so
+# one cp39-abi3 wheel per platform serves all CPython >= 3.9.
+#
+# Linux wheels are built via PyO3/maturin-action inside a manylinux container
+# (old glibc); maturin repairs the wheel itself (vendoring the extension's
+# dynamic system deps, notably libdbus from the keyring provider), so no
+# separate auditwheel step is needed. macOS builds natively.
+#
+# A Windows wheel is a follow-up: the default Windows toolchain is MSVC, and
+# the wheel build would have to vendor the provider system deps. The SDK
+# itself is exercised on every PR by the devenv-based sdks.yml; this workflow
+# only builds the distributable wheels.
+#
+# The build/repair pipeline is validated in CI; the publish job additionally
+# needs PyPI Trusted Publishing configured for this repo's "pypi" environment
+# before the first version tag.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - v**
+  # PR runs are scoped to changes in the Python SDK or this workflow. Core
+  # resolver and FFI changes are verified on PRs by the devenv-based test.yml,
+  # sdks.yml, and ffi-build.yml; the full matrix here still runs on tags and
+  # manual dispatch.
+  pull_request:
+    paths:
+      - "secretspec-py/**"
+      - ".github/workflows/python-wheels.yml"
+      - "scripts/sync-sdk-versions.sh"
+
+jobs:
+  linux:
+    name: wheel ${{ matrix.arch }} (manylinux)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, target: x86_64-unknown-linux-gnu, runner: ubuntu-latest }
+          - { arch: aarch64, target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+      - name: Build wheel (manylinux)
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: secretspec-py
+          target: ${{ matrix.target }}
+          manylinux: 2_28
+          rust-toolchain: "1.92.0" # matches rust-toolchain.toml
+          before-script-linux: yum install -y dbus-devel
+          args: --release --out ${{ github.workspace }}/wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+
+  native:
+    name: wheel ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: macos-aarch64, runner: macos-latest }
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: secretspec-py
+          args: --release --out ${{ github.workspace }}/wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: wheelhouse/*.whl
+
+  publish:
+    name: publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, native]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # PyPI Trusted Publishing (OIDC), no token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

@@ -67,11 +67,12 @@ pub enum SecretSpecError {
 }
 
 impl SecretSpecError {
-    /// A stable, non-sensitive token identifying the error variant, for audit logs.
+    /// A stable, non-sensitive token identifying the error variant, for audit
+    /// logs and typed handling by other-language SDKs over the FFI boundary.
     ///
     /// Returns only the variant name, never the error message: messages can embed
     /// secret names, provider URIs, or backend detail that must not reach the log.
-    pub(crate) fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> &'static str {
         match self {
             SecretSpecError::Io(_) => "io",
             SecretSpecError::Toml(_) => "toml",

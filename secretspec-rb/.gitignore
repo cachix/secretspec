@@ -1,0 +1,9 @@
+vendor/
+*.gem
+# Compiled extension + mkmf build artifacts.
+lib/secretspec/secretspec_ext.*
+ext/**/Makefile
+ext/**/*.o
+ext/**/*.so
+ext/**/*.bundle
+ext/**/mkmf.log

@@ -26,5 +26,11 @@
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.7.2"
+  },
+  "optionalDependencies": {
+    "secretspec-linux-x64-gnu": "0.12.2",
+    "secretspec-linux-arm64-gnu": "0.12.2",
+    "secretspec-darwin-arm64": "0.12.2",
+    "secretspec-win32-x64-msvc": "0.12.2"
   }
 }

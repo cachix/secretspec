@@ -58,36 +58,20 @@ transferred.
 3. Push a `vX.Y.Z` tag. The first successful push creates the gem and makes
    the publishing workflow its owner automatically.
 
-### npm — manual first publish required, then configure Trusted Publishing
+### npm — already done
 
-npm has no pending-publisher mechanism, and this applies to the main
-`secretspec` package **and every platform sub-package**
+npm has no pending-publisher mechanism, so this needed a manual first publish
+for the main `secretspec` package **and every platform sub-package**
 (`secretspec-linux-x64-gnu`, `secretspec-linux-arm64-gnu`,
 `secretspec-darwin-arm64`, `secretspec-win32-x64-msvc`) — 5 packages that each
-need to exist before a Trusted Publisher can be attached to them.
-
-1. Generate a temporary granular access token (write access, short expiry) at
-   https://www.npmjs.com/settings/<you>/tokens.
-2. Bootstrap-publish once with that token — build all 4 platform addons (or
-   download them from a `node-addon.yml` run), stage them, and run the same
-   sequence the `publish` job runs, authenticated with `NPM_TOKEN` instead of
-   OIDC:
-   ```
-   cd secretspec-node
-   npm ci
-   node_modules/.bin/napi create-npm-dirs
-   # copy each built secretspec.<platform>.node into npm/<platform>/ — see
-   # node-addon.yml's "Place each addon into its npm package dir" step for
-   # the target -> platform mapping
-   npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
-   node_modules/.bin/napi pre-publish --tag-style npm --no-gh-release
-   npm publish
-   ```
-3. Once all 5 packages exist, open each one's npm package settings → Trusted
-   Publisher → GitHub Actions, and set repo `cachix/secretspec`, workflow
-   `node-addon.yml` (no environment). Then revoke the temporary token from
-   step 1.
-4. Every release after this publishes via OIDC with no token stored anywhere.
+had to exist before a Trusted Publisher could be attached. This has been done:
+all 5 packages are published (bootstrap-published once with a temporary
+granular access token, "All Packages" / "Read and write" scope — narrower
+"select packages" scopes 404 on brand-new package names, since that picker
+can't reference a package that doesn't exist yet), each has a Trusted
+Publisher configured (GitHub Actions, repo `cachix/secretspec`, workflow
+`node-addon.yml`, no environment), and the bootstrap token has been revoked.
+Nothing left to do — every release from here publishes via OIDC.
 
 ### Hackage — token only, no Trusted Publishing
 
@@ -189,7 +173,4 @@ self-contained, vendored build — not a module-proxy install).
   runtime — the layout `@napi-rs/cli` automates (`napi create-npm-dirs` /
   `napi pre-publish`). Authenticated via **npm Trusted Publishing** (OIDC); no
   token stored in CI.
-- **One-time setup:** unlike PyPI/RubyGems, npm has no pending-publisher
-  mechanism — see "Before your first release" above for the manual
-  bootstrap-publish-then-configure-Trusted-Publisher sequence, needed for the
-  main `secretspec` package and all 4 platform sub-packages.
+- **One-time setup:** already done — see "Before your first release" above.

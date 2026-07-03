@@ -64,18 +64,13 @@ Publisher configured (GitHub Actions, repo `cachix/secretspec`, workflow
 `node-addon.yml`, no environment), and the bootstrap token has been revoked.
 Nothing left to do — every release from here publishes via OIDC.
 
-### Hackage — token only, no Trusted Publishing
+### Hackage — token set, done
 
 Hackage doesn't support OIDC yet (tracked upstream:
 [haskell/hackage-server#1443](https://github.com/haskell/hackage-server/issues/1443),
-open as of this writing).
-
-1. Generate an API token from your Hackage account
-   (https://hackage.haskell.org/user/<you>/manage).
-2. Add it as the `HACKAGE_TOKEN` repo secret (Settings → Secrets and
-   variables → Actions).
-3. Push a `vX.Y.Z` tag — `haskell-build.yml`'s publish job uploads with this
-   token, first release included. No separate bootstrap step.
+open as of this writing), so this stays a long-lived token rather than a
+one-time setup step. The `HACKAGE_TOKEN` repo secret is set. Nothing left to
+do — the first `vX.Y.Z` tag's `haskell-build.yml` publish job uploads with it.
 
 ### Go — nothing to set up
 

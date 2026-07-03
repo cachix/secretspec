@@ -30,33 +30,24 @@ GitHub repo is still correct at
 https://crates.io/crates/secretspec/settings if this repo is ever renamed or
 transferred.
 
-### PyPI — pending publisher, no manual publish needed
+### PyPI — pending publisher configured, done
 
-1. Create a `pypi` GitHub Environment on this repo (Settings → Environments →
-   New environment, name it `pypi`) — `python-wheels.yml`'s publish job
-   targets it.
-2. On PyPI (https://pypi.org/manage/account/publishing/), add a **pending
-   publisher**: project name `secretspec`, owner `cachix`, repo `secretspec`,
-   workflow `python-wheels.yml`, environment `pypi`.
-3. Push a `vX.Y.Z` tag. The first successful OIDC-authenticated publish
-   creates the `secretspec` project on PyPI automatically and converts the
-   pending publisher into a normal one — nothing to publish by hand.
-   ⚠️ if someone else registers the `secretspec` name on PyPI before your
-   first tag, the pending publisher is invalidated and the project would need
-   a different name.
+The `pypi` GitHub Environment exists and a pending publisher is configured on
+PyPI (project `secretspec`, owner `cachix`, repo `secretspec`, workflow
+`python-wheels.yml`, environment `pypi`). Nothing left to do — the first
+`vX.Y.Z` tag's OIDC-authenticated publish will create the `secretspec` project
+on PyPI automatically and convert the pending publisher into a normal one.
+⚠️ if someone else registers the `secretspec` name on PyPI before that first
+tag, the pending publisher is invalidated and the project would need a
+different name.
 
-### RubyGems — pending publisher, no manual push needed
+### RubyGems — pending publisher configured, done
 
-1. On rubygems.org: https://rubygems.org/profile/oidc/pending_trusted_publishers
-   → Create. Gem name `secretspec`, repository owner `cachix`, repository
-   name `secretspec`, workflow filename `ruby-gems.yml`, environment
-   `release` (matches the `environment: release` already set on
-   `ruby-gems.yml`'s publish job — this repo already has a `release`
-   GitHub Environment).
-2. Nothing else to configure — RubyGems matches trusted publishers purely by
-   repo + workflow filename + environment; no ID, role, or secret is issued.
-3. Push a `vX.Y.Z` tag. The first successful push creates the gem and makes
-   the publishing workflow its owner automatically.
+A pending trusted publisher is configured on rubygems.org (gem `secretspec`,
+repository owner `cachix`, repository name `secretspec`, workflow filename
+`ruby-gems.yml`, environment `release`). Nothing left to do — the first
+`vX.Y.Z` tag's push creates the gem and makes the publishing workflow its
+owner automatically.
 
 ### npm — already done
 
@@ -104,8 +95,8 @@ self-contained build.
   by the keyring provider), no separate `auditwheel` step needed. macOS builds
   natively; a Windows wheel is a follow-up.
 - **Publish:** `pypa/gh-action-pypi-publish` via **PyPI Trusted Publishing**
-  (OIDC). Configure a trusted publisher for this repo + a `pypi` environment; no
-  token needed.
+  (OIDC); no token needed. One-time setup already done — see "Before your
+  first release" above.
 
 ## Ruby (RubyGems) — `ruby-gems.yml`
 
@@ -116,9 +107,8 @@ self-contained build.
   compiler + Ruby headers, plus `libdbus-1-dev` for the keyring provider).
 - **Publish:** `gem push` for each platform gem, authenticated via **RubyGems
   Trusted Publishing** (OIDC) through `rubygems/configure-rubygems-credentials`
-  — no token stored in CI. See "Before your first release" above for the
-  one-time pending-publisher setup on rubygems.org (matched by repo + workflow
-  + environment, no ID to configure in the workflow itself).
+  — no token stored in CI. One-time setup already done — see "Before your
+  first release" above.
 - **Gap:** the Linux gem currently links the runner's glibc; for a portable gem,
   build the staticlib on an old-glibc baseline (e.g. a `manylinux` container, as
   the Python job does, or `rake-compiler-dock`) and bundle that. Tracked

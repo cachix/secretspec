@@ -45,7 +45,7 @@ jobs:
           echo "asset_tag=${TAG//\//-}" >> "$GITHUB_OUTPUT"
 
       - name: checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ steps.release_tag.outputs.tag }}
           fetch-depth: 0
@@ -83,14 +83,16 @@ jobs:
         shell: devenv shell -- bash -e {0}
 
       - name: get crates oidc auth token
-        uses: rust-lang/crates-io-auth-action@v1
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
         id: crates-oidc
 
       - name: setup cargo stable for publish
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch snapshot; installs stable
+        with:
+          toolchain: stable
 
       - name: setup node for publish
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org

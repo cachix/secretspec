@@ -52,14 +52,14 @@ runs:
     - name: cache rust dependencies
       id: cache-rust-dependencies
       continue-on-error: true
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
       with:
         prefix-key: ${{ inputs.cache-version }}
 
     - name: cache cargo binaries
       id: cache-cargo-binaries
       continue-on-error: true
-      uses: actions/cache@v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ./.bin
         key: ${{ runner.os }}-cargo-bin-${{ inputs.cache-version }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
@@ -69,13 +69,13 @@ runs:
     - name: install nix
       id: install-nix
       continue-on-error: true
-      uses: cachix/install-nix-action@v31
+      uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
       with:
         github_access_token: ${{ inputs.github-token }}
 
     - name: retry install nix
       if: steps.install-nix.outcome != 'success'
-      uses: cachix/install-nix-action@v31
+      uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
       with:
         github_access_token: ${{ inputs.github-token }}
 

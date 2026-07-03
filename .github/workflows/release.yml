@@ -53,7 +53,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: checkout current workflow ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
       - name: checkout release asset ref
@@ -83,15 +83,17 @@ jobs:
             exit 1
           fi
       - name: install rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch snapshot; installs stable
+        with:
+          toolchain: stable
       - name: setup cross toolchain
         if: startsWith(matrix.os, 'ubuntu') && !contains(matrix.target, '-musl')
-        uses: taiki-e/setup-cross-toolchain-action@v1
+        uses: taiki-e/setup-cross-toolchain-action@3d9770ce98eb7dbcf378563182a5e8031165f75b # v1.41.0
         with:
           target: ${{ matrix.target }}
       - name: install cross
         if: contains(matrix.target, '-musl')
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419 # v2.82.7
         with:
           tool: cross
       - name: set static crt linkage
@@ -105,7 +107,7 @@ jobs:
           set -euo pipefail
           echo "asset_tag=${RELEASE_TAG//\//-}" >> "$GITHUB_OUTPUT"
       - name: upload binaries
-        uses: taiki-e/upload-rust-binary-action@v1
+        uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
         with:
           bin: monosecret
           manifest-path: monosecret/Cargo.toml
@@ -152,7 +154,7 @@ jobs:
           fi
           sha256sum "$asset_dir"/*
       - name: attest all release archives
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: ${{ runner.temp }}/release-asset-attestations/*
       - name: verify all release archive attestations

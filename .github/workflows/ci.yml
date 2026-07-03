@@ -28,11 +28,11 @@ jobs:
       security-events: write
     steps:
       - name: checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - name: run zizmor
-        uses: zizmorcore/zizmor-action@v0.5.3
+        uses: zizmorcore/zizmor-action@192e21d79ab29983730a13d1382995c2307fbcaa # v0.5.7
         with:
           inputs: ".github/workflows/ .github/actions/"
           advanced-security: true
@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - name: setup
@@ -82,7 +82,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - name: setup
@@ -109,7 +109,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - name: setup devenv
@@ -120,7 +120,9 @@ jobs:
           free-runner-space: ${{ runner.os == 'Linux' && 'true' || 'false' }}
       - name: setup rust on windows
         if: runner.os == 'Windows'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch snapshot; installs stable
+        with:
+          toolchain: stable
       - name: build on unix
         if: runner.os != 'Windows'
         run: cargo build --workspace --all-features --locked
@@ -134,7 +136,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -163,7 +165,7 @@ jobs:
       id-token: write
     steps:
       - name: checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -190,7 +192,7 @@ jobs:
             --report-on=lib
         shell: devenv shell -- bash -e {0}
       - name: upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-reports
           path: |
@@ -201,7 +203,7 @@ jobs:
 
       - name: upload coverage to codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
         with:
           files: ./coverage/rust.lcov,./packages/monosecret/coverage/lcov.info
           disable_search: true

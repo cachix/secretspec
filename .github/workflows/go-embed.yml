@@ -77,12 +77,13 @@ jobs:
           cd "$smoke"
           go mod tidy
           unset SECRETSPEC_FFI_LIB
-          # `go build` + exec instead of `go run`: on macOS, `go run`'s ephemeral
-          # temp-dir binaries intermittently get built without a proper Mach-O
-          # UUID load command, which newer dyld refuses to load ("missing
-          # LC_UUID load command", abort trap). An explicitly built binary
-          # doesn't hit this.
-          go build -tags embed_lib -o embedsmoke .
+          # -linkmode=external: Go's internal linker doesn't emit a Mach-O
+          # LC_UUID load command (https://github.com/golang/go/issues/68678),
+          # and macOS 15+'s dyld refuses to load a binary without one ("missing
+          # LC_UUID load command", abort trap). The system linker (used when
+          # external linking) does emit it. Only valid building natively on
+          # macOS, which this job does.
+          go build -tags embed_lib -ldflags="-linkmode=external" -o embedsmoke .
           ./embedsmoke
 
       - uses: actions/upload-artifact@v4

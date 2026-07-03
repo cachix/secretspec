@@ -4,6 +4,10 @@
   "description": "Declarative secrets, every environment, any provider (Node.js SDK)",
   "license": "Apache-2.0",
   "homepage": "https://secretspec.dev/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cachix/secretspec.git"
+  },
   "main": "index.js",
   "types": "index.d.ts",
   "files": [

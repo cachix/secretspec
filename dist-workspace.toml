@@ -9,6 +9,11 @@ cargo-dist-version = "0.28.2"
 ci = "github"
 # The installers to generate for each app
 installers = ["shell"]
+# Build only the `secretspec` CLI app, package-by-package, instead of a
+# `cargo build --workspace`. The workspace now includes cdylib SDK crates
+# (e.g. the pyo3 `secretspec-py-native`) that do not link standalone on macOS,
+# so a whole-workspace release build fails; precise builds skip them.
+precise-builds = true
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Path that installers should place binaries in

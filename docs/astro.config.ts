@@ -133,6 +133,7 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
         }),
       ],
       title: "Monosecret",
+      favicon: "/favicon.ico",
       components: {
         Hero: "./src/overrides/Hero.astro",
         SocialIcons: "./src/overrides/SocialIcons.astro",

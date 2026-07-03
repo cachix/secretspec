@@ -45,6 +45,7 @@ const providerMetadata: ProviderMetadata[] = [
 
 
 const dup = <T,>(arr: T[]) => [...arr, ...arr];
+const sitePath = (path: string) => `${import.meta.env.BASE_URL.replace(/\/$/, '')}${path}`;
 ---
 
 <StarlightPage
@@ -63,7 +64,7 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
   <div class="landing-hero-inner">
     <!-- Latest blog post — sits inside the hero so the grid backdrop shows through -->
     {latestPost && (
-    <a href={`/blog/${latestPost.id.replace(/^blog\//, '')}/`} class="landing-blog-banner">
+    <a href={sitePath(`/blog/${latestPost.id.replace(/^blog\//, '')}/`)} class="landing-blog-banner">
       <span class="landing-blog-aside">
         <span class="landing-blog-flag">Latest from the blog</span>
         {latestPostDate && <span class="landing-blog-date">{latestPostDate}</span>}
@@ -85,8 +86,8 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
         Stop leaking <code class="inline-code">.env</code> files. Define what your application needs in <code class="inline-code">monosecret.toml</code>, then plug in keyring, 1Password, Vault, AWS, or any of 11 backends — same code, every environment.
       </p>
       <div class="landing-hero-actions">
-        <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
-        <a href="/concepts/overview/" class="landing-btn landing-btn-secondary">Read the concepts</a>
+        <a href={sitePath('/quick-start/')} class="landing-btn landing-btn-primary">Get Started</a>
+        <a href={sitePath('/concepts/overview/')} class="landing-btn landing-btn-secondary">Read the concepts</a>
         <a href="https://github.com/ifiokjr/monosecret" class="landing-btn landing-btn-secondary">View on GitHub</a>
       </div>
     </div>
@@ -151,7 +152,7 @@ $ monosecret run --profile production -- npm start
   <div class="landing-marquee">
     <div class="landing-marquee-track">
       {dup(providerMetadata).map(({ icon, label, slug }: ProviderMetadata) => (
-        <a href={`/providers/${slug}`} class="landing-marquee-item">
+        <a href={sitePath(`/providers/${slug}/`)} class="landing-marquee-item">
           {icon ? (
             <img class="landing-marquee-icon" src={`https://cdn.simpleicons.org/${icon}/888888`} alt="" loading="lazy" width="18" height="18" onerror="this.outerHTML='<svg class=&quot;landing-marquee-icon&quot; viewBox=&quot;0 0 24 24&quot; fill=&quot;none&quot; stroke=&quot;currentColor&quot; stroke-width=&quot;2&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; aria-hidden=&quot;true&quot;><rect x=&quot;3&quot; y=&quot;11&quot; width=&quot;18&quot; height=&quot;11&quot; rx=&quot;2&quot;/><path d=&quot;M7 11V7a5 5 0 0 1 10 0v4&quot;/></svg>'" />
           ) : (
@@ -212,32 +213,32 @@ $ monosecret run --profile production -- npm start
     </div>
 
     <div class="landing-bento">
-      <a href="/concepts/providers/" class="landing-bento-card is-link landing-bento-2">
+      <a href={sitePath('/concepts/providers/')} class="landing-bento-card is-link landing-bento-2">
         <div class="landing-bento-big-num">11</div>
         <p class="landing-bento-title">Providers</p>
         <p class="landing-bento-desc">Keyring · 1Password · LastPass · Bitwarden · Vault · AWS · GCP · Pass · Proton Pass · dotenv · env — pluggable trait-based architecture.</p>
       </a>
 
-      <a href="/concepts/profiles/" class="landing-bento-card is-link landing-bento-2">
+      <a href={sitePath('/concepts/profiles/')} class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">Profiles</p>
         <p class="landing-bento-desc">Different requirements, defaults, and validation per environment. Optional locally, required in production — without touching app code.</p>
         <pre is:raw class="landing-bento-mini-code"><code>[profiles.production]
 DATABASE_URL = { required = true }</code></pre>
       </a>
 
-      <a href="/concepts/generation/" class="landing-bento-card is-link landing-bento-2">
+      <a href={sitePath('/concepts/generation/')} class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">Auto-generation</p>
         <p class="landing-bento-desc">Passwords, tokens, and keys created automatically when missing — no manual setup, no copy paste.</p>
         <pre is:raw class="landing-bento-mini-code"><code>DB_PASSWORD = { type = "password", generate = true }</code></pre>
       </a>
 
-      <a href="/concepts/providers/" class="landing-bento-card is-link landing-bento-3">
+      <a href={sitePath('/concepts/providers/')} class="landing-bento-card is-link landing-bento-3">
         <p class="landing-bento-title">Per-secret fallback chains</p>
         <p class="landing-bento-desc">Each secret can specify its own ordered provider list. Tries Vault first, falls back to keyring, then env — until the value is found.</p>
         <pre is:raw class="landing-bento-mini-code"><code>API_KEY = { providers = ["vault", "keyring", "env"] }</code></pre>
       </a>
 
-      <a href="/sdk/rust/" class="landing-bento-card is-link landing-bento-3">
+      <a href={sitePath('/sdk/rust/')} class="landing-bento-card is-link landing-bento-3">
         <p class="landing-bento-title">Type-safe Rust SDK</p>
         <p class="landing-bento-desc">Proc macro reads <code class="inline-code">monosecret.toml</code> at compile time and generates strongly-typed structs. Typos fail to compile.</p>
         <pre is:raw class="landing-bento-mini-code"><code>monosecret_derive::declare_secrets!("monosecret.toml");
@@ -245,17 +246,17 @@ let s = Secrets::builder().load()?;
 println!("{}", s.secrets.database_url);</code></pre>
       </a>
 
-      <a href="/concepts/inheritance/" class="landing-bento-card is-link landing-bento-2">
+      <a href={sitePath('/concepts/inheritance/')} class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">Config inheritance</p>
         <p class="landing-bento-desc">Extend shared configs across services with <code class="inline-code">extends</code>. Define once, reuse everywhere with proper precedence.</p>
       </a>
 
-      <a href="/reference/cli/" class="landing-bento-card is-link landing-bento-2">
+      <a href={sitePath('/reference/cli/')} class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">File-path secrets</p>
         <p class="landing-bento-desc">Secrets with <code class="inline-code">as_path = true</code> get written to temp files — perfect for TLS certs and service account keys.</p>
       </a>
 
-      <a href="/reference/cli/" class="landing-bento-card is-link landing-bento-2">
+      <a href={sitePath('/reference/cli/')} class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">One-line migration</p>
         <p class="landing-bento-desc">Move all secrets between providers without changing application code. <code class="inline-code">monosecret import</code> does the rest.</p>
       </a>
@@ -332,7 +333,7 @@ println!("{}", s.secrets.database_url);</code></pre>
       <span class="landing-showcase-eyebrow">Profiles</span>
       <h2 class="landing-section-title">One config. Every environment.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Profiles let the same secret be optional in development, required in production — without changing application code. <a href="/concepts/profiles/" class="landing-link">How profiles work →</a>
+        Profiles let the same secret be optional in development, required in production — without changing application code. <a href={sitePath('/concepts/profiles/')} class="landing-link">How profiles work →</a>
       </p>
     </div>
 
@@ -420,7 +421,7 @@ println!("{}", s.secrets.database_url);</code></pre>
       <span class="landing-showcase-eyebrow">Audit &amp; AI agents</span>
       <h2 class="landing-section-title">Know who read a secret — and why.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Every access is appended to a local, append-only log — values never written, URI credentials redacted. And when an AI agent is driving, SecretSpec makes it state a reason first. <a href="/concepts/audit/" class="landing-link">How auditing works →</a>
+        Every access is appended to a local, append-only log — values never written, URI credentials redacted. And when an AI agent is driving, SecretSpec makes it state a reason first. <a href={sitePath('/concepts/audit/')} class="landing-link">How auditing works →</a>
       </p>
     </div>
 
@@ -456,7 +457,7 @@ $ secretspec audit -n 1
     </div>
 
     <p class="landing-chain-result" style="margin-top: 1.5rem;">
-      The default <code class="inline-code">require_reason = "agents"</code> policy is checked into <code class="inline-code">secretspec.toml</code>, so every clone, CI runner, and agent is held to it — humans running interactively are unaffected. <a href="/reference/configuration/#requiring-a-reason-for-secret-access" class="landing-link">Configure the policy →</a>
+      The default <code class="inline-code">require_reason = "agents"</code> policy is checked into <code class="inline-code">secretspec.toml</code>, so every clone, CI runner, and agent is held to it — humans running interactively are unaffected. <a href={sitePath('/reference/configuration/#requiring-a-reason-for-secret-access')} class="landing-link">Configure the policy →</a>
     </p>
   </div>
 </section>
@@ -468,7 +469,7 @@ $ secretspec audit -n 1
       <span class="landing-showcase-eyebrow">Type-safe SDK</span>
       <h2 class="landing-section-title">Compile-time secrets in Rust.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        The proc macro reads <code class="inline-code">monosecret.toml</code> at compile time and generates strongly-typed structs. Misspelling a secret name fails the build, not your deploy. <a href="/sdk/rust/" class="landing-link">SDK reference →</a>
+        The proc macro reads <code class="inline-code">monosecret.toml</code> at compile time and generates strongly-typed structs. Misspelling a secret name fails the build, not your deploy. <a href={sitePath('/sdk/rust/')} class="landing-link">SDK reference →</a>
       </p>
     </div>
 
@@ -602,7 +603,7 @@ REDIS_URL=redis://…</code></pre>
         <span class="landing-community-label">Announcement post</span>
         <span class="landing-community-desc">The design rationale behind separating declaration from storage.</span>
       </a>
-      <a href="/reference/adding-providers/" class="landing-community-card">
+      <a href={sitePath('/reference/adding-providers/')} class="landing-community-card">
         <span class="landing-community-stat">Add a provider</span>
         <span class="landing-community-label">Extend the ecosystem</span>
         <span class="landing-community-desc">Implement the <code class="inline-code">Provider</code> trait and ship a new backend.</span>
@@ -620,7 +621,7 @@ REDIS_URL=redis://…</code></pre>
         Declare what your application needs. Store the values anywhere. Onboard new developers in one command.
       </p>
       <div class="landing-hero-actions" style="justify-content: center;">
-        <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
+        <a href={sitePath('/quick-start/')} class="landing-btn landing-btn-primary">Get Started</a>
         <a href="https://github.com/ifiokjr/monosecret" class="landing-btn landing-btn-secondary">View on GitHub</a>
       </div>
     </div>

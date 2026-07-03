@@ -88,6 +88,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [gems]
     runs-on: ubuntu-latest
+    # Must match the "Environment" configured on rubygems.org's pending
+    # trusted publisher for the "secretspec" gem (see RELEASE.md) -- RubyGems
+    # matches trusted publishers by repo + workflow filename + environment,
+    # no ID or role value is issued or needed.
+    environment: release
     permissions:
       id-token: write # RubyGems Trusted Publishing (OIDC), no token needed
       contents: read
@@ -101,10 +106,6 @@ jobs:
           merge-multiple: true
       - name: Configure RubyGems credentials (OIDC trusted publishing)
         uses: rubygems/configure-rubygems-credentials@v2.1.0
-        with:
-          # From the "secretspec" gem's Trusted Publishers setup on rubygems.org
-          # (Settings -> add a GitHub Actions publisher for this repo/workflow).
-          role-to-assume: rg_oidc_akr_REPLACE_ME
       - name: gem push
         run: |
           for gem in gems/*.gem; do

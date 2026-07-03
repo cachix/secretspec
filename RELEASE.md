@@ -47,13 +47,14 @@ transferred.
 
 ### RubyGems — pending publisher, no manual push needed
 
-1. On rubygems.org, from your account (not an existing gem's page, since the
-   gem doesn't exist yet): Edit Profile → Trusted Publishers → add a
-   **pending trusted publisher**. Gem name `secretspec`, owner `cachix`, repo
-   `secretspec`, workflow `ruby-gems.yml`.
-2. This produces a `role-to-assume` value (`rg_oidc_akr_...`) — put it in
-   `ruby-gems.yml`'s publish job, replacing the `rg_oidc_akr_REPLACE_ME`
-   placeholder. It's an identifier, not a secret — safe to commit.
+1. On rubygems.org: https://rubygems.org/profile/oidc/pending_trusted_publishers
+   → Create. Gem name `secretspec`, repository owner `cachix`, repository
+   name `secretspec`, workflow filename `ruby-gems.yml`, environment
+   `release` (matches the `environment: release` already set on
+   `ruby-gems.yml`'s publish job — this repo already has a `release`
+   GitHub Environment).
+2. Nothing else to configure — RubyGems matches trusted publishers purely by
+   repo + workflow filename + environment; no ID, role, or secret is issued.
 3. Push a `vX.Y.Z` tag. The first successful push creates the gem and makes
    the publishing workflow its owner automatically.
 
@@ -132,8 +133,8 @@ self-contained build.
 - **Publish:** `gem push` for each platform gem, authenticated via **RubyGems
   Trusted Publishing** (OIDC) through `rubygems/configure-rubygems-credentials`
   — no token stored in CI. See "Before your first release" above for the
-  one-time pending-publisher setup that produces the `role-to-assume` ID
-  `ruby-gems.yml`'s publish job needs.
+  one-time pending-publisher setup on rubygems.org (matched by repo + workflow
+  + environment, no ID to configure in the workflow itself).
 - **Gap:** the Linux gem currently links the runner's glibc; for a portable gem,
   build the staticlib on an old-glibc baseline (e.g. a `manylinux` container, as
   the Python job does, or `rake-compiler-dock`) and bundle that. Tracked

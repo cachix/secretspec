@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-03
+
 ### Added
 - **Language SDKs for Python, Go, Ruby, Node.js / TypeScript, and Haskell**
   (`secretspec-py`, `secretspec-go`, `secretspec-rb`, `secretspec-node`,

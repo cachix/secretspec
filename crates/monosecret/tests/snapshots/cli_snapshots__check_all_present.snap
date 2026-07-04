@@ -1,0 +1,23 @@
+---
+source: crates/monosecret/tests/cli_snapshots.rs
+info:
+  program: monosecret
+  args:
+    - "--reason"
+    - test
+    - check
+    - "--no-prompt"
+    - "--provider"
+    - local
+---
+success: true
+exit_code: 0
+----- stdout -----
+
+----- stderr -----
+Checking secrets in demo (profile: default)...
+
+✓ API_TOKEN - API token
+✓ DATABASE_URL - Database URL
+
+Summary: 2 found, 0 missing

@@ -1,0 +1,20 @@
+---
+source: crates/monosecret/tests/cli_snapshots.rs
+info:
+  program: monosecret
+  args:
+    - "--reason"
+    - test
+    - env
+    - "--shell"
+    - bash
+    - "--provider"
+    - local
+---
+success: true
+exit_code: 0
+----- stdout -----
+export API_TOKEN='secret';
+export DATABASE_URL='postgres://localhost';
+
+----- stderr -----

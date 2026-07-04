@@ -12,7 +12,7 @@ name = "derive"
 path = "derive.rs"
 
 [dependencies]
-monosecret = { path = "../../monosecret" }
-monosecret_derive = { path = "../../monosecret_derive" }
-secrecy = { workspace = true }
-serde = { workspace = true }
+monosecret = { workspace = true }
+monosecret_derive = { workspace = true }
+secrecy = { workspace = true, default-features = true }
+serde = { workspace = true, default-features = true }

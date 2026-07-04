@@ -214,7 +214,10 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
         },
         {
           label: "SDK",
-          items: [{ label: "Rust SDK", slug: "sdk/rust" }],
+          items: [
+            { label: "Rust SDK", slug: "sdk/rust" },
+            { label: "Dart SDK", slug: "sdk/dart" },
+          ],
         },
         {
           label: "Reference",

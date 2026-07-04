@@ -59,13 +59,13 @@ jobs:
         run: git ls-files -z '*.toml' | xargs -0 taplo fmt --check
         shell: devenv shell -- bash -e {0}
       - name: dart format
-        run: dart format --output=none --set-exit-if-changed packages/monosecret
+        run: dart format --output=none --set-exit-if-changed dart/monosecret dart/monosecret_builder
         shell: devenv shell -- bash -e {0}
       - name: clippy
         run: cargo clippy --all-targets --all-features --locked
         shell: devenv shell -- bash -e {0}
       - name: dart analyze
-        run: cd packages/monosecret && dart analyze
+        run: dart analyze .
         shell: devenv shell -- bash -e {0}
       - name: validate monochange configuration
         run: monochange step validate
@@ -78,7 +78,7 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-          - macos-latest
+          - macos-26
     runs-on: ${{ matrix.os }}
     steps:
       - name: checkout repository
@@ -94,7 +94,7 @@ jobs:
         run: cargo test --all --all-features --locked
         shell: devenv shell -- bash -e {0}
       - name: dart tests
-        run: cd packages/monosecret && dart test
+        run: dart run melos exec --fail-fast -- dart test
         shell: devenv shell -- bash -e {0}
 
   build:
@@ -104,7 +104,7 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-          - macos-latest
+          - macos-26
           - windows-latest
     runs-on: ${{ matrix.os }}
     steps:
@@ -149,12 +149,15 @@ jobs:
         shell: devenv shell -- bash -e {0}
       - name: npm package dry-run
         run: |
-          for package in packages/monosecret__cli packages/monosecret__skill packages/monosecret__cli-*; do
+          for package in npm/monosecret__cli npm/monosecret__client npm/monosecret__skill npm/monosecret__cli-*; do
             npm --prefix "$package" pack --dry-run
           done
         shell: devenv shell -- bash -e {0}
       - name: dart publish dry-run
-        run: cd packages/monosecret && dart pub publish --dry-run --skip-validation
+        run: |
+          for package in dart/monosecret dart/monosecret_builder; do
+            (cd "$package" && dart pub publish --dry-run --skip-validation)
+          done
         shell: devenv shell -- bash -e {0}
 
   coverage:
@@ -181,15 +184,22 @@ jobs:
         shell: devenv shell -- bash -e {0}
       - name: dart coverage
         run: |
-          cd packages/monosecret
-          dart pub global activate coverage
-          dart test --coverage=coverage
-          dart pub global run coverage:format_coverage \
-            --lcov \
-            --in=coverage \
-            --out=coverage/lcov.info \
-            --package=. \
-            --report-on=lib
+          dart pub get
+          dart run melos exec --fail-fast -- dart test --coverage=coverage
+          for package in dart/monosecret dart/monosecret_builder; do
+            (
+              cd "$package"
+              dart run coverage:format_coverage \
+                --lcov \
+                --in=coverage \
+                --out=coverage/lcov.info \
+                --package=. \
+                --report-on=lib
+            )
+          done
+        shell: devenv shell -- bash -e {0}
+      - name: typescript coverage
+        run: pnpm --filter @monosecret/client run coverage
         shell: devenv shell -- bash -e {0}
       - name: upload coverage artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -197,17 +207,60 @@ jobs:
           name: coverage-reports
           path: |
             coverage/rust.lcov
-            packages/monosecret/coverage/lcov.info
+            dart/monosecret/coverage/lcov.info
+            dart/monosecret_builder/coverage/lcov.info
+            npm/monosecret__client/coverage/lcov.info
           if-no-files-found: error
           retention-days: 7
 
       - name: upload coverage to codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
-          files: ./coverage/rust.lcov,./packages/monosecret/coverage/lcov.info
+          files: ./coverage/rust.lcov
           disable_search: true
+          plugins: noop
           fail_ci_if_error: false
-          name: monosecret-workspace
+          flags: rust,crate-monosecret,crate-monosecret-derive
+          name: monosecret-rust
+          use_oidc: true
+          verbose: true
+
+      - name: upload dart sdk coverage to codecov
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./dart/monosecret/coverage/lcov.info
+          disable_search: true
+          plugins: noop
+          fail_ci_if_error: false
+          flags: dart,dart-monosecret
+          name: monosecret-dart-sdk
+          use_oidc: true
+          verbose: true
+
+      - name: upload dart builder coverage to codecov
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./dart/monosecret_builder/coverage/lcov.info
+          disable_search: true
+          plugins: noop
+          fail_ci_if_error: false
+          flags: dart,dart-monosecret-builder
+          name: monosecret-dart-builder
+          use_oidc: true
+          verbose: true
+
+      - name: upload npm coverage to codecov
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./npm/monosecret__client/coverage/lcov.info
+          disable_search: true
+          plugins: noop
+          fail_ci_if_error: false
+          flags: npm,npm-monosecret-client
+          name: monosecret-npm
           use_oidc: true
           verbose: true

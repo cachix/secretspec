@@ -1,0 +1,183 @@
+---
+source: crates/monosecret_derive/tests/snapshot_tests.rs
+expression: "manifest_json(include_str!(\"fixtures/complex.toml\"))"
+---
+{
+  "groups": {},
+  "profiles": {
+    "default": {
+      "secrets": {
+        "ALWAYS_OPTIONAL": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": false
+        },
+        "ALWAYS_REQUIRED": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "COMPLEX_SECRET": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "MULTI_PROFILE": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": false
+        },
+        "REQUIRED_WITH_DEFAULT": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": true,
+          "required": true
+        }
+      }
+    },
+    "development": {
+      "secrets": {
+        "ALWAYS_OPTIONAL": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": false
+        },
+        "ALWAYS_REQUIRED": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "COMPLEX_SECRET": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": true,
+          "required": false
+        },
+        "MULTI_PROFILE": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": false
+        },
+        "REQUIRED_WITH_DEFAULT": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": true,
+          "required": true
+        }
+      }
+    },
+    "production": {
+      "secrets": {
+        "ALWAYS_OPTIONAL": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": false
+        },
+        "ALWAYS_REQUIRED": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "COMPLEX_SECRET": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "MULTI_PROFILE": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "REQUIRED_WITH_DEFAULT": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": true,
+          "required": true
+        }
+      }
+    },
+    "staging": {
+      "secrets": {
+        "ALWAYS_OPTIONAL": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": false
+        },
+        "ALWAYS_REQUIRED": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "COMPLEX_SECRET": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": true,
+          "required": true
+        },
+        "MULTI_PROFILE": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": true,
+          "required": true
+        },
+        "REQUIRED_WITH_DEFAULT": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": true,
+          "required": true
+        }
+      }
+    },
+    "test": {
+      "secrets": {
+        "ALWAYS_OPTIONAL": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": false
+        },
+        "ALWAYS_REQUIRED": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "COMPLEX_SECRET": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": false
+        },
+        "MULTI_PROFILE": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": false
+        },
+        "REQUIRED_WITH_DEFAULT": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": true,
+          "required": true
+        }
+      }
+    }
+  },
+  "project": {
+    "name": "complex-project",
+    "revision": "1.0"
+  }
+}

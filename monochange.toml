@@ -28,65 +28,70 @@ owner = "ifiokjr"
 repo = "monosecret"
 
 [package."rust:monosecret"]
-path = "monosecret"
+path = "crates/monosecret"
 
 [package."rust:monosecret_derive"]
-path = "monosecret_derive"
+path = "crates/monosecret_derive"
 
 [package."@monosecret/cli"]
 type = "npm"
-path = "packages/monosecret__cli"
+path = "npm/monosecret__cli"
 
 [package."@monosecret/client"]
 type = "npm"
-path = "packages/monosecret__client"
+path = "npm/monosecret__client"
 
 [package."@monosecret/skill"]
 type = "npm"
-path = "packages/monosecret__skill"
+path = "npm/monosecret__skill"
 
 [package."@monosecret/cli-darwin-arm64"]
 type = "npm"
-path = "packages/monosecret__cli-darwin-arm64"
+path = "npm/monosecret__cli-darwin-arm64"
 
 [package."@monosecret/cli-darwin-x64"]
 type = "npm"
-path = "packages/monosecret__cli-darwin-x64"
+path = "npm/monosecret__cli-darwin-x64"
 changelog = false
 
 [package."@monosecret/cli-linux-arm64-gnu"]
 type = "npm"
-path = "packages/monosecret__cli-linux-arm64-gnu"
+path = "npm/monosecret__cli-linux-arm64-gnu"
 changelog = false
 
 [package."@monosecret/cli-linux-arm64-musl"]
 type = "npm"
-path = "packages/monosecret__cli-linux-arm64-musl"
+path = "npm/monosecret__cli-linux-arm64-musl"
 changelog = false
 
 [package."@monosecret/cli-linux-x64-gnu"]
 type = "npm"
-path = "packages/monosecret__cli-linux-x64-gnu"
+path = "npm/monosecret__cli-linux-x64-gnu"
 changelog = false
 
 [package."@monosecret/cli-linux-x64-musl"]
 type = "npm"
-path = "packages/monosecret__cli-linux-x64-musl"
+path = "npm/monosecret__cli-linux-x64-musl"
 changelog = false
 
 [package."@monosecret/cli-win32-arm64-msvc"]
 type = "npm"
-path = "packages/monosecret__cli-win32-arm64-msvc"
+path = "npm/monosecret__cli-win32-arm64-msvc"
 changelog = false
 
 [package."@monosecret/cli-win32-x64-msvc"]
 type = "npm"
-path = "packages/monosecret__cli-win32-x64-msvc"
+path = "npm/monosecret__cli-win32-x64-msvc"
 changelog = false
 
 [package."dart"]
 type = "dart"
-path = "packages/monosecret"
+path = "dart/monosecret"
+changelog = false
+
+[package."dart:monosecret_builder"]
+type = "dart"
+path = "dart/monosecret_builder"
 changelog = false
 
 [group.monosecret]
@@ -105,6 +110,7 @@ packages = [
   "@monosecret/cli-win32-arm64-msvc",
   "@monosecret/cli-win32-x64-msvc",
   "dart",
+  "dart:monosecret_builder",
 ]
 release = true
 tag = true
@@ -128,5 +134,6 @@ ignored_paths = [
   "fixtures/tests/**",
   "crates/*/changelog.md",
   "changelog.md",
-  "packages/*/changelog.md",
+  "dart/*/changelog.md",
+  "npm/*/changelog.md",
 ]

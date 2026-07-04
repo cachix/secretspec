@@ -1,0 +1,22 @@
+---
+source: crates/monosecret/tests/cli_command_arms.rs
+info:
+  program: monosecret
+  args:
+    - "-f"
+    - monosecret.toml
+    - "--reason"
+    - test
+    - env
+    - "--shell"
+    - dotenv
+    - "--provider"
+    - local
+    - "--output"
+    - /private/var/folders/lm/90xr38kd5y52p5y6jj2ny_dr0000gn/T/zed-agent-terminal-aWF7zb/.tmpQZ9lhn/env.out
+---
+success: true
+exit_code: 0
+----- stdout -----
+
+----- stderr -----

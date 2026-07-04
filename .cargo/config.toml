@@ -1,0 +1,4 @@
+[patch.crates-io]
+# Remove after proc-macro-error2 publishes the public proc_macro re-export fix.
+proc-macro-error-attr2 = { git = "https://github.com/GnomedDev/proc-macro-error-2.git", rev = "9170a9d18fef904daf611c95256d90e0b86f0890" }
+proc-macro-error2 = { git = "https://github.com/GnomedDev/proc-macro-error-2.git", rev = "9170a9d18fef904daf611c95256d90e0b86f0890" }

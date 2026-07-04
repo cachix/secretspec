@@ -43,7 +43,7 @@
     "pnpm-lock.yaml",
     "**/pubspec.lock",
     "**/.dart_tool/**",
-    "packages/monosecret/coverage",
+    "dart/*/coverage",
     ".claude/settings.local.json",
     "context.md",
     "PR-CHANGES.md"

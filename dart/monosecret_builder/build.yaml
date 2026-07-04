@@ -1,0 +1,8 @@
+builders:
+  monosecret:
+    import: "package:monosecret_builder/builder.dart"
+    builder_factories: ["monosecretBuilder"]
+    build_extensions: { ".dart": [".monosecret.g.part"] }
+    auto_apply: dependents
+    build_to: cache
+    applies_builders: ["source_gen:combining_builder"]

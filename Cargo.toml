@@ -1,5 +1,5 @@
 [workspace]
-members = ["examples/derive", "monosecret", "monosecret_derive"]
+members = ["crates/monosecret", "crates/monosecret_derive", "examples/derive"]
 resolver = "2"
 
 [workspace.package]
@@ -7,57 +7,70 @@ version = "0.0.0"
 edition = "2024"
 
 [workspace.dependencies]
-aws-config = "1"
-aws-sdk-secretsmanager = "1"
-bitwarden = { version = "2.0.0", features = ["secrets"] }
-clap = { version = "4.0", features = ["derive", "env"] }
-colored = "3.0"
-data-encoding = "2"
-dotenvy = "0.15"
-etcetera = "0.11"
-google-cloud-secretmanager-v1 = "1.2"
-http = "1.0"
-inquire = { version = "0.9.4", features = ["experimental-multiline-input"] }
-insta = "1.34"
-apple-native-keyring-store = { version = "1.0.0", features = ["keychain"] }
-keyring-core = "1.0.0"
-linkme = "0.3"
-miette = { version = "7.6", features = ["fancy"] }
-monosecret = { version = "0.0.0", path = "./monosecret", default-features = false }
-monosecret_derive = { version = "0.0.0", path = "./monosecret_derive" }
-percent-encoding = "2.3"
-proc-macro2 = "1.0"
-quote = "1.0"
-rand = "0.10.1"
+aws-config = { default-features = false, version = "^1" }
+aws-sdk-secretsmanager = { default-features = false, version = "^1" }
+bitwarden = { version = "2", features = ["secrets"], default-features = false }
+clap = { version = "4", features = ["derive", "env"], default-features = false }
+colored = { default-features = false, version = "^3" }
+data-encoding = { default-features = false, version = "^2" }
+dotenvy = { default-features = false, version = "^0.15" }
+etcetera = { default-features = false, version = "^0.11" }
+google-cloud-secretmanager-v1 = { default-features = false, version = "^1.10.0" }
+http = { default-features = false, version = "^1.4" }
+inquire = { version = "0.9.4", features = [
+  "experimental-multiline-input",
+], default-features = false }
+insta = { version = "1", features = [
+  "filters",
+  "json",
+  "redactions",
+], default-features = false }
+insta-cmd = { default-features = false, version = "^0.7" }
+apple-native-keyring-store = { version = "1.0.0", features = [
+  "keychain",
+], default-features = false }
+keyring-core = { default-features = false, version = "^1" }
+linkme = { default-features = false, version = "^0.3" }
+miette = { version = "7.6", features = ["fancy"], default-features = false }
+percent-encoding = { default-features = false, version = "^2.3" }
+proc-macro2 = { default-features = false, version = "^1.0" }
+quote = { default-features = false, version = "^1.0" }
+rand = { default-features = false, version = "^0.10" }
 reqwest = { version = "0.13.4", default-features = false, features = [
   "json",
   "rustls",
 ] }
-rsa = { version = "0.9", features = ["pem"] }
+rsa = { version = "0.9", features = ["pem"], default-features = false }
 rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
 ] }
-secrecy = { version = "0.10.3", features = ["serde"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-syn = "2.0"
-tempfile = "3.0"
-thiserror = "2.0"
-tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
-toml = "1.1.2+spec-1.1.0"
-toml_edit = "0.25.12+spec-1.1.0"
-tracing = "0.1"
-trybuild = "1.0"
-url = "2.5.4"
-uuid = { version = "1", features = ["v4"] }
-windows-native-keyring-store = "1.1.0"
+secrecy = { version = "0.10.3", features = ["serde"], default-features = false }
+serde = { version = "1.0", features = ["derive"], default-features = false }
+serde_json = { default-features = false, version = "^1.0" }
+syn = { default-features = false, version = "^2.0" }
+tempfile = { default-features = false, version = "^3" }
+thiserror = { default-features = false, version = "^2.0" }
+tokio = { version = "1", features = [
+  "rt",
+  "rt-multi-thread",
+], default-features = false }
+toml = { default-features = false, version = "^1.1.2" }
+toml_edit = { default-features = false, version = "^0.25.12" }
+tracing = { default-features = false, version = "^0.1" }
+trybuild = { default-features = false, version = "^1.0" }
+url = { default-features = false, version = "^2.5" }
+uuid = { version = "1", features = ["v4"], default-features = false }
+windows-native-keyring-store = { default-features = false, version = "^1.1.0" }
 zbus-secret-service-keyring-store = { version = "1.0.0", features = [
   "rt-tokio-crypto-rust",
-] }
-detect-coding-agent = "0.1"
-whoami = "2.0"
-jiff = "0.2"
+], default-features = false }
+detect-coding-agent = { default-features = false, version = "^0.1" }
+whoami = { default-features = false, version = "^2.1" }
+jiff = { default-features = false, version = "^0.2" }
 
+# internal crates
+monosecret = { version = "0.0.0", path = "./crates/monosecret", default-features = false }
+monosecret_derive = { version = "0.0.0", path = "./crates/monosecret_derive" }
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"

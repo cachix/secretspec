@@ -1,0 +1,35 @@
+---
+source: crates/monosecret_derive/tests/snapshot_tests.rs
+expression: "manifest_json(include_str!(\"fixtures/basic.toml\"))"
+---
+{
+  "groups": {},
+  "profiles": {
+    "default": {
+      "secrets": {
+        "API_KEY": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "DATABASE_URL": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "OPTIONAL_SECRET": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": true,
+          "required": false
+        }
+      }
+    }
+  },
+  "project": {
+    "name": "test-project",
+    "revision": "1.0"
+  }
+}

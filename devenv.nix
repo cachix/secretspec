@@ -14,6 +14,7 @@ in
   packages =
     with pkgs;
     [
+      cargo-insta
       cargo-dist
       custom.monochange
       custom.op
@@ -254,8 +255,9 @@ in
         export PATH="$DEVENV_PROFILE/bin:$PATH"
         coverage:rust
         coverage:dart
+        coverage:node
       '';
-      description = "Generate Rust and Dart LCOV reports.";
+      description = "Generate Rust, Dart, and npm LCOV reports.";
       binary = "bash";
     };
     "coverage:rust" = {
@@ -272,16 +274,30 @@ in
       exec = ''
         set -euo pipefail
         install:dart
-        cd packages/monosecret
-        dart test --coverage=coverage
-        dart run coverage:format_coverage \
-          --lcov \
-          --in=coverage \
-          --out=coverage/lcov.info \
-          --package=. \
-          --report-on=lib
+        rm -rf coverage/dart
+        mkdir -p coverage/dart
+        melos exec --fail-fast -- dart test --coverage=coverage
+        for package in dart/monosecret dart/monosecret_builder; do
+          (
+            cd "$package"
+            dart run coverage:format_coverage \
+              --lcov \
+              --in=coverage \
+              --out=coverage/lcov.info \
+              --package=. \
+              --report-on=lib
+          )
+        done
       '';
-      description = "Generate Dart SDK coverage at packages/monosecret/coverage/lcov.info.";
+      description = "Generate Dart SDK and builder LCOV reports.";
+      binary = "bash";
+    };
+    "coverage:node" = {
+      exec = ''
+        set -euo pipefail
+        pnpm --filter @monosecret/client run coverage
+      '';
+      description = "Generate TypeScript client LCOV report.";
       binary = "bash";
     };
 
@@ -307,7 +323,7 @@ in
     "package:node:check" = {
       exec = ''
         set -euo pipefail
-        for package in packages/monosecret__cli packages/monosecret__client packages/monosecret__skill packages/monosecret__cli-*; do
+        for package in npm/monosecret__cli npm/monosecret__client npm/monosecret__skill npm/monosecret__cli-*; do
           (cd "$package" && npm pack --dry-run)
         done
       '';
@@ -317,8 +333,9 @@ in
     "package:dart:check" = {
       exec = ''
         set -euo pipefail
-        cd packages/monosecret
-        dart pub publish --dry-run --skip-validation
+        for package in dart/monosecret dart/monosecret_builder; do
+          (cd "$package" && dart pub publish --dry-run --skip-validation)
+        done
       '';
       description = "Dry-run Dart package packaging (local validation without server contact).";
       binary = "bash";
@@ -463,8 +480,9 @@ in
       exec = ''
         set -euo pipefail
         install:dart
-        cd packages/monosecret
-        dart fix --apply
+        for package in dart/monosecret dart/monosecret_builder; do
+          (cd "$package" && dart fix --apply)
+        done
       '';
       description = "Apply Dart analyzer fixes where possible.";
       binary = "bash";
@@ -484,6 +502,24 @@ in
         lint:actionlint
       '';
       description = "Auto-fix zizmor findings where possible, then validate workflow syntax with actionlint.";
+      binary = "bash";
+    };
+
+    "snapshot:review" = {
+      exec = ''
+        set -euo pipefail
+        cargo insta test --all-features --workspace --accept-unseen
+        cargo insta review --workspace
+      '';
+      description = "Run snapshot tests and review any pending changes with cargo-insta.";
+      binary = "bash";
+    };
+    "snapshot:accept" = {
+      exec = ''
+        set -euo pipefail
+        cargo insta accept --workspace
+      '';
+      description = "Accept all pending insta snapshots without interactive review.";
       binary = "bash";
     };
   };

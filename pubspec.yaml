@@ -5,7 +5,8 @@ environment:
   sdk: ^3.5.0
 
 workspace:
-  - packages/monosecret
+  - dart/monosecret
+  - dart/monosecret_builder
 
 dev_dependencies:
   coverage: ^1.9.0

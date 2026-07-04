@@ -1,0 +1,45 @@
+---
+source: crates/monosecret/tests/cli_snapshots.rs
+info:
+  program: monosecret
+  args:
+    - manifest
+    - "--format"
+    - json
+---
+success: true
+exit_code: 0
+----- stdout -----
+{
+  "project": {
+    "name": "demo",
+    "revision": "1.0"
+  },
+  "profiles": {
+    "default": {
+      "secrets": {
+        "API_TOKEN": {
+          "required": true,
+          "hasDefault": false,
+          "asPath": false,
+          "groups": []
+        },
+        "DATABASE_URL": {
+          "required": true,
+          "hasDefault": false,
+          "asPath": false,
+          "groups": []
+        },
+        "OPTIONAL": {
+          "required": false,
+          "hasDefault": true,
+          "asPath": false,
+          "groups": []
+        }
+      }
+    }
+  },
+  "groups": {}
+}
+
+----- stderr -----

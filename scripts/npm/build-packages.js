@@ -197,7 +197,7 @@ export function main(argv = process.argv.slice(2)) {
     );
   }
 
-  const packagesDir = join(repoRoot, "packages");
+  const packagesDir = join(repoRoot, "npm");
   const tmpDir = join(packagesDir, ".tmp");
 
   for (const spec of platforms) {

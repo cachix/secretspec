@@ -1,0 +1,6 @@
+---
+source: crates/monosecret/tests/cli_command_arms.rs
+expression: "fs::read_to_string(&output_file).unwrap()"
+---
+API_KEY="env-value"
+OPTIONAL="fallback"

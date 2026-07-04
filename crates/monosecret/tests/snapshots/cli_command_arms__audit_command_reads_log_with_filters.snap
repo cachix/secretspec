@@ -1,0 +1,23 @@
+---
+source: crates/monosecret/tests/cli_command_arms.rs
+info:
+  program: monosecret
+  args:
+    - audit
+    - "--project"
+    - demo
+    - "--action"
+    - get
+    - "--tail"
+    - "1"
+    - "--json"
+  env:
+    HOME: /private/var/folders/lm/90xr38kd5y52p5y6jj2ny_dr0000gn/T/zed-agent-terminal-aWF7zb/.tmp7nHfMR
+    XDG_CONFIG_HOME: /private/var/folders/lm/90xr38kd5y52p5y6jj2ny_dr0000gn/T/zed-agent-terminal-aWF7zb/.tmp7nHfMR/.config
+---
+success: true
+exit_code: 0
+----- stdout -----
+{"action":"get","project":"demo","key":"C","outcome":"found","ts":"2026-01-03T00:00:00Z","profile":"default"}
+
+----- stderr -----

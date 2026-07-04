@@ -1,0 +1,20 @@
+name: monosecret_builder
+description: Build runner generator for typed Dart access to Monosecret manifests.
+version: 0.0.0
+repository: https://github.com/ifiokjr/monosecret
+resolution: workspace
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  analyzer: ^8.0.0
+  build: ^4.0.0
+  monosecret: ^0.0.0
+  source_gen: ^4.0.0
+  toml: ^0.18.0
+
+dev_dependencies:
+  build_runner: ^2.8.0
+  coverage: ^1.9.0
+  test: ^1.25.0

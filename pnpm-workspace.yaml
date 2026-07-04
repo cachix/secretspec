@@ -1,3 +1,6 @@
 packages:
-  - "packages/*"
+  - "npm/*"
   - "docs"
+allowBuilds:
+  esbuild: true
+  sharp: true

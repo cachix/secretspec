@@ -125,7 +125,7 @@ jobs:
             --asset-tag "$RELEASE_ASSET_TAG" \
             --assets-dir "$RUNNER_TEMP/release-assets"
           pnpm node scripts/npm/populate-packages.js \
-            --packages-dir packages
+                      --packages-dir npm
         shell: devenv shell -- bash -e {0}
 
       - name: check publish readiness

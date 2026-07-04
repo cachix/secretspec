@@ -42,7 +42,7 @@ jobs:
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-26
           - target: aarch64-apple-darwin
             os: macos-14
           - target: x86_64-pc-windows-msvc
@@ -110,7 +110,7 @@ jobs:
         uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
         with:
           bin: monosecret
-          manifest-path: monosecret/Cargo.toml
+          manifest-path: crates/monosecret/Cargo.toml
           profile: release
           ref: refs/tags/${{ env.RELEASE_TAG }}
           archive: monosecret-$target-${{ steps.release_vars.outputs.asset_tag }}

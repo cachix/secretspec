@@ -1,0 +1,84 @@
+coverage:
+  status:
+    project:
+      default:
+        target: 95%
+        threshold: 0%
+      rust:
+        target: 95%
+        threshold: 0%
+        flags:
+          - rust
+      crate-monosecret:
+        target: 95%
+        threshold: 0%
+        flags:
+          - crate-monosecret
+      crate-monosecret-derive:
+        target: 95%
+        threshold: 0%
+        flags:
+          - crate-monosecret-derive
+      dart:
+        target: 95%
+        threshold: 0%
+        flags:
+          - dart
+      dart-monosecret:
+        target: 95%
+        threshold: 0%
+        flags:
+          - dart-monosecret
+      dart-monosecret-builder:
+        target: 95%
+        threshold: 0%
+        flags:
+          - dart-monosecret-builder
+      npm:
+        target: 95%
+        threshold: 0%
+        flags:
+          - npm
+      npm-monosecret-client:
+        target: 95%
+        threshold: 0%
+        flags:
+          - npm-monosecret-client
+    patch:
+      default:
+        target: 100%
+        threshold: 0%
+        only_pulls: true
+
+flags:
+  rust:
+    paths:
+      - crates/
+  crate-monosecret:
+    paths:
+      - crates/monosecret/
+  crate-monosecret-derive:
+    paths:
+      - crates/monosecret_derive/
+  dart:
+    paths:
+      - dart/
+  dart-monosecret:
+    paths:
+      - dart/monosecret/
+  dart-monosecret-builder:
+    paths:
+      - dart/monosecret_builder/
+  npm:
+    paths:
+      - npm/
+  npm-monosecret-client:
+    paths:
+      - npm/monosecret__client/
+
+ignore:
+  - "dart/monosecret_builder/lib/src/source_gen_adapter.dart"
+
+comment:
+  layout: "condensed_header, diff, flags, files"
+  require_changes: true

@@ -1,0 +1,101 @@
+---
+source: crates/monosecret_derive/tests/snapshot_tests.rs
+expression: "manifest_json(include_str!(\"fixtures/profiles.toml\"))"
+---
+{
+  "groups": {},
+  "profiles": {
+    "default": {
+      "secrets": {
+        "API_KEY": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "DATABASE_URL": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "REDIS_URL": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": false
+        }
+      }
+    },
+    "development": {
+      "secrets": {
+        "API_KEY": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": true,
+          "required": false
+        },
+        "DATABASE_URL": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": true,
+          "required": true
+        },
+        "REDIS_URL": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": false
+        }
+      }
+    },
+    "production": {
+      "secrets": {
+        "API_KEY": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "DATABASE_URL": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "REDIS_URL": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        }
+      }
+    },
+    "staging": {
+      "secrets": {
+        "API_KEY": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "DATABASE_URL": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": true
+        },
+        "REDIS_URL": {
+          "asPath": false,
+          "groups": [],
+          "hasDefault": false,
+          "required": false
+        }
+      }
+    }
+  },
+  "project": {
+    "name": "profile-test",
+    "revision": "1.0"
+  }
+}

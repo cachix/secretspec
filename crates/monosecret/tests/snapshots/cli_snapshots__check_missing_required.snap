@@ -1,0 +1,24 @@
+---
+source: crates/monosecret/tests/cli_snapshots.rs
+info:
+  program: monosecret
+  args:
+    - "--reason"
+    - test
+    - check
+    - "--no-prompt"
+    - "--provider"
+    - local
+---
+success: false
+exit_code: 1
+----- stdout -----
+
+----- stderr -----
+Checking secrets in demo (profile: default)...
+
+✗ API_TOKEN - API token (required)
+
+Summary: 0 found, 1 missing
+Error:   × Failed to check secrets
+  ╰─▶ Secret 'API_TOKEN' is required but not set

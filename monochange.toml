@@ -108,7 +108,7 @@ packages = [
 ]
 release = true
 tag = true
-version_format = "namespaced"
+version_format = "primary"
 versioned_files = [
   { path = "Cargo.toml", type = "cargo", fields = [
     "workspace.package.version",

@@ -3,7 +3,7 @@ members = ["crates/monosecret", "crates/monosecret_derive", "examples/derive"]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
@@ -69,8 +69,8 @@ whoami = { default-features = false, version = "^2.1" }
 jiff = { default-features = false, version = "^0.2" }
 
 # internal crates
-monosecret = { version = "0.0.0", path = "./crates/monosecret", default-features = false }
-monosecret_derive = { version = "0.0.0", path = "./crates/monosecret_derive" }
+monosecret = { version = "0.1.0", path = "./crates/monosecret", default-features = false }
+monosecret_derive = { version = "0.1.0", path = "./crates/monosecret_derive" }
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"

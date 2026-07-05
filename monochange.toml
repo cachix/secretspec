@@ -27,6 +27,15 @@ provider = "github"
 owner = "ifiokjr"
 repo = "monosecret"
 
+[cli.release]
+help_text = "Prepare, format, commit, and open the release pull request."
+steps = [
+  { name = "prepare release", type = "PrepareRelease", inputs = { format = "json" } },
+  { name = "format release commit", type = "Command", shell = "bash", command = "fix:format" },
+  { name = "commit release", type = "CommitRelease", inputs = { stage_all = true, no_verify = true } },
+  { name = "open release request", type = "OpenReleaseRequest", inputs = { stage_all = true, no_verify = true } },
+]
+
 [package."rust:monosecret"]
 path = "crates/monosecret"
 changelog = { path = "crates/monosecret/CHANGELOG.md", format = "keep_a_changelog" }

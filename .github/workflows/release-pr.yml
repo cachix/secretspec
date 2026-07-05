@@ -89,44 +89,7 @@ jobs:
         run: |
           set -euo pipefail
           export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
-          monochange --log-level=debug step prepare-release --format json
-          monochange --log-level=debug step commit-release --stage-all --no-verify
-
-          fix:format
-          fix:monochange
-          fix:dart
-          fix:format
-
-          git add -A
-          if ! git diff --cached --quiet; then
-            GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true \
-              git -c core.editor=true -c sequence.editor=true \
-              commit --amend --no-edit --no-verify
-          fi
-
-          # The formatter runs after commit-release, so refresh the local prepared release
-          # cache for the amended commit before open-release-request reuses it.
-          python3 - <<'PY'
-          import json
-          import subprocess
-          from pathlib import Path
-
-          cache_path = Path('.monochange/local/prepared-release-cache.json')
-          cache = json.loads(cache_path.read_text())
-          cache['head_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-
-          for tracked_path in cache.get('tracked_paths', []):
-              if tracked_path.get('state') == 'file':
-                  tracked_path['hash'] = subprocess.check_output(
-                      ['git', 'hash-object', '--', tracked_path['path']],
-                      text=True,
-                  ).strip()
-
-          cache_path.write_text(json.dumps(cache, indent=2) + '\n')
-          PY
-
-          monochange --log-level=debug step release-record --from HEAD --format json >/dev/null
-          monochange --log-level=debug step open-release-request --stage-all --no-verify
+          monochange run release
         shell: devenv shell -- bash -e {0}
 
       - name: skip refresh without changesets

@@ -650,6 +650,10 @@ mod tests {
 		insta::assert_json_snapshot!(event, {
 			".id" => "[event-id]",
 			".ts" => "[timestamp]",
+			".version" => insta::dynamic_redaction(|value, _path| {
+				assert_eq!(value.as_str().unwrap(), env!("CARGO_PKG_VERSION"));
+				"[version]"
+			}),
 		});
 		// The secret value never appears anywhere in the record.
 		assert!(!lines[0].contains("s3cr3t"));
@@ -681,6 +685,10 @@ mod tests {
 		insta::assert_json_snapshot!(event, {
 			".id" => "[event-id]",
 			".ts" => "[timestamp]",
+			".version" => insta::dynamic_redaction(|value, _path| {
+				assert_eq!(value.as_str().unwrap(), env!("CARGO_PKG_VERSION"));
+				"[version]"
+			}),
 		});
 	}
 
@@ -872,6 +880,10 @@ mod tests {
 			".id" => "[event-id]",
 			".ts" => "[timestamp]",
 			".session_id" => "[session-id]",
+			".version" => insta::dynamic_redaction(|value, _path| {
+				assert_eq!(value.as_str().unwrap(), env!("CARGO_PKG_VERSION"));
+				"[version]"
+			}),
 		});
 	}
 }

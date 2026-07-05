@@ -29,9 +29,11 @@ repo = "monosecret"
 
 [package."rust:monosecret"]
 path = "crates/monosecret"
+changelog = { path = "crates/monosecret/CHANGELOG.md", format = "keep_a_changelog" }
 
 [package."rust:monosecret_derive"]
 path = "crates/monosecret_derive"
+changelog = { path = "crates/monosecret_derive/CHANGELOG.md", format = "keep_a_changelog" }
 
 [package."@monosecret/cli"]
 type = "npm"
@@ -87,12 +89,12 @@ changelog = false
 [package."dart"]
 type = "dart"
 path = "dart/monosecret"
-changelog = false
+changelog = { path = "dart/monosecret/CHANGELOG.md", format = "keep_a_changelog" }
 
 [package."dart:monosecret_builder"]
 type = "dart"
 path = "dart/monosecret_builder"
-changelog = false
+changelog = { path = "dart/monosecret_builder/CHANGELOG.md", format = "keep_a_changelog" }
 
 [group.monosecret]
 packages = [
@@ -115,6 +117,7 @@ packages = [
 release = true
 tag = true
 version_format = "primary"
+changelog = { path = "CHANGELOG.md", format = "keep_a_changelog", include = "all" }
 versioned_files = [
   { path = "Cargo.toml", type = "cargo", fields = [
     "workspace.package.version",

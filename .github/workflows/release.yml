@@ -1,13 +1,10 @@
 name: release
 
 on:
-  push:
-    tags:
-      - "monosecret/v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (for example monosecret/v0.1.0). Must start with monosecret/v."
+        description: "Release tag (for example v0.1.0). Must start with v."
         required: true
         type: string
 
@@ -15,20 +12,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
+  group: ${{ github.workflow }}-${{ inputs.tag }}
   cancel-in-progress: true
 
 jobs:
   upload_assets:
     env:
-      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      RELEASE_TAG: ${{ inputs.tag }}
     permissions:
       attestations: write
       contents: write
       id-token: write
     if: >-
       (github.repository_owner == 'ifiokjr' || github.repository_owner == 'monosecret') &&
-      startsWith(inputs.tag || github.ref_name, 'monosecret/v')
+      startsWith(inputs.tag, 'v')
     strategy:
       fail-fast: false
       matrix:
@@ -52,36 +49,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
-      - name: checkout current workflow ref
+      - name: checkout release tag
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
-      - name: checkout release asset ref
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch --force origin "+refs/heads/*:refs/remotes/origin/*"
-          git fetch --tags --force origin "+refs/tags/*:refs/tags/*"
-          if git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
-            git checkout --detach "refs/tags/$RELEASE_TAG"
-          else
-            echo "::error::Release ref '$RELEASE_TAG' is not a valid tag. Releases must be created from tags." >&2
-            exit 1
-          fi
-      - name: verify checkout matches release tag
-        shell: bash
-        run: |
-          set -euo pipefail
-          actual_commit=$(git rev-parse HEAD)
-          tag_commit=$(git rev-list -n1 "$RELEASE_TAG")
-          if [ "$actual_commit" != "$tag_commit" ]; then
-            echo "::error::Checked-out commit $actual_commit does not match tag $RELEASE_TAG ($tag_commit)" >&2
-            exit 1
-          fi
-          if ! git merge-base --is-ancestor "$actual_commit" refs/remotes/origin/main 2>/dev/null; then
-            echo "::error::Tag $RELEASE_TAG ($actual_commit) is not on main" >&2
-            exit 1
-          fi
       - name: install rust toolchain
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch snapshot; installs stable
         with:
@@ -123,7 +95,7 @@ jobs:
   attest_assets:
     if: >-
       (github.repository_owner == 'ifiokjr' || github.repository_owner == 'monosecret') &&
-      startsWith(inputs.tag || github.ref_name, 'monosecret/v')
+      startsWith(inputs.tag, 'v')
     needs: upload_assets
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -132,7 +104,7 @@ jobs:
       contents: write
       id-token: write
     env:
-      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      RELEASE_TAG: ${{ inputs.tag }}
     steps:
       - name: download all release archives for attestation
         env:
@@ -183,12 +155,12 @@ jobs:
     needs: attest_assets
     environment: publisher
     env:
-      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      RELEASE_TAG: ${{ inputs.tag }}
     permissions:
       contents: write
     if: >-
       (github.repository_owner == 'ifiokjr' || github.repository_owner == 'monosecret') &&
-      startsWith(inputs.tag || github.ref_name, 'monosecret/v')
+      startsWith(inputs.tag, 'v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -201,12 +173,12 @@ jobs:
     needs: publish_draft
     environment: publisher
     env:
-      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      RELEASE_TAG: ${{ inputs.tag }}
     permissions:
       actions: write
     if: >-
       (github.repository_owner == 'ifiokjr' || github.repository_owner == 'monosecret') &&
-      startsWith(inputs.tag || github.ref_name, 'monosecret/v')
+      startsWith(inputs.tag, 'v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -222,7 +194,6 @@ jobs:
           done
           gh workflow run publish.yml \
             --repo "${{ github.repository }}" \
-            --ref "$RELEASE_TAG" \
             -f "tag=$RELEASE_TAG"
         env:
           GH_TOKEN: ${{ github.token }}

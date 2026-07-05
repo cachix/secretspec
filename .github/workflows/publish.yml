@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to publish (for example monosecret/v0.1.0)."
+        description: "Release tag to publish (for example v0.1.0)."
         required: true
         type: string
 
@@ -25,53 +25,29 @@ jobs:
     if: github.repository_owner == 'ifiokjr' || github.repository_owner == 'monosecret'
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_ASSET_TAG: ${{ inputs.tag }}
     steps:
-      - name: resolve release tag
-        id: release_tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: validate release tag input
         run: |
           set -euo pipefail
-          TAG='${{ inputs.tag }}'
-          if [[ "$TAG" != monosecret/v* ]]; then
-            echo "::error::Tag '$TAG' must be a namespaced monosecret release tag like monosecret/v0.1.0" >&2
+          if [[ "$RELEASE_TAG" != v* ]]; then
+            echo "::error::Tag '$RELEASE_TAG' must be a release tag like v0.1.0" >&2
             exit 1
           fi
-          if ! git ls-remote --exit-code --tags "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "::error::Tag '$TAG' does not exist on the remote" >&2
-            exit 1
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "asset_tag=${TAG//\//-}" >> "$GITHUB_OUTPUT"
 
       - name: checkout release tag
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ steps.release_tag.outputs.tag }}
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
-
-      - name: verify tag checkout
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected_tag="${{ steps.release_tag.outputs.tag }}"
-          actual_commit=$(git rev-parse HEAD)
-          tag_commit=$(git rev-list -n1 "$expected_tag")
-          if [ "$actual_commit" != "$tag_commit" ]; then
-            echo "::error::Checked-out commit $actual_commit does not match tag $expected_tag ($tag_commit)" >&2
-            exit 1
-          fi
-          if ! git merge-base --is-ancestor "$actual_commit" refs/remotes/origin/main 2>/dev/null; then
-            echo "::error::Tag $expected_tag ($actual_commit) is not on main" >&2
-            exit 1
-          fi
 
       - name: setup
         uses: ./.github/actions/devenv
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           free-runner-space: "true"
-          activate: "true"
 
       - name: load publish secrets
         env:
@@ -100,8 +76,6 @@ jobs:
       - name: download release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
-          RELEASE_ASSET_TAG: ${{ steps.release_tag.outputs.asset_tag }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/release-assets"
@@ -114,9 +88,6 @@ jobs:
         shell: bash
 
       - name: populate cli npm packages with release binaries
-        env:
-          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
-          RELEASE_ASSET_TAG: ${{ steps.release_tag.outputs.asset_tag }}
         run: |
           set -euo pipefail
           build:dist

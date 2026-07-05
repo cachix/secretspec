@@ -89,9 +89,22 @@ jobs:
         run: |
           set -euo pipefail
           export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
-          fix:format
           monochange --log-level=debug step prepare-release --format json
           monochange --log-level=debug step commit-release --stage-all --no-verify
+
+          fix:format
+          fix:monochange
+          fix:dart
+          fix:format
+
+          git add -A
+          if ! git diff --cached --quiet; then
+            GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true \
+              git -c core.editor=true -c sequence.editor=true \
+              commit --amend --no-edit --no-verify
+          fi
+
+          monochange --log-level=debug step release-record --from HEAD --format json >/dev/null
           monochange --log-level=debug step open-release-request --stage-all --no-verify
         shell: devenv shell -- bash -e {0}
 

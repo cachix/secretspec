@@ -1,30 +1,27 @@
 {
-  "name": "@monosecret/cli-linux-x64-musl",
-  "version": "0.0.0",
-  "description": "Prebuilt Monosecret binary for Linux x64 (musl)",
-  "homepage": "https://github.com/ifiokjr/monosecret",
   "bugs": {
     "url": "https://github.com/ifiokjr/monosecret/issues"
   },
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ifiokjr/monosecret.git"
-  },
+  "cpu": [
+    "x64"
+  ],
+  "description": "Prebuilt Monosecret binary for Linux x64 (musl)",
   "files": [
     "bin"
   ],
+  "homepage": "https://github.com/ifiokjr/monosecret",
+  "libc": [
+    "musl"
+  ],
+  "license": "Apache-2.0",
+  "name": "@monosecret/cli-linux-x64-musl",
   "os": [
     "linux"
-  ],
-  "cpu": [
-    "x64"
   ],
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
-  "libc": [
-    "musl"
-  ]
+  "repository": "https://github.com/ifiokjr/monosecret/tree/main/npm/monosecret__cli-linux-x64-musl",
+  "version": "0.0.0"
 }

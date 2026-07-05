@@ -1,27 +1,24 @@
 {
-  "name": "@monosecret/cli-darwin-arm64",
-  "version": "0.0.0",
-  "description": "Prebuilt Monosecret binary for macOS arm64",
-  "homepage": "https://github.com/ifiokjr/monosecret",
   "bugs": {
     "url": "https://github.com/ifiokjr/monosecret/issues"
   },
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ifiokjr/monosecret.git"
-  },
+  "cpu": [
+    "arm64"
+  ],
+  "description": "Prebuilt Monosecret binary for macOS arm64",
   "files": [
     "bin"
   ],
+  "homepage": "https://github.com/ifiokjr/monosecret",
+  "license": "Apache-2.0",
+  "name": "@monosecret/cli-darwin-arm64",
   "os": [
     "darwin"
-  ],
-  "cpu": [
-    "arm64"
   ],
   "publishConfig": {
     "access": "public",
     "provenance": true
-  }
+  },
+  "repository": "https://github.com/ifiokjr/monosecret/tree/main/npm/monosecret__cli-darwin-arm64",
+  "version": "0.0.0"
 }

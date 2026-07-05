@@ -1,19 +1,15 @@
 {
-  "name": "@monosecret/skill",
-  "version": "0.0.0",
   "description": "Agent skill for using Monosecret in development workflows",
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ifiokjr/monosecret.git",
-    "directory": "npm/monosecret__skill"
-  },
   "files": [
     "SKILL.md",
     "README.md"
   ],
+  "license": "Apache-2.0",
+  "name": "@monosecret/skill",
   "publishConfig": {
     "access": "public",
     "provenance": true
-  }
+  },
+  "repository": "https://github.com/ifiokjr/monosecret/tree/main/npm/monosecret__skill",
+  "version": "0.0.0"
 }

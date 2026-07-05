@@ -1,51 +1,47 @@
 {
-  "name": "@monosecret/client",
-  "version": "0.0.0",
-  "type": "module",
-  "description": "TypeScript client for Monosecret declarative secrets management",
-  "license": "Apache-2.0",
-  "homepage": "https://github.com/ifiokjr/monosecret",
   "bugs": {
     "url": "https://github.com/ifiokjr/monosecret/issues"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ifiokjr/monosecret.git",
-    "directory": "npm/monosecret__client"
-  },
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    }
-  },
-  "files": [
-    "dist",
-    "README.md"
-  ],
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
-  },
-  "engines": {
-    "node": ">=18"
-  },
-  "scripts": {
-    "build": "tsdown",
-    "check": "tsc --noEmit",
-    "test": "vitest run",
-    "coverage": "vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text",
-    "prepack": "pnpm run build"
-  },
+  "description": "TypeScript client for Monosecret declarative secrets management",
   "devDependencies": {
     "@types/node": "^24.10.1",
     "@vitest/coverage-v8": "^4.1.8",
     "tsdown": "^0.15.12",
     "typescript": "^5.9.3",
     "vitest": "^4.1.8"
-  }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "homepage": "https://github.com/ifiokjr/monosecret",
+  "license": "Apache-2.0",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "name": "@monosecret/client",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": "https://github.com/ifiokjr/monosecret/tree/main/npm/monosecret__client",
+  "scripts": {
+    "build": "tsdown",
+    "check": "tsc --noEmit",
+    "coverage": "vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text",
+    "prepack": "pnpm run build",
+    "test": "vitest run"
+  },
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "version": "0.0.0"
 }

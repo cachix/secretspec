@@ -1,30 +1,27 @@
 {
-  "name": "@monosecret/cli-linux-arm64-gnu",
-  "version": "0.0.0",
-  "description": "Prebuilt Monosecret binary for Linux arm64 (glibc)",
-  "homepage": "https://github.com/ifiokjr/monosecret",
   "bugs": {
     "url": "https://github.com/ifiokjr/monosecret/issues"
   },
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ifiokjr/monosecret.git"
-  },
+  "cpu": [
+    "arm64"
+  ],
+  "description": "Prebuilt Monosecret binary for Linux arm64 (glibc)",
   "files": [
     "bin"
   ],
+  "homepage": "https://github.com/ifiokjr/monosecret",
+  "libc": [
+    "glibc"
+  ],
+  "license": "Apache-2.0",
+  "name": "@monosecret/cli-linux-arm64-gnu",
   "os": [
     "linux"
-  ],
-  "cpu": [
-    "arm64"
   ],
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
-  "libc": [
-    "glibc"
-  ]
+  "repository": "https://github.com/ifiokjr/monosecret/tree/main/npm/monosecret__cli-linux-arm64-gnu",
+  "version": "0.0.0"
 }

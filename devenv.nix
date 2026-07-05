@@ -418,7 +418,7 @@ in
     "lint:monochange" = {
       exec = ''
         set -euo pipefail
-        monochange step validate
+        monochange check
       '';
       description = "Validate monochange release metadata.";
       binary = "bash";
@@ -490,7 +490,7 @@ in
     "fix:monochange" = {
       exec = ''
         set -euo pipefail
-        monochange step validate
+        monochange check --fix
       '';
       description = "Validate monochange metadata after other fixes.";
       binary = "bash";

@@ -1,28 +1,21 @@
 {
-  "name": "@monosecret/cli",
-  "version": "0.0.0",
-  "type": "module",
-  "description": "CLI for Monosecret declarative secrets management",
-  "license": "Apache-2.0",
-  "homepage": "https://github.com/ifiokjr/monosecret",
+  "bin": {
+    "monosecret": "bin/monosecret.js"
+  },
   "bugs": {
     "url": "https://github.com/ifiokjr/monosecret/issues"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ifiokjr/monosecret.git"
-  },
-  "bin": {
-    "monosecret": "bin/monosecret.js"
+  "description": "CLI for Monosecret declarative secrets management",
+  "engines": {
+    "node": ">=18"
   },
   "files": [
     "bin",
     "README.md"
   ],
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
-  },
+  "homepage": "https://github.com/ifiokjr/monosecret",
+  "license": "Apache-2.0",
+  "name": "@monosecret/cli",
   "optionalDependencies": {
     "@monosecret/cli-darwin-arm64": "workspace:*",
     "@monosecret/cli-darwin-x64": "workspace:*",
@@ -33,11 +26,15 @@
     "@monosecret/cli-win32-arm64-msvc": "workspace:*",
     "@monosecret/cli-win32-x64-msvc": "workspace:*"
   },
-  "engines": {
-    "node": ">=18"
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
+  "repository": "https://github.com/ifiokjr/monosecret/tree/main/npm/monosecret__cli",
   "scripts": {
     "build": "pnpm --dir ../.. build:rust",
     "prepack": "pnpm --dir ../.. build:rust"
-  }
+  },
+  "type": "module",
+  "version": "0.0.0"
 }

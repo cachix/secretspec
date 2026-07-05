@@ -2,7 +2,7 @@
 "rust:monosecret": feat
 ---
 
-# `monosecret env`: load secrets into any shell or CI environment
+# `monosecret env`: load secrets into any shell
 
 Add `monosecret env` (alias `load-env`) to load resolved secrets into the
 surrounding shell or a CI environment with one command. A `--shell` flag

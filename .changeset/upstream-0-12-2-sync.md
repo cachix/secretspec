@@ -2,7 +2,7 @@
 "rust:monosecret": feat
 ---
 
-# Sync upstream secretspec 0.12.2: pass store_dir and the audit CLI command
+# Sync upstream secretspec 0.12.2 support
 
 Merge upstream/main through 0.12.2.
 

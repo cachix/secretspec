@@ -121,6 +121,34 @@ versioned_files = [
   ] },
 ]
 
+[ecosystems.crates]
+enabled = true
+versioned_files = ["Cargo.toml"]
+publish.enabled = true
+publish.mode = "builtin"
+publish.registry = "crates"
+
+[ecosystems.dart]
+enabled = true
+publish.enabled = true
+publish.mode = "builtin"
+publish.registry = "pub_dev"
+publish.trusted_publishing = true
+versioned_files = [
+  { path = "**/pubspec.yaml", type = "dart", fields = [
+    "dependencies",
+    "dev_dependencies",
+  ] },
+]
+
+[ecosystems.npm]
+publish.enabled = true
+publish.mode = "builtin"
+publish.registry = "npm"
+enabled = true
+publish.trusted_publishing = true
+
+
 [changesets.affected]
 enabled = true
 required = true

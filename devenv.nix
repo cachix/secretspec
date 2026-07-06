@@ -67,6 +67,20 @@
       CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = muslcc;
       MUSL_CC = muslcc;
       MUSL_STATIC_LDFLAGS = "-L${pkgs.pkgsStatic.dbus.lib}/lib -L${pkgs.pkgsStatic.libunwind}/lib";
+
+      # egui-pinentry's windowing stack (winit / softbuffer / x11-dl) dlopens
+      # these at runtime, so they must be on the loader path. Referenced by path
+      # (not added to `packages`) so they do not pollute the host NIX_LDFLAGS,
+      # matching the musl libs above.
+      LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (with pkgs; [
+        wayland
+        libxkbcommon
+        xorg.libX11
+        xorg.libxcb
+        xorg.libXcursor
+        xorg.libXrandr
+        xorg.libXi
+      ]);
     };
 
   git-hooks.hooks = {

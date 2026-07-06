@@ -5,6 +5,7 @@ members = [
   "secretspec-ffi",
   "secretspec-node",
   "secretspec-py",
+  "egui-pinentry",
   "examples/derive",
 ]
 resolver = "2"

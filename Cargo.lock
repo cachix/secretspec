@@ -5103,6 +5103,7 @@ dependencies = [
  "data-encoding",
  "detect-coding-agent",
  "dotenvy",
+ "egui-pinentry",
  "etcetera",
  "google-cloud-secretmanager-v1",
  "inquire",

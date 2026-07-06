@@ -11,9 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Trusted prompts for value entry and secret release.** Keep secrets off an
   orchestrator's pipes so a CI job or coding agent can *trigger* secret operations
   without ever seeing the values. Mark a secret `interactive = true` (or pass
-  `secretspec set --ask`) to type its value into a trusted
-  [pinentry](https://www.gnupg.org/related_software/pinentry/) prompt (with a
-  `/dev/tty` fallback) instead of stdin. Set `require_approval` in `[project]`
+  `secretspec set --ask`) to type its value into a trusted local dialog instead
+  of stdin. The CLI shows a built-in GUI dialog that needs no external program
+  (it grabs the keyboard on X11), falling back to a `/dev/tty` prompt when no
+  display is available. Set `require_approval` in `[project]`
   (`true`, `false`, or `"agents"`) to require human approval at that same trusted
   prompt before `secretspec run` injects secrets into a command or `secretspec get`
   prints one. Because the prompt is read on a channel the caller does not control,

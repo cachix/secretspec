@@ -15,8 +15,16 @@ crate-type = ["cdylib", "staticlib", "lib"]
 
 [dependencies]
 # The envelope/resolve logic lives in the secretspec crate (resolve_json); this
-# crate is only the C ABI wrapper.
-secretspec = { workspace = true }
+# crate is only the C ABI wrapper. Depend on the library without default features
+# (no `cli`, so no `gui-prompt`/egui GUI stack in the SDK cdylib) and re-enable
+# the providers the SDK resolves from.
+secretspec = { path = "../secretspec", version = "0.13.0", default-features = false, features = [
+  "keyring",
+  "gcsm",
+  "awssm",
+  "vault",
+  "bws",
+] }
 
 [dev-dependencies]
 serde_json = { workspace = true }

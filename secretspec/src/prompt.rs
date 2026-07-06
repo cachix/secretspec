@@ -6,16 +6,16 @@
 //! orchestrator. These helpers instead route through trusted prompts that the
 //! orchestrator does not sit between:
 //!
-//! 1. `pinentry` (GnuPG's prompt helper): a dialog that runs in its own process.
-//!    A **GUI** pinentry (pinentry-gnome, pinentry-mac) reads from a display the
-//!    caller does not sit between — the strong path. A **curses/tty** pinentry,
-//!    by contrast, reads the *controlling terminal*, so it is only as strong as
-//!    that terminal is trusted (see below).
-//! 2. A `/dev/tty` fallback (via `rpassword` for values) when no pinentry
-//!    binary is installed: reads from the controlling terminal rather than
-//!    stdin. An orchestrator that owns the pty can observe or drive it, which is
-//!    why, for *approval*, a detected agent is refused any terminal-bound
-//!    channel (fallback or curses pinentry) and required to use a GUI prompt.
+//! 1. A **GUI dialog** that reads from the display, a channel the caller does
+//!    not sit between. With the `gui-prompt` feature (enabled by `cli`) this is
+//!    the built-in `egui-pinentry` dialog, which needs no external program and,
+//!    on X11, grabs the keyboard. Without that feature it is a GnuPG `pinentry`
+//!    binary, when one is installed.
+//! 2. A `/dev/tty` fallback (via `rpassword` for values) when no display is
+//!    available: reads from the controlling terminal rather than stdin. An
+//!    orchestrator that owns the pty can observe or drive it, which is why, for
+//!    *approval*, a detected agent is refused any terminal-bound channel and
+//!    required to use a GUI prompt.
 //!
 //! The value is still handled in-process by secretspec before it reaches the
 //! provider, so the guarantee is "the calling agent never sees it", not "only
@@ -29,6 +29,7 @@ use secrecy::SecretString;
 /// ([`SecretSpecError::PromptCancelled`]) — *not* an approval denial, since no
 /// approval was involved — while a cancelled approval dialog is a denial
 /// ([`SecretSpecError::ApprovalDenied`]). Anything else is a prompt failure.
+#[cfg(not(feature = "gui-prompt"))]
 fn prompt_err(e: pinentry::Error, on_cancel: SecretSpecError) -> SecretSpecError {
     match e {
         pinentry::Error::Cancelled => on_cancel,
@@ -45,13 +46,46 @@ pub(crate) fn trusted_secret(description: &str) -> Result<SecretString> {
     if let Some(canned) = test_hooks::take_secret_override() {
         return canned;
     }
-    if let Some(mut input) = pinentry::PassphraseInput::with_default_binary() {
-        input.with_description(description).with_prompt("Value:");
-        return input
-            .interact()
-            .map_err(|e| prompt_err(e, SecretSpecError::PromptCancelled));
+    match gui_secret(description)? {
+        Some(value) => Ok(value),
+        None => tty_secret(description),
     }
-    tty_secret(description)
+}
+
+/// Attempts the GUI trusted prompt for a value: `Ok(Some(v))` on entry,
+/// `Ok(None)` when no GUI channel is available (the caller then falls back to
+/// `/dev/tty`), and `Err` on cancel or failure.
+///
+/// With the `gui-prompt` feature this is the built-in [`egui_pinentry`] dialog,
+/// which needs no external program.
+#[cfg(feature = "gui-prompt")]
+fn gui_secret(description: &str) -> Result<Option<SecretString>> {
+    use egui_pinentry::{Error, PassphraseInput};
+    let mut input = PassphraseInput::new();
+    input
+        .with_title("secretspec")
+        .with_description(description)
+        .with_prompt("Value:");
+    match input.interact() {
+        Ok(value) => Ok(Some(value)),
+        Err(Error::NoDisplay(_)) => Ok(None),
+        Err(Error::Cancelled) => Err(SecretSpecError::PromptCancelled),
+        Err(Error::Failed(msg)) => Err(SecretSpecError::PromptFailed(msg)),
+    }
+}
+
+/// Without the `gui-prompt` feature, use a GnuPG `pinentry` binary when one is
+/// installed, else `Ok(None)` to fall through to `/dev/tty`.
+#[cfg(not(feature = "gui-prompt"))]
+fn gui_secret(description: &str) -> Result<Option<SecretString>> {
+    let Some(mut input) = pinentry::PassphraseInput::with_default_binary() else {
+        return Ok(None);
+    };
+    input.with_description(description).with_prompt("Value:");
+    input
+        .interact()
+        .map(Some)
+        .map_err(|e| prompt_err(e, SecretSpecError::PromptCancelled))
 }
 
 /// Asks the user to approve or deny an action at a trusted local prompt.
@@ -76,27 +110,57 @@ pub(crate) fn trusted_approve(body: &str, is_agent: bool) -> Result<()> {
         };
     }
     // For a detected agent, only an out-of-band GUI prompt is trustworthy. Refuse
-    // before even trying pinentry, because with no display pinentry falls back to
-    // curses on the controlling terminal — which the agent may own.
+    // before even trying, because with no display the prompt falls back to the
+    // controlling terminal, which the agent may own.
     if is_agent && !gui_channel_available() {
         return Err(SecretSpecError::PromptFailed(
-            "approval requires a GUI pinentry when running as an agent (no display detected); \
-             install a GUI pinentry or approve from a human session"
+            "approval requires a GUI prompt when running as an agent (no display detected); \
+             run from a human session or provide a display"
                 .to_string(),
         ));
     }
-    if let Some(mut dialog) = pinentry::ConfirmationDialog::with_default_binary() {
-        dialog
-            .with_title("secretspec: approve secret access")
-            .with_ok("Approve")
-            .with_cancel("Deny");
-        return match dialog.confirm(body) {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(SecretSpecError::ApprovalDenied),
-            Err(e) => Err(prompt_err(e, SecretSpecError::ApprovalDenied)),
-        };
+    match gui_approve(body)? {
+        Some(true) => Ok(()),
+        Some(false) => Err(SecretSpecError::ApprovalDenied),
+        None => tty_approve(body, is_agent),
     }
-    tty_approve(body, is_agent)
+}
+
+/// Attempts the GUI approval prompt: `Ok(Some(bool))` for an explicit
+/// approve/deny, `Ok(None)` when no GUI channel is available (fall back to
+/// `/dev/tty`), and `Err` on failure. A cancelled dialog counts as a denial.
+#[cfg(feature = "gui-prompt")]
+fn gui_approve(body: &str) -> Result<Option<bool>> {
+    use egui_pinentry::{ConfirmationDialog, Error};
+    let mut dialog = ConfirmationDialog::new();
+    dialog
+        .with_title("secretspec: approve secret access")
+        .with_ok("Approve")
+        .with_cancel("Deny");
+    match dialog.confirm(body) {
+        Ok(approved) => Ok(Some(approved)),
+        Err(Error::NoDisplay(_)) => Ok(None),
+        Err(Error::Cancelled) => Ok(Some(false)),
+        Err(Error::Failed(msg)) => Err(SecretSpecError::PromptFailed(msg)),
+    }
+}
+
+/// Without the `gui-prompt` feature, use a GnuPG `pinentry` binary when one is
+/// installed, else `Ok(None)` to fall through to `/dev/tty`.
+#[cfg(not(feature = "gui-prompt"))]
+fn gui_approve(body: &str) -> Result<Option<bool>> {
+    let Some(mut dialog) = pinentry::ConfirmationDialog::with_default_binary() else {
+        return Ok(None);
+    };
+    dialog
+        .with_title("secretspec: approve secret access")
+        .with_ok("Approve")
+        .with_cancel("Deny");
+    match dialog.confirm(body) {
+        Ok(approved) => Ok(Some(approved)),
+        Err(pinentry::Error::Cancelled) => Ok(Some(false)),
+        Err(other) => Err(SecretSpecError::PromptFailed(other.to_string())),
+    }
 }
 
 /// Whether an out-of-band GUI prompt channel is plausibly available — one a
@@ -227,6 +291,9 @@ mod tests {
         }
     }
 
+    // Exercises the pinentry-binary fallback's error mapping, which only exists
+    // when the built-in GUI prompt is not compiled in.
+    #[cfg(not(feature = "gui-prompt"))]
     #[test]
     fn cancel_maps_to_the_prompts_meaning_and_other_errors_fail() {
         // Cancelling a value entry must not surface as "approval denied" — no

@@ -47,6 +47,8 @@ rsa.workspace = true
 uuid.workspace = true
 data-encoding.workspace = true
 detect-coding-agent.workspace = true
+pinentry.workspace = true
+rpassword.workspace = true
 
 [features]
 default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws"]

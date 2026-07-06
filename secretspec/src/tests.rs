@@ -1,11 +1,11 @@
 use crate::config::{
-    Config, GlobalConfig, GlobalDefaults, ParseError, Profile, Project, RequireReason, Resolved,
+    Config, GlobalConfig, GlobalDefaults, ParseError, PolicyMode, Profile, Project, Resolved,
     Secret,
 };
 use crate::error::{Result, SecretSpecError};
 use crate::secrets::Secrets;
 use crate::validation::{ValidatedSecrets, ValidationErrors};
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::path::Path;
@@ -111,18 +111,15 @@ require_reason = true
 
     // Build hermetically from the parsed project config rather than via
     // `load_from`, which would build a real audit logger and write to the user's
-    // real audit log. This still exercises that `require_reason = true` parses to
+    // real audit log. `Secrets::new` keeps the parsed policy (it only fills an
+    // unspecified one), so this exercises that `require_reason = true` parses to
     // the Always policy and that the gate is enforced.
     let project_config = Config::try_from(project_path.as_path()).unwrap();
     assert_eq!(
         project_config.project.require_reason,
-        Some(RequireReason::Always)
+        Some(PolicyMode::Always)
     );
-    let build = || {
-        let mut spec = Secrets::new(project_config.clone(), None, None, None);
-        spec.set_require_reason(RequireReason::Always);
-        spec
-    };
+    let build = || Secrets::new(project_config.clone(), None, None, None);
 
     // require_reason = true -> any caller (agent or not) is refused without a reason.
     assert!(matches!(
@@ -163,14 +160,14 @@ require_reason = false
     )
     .unwrap();
 
-    // Hermetic build (see the sibling test) — no real audit log is touched.
+    // Hermetic build (see the sibling test) — no real audit log is touched, and
+    // the parsed Never policy carries through `Secrets::new` unchanged.
     let project_config = Config::try_from(project_path.as_path()).unwrap();
     assert_eq!(
         project_config.project.require_reason,
-        Some(RequireReason::Never)
+        Some(PolicyMode::Never)
     );
-    let mut spec = Secrets::new(project_config, None, None, None);
-    spec.set_require_reason(RequireReason::Never);
+    let spec = Secrets::new(project_config, None, None, None);
 
     // require_reason = false -> the reason gate never fires, even under an agent.
     // (validate() may still fail later for environment reasons such as no provider
@@ -4548,6 +4545,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
             as_path: None,
             secret_type: Some("password".to_string()),
             generate: Some(crate::config::GenerateConfig::Bool(true)),
+            interactive: Some(true),
         },
     );
     profiles.insert(
@@ -4592,9 +4590,10 @@ fn test_resolve_secret_config_merges_type_and_generate() {
         .resolve_secret_config("DB_PASSWORD", Some("production"))
         .unwrap();
 
-    // type and generate should be inherited from default
+    // type, generate, and interactive should be inherited from default
     assert_eq!(resolved.secret_type.as_deref(), Some("password"));
     assert!(resolved.generate.is_some());
+    assert_eq!(resolved.interactive, Some(true));
     // description should come from production
     assert_eq!(resolved.description.as_deref(), Some("Prod DB password"));
 }
@@ -5286,6 +5285,20 @@ fn required_secret_profile(name: &str) -> HashMap<String, Profile> {
     )])
 }
 
+/// Like [`required_secret_profile`], with the secret opted into trusted-prompt
+/// value entry (`interactive = true`).
+fn interactive_secret_profile(name: &str) -> HashMap<String, Profile> {
+    let mut profiles = required_secret_profile(name);
+    profiles
+        .get_mut("default")
+        .unwrap()
+        .secrets
+        .get_mut(name)
+        .unwrap()
+        .interactive = Some(true);
+    profiles
+}
+
 #[test]
 fn test_check_returns_ok_when_required_present() {
     let temp_dir = TempDir::new().unwrap();
@@ -5598,7 +5611,7 @@ fn audit_policy_denied_still_records_blocked_attempt() {
         &temp_dir,
     );
     // require_reason = Always with no reason supplied -> every access is denied.
-    spec.set_require_reason(RequireReason::Always);
+    spec.set_require_reason(PolicyMode::Always);
     let (logger, lines) = crate::audit::test_support::collecting_logger();
     spec.set_audit_for_test(logger);
 
@@ -5668,4 +5681,210 @@ fn test_resolve_profile_unknown_returns_invalid_profile() {
         }
         other => panic!("expected InvalidProfile, got {other:?}"),
     }
+}
+
+/// The approval gate must actually stop `run`: a denied approval returns
+/// `ApprovalDenied` and the command never executes (so no secret reaches it),
+/// while an approval lets it run with the secret injected. Uses the test seam in
+/// `crate::prompt` so no real prompt is spawned.
+#[cfg(unix)]
+#[test]
+fn approval_gate_controls_whether_run_executes() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec("TOKEN=abc\n", required_secret_profile("TOKEN"), &temp_dir);
+    spec.set_require_approval(PolicyMode::Always);
+
+    let out_path = temp_dir.path().join("out");
+    let command = || {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("printf '%s' \"$TOKEN\" > {}", out_path.display()),
+        ]
+    };
+
+    // Denied: the command must not run, so the output file is never created.
+    crate::prompt::test_hooks::set_approve_override(Some(false));
+    let err = spec.run_command(command()).unwrap_err();
+    assert!(matches!(err, SecretSpecError::ApprovalDenied));
+    assert!(!out_path.exists(), "command ran despite denied approval");
+
+    // Approved: the command runs and the secret is injected into it.
+    crate::prompt::test_hooks::set_approve_override(Some(true));
+    let code = spec.run_command(command()).unwrap();
+    assert_eq!(code, 0);
+    assert_eq!(fs::read_to_string(&out_path).unwrap(), "abc");
+
+    crate::prompt::test_hooks::set_approve_override(None);
+}
+
+/// A denied approval blocks `get` before the value is revealed.
+#[test]
+fn approval_gate_blocks_get_when_denied() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec("TOKEN=abc\n", required_secret_profile("TOKEN"), &temp_dir);
+    spec.set_require_approval(PolicyMode::Always);
+
+    crate::prompt::test_hooks::set_approve_override(Some(false));
+    let err = spec.get("TOKEN").unwrap_err();
+    assert!(matches!(err, SecretSpecError::ApprovalDenied));
+    crate::prompt::test_hooks::set_approve_override(None);
+}
+
+/// `set` with the trusted-prompt path (here forced via `set_ask`) writes the
+/// value returned by the prompt to the provider — proving an agent that only
+/// triggers `set` can have a human-entered value stored without supplying it.
+#[test]
+fn set_ask_stores_trusted_prompt_value() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec("", required_secret_profile("TOKEN"), &temp_dir);
+    spec.set_ask(true);
+
+    crate::prompt::test_hooks::set_secret_override(SecretString::new(
+        "typedvalue123".to_string().into(),
+    ));
+    spec.set("TOKEN", None).unwrap();
+
+    assert_eq!(
+        read_env_var(&temp_dir.path().join(".env"), "TOKEN").as_deref(),
+        Some("typedvalue123")
+    );
+}
+
+/// `check` fills a missing `interactive` secret via the trusted prompt (not the
+/// stdin prompt), and the relaxed terminal guard lets it proceed even when stdin
+/// is not a tty — the case where an agent triggers `check` and a human fills the
+/// value. Uses the prompt test seam so no real dialog is spawned.
+#[test]
+fn check_fills_interactive_secret_via_trusted_prompt() {
+    let temp_dir = TempDir::new().unwrap();
+    let spec = dotenv_spec("", interactive_secret_profile("TOKEN"), &temp_dir);
+
+    crate::prompt::test_hooks::set_secret_override(SecretString::new(
+        "filledviatrusted".to_string().into(),
+    ));
+    // no_prompt = false -> interactive fill; the interactive secret routes through
+    // the trusted prompt, so the non-tty test stdin does not abort it.
+    spec.check(false).unwrap();
+
+    assert_eq!(
+        read_env_var(&temp_dir.path().join(".env"), "TOKEN").as_deref(),
+        Some("filledviatrusted")
+    );
+}
+
+/// A cancelled trusted value entry surfaces as `PromptCancelled` — not the
+/// misleading `ApprovalDenied` — and records a Set/Error audit event, matching the
+/// other pre-write failure paths in `set`.
+#[test]
+fn set_ask_prompt_cancel_records_set_error() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec("", required_secret_profile("TOKEN"), &temp_dir);
+    spec.set_ask(true);
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    crate::prompt::test_hooks::set_secret_override_err(SecretSpecError::PromptCancelled);
+    let err = spec.set("TOKEN", None).unwrap_err();
+    assert!(matches!(err, SecretSpecError::PromptCancelled));
+
+    // Nothing written on a cancelled prompt.
+    assert_eq!(read_env_var(&temp_dir.path().join(".env"), "TOKEN"), None);
+
+    let events = audit_events(&lines);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["action"], "set");
+    assert_eq!(events[0]["outcome"], "error");
+    assert_eq!(events[0]["error_kind"], "prompt_cancelled");
+}
+
+/// `check` rejects an empty value from the trusted prompt instead of storing a
+/// blank secret, and records a Set/Error — parity with `set`.
+#[test]
+fn check_rejects_empty_interactive_value() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec("", interactive_secret_profile("TOKEN"), &temp_dir);
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    crate::prompt::test_hooks::set_secret_override(SecretString::new("".to_string().into()));
+    let err = match spec.check(false) {
+        Ok(_) => panic!("expected empty value to be rejected"),
+        Err(e) => e,
+    };
+    assert!(matches!(err, SecretSpecError::ProviderOperationFailed(_)));
+
+    // The empty value was not stored.
+    assert_eq!(read_env_var(&temp_dir.path().join(".env"), "TOKEN"), None);
+
+    // A Set/Error was recorded for the empty value.
+    let events = audit_events(&lines);
+    assert!(events.iter().any(|e| e["action"] == "set"
+        && e["outcome"] == "error"
+        && e["error_kind"] == "provider_operation_failed"));
+}
+
+/// `import` is gated by `require_approval`: a denial blocks the copy (nothing
+/// reaches the target), an approval lets it proceed. Guards the bulk-exfil path.
+#[test]
+fn approval_gate_blocks_import_when_denied() {
+    let temp_dir = TempDir::new().unwrap();
+    let source = temp_dir.path().join("source.env");
+    fs::write(&source, "TOKEN=abc\n").unwrap();
+    let mut spec = dotenv_spec("", required_secret_profile("TOKEN"), &temp_dir);
+    spec.set_require_approval(PolicyMode::Always);
+    let from = format!("dotenv://{}", source.display());
+
+    // Denied: nothing is copied into the target provider.
+    crate::prompt::test_hooks::set_approve_override(Some(false));
+    let err = spec.import(&from).unwrap_err();
+    assert!(matches!(err, SecretSpecError::ApprovalDenied));
+    assert_eq!(read_env_var(&temp_dir.path().join(".env"), "TOKEN"), None);
+
+    // Approved: the copy proceeds.
+    crate::prompt::test_hooks::set_approve_override(Some(true));
+    spec.import(&from).unwrap();
+    assert_eq!(
+        read_env_var(&temp_dir.path().join(".env"), "TOKEN").as_deref(),
+        Some("abc")
+    );
+    crate::prompt::test_hooks::set_approve_override(None);
+}
+
+/// A `run` that resolves zero secrets must not prompt for approval (there is
+/// nothing to release), even under `require_approval = true`.
+#[cfg(unix)]
+#[test]
+fn approval_gate_skipped_when_run_has_no_secrets() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        Profile {
+            defaults: None,
+            secrets: HashMap::new(),
+        },
+    );
+    let mut spec = dotenv_spec("", profiles, &temp_dir);
+    spec.set_require_approval(PolicyMode::Always);
+
+    // The override would deny if the gate fired; the run must succeed regardless.
+    crate::prompt::test_hooks::set_approve_override(Some(false));
+    assert_eq!(spec.run_command(vec!["true".to_string()]).unwrap(), 0);
+    crate::prompt::test_hooks::set_approve_override(None);
+}
+
+/// `get` gates on approval *before* reading the provider: a denied read of a
+/// missing secret returns `ApprovalDenied`, not `SecretNotFound` — so the read
+/// never happens and the caller can't learn (unapproved) whether it exists.
+#[test]
+fn get_gates_before_read_even_for_missing_secret() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec("", required_secret_profile("TOKEN"), &temp_dir);
+    spec.set_require_approval(PolicyMode::Always);
+
+    crate::prompt::test_hooks::set_approve_override(Some(false));
+    let err = spec.get("TOKEN").unwrap_err();
+    assert!(matches!(err, SecretSpecError::ApprovalDenied));
+    crate::prompt::test_hooks::set_approve_override(None);
 }

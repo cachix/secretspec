@@ -15,6 +15,7 @@ name = "my-app"              # Project name (required)
 revision = "1.0"             # Format version (required, must be "1.0")
 extends = ["../shared"]      # Paths to parent configs for inheritance (optional)
 require_reason = "agents"    # When to require a reason for secret access (optional)
+require_approval = false     # When to require human approval before releasing secrets (optional)
 ```
 
 | Field | Type | Required | Description |
@@ -23,6 +24,7 @@ require_reason = "agents"    # When to require a reason for secret access (optio
 | `revision` | string | Yes | Format version (must be "1.0") |
 | `extends` | array[string] | No | Paths to parent configuration files |
 | `require_reason` | `"agents"` \| boolean | No | When secret access must supply a reason (via `--reason`, `SECRETSPEC_REASON`, or the SDK's `with_reason()`). Defaults to `"agents"`. |
+| `require_approval` | `"agents"` \| boolean | No | When releasing secrets to a `run`/`get` requires human approval at a trusted prompt. Defaults to `false`. |
 
 #### Requiring a reason for secret access
 
@@ -65,6 +67,28 @@ The reason is recorded in secretspec's own [audit log](/concepts/audit/) and is 
 forwarded to providers that support auditing (e.g. the
 [Proton Pass](/providers/protonpass/) provider records it in the agent audit log).
 
+#### Requiring human approval before releasing secrets
+
+`require_approval` gates the moment secrets are handed to a command. Before
+`secretspec run` injects secrets into a child process (or `secretspec get`
+prints a value), secretspec pops a **trusted approval prompt** summarizing the
+secrets and the command, and proceeds only if you approve. It accepts the same
+three values as `require_reason`:
+
+| Value | Behavior |
+|-------|----------|
+| `false` (default) | Never require approval. |
+| `"agents"` | Require approval **only when an AI agent is detected** (same detection as `require_reason`). Humans running interactively are unaffected. |
+| `true` | Require approval from **every** caller. |
+
+The prompt is shown by [pinentry](https://www.gnupg.org/related_software/pinentry/)
+(GnuPG's prompt helper — a GUI or terminal dialog), falling back to `/dev/tty`
+when no pinentry binary is installed. Because it is read on a channel the calling
+process does not control, an orchestrator that only *triggers* the operation
+cannot approve on your behalf — so you can let an agent run `secretspec run`
+while you remain the one who releases the secrets. A denial aborts the command
+and is recorded in the [audit log](/concepts/audit/).
+
 ### [profiles.*] Section
 
 Defines secret variables for different environments. At least a `[profiles.default]` section is required.
@@ -90,6 +114,7 @@ Each secret variable is defined as a table with the following fields:
 | `default` | string | No** | Default value if not provided |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
+| `interactive` | boolean | No | When set via `set`/`--ask` or filled by `check`, collect the value via a trusted local prompt instead of stdin (default: false) |
 | `type` | string | No*** | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
 | `generate` | boolean or table | No*** | Enable auto-generation when secret is missing |
 
@@ -220,6 +245,38 @@ GOOGLE_APPLICATION_CREDENTIALS = { description = "GCP service account", as_path 
 | CLI (`get`, `check`, `run`) | Files are persisted (not deleted after command exits) |
 | Rust SDK | Files cleaned up when `ValidatedSecrets` is dropped; use `keep_temp_files()` to persist |
 | Rust SDK types | `PathBuf` or `Option<PathBuf>` instead of `String` |
+
+### interactive Option
+
+When `interactive = true`, `secretspec set` collects the value from a **trusted
+local prompt** ([pinentry](https://www.gnupg.org/related_software/pinentry/), with
+a `/dev/tty` fallback) instead of reading it from stdin:
+
+```toml
+[profiles.production]
+STRIPE_SECRET_KEY = { description = "Stripe secret key", interactive = true }
+```
+
+The value is typed on pinentry's own channel, not this process's stdin, so a
+caller that only *triggers* the `set` (CI, a coding agent) never sees what you
+type. secretspec itself still handles the value in order to write it to the
+provider, so the guarantee is "the calling tool never sees it", not "only the
+provider ever sees it". This works with **every provider**, since the prompt
+happens before the value reaches the backend. Passing a value inline (`secretspec
+set KEY value`) skips the prompt; the `--ask` flag forces it for any secret.
+
+Because the value is read on the trusted channel and never on stdin, an
+`interactive` secret does **not** consume a piped value: `echo secret | secretspec
+set KEY` prompts instead of storing `secret` (and, with no pinentry and no
+terminal, fails rather than reading the pipe). To set non-interactively (scripts,
+CI seeding), pass the value inline (`secretspec set KEY "$VALUE"`) — inline always
+wins — or leave the secret non-`interactive` so stdin is read.
+
+`secretspec check` honors it too: when it fills a missing `interactive` secret it
+uses the trusted prompt rather than stdin. Because that prompt does not read
+stdin, `check` can fill an all-`interactive` set even when stdin is not a terminal
+(e.g. an agent triggers `check` and a human fills the values); a missing
+non-`interactive` secret still requires an interactive terminal.
 
 ### Secret Generation
 

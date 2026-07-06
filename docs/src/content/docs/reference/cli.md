@@ -244,11 +244,15 @@ secretspec set [OPTIONS] <NAME> [VALUE]
 **Options:**
 - `-p, --provider <PROVIDER>` - Provider backend to use
 - `-P, --profile <PROFILE>` - Profile to use
+- `-a, --ask` - Collect the value from a trusted local prompt (pinentry, with a `/dev/tty` fallback) instead of stdin, so a caller that only triggers the `set` never sees the typed value. Ignored when a value is supplied inline. Equivalent to marking the secret `interactive = true` in `secretspec.toml`.
 
 **Example:**
 ```bash
 $ secretspec set API_KEY sk-1234567890
 ✓ Secret 'API_KEY' saved to keyring (profile: development)
+
+# Let an agent trigger the save, but type the value yourself in the trusted prompt:
+$ secretspec set --ask STRIPE_SECRET_KEY
 ```
 
 ### run

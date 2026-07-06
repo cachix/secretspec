@@ -1,4 +1,5 @@
 use crate::provider::{Provider, providers};
+use crate::secrets::escape_ctrl;
 use crate::{Config, GlobalConfig, GlobalDefaults, Profile, Project, Secrets};
 use clap::{Parser, Subcommand};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
@@ -59,6 +60,11 @@ enum Commands {
         /// Profile to use
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
         profile: Option<String>,
+        /// Collect the value via a trusted local prompt (pinentry, with a
+        /// /dev/tty fallback) instead of stdin, so a caller that only triggers
+        /// this `set` never sees the typed value. Ignored if a value is given.
+        #[arg(short = 'a', long)]
+        ask: bool,
     },
     /// Get a secret value
     Get {
@@ -588,6 +594,7 @@ pub fn main() -> Result<()> {
             value,
             provider,
             profile,
+            ask,
         } => {
             let mut app = load_secrets(&cli.file, &cli.reason)?;
             if let Some(p) = provider {
@@ -596,6 +603,7 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
+            app.set_ask(ask);
             app.set(&name, value)
                 .into_diagnostic()
                 .wrap_err("Failed to set secret")?;
@@ -811,28 +819,6 @@ fn filter_audit_entries<'a>(
     entries
 }
 
-/// Renders control characters in a field harmlessly so caller controlled audit
-/// content (reason, command, key, ...) cannot inject escape sequences that
-/// erase, overwrite, or forge lines in the formatted `secretspec audit` view.
-///
-/// ASCII control bytes (0x00..=0x1F) and DEL (0x7F) are replaced with a visible
-/// `\xNN` rendering; all other characters pass through unchanged so normal
-/// entries look identical.
-fn sanitize_field(s: &str) -> String {
-    if !s.chars().any(|c| c.is_control()) {
-        return s.to_string();
-    }
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        if c.is_control() {
-            out.push_str(&format!("\\x{:02x}", c as u32));
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
 /// Renders one parsed JSON Lines audit entry as a readable, colored summary line.
 /// The value has already been validated as JSON by `show_audit_log`.
 fn format_audit_line(v: &serde_json::Value) -> String {
@@ -840,18 +826,18 @@ fn format_audit_line(v: &serde_json::Value) -> String {
 
     let str_field = |k: &str| v.get(k).and_then(|x| x.as_str());
 
-    let ts = sanitize_field(str_field("ts").unwrap_or(""));
-    let action = sanitize_field(str_field("action").unwrap_or("?"));
-    let outcome = sanitize_field(str_field("outcome").unwrap_or("?"));
-    let project = sanitize_field(str_field("project").unwrap_or(""));
-    let profile = sanitize_field(str_field("profile").unwrap_or(""));
+    let ts = escape_ctrl(str_field("ts").unwrap_or(""));
+    let action = escape_ctrl(str_field("action").unwrap_or("?"));
+    let outcome = escape_ctrl(str_field("outcome").unwrap_or("?"));
+    let project = escape_ctrl(str_field("project").unwrap_or(""));
+    let profile = escape_ctrl(str_field("profile").unwrap_or(""));
 
     let target = if let Some(key) = str_field("key") {
-        sanitize_field(key)
+        escape_ctrl(key)
     } else if let Some(arr) = v.get("keys").and_then(|x| x.as_array()) {
         arr.iter()
             .filter_map(|x| x.as_str())
-            .map(sanitize_field)
+            .map(escape_ctrl)
             .collect::<Vec<_>>()
             .join(",")
     } else {
@@ -866,25 +852,25 @@ fn format_audit_line(v: &serde_json::Value) -> String {
 
     let mut s = format!("{}  {:<6} {}", ts.dimmed(), action.bold(), outcome_colored);
     if let Some(cmd) = str_field("command") {
-        s += &format!("  {}", sanitize_field(cmd).bold());
+        s += &format!("  {}", escape_ctrl(cmd).bold());
     }
     if !target.is_empty() {
         s += &format!("  {target}");
     }
     s += &format!("  ({project}/{profile}");
     if let Some(provider) = str_field("provider") {
-        s += &format!(" via {}", sanitize_field(provider));
+        s += &format!(" via {}", escape_ctrl(provider));
     }
     s += ")";
     if let Some(reason) = str_field("reason") {
-        s += &format!("  reason: {}", sanitize_field(reason).italic());
+        s += &format!("  reason: {}", escape_ctrl(reason).italic());
     }
     if let Some(agent) = v
         .get("actor")
         .and_then(|a| a.get("agent"))
         .and_then(|x| x.as_str())
     {
-        s += &format!("  [{}]", sanitize_field(agent));
+        s += &format!("  [{}]", escape_ctrl(agent));
     }
     s
 }
@@ -912,27 +898,6 @@ mod tests {
             )]),
             providers: None,
         }
-    }
-
-    #[test]
-    fn sanitize_field_neutralizes_control_characters() {
-        // A clean string passes through unchanged (and takes the early-return path).
-        assert_eq!(sanitize_field("DATABASE_URL"), "DATABASE_URL");
-        assert_eq!(sanitize_field(""), "");
-
-        // ASCII control bytes and DEL become a visible `\xNN` rendering so a
-        // caller-controlled field (reason, command, key) cannot inject an escape
-        // sequence that erases or forges lines in the formatted audit view.
-        assert_eq!(sanitize_field("a\nb"), "a\\x0ab");
-        assert_eq!(sanitize_field("a\tb"), "a\\x09b");
-        assert_eq!(sanitize_field("a\x00b"), "a\\x00b");
-        assert_eq!(sanitize_field("a\x7fb"), "a\\x7fb");
-
-        // A real ANSI clear-line sequence is defanged: the ESC byte is escaped,
-        // so the literal control character no longer reaches the terminal.
-        let injected = sanitize_field("ok\x1b[2Kforged");
-        assert_eq!(injected, "ok\\x1b[2Kforged");
-        assert!(!injected.contains('\x1b'));
     }
 
     /// Three audit lines for two projects/actions, used by the filter tests.
@@ -1202,6 +1167,29 @@ mod tests {
         match cli.command {
             Commands::Check { no_prompt, .. } => assert!(no_prompt),
             _ => panic!("expected Check command"),
+        }
+    }
+
+    #[test]
+    fn set_parses_ask_flag() {
+        let cli = Cli::try_parse_from(["secretspec", "set", "API_KEY", "-a"]).unwrap();
+        match cli.command {
+            Commands::Set { ask, value, .. } => {
+                assert!(ask);
+                // `-a` must not be swallowed as the positional value.
+                assert_eq!(value, None);
+            }
+            _ => panic!("expected Set command"),
+        }
+
+        // Defaults off, and an inline value still parses alongside no `--ask`.
+        let cli = Cli::try_parse_from(["secretspec", "set", "API_KEY", "v"]).unwrap();
+        match cli.command {
+            Commands::Set { ask, value, .. } => {
+                assert!(!ask);
+                assert_eq!(value.as_deref(), Some("v"));
+            }
+            _ => panic!("expected Set command"),
         }
     }
 }

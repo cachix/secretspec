@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Trusted prompts for value entry and secret release.** Keep secrets off an
+  orchestrator's pipes so a CI job or coding agent can *trigger* secret operations
+  without ever seeing the values. Mark a secret `interactive = true` (or pass
+  `secretspec set --ask`) to type its value into a trusted
+  [pinentry](https://www.gnupg.org/related_software/pinentry/) prompt (with a
+  `/dev/tty` fallback) instead of stdin. Set `require_approval` in `[project]`
+  (`true`, `false`, or `"agents"`) to require human approval at that same trusted
+  prompt before `secretspec run` injects secrets into a command or `secretspec get`
+  prints one. Because the prompt is read on a channel the caller does not control,
+  the triggering tool cannot self-approve. Works with every provider. Note that an
+  `interactive` secret (or `set --ask`) never reads a piped value: `echo v |
+  secretspec set KEY` prompts rather than storing `v`. To set from a script or
+  pipe, pass the value inline (`secretspec set KEY "$V"`) or leave the secret
+  non-`interactive`.
+
 ## [0.13.0] - 2026-07-03
 
 ### Added

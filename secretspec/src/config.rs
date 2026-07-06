@@ -117,6 +117,11 @@ impl Config {
         if self.project.require_reason.is_none() {
             self.project.require_reason = other.project.require_reason;
         }
+        // Same inheritance for the approval policy: a shared base config can
+        // require approval for everything that extends it.
+        if self.project.require_approval.is_none() {
+            self.project.require_approval = other.project.require_approval;
+        }
 
         // Merge profiles
         for (profile_name, profile_config) in other.profiles {
@@ -242,65 +247,70 @@ impl TryFrom<&Path> for Config {
     }
 }
 
-/// When secretspec requires a reason for secret access.
+/// A tri-state agent-safeguard policy: applies never, only when an AI agent is
+/// detected, or always.
 ///
-/// Parsed from `[project].require_reason`, which accepts a boolean or the string
-/// `"agents"`. Defaults to [`RequireReason::Agents`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RequireReason {
-    /// Never require a reason.
+/// Shared value type of `[project].require_reason` and `[project].require_approval`,
+/// both of which accept a boolean or the string `"agents"` in TOML. The two fields
+/// differ only in what an *unspecified* policy resolves to (reason: `Agents`,
+/// approval: `Never`); that default is applied where the policy is consumed in
+/// [`crate::Secrets`], not here, so this type deliberately has no `Default`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyMode {
+    /// The safeguard never applies.
     Never,
-    /// Require a reason only when an AI agent is detected (the default).
-    #[default]
+    /// The safeguard applies only when an AI agent is detected.
     Agents,
-    /// Require a reason from every caller.
+    /// The safeguard applies to every caller.
     Always,
 }
 
-impl Serialize for RequireReason {
+impl Serialize for PolicyMode {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
-            RequireReason::Never => serializer.serialize_bool(false),
-            RequireReason::Always => serializer.serialize_bool(true),
-            RequireReason::Agents => serializer.serialize_str("agents"),
+            PolicyMode::Never => serializer.serialize_bool(false),
+            PolicyMode::Always => serializer.serialize_bool(true),
+            PolicyMode::Agents => serializer.serialize_str("agents"),
         }
     }
 }
 
-impl<'de> Deserialize<'de> for RequireReason {
+impl<'de> Deserialize<'de> for PolicyMode {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        // A reason policy is a boolean or the string "agents". A hand-written visitor
-        // (rather than an untagged enum) lets serde report a precise, located error for
-        // a wrong *type*, not just for unknown strings. For example `require_reason = 1`
-        // yields "invalid type: integer `1`, expected a boolean or the string \"agents\"".
-        struct RequireReasonVisitor;
+        // A policy is a boolean or the string "agents". A hand-written visitor
+        // (rather than an untagged enum) lets serde report a precise, located error
+        // for a wrong *type*, not just for unknown strings. For example
+        // `require_reason = 1` yields "invalid type: integer `1`, expected a
+        // boolean or the string \"agents\"". The offending field name is supplied
+        // by the TOML error's location context.
+        struct PolicyModeVisitor;
 
-        impl serde::de::Visitor<'_> for RequireReasonVisitor {
-            type Value = RequireReason;
+        impl serde::de::Visitor<'_> for PolicyModeVisitor {
+            type Value = PolicyMode;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str(r#"a boolean or the string "agents""#)
             }
 
-            fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<RequireReason, E> {
+            fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<PolicyMode, E> {
                 Ok(if v {
-                    RequireReason::Always
+                    PolicyMode::Always
                 } else {
-                    RequireReason::Never
+                    PolicyMode::Never
                 })
             }
 
-            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<RequireReason, E> {
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<PolicyMode, E> {
                 match v {
-                    "agents" => Ok(RequireReason::Agents),
+                    "agents" => Ok(PolicyMode::Agents),
                     other => Err(E::custom(format!(
-                        "invalid require_reason value '{other}': expected true, false, or \"agents\""
+                        "invalid policy value '{other}': expected true, false, or \"agents\""
                     ))),
                 }
             }
         }
 
-        deserializer.deserialize_any(RequireReasonVisitor)
+        deserializer.deserialize_any(PolicyModeVisitor)
     }
 }
 
@@ -320,10 +330,17 @@ pub struct Project {
     pub extends: Option<Vec<String>>,
     /// Policy controlling when secret access must supply a reason. Accepts a boolean
     /// or `"agents"`; enforced by [`crate::Secrets`]. `None` means "unspecified": it
-    /// resolves to [`RequireReason::default`] unless a parent config supplies a value
+    /// resolves to [`PolicyMode::Agents`] unless a parent config supplies a value
     /// via `extends` (see [`Config::merge_with`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub require_reason: Option<RequireReason>,
+    pub require_reason: Option<PolicyMode>,
+    /// Policy controlling when secrets may only be released to a `run` command (or
+    /// a `get`) after human approval at a trusted prompt. Accepts a boolean or
+    /// `"agents"`; enforced by [`crate::Secrets`]. `None` is "unspecified": it
+    /// resolves to [`PolicyMode::Never`] (approval is opt-in) unless a parent config
+    /// supplies a value via `extends` (see [`Config::merge_with`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_approval: Option<PolicyMode>,
 }
 
 impl Default for Project {
@@ -336,6 +353,7 @@ impl Default for Project {
             revision: "1.0".to_string(),
             extends: None,
             require_reason: None,
+            require_approval: None,
         }
     }
 }
@@ -648,9 +666,21 @@ pub struct Secret {
     /// Auto-generation configuration. Either `true` for defaults or a table with options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generate: Option<GenerateConfig>,
+    /// Collect this secret's value via a trusted local prompt (pinentry, with a
+    /// `/dev/tty` fallback) on `set`, instead of reading it from stdin. This keeps
+    /// the value off the calling process's pipes, so an orchestrator (CI, a coding
+    /// agent) that only *triggers* the `set` never sees what is typed. Applies to
+    /// every provider. Ignored when a value is supplied inline on the command line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interactive: Option<bool>,
 }
 
 impl Secret {
+    /// Whether this secret opts into trusted-prompt value entry (`interactive = true`).
+    pub(crate) fn is_interactive(&self) -> bool {
+        self.interactive == Some(true)
+    }
+
     /// Validate the secret configuration.
     ///
     /// Ensures that required secrets don't have default values,
@@ -1047,54 +1077,71 @@ impl From<toml::de::Error> for ParseError {
 }
 
 #[cfg(test)]
-mod require_reason_tests {
+mod policy_mode_tests {
     use super::*;
 
-    fn parse(line: &str) -> Option<RequireReason> {
+    fn parse_project(line: &str) -> Project {
         let toml = format!("name = \"t\"\nrevision = \"1.0\"\n{line}");
-        toml::from_str::<Project>(&toml).unwrap().require_reason
+        toml::from_str::<Project>(&toml).unwrap()
+    }
+
+    fn parse(line: &str) -> Option<PolicyMode> {
+        parse_project(line).require_reason
+    }
+
+    fn parse_approval(line: &str) -> Option<PolicyMode> {
+        parse_project(line).require_approval
     }
 
     #[test]
     fn accepts_bool_and_agents_string() {
-        assert_eq!(parse("require_reason = true"), Some(RequireReason::Always));
-        assert_eq!(parse("require_reason = false"), Some(RequireReason::Never));
+        assert_eq!(parse("require_reason = true"), Some(PolicyMode::Always));
+        assert_eq!(parse("require_reason = false"), Some(PolicyMode::Never));
         assert_eq!(
             parse("require_reason = \"agents\""),
-            Some(RequireReason::Agents)
+            Some(PolicyMode::Agents)
+        );
+        // The same shared type parses on the require_approval field.
+        assert_eq!(
+            parse_approval("require_approval = \"agents\""),
+            Some(PolicyMode::Agents)
         );
     }
 
     #[test]
-    fn unspecified_require_reason_is_none_and_resolves_to_agents() {
+    fn unspecified_policies_are_none() {
         // Absent in TOML parses to `None` so `extends` can fill it from a parent;
-        // the runtime default is applied at use via `unwrap_or_default`.
+        // the per-field runtime defaults (reason: agents, approval: never) are
+        // applied where the policies are consumed in `Secrets`.
         assert_eq!(parse(""), None);
-        assert_eq!(parse("").unwrap_or_default(), RequireReason::Agents);
+        assert_eq!(parse_approval(""), None);
     }
 
     #[test]
-    fn extends_inherits_parent_require_reason_when_unspecified() {
+    fn extends_inherits_parent_policies_when_unspecified() {
         use std::collections::HashMap;
-        let cfg = |rr: Option<RequireReason>| Config {
+        let cfg = |rr: Option<PolicyMode>, ra: Option<PolicyMode>| Config {
             project: Project {
                 name: "t".to_string(),
                 require_reason: rr,
+                require_approval: ra,
                 ..Default::default()
             },
             profiles: HashMap::new(),
             providers: None,
         };
 
-        // Child leaves the policy unspecified -> it inherits the parent's value.
-        let mut child = cfg(None);
-        child.merge_with(cfg(Some(RequireReason::Always)));
-        assert_eq!(child.project.require_reason, Some(RequireReason::Always));
+        // Child leaves the policies unspecified -> it inherits the parent's values.
+        let mut child = cfg(None, None);
+        child.merge_with(cfg(Some(PolicyMode::Always), Some(PolicyMode::Always)));
+        assert_eq!(child.project.require_reason, Some(PolicyMode::Always));
+        assert_eq!(child.project.require_approval, Some(PolicyMode::Always));
 
-        // Child sets the policy explicitly -> its own value wins over the parent's.
-        let mut child = cfg(Some(RequireReason::Never));
-        child.merge_with(cfg(Some(RequireReason::Always)));
-        assert_eq!(child.project.require_reason, Some(RequireReason::Never));
+        // Child sets the policies explicitly -> its own values win over the parent's.
+        let mut child = cfg(Some(PolicyMode::Never), Some(PolicyMode::Never));
+        child.merge_with(cfg(Some(PolicyMode::Always), Some(PolicyMode::Always)));
+        assert_eq!(child.project.require_reason, Some(PolicyMode::Never));
+        assert_eq!(child.project.require_approval, Some(PolicyMode::Never));
     }
 
     #[test]
@@ -1131,6 +1178,7 @@ mod require_reason_tests {
             revision: "1.0".to_string(),
             extends: None,
             require_reason: None,
+            require_approval: None,
         })
         .unwrap();
         assert!(!toml.contains("require_reason"));
@@ -1139,12 +1187,13 @@ mod require_reason_tests {
             name: "t".to_string(),
             revision: "1.0".to_string(),
             extends: None,
-            require_reason: Some(RequireReason::Always),
+            require_reason: Some(PolicyMode::Always),
+            require_approval: None,
         })
         .unwrap();
         assert_eq!(
             toml::from_str::<Project>(&toml).unwrap().require_reason,
-            Some(RequireReason::Always)
+            Some(PolicyMode::Always)
         );
     }
 }
@@ -1396,6 +1445,20 @@ mod validation_tests {
                 .unwrap_err()
                 .contains("requires generate = { command")
         );
+    }
+
+    #[test]
+    fn interactive_parses_and_is_omitted_when_unset() {
+        let with = toml::from_str::<Secret>("description = \"d\"\ninteractive = true").unwrap();
+        assert_eq!(with.interactive, Some(true));
+
+        // `skip_serializing_if` keeps the field out of serialized output when unset,
+        // so existing manifests don't grow a noisy `interactive = false` line.
+        let plain = Secret {
+            description: Some("d".to_string()),
+            ..Default::default()
+        };
+        assert!(!toml::to_string(&plain).unwrap().contains("interactive"));
     }
 
     #[test]

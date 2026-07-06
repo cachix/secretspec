@@ -71,7 +71,6 @@ jobs:
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
 
       - name: download release assets
         env:
@@ -111,6 +110,8 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-oidc.outputs.token }}
           NPM_CONFIG_PROVENANCE: "true"
         run: |
+          unset NODE_AUTH_TOKEN NPM_TOKEN NPM_AUTH_TOKEN NPM_CONFIG_TOKEN NPM_CONFIG__AUTH_TOKEN npm_config_token npm_config__authToken
+
           monochange step publish-packages \
             --log-level info \
             --all \

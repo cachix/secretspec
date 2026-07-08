@@ -225,10 +225,10 @@ GOOGLE_APPLICATION_CREDENTIALS = { description = "GCP service account", as_path 
 
 ### Secret References
 
-By default, SecretSpec names secrets in a provider's store by its own
-`{project}/{profile}/{key}` convention. The `ref` field replaces that naming for
-one secret with the store's own coordinates, so SecretSpec reads and writes a
-secret that already exists and is managed outside SecretSpec:
+The `ref` field names one externally managed secret by the store's own
+coordinates, instead of SecretSpec's `{project}/{profile}/{key}` convention. See
+[Secret References](/concepts/references/) for the concept, model, and examples;
+this section is the specification.
 
 ```toml
 [profiles.production]
@@ -238,7 +238,11 @@ GITHUB_TOKEN = { description = "GitHub token", ref = { item = "GITHUB_PAT" }, pr
 ```
 
 `ref` is a table of provider-independent coordinates. Unknown keys are rejected
-at parse time.
+at parse time. Only `item` is universal; it is the secret's complete name in the
+store and replaces the whole convention path, including any `folder_prefix` or
+format string the provider is configured with (nothing is prepended). A
+coordinate a store has no equivalent for is rejected with an error naming it,
+never silently ignored.
 
 | Coordinate | Required | Meaning |
 |------------|----------|---------|
@@ -248,90 +252,27 @@ at parse time.
 | `section` | No | A named group of fields inside the item. 1Password only; requires `field` |
 | `version` | No | Which revision of the secret to read. Google Secret Manager only; defaults to the latest |
 
-#### What the coordinates mean
-
-The coordinates address one secret from the outside in. Each names a different
-level of the store's structure:
-
-```
-vault                which container holds the item        (1Password only)
-└── item             the store's own name for the secret   (always required)
-    └── section      a named group of fields               (1Password only)
-        └── field    one component inside the item         (structured stores)
-            └── version   which revision to read           (GCSM only)
-```
-
-Only `item` is universal. The others exist because some stores give a secret
-internal structure, or nest it inside a container.
-
-**`item` is the complete name, not a suffix.** It replaces the entire
-`{project}/{profile}/{key}` convention path, including any `folder_prefix` or
-format string the provider is configured with. Nothing is prepended:
-
-```toml
-# Reads the .env key TOTALLY_DIFFERENT_NAME.
-# Not secretspec/myapp/default/DATABASE_URL.
-DATABASE_URL = { description = "DB", ref = { item = "TOTALLY_DIFFERENT_NAME" }, providers = ["dotenv"] }
-```
-
-So whatever the store calls a secret's full name is what goes in `item`: a
-1Password item title, a Vault KV path (`myapp/config`), an AWS secret name or a
-complete ARN, a `pass` entry path (`email/work`), a GCSM secret id, a keyring
-service, a `.env` key, an environment variable name.
-
-**`field` addresses a component inside the item.** Stores fall into two groups:
+Stores fall into two groups for `field`:
 
 | Store | Shape of one secret | `field` |
 |-------|---------------------|---------|
 | dotenv, env, pass, LastPass, Proton Pass, Bitwarden | a single value | Rejected: there is nothing to select |
 | 1Password, Vault KV, AWS Secrets Manager, keyring | a record of named parts | Selects the part: field label, map key, JSON key, account |
 
-A coordinate a store has no equivalent for is **rejected with an error naming
-it**, never silently ignored. A ref written for 1Password fails loudly when
-routing points it at `pass`, instead of quietly reading the wrong secret.
-
-**`vault` is the only container coordinate.** Every store has some container: a
-1Password vault, a Vault mount, a GCSM project, an AWS region. For all of them
-except 1Password, the container is part of the *provider URI*, not the ref:
+`vault` is the only container coordinate. For every store except 1Password the
+container is part of the provider URI, not the ref:
 
 ```toml
 # The mount `kv2` comes from the URI; the ref names the path inside it.
 DB = { description = "DB", ref = { item = "myapp/config", field = "pw" }, providers = ["vault://vault.example.com:8200/kv2"] }
 
-# 1Password is the exception: `vault` on the ref overrides the URI's default vault.
+# 1Password: `vault` on the ref overrides the URI's default vault.
 TOKEN = { description = "Token", ref = { vault = "Production", item = "infra", field = "token" }, providers = ["onepassword://Private"] }
 ```
 
-To point one secret at a different mount, project, or region, give it a
-`providers` entry with that URI rather than reaching for a coordinate.
-
-#### Refs name, providers route
-
-A `ref` supplies naming only; it does not pin a store. Which provider resolves
-the coordinates follows the ordinary resolution order:
-
-1. An explicit `--provider` flag or `SECRETSPEC_PROVIDER` override
-2. The secret's `providers` fallback chain
-3. The profile's default providers (`[profiles.<name>.defaults]`)
-4. The global default provider
-
-`ref` therefore composes with `providers`: each provider in the chain is asked
-for the same coordinates, and a chain member that cannot interpret them warns
-and the chain continues. Chain entries may be aliases from the `[providers]`
-table or inline provider URIs:
-
-```toml
-[profiles.production]
-DATABASE_URL = { description = "Postgres DSN", ref = { item = "db", field = "password" }, providers = ["onepassword://Production", "keyring"] }
-```
-
-Because the store is not baked into the ref, the `--provider` override redirects
-ref secrets exactly like convention secrets. This makes fixtures trivial: point
-every ref at a `.env` file during tests without editing the manifest:
-
-```bash
-$ secretspec run --provider dotenv:.env.fixtures -- cargo test
-```
+Which provider resolves a `ref` follows the ordinary [provider resolution
+order](/concepts/providers/); a `ref` composes with the `providers` fallback
+chain, and each provider is asked for the same coordinates.
 
 #### How providers interpret the coordinates
 

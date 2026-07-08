@@ -156,6 +156,7 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
               slug: "concepts/inheritance",
             },
             { label: "Secret Generation", slug: "concepts/generation" },
+            { label: "Secret References", slug: "concepts/references" },
             { label: "Audit Logging", slug: "concepts/audit" },
           ],
         },

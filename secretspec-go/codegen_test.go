@@ -70,8 +70,8 @@ name = "go-codegen"
 revision = "1.0"
 
 [profiles.default]
-DATABASE_URL = { required = true }
-LOG_LEVEL = { required = false, default = "info" }
+DATABASE_URL = { description = "Database connection URL", required = true }
+LOG_LEVEL = { description = "Log verbosity", required = false, default = "info" }
 `), 0o600)
 	os.WriteFile(env, []byte("DATABASE_URL=postgres://db\n"), 0o600)
 

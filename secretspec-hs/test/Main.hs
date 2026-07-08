@@ -122,8 +122,8 @@ runCodegen bin = do
       , "revision = \"1.0\""
       , ""
       , "[profiles.default]"
-      , "DATABASE_URL = { required = true }"
-      , "LOG_LEVEL = { required = false, default = \"info\" }"
+      , "DATABASE_URL = { description = \"DB\", required = true }"
+      , "LOG_LEVEL = { description = \"log\", required = false, default = \"info\" }"
       ]
   writeFile (dir </> ".env") "DATABASE_URL=postgres://db\n"
 

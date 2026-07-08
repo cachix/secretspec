@@ -44,9 +44,9 @@ name = "node-codegen"
 revision = "1.0"
 
 [profiles.default]
-DATABASE_URL = { required = true }
-LOG_LEVEL = { required = false, default = "info" }
-SENTRY_DSN = { required = false }
+DATABASE_URL = { description = "DB", required = true }
+LOG_LEVEL = { description = "log", required = false, default = "info" }
+SENTRY_DSN = { description = "sentry", required = false }
 `;
 
 test('quicktype-generated converter consumes fieldsJson()', { skip: !hasNpx() }, () => {

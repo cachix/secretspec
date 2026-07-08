@@ -1,0 +1,40 @@
+[package]
+name = "egui-pinentry"
+version = "0.1.0"
+edition.workspace = true
+description = "A trusted local passphrase and confirmation dialog, drawn with egui on the CPU (no GPU) and presented via softbuffer, with an X11 keyboard grab to resist keylogging"
+license = "Apache-2.0"
+repository = "https://github.com/cachix/secretspec"
+readme = "README.md"
+keywords = ["pinentry", "passphrase", "egui", "prompt", "secret"]
+categories = ["gui", "authentication"]
+
+[dependencies]
+secrecy = { workspace = true }
+thiserror = { workspace = true }
+# The passphrase field's backing buffer is wiped on drop rather than merely
+# freed, so a cancelled or submitted value does not linger in process memory.
+zeroize = "1"
+
+# egui triple: these three MUST stay together on the 0.34 line. The CPU
+# software backend (egui_software_backend) is the linchpin: its latest release
+# pins egui 0.34, which pins egui-winit 0.34 and winit 0.30.
+egui = { version = "=0.34.3", default-features = false, features = ["default_fonts"] }
+egui-winit = { version = "=0.34.3", default-features = false, features = ["wayland", "x11"] }
+egui_software_backend = "=0.0.3"
+
+# Windowing + pure-CPU presentation. No GPU/OpenGL/Vulkan in the tree: the UI is
+# rasterized on the CPU by egui_software_backend and blitted with softbuffer.
+winit = "=0.30.13"
+softbuffer = "=0.4.8"
+bytemuck = "1.25"
+
+# X11 keyboard grab (anti-keylogging). dlopens libX11 at runtime; Linux only.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11-dl = "2.21"
+
+[dev-dependencies]
+secrecy = { workspace = true }
+# Headless UI tests: drive dialog_ui with synthetic input events and assert on
+# the resulting state, no window required. Pinned to the egui 0.34 line.
+egui_kittest = "=0.34.0"

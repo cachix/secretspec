@@ -12,7 +12,15 @@ crate-type = ["cdylib"]
 [dependencies]
 napi = { version = "2.16", default-features = false, features = ["napi8"] }
 napi-derive = "2.16"
-secretspec = { workspace = true }
+# No default features (no `cli`, hence no `gui-prompt`/egui GUI stack in the
+# Node addon); re-enable the providers the SDK resolves from.
+secretspec = { path = "../secretspec", version = "0.13.0", default-features = false, features = [
+  "keyring",
+  "gcsm",
+  "awssm",
+  "vault",
+  "bws",
+] }
 
 [build-dependencies]
 napi-build = "2.1"

@@ -47,10 +47,18 @@ rsa.workspace = true
 uuid.workspace = true
 data-encoding.workspace = true
 detect-coding-agent.workspace = true
+pinentry.workspace = true
+rpassword.workspace = true
+egui-pinentry = { path = "../egui-pinentry", version = "0.1", optional = true }
 
 [features]
 default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws"]
-cli = ["dep:toml_edit"]
+cli = ["dep:toml_edit", "gui-prompt"]
+# Built-in GUI trusted prompt (egui-pinentry) for value entry and approval,
+# used instead of an external pinentry binary. Kept optional and out of the
+# default library build so the language SDK cdylibs do not pull the GUI stack;
+# `cli` enables it for the binary.
+gui-prompt = ["dep:egui-pinentry"]
 keyring = ["dep:keyring", "dep:whoami"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]
 awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]

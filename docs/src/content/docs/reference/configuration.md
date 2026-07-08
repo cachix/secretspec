@@ -15,6 +15,7 @@ name = "my-app"              # Project name (required)
 revision = "1.0"             # Format version (required, must be "1.0")
 extends = ["../shared"]      # Paths to parent configs for inheritance (optional)
 require_reason = "agents"    # When to require a reason for secret access (optional)
+require_approval = false     # When to require human approval before releasing secrets (optional)
 ```
 
 | Field | Type | Required | Description |
@@ -23,6 +24,7 @@ require_reason = "agents"    # When to require a reason for secret access (optio
 | `revision` | string | Yes | Format version (must be "1.0") |
 | `extends` | array[string] | No | Paths to parent configuration files |
 | `require_reason` | `"agents"` \| boolean | No | When secret access must supply a reason (via `--reason`, `SECRETSPEC_REASON`, or the SDK's `with_reason()`). Defaults to `"agents"`. |
+| `require_approval` | `"agents"` \| boolean | No | When releasing secrets to a `run`/`get`/`import` requires human approval in a GUI prompt. Defaults to `false`. Can also be set per-user in `~/.config/secretspec/config.toml`; the stricter of the two wins. |
 
 #### Requiring a reason for secret access
 
@@ -64,6 +66,83 @@ If your agent isn't auto-detected, set `SECRETSPEC_AGENT=1` (or use
 The reason is recorded in secretspec's own [audit log](/concepts/audit/) and is also
 forwarded to providers that support auditing (e.g. the
 [Proton Pass](/providers/protonpass/) provider records it in the agent audit log).
+
+#### Requiring human approval before releasing secrets
+
+`require_approval` gates the moment secrets are handed to a caller. Before
+`secretspec run` injects secrets into a child process, `secretspec get` prints a
+value, or `secretspec import` copies secrets into another provider, secretspec
+pops a **GUI approval prompt** summarizing the secrets and the destination, and
+proceeds only if you approve. It accepts the same three values as
+`require_reason`:
+
+| Value | Behavior |
+|-------|----------|
+| `false` (default) | Never require approval. |
+| `"agents"` | Require approval **only when an AI agent is detected** (same detection as `require_reason`). Humans running interactively are unaffected. |
+| `true` | Require approval from **every** caller. |
+
+The prompt is a built-in graphical dialog that needs no external program. See
+[GUI prompts](#gui-prompts) for how the prompt is chosen. Because it appears in
+its own window rather than on the console the calling process controls, an
+orchestrator that only *triggers* the operation cannot approve on your behalf, so
+you can let an agent run `secretspec run` while you remain the one who releases
+the secrets. A denial aborts the command and is recorded in the
+[audit log](/concepts/audit/).
+
+When the caller is a detected agent, secretspec refuses to approve over a
+terminal, since an agent that owns the controlling terminal could answer the
+prompt itself. Approval by an agent-triggered command therefore requires a
+graphical session.
+
+##### Requiring approval for every project
+
+`require_approval` can also be set once in your user config, where it applies to
+every project you run:
+
+```toml title="~/.config/secretspec/config.toml"
+[defaults]
+provider = "keyring"
+require_approval = "agents"   # ask me whenever an agent releases secrets, anywhere
+```
+
+The two settings are combined by taking **whichever is stricter**, ordering them
+`false` < `"agents"` < `true`. This is a floor, not a fallback, and that
+distinction is the point:
+
+| `[project]` in `secretspec.toml` | `[defaults]` in your user config | Effective |
+|---|---|---|
+| unset | `"agents"` | `"agents"` |
+| `true` | unset | `true` |
+| `false` | `true` | `true` |
+| `true` | `false` | `true` |
+| `"agents"` | `true` | `true` |
+
+So a project you cloned cannot switch off the approval you asked for on your own
+machine, and you cannot switch off the approval a project demands of every clone.
+If you want no approval anywhere, leave both unset, which is the default.
+
+Run `secretspec config show` to see the policy currently set in your user config.
+
+#### GUI prompts
+
+Whenever secretspec needs a human at the keyboard, either to collect a secret
+value or to approve a release, it shows a **GUI prompt** in its own window rather
+than reading the console. That matters beyond appearance: a separate window is a
+channel the calling process does not sit between, so an orchestrator that only
+triggers the command cannot read the value you type or answer the approval for
+you. secretspec detects what is available and picks automatically, so there is
+nothing to configure:
+
+1. A built-in graphical dialog, drawn by secretspec itself. On X11 it grabs the
+   keyboard for the duration of the prompt so other clients on the display cannot
+   snoop keystrokes. This is used whenever a display server is present (and always
+   on macOS and Windows).
+2. With no display, a `/dev/tty` prompt on the controlling terminal, which is
+   still off the calling process's stdin.
+
+For value entry, when neither is reachable secretspec falls back to reading stdin.
+See [`secretspec set`](/reference/cli/#set) for what that means in scripts.
 
 ### [profiles.*] Section
 

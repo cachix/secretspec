@@ -65,7 +65,11 @@ secretspec config show
 $ secretspec config show
 Provider: keyring
 Profile:  development
+Approval: agents
 ```
+
+`Approval` is the user-level [`require_approval`](/reference/configuration/#requiring-approval-for-every-project)
+policy, which applies to every project you run. It shows `(none)` when unset.
 
 ### config provider add
 Add a provider alias to your user-level configuration (`~/.config/secretspec/config.toml`).
@@ -249,7 +253,31 @@ secretspec set [OPTIONS] <NAME> [VALUE]
 ```bash
 $ secretspec set API_KEY sk-1234567890
 ✓ Secret 'API_KEY' saved to keyring (profile: development)
+
+# Let an agent trigger the save, but type the value yourself in the GUI prompt:
+$ secretspec set STRIPE_SECRET_KEY
 ```
+
+**Where the value comes from.** With no inline `VALUE`, secretspec collects the
+value in a [GUI prompt](/reference/configuration/#gui-prompts) when this machine
+can show one, so a caller that only triggers the `set` (CI, a coding agent) never
+sees what you type. There is nothing to opt into. Precedence:
+
+| Situation | Value read from |
+|-----------|-----------------|
+| `VALUE` given inline | The command line |
+| A GUI is available | The GUI prompt |
+| No GUI, stdin is a terminal | A masked terminal prompt |
+| No GUI, stdin is piped | stdin |
+
+Because the GUI prompt does not read stdin, `echo v \| secretspec set KEY` opens
+a dialog rather than storing `v` on any machine with a display. To set a secret
+from a script, pass the value inline (`secretspec set KEY "$VALUE"`), which always
+wins.
+
+`secretspec check` fills missing secrets the same way. When a GUI is available it
+can fill them even without a terminal, which is what lets an agent trigger `check`
+while a human types the values.
 
 ### run
 Run a command with secrets injected as environment variables.

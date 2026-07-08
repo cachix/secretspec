@@ -64,6 +64,12 @@ pub enum SecretSpecError {
          set it to false to disable.)"
     )]
     ReasonRequired,
+    #[error("Access was denied at the approval prompt")]
+    ApprovalDenied,
+    #[error("Prompt was cancelled")]
+    PromptCancelled,
+    #[error("GUI prompt failed: {0}")]
+    PromptFailed(String),
 }
 
 impl SecretSpecError {
@@ -95,6 +101,9 @@ impl SecretSpecError {
             SecretSpecError::ValidationFailed(_) => "validation_failed",
             SecretSpecError::GenerationFailed(_) => "generation_failed",
             SecretSpecError::ReasonRequired => "reason_required",
+            SecretSpecError::ApprovalDenied => "approval_denied",
+            SecretSpecError::PromptCancelled => "prompt_cancelled",
+            SecretSpecError::PromptFailed(_) => "prompt_failed",
         }
     }
 }
@@ -148,6 +157,9 @@ mod tests {
                 "generation_failed",
             ),
             (SecretSpecError::ReasonRequired, "reason_required"),
+            (SecretSpecError::ApprovalDenied, "approval_denied"),
+            (SecretSpecError::PromptCancelled, "prompt_cancelled"),
+            (SecretSpecError::PromptFailed("x".into()), "prompt_failed"),
         ];
 
         for (err, expected) in cases {

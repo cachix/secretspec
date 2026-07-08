@@ -47,7 +47,7 @@
 //! secretspec check --provider vault://team-a@vault.example.com:8200/secret
 //! ```
 
-use super::{Provider, ProviderUrl};
+use super::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use reqwest::header::{HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
@@ -148,15 +148,16 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
                 })?,
         };
 
-        // Mount path from URL path (strip leading slash, default to "secret")
+        // Mount path from URL path (strip leading slash, default to "secret").
+        // Mount paths may contain slashes; specific KV paths are addressed with
+        // a secret's `ref`, never in the provider URI.
         let path = url.path();
-        let mount = path
-            .trim_start_matches('/')
-            .split('/')
-            .next()
-            .filter(|s| !s.is_empty())
-            .unwrap_or("secret")
-            .to_string();
+        let trimmed = path.trim_start_matches('/').trim_end_matches('/');
+        let mount = if trimmed.is_empty() {
+            "secret".to_string()
+        } else {
+            trimmed.to_string()
+        };
 
         // KV version from query parameter (default: V2)
         let kv_version = url
@@ -193,6 +194,17 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
             })
             .transpose()?
             .unwrap_or_default();
+
+        // The `?field=` reference form from earlier iterations is rejected
+        // with a pointer at the `ref` table, instead of being silently ignored
+        // and reading the conventional layout.
+        if let Some(field) = url.query_value("field") {
+            let hint = crate::config::ref_table_hint(None, "<kv-path>", None, Some(&field));
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "vault URIs take no `field` query: address the KV entry with \
+                 {hint} on the secret instead"
+            )));
+        }
 
         Ok(Self {
             endpoint,
@@ -375,15 +387,15 @@ impl VaultProvider {
         }
     }
 
-    /// Retrieves a secret from Vault asynchronously.
-    async fn get_secret_async(
+    /// Reads a single field from a KV path asynchronously. SecretSpec's own layout
+    /// stores every secret under a `value` field; a reference reads an arbitrary
+    /// field at an arbitrary path.
+    async fn get_field_async(
         &self,
-        project: &str,
-        key: &str,
-        profile: &str,
+        secret_path: &str,
+        field: &str,
     ) -> Result<Option<SecretString>> {
-        let secret_path = Self::format_secret_path(project, profile, key)?;
-        let url = self.build_url(&secret_path);
+        let url = self.build_url(secret_path);
         let token = self.resolve_token()?;
         let headers = Self::build_headers(&token, &self.config.namespace)?;
 
@@ -413,11 +425,11 @@ impl VaultProvider {
                     KvVersion::V2 => body
                         .get("data")
                         .and_then(|d| d.get("data"))
-                        .and_then(|d| d.get("value"))
+                        .and_then(|d| d.get(field))
                         .and_then(|v| v.as_str()),
                     KvVersion::V1 => body
                         .get("data")
-                        .and_then(|d| d.get("value"))
+                        .and_then(|d| d.get(field))
                         .and_then(|v| v.as_str()),
                 };
 
@@ -439,16 +451,9 @@ impl VaultProvider {
         }
     }
 
-    /// Writes a secret to Vault asynchronously.
-    async fn set_secret_async(
-        &self,
-        project: &str,
-        key: &str,
-        value: &SecretString,
-        profile: &str,
-    ) -> Result<()> {
-        let secret_path = Self::format_secret_path(project, profile, key)?;
-        let url = self.build_url(&secret_path);
+    /// Writes a secret's `value` field at a KV path asynchronously.
+    async fn set_secret_async(&self, secret_path: &str, value: &SecretString) -> Result<()> {
+        let url = self.build_url(secret_path);
         let token = self.resolve_token()?;
         let headers = Self::build_headers(&token, &self.config.namespace)?;
 
@@ -494,18 +499,32 @@ impl VaultProvider {
 }
 
 impl Provider for VaultProvider {
+    /// Convention secrets each live at their own KV path,
+    /// `secretspec/{project}/{profile}/{key}`, under a `value` field.
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: Self::format_secret_path(project, profile, key)?,
+            field: Some("value".to_string()),
+            ..Default::default()
+        })
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
 
     fn uri(&self) -> String {
-        let mut uri = format!(
-            "vault://{}",
-            self.config
-                .endpoint
-                .trim_start_matches("https://")
-                .trim_start_matches("http://")
-        );
+        let host = self
+            .config
+            .endpoint
+            .trim_start_matches("https://")
+            .trim_start_matches("http://");
+        let mut uri = format!("vault://{}", host);
         if self.config.mount != "secret" {
             uri.push('/');
             uri.push_str(&self.config.mount);
@@ -513,15 +532,111 @@ impl Provider for VaultProvider {
         uri
     }
 
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        super::block_on(self.get_secret_async(project, key, profile))
+    /// `field` names the key within the KV entry's map.
+    fn supported_coords(&self) -> &'static [&'static str] {
+        &["field"]
     }
 
-    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        super::block_on(self.set_secret_async(project, key, value, profile))
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let coords = self.resolve_coords(addr)?;
+        // KV entries are maps; without a field there is nothing well-defined
+        // to read. Convention coordinates always carry `value`.
+        let Some(field) = &coords.field else {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "vault references need a `field`: KV entries are maps, e.g. \
+                 ref = { item = \"myapp/config\", field = \"db_password\" }"
+                    .to_string(),
+            ));
+        };
+        super::block_on(self.get_field_async(&coords.item, field))
     }
 
-    fn allows_set(&self) -> bool {
-        true
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        self.check_writable(addr)?;
+        let coords = self.resolve_coords(addr)?;
+        super::block_on(self.set_secret_async(&coords.item, value))
+    }
+
+    /// Native addresses are read-only: writing a single field would clobber
+    /// the other fields at the same KV path.
+    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+        match addr {
+            Address::Convention { .. } => Ok(()),
+            Address::Native(_) => Err(SecretSpecError::ProviderOperationFailed(
+                "vault secret references are read-only: writing a single field would \
+                 clobber the other fields at the same KV path"
+                    .to_string(),
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+    use url::Url;
+
+    fn config(s: &str) -> VaultConfig {
+        VaultConfig::try_from(&ProviderUrl::new(Url::parse(s).unwrap())).unwrap()
+    }
+
+    /// The `?field=` reference form from earlier iterations errors with a
+    /// pointer at the `ref` table.
+    #[test]
+    fn field_query_is_rejected_with_ref_hint() {
+        let err = VaultConfig::try_from(&ProviderUrl::new(
+            Url::parse("vault://vault.example.com:8200/secret?field=x").unwrap(),
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("field = \"x\""), "{err}");
+    }
+
+    /// KV entries are maps: a native address must say which field to read.
+    #[test]
+    fn native_address_requires_a_field() {
+        let p = VaultProvider::new(config("vault://vault.example.com:8200/secret"));
+        let addr = crate::config::NativeAddress {
+            item: "myapp/config".into(),
+            ..Default::default()
+        };
+        let err = p.get(Address::Native(&addr)).unwrap_err();
+        assert!(err.to_string().contains("need a `field`"), "{err}");
+    }
+
+    /// Native addresses are read-only: a field-level write would clobber the
+    /// sibling fields at the KV path.
+    #[test]
+    fn native_address_is_read_only() {
+        let p = VaultProvider::new(config("vault://vault.example.com:8200/secret"));
+        let addr = crate::config::NativeAddress {
+            item: "myapp/config".into(),
+            field: Some("db_password".into()),
+            ..Default::default()
+        };
+        let refusal = p.check_writable(Address::Native(&addr)).unwrap_err();
+        assert!(refusal.to_string().contains("read-only"), "{refusal}");
+        // `set` refuses with the same reason, so the pre-check cannot drift.
+        let err = p
+            .set(
+                Address::Native(&addr),
+                &secrecy::SecretString::new("v".into()),
+            )
+            .unwrap_err();
+        assert_eq!(err.to_string(), refusal.to_string());
+    }
+
+    /// Version pinning is not supported for Vault KV yet; the coordinate is
+    /// rejected.
+    #[test]
+    fn native_address_rejects_version() {
+        let p = VaultProvider::new(config("vault://vault.example.com:8200/secret"));
+        let addr = crate::config::NativeAddress {
+            item: "myapp/config".into(),
+            field: Some("db_password".into()),
+            version: Some("3".into()),
+            ..Default::default()
+        };
+        let err = p.get(Address::Native(&addr)).unwrap_err();
+        assert!(err.to_string().contains("`version`"), "{err}");
     }
 }

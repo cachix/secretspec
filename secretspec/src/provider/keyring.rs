@@ -1,4 +1,4 @@
-use super::{Provider, ProviderUrl};
+use super::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use keyring::Entry;
 use secrecy::{ExposeSecret, SecretString};
@@ -23,7 +23,9 @@ impl TryFrom<&ProviderUrl> for KeyringConfig {
     /// Creates a new KeyringConfig from a URL.
     ///
     /// The URL must have the scheme "keyring" (e.g., "keyring://" or
-    /// "keyring://secretspec/shared/{profile}/{key}").
+    /// "keyring://secretspec/shared/{profile}/{key}"). One specific
+    /// `(service, account)` entry is addressed with a secret's
+    /// `ref = { item = "<service>", field = "<account>" }`, not in the URI.
     fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
         if url.scheme() != "keyring" {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
@@ -35,8 +37,7 @@ impl TryFrom<&ProviderUrl> for KeyringConfig {
         let mut config = Self::default();
 
         if let Some(host) = url.host() {
-            let path = url.path();
-            config.folder_prefix = Some(format!("{}{}", host, path));
+            config.folder_prefix = Some(format!("{}{}", host, url.path()));
         }
 
         Ok(config)
@@ -99,9 +100,46 @@ impl KeyringProvider {
             .replace("{profile}", profile)
             .replace("{key}", key)
     }
+
+    /// Resolves the `(service, account)` an operation targets: `item` is the
+    /// service, `field` the account, defaulting to the current system
+    /// username (the account convention entries live under).
+    fn entry_target(&self, addr: Address<'_>) -> Result<(String, String)> {
+        let coords = self.resolve_coords(addr)?;
+        let account = match &coords.field {
+            Some(account) => account.clone(),
+            None => Self::current_username()?,
+        };
+        Ok((coords.item.clone(), account))
+    }
+
+    /// The current system username, the account convention entries live under.
+    fn current_username() -> Result<String> {
+        whoami::username().map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))
+    }
 }
 
 impl Provider for KeyringProvider {
+    /// Convention entries use the folder-prefix format string as the service
+    /// name, `secretspec/{project}/{profile}/{key}` by default; the account
+    /// (the `field` coordinate) is resolved at operation time.
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: self.format_service(project, profile, key),
+            ..Default::default()
+        })
+    }
+
+    /// `field` is the keyring account within the service entry.
+    fn supported_coords(&self) -> &'static [&'static str] {
+        &["field"]
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
@@ -120,10 +158,8 @@ impl Provider for KeyringProvider {
     /// by the folder_prefix format string (defaults to `secretspec/{project}/{profile}/{key}`).
     ///
     /// The current system username is used as the account identifier.
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        let service = self.format_service(project, profile, key);
-        let username = whoami::username()
-            .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))?;
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let (service, username) = self.entry_target(addr)?;
         let entry = Entry::new(&service, &username)?;
         match entry.get_password() {
             Ok(password) => Ok(Some(SecretString::new(password.into()))),
@@ -139,10 +175,8 @@ impl Provider for KeyringProvider {
     ///
     /// The current system username is used as the account identifier.
     /// If a secret already exists with the same key, it will be overwritten.
-    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        let service = self.format_service(project, profile, key);
-        let username = whoami::username()
-            .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))?;
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        let (service, username) = self.entry_target(addr)?;
         let entry = Entry::new(&service, &username)?;
         entry.set_password(value.expose_secret())?;
         Ok(())
@@ -212,5 +246,47 @@ mod tests {
         });
         // The space must be percent-encoded.
         assert_eq!(provider.uri(), "keyring://my%20vault/{key}");
+    }
+
+    /// A native address maps `item` to the service and `field` to the account.
+    #[test]
+    fn native_address_maps_item_and_field_to_service_and_account() {
+        let p = KeyringProvider::new(KeyringConfig::default());
+        let addr = crate::config::NativeAddress {
+            item: "com.example.app".into(),
+            field: Some("alice".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            p.entry_target(Address::Native(&addr)).unwrap(),
+            ("com.example.app".to_string(), "alice".to_string())
+        );
+    }
+
+    /// Without a `field`, the account defaults to the current system username,
+    /// matching where convention entries are stored.
+    #[test]
+    fn native_address_account_defaults_to_current_username() {
+        let p = KeyringProvider::new(KeyringConfig::default());
+        let addr = crate::config::NativeAddress {
+            item: "com.example.app".into(),
+            ..Default::default()
+        };
+        let (service, account) = p.entry_target(Address::Native(&addr)).unwrap();
+        assert_eq!(service, "com.example.app");
+        assert_eq!(account, whoami::username().unwrap());
+    }
+
+    /// Keyring entries have no versions; the coordinate is rejected.
+    #[test]
+    fn native_address_rejects_version() {
+        let p = KeyringProvider::new(KeyringConfig::default());
+        let addr = crate::config::NativeAddress {
+            item: "com.example.app".into(),
+            version: Some("3".into()),
+            ..Default::default()
+        };
+        let err = p.entry_target(Address::Native(&addr)).unwrap_err();
+        assert!(err.to_string().contains("`version`"), "{err}");
     }
 }

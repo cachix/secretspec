@@ -52,6 +52,18 @@ $ secretspec check --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c
 $ secretspec run --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c -- npm start
 ```
 
+## Secret References
+
+By default each secret is matched by the BWS key name equal to the secret's own
+name. A secret's [`ref`](/reference/configuration/#secret-references) field names
+a different key instead: `item` is the BWS key name (`field` is not supported).
+Reads and writes target that key in place.
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "DB", ref = { item = "prod-db-connection" }, providers = ["bws://a9230ec4-5507-4870-b8b5-b3f500587e4c"] }
+```
+
 ## Usage
 
 ### Authentication

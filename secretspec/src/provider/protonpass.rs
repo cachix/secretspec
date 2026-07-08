@@ -1,4 +1,4 @@
-use crate::provider::{Provider, ProviderUrl};
+use crate::provider::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -300,6 +300,20 @@ impl ProtonPassProvider {
 }
 
 impl Provider for ProtonPassProvider {
+    /// Convention items are titled by the title template,
+    /// `{project}/{profile}/{key}` by default.
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: self.format_item_title(project, profile, key),
+            ..Default::default()
+        })
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
@@ -316,11 +330,18 @@ impl Provider for ProtonPassProvider {
         }
     }
 
+    /// `pass-cli test` probes the CLI's login session, which every instance
+    /// using the same binary shares, so they share one preflight probe.
+    fn auth_scope_key(&self) -> Option<String> {
+        Some(self.cli_binary_path.clone())
+    }
+
     fn set_reason(&self, reason: Option<String>) {
         *self.session_reason.lock().unwrap() = reason;
     }
 
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let title = crate::provider::flat_item(self, addr)?;
         match self.run_pass_cli(
             &[
                 "item",
@@ -328,7 +349,7 @@ impl Provider for ProtonPassProvider {
                 "--vault-name",
                 self.get_vault_name(),
                 "--item-title",
-                &self.format_item_title(project, profile, key),
+                &title,
                 "--output",
                 "json",
             ],
@@ -351,8 +372,8 @@ impl Provider for ProtonPassProvider {
         }
     }
 
-    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        let title = self.format_item_title(project, profile, key);
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        let title = crate::provider::flat_item(self, addr)?;
         let maybe_existing_item = {
             let output = self.run_pass_cli(
                 &["item", "list", self.get_vault_name(), "--output", "json"],
@@ -363,7 +384,7 @@ impl Provider for ProtonPassProvider {
             response
                 .items
                 .into_iter()
-                .find(|item| item.title() == Some(title.as_str()))
+                .find(|item| item.title() == Some(&*title))
         };
 
         if let Some(existing_item) = maybe_existing_item {
@@ -381,7 +402,7 @@ impl Provider for ProtonPassProvider {
         }
 
         let template = serde_json::to_string(&ProtonPassNoteTemplate {
-            title,
+            title: title.into_owned(),
             note: value.expose_secret().to_string(),
         })
         .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))?;
@@ -402,16 +423,18 @@ impl Provider for ProtonPassProvider {
         Ok(())
     }
 
-    fn get_batch(
-        &self,
-        project: &str,
-        keys: &[&str],
-        profile: &str,
-    ) -> Result<HashMap<String, SecretString>> {
+    /// Serves every request, convention or `ref`, from one vault listing plus
+    /// parallel `item view` calls for the titles that exist.
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
         use std::thread;
 
-        if keys.is_empty() {
+        if requests.is_empty() {
             return Ok(HashMap::new());
+        }
+
+        let mut titles = Vec::with_capacity(requests.len());
+        for (name, addr) in requests {
+            titles.push((*name, crate::provider::flat_item(self, *addr)?));
         }
 
         let list_response: ProtonPassListResponse = serde_json::from_str(&self.run_pass_cli(
@@ -429,13 +452,12 @@ impl Provider for ProtonPassProvider {
             })
             .collect();
 
-        let keys_to_fetch: Vec<(&str, String, String)> = keys
+        let keys_to_fetch: Vec<(&str, String, String)> = titles
             .iter()
-            .filter_map(|key| {
-                let title = self.format_item_title(project, profile, key);
+            .filter_map(|(name, title)| {
                 item_map
-                    .get(&title)
-                    .map(|(share_id, id)| (*key, share_id.clone(), id.clone()))
+                    .get(&**title)
+                    .map(|(share_id, id)| (*name, share_id.clone(), id.clone()))
             })
             .collect();
 
@@ -586,5 +608,36 @@ mod tests {
         let provider: Arc<ProtonPassProvider> = Arc::new(ProtonPassProvider::default());
         Provider::set_reason(&provider, Some("via arc".to_string()));
         assert_eq!(provider.agent_reason(), "via arc");
+    }
+
+    /// A native address names the item title directly via `item`, bypassing
+    /// the title template.
+    #[test]
+    fn native_address_names_the_title() {
+        let p = ProtonPassProvider::new(ProtonPassConfig {
+            title_template: Some("{project}/{key}".to_string()),
+            ..Default::default()
+        });
+        let addr = crate::config::NativeAddress {
+            item: "my api token".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::provider::flat_item(&p, Address::Native(&addr)).unwrap(),
+            "my api token"
+        );
+    }
+
+    /// Note items carry the whole secret; a `field` coordinate is rejected.
+    #[test]
+    fn native_address_rejects_field() {
+        let p = ProtonPassProvider::new(ProtonPassConfig::default());
+        let addr = crate::config::NativeAddress {
+            item: "my api token".into(),
+            field: Some("password".into()),
+            ..Default::default()
+        };
+        let err = crate::provider::flat_item(&p, Address::Native(&addr)).unwrap_err();
+        assert!(err.to_string().contains("`field`"), "{err}");
     }
 }

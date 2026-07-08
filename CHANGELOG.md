@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`ref`: native secret references on secrets**: a secret can name one
+  externally managed secret by its store's own coordinates, instead of
+  SecretSpec's `{project}/{profile}/{key}` naming:
+
+  ```toml
+  [profiles.production]
+  DATABASE_URL = { description = "...", ref = { item = "db", field = "password" }, providers = ["prod_op"] }
+  ```
+
+  `item` is the store's own name for the secret (1Password item title, Vault
+  KV path, AWS secret name or ARN, `.env` key, environment variable, ...);
+  optional keys refine it where the store supports them: `field` (1Password
+  field label, Vault KV field, AWS JSON key, keyring account), `vault` and
+  `section` (1Password), and `version` (Google Secret Manager). Every provider
+  resolves refs; coordinates a store has no equivalent for are rejected with a
+  clear error rather than guessed at.
+
+  The coordinates supply naming only — *which* store resolves them follows the
+  same routing as every other secret (the secret's `providers` chain, the
+  `--provider`/`SECRETSPEC_PROVIDER` override, or the default provider). That
+  means refs compose with `providers` fallback chains, and an explicit
+  override redirects them like any secret, e.g. at a `.env` fixtures file
+  during tests. Writes are symmetric where the backend allows it:
+  `secretspec set` and `check` prompting write through the coordinates in
+  place (1Password `op item edit`, keyring, pass, dotenv, Bitwarden, Proton
+  Pass, LastPass); Vault, AWS, and GCSM refs are read-only. Secrets sharing
+  identical coordinates fetch once, and audit events record the coordinates in
+  a new `ref` field.
+- **Inline provider URIs in `providers` chains**: chain entries that are
+  already URIs (`providers = ["onepassword://Production", "keyring"]`) now
+  pass through without declaring a `[providers]` alias first.
+
+### Changed
+- **Faster multi-provider resolution**: `check`, `run`, and SDK resolution now
+  group secrets by store and fetch the groups concurrently instead of one
+  after another; within a group, `ref` secrets batch through the store's bulk
+  surface where it has one (AWS `BatchGetSecretValue`, the single Bitwarden,
+  Proton Pass, and 1Password listings) and otherwise resolve concurrently,
+  each unique coordinate fetched once. CLI authentication (1Password,
+  LastPass, Proton Pass) is probed once per account/session instead of once
+  per provider instance.
+- **Provider trait speaks one address vocabulary** (affects custom providers
+  built on the Rust library): each provider now compiles SecretSpec's
+  `{project}/{profile}/{key}` convention into its native coordinates via a
+  new required `convention_address` method, and reads resolve every address
+  through the same coordinate path a `ref` uses. The convention-only
+  `get_batch` method is replaced by `get_many`, which takes addresses and so
+  batches `ref` secrets too. A provider declares the `ref` coordinates it
+  honors with `supported_coords` and the rest are rejected for it, and
+  `allows_set` is replaced by `check_writable`, which returns the reason a
+  write is refused rather than a bare `false`.
+- **Manifest validation runs on load**: the semantic rules `secretspec.toml`
+  documents (a required secret cannot carry a `default`, `generate` needs a
+  `type`, `ref` coordinates must be non-empty and non-whitespace) are now
+  enforced whenever the config is loaded. Configs that silently violated them
+  previously will now fail with a pointed error.
+
+### Fixed
+- **onepassword**: URIs carrying an item path (e.g. the
+  `onepassword://vault/Production` form some older docs showed) previously
+  discarded the path silently and targeted a vault literally named `vault`.
+  Item paths — including pasted `op://vault/item/field` references — now fail
+  with an error spelling out the exact `ref` coordinates to write instead.
+- **`set` on a read-only `ref`** reported "Provider '<name>' is read-only and
+  does not support setting values", which is untrue of Vault, AWS, and GCSM —
+  they write the conventional layout fine and refuse only refs. The store's own
+  reason is now shown (e.g. writing one Vault field would clobber the sibling
+  fields at the same KV path).
+
 ## [0.13.0] - 2026-07-03
 
 ### Added

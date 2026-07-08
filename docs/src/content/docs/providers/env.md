@@ -16,6 +16,20 @@ $ secretspec check --provider env:
 $ secretspec check --provider env://
 ```
 
+## Secret References
+
+By default each secret reads the environment variable named after it. A secret's
+[`ref`](/reference/configuration/#secret-references) field reads a different
+variable, which is useful when your infrastructure already exposes a value under
+another name: `item` is the variable name, case-sensitive and preserved verbatim
+(`field` is not supported). Like the rest of this provider, references are
+read-only.
+
+```toml
+[profiles.default]
+DATABASE_URL = { description = "DB", ref = { item = "POSTGRES_CONNECTION_STRING" }, providers = ["env"] }
+```
+
 ## When to Use
 
 - Running in CI/CD pipelines where secrets are injected as environment variables

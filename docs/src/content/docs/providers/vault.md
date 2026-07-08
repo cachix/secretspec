@@ -44,6 +44,24 @@ $ secretspec check --provider vault://vault.example.com:8200/secret
 $ secretspec run --provider vault://vault.example.com:8200/secret -- npm start
 ```
 
+## Secret References
+
+By default each secret is stored at `secretspec/{project}/{profile}/{key}` under
+the mount, with a `value` field. A secret's
+[`ref`](/reference/configuration/#secret-references) field names an existing KV
+entry instead: `item` is the KV path relative to the mount, and `field` selects
+the field to read. `field` is required, since KV entries are maps. References
+are **read-only** in this provider.
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "DB", ref = { item = "myapp/config", field = "db_url" }, providers = ["vault://vault.example.com:8200/secret"] }
+```
+
+The mount is not a ref coordinate: it comes from the provider URI (`secret` in
+the example above). To read one secret from a different mount, give that secret
+a `providers` entry with the mount in the URI.
+
 ## Usage
 
 ### Basic Commands

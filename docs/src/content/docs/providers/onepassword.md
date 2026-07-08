@@ -57,14 +57,16 @@ expire after 30 minutes of inactivity; if they expire mid-session,
 ### URI Format
 
 ```
-onepassword://[account@]vault[/path]
-onepassword+token://[token@]vault[/path]
+onepassword://[account@]vault
+onepassword+token://[token@]vault
 ```
 
 - `account`: Optional account shorthand
 - `vault`: Target vault name (defaults to "Private")
 - `token`: Service account token
-- `path`: Reserved for future use
+
+The URI names a vault only; item paths (e.g. `onepassword://Vault/item/field`)
+are rejected. To name a specific item, use a [secret reference](#secret-references).
 
 ### Examples
 
@@ -80,6 +82,49 @@ $ secretspec set SECRET --provider "onepassword+token://ops_token123@Production"
 
 # Default vault (Private)
 $ secretspec set KEY --provider onepassword://
+```
+
+## Secret References
+
+By default, secretspec manages its own items in 1Password (Secure Notes named
+`secretspec/{project}/{profile}/{key}`). If your secrets already live in
+1Password items you manage yourself, name those items with the
+[`ref`](/reference/configuration/#secret-references) field and route the secret
+at a vault with `providers`:
+
+```toml
+# secretspec.toml
+[profiles.production]
+DATABASE_URL = { description = "Production DB", ref = { item = "Postgres", field = "connection-url" }, providers = ["onepassword://Infra"] }
+STRIPE_API_KEY = { description = "Stripe key", ref = { item = "Stripe", field = "api key" }, providers = ["onepassword://Infra"] }
+```
+
+The coordinates translate to 1Password as follows:
+
+- `item`: the item title or UUID. Spaces are fine.
+- `field`: the field label. Without `field`, the item is read like a
+  convention secret (its value or password field), and writes edit the `value`
+  field.
+- `vault`: overrides the URI's default vault for this one secret, e.g.
+  `ref = { vault = "Production", item = "infra", field = "token" }`.
+- `section`: addresses a field inside a section; requires `field`.
+
+Writes go through `op item edit`: `secretspec set` updates the referenced field
+in place, adding the field to the item if it is missing. Items are never
+created through a ref.
+
+A ref does not pin the store. Provider resolution works as usual, so a
+`providers` chain can fall back to other stores, and
+`--provider dotenv:.env.fixtures` redirects these secrets to a fixtures file
+during tests.
+
+Native reference strings from the 1Password app's **Copy Secret Reference**
+(`op://vault/item/field`) are not accepted directly; pasting one into `ref`
+produces an error that spells out the translation:
+
+```toml
+# op://Infra/Postgres/connection-url becomes:
+DATABASE_URL = { description = "Production DB", ref = { vault = "Infra", item = "Postgres", field = "connection-url" }, providers = ["onepassword://Infra"] }
 ```
 
 ## Usage

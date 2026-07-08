@@ -3055,10 +3055,7 @@ fn test_per_secret_provider_configuration() {
 fn test_provider_alias_resolution() {
     let mut providers_map = HashMap::new();
     providers_map.insert("dev".to_string(), "dotenv://.env.development".to_string());
-    providers_map.insert(
-        "prod".to_string(),
-        "onepassword://vault/Production".to_string(),
-    );
+    providers_map.insert("prod".to_string(), "onepassword://Production".to_string());
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
@@ -3098,7 +3095,7 @@ fn test_provider_alias_resolution() {
         .expect("Should resolve prod alias");
     assert_eq!(
         prod_uris,
-        Some(vec!["onepassword://vault/Production".to_string()])
+        Some(vec!["onepassword://Production".to_string()])
     );
 
     // Test resolving multiple aliases in order
@@ -3109,7 +3106,7 @@ fn test_provider_alias_resolution() {
         multi_uris,
         Some(vec![
             "dotenv://.env.development".to_string(),
-            "onepassword://vault/Production".to_string(),
+            "onepassword://Production".to_string(),
         ])
     );
 
@@ -3840,21 +3837,15 @@ provider = "keyring"
         config.defaults.providers = Some(HashMap::new());
     }
     if let Some(providers) = &mut config.defaults.providers {
-        providers.insert(
-            "shared".to_string(),
-            "onepassword://vault/Shared".to_string(),
-        );
-        providers.insert(
-            "prod".to_string(),
-            "onepassword://vault/Production".to_string(),
-        );
+        providers.insert("shared".to_string(), "onepassword://Shared".to_string());
+        providers.insert("prod".to_string(), "onepassword://Production".to_string());
     }
 
     // Verify providers were added
     assert_eq!(config.defaults.providers.as_ref().unwrap().len(), 2);
     assert_eq!(
         config.defaults.providers.as_ref().unwrap().get("shared"),
-        Some(&"onepassword://vault/Shared".to_string())
+        Some(&"onepassword://Shared".to_string())
     );
 
     // Simulate removing a provider alias
@@ -4545,6 +4536,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
             required: None,
             default: None,
             providers: None,
+            reference: None,
             as_path: None,
             secret_type: Some("password".to_string()),
             generate: Some(crate::config::GenerateConfig::Bool(true)),

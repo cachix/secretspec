@@ -1,4 +1,4 @@
-use crate::provider::{Provider, ProviderUrl};
+use crate::provider::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -236,8 +236,28 @@ impl LastPassProvider {
 }
 
 impl Provider for LastPassProvider {
+    /// Convention items live under the folder-prefix format string,
+    /// `secretspec/{project}/{profile}/{key}` by default.
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: self.format_item_name(project, key, profile),
+            ..Default::default()
+        })
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
+    }
+
+    /// `lpass status` probes the user's singleton LastPass session, so every
+    /// instance shares one preflight probe.
+    fn auth_scope_key(&self) -> Option<String> {
+        Some(String::new())
     }
 
     fn uri(&self) -> String {
@@ -281,8 +301,8 @@ impl Provider for LastPassProvider {
     ///
     /// - Returns an error if not logged in to LastPass
     /// - Returns an error if the LastPass CLI fails
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        let item_name = self.format_item_name(project, key, profile);
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let item_name = crate::provider::flat_item(self, addr)?;
 
         match self.execute_lpass_command(&["show", "--sync=now", "--password", &item_name]) {
             Ok(output) => {
@@ -330,11 +350,11 @@ impl Provider for LastPassProvider {
     /// The method uses non-interactive mode and disables pinentry to avoid
     /// GUI prompts. The secret value is passed via stdin to avoid exposing
     /// it in the process list.
-    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        let item_name = self.format_item_name(project, key, profile);
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        let item_name = crate::provider::flat_item(self, addr)?;
 
         // Check if item exists
-        if self.get(project, key, profile)?.is_some() {
+        if self.get(addr)?.is_some() {
             // Update existing item
             let args = vec![
                 "edit",
@@ -408,5 +428,40 @@ impl Default for LastPassProvider {
     /// This is equivalent to calling `LastPassProvider::new(LastPassConfig::default())`.
     fn default() -> Self {
         Self::new(LastPassConfig::default())
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+
+    /// A native address names the item directly via `item`, bypassing the
+    /// folder-prefix format string.
+    #[test]
+    fn native_address_names_the_item() {
+        let p = LastPassProvider::new(LastPassConfig {
+            folder_prefix: Some("Work/{key}".to_string()),
+        });
+        let addr = crate::config::NativeAddress {
+            item: "Shared/api-token".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::provider::flat_item(&p, Address::Native(&addr)).unwrap(),
+            "Shared/api-token"
+        );
+    }
+
+    /// LastPass items are read whole here; a `field` coordinate is rejected.
+    #[test]
+    fn native_address_rejects_field() {
+        let p = LastPassProvider::new(LastPassConfig::default());
+        let addr = crate::config::NativeAddress {
+            item: "api-token".into(),
+            field: Some("password".into()),
+            ..Default::default()
+        };
+        let err = crate::provider::flat_item(&p, Address::Native(&addr)).unwrap_err();
+        assert!(err.to_string().contains("`field`"), "{err}");
     }
 }

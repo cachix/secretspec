@@ -89,6 +89,7 @@ Each secret variable is defined as a table with the following fields:
 | `required` | boolean | No* | Whether the value must be provided (default: true) |
 | `default` | string | No** | Default value if not provided |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
+| `ref` | table | No**** | Coordinates naming an externally managed secret in the provider's store (e.g. `ref = { item = "db", field = "password" }`) |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
 | `type` | string | No*** | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
 | `generate` | boolean or table | No*** | Enable auto-generation when secret is missing |
@@ -96,6 +97,7 @@ Each secret variable is defined as a table with the following fields:
 *If `default` is provided, `required` defaults to false
 **Only valid when `required = false`
 ***`type` is required when `generate` is enabled; `generate` and `default` cannot both be set
+****`ref` cannot be combined with `generate`; see [Secret References](#secret-references)
 
 ## Complete Example
 
@@ -108,8 +110,8 @@ extends = ["../shared/secretspec.toml"]  # Optional inheritance
 
 # Provider aliases used by profile provider chains
 [providers]
-prod_vault = "onepassword://vault/Production"
-shared_vault = "onepassword://vault/Shared"
+prod_vault = "onepassword://Production"
+shared_vault = "onepassword://Shared"
 keyring = "keyring://"
 env = "env://"
 
@@ -144,8 +146,8 @@ On conflict the project-level alias wins, so a stale local config cannot silentl
 
 ```toml title="secretspec.toml"
 [providers]
-prod_vault = "onepassword://vault/Production"
-shared_vault = "onepassword://vault/Shared"
+prod_vault = "onepassword://Production"
+shared_vault = "onepassword://Shared"
 keyring = "keyring://"
 env = "env://"
 
@@ -158,8 +160,8 @@ DATABASE_URL = { description = "Production DB", providers = ["prod_vault", "keyr
 provider = "keyring"
 
 [defaults.providers]
-prod_vault = "onepassword://vault/Production"
-shared_vault = "onepassword://vault/Shared"
+prod_vault = "onepassword://Production"
+shared_vault = "onepassword://Shared"
 keyring = "keyring://"
 env = "env://"
 ```
@@ -168,7 +170,7 @@ Manage user-level aliases via CLI:
 
 ```bash
 # Add a provider alias to your user config
-$ secretspec config provider add prod_vault "onepassword://vault/Production"
+$ secretspec config provider add prod_vault "onepassword://Production"
 
 # List all aliases known to your user config
 $ secretspec config provider list
@@ -220,6 +222,168 @@ GOOGLE_APPLICATION_CREDENTIALS = { description = "GCP service account", as_path 
 | CLI (`get`, `check`, `run`) | Files are persisted (not deleted after command exits) |
 | Rust SDK | Files cleaned up when `ValidatedSecrets` is dropped; use `keep_temp_files()` to persist |
 | Rust SDK types | `PathBuf` or `Option<PathBuf>` instead of `String` |
+
+### Secret References
+
+By default, SecretSpec names secrets in a provider's store by its own
+`{project}/{profile}/{key}` convention. The `ref` field replaces that naming for
+one secret with the store's own coordinates, so SecretSpec reads and writes a
+secret that already exists and is managed outside SecretSpec:
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "Postgres DSN", ref = { item = "db", field = "password" }, providers = ["prod_vault"] }
+INFRA_TOKEN  = { description = "Infra token", ref = { vault = "Production", item = "infra", field = "token" } }
+GITHUB_TOKEN = { description = "GitHub token", ref = { item = "GITHUB_PAT" }, providers = ["env"] }
+```
+
+`ref` is a table of provider-independent coordinates. Unknown keys are rejected
+at parse time.
+
+| Coordinate | Required | Meaning |
+|------------|----------|---------|
+| `item` | Yes | The store's complete name for the secret. Replaces the whole convention path |
+| `field` | No | A named component inside the item. Rejected by stores whose secrets hold a single value |
+| `vault` | No | The container holding the item. 1Password only; other stores take their container from the provider URI |
+| `section` | No | A named group of fields inside the item. 1Password only; requires `field` |
+| `version` | No | Which revision of the secret to read. Google Secret Manager only; defaults to the latest |
+
+#### What the coordinates mean
+
+The coordinates address one secret from the outside in. Each names a different
+level of the store's structure:
+
+```
+vault                which container holds the item        (1Password only)
+└── item             the store's own name for the secret   (always required)
+    └── section      a named group of fields               (1Password only)
+        └── field    one component inside the item         (structured stores)
+            └── version   which revision to read           (GCSM only)
+```
+
+Only `item` is universal. The others exist because some stores give a secret
+internal structure, or nest it inside a container.
+
+**`item` is the complete name, not a suffix.** It replaces the entire
+`{project}/{profile}/{key}` convention path, including any `folder_prefix` or
+format string the provider is configured with. Nothing is prepended:
+
+```toml
+# Reads the .env key TOTALLY_DIFFERENT_NAME.
+# Not secretspec/myapp/default/DATABASE_URL.
+DATABASE_URL = { description = "DB", ref = { item = "TOTALLY_DIFFERENT_NAME" }, providers = ["dotenv"] }
+```
+
+So whatever the store calls a secret's full name is what goes in `item`: a
+1Password item title, a Vault KV path (`myapp/config`), an AWS secret name or a
+complete ARN, a `pass` entry path (`email/work`), a GCSM secret id, a keyring
+service, a `.env` key, an environment variable name.
+
+**`field` addresses a component inside the item.** Stores fall into two groups:
+
+| Store | Shape of one secret | `field` |
+|-------|---------------------|---------|
+| dotenv, env, pass, LastPass, Proton Pass, Bitwarden | a single value | Rejected: there is nothing to select |
+| 1Password, Vault KV, AWS Secrets Manager, keyring | a record of named parts | Selects the part: field label, map key, JSON key, account |
+
+A coordinate a store has no equivalent for is **rejected with an error naming
+it**, never silently ignored. A ref written for 1Password fails loudly when
+routing points it at `pass`, instead of quietly reading the wrong secret.
+
+**`vault` is the only container coordinate.** Every store has some container: a
+1Password vault, a Vault mount, a GCSM project, an AWS region. For all of them
+except 1Password, the container is part of the *provider URI*, not the ref:
+
+```toml
+# The mount `kv2` comes from the URI; the ref names the path inside it.
+DB = { description = "DB", ref = { item = "myapp/config", field = "pw" }, providers = ["vault://vault.example.com:8200/kv2"] }
+
+# 1Password is the exception: `vault` on the ref overrides the URI's default vault.
+TOKEN = { description = "Token", ref = { vault = "Production", item = "infra", field = "token" }, providers = ["onepassword://Private"] }
+```
+
+To point one secret at a different mount, project, or region, give it a
+`providers` entry with that URI rather than reaching for a coordinate.
+
+#### Refs name, providers route
+
+A `ref` supplies naming only; it does not pin a store. Which provider resolves
+the coordinates follows the ordinary resolution order:
+
+1. An explicit `--provider` flag or `SECRETSPEC_PROVIDER` override
+2. The secret's `providers` fallback chain
+3. The profile's default providers (`[profiles.<name>.defaults]`)
+4. The global default provider
+
+`ref` therefore composes with `providers`: each provider in the chain is asked
+for the same coordinates, and a chain member that cannot interpret them warns
+and the chain continues. Chain entries may be aliases from the `[providers]`
+table or inline provider URIs:
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "Postgres DSN", ref = { item = "db", field = "password" }, providers = ["onepassword://Production", "keyring"] }
+```
+
+Because the store is not baked into the ref, the `--provider` override redirects
+ref secrets exactly like convention secrets. This makes fixtures trivial: point
+every ref at a `.env` file during tests without editing the manifest:
+
+```bash
+$ secretspec run --provider dotenv:.env.fixtures -- cargo test
+```
+
+#### How providers interpret the coordinates
+
+| Provider | `item` | `field` | Without `field` | Writes via ref |
+|----------|--------|---------|-----------------|----------------|
+| [OnePassword](/providers/onepassword/#secret-references) | Item title or UUID | Field label; `vault` and `section` also apply | Reads the item like a convention secret (its value or password field); writes edit the `value` field | ✅ via `op item edit` (adds a missing field, never creates items) |
+| [keyring](/providers/keyring/#secret-references) | Service | Account (defaults to the current system username) | Current user's entry | ✅ |
+| [dotenv](/providers/dotenv/#secret-references) | `.env` key | Rejected | Reads the key | ✅ |
+| [env](/providers/env/#secret-references) | Variable name | Rejected | Reads the variable | — (read-only) |
+| [pass](/providers/pass/#secret-references) | Entry path | Rejected | Reads the entry | ✅ |
+| [LastPass](/providers/lastpass/#secret-references) | Item name | Rejected | Reads the item | ✅ |
+| [Proton Pass](/providers/protonpass/#secret-references) | Item title | Rejected | Reads the note | ✅ |
+| [Vault / OpenBao](/providers/vault/#secret-references) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
+| [AWS Secrets Manager](/providers/awssm/#secret-references) | Secret name or ARN | JSON key | Whole secret string | — (read-only) |
+| [GCSM](/providers/gcsm/#secret-references) | Secret id; `version` also applies | Rejected | Reads latest or the pinned version | — (read-only) |
+| [Bitwarden (bws)](/providers/bws/#secret-references) | BWS key name | Rejected | Reads the key | ✅ |
+
+A provider rejects coordinates it has no equivalent for, with an error naming
+the coordinate (for example, `field` on the env provider).
+
+#### Writing through a ref
+
+Writes are symmetric with reads: `secretspec set` and interactive `check`
+prompting write through the coordinates in place wherever the table above says
+writes are supported. Read-only stores fail with a clear error instead.
+
+#### Combining with other fields
+
+`ref` cannot be combined with `generate`: a referenced secret is externally
+managed, not minted. It combines freely with `default`, `required`, and
+`as_path`.
+
+#### No string refs
+
+`ref` is always a table. String and URI forms (`ref = "op://vault/item/field"`,
+`ref = "env://VAR"`, query-parameter URIs, and similar) are rejected, and the
+error spells out the exact table translation. For example, a pasted 1Password
+reference `op://Production/infra/token` translates to:
+
+```toml
+INFRA_TOKEN = { description = "Infra token", ref = { vault = "Production", item = "infra", field = "token" }, providers = ["onepassword://Production"] }
+```
+
+Provider URIs stay store addresses only: `onepassword://Production` names a
+vault, and item paths on provider URIs are errors.
+
+#### Deduplication, auditing, and reporting
+
+- Secrets sharing identical coordinates and store are fetched once.
+- [Audit log](/concepts/audit/) events carry a `ref` field with the coordinates.
+- `check --explain` and `check --json` attribute ref secrets to the store URI
+  they resolved from.
 
 ### Secret Generation
 

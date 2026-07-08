@@ -5,16 +5,48 @@ description: Step-by-step guide for implementing custom provider backends
 
 ## Provider Trait
 
-All providers must implement the `Provider` trait:
+All providers must implement the `Provider` trait. Every operation names its
+secret with an `Address`: either the store's own coordinates (a secret's
+`ref`) or SecretSpec's `{project}/{profile}/{key}` naming convention, which
+your provider compiles into its native coordinates via `convention_address`:
 
 ```rust
 pub trait Provider: Send + Sync {
     fn name(&self) -> &'static str;
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<String>>;
-    fn set(&self, project: &str, key: &str, value: &str, profile: &str) -> Result<()>;
-    fn allows_set(&self) -> bool { true }  // Optional, defaults to true
+    fn uri(&self) -> String;
+
+    /// Compile SecretSpec's naming convention into the store's native
+    /// coordinates. The single owner of the provider's convention layout.
+    fn convention_address(&self, project: &str, profile: &str, key: &str)
+        -> Result<NativeAddress>;
+
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>>;
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()>;
+
+    /// Optional, defaults to empty. The `ref` coordinates your store can
+    /// honor beyond `item`; every other coordinate is rejected for you.
+    fn supported_coords(&self) -> &'static [&'static str] { &[] }
+
+    /// Optional, defaults to writable. Read-only providers reject every
+    /// address; providers whose refs name externally managed secrets reject
+    /// native addresses only. State the reason: it is what the user sees.
+    fn check_writable(&self, addr: Address<'_>) -> Result<()> { Ok(()) }
+
+    /// Optional batch read. The default resolves each request's address and
+    /// fetches every unique address once, concurrently; override it when the
+    /// store has a real bulk surface (one listing, a batch API).
+    fn get_many(&self, requests: &[(&str, Address<'_>)])
+        -> Result<HashMap<String, SecretString>> { /* default */ }
 }
 ```
+
+Inside `get`/`set`, call `self.resolve_coords(addr)` to obtain the native
+coordinates for any address. It rejects any coordinate outside
+`supported_coords` (e.g. a `field` on a flat key/value store), so a `ref`
+written for another store fails loudly instead of resolving something else —
+you declare the set, you never write the check. Have `set` call
+`self.check_writable(addr)?` first, so the pre-check and the write agree on
+one refusal message.
 
 ## Implementation Steps
 
@@ -84,13 +116,27 @@ impl Provider for MyBackendProvider {
         Self::PROVIDER_NAME
     }
 
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<String>> {
-        // Implementation
+    fn uri(&self) -> String {
+        "mybackend".to_string()
+    }
+
+    fn convention_address(&self, project: &str, profile: &str, key: &str)
+        -> Result<NativeAddress> {
+        Ok(NativeAddress {
+            item: format!("secretspec/{}/{}/{}", project, profile, key),
+            ..Default::default()
+        })
+    }
+
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let coords = self.resolve_coords(addr)?;
+        // Reject coordinates the store cannot honor, then read coords.item
         Ok(None)
     }
 
-    fn set(&self, project: &str, key: &str, value: &str, profile: &str) -> Result<()> {
-        // Implementation
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        let coords = self.resolve_coords(addr)?;
+        // Write value at coords.item
         Ok(())
     }
 }

@@ -613,6 +613,218 @@ pub struct GenerateOptions {
     pub bits: Option<usize>,
 }
 
+/// Native coordinates of one externally managed secret: the value of a
+/// secret's `ref` field.
+///
+/// The coordinates carry naming only; *routing* (which store to consult) stays
+/// with the ordinary provider resolution (`providers` chains, `--provider`
+/// override, defaults). Each provider translates the coordinates into its own
+/// namespace — the 1Password item title, the Vault KV path plus field, the AWS
+/// secret name plus JSON key, the `.env` key — and rejects coordinates it has
+/// no equivalent for, so the same `ref` re-resolves against whichever store
+/// routing selects.
+///
+/// The coordinates are *not* uniformly provider-independent, and this type does
+/// not pretend they are:
+///
+/// - `item` (required) and `field` are shared vocabulary every relevant store
+///   maps: a name, and an optional component within it.
+/// - `vault`, `section` (1Password), and `version` (GCSM) are coordinates only
+///   some stores have an equivalent for. Each is named for the concept, not the
+///   vendor, so another store can adopt one by adding it to its
+///   [`supported_coords`](crate::provider::Provider::supported_coords); a store
+///   that has not rejects it rather than guessing. They are deliberately *not*
+///   collapsed into one generalized coordinate: a 1Password vault (a per-secret
+///   naming axis) and a Vault mount (set-once connection topology, whose
+///   per-secret hierarchy already lives in `item`) are different concepts and
+///   should not be forced to look alike. A store whose container is genuinely
+///   connection-level (a Vault mount, a GCSM project, an AWS region) takes it
+///   from the provider URI instead.
+///
+/// Unknown TOML keys are rejected at parse time.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize)]
+pub struct NativeAddress {
+    /// The store's own name for the secret: item title (1Password, Proton
+    /// Pass, LastPass), entry path (pass), KV path (Vault), secret name/ARN
+    /// (AWS), secret id (GCSM), key name (BWS, dotenv), variable name (env),
+    /// service (keyring).
+    pub item: String,
+    /// A component within the item: field label (1Password), KV field
+    /// (Vault), JSON key (AWS), account (keyring). Providers whose secrets
+    /// have no sub-components reject it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// 1Password only: the vault holding the item, overriding the store's
+    /// default vault for this secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault: Option<String>,
+    /// 1Password only: the section containing the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    /// GCSM only: the secret version to read; defaults to the latest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+impl NativeAddress {
+    /// Every coordinate name paired with its value, outer scope first. The
+    /// single enumeration that the renderer, the validator, and the
+    /// provider-side coordinate rejection all consume, so a new coordinate
+    /// cannot be added to one and silently missed by the others.
+    pub(crate) fn coordinates(&self) -> [(&'static str, Option<&str>); 5] {
+        [
+            ("vault", self.vault.as_deref()),
+            ("item", Some(self.item.as_str())),
+            ("section", self.section.as_deref()),
+            ("field", self.field.as_deref()),
+            ("version", self.version.as_deref()),
+        ]
+    }
+
+    /// Canonical single-line rendering for logs and audit events, outer scope
+    /// first: `vault=Production item=db field=password`. Only present
+    /// coordinates appear.
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        for (name, value) in self.coordinates() {
+            if let Some(value) = value {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(name);
+                out.push('=');
+                out.push_str(value);
+            }
+        }
+        out
+    }
+}
+
+/// Derived deserialization target for [`NativeAddress`]. The manual
+/// [`Deserialize`] below delegates table input here so serde's precise
+/// `deny_unknown_fields` messages ("unknown field \`filed\`, expected one of
+/// ...") survive, while string input gets a translation hint instead of the
+/// useless "invalid type" default.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeAddressFields {
+    item: String,
+    field: Option<String>,
+    vault: Option<String>,
+    section: Option<String>,
+    version: Option<String>,
+}
+
+impl From<NativeAddressFields> for NativeAddress {
+    fn from(f: NativeAddressFields) -> Self {
+        NativeAddress {
+            item: f.item,
+            field: f.field,
+            vault: f.vault,
+            section: f.section,
+            version: f.version,
+        }
+    }
+}
+
+/// Renders the `ref = { ... }` TOML inline table used by the error hints that
+/// translate a rejected provider-URI address into the exact table to write.
+/// Shared by the string-`ref` deserialization hint below and by every provider
+/// that rejects a URI-embedded address, so the renderings cannot drift.
+pub(crate) fn ref_table_hint(
+    vault: Option<&str>,
+    item: &str,
+    section: Option<&str>,
+    field: Option<&str>,
+) -> String {
+    let coords = NativeAddress {
+        item: item.to_string(),
+        field: field.map(str::to_string),
+        vault: vault.map(str::to_string),
+        section: section.map(str::to_string),
+        version: None,
+    };
+    let rendered: Vec<String> = coords
+        .coordinates()
+        .into_iter()
+        .filter_map(|(name, value)| value.map(|v| format!("{name} = \"{v}\"")))
+        .collect();
+    format!("ref = {{ {} }}", rendered.join(", "))
+}
+
+/// The error shown when `ref` is written as a string. Earlier iterations of
+/// the feature accepted provider URIs here, so pasted `op://vault/item/field`
+/// strings are the expected mistake: translate the common shapes into the
+/// exact table to write.
+fn ref_string_hint(s: &str) -> String {
+    if let Some(rest) = s.strip_prefix("op://") {
+        let segments: Vec<&str> = rest.split('/').collect();
+        match segments[..] {
+            [vault, item, field] if !vault.is_empty() && !item.is_empty() && !field.is_empty() => {
+                return format!(
+                    "`ref` takes a table of coordinates, not a URI. Use: {}",
+                    ref_table_hint(Some(vault), item, None, Some(field))
+                );
+            }
+            [vault, item, section, field]
+                if !vault.is_empty()
+                    && !item.is_empty()
+                    && !section.is_empty()
+                    && !field.is_empty() =>
+            {
+                return format!(
+                    "`ref` takes a table of coordinates, not a URI. Use: {}",
+                    ref_table_hint(Some(vault), item, Some(section), Some(field))
+                );
+            }
+            _ => {}
+        }
+    }
+    format!(
+        "`ref` takes a table of native secret coordinates, not a string: got '{s}'. \
+         Write e.g. {}; which store resolves \
+         the coordinates comes from `providers` (or the default provider).",
+        ref_table_hint(None, "db", None, Some("password"))
+    )
+}
+
+impl<'de> Deserialize<'de> for NativeAddress {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct AddressVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for AddressVisitor {
+            type Value = NativeAddress;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(
+                    f,
+                    "a table of native secret coordinates like {{ item = \"db\", field = \"password\" }}"
+                )
+            }
+
+            fn visit_map<A>(self, map: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                NativeAddressFields::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map(NativeAddress::from)
+            }
+
+            fn visit_str<E>(self, s: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom(ref_string_hint(s)))
+            }
+        }
+
+        deserializer.deserialize_any(AddressVisitor)
+    }
+}
+
 /// Configuration for an individual secret.
 ///
 /// Defines the properties of a secret including its documentation,
@@ -636,6 +848,19 @@ pub struct Secret {
     /// Example: providers = ["keyring", "env"] will try keyring first, then env.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub providers: Option<Vec<String>>,
+    /// Native coordinates naming one externally managed secret (see
+    /// [`NativeAddress`]): `ref = { item = "db", field = "password" }`.
+    ///
+    /// The coordinates supply *naming only*, replacing SecretSpec's own
+    /// `{project}/{profile}/{key}` scheme for this secret. Which store
+    /// resolves them follows ordinary provider resolution — the secret's
+    /// `providers` chain, the `--provider` override, or the default provider —
+    /// so the same `ref` can be re-routed (e.g. at a fixtures store during
+    /// tests) without editing it, and composes with `providers`. Cannot be
+    /// combined with `generate` (a referenced secret is externally managed,
+    /// not minted). Serialized as `ref` in TOML.
+    #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub reference: Option<NativeAddress>,
     /// Whether to write the secret value to a temporary file and return the path.
     /// If true, the secret will be written to a temporary file and the field
     /// will contain the path to that file instead of the secret value.
@@ -667,6 +892,26 @@ impl Secret {
         // If required is explicitly true and default is set, that's an error
         if self.required == Some(true) && self.default.is_some() {
             return Err("Required secrets cannot have default values".into());
+        }
+
+        // A `ref` supplies naming only, so it composes with `providers`
+        // routing; `generate` stays incompatible (a referenced secret is
+        // externally managed, not minted).
+        if let Some(reference) = &self.reference {
+            if self.generate.as_ref().is_some_and(|g| g.is_enabled()) {
+                return Err("`ref` and `generate` cannot both be set".into());
+            }
+            // `coordinates()` yields `item` too, so this covers the required
+            // coordinate as well as the optional ones. Whitespace-only is a
+            // typo, not a name: no store has a secret titled "   ".
+            for (name, value) in reference.coordinates() {
+                if value.is_some_and(|v| v.trim().is_empty()) {
+                    return Err(format!(
+                        "`ref` coordinate `{}` cannot be empty or whitespace",
+                        name
+                    ));
+                }
+            }
         }
 
         // Validate generate config
@@ -780,7 +1025,7 @@ pub struct GlobalDefaults {
     /// provider details in secretspec.toml. Example user config:
     /// ```toml
     /// [defaults.providers]
-    /// shared = "onepassword://vault/Shared"
+    /// shared = "onepassword://Shared"
     /// local = "dotenv://.env.local"
     /// ```
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1395,6 +1640,196 @@ mod validation_tests {
             s.validate()
                 .unwrap_err()
                 .contains("requires generate = { command")
+        );
+    }
+
+    /// Shorthand for a native address in tests.
+    fn addr(item: &str, field: Option<&str>) -> NativeAddress {
+        NativeAddress {
+            item: item.to_string(),
+            field: field.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn secret_validate_accepts_reference() {
+        let s = Secret {
+            description: Some("Sentry DSN".to_string()),
+            reference: Some(addr("shared", Some("SENTRY_DSN"))),
+            ..Default::default()
+        };
+        assert!(s.validate().is_ok());
+    }
+
+    /// A `ref` supplies naming and `providers` supplies routing; they compose.
+    #[test]
+    fn secret_validate_accepts_ref_with_providers() {
+        let s = Secret {
+            description: Some("d".to_string()),
+            reference: Some(addr("db", Some("password"))),
+            providers: Some(vec!["keyring".to_string()]),
+            ..Default::default()
+        };
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn secret_validate_rejects_ref_with_generate() {
+        let s = Secret {
+            description: Some("d".to_string()),
+            reference: Some(addr("db", Some("password"))),
+            secret_type: Some("password".to_string()),
+            generate: Some(GenerateConfig::Bool(true)),
+            ..Default::default()
+        };
+        assert!(
+            s.validate()
+                .unwrap_err()
+                .contains("`ref` and `generate` cannot both be set")
+        );
+    }
+
+    #[test]
+    fn secret_validate_rejects_empty_ref_coordinates() {
+        let s = Secret {
+            description: Some("d".to_string()),
+            reference: Some(addr("", None)),
+            ..Default::default()
+        };
+        assert!(s.validate().unwrap_err().contains("`item` cannot be empty"));
+
+        let s = Secret {
+            description: Some("d".to_string()),
+            reference: Some(addr("db", Some(""))),
+            ..Default::default()
+        };
+        assert!(
+            s.validate()
+                .unwrap_err()
+                .contains("`field` cannot be empty")
+        );
+
+        // Whitespace-only is the same typo as empty: no store names a secret
+        // "   ", and an unrejected one resolves against the store verbatim.
+        for blank in ["   ", "\t", "\n"] {
+            let s = Secret {
+                description: Some("d".to_string()),
+                reference: Some(addr(blank, None)),
+                ..Default::default()
+            };
+            assert!(
+                s.validate().unwrap_err().contains("`item` cannot be empty"),
+                "item {blank:?} should be rejected"
+            );
+
+            let s = Secret {
+                description: Some("d".to_string()),
+                reference: Some(addr("db", Some(blank))),
+                ..Default::default()
+            };
+            assert!(
+                s.validate()
+                    .unwrap_err()
+                    .contains("`field` cannot be empty"),
+                "field {blank:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn secret_reference_round_trips_as_ref_in_toml() {
+        // The field is `reference` in Rust but `ref` in TOML, and is omitted
+        // when unset so `secretspec config`/init output stays clean.
+        let s = Secret {
+            description: Some("d".to_string()),
+            reference: Some(NativeAddress {
+                item: "db".to_string(),
+                field: Some("password".to_string()),
+                vault: Some("Production".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let toml = toml::to_string(&s).unwrap();
+        assert!(toml.contains("item = \"db\""), "{toml}");
+        let parsed = toml::from_str::<Secret>(&toml).unwrap();
+        assert_eq!(parsed.reference, s.reference);
+
+        let toml = toml::to_string(&Secret {
+            description: Some("d".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(!toml.contains("ref"));
+    }
+
+    /// All coordinate keys parse from the inline table form.
+    #[test]
+    fn ref_table_parses_every_coordinate() {
+        let s: Secret = toml::from_str(
+            r#"description = "d"
+ref = { vault = "Production", item = "db", section = "api", field = "password", version = "3" }"#,
+        )
+        .unwrap();
+        let reference = s.reference.unwrap();
+        assert_eq!(reference.vault.as_deref(), Some("Production"));
+        assert_eq!(reference.item, "db");
+        assert_eq!(reference.section.as_deref(), Some("api"));
+        assert_eq!(reference.field.as_deref(), Some("password"));
+        assert_eq!(reference.version.as_deref(), Some("3"));
+    }
+
+    /// A misspelled coordinate fails with serde's precise unknown-field
+    /// message rather than an opaque untagged-enum error.
+    #[test]
+    fn ref_table_rejects_unknown_keys() {
+        let err = toml::from_str::<Secret>(
+            r#"description = "d"
+ref = { item = "db", filed = "password" }"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field `filed`"), "{err}");
+    }
+
+    /// A string `ref` (the shape earlier iterations accepted) errors with the
+    /// exact table translation for the common `op://` paste.
+    #[test]
+    fn ref_string_gets_translation_hint() {
+        let err = toml::from_str::<Secret>(
+            r#"description = "d"
+ref = "op://Production/db/password""#,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ref = { vault = \"Production\", item = \"db\", field = \"password\" }"),
+            "{msg}"
+        );
+
+        let err = toml::from_str::<Secret>(
+            r#"description = "d"
+ref = "just-a-string""#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("table of native secret coordinates"),
+            "{err}"
+        );
+    }
+
+    /// A non-string, non-table value reports the expected shape.
+    #[test]
+    fn ref_wrong_type_reports_expected_shape() {
+        let err = toml::from_str::<Secret>(
+            r#"description = "d"
+ref = 3"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("native secret coordinates"),
+            "{err}"
         );
     }
 

@@ -46,6 +46,18 @@ export LPASS_DISABLE_PINENTRY=1
 echo "password" | lpass login --trust your-email@example.com
 ```
 
+## Secret References
+
+By default each secret maps to an item named `secretspec/{project}/{profile}/{key}`.
+A secret's [`ref`](/reference/configuration/#secret-references) field names an
+existing item instead: `item` is the full item name, including any folder
+(`field` is not supported). Reads and writes target that item in place.
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "DB", ref = { item = "Shared-Infra/Production DB" }, providers = ["lastpass"] }
+```
+
 ## Usage
 
 ```bash

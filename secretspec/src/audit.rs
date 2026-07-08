@@ -119,6 +119,10 @@ pub(crate) struct AuditContext<'a> {
     /// The provider URI that served (or was consulted for) the access. Redacted
     /// before it is written.
     pub provider_uri: Option<String>,
+    /// Canonical rendering of the secret's native `ref` coordinates, when the
+    /// access resolved one (e.g. `item=db field=password`). Keeps per-address
+    /// granularity now that `provider` names only the store.
+    pub reference: Option<String>,
     pub outcome: AuditOutcome,
     pub error_kind: Option<&'a str>,
     pub reason: Option<&'a str>,
@@ -151,6 +155,9 @@ struct AuditEvent<'a> {
     /// Redacted provider URI.
     #[serde(skip_serializing_if = "Option::is_none")]
     provider: Option<String>,
+    /// Canonical rendering of the native `ref` coordinates, if any.
+    #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+    reference: Option<&'a str>,
     outcome: AuditOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     error_kind: Option<&'a str>,
@@ -377,6 +384,7 @@ impl AuditLogger {
             keys: ctx.keys,
             command: ctx.command,
             provider: ctx.provider_uri.as_deref().map(redact_uri),
+            reference: ctx.reference.as_deref(),
             outcome: ctx.outcome,
             error_kind: ctx.error_kind,
             reason: ctx.reason,
@@ -621,6 +629,7 @@ mod tests {
                 keys: &[],
                 command: None,
                 provider_uri: Some("vault://user:s3cr3t@host/kv".to_string()),
+                reference: None,
                 outcome: AuditOutcome::Found,
                 error_kind: None,
                 reason: Some("deploy web frontend"),
@@ -662,6 +671,7 @@ mod tests {
                 keys: &keys,
                 command: Some("./deploy.sh"),
                 provider_uri: None,
+                reference: None,
                 outcome: AuditOutcome::Found,
                 error_kind: None,
                 reason: None,
@@ -692,6 +702,7 @@ mod tests {
                     keys: &[],
                     command: None,
                     provider_uri: None,
+                    reference: None,
                     outcome: AuditOutcome::Written,
                     error_kind: None,
                     reason: None,
@@ -848,6 +859,7 @@ mod tests {
                 keys: &[],
                 command: None,
                 provider_uri: None,
+                reference: None,
                 outcome: AuditOutcome::Found,
                 error_kind: None,
                 reason: None,

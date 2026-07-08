@@ -35,6 +35,18 @@ protonpass://Work
 protonpass://Work/{project}/{profile}/{key}
 ```
 
+## Secret References
+
+By default each secret maps to an item titled `{project}/{profile}/{key}`. A
+secret's [`ref`](/reference/configuration/#secret-references) field names an
+existing item instead: `item` is the exact item title, whose note is read
+(`field` is not supported). Reads and writes target that item in place.
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "DB", ref = { item = "Production Database" }, providers = ["protonpass://Work"] }
+```
+
 ## Usage
 
 ```bash

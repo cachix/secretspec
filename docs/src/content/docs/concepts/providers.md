@@ -23,12 +23,17 @@ Providers are pluggable storage backends that handle the storage and retrieval o
 
 ## Provider Selection
 
-SecretSpec determines which provider to use in this order:
+SecretSpec determines which provider to use for each secret in this order:
 
-1. **Per-secret providers**: `providers` field in `secretspec.toml` (highest priority, with fallback chain)
-2. **CLI flag**: `secretspec --provider` flag
-3. **Environment**: `SECRETSPEC_PROVIDER`
+1. **Explicit override**: the `--provider` CLI flag or the `SECRETSPEC_PROVIDER` environment variable
+2. **Per-secret providers**: `providers` field in `secretspec.toml` (with fallback chain)
+3. **Profile defaults**: `providers` under `[profiles.<name>.defaults]`
 4. **Global default**: Default provider in user config set via `secretspec config init`
+
+A secret's [`ref`](/reference/configuration/#secret-references) field never
+affects provider selection: it only changes what name is looked up in the store,
+not which store is used. The same order above picks the store for ref secrets
+and convention secrets alike.
 
 ## Configuration
 
@@ -62,7 +67,7 @@ You can use provider URIs for more specific configuration:
 
 ```bash
 # Use a specific OnePassword vault
-$ secretspec run --provider "onepassword://Personal/Development" -- npm start
+$ secretspec run --provider "onepassword://Development" -- npm start
 
 # Use a specific dotenv file
 $ secretspec run --provider "dotenv:/home/user/work/.env" -- npm test
@@ -79,6 +84,14 @@ API_KEY = { description = "API key from env", providers = ["env"] }
 SENTRY_DSN = { description = "Error tracking", providers = ["shared_vault", "keyring"] }
 ```
 
+Chain entries are provider aliases (see below) or inline provider URIs, which
+need no alias declaration:
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "Production DB", providers = ["onepassword://Production", "keyring"] }
+```
+
 ### Profile-Level Default Providers
 
 You can also set default providers for an entire profile using `profiles.<name>.defaults`. See [Profile-Level Defaults](/concepts/profiles/#profile-level-defaults) for details.
@@ -92,8 +105,8 @@ On name conflicts the project-level alias wins, so a stale user config cannot si
 
 ```toml title="secretspec.toml"
 [providers]
-prod_vault = "onepassword://vault/Production"
-shared_vault = "onepassword://vault/Shared"
+prod_vault = "onepassword://Production"
+shared_vault = "onepassword://Shared"
 keyring = "keyring://"
 env = "env://"
 ```
@@ -103,8 +116,8 @@ env = "env://"
 provider = "keyring"
 
 [defaults.providers]
-prod_vault = "onepassword://vault/Production"
-shared_vault = "onepassword://vault/Shared"
+prod_vault = "onepassword://Production"
+shared_vault = "onepassword://Shared"
 keyring = "keyring://"
 env = "env://"
 ```
@@ -130,7 +143,7 @@ Use CLI commands to manage user-level provider aliases in `~/.config/secretspec/
 
 ```bash
 # Add a provider alias
-$ secretspec config provider add prod_vault "onepassword://vault/Production"
+$ secretspec config provider add prod_vault "onepassword://Production"
 
 # List all aliases
 $ secretspec config provider list

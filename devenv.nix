@@ -67,11 +67,14 @@
       CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = muslcc;
       MUSL_CC = muslcc;
       MUSL_STATIC_LDFLAGS = "-L${pkgs.pkgsStatic.dbus.lib}/lib -L${pkgs.pkgsStatic.libunwind}/lib";
-
-      # egui-pinentry's windowing stack (winit / softbuffer / x11-dl) dlopens
-      # these at runtime, so they must be on the loader path. Referenced by path
-      # (not added to `packages`) so they do not pollute the host NIX_LDFLAGS,
-      # matching the musl libs above.
+    }
+    # egui-pinentry's windowing stack (winit / softbuffer / x11-dl) dlopens these
+    # at runtime, so they must be on the loader path. Referenced by path (not added
+    # to `packages`) so they do not pollute the host NIX_LDFLAGS, matching the musl
+    # libs above. Linux-only: these are the X11/Wayland libraries, which do not
+    # exist on macOS (windowing there is native Cocoa), so referencing them on a
+    # darwin host would fail to evaluate the whole shell derivation.
+    // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
       LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (with pkgs; [
         wayland
         libxkbcommon

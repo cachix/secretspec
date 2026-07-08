@@ -4309,6 +4309,63 @@ DB_PASSWORD = { description = "Database password", type = "password", generate =
 }
 
 #[test]
+fn test_generate_writes_through_ref_coordinates() {
+    use secrecy::ExposeSecret;
+
+    // A generatable secret that also carries a `ref`: generation mints the value
+    // and writes it to the ref coordinate (the dotenv key `MY_DB_SECRET`), not to
+    // SecretSpec's `{project}/{profile}/{key}` convention path.
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, "").unwrap();
+
+    let config_file = temp_dir.path().join("secretspec.toml");
+    let toml_content = r#"[project]
+name = "test-gen-ref"
+revision = "1.0"
+
+[profiles.default]
+DB_PASSWORD = { description = "Database password", type = "password", generate = true, ref = { item = "MY_DB_SECRET" } }
+"#;
+    fs::write(&config_file, toml_content).unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+        audit: None,
+    };
+
+    let spec = Secrets::new(config, Some(global_config), None, None);
+    let validated = spec.validate().unwrap().unwrap();
+
+    let generated = validated
+        .resolved
+        .secrets
+        .get("DB_PASSWORD")
+        .unwrap()
+        .expose_secret()
+        .to_string();
+    assert_eq!(generated.len(), 32);
+
+    // The generated value landed at the ref key, not the convention path.
+    let env_contents = fs::read_to_string(&env_file).unwrap();
+    assert!(
+        env_contents.contains("MY_DB_SECRET="),
+        "generated value should be stored under the ref key, got: {}",
+        env_contents
+    );
+    assert!(
+        env_contents.contains(&generated),
+        "the .env file should hold the generated value, got: {}",
+        env_contents
+    );
+}
+
+#[test]
 fn test_validate_does_not_regenerate_existing_secret() {
     use secrecy::ExposeSecret;
 

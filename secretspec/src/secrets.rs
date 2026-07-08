@@ -2056,15 +2056,21 @@ impl Secrets {
 
         let value = crate::generator::generate(secret_type, gen_config)?;
 
-        // Store the generated value. The address is convention naming in
-        // practice: validation rejects `ref` + enabled `generate`.
+        // Store the generated value at the secret's address: its `ref`
+        // coordinates when it has them, otherwise the naming convention.
         let addr =
             Self::secret_address(secret_config, &self.config.project.name, profile_name, name);
         let backend = self.get_writable_provider_for_secret(secret_config, addr)?;
         let set_result = backend.set(addr, &value);
         // Generating a secret writes a brand-new value to the provider; record it
         // like any other write so the audit log captures every stored secret.
-        self.audit_write_result(&set_result, name, profile_name, Some(backend.uri()), None);
+        self.audit_write_result(
+            &set_result,
+            name,
+            profile_name,
+            Some(backend.uri()),
+            secret_config.reference.as_ref(),
+        );
         set_result?;
 
         eprintln!(

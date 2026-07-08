@@ -856,9 +856,9 @@ pub struct Secret {
     /// resolves them follows ordinary provider resolution — the secret's
     /// `providers` chain, the `--provider` override, or the default provider —
     /// so the same `ref` can be re-routed (e.g. at a fixtures store during
-    /// tests) without editing it, and composes with `providers`. Cannot be
-    /// combined with `generate` (a referenced secret is externally managed,
-    /// not minted). Serialized as `ref` in TOML.
+    /// tests) without editing it, and composes with `providers`. Also composes
+    /// with `generate`: a missing referenced secret is minted and written to
+    /// its coordinates. Serialized as `ref` in TOML.
     #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
     pub reference: Option<NativeAddress>,
     /// Whether to write the secret value to a temporary file and return the path.
@@ -894,13 +894,10 @@ impl Secret {
             return Err("Required secrets cannot have default values".into());
         }
 
-        // A `ref` supplies naming only, so it composes with `providers`
-        // routing; `generate` stays incompatible (a referenced secret is
-        // externally managed, not minted).
+        // A `ref` supplies naming only: it composes with `providers` routing
+        // and with `generate` (a missing referenced secret is minted and
+        // written to its coordinates, like any other generated value).
         if let Some(reference) = &self.reference {
-            if self.generate.as_ref().is_some_and(|g| g.is_enabled()) {
-                return Err("`ref` and `generate` cannot both be set".into());
-            }
             // `coordinates()` yields `item` too, so this covers the required
             // coordinate as well as the optional ones. Whitespace-only is a
             // typo, not a name: no store has a secret titled "   ".
@@ -1675,7 +1672,9 @@ mod validation_tests {
     }
 
     #[test]
-    fn secret_validate_rejects_ref_with_generate() {
+    fn secret_validate_allows_ref_with_generate() {
+        // `ref` names where the secret lives; `generate` mints an initial
+        // value and sets it there when missing. The two compose.
         let s = Secret {
             description: Some("d".to_string()),
             reference: Some(addr("db", Some("password"))),
@@ -1683,11 +1682,7 @@ mod validation_tests {
             generate: Some(GenerateConfig::Bool(true)),
             ..Default::default()
         };
-        assert!(
-            s.validate()
-                .unwrap_err()
-                .contains("`ref` and `generate` cannot both be set")
-        );
+        assert!(s.validate().is_ok());
     }
 
     #[test]

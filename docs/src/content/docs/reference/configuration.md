@@ -89,7 +89,7 @@ Each secret variable is defined as a table with the following fields:
 | `required` | boolean | No* | Whether the value must be provided (default: true) |
 | `default` | string | No** | Default value if not provided |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
-| `ref` | table | No**** | Coordinates naming an externally managed secret in the provider's store (e.g. `ref = { item = "db", field = "password" }`) |
+| `ref` | table | No | Coordinates naming an externally managed secret in the provider's store (e.g. `ref = { item = "db", field = "password" }`) |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
 | `type` | string | No*** | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
 | `generate` | boolean or table | No*** | Enable auto-generation when secret is missing |
@@ -97,7 +97,6 @@ Each secret variable is defined as a table with the following fields:
 *If `default` is provided, `required` defaults to false
 **Only valid when `required = false`
 ***`type` is required when `generate` is enabled; `generate` and `default` cannot both be set
-****`ref` cannot be combined with `generate`; see [Secret References](#secret-references)
 
 ## Complete Example
 
@@ -298,12 +297,6 @@ the coordinate (for example, `field` on the env provider).
 Writes are symmetric with reads: `secretspec set` and interactive `check`
 prompting write through the coordinates in place wherever the table above says
 writes are supported. Read-only stores fail with a clear error instead.
-
-#### Combining with other fields
-
-`ref` cannot be combined with `generate`: a referenced secret is externally
-managed, not minted. It combines freely with `default`, `required`, and
-`as_path`.
 
 #### No string refs
 

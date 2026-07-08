@@ -87,8 +87,6 @@ $ secretspec run --provider dotenv:.env.fixtures -- cargo test
 - Reads and writes are symmetric: `secretspec set` and interactive `check` write
   through the coordinates in place wherever the store supports writes. Read-only
   stores fail with a clear error.
-- A `ref` combines freely with `default`, `required`, and `as_path`, but not with
-  `generate`: a referenced secret is externally managed, not minted.
 - `ref` is always a table. String and URI forms (`ref = "op://vault/item/field"`)
   are rejected, with an error that spells out the equivalent table.
 - Secrets sharing identical coordinates and store are fetched once, and

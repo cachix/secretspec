@@ -35,7 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   place (1Password `op item edit`, keyring, pass, dotenv, Bitwarden, Proton
   Pass, LastPass); Vault, AWS, and GCSM refs are read-only. Secrets sharing
   identical coordinates fetch once, and audit events record the coordinates in
-  a new `ref` field.
+  a new `ref` field. A `ref` also composes with `generate`: a missing
+  referenced secret is minted and written straight to its coordinates.
 - **Inline provider URIs in `providers` chains**: chain entries that are
   already URIs (`providers = ["onepassword://Production", "keyring"]`) now
   pass through without declaring a `[providers]` alias first.

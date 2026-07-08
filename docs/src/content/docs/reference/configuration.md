@@ -24,7 +24,7 @@ require_approval = false     # When to require human approval before releasing s
 | `revision` | string | Yes | Format version (must be "1.0") |
 | `extends` | array[string] | No | Paths to parent configuration files |
 | `require_reason` | `"agents"` \| boolean | No | When secret access must supply a reason (via `--reason`, `SECRETSPEC_REASON`, or the SDK's `with_reason()`). Defaults to `"agents"`. |
-| `require_approval` | `"agents"` \| boolean | No | When releasing secrets to a `run`/`get` requires human approval at a trusted prompt. Defaults to `false`. |
+| `require_approval` | `"agents"` \| boolean | No | When releasing secrets to a `run`/`get`/`import` requires human approval in a GUI prompt. Defaults to `false`. Can also be set per-user in `~/.config/secretspec/config.toml`; the stricter of the two wins. |
 
 #### Requiring a reason for secret access
 
@@ -69,11 +69,12 @@ forwarded to providers that support auditing (e.g. the
 
 #### Requiring human approval before releasing secrets
 
-`require_approval` gates the moment secrets are handed to a command. Before
-`secretspec run` injects secrets into a child process (or `secretspec get`
-prints a value), secretspec pops a **trusted approval prompt** summarizing the
-secrets and the command, and proceeds only if you approve. It accepts the same
-three values as `require_reason`:
+`require_approval` gates the moment secrets are handed to a caller. Before
+`secretspec run` injects secrets into a child process, `secretspec get` prints a
+value, or `secretspec import` copies secrets into another provider, secretspec
+pops a **GUI approval prompt** summarizing the secrets and the destination, and
+proceeds only if you approve. It accepts the same three values as
+`require_reason`:
 
 | Value | Behavior |
 |-------|----------|
@@ -81,13 +82,67 @@ three values as `require_reason`:
 | `"agents"` | Require approval **only when an AI agent is detected** (same detection as `require_reason`). Humans running interactively are unaffected. |
 | `true` | Require approval from **every** caller. |
 
-The prompt is shown by [pinentry](https://www.gnupg.org/related_software/pinentry/)
-(GnuPG's prompt helper — a GUI or terminal dialog), falling back to `/dev/tty`
-when no pinentry binary is installed. Because it is read on a channel the calling
-process does not control, an orchestrator that only *triggers* the operation
-cannot approve on your behalf — so you can let an agent run `secretspec run`
-while you remain the one who releases the secrets. A denial aborts the command
-and is recorded in the [audit log](/concepts/audit/).
+The prompt is a built-in graphical dialog that needs no external program. See
+[GUI prompts](#gui-prompts) for how the prompt is chosen. Because it appears in
+its own window rather than on the console the calling process controls, an
+orchestrator that only *triggers* the operation cannot approve on your behalf, so
+you can let an agent run `secretspec run` while you remain the one who releases
+the secrets. A denial aborts the command and is recorded in the
+[audit log](/concepts/audit/).
+
+When the caller is a detected agent, secretspec refuses to approve over a
+terminal, since an agent that owns the controlling terminal could answer the
+prompt itself. Approval by an agent-triggered command therefore requires a
+graphical session.
+
+##### Requiring approval for every project
+
+`require_approval` can also be set once in your user config, where it applies to
+every project you run:
+
+```toml title="~/.config/secretspec/config.toml"
+[defaults]
+provider = "keyring"
+require_approval = "agents"   # ask me whenever an agent releases secrets, anywhere
+```
+
+The two settings are combined by taking **whichever is stricter**, ordering them
+`false` < `"agents"` < `true`. This is a floor, not a fallback, and that
+distinction is the point:
+
+| `[project]` in `secretspec.toml` | `[defaults]` in your user config | Effective |
+|---|---|---|
+| unset | `"agents"` | `"agents"` |
+| `true` | unset | `true` |
+| `false` | `true` | `true` |
+| `true` | `false` | `true` |
+| `"agents"` | `true` | `true` |
+
+So a project you cloned cannot switch off the approval you asked for on your own
+machine, and you cannot switch off the approval a project demands of every clone.
+If you want no approval anywhere, leave both unset, which is the default.
+
+Run `secretspec config show` to see the policy currently set in your user config.
+
+#### GUI prompts
+
+Whenever secretspec needs a human at the keyboard, either to collect a secret
+value or to approve a release, it shows a **GUI prompt** in its own window rather
+than reading the console. That matters beyond appearance: a separate window is a
+channel the calling process does not sit between, so an orchestrator that only
+triggers the command cannot read the value you type or answer the approval for
+you. secretspec detects what is available and picks automatically, so there is
+nothing to configure:
+
+1. A built-in graphical dialog, drawn by secretspec itself. On X11 it grabs the
+   keyboard for the duration of the prompt so other clients on the display cannot
+   snoop keystrokes. This is used whenever a display server is present (and always
+   on macOS and Windows).
+2. With no display, a `/dev/tty` prompt on the controlling terminal, which is
+   still off the calling process's stdin.
+
+For value entry, when neither is reachable secretspec falls back to reading stdin.
+See [`secretspec set`](/reference/cli/#set) for what that means in scripts.
 
 ### [profiles.*] Section
 
@@ -114,7 +169,6 @@ Each secret variable is defined as a table with the following fields:
 | `default` | string | No** | Default value if not provided |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
-| `interactive` | boolean | No | When set via `set`/`--ask` or filled by `check`, collect the value via a trusted local prompt instead of stdin (default: false) |
 | `type` | string | No*** | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
 | `generate` | boolean or table | No*** | Enable auto-generation when secret is missing |
 
@@ -245,38 +299,6 @@ GOOGLE_APPLICATION_CREDENTIALS = { description = "GCP service account", as_path 
 | CLI (`get`, `check`, `run`) | Files are persisted (not deleted after command exits) |
 | Rust SDK | Files cleaned up when `ValidatedSecrets` is dropped; use `keep_temp_files()` to persist |
 | Rust SDK types | `PathBuf` or `Option<PathBuf>` instead of `String` |
-
-### interactive Option
-
-When `interactive = true`, `secretspec set` collects the value from a **trusted
-local prompt** ([pinentry](https://www.gnupg.org/related_software/pinentry/), with
-a `/dev/tty` fallback) instead of reading it from stdin:
-
-```toml
-[profiles.production]
-STRIPE_SECRET_KEY = { description = "Stripe secret key", interactive = true }
-```
-
-The value is typed on pinentry's own channel, not this process's stdin, so a
-caller that only *triggers* the `set` (CI, a coding agent) never sees what you
-type. secretspec itself still handles the value in order to write it to the
-provider, so the guarantee is "the calling tool never sees it", not "only the
-provider ever sees it". This works with **every provider**, since the prompt
-happens before the value reaches the backend. Passing a value inline (`secretspec
-set KEY value`) skips the prompt; the `--ask` flag forces it for any secret.
-
-Because the value is read on the trusted channel and never on stdin, an
-`interactive` secret does **not** consume a piped value: `echo secret | secretspec
-set KEY` prompts instead of storing `secret` (and, with no pinentry and no
-terminal, fails rather than reading the pipe). To set non-interactively (scripts,
-CI seeding), pass the value inline (`secretspec set KEY "$VALUE"`) — inline always
-wins — or leave the secret non-`interactive` so stdin is read.
-
-`secretspec check` honors it too: when it fills a missing `interactive` secret it
-uses the trusted prompt rather than stdin. Because that prompt does not read
-stdin, `check` can fill an all-`interactive` set even when stdin is not a terminal
-(e.g. an agent triggers `check` and a human fills the values); a missing
-non-`interactive` secret still requires an interactive terminal.
 
 ### Secret Generation
 

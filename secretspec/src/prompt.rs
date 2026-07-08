@@ -1,10 +1,10 @@
-//! Trusted local prompts, decoupled from the calling process's stdio.
+//! GUI prompts, decoupled from the calling process's stdio.
 //!
 //! When an orchestrator (a CI job, a coding agent) invokes secretspec, it
 //! controls the child's stdin/stdout — so a value read from stdin, or an
 //! approval answered on stdin, is visible to (and forgeable by) that
-//! orchestrator. These helpers instead route through trusted prompts that the
-//! orchestrator does not sit between:
+//! orchestrator. These helpers instead prompt in a GUI window the orchestrator
+//! does not sit between:
 //!
 //! 1. A **GUI dialog** that reads from the display, a channel the caller does
 //!    not sit between. With the `gui-prompt` feature (enabled by `cli`) this is
@@ -15,7 +15,11 @@
 //!    available: reads from the controlling terminal rather than stdin. An
 //!    orchestrator that owns the pty can observe or drive it, which is why, for
 //!    *approval*, a detected agent is refused any terminal-bound channel and
-//!    required to use a GUI prompt.
+//!    required to use the GUI prompt.
+//!
+//! Value entry is not opt-in: [`gui_prompt_available`] detects whether this
+//! machine can show a GUI prompt at all, and `set`/`check` prefer it over their
+//! own stdin whenever it can.
 //!
 //! The value is still handled in-process by secretspec before it reaches the
 //! provider, so the guarantee is "the calling agent never sees it", not "only
@@ -37,29 +41,29 @@ fn prompt_err(e: pinentry::Error, on_cancel: SecretSpecError) -> SecretSpecError
     }
 }
 
-/// Collects a secret value from a trusted local prompt.
+/// Collects a secret value from the GUI prompt (with a `/dev/tty` fallback).
 ///
 /// `description` is the context line explaining what is being set; the input
 /// label itself is always "Value:".
-pub(crate) fn trusted_secret(description: &str) -> Result<SecretString> {
+pub(crate) fn gui_prompt_secret(description: &str) -> Result<SecretString> {
     #[cfg(test)]
     if let Some(canned) = test_hooks::take_secret_override() {
         return canned;
     }
-    match gui_secret(description)? {
+    match try_gui_secret(description)? {
         Some(value) => Ok(value),
         None => tty_secret(description),
     }
 }
 
-/// Attempts the GUI trusted prompt for a value: `Ok(Some(v))` on entry,
-/// `Ok(None)` when no GUI channel is available (the caller then falls back to
-/// `/dev/tty`), and `Err` on cancel or failure.
+/// Attempts the GUI dialog for a value: `Ok(Some(v))` on entry, `Ok(None)` when
+/// no display is available (the caller then falls back to `/dev/tty`), and `Err`
+/// on cancel or failure.
 ///
 /// With the `gui-prompt` feature this is the built-in [`egui_pinentry`] dialog,
 /// which needs no external program.
 #[cfg(feature = "gui-prompt")]
-fn gui_secret(description: &str) -> Result<Option<SecretString>> {
+fn try_gui_secret(description: &str) -> Result<Option<SecretString>> {
     use egui_pinentry::{Error, PassphraseInput};
     let mut input = PassphraseInput::new();
     input
@@ -77,7 +81,7 @@ fn gui_secret(description: &str) -> Result<Option<SecretString>> {
 /// Without the `gui-prompt` feature, use a GnuPG `pinentry` binary when one is
 /// installed, else `Ok(None)` to fall through to `/dev/tty`.
 #[cfg(not(feature = "gui-prompt"))]
-fn gui_secret(description: &str) -> Result<Option<SecretString>> {
+fn try_gui_secret(description: &str) -> Result<Option<SecretString>> {
     let Some(mut input) = pinentry::PassphraseInput::with_default_binary() else {
         return Ok(None);
     };
@@ -88,19 +92,19 @@ fn gui_secret(description: &str) -> Result<Option<SecretString>> {
         .map_err(|e| prompt_err(e, SecretSpecError::PromptCancelled))
 }
 
-/// Asks the user to approve or deny an action at a trusted local prompt.
+/// Asks the user to approve or deny an action at the GUI prompt.
 ///
 /// Returns `Ok(())` on approval and [`SecretSpecError::ApprovalDenied`] on
-/// denial (or [`SecretSpecError::PromptFailed`] when no trusted channel is
+/// denial (or [`SecretSpecError::PromptFailed`] when no prompt channel is
 /// available).
 ///
 /// `is_agent` is whether the *caller* is a detected agent. When it is, any
 /// terminal-bound channel is untrusted: an agent that owns the controlling
 /// terminal can forge the answer, and that includes both the `/dev/tty` fallback
 /// and a *curses* pinentry (which reads the same terminal). So for an agent we
-/// require an out-of-band GUI channel and refuse if none is evident, rather than
+/// require the out-of-band GUI prompt and refuse if none is evident, rather than
 /// trusting a prompt the agent could drive.
-pub(crate) fn trusted_approve(body: &str, is_agent: bool) -> Result<()> {
+pub(crate) fn gui_prompt_approve(body: &str, is_agent: bool) -> Result<()> {
     #[cfg(test)]
     if let Some(approved) = test_hooks::approve_override() {
         return if approved {
@@ -109,28 +113,28 @@ pub(crate) fn trusted_approve(body: &str, is_agent: bool) -> Result<()> {
             Err(SecretSpecError::ApprovalDenied)
         };
     }
-    // For a detected agent, only an out-of-band GUI prompt is trustworthy. Refuse
+    // For a detected agent, only the out-of-band GUI prompt is trustworthy. Refuse
     // before even trying, because with no display the prompt falls back to the
     // controlling terminal, which the agent may own.
-    if is_agent && !gui_channel_available() {
+    if is_agent && !display_available() {
         return Err(SecretSpecError::PromptFailed(
             "approval requires a GUI prompt when running as an agent (no display detected); \
              run from a human session or provide a display"
                 .to_string(),
         ));
     }
-    match gui_approve(body)? {
+    match try_gui_approve(body)? {
         Some(true) => Ok(()),
         Some(false) => Err(SecretSpecError::ApprovalDenied),
         None => tty_approve(body, is_agent),
     }
 }
 
-/// Attempts the GUI approval prompt: `Ok(Some(bool))` for an explicit
-/// approve/deny, `Ok(None)` when no GUI channel is available (fall back to
+/// Attempts the GUI approval dialog: `Ok(Some(bool))` for an explicit
+/// approve/deny, `Ok(None)` when no display is available (fall back to
 /// `/dev/tty`), and `Err` on failure. A cancelled dialog counts as a denial.
 #[cfg(feature = "gui-prompt")]
-fn gui_approve(body: &str) -> Result<Option<bool>> {
+fn try_gui_approve(body: &str) -> Result<Option<bool>> {
     use egui_pinentry::{ConfirmationDialog, Error};
     let mut dialog = ConfirmationDialog::new();
     dialog
@@ -148,7 +152,7 @@ fn gui_approve(body: &str) -> Result<Option<bool>> {
 /// Without the `gui-prompt` feature, use a GnuPG `pinentry` binary when one is
 /// installed, else `Ok(None)` to fall through to `/dev/tty`.
 #[cfg(not(feature = "gui-prompt"))]
-fn gui_approve(body: &str) -> Result<Option<bool>> {
+fn try_gui_approve(body: &str) -> Result<Option<bool>> {
     let Some(mut dialog) = pinentry::ConfirmationDialog::with_default_binary() else {
         return Ok(None);
     };
@@ -163,41 +167,92 @@ fn gui_approve(body: &str) -> Result<Option<bool>> {
     }
 }
 
-/// Whether an out-of-band GUI prompt channel is plausibly available — one a
-/// process that merely owns our controlling terminal cannot drive. Heuristic: a
-/// display server on Linux/BSD, or macOS (where pinentry-mac is a GUI app). It
-/// can be fooled by a spoofed `DISPLAY`, but it raises the bar from "trivially
-/// forgeable terminal" to "must impersonate a display server".
-fn gui_channel_available() -> bool {
+/// Whether a display server the GUI prompt can open a window on is plausibly
+/// present — one a process that merely owns our controlling terminal cannot
+/// drive. Heuristic: a display server on Linux/BSD, or a platform whose window
+/// server is always present. It can be fooled by a spoofed `DISPLAY`, but it
+/// raises the bar from "trivially forgeable terminal" to "must impersonate a
+/// display server".
+fn display_available() -> bool {
+    // macOS always has a window server, and pinentry-mac is a GUI app either way.
     if cfg!(target_os = "macos") {
+        return true;
+    }
+    // Windows has one too, but only the built-in dialog opens its own window
+    // there; a GnuPG `pinentry` binary on Windows is a console program, which an
+    // orchestrator owning that console could drive.
+    if cfg!(all(windows, feature = "gui-prompt")) {
         return true;
     }
     std::env::var_os("DISPLAY").is_some_and(|v| !v.is_empty())
         || std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
 }
 
-/// `/dev/tty` fallback for [`trusted_secret`]: reads from the controlling
+/// Whether a GUI prompt can be shown on this machine, i.e. whether a value typed
+/// at one would stay off the calling process's stdin. `set` and the `check` fill
+/// loop consult this to route value entry automatically: when a GUI prompt is
+/// available they prompt on it, otherwise they fall back to their own stdin (a
+/// terminal prompt, or a piped value).
+///
+/// This needs both a display ([`display_available`]) and a backend able to draw
+/// on it: the built-in dialog is always there, an external `pinentry` binary has
+/// to be installed.
+pub(crate) fn gui_prompt_available() -> bool {
+    // Never probe the real environment under test. A developer's `DISPLAY` would
+    // otherwise route `set`/`check` into a real dialog and hang the suite; tests
+    // opt in explicitly via `test_hooks::set_channel_override`.
+    #[cfg(test)]
+    {
+        test_hooks::channel_override().unwrap_or(false)
+    }
+    #[cfg(not(test))]
+    {
+        display_available() && gui_backend_present()
+    }
+}
+
+/// The built-in dialog is compiled in, so there is nothing to look for on `PATH`.
+#[cfg(all(not(test), feature = "gui-prompt"))]
+fn gui_backend_present() -> bool {
+    true
+}
+
+/// Without the built-in dialog we need a GnuPG `pinentry` binary to draw with.
+#[cfg(all(not(test), not(feature = "gui-prompt")))]
+fn gui_backend_present() -> bool {
+    pinentry::PassphraseInput::with_default_binary().is_some()
+}
+
+/// `/dev/tty` fallback for [`gui_prompt_secret`]: reads from the controlling
 /// terminal (never stdin) with echo disabled.
+///
+/// Reached when [`gui_prompt_available`] saw a display but the dialog could not
+/// open on it (a stale `DISPLAY`, a sandboxed session). With no terminal either
+/// we fail rather than fall back to stdin, since stdin is the one channel the
+/// caller controls, so the error names the way out.
 fn tty_secret(description: &str) -> Result<SecretString> {
-    let value = rpassword::prompt_password(format!("{description}\nValue: "))
-        .map_err(|e| SecretSpecError::PromptFailed(e.to_string()))?;
+    let value = rpassword::prompt_password(format!("{description}\nValue: ")).map_err(|e| {
+        SecretSpecError::PromptFailed(format!(
+            "cannot prompt on the terminal ({e}); with no GUI prompt and no terminal, \
+             pass the value inline instead"
+        ))
+    })?;
     Ok(SecretString::new(value.into()))
 }
 
-/// `/dev/tty` fallback for [`trusted_approve`]: prints the prompt to, and reads
-/// the answer from, the controlling terminal. Any answer other than an explicit
-/// yes (including EOF or an empty line) is treated as a denial.
+/// `/dev/tty` fallback for [`gui_prompt_approve`]: prints the prompt to, and
+/// reads the answer from, the controlling terminal. Any answer other than an
+/// explicit yes (including EOF or an empty line) is treated as a denial.
 #[cfg(unix)]
 fn tty_approve(body: &str, is_agent: bool) -> Result<()> {
     use std::io::{BufRead, BufReader, Write};
 
     // A detected agent may own this very terminal, so /dev/tty is not a channel
     // it cannot forge — refuse rather than trust it (the GUI-required check in
-    // `trusted_approve` normally catches this earlier, but guard here too).
+    // `gui_prompt_approve` normally catches this earlier, but guard here too).
     if is_agent {
         return Err(SecretSpecError::PromptFailed(
-            "no trusted approval channel available for an agent; install a GUI pinentry"
-                .to_string(),
+            "no GUI approval prompt available for an agent; install a GUI pinentry".to_string(),
         ));
     }
 
@@ -227,7 +282,7 @@ fn tty_approve(body: &str, is_agent: bool) -> Result<()> {
 #[cfg(not(unix))]
 fn tty_approve(_body: &str, _is_agent: bool) -> Result<()> {
     Err(SecretSpecError::PromptFailed(
-        "no trusted approval channel available; install pinentry".to_string(),
+        "no GUI approval prompt available; install pinentry".to_string(),
     ))
 }
 
@@ -238,9 +293,10 @@ fn is_affirmative(line: &str) -> bool {
 }
 
 /// Test-only seam: lets tests drive the interactive prompts deterministically —
-/// a canned value for [`trusted_secret`], a fixed approve/deny verdict for
-/// [`trusted_approve`] — without spawning pinentry or touching a terminal, which
-/// would hang the suite. Thread-local so parallel tests never interfere.
+/// a canned value for [`gui_prompt_secret`], a fixed approve/deny verdict for
+/// [`gui_prompt_approve`], a fixed answer for [`gui_prompt_available`] — without
+/// spawning pinentry or touching a terminal, which would hang the suite.
+/// Thread-local so parallel tests never interfere.
 #[cfg(test)]
 pub(crate) mod test_hooks {
     use super::{Result, SecretSpecError, SecretString};
@@ -249,14 +305,26 @@ pub(crate) mod test_hooks {
     thread_local! {
         static SECRET_OVERRIDE: RefCell<Option<Result<SecretString>>> = const { RefCell::new(None) };
         static APPROVE_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
+        static CHANNEL_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
     }
 
-    /// Queue a value returned by the next [`super::trusted_secret`] call (consumed once).
+    /// Declare whether a GUI prompt is available, so a test can exercise the
+    /// routing in `set`/`check` without a display. Unset (`None`) reads as "no
+    /// GUI prompt", which keeps every other test on the stdin path.
+    pub(crate) fn set_channel_override(available: Option<bool>) {
+        CHANNEL_OVERRIDE.with(|c| *c.borrow_mut() = available);
+    }
+
+    pub(crate) fn channel_override() -> Option<bool> {
+        CHANNEL_OVERRIDE.with(|c| *c.borrow())
+    }
+
+    /// Queue a value returned by the next [`super::gui_prompt_secret`] call (consumed once).
     pub(crate) fn set_secret_override(value: SecretString) {
         SECRET_OVERRIDE.with(|c| *c.borrow_mut() = Some(Ok(value)));
     }
 
-    /// Queue an error returned by the next [`super::trusted_secret`] call, so tests
+    /// Queue an error returned by the next [`super::gui_prompt_secret`] call, so tests
     /// can exercise the prompt-failure path (e.g. a cancelled value entry).
     pub(crate) fn set_secret_override_err(err: SecretSpecError) {
         SECRET_OVERRIDE.with(|c| *c.borrow_mut() = Some(Err(err)));
@@ -266,7 +334,7 @@ pub(crate) mod test_hooks {
         SECRET_OVERRIDE.with(|c| c.borrow_mut().take())
     }
 
-    /// Force [`super::trusted_approve`] to approve (`Some(true)`), deny
+    /// Force [`super::gui_prompt_approve`] to approve (`Some(true)`), deny
     /// (`Some(false)`), or fall through to the real prompt (`None`).
     pub(crate) fn set_approve_override(verdict: Option<bool>) {
         APPROVE_OVERRIDE.with(|c| *c.borrow_mut() = verdict);

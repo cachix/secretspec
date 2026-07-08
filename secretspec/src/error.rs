@@ -68,7 +68,7 @@ pub enum SecretSpecError {
     ApprovalDenied,
     #[error("Prompt was cancelled")]
     PromptCancelled,
-    #[error("Trusted prompt failed: {0}")]
+    #[error("GUI prompt failed: {0}")]
     PromptFailed(String),
 }
 

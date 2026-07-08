@@ -8,21 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Trusted prompts for value entry and secret release.** Keep secrets off an
-  orchestrator's pipes so a CI job or coding agent can *trigger* secret operations
-  without ever seeing the values. Mark a secret `interactive = true` (or pass
-  `secretspec set --ask`) to type its value into a trusted local dialog instead
-  of stdin. The CLI shows a built-in GUI dialog that needs no external program
-  (it grabs the keyboard on X11), falling back to a `/dev/tty` prompt when no
-  display is available. Set `require_approval` in `[project]`
-  (`true`, `false`, or `"agents"`) to require human approval at that same trusted
-  prompt before `secretspec run` injects secrets into a command or `secretspec get`
-  prints one. Because the prompt is read on a channel the caller does not control,
-  the triggering tool cannot self-approve. Works with every provider. Note that an
-  `interactive` secret (or `set --ask`) never reads a piped value: `echo v |
-  secretspec set KEY` prompts rather than storing `v`. To set from a script or
-  pipe, pass the value inline (`secretspec set KEY "$V"`) or leave the secret
-  non-`interactive`.
+- **GUI prompts for value entry and release approval.** secretspec now prompts
+  for secret values and release approval in a GUI window instead of the
+  console/stdin, so a CI job or coding agent that only *triggers* a secret
+  operation never sees the value: the calling process cannot read or drive a
+  separate window. When `secretspec set` (or a `secretspec check` that fills a
+  missing secret) needs a value, it detects whether this machine can show a GUI
+  and uses it automatically, with nothing to opt into: a built-in dialog that
+  needs no external program (it grabs the keyboard on X11), falling back to a
+  `/dev/tty` terminal prompt when no display is available, and only then to stdin.
+  Set `require_approval` in `[project]` (`true`, `false`, or `"agents"`) to
+  require human approval at that same prompt before `secretspec run` injects
+  secrets into a command, `secretspec get` prints one, or `secretspec import`
+  copies them to another provider — and because the triggering tool cannot drive
+  the window, it cannot self-approve. Works with every provider. Note the GUI
+  prompt never reads a piped value: on a machine with a display, `echo v |
+  secretspec set KEY` opens a dialog rather than storing `v`. To set from a
+  script, pass the value inline (`secretspec set KEY "$V"`), which always wins.
+- **`require_approval` can be set once for every project**, as
+  `[defaults].require_approval` in `~/.config/secretspec/config.toml`, so you can ask
+  to be prompted whenever an agent releases secrets anywhere on your machine without
+  editing each `secretspec.toml`. The project and user policies are combined by
+  taking whichever is stricter (`false` < `"agents"` < `true`), so a project you
+  cloned cannot switch off the approval you configured for yourself, and you cannot
+  switch off the approval a project demands of every clone. `secretspec config show`
+  now prints the user-level policy.
 
 ## [0.13.0] - 2026-07-03
 

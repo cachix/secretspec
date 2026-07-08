@@ -255,7 +255,13 @@ impl TryFrom<&Path> for Config {
 /// differ only in what an *unspecified* policy resolves to (reason: `Agents`,
 /// approval: `Never`); that default is applied where the policy is consumed in
 /// [`crate::Secrets`], not here, so this type deliberately has no `Default`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// The variants are declared in order of increasing strictness, and the derived
+/// [`Ord`] follows that order (`Never < Agents < Always`). Policies from different
+/// sources therefore combine with [`Ord::max`]: `require_approval` may be set both
+/// by the project and by the user's global config, and taking the stricter of the
+/// two means neither can switch off the other's safeguard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PolicyMode {
     /// The safeguard never applies.
     Never,
@@ -263,6 +269,18 @@ pub enum PolicyMode {
     Agents,
     /// The safeguard applies to every caller.
     Always,
+}
+
+impl std::fmt::Display for PolicyMode {
+    /// Renders the policy the way it is written in TOML, so `secretspec config show`
+    /// prints a value that can be pasted straight back into a config file.
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(match self {
+            PolicyMode::Never => "false",
+            PolicyMode::Agents => "agents",
+            PolicyMode::Always => "true",
+        })
+    }
 }
 
 impl Serialize for PolicyMode {
@@ -335,10 +353,13 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub require_reason: Option<PolicyMode>,
     /// Policy controlling when secrets may only be released to a `run` command (or
-    /// a `get`) after human approval at a trusted prompt. Accepts a boolean or
-    /// `"agents"`; enforced by [`crate::Secrets`]. `None` is "unspecified": it
-    /// resolves to [`PolicyMode::Never`] (approval is opt-in) unless a parent config
-    /// supplies a value via `extends` (see [`Config::merge_with`]).
+    /// a `get`, or an `import`) after human approval at a GUI prompt. Accepts a
+    /// boolean or `"agents"`; enforced by [`crate::Secrets`]. `None` is "unspecified":
+    /// it resolves to [`PolicyMode::Never`] (approval is opt-in) unless a parent
+    /// config supplies a value via `extends` (see [`Config::merge_with`]).
+    ///
+    /// The user's global `[defaults].require_approval` is combined with this by
+    /// strictness, so neither can switch off the other (see [`GlobalDefaults`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub require_approval: Option<PolicyMode>,
 }
@@ -666,21 +687,9 @@ pub struct Secret {
     /// Auto-generation configuration. Either `true` for defaults or a table with options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generate: Option<GenerateConfig>,
-    /// Collect this secret's value via a trusted local prompt (pinentry, with a
-    /// `/dev/tty` fallback) on `set`, instead of reading it from stdin. This keeps
-    /// the value off the calling process's pipes, so an orchestrator (CI, a coding
-    /// agent) that only *triggers* the `set` never sees what is typed. Applies to
-    /// every provider. Ignored when a value is supplied inline on the command line.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub interactive: Option<bool>,
 }
 
 impl Secret {
-    /// Whether this secret opts into trusted-prompt value entry (`interactive = true`).
-    pub(crate) fn is_interactive(&self) -> bool {
-        self.interactive == Some(true)
-    }
-
     /// Validate the secret configuration.
     ///
     /// Ensures that required secrets don't have default values,
@@ -805,6 +814,16 @@ pub struct GlobalDefaults {
     /// Default profile to use when not specified
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Policy controlling when releasing secrets requires human approval at a
+    /// GUI prompt, applied to every project this user runs. Accepts a boolean or
+    /// `"agents"`, exactly like the project's `[project].require_approval`.
+    ///
+    /// This is a floor, not a fallback. It combines with the project's policy by
+    /// taking whichever is stricter (see [`PolicyMode`]), so a checked-in project
+    /// config cannot switch off a safeguard its operator asked for, and an operator
+    /// cannot switch off one the project asks for. `None` contributes nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_approval: Option<PolicyMode>,
     /// Named provider aliases that map alias names to provider URIs.
     /// Used by per-secret provider configuration to avoid storing sensitive
     /// provider details in secretspec.toml. Example user config:
@@ -1115,6 +1134,59 @@ mod policy_mode_tests {
         // applied where the policies are consumed in `Secrets`.
         assert_eq!(parse(""), None);
         assert_eq!(parse_approval(""), None);
+    }
+
+    #[test]
+    fn policy_modes_order_by_strictness() {
+        // `Secrets::approval_mode` combines the project and user-global policies with
+        // `max`, so the derived Ord must rank them least to most restrictive.
+        assert!(PolicyMode::Never < PolicyMode::Agents);
+        assert!(PolicyMode::Agents < PolicyMode::Always);
+        assert_eq!(
+            PolicyMode::Never.max(PolicyMode::Always),
+            PolicyMode::Always
+        );
+        assert_eq!(
+            PolicyMode::Agents.max(PolicyMode::Never),
+            PolicyMode::Agents
+        );
+    }
+
+    #[test]
+    fn global_require_approval_parses_and_round_trips() {
+        let toml = "[defaults]\nrequire_approval = \"agents\"\n";
+        let global: GlobalConfig = toml::from_str(toml).unwrap();
+        assert_eq!(global.defaults.require_approval, Some(PolicyMode::Agents));
+
+        // Unset stays out of a serialized config rather than writing `= false`, which
+        // would silently pin the policy and defeat a later project-level tightening.
+        let empty: GlobalConfig = toml::from_str("[defaults]\n").unwrap();
+        assert_eq!(empty.defaults.require_approval, None);
+        assert!(
+            !toml::to_string(&empty)
+                .unwrap()
+                .contains("require_approval")
+        );
+    }
+
+    #[test]
+    fn global_require_approval_round_trips_alongside_the_providers_table() {
+        // `[defaults]` holds both a scalar policy and the `providers` sub-table, and
+        // TOML requires scalars to precede sub-tables within a table. The serializer
+        // handles that ordering for us; this pins the round trip so a future field
+        // rearrangement cannot quietly emit a config secretspec can no longer read.
+        let mut global = GlobalConfig::default();
+        global.defaults.require_approval = Some(PolicyMode::Always);
+        global.defaults.providers =
+            Some(HashMap::from([("k".to_string(), "keyring://".to_string())]));
+
+        let rendered = toml::to_string(&global).unwrap();
+        let reparsed: GlobalConfig = toml::from_str(&rendered).unwrap();
+        assert_eq!(
+            reparsed.defaults.require_approval,
+            Some(PolicyMode::Always),
+            "round trip lost the policy; rendered as:\n{rendered}"
+        );
     }
 
     #[test]
@@ -1445,20 +1517,6 @@ mod validation_tests {
                 .unwrap_err()
                 .contains("requires generate = { command")
         );
-    }
-
-    #[test]
-    fn interactive_parses_and_is_omitted_when_unset() {
-        let with = toml::from_str::<Secret>("description = \"d\"\ninteractive = true").unwrap();
-        assert_eq!(with.interactive, Some(true));
-
-        // `skip_serializing_if` keeps the field out of serialized output when unset,
-        // so existing manifests don't grow a noisy `interactive = false` line.
-        let plain = Secret {
-            description: Some("d".to_string()),
-            ..Default::default()
-        };
-        assert!(!toml::to_string(&plain).unwrap().contains("interactive"));
     }
 
     #[test]

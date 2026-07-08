@@ -194,6 +194,7 @@ fn test_new_with_default_overrides() {
         defaults: GlobalDefaults {
             provider: Some("dotenv".to_string()),
             profile: Some("production".to_string()),
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -799,6 +800,7 @@ fn test_secretspec_new() {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: Some("dev".to_string()),
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -822,6 +824,7 @@ fn test_resolve_profile() {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: Some("development".to_string()),
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -984,6 +987,7 @@ fn test_get_provider_with_global_config() {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -1940,6 +1944,7 @@ fn test_set_with_undefined_secret() {
         defaults: GlobalDefaults {
             provider: Some("env".to_string()),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -2011,6 +2016,7 @@ fn test_set_with_defined_secret() {
         defaults: GlobalDefaults {
             provider: Some("dotenv".to_string()),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -2065,6 +2071,7 @@ fn test_set_with_readonly_provider() {
         defaults: GlobalDefaults {
             provider: Some("env".to_string()),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -2175,6 +2182,7 @@ fn test_import_between_dotenv_files() {
         defaults: GlobalDefaults {
             provider: Some(format!("dotenv://{}", target_env_path.display())),
             profile: Some("default".to_string()),
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -2302,6 +2310,7 @@ fn test_import_edge_cases() {
         defaults: GlobalDefaults {
             provider: Some(format!("dotenv://{}", target_env_path.display())),
             profile: Some("default".to_string()),
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -2383,6 +2392,7 @@ API_KEY = { description = "Dev API key", required = true }
         defaults: GlobalDefaults {
             provider: Some("env".to_string()),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -2568,6 +2578,7 @@ fn test_import_with_profiles() {
         defaults: GlobalDefaults {
             provider: Some(format!("dotenv://{}", target_env_path.display())),
             profile: Some("development".to_string()),
+            require_approval: None,
             providers: None, // Use development profile
         },
         audit: None,
@@ -2627,6 +2638,7 @@ fn test_run_with_empty_command() {
             defaults: GlobalDefaults {
                 provider: Some(format!("dotenv://{}", env_file.display())),
                 profile: None,
+                require_approval: None,
                 providers: None,
             },
             audit: None,
@@ -2689,6 +2701,7 @@ fn test_run_with_missing_required_secrets() {
             defaults: GlobalDefaults {
                 provider: Some(format!("dotenv://{}", env_file.display())),
                 profile: None,
+                require_approval: None,
                 providers: None,
             },
             audit: None,
@@ -2749,6 +2762,7 @@ fn test_get_existing_secret() {
             defaults: GlobalDefaults {
                 provider: Some(format!("dotenv://{}", env_file.display())),
                 profile: None,
+                require_approval: None,
                 providers: None,
             },
             audit: None,
@@ -2803,6 +2817,7 @@ fn test_get_secret_with_default() {
             defaults: GlobalDefaults {
                 provider: Some(format!("dotenv://{}", env_file.display())),
                 profile: None,
+                require_approval: None,
                 providers: None,
             },
             audit: None,
@@ -2856,6 +2871,7 @@ fn test_get_nonexistent_secret() {
             defaults: GlobalDefaults {
                 provider: Some(format!("dotenv://{}", env_file.display())),
                 profile: None,
+                require_approval: None,
                 providers: None,
             },
             audit: None,
@@ -2904,6 +2920,7 @@ fn test_import_dotenv_profile_issue_36() {
         defaults: GlobalDefaults {
             provider: Some(format!("dotenv://{}", target_env_path.display())),
             profile: Some("development".to_string()),
+            require_approval: None,
             providers: None, // Using development profile as per bug report
         },
         audit: None,
@@ -3028,6 +3045,7 @@ fn test_per_secret_provider_configuration() {
         defaults: GlobalDefaults {
             provider: Some("env".to_string()),
             profile: None,
+            require_approval: None,
             providers: Some(providers_map),
         },
         audit: None,
@@ -3061,6 +3079,7 @@ fn test_provider_alias_resolution() {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: None,
+            require_approval: None,
             providers: Some(providers_map),
         },
         audit: None,
@@ -3126,6 +3145,7 @@ fn test_provider_alias_not_found() {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: None,
+            require_approval: None,
             providers: Some(providers_map),
         },
         audit: None,
@@ -3228,6 +3248,7 @@ fn test_per_secret_provider_with_fallback_chain() {
         defaults: GlobalDefaults {
             provider: None,
             profile: None,
+            require_approval: None,
             providers: Some(providers_map),
         },
         audit: None,
@@ -3326,6 +3347,7 @@ fn test_get_secret_with_fallback_chain() {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()), // Default fallback provider
             profile: None,
+            require_approval: None,
             providers: Some(providers_map),
         },
         audit: None,
@@ -3409,6 +3431,7 @@ fn test_validate_falls_back_on_primary_provider_error() {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: None,
+            require_approval: None,
             providers: Some(providers_map),
         },
         audit: None,
@@ -3477,6 +3500,7 @@ fn test_validate_surfaces_error_when_all_providers_fail() {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: None,
+            require_approval: None,
             providers: Some(providers_map),
         },
         audit: None,
@@ -3576,6 +3600,7 @@ fn test_validate_with_per_secret_providers() {
         defaults: GlobalDefaults {
             provider: Some("env".to_string()),
             profile: None,
+            require_approval: None,
             providers: Some(providers_map),
         },
         audit: None,
@@ -3908,6 +3933,7 @@ REGULAR_SECRET = { description = "Regular secret", as_path = false }
         defaults: GlobalDefaults {
             provider: Some(format!("dotenv://{}", env_file.display())),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -3987,6 +4013,7 @@ CERT_DATA = { description = "Certificate data", as_path = true }
         defaults: GlobalDefaults {
             provider: Some(format!("dotenv://{}", env_file.display())),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -4057,6 +4084,7 @@ CERT_DATA = { description = "Certificate data", as_path = true }
         defaults: GlobalDefaults {
             provider: Some(format!("dotenv://{}", env_file.display())),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -4295,6 +4323,7 @@ DB_PASSWORD = { description = "Database password", type = "password", generate =
         defaults: GlobalDefaults {
             provider: Some(format!("dotenv://{}", env_file.display())),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -4337,6 +4366,7 @@ DB_PASSWORD = { description = "Database password", type = "password", generate =
         defaults: GlobalDefaults {
             provider: Some(format!("dotenv://{}", env_file.display())),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -4381,6 +4411,7 @@ DB_PASSWORD = { description = "Database password", type = "password", generate =
         defaults: GlobalDefaults {
             provider: Some(format!("dotenv://{}", env_file.display())),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -4438,6 +4469,7 @@ REQUEST_ID = { description = "ID", type = "uuid", generate = true }
         defaults: GlobalDefaults {
             provider: Some(format!("dotenv://{}", env_file.display())),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -4505,6 +4537,7 @@ PROD_KEY = { description = "Production key", type = "hex", generate = { bytes = 
         defaults: GlobalDefaults {
             provider: Some(format!("dotenv://{}", env_file.display())),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -4545,7 +4578,6 @@ fn test_resolve_secret_config_merges_type_and_generate() {
             as_path: None,
             secret_type: Some("password".to_string()),
             generate: Some(crate::config::GenerateConfig::Bool(true)),
-            interactive: Some(true),
         },
     );
     profiles.insert(
@@ -4590,10 +4622,9 @@ fn test_resolve_secret_config_merges_type_and_generate() {
         .resolve_secret_config("DB_PASSWORD", Some("production"))
         .unwrap();
 
-    // type, generate, and interactive should be inherited from default
+    // type and generate should be inherited from default
     assert_eq!(resolved.secret_type.as_deref(), Some("password"));
     assert!(resolved.generate.is_some());
-    assert_eq!(resolved.interactive, Some(true));
     // description should come from production
     assert_eq!(resolved.description.as_deref(), Some("Prod DB password"));
 }
@@ -4655,6 +4686,7 @@ fn build_chain_scenario(
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: Some("development".to_string()),
+            require_approval: None,
             providers: Some(providers_map),
         },
         audit: None,
@@ -4816,6 +4848,7 @@ OPTIONAL_MISSING = { description = "optional, not set", required = false }
         defaults: GlobalDefaults {
             provider: Some(format!("dotenv://{}", env_file.display())),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -4865,6 +4898,7 @@ fn global_config_with_aliases(aliases: &[(&str, &str)]) -> GlobalConfig {
         defaults: GlobalDefaults {
             provider: None,
             profile: None,
+            require_approval: None,
             providers: Some(aliases_map(aliases)),
         },
         audit: None,
@@ -5257,6 +5291,7 @@ fn dotenv_spec(
             defaults: GlobalDefaults {
                 provider: Some(format!("dotenv://{}", env_file.display())),
                 profile: None,
+                require_approval: None,
                 providers: None,
             },
             audit: None,
@@ -5285,18 +5320,22 @@ fn required_secret_profile(name: &str) -> HashMap<String, Profile> {
     )])
 }
 
-/// Like [`required_secret_profile`], with the secret opted into trusted-prompt
-/// value entry (`interactive = true`).
-fn interactive_secret_profile(name: &str) -> HashMap<String, Profile> {
-    let mut profiles = required_secret_profile(name);
-    profiles
-        .get_mut("default")
-        .unwrap()
-        .secrets
-        .get_mut(name)
-        .unwrap()
-        .interactive = Some(true);
-    profiles
+/// Declares a GUI prompt available for the duration of a test, restoring the
+/// default ("no GUI prompt") on drop so a panicking test cannot leak the
+/// override onto the next test that reuses this thread.
+struct GuiPrompt;
+
+impl GuiPrompt {
+    fn available() -> Self {
+        crate::prompt::test_hooks::set_channel_override(Some(true));
+        Self
+    }
+}
+
+impl Drop for GuiPrompt {
+    fn drop(&mut self) {
+        crate::prompt::test_hooks::set_channel_override(None);
+    }
 }
 
 #[test]
@@ -5582,6 +5621,7 @@ fn audit_set_readonly_provider_records_error() {
         defaults: GlobalDefaults {
             provider: Some("env".to_string()),
             profile: None,
+            require_approval: None,
             providers: None,
         },
         audit: None,
@@ -5731,14 +5771,65 @@ fn approval_gate_blocks_get_when_denied() {
     crate::prompt::test_hooks::set_approve_override(None);
 }
 
-/// `set` with the trusted-prompt path (here forced via `set_ask`) writes the
-/// value returned by the prompt to the provider — proving an agent that only
-/// triggers `set` can have a human-entered value stored without supplying it.
+/// The user's global `[defaults].require_approval` gates a project that says nothing
+/// about approval, which is the point of setting it globally: one line in
+/// `~/.config/secretspec/config.toml` covers every project this operator runs.
 #[test]
-fn set_ask_stores_trusted_prompt_value() {
+fn global_approval_policy_gates_a_project_that_sets_none() {
     let temp_dir = TempDir::new().unwrap();
-    let mut spec = dotenv_spec("", required_secret_profile("TOKEN"), &temp_dir);
-    spec.set_ask(true);
+    let mut spec = dotenv_spec("TOKEN=abc\n", required_secret_profile("TOKEN"), &temp_dir);
+    spec.set_global_require_approval(Some(PolicyMode::Always));
+
+    crate::prompt::test_hooks::set_approve_override(Some(false));
+    let err = spec.get("TOKEN").unwrap_err();
+    assert!(matches!(err, SecretSpecError::ApprovalDenied));
+    crate::prompt::test_hooks::set_approve_override(None);
+}
+
+/// The two sources combine by strictness, not by override. A project that explicitly
+/// opts out (`require_approval = false`) cannot switch off the operator's global
+/// safeguard, and an operator who has not set one cannot weaken the project's.
+#[test]
+fn approval_policy_takes_the_stricter_of_project_and_global() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec("TOKEN=abc\n", required_secret_profile("TOKEN"), &temp_dir);
+
+    // A checked-in `require_approval = false` must not defeat the operator's `true`.
+    spec.set_require_approval(PolicyMode::Never);
+    spec.set_global_require_approval(Some(PolicyMode::Always));
+    crate::prompt::test_hooks::set_approve_override(Some(false));
+    assert!(
+        matches!(spec.get("TOKEN"), Err(SecretSpecError::ApprovalDenied)),
+        "a permissive project policy must not lower the global one"
+    );
+
+    // ...and symmetrically, a permissive global must not defeat the project's `true`.
+    spec.set_require_approval(PolicyMode::Always);
+    spec.set_global_require_approval(Some(PolicyMode::Never));
+    assert!(
+        matches!(spec.get("TOKEN"), Err(SecretSpecError::ApprovalDenied)),
+        "a permissive global policy must not lower the project's"
+    );
+    crate::prompt::test_hooks::set_approve_override(None);
+
+    // With neither source asking for approval, the gate stays out of the way. No
+    // approve override is queued, so reaching a prompt at all would hang this test.
+    spec.set_require_approval(PolicyMode::Never);
+    spec.set_global_require_approval(None);
+    assert!(
+        spec.get("TOKEN").is_ok(),
+        "no policy anywhere should mean no prompt"
+    );
+}
+
+/// With a GUI prompt available, `set` takes it with no per-secret opt-in and
+/// writes the value returned by the prompt to the provider — proving an agent that
+/// only triggers `set` can have a human-entered value stored without supplying it.
+#[test]
+fn set_uses_gui_prompt_when_available() {
+    let temp_dir = TempDir::new().unwrap();
+    let spec = dotenv_spec("", required_secret_profile("TOKEN"), &temp_dir);
+    let _gui = GuiPrompt::available();
 
     crate::prompt::test_hooks::set_secret_override(SecretString::new(
         "typedvalue123".to_string().into(),
@@ -5751,36 +5842,56 @@ fn set_ask_stores_trusted_prompt_value() {
     );
 }
 
-/// `check` fills a missing `interactive` secret via the trusted prompt (not the
-/// stdin prompt), and the relaxed terminal guard lets it proceed even when stdin
-/// is not a tty — the case where an agent triggers `check` and a human fills the
-/// value. Uses the prompt test seam so no real dialog is spawned.
+/// `check` fills a missing secret via the GUI prompt (not the stdin prompt) when
+/// one is available, and the terminal guard lets it proceed even when stdin is not
+/// a tty — the case where an agent triggers `check` and a human fills the value.
+/// Uses the prompt test seam so no real dialog is spawned.
 #[test]
-fn check_fills_interactive_secret_via_trusted_prompt() {
+fn check_fills_secret_via_gui_prompt_without_a_tty() {
     let temp_dir = TempDir::new().unwrap();
-    let spec = dotenv_spec("", interactive_secret_profile("TOKEN"), &temp_dir);
+    let spec = dotenv_spec("", required_secret_profile("TOKEN"), &temp_dir);
+    let _gui = GuiPrompt::available();
 
     crate::prompt::test_hooks::set_secret_override(SecretString::new(
-        "filledviatrusted".to_string().into(),
+        "filledviagui".to_string().into(),
     ));
-    // no_prompt = false -> interactive fill; the interactive secret routes through
-    // the trusted prompt, so the non-tty test stdin does not abort it.
+    // no_prompt = false -> fill the missing secret; the GUI prompt does not read
+    // stdin, so the non-tty test stdin does not abort it.
     spec.check(false).unwrap();
 
     assert_eq!(
         read_env_var(&temp_dir.path().join(".env"), "TOKEN").as_deref(),
-        Some("filledviatrusted")
+        Some("filledviagui")
     );
 }
 
-/// A cancelled trusted value entry surfaces as `PromptCancelled` — not the
-/// misleading `ApprovalDenied` — and records a Set/Error audit event, matching the
-/// other pre-write failure paths in `set`.
+/// The other half of the routing: with no GUI prompt, a prompting `check` may only
+/// use the stdin prompt, which needs a terminal. Under the non-tty test stdin it
+/// must report the missing secret rather than block on a pipe. (No secret override
+/// is queued, so reaching a prompt at all would hang this test.)
 #[test]
-fn set_ask_prompt_cancel_records_set_error() {
+fn check_without_gui_prompt_needs_a_tty() {
+    let temp_dir = TempDir::new().unwrap();
+    let spec = dotenv_spec("", required_secret_profile("TOKEN"), &temp_dir);
+
+    assert!(
+        matches!(
+            spec.check(false),
+            Err(SecretSpecError::RequiredSecretMissing(_))
+        ),
+        "expected the fill loop to bail without a GUI prompt or a tty"
+    );
+    assert_eq!(read_env_var(&temp_dir.path().join(".env"), "TOKEN"), None);
+}
+
+/// A cancelled GUI value entry surfaces as `PromptCancelled` — not the misleading
+/// `ApprovalDenied` — and records a Set/Error audit event, matching the other
+/// pre-write failure paths in `set`.
+#[test]
+fn gui_prompt_cancel_records_set_error() {
     let temp_dir = TempDir::new().unwrap();
     let mut spec = dotenv_spec("", required_secret_profile("TOKEN"), &temp_dir);
-    spec.set_ask(true);
+    let _gui = GuiPrompt::available();
     let (logger, lines) = crate::audit::test_support::collecting_logger();
     spec.set_audit_for_test(logger);
 
@@ -5798,12 +5909,13 @@ fn set_ask_prompt_cancel_records_set_error() {
     assert_eq!(events[0]["error_kind"], "prompt_cancelled");
 }
 
-/// `check` rejects an empty value from the trusted prompt instead of storing a
-/// blank secret, and records a Set/Error — parity with `set`.
+/// `check` rejects an empty value from the GUI prompt instead of storing a blank
+/// secret, and records a Set/Error — parity with `set`.
 #[test]
-fn check_rejects_empty_interactive_value() {
+fn check_rejects_empty_gui_prompt_value() {
     let temp_dir = TempDir::new().unwrap();
-    let mut spec = dotenv_spec("", interactive_secret_profile("TOKEN"), &temp_dir);
+    let mut spec = dotenv_spec("", required_secret_profile("TOKEN"), &temp_dir);
+    let _gui = GuiPrompt::available();
     let (logger, lines) = crate::audit::test_support::collecting_logger();
     spec.set_audit_for_test(logger);
 

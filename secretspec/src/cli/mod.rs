@@ -1,6 +1,6 @@
 use crate::provider::{Provider, providers};
 use crate::secrets::escape_ctrl;
-use crate::{Config, GlobalConfig, GlobalDefaults, Profile, Project, Secrets};
+use crate::{Config, GlobalConfig, Profile, Project, Secrets};
 use clap::{Parser, Subcommand};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use std::collections::HashMap;
@@ -60,11 +60,6 @@ enum Commands {
         /// Profile to use
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
         profile: Option<String>,
-        /// Collect the value via a trusted local prompt (pinentry, with a
-        /// /dev/tty fallback) instead of stdin, so a caller that only triggers
-        /// this `set` never sees the typed value. Ignored if a value is given.
-        #[arg(short = 'a', long)]
-        ask: bool,
     },
     /// Get a secret value
     Get {
@@ -482,6 +477,10 @@ pub fn main() -> Result<()> {
                             Some(profile) => println!("Profile:  {}", profile),
                             None => println!("Profile:  (none)"),
                         }
+                        match config.defaults.require_approval {
+                            Some(policy) => println!("Approval: {}", policy),
+                            None => println!("Approval: (none)"),
+                        }
                         if let Some(providers) = &config.defaults.providers {
                             println!("\nProvider Aliases:");
                             let mut aliases: Vec<_> = providers.iter().collect();
@@ -507,16 +506,7 @@ pub fn main() -> Result<()> {
                     ProviderAction::Add { name, uri } => {
                         // Load or create config
                         let mut config =
-                            GlobalConfig::load()
-                                .into_diagnostic()?
-                                .unwrap_or(GlobalConfig {
-                                    defaults: GlobalDefaults {
-                                        provider: None,
-                                        profile: None,
-                                        providers: None,
-                                    },
-                                    audit: None,
-                                });
+                            GlobalConfig::load().into_diagnostic()?.unwrap_or_default();
 
                         // Initialize providers map if needed
                         if config.defaults.providers.is_none() {
@@ -594,7 +584,6 @@ pub fn main() -> Result<()> {
             value,
             provider,
             profile,
-            ask,
         } => {
             let mut app = load_secrets(&cli.file, &cli.reason)?;
             if let Some(p) = provider {
@@ -603,7 +592,6 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
-            app.set_ask(ask);
             app.set(&name, value)
                 .into_diagnostic()
                 .wrap_err("Failed to set secret")?;
@@ -1171,24 +1159,16 @@ mod tests {
     }
 
     #[test]
-    fn set_parses_ask_flag() {
-        let cli = Cli::try_parse_from(["secretspec", "set", "API_KEY", "-a"]).unwrap();
+    fn set_parses_optional_inline_value() {
+        let cli = Cli::try_parse_from(["secretspec", "set", "API_KEY"]).unwrap();
         match cli.command {
-            Commands::Set { ask, value, .. } => {
-                assert!(ask);
-                // `-a` must not be swallowed as the positional value.
-                assert_eq!(value, None);
-            }
+            Commands::Set { value, .. } => assert_eq!(value, None),
             _ => panic!("expected Set command"),
         }
 
-        // Defaults off, and an inline value still parses alongside no `--ask`.
         let cli = Cli::try_parse_from(["secretspec", "set", "API_KEY", "v"]).unwrap();
         match cli.command {
-            Commands::Set { ask, value, .. } => {
-                assert!(!ask);
-                assert_eq!(value.as_deref(), Some("v"));
-            }
+            Commands::Set { value, .. } => assert_eq!(value.as_deref(), Some("v")),
             _ => panic!("expected Set command"),
         }
     }

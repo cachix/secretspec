@@ -127,9 +127,6 @@ pub struct Secrets {
     /// Reason for this session's secret access, forwarded to providers that
     /// support audit logging (set via [`Secrets::with_reason`]).
     reason: Option<String>,
-    /// Force trusted-prompt value entry on `set` regardless of a secret's
-    /// per-secret `interactive` flag. Set by the `--ask` CLI flag.
-    ask_override: bool,
     /// Audit logger, if auditing is enabled (user-global `[audit]` config). `None`
     /// disables auditing. Built once per `Secrets` so all events share a session id.
     audit: Option<AuditLogger>,
@@ -267,7 +264,7 @@ fn approval_summary(keys: &[String], context: &ApprovalContext, reason: Option<&
     lines.join("\n")
 }
 
-/// Renders argv for display in the trusted prompt: each argument is escaped for
+/// Renders argv for display in the GUI approval prompt: each argument is escaped for
 /// control characters, then wrapped in single quotes when it is empty or contains
 /// spaces/quotes so argument boundaries are unambiguous. This is display, not
 /// shell round-tripping — the goal is that the approver sees the real command and
@@ -287,7 +284,7 @@ fn render_command(argv: &[String]) -> String {
 }
 
 /// Escapes control characters (C0, DEL, and C1) as visible backslash escapes,
-/// so caller-controlled text cannot alter a trusted view's layout: an embedded
+/// so caller-controlled text cannot alter a rendered view's layout: an embedded
 /// newline forging an extra "Reason:" line on the approval prompt, or an escape
 /// sequence erasing/overwriting lines in the formatted `secretspec audit`
 /// listing (which also uses this).
@@ -311,17 +308,13 @@ pub(crate) fn escape_ctrl(s: &str) -> String {
     out
 }
 
-/// Prompts for a secret value on the channel the routing decided: the trusted
-/// local prompt (pinentry, with a `/dev/tty` fallback) when `trusted`, else the
-/// interactive stdin prompt. Shared by `set` and the `check` fill loop so the
-/// two entry paths collect values identically.
-fn prompt_secret_value(
-    trusted: bool,
-    trusted_desc: &str,
-    stdin_prompt: &str,
-) -> Result<SecretString> {
-    if trusted {
-        crate::prompt::trusted_secret(trusted_desc)
+/// Prompts for a secret value on the channel the routing decided: the GUI prompt
+/// (with a `/dev/tty` fallback) when `use_gui`, else the stdin prompt. Shared by
+/// `set` and the `check` fill loop so the two entry paths collect values
+/// identically.
+fn prompt_secret_value(use_gui: bool, gui_desc: &str, stdin_prompt: &str) -> Result<SecretString> {
+    if use_gui {
+        crate::prompt::gui_prompt_secret(gui_desc)
     } else {
         Ok(SecretString::new(
             inquire::Password::new(stdin_prompt)
@@ -413,7 +406,6 @@ impl Secrets {
             provider,
             profile,
             reason: None,
-            ask_override: false,
             audit: None,
         }
     }
@@ -484,7 +476,6 @@ impl Secrets {
             provider: None,
             profile: None,
             reason: env_reason(),
-            ask_override: false,
             audit,
         })
     }
@@ -529,14 +520,6 @@ impl Secrets {
     /// ```
     pub fn set_profile(&mut self, profile: impl Into<String>) {
         self.profile = Some(profile.into());
-    }
-
-    /// Forces `set` to collect the value via a trusted local prompt (pinentry,
-    /// with a `/dev/tty` fallback) even when the secret is not marked
-    /// `interactive` in `secretspec.toml`. Backs the `--ask` CLI flag. Has no
-    /// effect when a value is supplied inline.
-    pub fn set_ask(&mut self, ask: bool) {
-        self.ask_override = ask;
     }
 
     /// Sets a human-readable reason for this session's secret access.
@@ -596,14 +579,27 @@ impl Secrets {
             .unwrap_or(PolicyMode::Agents)
     }
 
-    /// The project's `require_approval` policy. `None` resolves to
-    /// [`PolicyMode::Never`] because an approval prompt blocks execution and is
-    /// opted into explicitly.
+    /// The effective `require_approval` policy: the stricter of the project's
+    /// `[project].require_approval` and the user's global `[defaults].require_approval`.
+    /// Either being unset contributes [`PolicyMode::Never`], because an approval
+    /// prompt blocks execution and is opted into explicitly.
+    ///
+    /// Combining by strictness rather than letting one source override the other is
+    /// what makes both settings trustworthy: a checked-in `secretspec.toml` cannot
+    /// switch off the approval an operator configured on their own machine, and an
+    /// operator cannot switch off the approval a project demands of every clone.
     fn approval_mode(&self) -> PolicyMode {
-        self.config
+        let project = self
+            .config
             .project
             .require_approval
-            .unwrap_or(PolicyMode::Never)
+            .unwrap_or(PolicyMode::Never);
+        let global = self
+            .global_config
+            .as_ref()
+            .and_then(|g| g.defaults.require_approval)
+            .unwrap_or(PolicyMode::Never);
+        project.max(global)
     }
 
     /// Builds a provider from a spec (name or URI) and applies the session reason.
@@ -773,9 +769,9 @@ impl Secrets {
     /// records the plural `keys` plus the command (argv[0] only — arguments may
     /// contain secrets), an `Import` records `keys`.
     ///
-    /// When the policy applies, a trusted approval prompt summarizes what is
-    /// being released and the operation proceeds only on approval. Because the
-    /// prompt is read on a channel the calling process does not control, an
+    /// When the policy applies, a GUI approval prompt summarizes what is being
+    /// released and the operation proceeds only on approval. Because the prompt
+    /// is read on a channel the calling process does not control, an
     /// orchestrator that only *triggers* the operation cannot self-approve. When
     /// the caller is a detected agent, terminal-bound channels (the `/dev/tty`
     /// fallback and a curses pinentry) are refused, since an agent that owns the
@@ -805,7 +801,7 @@ impl Secrets {
             return Ok(());
         }
         let body = approval_summary(keys, &context, self.reason.as_deref());
-        if let Err(e) = crate::prompt::trusted_approve(&body, is_agent) {
+        if let Err(e) = crate::prompt::gui_prompt_approve(&body, is_agent) {
             let mut fields = AuditFields {
                 error_kind: Some(e.kind()),
                 ..Default::default()
@@ -873,12 +869,23 @@ impl Secrets {
         self.config.project.require_reason = Some(policy);
     }
 
-    /// Override the `require_approval` policy (for testing the gate without going
-    /// through `load`/`load_from`). Writes into the stored config, which is where
-    /// [`Self::approval_mode`] reads the policy.
+    /// Override the project's `require_approval` policy (for testing the gate without
+    /// going through `load`/`load_from`). Writes into the stored config, which is one
+    /// of the two sources [`Self::approval_mode`] reads.
     #[cfg(test)]
     pub(crate) fn set_require_approval(&mut self, policy: PolicyMode) {
         self.config.project.require_approval = Some(policy);
+    }
+
+    /// Override the user-global `[defaults].require_approval` policy, the other source
+    /// [`Self::approval_mode`] reads. `None` clears it, so a test can assert that an
+    /// explicitly permissive project policy is still raised by the global one.
+    #[cfg(test)]
+    pub(crate) fn set_global_require_approval(&mut self, policy: Option<PolicyMode>) {
+        self.global_config
+            .get_or_insert_with(Default::default)
+            .defaults
+            .require_approval = policy;
     }
 
     /// Resolves the profile to use based on the provided value and configuration
@@ -1023,7 +1030,6 @@ impl Secrets {
                         .generate
                         .clone()
                         .or_else(|| default.generate.clone()),
-                    interactive: current.interactive.or(default.interactive),
                 })
             }
             (Some(secret), None) | (None, Some(secret)) => {
@@ -1044,7 +1050,6 @@ impl Secrets {
                     as_path: secret.as_path,
                     secret_type: secret.secret_type.clone(),
                     generate: secret.generate.clone(),
-                    interactive: secret.interactive,
                 })
             }
             (None, None) => None,
@@ -1448,19 +1453,23 @@ impl Secrets {
             return Err(err);
         }
 
-        // Route the value through a trusted local prompt when the secret opts in
-        // (`interactive = true`) or the caller passes `--ask`. This happens here,
-        // above the provider trait, so every provider gets it: a caller that only
-        // *triggers* the `set` (CI, a coding agent) never sees the typed value,
-        // because it is read on pinentry's own channel (or `/dev/tty`) rather than
-        // this process's stdin. An inline value skips prompting entirely.
-        let use_trusted = self.ask_override || secret_config.is_interactive();
+        // Route the value through the GUI prompt whenever this machine can show
+        // one, with no per-secret opt-in: the dialog reads on a channel the calling
+        // process does not sit between, so a caller that only *triggers* the `set`
+        // (CI, a coding agent) never sees the typed value. This happens here, above
+        // the provider trait, so every provider gets it.
+        //
+        // An inline value skips prompting entirely, and stays the way to seed a
+        // secret from a script on a machine that does have a display. With no GUI
+        // prompt we fall back to the old behavior: prompt on a terminal, else read
+        // the piped value off stdin.
+        let use_gui = crate::prompt::gui_prompt_available();
         let collected: Result<SecretString> = (|| {
             if let Some(v) = value {
                 Ok(SecretString::new(v.into()))
-            } else if use_trusted || io::stdin().is_terminal() {
+            } else if use_gui || io::stdin().is_terminal() {
                 prompt_secret_value(
-                    use_trusted,
+                    use_gui,
                     &format!("Set {name} (profile: {profile_name})"),
                     &format!("Enter value for {name} (profile: {profile_name}):"),
                 )
@@ -1687,18 +1696,13 @@ impl Secrets {
                         })
                         .collect();
 
-                    // Secrets marked `interactive` are filled via the trusted prompt
-                    // (pinentry, with a `/dev/tty` fallback), which does not read
-                    // stdin; every other secret uses the stdin prompt, which needs a
-                    // terminal. Only bail early when a stdin-prompted secret is missing
-                    // and stdin is not a tty — an all-`interactive` set can still be
-                    // filled under a piped stdin (e.g. by an agent triggering `check`).
-                    let needs_stdin_prompt = missing.iter().any(|(_, config)| {
-                        !config
-                            .as_ref()
-                            .is_some_and(crate::config::Secret::is_interactive)
-                    });
-                    if needs_stdin_prompt && !io::stdin().is_terminal() {
+                    // The GUI prompt does not read stdin, so when this machine can
+                    // show one every missing secret can be filled even under a piped
+                    // stdin (an agent triggers `check`, a human types the values).
+                    // Without one we fall back to the stdin prompt, which needs a
+                    // terminal, so bail early rather than block on a pipe.
+                    let use_gui = crate::prompt::gui_prompt_available();
+                    if !use_gui && !io::stdin().is_terminal() {
                         return Err(SecretSpecError::RequiredSecretMissing(
                             validation_errors.missing_required.join(", "),
                         ));
@@ -1743,11 +1747,10 @@ impl Secrets {
                             let backend = self
                                 .resolve_write_provider(secret_config, provider_arg.as_deref())?;
 
-                            // Honor the per-secret `interactive` opt-in here too, so a
-                            // secret marked interactive is filled via the trusted prompt
-                            // during `check`, consistent with `set`/`--ask`.
+                            // Same channel routing as `set`, decided once above so the
+                            // whole fill loop collects values the same way.
                             let collected = prompt_secret_value(
-                                secret_config.is_interactive(),
+                                use_gui,
                                 &format!(
                                     "[{}/{}] Set {} (profile: {})",
                                     i + 1,
@@ -3116,7 +3119,7 @@ mod policy_tests {
         // Common whitespace controls get readable named escapes; everything else
         // in C0, DEL, and C1 becomes a visible `\xNN` rendering, so
         // caller-controlled text (a command argument, a reason, an audit field)
-        // cannot alter the layout of a trusted view.
+        // cannot alter the layout of a rendered view.
         assert_eq!(escape_ctrl("a\nb"), "a\\nb");
         assert_eq!(escape_ctrl("a\tb"), "a\\tb");
         assert_eq!(escape_ctrl("a\x00b"), "a\\x00b");

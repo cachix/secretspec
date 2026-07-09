@@ -88,7 +88,10 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
       - name: Upgrade npm (Trusted Publishing needs npm >= 11.5.1)
-        run: npm install -g npm@latest
+        # Pin to 11.x: npm 12's in-place global self-install leaves libnpmpublish's
+        # bundled sigstore dependency missing, which breaks provenance publishing
+        # ("Cannot find module 'sigstore'"). 11.5.1+ satisfies Trusted Publishing.
+        run: npm install -g npm@^11.5.1
       - name: Install napi CLI
         run: npm ci
         working-directory: secretspec-node

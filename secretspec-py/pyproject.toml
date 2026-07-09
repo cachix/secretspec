@@ -7,7 +7,7 @@ build-backend = "maturin"
 
 [project]
 name = "secretspec"
-version = "0.13.0"
+version = "0.14.0"
 description = "Declarative secrets, every environment, any provider (Python SDK)"
 readme = "README.md"
 requires-python = ">=3.9"

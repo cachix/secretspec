@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Passbolt provider** (`passbolt://`): store and read secrets in a
+  self-hosted [Passbolt](https://www.passbolt.com/) server via the official
+  [`go-passbolt-cli`](https://github.com/passbolt/go-passbolt-cli). Convention
+  secrets map to a resource named `secretspec/{project}/{profile}/{key}` with
+  the value in the `password` field; a secret's `ref` can instead point at an
+  existing resource by id or name and pick a `field`
+  (`password`/`username`/`uri`/`description`). Credentials are supplied either
+  through the `passbolt` CLI's own configuration or through secretspec-owned env
+  vars (`SECRETSPEC_PASSBOLT_SERVER`, `SECRETSPEC_PASSBOLT_PRIVATE_KEY_FILE` /
+  `SECRETSPEC_PASSBOLT_PRIVATE_KEY`, `SECRETSPEC_PASSBOLT_PASSPHRASE`) that the
+  provider forwards to the CLI — the passphrase and inline key via the child's
+  environment, never the argv — so no credentials live in `secretspec.toml` or
+  the provider URI.
+
 ## [0.14.0] - 2026-07-09
 
 ### Added

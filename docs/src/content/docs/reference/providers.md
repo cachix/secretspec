@@ -97,6 +97,21 @@ protonpass://Work/{project}/{profile}/{key}        # Custom vault and title temp
 **Prerequisites**: `pass-cli`, authenticated with `pass-cli login` (or `pass-cli login --pat $PAT` for CI)
 **Storage**: Note item titled `{project}/{profile}/{key}` inside the configured vault
 
+## Passbolt Provider
+
+**URI**: `passbolt://[name-template][?folder=<id>&server=<address>]` - Stores secrets in self-hosted Passbolt via the official `go-passbolt-cli`
+
+```bash
+passbolt://                                         # Default name (secretspec/{project}/{profile}/{key})
+passbolt://secretspec/{project}/{profile}/{key}     # Custom resource-name template
+passbolt://?server=https://pass.example.com         # Pin the server address
+passbolt://?folder=<folder-id>                       # Create/scope resources in a folder
+```
+
+**Features**: Read/write, end-to-end encryption, self-hosted, `ref` by resource id or name (fields: `password`/`username`/`uri`/`description`)
+**Prerequisites**: `passbolt` CLI, configured with `passbolt configure --serverAddress https://... --userPrivateKeyFile key.asc --userPassword <passphrase>`
+**Storage**: Resource named `secretspec/{project}/{profile}/{key}`, value in the `password` field
+
 ## Google Cloud Secret Manager Provider
 
 **URI**: `gcsm://PROJECT_ID` - Stores secrets in Google Cloud Secret Manager
@@ -189,6 +204,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Keyring | ✅ System encryption | System keychain | ❌ No |
 | Pass | ✅ GPG encryption | Local filesystem | ❌ No |
 | Proton Pass | ✅ End-to-end | Cloud (Proton) | ✅ Yes |
+| Passbolt | ✅ End-to-end | Self-hosted (Passbolt server) | ✅ Yes |
 | LastPass | ✅ End-to-end | Cloud (LastPass) | ✅ Yes |
 | OnePassword | ✅ End-to-end | Cloud (OnePassword) | ✅ Yes |
 | GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |

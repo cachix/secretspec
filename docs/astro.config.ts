@@ -168,6 +168,7 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
             { label: "Environment Variables", slug: "providers/env" },
             { label: "Pass", slug: "providers/pass" },
             { label: "Proton Pass", slug: "providers/protonpass" },
+            { label: "Passbolt", slug: "providers/passbolt" },
             { label: "LastPass", slug: "providers/lastpass" },
             { label: "1Password", slug: "providers/onepassword" },
             {

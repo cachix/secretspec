@@ -780,7 +780,7 @@ Stores fall into two groups for `field`:
 | Store | Shape of one secret | `field` |
 |-------|---------------------|---------|
 | dotenv, file (0.19+), env, pass, LastPass, Proton Pass, Bitwarden, AWS Parameter Store (0.18+) | a single value | Rejected: there is nothing to select |
-| 1Password, Keeper (0.18+), Vault KV, AWS Secrets Manager, keyring | a record of named parts | Selects the part: field label, map key, JSON key, account |
+| 1Password, Keeper (0.18+), Passbolt (0.19+), Vault KV, AWS Secrets Manager, keyring | a record of named parts | Selects the part: field label, map key, JSON key, account |
 
 `vault` is the only container coordinate. For every store except 1Password the
 container is part of the provider URI, not the ref:
@@ -854,6 +854,7 @@ entry declares neither, it inherits whichever form `[profiles.default]` uses.
 | [LastPass](/providers/lastpass/#use-existing-secrets) | Item name | Rejected | Reads the item | ✅ |
 | [Dashlane (0.18+)](/providers/dashlane/#use-existing-secrets) | Item title or identifier | Field name on the item | Reads the type's default field (`content`, or `password` for a login) | — (read-only) |
 | [Proton Pass](/providers/protonpass/#use-existing-secrets) | Item title | Rejected | Reads the note | ✅ |
+| [Passbolt (0.19+)](/providers/passbolt/#use-existing-resources) | Resource UUID or exact name | `password`, `username`, `uri`, or `description` | Reads `password` | ✅ for existing resources; never creates through `ref` |
 | [Vault](/providers/vault/#use-existing-secrets) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
 | [OpenBao](/providers/openbao/#use-existing-secrets) (0.17+) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
 | [AWS Secrets Manager](/providers/awssm/#use-existing-secrets) | Secret name or ARN | JSON key | Whole secret string | — (read-only) |

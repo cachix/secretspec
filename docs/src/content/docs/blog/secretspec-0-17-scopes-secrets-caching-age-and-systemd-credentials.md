@@ -234,7 +234,7 @@ The next work brings more control to local secret access:
   dialogs](https://github.com/cachix/secretspec/pull/122)** — approve or deny a
   secret request in a native prompt instead of requiring a terminal
   interaction.
-- **A [Passbolt provider](https://github.com/cachix/secretspec/pull/127)** —
+- **A [Passbolt provider](https://github.com/cachix/secretspec/pull/127) (0.19+)** —
   bring Passbolt's open-source, collaboration-focused credential manager
   behind the same SecretSpec interface for cloud and self-hosted teams.
 - **A [Bitwarden Password Manager

@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Profiles can opt out of inheriting `[profiles.default]` by setting
   `inherit = false` in their profile defaults (0.19+), allowing standalone
   secret sets alongside profiles that still share the default declarations.
+- **Passbolt provider** (`passbolt://`): store and read secrets in a
+  self-hosted Passbolt server through the community-maintained
+  `go-passbolt-cli`, with convention-based names, references to existing
+  resources, and credentials supplied by the CLI configuration or SecretSpec
+  provider environment variables.
+
 - Windows ARM64 CLI release artifacts (`aarch64-pc-windows-msvc`).
 - Provider aliases can define native `ref` templates and secrets can override
   coordinates per leaf alias with `refs`, so fallback providers and import
@@ -63,6 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - SOPS write-target previews consistently use canonical physical paths on macOS
   and Windows, matching the files used for writes.
+- Passbolt now updates UUID-addressed resources outside a configured folder,
+  treats URI- and environment-selected forms of the same server as one import
+  destination, rejects malformed provider query parameters, and avoids
+  redundant resource listings during writes.
 - Cache entries now store their absolute expiration time, allowing SecretSpec
   to remove an expired entry whenever it encounters one, including at an
   address previously used by another project or profile. Changing `max_age`

@@ -26,6 +26,7 @@
 //! - [`gopass::GoPassProvider`]: Gopass integration
 //! - [`systemd_credential::SystemdCredentialProvider`]: systemd service credentials (0.17+)
 //! - [`protonpass::ProtonPassProvider`]: Proton Pass integration
+//! - [`passbolt::PassboltProvider`]: Passbolt integration through go-passbolt-cli (0.19+)
 //! - [`onepassword::OnePasswordProvider`]: 1Password integration
 //! - [`lastpass::LastPassProvider`]: LastPass integration
 //! - [`dashlane::DashlaneProvider`]: Dashlane integration, read-only (0.18+)
@@ -214,16 +215,6 @@ impl ProviderUrl {
         self.0.port()
     }
 
-    #[cfg(any(
-        feature = "awssm",
-        feature = "bw",
-        feature = "infisical",
-        feature = "kdbx",
-        feature = "openbao",
-        feature = "sops",
-        feature = "vault",
-        test
-    ))]
     pub fn query_pairs(&self) -> url::form_urlencoded::Parse<'_> {
         self.0.query_pairs()
     }
@@ -316,6 +307,7 @@ pub mod onepassword;
 #[cfg(feature = "openbao")]
 pub mod openbao;
 pub mod pass;
+pub mod passbolt;
 pub mod protonpass;
 #[cfg(feature = "scaleway")]
 pub mod scaleway;

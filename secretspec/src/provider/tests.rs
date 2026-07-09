@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::provider::Provider;
+use crate::provider::{Address, Provider};
 use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -22,17 +22,29 @@ impl MockProvider {
 }
 
 impl Provider for MockProvider {
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: format!("{}/{}/{}", project, profile, key),
+            ..Default::default()
+        })
+    }
+
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let full_key = super::flat_item(self, addr)?;
         let storage = self.storage.lock().unwrap();
-        let full_key = format!("{}/{}/{}", project, profile, key);
         Ok(storage
-            .get(&full_key)
+            .get(&*full_key)
             .map(|v| SecretString::new(v.clone().into())))
     }
 
-    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        let full_key = super::flat_item(self, addr)?.into_owned();
         let mut storage = self.storage.lock().unwrap();
-        let full_key = format!("{}/{}/{}", project, profile, key);
         storage.insert(full_key, value.expose_secret().to_string());
         Ok(())
     }
@@ -44,6 +56,119 @@ impl Provider for MockProvider {
     fn uri(&self) -> String {
         "mock://".to_string()
     }
+}
+
+/// Provider that records how many times `get` runs for each resolved `item`,
+/// so the shared [`get_each`](crate::provider::get_each) contract — identical
+/// addresses fetched once, missing secrets omitted — can be asserted. Every
+/// known item returns its stored value; anything else is `None`.
+struct CountingProvider {
+    values: HashMap<String, String>,
+    gets: Arc<Mutex<HashMap<String, usize>>>,
+}
+
+impl CountingProvider {
+    fn new(values: &[(&str, &str)]) -> Self {
+        Self {
+            values: values
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            gets: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn get_count(&self, item: &str) -> usize {
+        self.gets.lock().unwrap().get(item).copied().unwrap_or(0)
+    }
+}
+
+impl Provider for CountingProvider {
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: format!("{}/{}/{}", project, profile, key),
+            ..Default::default()
+        })
+    }
+
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let item = super::flat_item(self, addr)?.into_owned();
+        *self.gets.lock().unwrap().entry(item.clone()).or_insert(0) += 1;
+        Ok(self
+            .values
+            .get(&item)
+            .map(|v| SecretString::new(v.clone().into())))
+    }
+
+    fn set(&self, _addr: Address<'_>, _value: &SecretString) -> Result<()> {
+        Ok(())
+    }
+
+    fn name(&self) -> &'static str {
+        "counting"
+    }
+
+    fn uri(&self) -> String {
+        "counting://".to_string()
+    }
+}
+
+/// A single distinct address (the common case: one secret, or several sharing
+/// one `ref`) is fetched once and its value shared, via the inline fast path.
+#[test]
+fn get_each_dedupes_one_address_across_names() {
+    let p = CountingProvider::new(&[("svc", "val")]);
+    let coords = crate::config::NativeAddress {
+        item: "svc".into(),
+        ..Default::default()
+    };
+    let addr = Address::Native(&coords);
+    let out = super::get_each(&p, &[("FIRST", addr), ("SECOND", addr)]).unwrap();
+
+    assert_eq!(out["FIRST"].expose_secret(), "val");
+    assert_eq!(out["SECOND"].expose_secret(), "val");
+    assert_eq!(p.get_count("svc"), 1, "one address must be fetched once");
+}
+
+/// Distinct addresses take the threaded path; each is fetched once, results map
+/// back to the right names, and a secret that does not exist is omitted rather
+/// than surfaced as an empty value.
+#[test]
+fn get_each_fetches_distinct_addresses_and_omits_missing() {
+    let p = CountingProvider::new(&[("one", "v1"), ("two", "v2")]);
+    let a1 = crate::config::NativeAddress {
+        item: "one".into(),
+        ..Default::default()
+    };
+    let a2 = crate::config::NativeAddress {
+        item: "two".into(),
+        ..Default::default()
+    };
+    let a3 = crate::config::NativeAddress {
+        item: "absent".into(),
+        ..Default::default()
+    };
+    let out = super::get_each(
+        &p,
+        &[
+            ("A", Address::Native(&a1)),
+            ("B", Address::Native(&a2)),
+            ("C", Address::Native(&a3)),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(out["A"].expose_secret(), "v1");
+    assert_eq!(out["B"].expose_secret(), "v2");
+    assert!(!out.contains_key("C"), "a missing secret is omitted");
+    assert_eq!(p.get_count("one"), 1);
+    assert_eq!(p.get_count("two"), 1);
+    assert_eq!(p.get_count("absent"), 1);
 }
 
 #[test]
@@ -217,16 +342,33 @@ fn test_edge_cases_and_normalization() {
     let provider = Box::<dyn Provider>::try_from("dotenv:/absolute/path").unwrap();
     assert_eq!(provider.name(), "dotenv");
 
-    // Test normalized URIs with localhost (line 154)
-    let provider = Box::<dyn Provider>::try_from("env://localhost").unwrap();
-    assert_eq!(provider.name(), "env");
+    // env takes no authority: a variable is addressed via `ref`, not the URI.
+    let Err(err) = Box::<dyn Provider>::try_from("env://localhost") else {
+        panic!("env authority must be rejected");
+    };
+    assert!(err.to_string().contains("ref = { item ="), "{err}");
 }
 
 #[test]
-fn test_documentation_example_line_184() {
-    // Test the exact example from line 184 of registry.rs
-    let provider = Box::<dyn Provider>::try_from("onepassword://vault/Production").unwrap();
+fn test_onepassword_uri_forms() {
+    // Vault-only form
+    let provider = Box::<dyn Provider>::try_from("onepassword://Production").unwrap();
     assert_eq!(provider.name(), "onepassword");
+
+    // op:// URIs (1Password's own reference syntax) are no longer provider
+    // addresses: the error spells out the exact `ref` table translation.
+    let Err(err) = Box::<dyn Provider>::try_from("op://Production/db/password") else {
+        panic!("op:// provider spec must be rejected");
+    };
+    assert!(
+        err.to_string()
+            .contains("ref = { vault = \"Production\", item = \"db\", field = \"password\" }"),
+        "{err}"
+    );
+
+    // Any item path on the provider URI fails loudly instead of being
+    // silently discarded.
+    assert!(Box::<dyn Provider>::try_from("onepassword://vault/Production").is_err());
 }
 
 #[test]
@@ -350,7 +492,11 @@ mod integration_tests {
         let project_name = generate_test_project_name();
 
         // Test 1: Get non-existent secret
-        let result = provider.get(&project_name, "TEST_PASSWORD", "default");
+        let result = provider.get(Address::convention(
+            &project_name,
+            "default",
+            "TEST_PASSWORD",
+        ));
         match result {
             Ok(None) => {
                 // Expected: key doesn't exist
@@ -366,10 +512,16 @@ mod integration_tests {
         // Test 2: Try to set a secret (may fail for read-only providers)
         let test_value = SecretString::new(format!("test_password_{}", provider_name).into());
 
-        if provider.allows_set() {
+        if provider
+            .check_writable(Address::convention("proj", "default", "KEY"))
+            .is_ok()
+        {
             // Provider claims to support set, so it should work
             provider
-                .set(&project_name, "TEST_PASSWORD", &test_value, "default")
+                .set(
+                    Address::convention(&project_name, "default", "TEST_PASSWORD"),
+                    &test_value,
+                )
                 .expect(&format!(
                     "[{}] Provider claims to support set but failed",
                     provider_name
@@ -377,7 +529,11 @@ mod integration_tests {
 
             // Verify we can retrieve it
             let retrieved = provider
-                .get(&project_name, "TEST_PASSWORD", "default")
+                .get(Address::convention(
+                    &project_name,
+                    "default",
+                    "TEST_PASSWORD",
+                ))
                 .expect(&format!(
                     "[{}] Should not error when getting after set",
                     provider_name
@@ -398,7 +554,10 @@ mod integration_tests {
             }
         } else {
             // Provider is read-only, verify set fails
-            match provider.set(&project_name, "TEST_PASSWORD", &test_value, "default") {
+            match provider.set(
+                Address::convention(&project_name, "default", "TEST_PASSWORD"),
+                &test_value,
+            ) {
                 Ok(_) => {
                     panic!(
                         "[{}] Read-only provider should not allow set operations",
@@ -447,11 +606,14 @@ mod integration_tests {
         for (key, value) in &test_cases {
             let secret_value = SecretString::new(value.to_string().into());
             provider
-                .set(&project_name, key, &secret_value, "default")
+                .set(
+                    Address::convention(&project_name, "default", key),
+                    &secret_value,
+                )
                 .expect("Mock provider should handle all characters");
 
             let result = provider
-                .get(&project_name, key, "default")
+                .get(Address::convention(&project_name, "default", key))
                 .expect("Should not error when getting");
 
             assert_eq!(
@@ -472,11 +634,14 @@ mod integration_tests {
         for profile in &profiles {
             let value = SecretString::new(format!("key_for_{}", profile).into());
             provider
-                .set(&project_name, test_key, &value, profile)
+                .set(
+                    Address::convention(&project_name, profile, test_key),
+                    &value,
+                )
                 .expect("Should set with profile");
 
             let result = provider
-                .get(&project_name, test_key, profile)
+                .get(Address::convention(&project_name, profile, test_key))
                 .expect("Should get with profile");
 
             assert_eq!(
@@ -490,7 +655,7 @@ mod integration_tests {
         for i in 0..profiles.len() {
             for j in 0..profiles.len() {
                 let result = provider
-                    .get(&project_name, test_key, profiles[j])
+                    .get(Address::convention(&project_name, profiles[j], test_key))
                     .expect("Should not error");
 
                 if i == j {
@@ -567,10 +732,12 @@ mod integration_tests {
     }
 
     #[test]
-    fn test_pass_provider_allows_set() {
+    fn test_pass_provider_is_writable() {
         let provider = Box::<dyn Provider>::try_from("pass").unwrap();
         assert!(
-            provider.allows_set(),
+            provider
+                .check_writable(Address::convention("proj", "default", "KEY"))
+                .is_ok(),
             "Pass provider should support write operations"
         );
     }
@@ -599,10 +766,12 @@ mod integration_tests {
     }
 
     #[test]
-    fn test_protonpass_provider_allows_set() {
+    fn test_protonpass_provider_is_writable() {
         let provider = Box::<dyn Provider>::try_from("protonpass").unwrap();
         assert!(
-            provider.allows_set(),
+            provider
+                .check_writable(Address::convention("proj", "default", "KEY"))
+                .is_ok(),
             "ProtonPass provider should support write operations"
         );
     }
@@ -628,10 +797,8 @@ mod integration_tests {
         for (key, value) in &test_secrets {
             provider
                 .set(
-                    &project_name,
-                    key,
+                    Address::convention(&project_name, profile, key),
                     &SecretString::new(value.to_string().into()),
-                    profile,
                 )
                 .unwrap();
         }
@@ -643,7 +810,11 @@ mod integration_tests {
             "BATCH_TEST_3",
             "NONEXISTENT",
         ];
-        let result = provider.get_batch(&project_name, &keys, profile).unwrap();
+        let requests: Vec<(&str, Address<'_>)> = keys
+            .iter()
+            .map(|key| (*key, Address::convention(&project_name, profile, key)))
+            .collect();
+        let result = provider.get_many(&requests).unwrap();
 
         assert_eq!(result.len(), 3);
         assert_eq!(result["BATCH_TEST_1"].expose_secret(), "value1");

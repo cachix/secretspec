@@ -386,7 +386,7 @@ println!("{}", s.secrets.database_url);</code></pre>
           <span class="landing-terminal-title">secretspec.toml</span>
         </div>
         <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[providers]</span>
-<span class="tok-key">team_vault</span> <span class="tok-pun">=</span> <span class="tok-str">"onepassword://vault/Shared"</span>
+<span class="tok-key">team_vault</span> <span class="tok-pun">=</span> <span class="tok-str">"onepassword://Shared"</span>
 <span class="tok-key">keyring</span>    <span class="tok-pun">=</span> <span class="tok-str">"keyring://"</span>
 <span class="tok-key">env</span>        <span class="tok-pun">=</span> <span class="tok-str">"env://"</span>
 
@@ -408,6 +408,47 @@ println!("{}", s.secrets.database_url);</code></pre>
           <span>Found in <strong>keyring</strong> ✓</span>
         </div>
         <p class="landing-chain-result">Same code. Same secret. Different source per machine.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SHOWCASE: secret references ============ -->
+<section class="landing-showcase">
+  <div class="landing-container">
+    <div class="landing-showcase-head">
+      <span class="landing-showcase-eyebrow">Secret references</span>
+      <h2 class="landing-section-title">Name it once. Point it anywhere.</h2>
+      <p class="landing-section-lead landing-section-lead-narrow">
+        Already managing a secret in 1Password, Vault, or a <code class="inline-code">.env</code> file? Point at it by the store's own coordinates with <code class="inline-code">ref</code>. No renaming, no copying it into SecretSpec's own layout. <a href="/concepts/references/" class="landing-link">How references work →</a>
+      </p>
+    </div>
+
+    <div class="landing-fallback">
+      <div class="landing-terminal">
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">secretspec.toml</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[profiles.production]</span>
+<span class="tok-com"># Point at a secret that already lives in your store</span>
+<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span>
+  <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"Postgres DSN"</span><span class="tok-pun">,</span>
+  <span class="tok-key">ref</span> <span class="tok-pun">= {</span> <span class="tok-key">item</span> <span class="tok-pun">=</span> <span class="tok-str">"db"</span><span class="tok-pun">,</span> <span class="tok-key">field</span> <span class="tok-pun">=</span> <span class="tok-str">"password"</span> <span class="tok-pun">}</span>
+<span class="tok-pun">}</span></code></pre>
+      </div>
+
+      <div class="landing-chain">
+        <div class="landing-chain-step">
+          <span aria-hidden="true">🧭</span>
+          <span>A <code>ref</code> names the store's own coordinates: <code>item</code> plus an optional <code>field</code></span>
+        </div>
+        <div class="landing-chain-arrow" aria-hidden="true">↓ resolves through</div>
+        <div class="landing-chain-step is-hit">
+          <span aria-hidden="true">🔀</span>
+          <span>The same coordinates work in <strong>1Password</strong>, <strong>Vault</strong>, <strong>keyring</strong>, or <strong>.env</strong></span>
+        </div>
+        <p class="landing-chain-result">Point at secrets you already have. Switch stores without editing the ref.</p>
       </div>
     </div>
   </div>

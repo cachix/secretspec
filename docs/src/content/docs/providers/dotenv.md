@@ -41,6 +41,18 @@ dotenv:/absolute/path/.env
 export SECRETSPEC_PROVIDER=dotenv:.env.local
 ```
 
+## Secret References
+
+By default each secret reads the key named after it. A secret's
+[`ref`](/reference/configuration/#secret-references) field reads a key stored
+under a different name: `item` is the `.env` key (`field` is not supported).
+Reads and writes target that key in place; the secret's own name is ignored.
+
+```toml
+[profiles.default]
+DATABASE_URL = { description = "DB", ref = { item = "POSTGRES_URL" }, providers = ["dotenv://.env.shared"] }
+```
+
 ## Usage
 
 ```bash

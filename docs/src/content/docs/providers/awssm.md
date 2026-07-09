@@ -45,6 +45,22 @@ $ secretspec run --provider awssm://us-east-1 -- npm start
 $ secretspec set DATABASE_URL --provider awssm
 ```
 
+## Secret References
+
+By default each secret is stored under `secretspec/{project}/{profile}/{key}`. A
+secret's [`ref`](/reference/configuration/#secret-references) field names an
+existing secret instead: `item` is the secret name (or ARN), and the optional
+`field` selects one key of a JSON secret value. Without `field`, the whole
+secret string is returned. References are **read-only** in this provider.
+
+```toml
+[profiles.production]
+# Whole secret value
+DATABASE_URL = { description = "DB", ref = { item = "prod/database-url" }, providers = ["awssm://us-east-1"] }
+# One key of a JSON secret value
+DB_PASSWORD = { description = "DB pw", ref = { item = "prod/db-credentials", field = "password" }, providers = ["awssm://us-east-1"] }
+```
+
 ## Usage
 
 ### Basic Commands

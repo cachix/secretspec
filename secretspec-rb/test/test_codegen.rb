@@ -46,8 +46,8 @@ class CodegenTest < Minitest::Test
         revision = "1.0"
 
         [profiles.default]
-        DATABASE_URL = { required = true }
-        LOG_LEVEL = { required = false, default = "info" }
+        DATABASE_URL = { description = "DB", required = true }
+        LOG_LEVEL = { description = "log", required = false, default = "info" }
       TOML
       File.write(env_path, "DATABASE_URL=postgres://db\n")
 

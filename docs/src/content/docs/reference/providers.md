@@ -66,6 +66,11 @@ onepassword+token://user:op_token@SecureVault   # Service account
 **Prerequisites**: `op` CLI, authenticated with `op signin`
 **Storage**: Item name `{project}/{key}`, tags `automated`, `{project}`
 
+The URI names a vault only; item paths on the URI are rejected. To read and
+write an existing item's field in place, name it with the `ref` field
+(`SECRET = { description = "…", ref = { item = "…", field = "…" } }`); see
+[Secret References](/reference/configuration/#secret-references).
+
 ## Pass Provider
 
 **URI**: `pass://` - Uses Unix password manager with GPG encryption

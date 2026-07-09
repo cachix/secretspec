@@ -78,14 +78,14 @@ secretspec config provider add <ALIAS> <URI>
 
 **Arguments:**
 - `<ALIAS>` - Short name for the provider (e.g., `prod_vault`, `shared`)
-- `<URI>` - Provider URI (e.g., `onepassword://vault/Production`, `env://`)
+- `<URI>` - Provider URI (e.g., `onepassword://Production`, `env://`)
 
 **Example:**
 ```bash
-$ secretspec config provider add prod_vault "onepassword://vault/Production"
+$ secretspec config provider add prod_vault "onepassword://Production"
 ✓ Provider alias 'prod_vault' saved
 
-$ secretspec config provider add shared "onepassword://vault/Shared"
+$ secretspec config provider add shared "onepassword://Shared"
 ✓ Provider alias 'shared' saved
 ```
 
@@ -99,8 +99,8 @@ secretspec config provider list
 **Example:**
 ```bash
 $ secretspec config provider list
-prod_vault  → onepassword://vault/Production
-shared      → onepassword://vault/Shared
+prod_vault  → onepassword://Production
+shared      → onepassword://Shared
 env         → env://
 ```
 
@@ -270,6 +270,16 @@ $ secretspec run --profile production -- npm run deploy
 # Verify secrets are injected
 $ secretspec run -- env | grep DATABASE_URL
 DATABASE_URL=postgresql://localhost/mydb
+```
+
+The `--provider` override applies to every secret, including those with a
+[`ref`](/reference/configuration/#secret-references) field: refs are redirected
+to the overriding provider just like convention secrets. This makes it easy to
+point refs at fixtures during tests without editing the manifest:
+
+```bash
+# Resolve every secret, refs included, from a fixtures file
+$ secretspec run --provider dotenv:.env.fixtures -- cargo test
 ```
 
 :::note[Shell Variable Expansion]

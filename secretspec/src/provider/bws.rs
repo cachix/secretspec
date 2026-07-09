@@ -36,7 +36,7 @@
 //! secretspec check --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c
 //! ```
 
-use super::{Provider, ProviderUrl};
+use super::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use bitwarden::auth::login::AccessTokenLoginRequest;
 use bitwarden::secrets_manager::ClientSecretsExt;
@@ -249,18 +249,13 @@ impl BwsProvider {
         Ok(secrets.data)
     }
 
-    /// Retrieves a secret value from BWS by key name.
-    async fn get_secret_async(
-        &self,
-        _project: &str,
-        key: &str,
-        _profile: &str,
-    ) -> Result<Option<SecretString>> {
+    /// Retrieves a secret value from BWS by its resolved key name.
+    async fn get_secret_async(&self, target: &str) -> Result<Option<SecretString>> {
         let secrets = self.ensure_secrets().await?;
 
-        // BWS uses flat key names -- match directly on the key
+        // BWS uses flat key names -- match directly.
         for secret in secrets {
-            if secret.key == key {
+            if secret.key == target {
                 return Ok(Some(SecretString::new(secret.value.clone().into())));
             }
         }
@@ -268,14 +263,8 @@ impl BwsProvider {
         Ok(None)
     }
 
-    /// Creates or updates a secret in BWS.
-    async fn set_secret_async(
-        &self,
-        _project: &str,
-        key: &str,
-        value: &SecretString,
-        _profile: &str,
-    ) -> Result<()> {
+    /// Creates or updates a secret in BWS at its resolved key name.
+    async fn set_secret_async(&self, key: &str, value: &SecretString) -> Result<()> {
         let client = self.ensure_client().await?;
 
         // get_access_token_organization() is not part of the public stable API surface
@@ -340,31 +329,23 @@ impl BwsProvider {
 
         Ok(())
     }
-
-    /// Retrieves multiple secrets in a single batch using the cached secrets list.
-    async fn get_batch_async(
-        &self,
-        _project: &str,
-        keys: &[&str],
-        _profile: &str,
-    ) -> Result<HashMap<String, SecretString>> {
-        let secrets = self.ensure_secrets().await?;
-        let mut results = HashMap::new();
-
-        for secret in secrets {
-            if keys.contains(&secret.key.as_str()) {
-                results.insert(
-                    secret.key.clone(),
-                    SecretString::new(secret.value.clone().into()),
-                );
-            }
-        }
-
-        Ok(results)
-    }
 }
 
 impl Provider for BwsProvider {
+    /// Convention names map straight to the BWS key named after the secret;
+    /// the project UUID in the URI provides namespace isolation instead.
+    fn convention_address(
+        &self,
+        _project: &str,
+        _profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: key.to_string(),
+            ..Default::default()
+        })
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
@@ -376,25 +357,43 @@ impl Provider for BwsProvider {
         }
     }
 
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        super::block_on(self.get_secret_async(project, key, profile))
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let target = super::flat_item(self, addr)?;
+        super::block_on(self.get_secret_async(&target))
     }
 
-    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        super::block_on(self.set_secret_async(project, key, value, profile))
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        let target = super::flat_item(self, addr)?;
+        super::block_on(self.set_secret_async(&target, value))
     }
 
-    fn allows_set(&self) -> bool {
-        true
-    }
+    /// Serves every request, convention or `ref`, from one cached listing of
+    /// the project's secrets.
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+        if requests.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut targets = Vec::with_capacity(requests.len());
+        for (name, addr) in requests {
+            targets.push((*name, super::flat_item(self, *addr)?));
+        }
 
-    fn get_batch(
-        &self,
-        project: &str,
-        keys: &[&str],
-        profile: &str,
-    ) -> Result<HashMap<String, SecretString>> {
-        super::block_on(self.get_batch_async(project, keys, profile))
+        let secrets = super::block_on(self.ensure_secrets())?;
+        let by_key: HashMap<&str, &str> = secrets
+            .iter()
+            .map(|s| (s.key.as_str(), s.value.as_str()))
+            .collect();
+
+        let mut results = HashMap::new();
+        for (name, target) in targets {
+            if let Some(value) = by_key.get(&*target) {
+                results.insert(
+                    name.to_string(),
+                    SecretString::new((*value).to_string().into()),
+                );
+            }
+        }
+        Ok(results)
     }
 }
 
@@ -464,6 +463,23 @@ mod tests {
         );
     }
 
+    /// A native address names the BWS key directly via `item`.
+    #[test]
+    fn native_address_names_the_key() {
+        let config =
+            BwsConfig::try_from(&provider_url("bws://a9230ec4-5507-4870-b8b5-b3f500587e4c"))
+                .unwrap();
+        let p = BwsProvider::new(config);
+        let addr = crate::config::NativeAddress {
+            item: "prod-db-url".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::provider::flat_item(&p, Address::Native(&addr)).unwrap(),
+            "prod-db-url"
+        );
+    }
+
     #[test]
     fn test_bws_provider_metadata() {
         let config = BwsConfig {
@@ -477,7 +493,11 @@ mod tests {
             provider.uri(),
             "bws://vault.bitwarden.com@a9230ec4-5507-4870-b8b5-b3f500587e4c"
         );
-        assert!(provider.allows_set());
+        assert!(
+            provider
+                .check_writable(Address::convention("proj", "default", "KEY"))
+                .is_ok()
+        );
 
         let config = BwsConfig {
             project_id: uuid::Uuid::parse_str("a9230ec4-5507-4870-b8b5-b3f500587e4c").unwrap(),
@@ -487,7 +507,11 @@ mod tests {
 
         assert_eq!(provider.name(), "bws");
         assert_eq!(provider.uri(), "bws://a9230ec4-5507-4870-b8b5-b3f500587e4c");
-        assert!(provider.allows_set());
+        assert!(
+            provider
+                .check_writable(Address::convention("proj", "default", "KEY"))
+                .is_ok()
+        );
     }
 
     #[test]
@@ -502,7 +526,7 @@ mod tests {
         };
         let provider = BwsProvider::new(config);
 
-        let result = provider.get("test_project", "TEST_KEY", "default");
+        let result = provider.get(Address::convention("test_project", "default", "TEST_KEY"));
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -510,5 +534,21 @@ mod tests {
             "Error should mention BWS_ACCESS_TOKEN, got: {}",
             err_msg
         );
+    }
+
+    /// BWS secrets are flat key/value pairs; a `field` coordinate is rejected.
+    #[test]
+    fn native_address_rejects_field() {
+        let config =
+            BwsConfig::try_from(&provider_url("bws://a9230ec4-5507-4870-b8b5-b3f500587e4c"))
+                .unwrap();
+        let p = BwsProvider::new(config);
+        let addr = crate::config::NativeAddress {
+            item: "prod-db-url".into(),
+            field: Some("password".into()),
+            ..Default::default()
+        };
+        let err = crate::provider::flat_item(&p, Address::Native(&addr)).unwrap_err();
+        assert!(err.to_string().contains("`field`"), "{err}");
     }
 }

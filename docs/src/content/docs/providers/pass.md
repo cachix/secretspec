@@ -45,6 +45,19 @@ $ secretspec set DATABASE_URL --provider "pass://shared/{profile}/{key}"
 $ secretspec set DATABASE_URL --provider "pass://?store_dir=/path/to/store"
 ```
 
+## Secret References
+
+By default each secret is stored at `secretspec/{project}/{profile}/{key}`. A
+secret's [`ref`](/reference/configuration/#secret-references) field names an
+existing store entry instead, letting you read credentials you already keep in
+`pass`: `item` is the entry path (`field` is not supported). Reads and writes
+target that entry in place.
+
+```toml
+[profiles.default]
+GITHUB_TOKEN = { description = "GH token", ref = { item = "github/token" }, providers = ["pass"] }
+```
+
 ## Usage
 
 ```bash

@@ -30,7 +30,7 @@
 //! secretspec check --provider gcsm://my-gcp-project
 //! ```
 
-use super::{Provider, ProviderUrl};
+use super::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use google_cloud_secretmanager_v1::client::SecretManagerService;
 use google_cloud_secretmanager_v1::model::{Replication, Secret, SecretPayload, replication};
@@ -115,6 +115,26 @@ impl TryFrom<&ProviderUrl> for GcsmConfig {
 
         // Validate project ID format
         validate_gcp_project_id(&project_id)?;
+
+        // The path reference form from earlier iterations is rejected with a
+        // pointer at the `ref` table, instead of being silently ignored and
+        // reading the conventional layout.
+        let path = url.path();
+        let trimmed = path.trim_start_matches('/');
+        if !trimmed.is_empty() {
+            let id = trimmed
+                .strip_prefix("secrets/")
+                .unwrap_or(trimmed)
+                .split('/')
+                .next()
+                .unwrap_or(trimmed);
+            let hint = crate::config::ref_table_hint(None, id, None, None);
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "gcsm URIs take no path: address the secret with \
+                 {hint} on the secret instead \
+                 (add version = \"<n>\" to pin a version)"
+            )));
+        }
 
         Ok(Self { project_id })
     }
@@ -220,19 +240,18 @@ impl GcsmProvider {
         })
     }
 
-    /// Retrieves a secret value from GCP Secret Manager.
-    async fn get_secret_async(
+    /// Resolves coordinates to a version resource and reads it, mapping "not
+    /// found" to `None`: `item` is the secret id, `version` the version to read
+    /// (defaulting to the latest).
+    async fn get_coords_async(
         &self,
-        project: &str,
-        key: &str,
-        profile: &str,
+        coords: &crate::config::NativeAddress,
     ) -> Result<Option<SecretString>> {
-        let secret_name = self.format_secret_name(project, profile, key)?;
+        let version = coords.version.as_deref().unwrap_or("latest");
         let secret_version_path = format!(
-            "projects/{}/secrets/{}/versions/latest",
-            self.config.project_id, secret_name
+            "projects/{}/secrets/{}/versions/{}",
+            self.config.project_id, coords.item, version
         );
-
         let client = self.create_client().await?;
 
         match client
@@ -261,7 +280,7 @@ impl GcsmProvider {
                 } else {
                     Err(SecretSpecError::ProviderOperationFailed(format!(
                         "Failed to access secret '{}': {}",
-                        secret_name, e
+                        coords.item, e
                     )))
                 }
             }
@@ -272,21 +291,14 @@ impl GcsmProvider {
     ///
     /// Always attempts to create the secret first (idempotent operation), then adds a new version.
     /// This avoids TOCTOU race conditions by not checking existence before creation.
-    async fn set_secret_async(
-        &self,
-        project: &str,
-        key: &str,
-        value: &SecretString,
-        profile: &str,
-    ) -> Result<()> {
-        let secret_name = self.format_secret_name(project, profile, key)?;
+    async fn set_secret_async(&self, secret_name: &str, value: &SecretString) -> Result<()> {
         let client = self.create_client().await?;
 
         // Always try to create the secret first (idempotent - ALREADY_EXISTS is expected for existing secrets)
         let create_result = client
             .create_secret()
             .set_parent(format!("projects/{}", self.config.project_id))
-            .set_secret_id(&secret_name)
+            .set_secret_id(secret_name)
             .set_secret(Secret::default().set_replication(
                 Replication::default().set_automatic(replication::Automatic::default()),
             ))
@@ -328,6 +340,21 @@ impl GcsmProvider {
 }
 
 impl Provider for GcsmProvider {
+    /// Convention secrets are ids of the form
+    /// `secretspec-{project}-{profile}-{key}` (GCP secret ids cannot contain
+    /// slashes), read at their latest version.
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: self.format_secret_name(project, profile, key)?,
+            ..Default::default()
+        })
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
@@ -336,15 +363,89 @@ impl Provider for GcsmProvider {
         format!("gcsm://{}", self.config.project_id)
     }
 
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        super::block_on(self.get_secret_async(project, key, profile))
+    /// An optional `version` pins the secret version to read.
+    fn supported_coords(&self) -> &'static [&'static str] {
+        &["version"]
     }
 
-    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        super::block_on(self.set_secret_async(project, key, value, profile))
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let coords = self.resolve_coords(addr)?;
+        super::block_on(self.get_coords_async(&coords))
     }
 
-    fn allows_set(&self) -> bool {
-        true
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        self.check_writable(addr)?;
+        let coords = self.resolve_coords(addr)?;
+        super::block_on(self.set_secret_async(&coords.item, value))
+    }
+
+    /// Native addresses are read-only: they name an existing (often
+    /// version-pinned) secret, and writing would mean minting a new version of
+    /// someone else's secret.
+    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+        match addr {
+            Address::Convention { .. } => Ok(()),
+            Address::Native(_) => Err(SecretSpecError::ProviderOperationFailed(
+                "gcsm secret references are read-only and cannot be written".to_string(),
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+    use url::Url;
+
+    /// A path that is not a `secrets/...` resource is rejected.
+    #[test]
+    fn path_is_rejected_with_ref_hint() {
+        let err = GcsmConfig::try_from(&ProviderUrl::new(
+            Url::parse("gcsm://my-project/secrets/db-url/versions/3").unwrap(),
+        ))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("ref = { item = \"db-url\" }"),
+            "{err}"
+        );
+    }
+
+    /// Native addresses are read-only: writing would mint a new version of a
+    /// secret managed outside SecretSpec.
+    #[test]
+    fn native_address_is_read_only() {
+        let c = GcsmConfig::try_from(&ProviderUrl::new(Url::parse("gcsm://my-project").unwrap()))
+            .unwrap();
+        let p = GcsmProvider::new(c);
+        let addr = crate::config::NativeAddress {
+            item: "db-url".into(),
+            ..Default::default()
+        };
+        let refusal = p.check_writable(Address::Native(&addr)).unwrap_err();
+        assert!(refusal.to_string().contains("read-only"), "{refusal}");
+        // `set` refuses with the same reason, so the pre-check cannot drift.
+        let err = p
+            .set(
+                Address::Native(&addr),
+                &secrecy::SecretString::new("v".into()),
+            )
+            .unwrap_err();
+        assert_eq!(err.to_string(), refusal.to_string());
+    }
+
+    /// GCSM secrets have no fields; the coordinate is rejected before any
+    /// network I/O.
+    #[test]
+    fn native_address_rejects_field() {
+        let c = GcsmConfig::try_from(&ProviderUrl::new(Url::parse("gcsm://my-project").unwrap()))
+            .unwrap();
+        let p = GcsmProvider::new(c);
+        let addr = crate::config::NativeAddress {
+            item: "db-url".into(),
+            field: Some("x".into()),
+            ..Default::default()
+        };
+        let err = p.get(Address::Native(&addr)).unwrap_err();
+        assert!(err.to_string().contains("`field`"), "{err}");
     }
 }

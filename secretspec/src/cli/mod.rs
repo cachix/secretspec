@@ -171,7 +171,7 @@ enum ProviderAction {
     Add {
         /// Name of the provider alias
         name: String,
-        /// Provider URI (e.g., "keyring://", "onepassword://vault/Shared", "dotenv://.env.local")
+        /// Provider URI (e.g., "keyring://", "onepassword://Shared", "dotenv://.env.local")
         uri: String,
     },
     /// Remove a provider alias

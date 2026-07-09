@@ -38,6 +38,20 @@ $ secretspec check --provider gcsm://my-gcp-project
 $ secretspec run --provider gcsm://my-gcp-project -- npm start
 ```
 
+## Secret References
+
+By default each secret is stored as `secretspec-{project}-{profile}-{key}`. A
+secret's [`ref`](/reference/configuration/#secret-references) field names an
+existing secret instead: `item` is the secret id, and the optional `version`
+pins a version (defaults to latest; `field` is not supported). References are
+**read-only** in this provider.
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "DB", ref = { item = "database-url" }, providers = ["gcsm://my-gcp-project"] }
+SIGNING_KEY = { description = "Key", ref = { item = "signing-key", version = "3" }, providers = ["gcsm://my-gcp-project"] }
+```
+
 ## Usage
 
 ### Basic Commands

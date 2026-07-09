@@ -1,4 +1,4 @@
-use super::{Provider, ProviderUrl};
+use super::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -42,12 +42,12 @@ impl TryFrom<&ProviderUrl> for PassConfig {
 
         let mut config = Self::default();
 
+        config.store_dir = url.query_value("store_dir");
+
         if let Some(host) = url.host() {
             let path = url.path();
             config.folder_prefix = Some(format!("{}{}", host, path));
         }
-
-        config.store_dir = url.query_value("store_dir");
 
         Ok(config)
     }
@@ -119,6 +119,20 @@ impl PassProvider {
 }
 
 impl Provider for PassProvider {
+    /// Convention entries live under the folder-prefix format string,
+    /// `secretspec/{project}/{profile}/{key}` by default.
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: self.format_entry_name(project, profile, key),
+            ..Default::default()
+        })
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
@@ -156,13 +170,13 @@ impl Provider for PassProvider {
     /// * `Ok(Some(SecretString))` - The secret value if found
     /// * `Ok(None)` - If the secret doesn't exist in the password store
     /// * `Err` - If there was an error executing `pass` or reading the output
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        let entry_name = self.format_entry_name(project, profile, key);
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let entry_name = super::flat_item(self, addr)?;
 
         let output = self
             .command()
             .arg("show")
-            .arg(&entry_name)
+            .arg(&*entry_name)
             .output()
             .map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
@@ -210,8 +224,8 @@ impl Provider for PassProvider {
     ///
     /// * `Ok(())` - If the value was successfully written
     /// * `Err(SecretSpecError)` - If writing the pass entry fails
-    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        let entry_name = self.format_entry_name(project, profile, key);
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        let entry_name = super::flat_item(self, addr)?;
 
         let mut child = self
             .command()
@@ -395,5 +409,36 @@ mod tests {
                 "folder_prefix corrupted by store_dir {store_dir:?} via uri {uri:?}"
             );
         }
+    }
+
+    /// A native address names the store entry directly via `item`, bypassing
+    /// the folder-prefix format string.
+    #[test]
+    fn native_address_names_the_entry() {
+        let p = PassProvider::new(PassConfig {
+            folder_prefix: Some("vault/{profile}/{key}".to_string()),
+            store_dir: None,
+        });
+        let addr = crate::config::NativeAddress {
+            item: "email/work".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::provider::flat_item(&p, Address::Native(&addr)).unwrap(),
+            "email/work"
+        );
+    }
+
+    /// Store entries have no sub-components; a `field` coordinate is rejected.
+    #[test]
+    fn native_address_rejects_field() {
+        let p = PassProvider::new(PassConfig::default());
+        let addr = crate::config::NativeAddress {
+            item: "email/work".into(),
+            field: Some("password".into()),
+            ..Default::default()
+        };
+        let err = crate::provider::flat_item(&p, Address::Native(&addr)).unwrap_err();
+        assert!(err.to_string().contains("`field`"), "{err}");
     }
 }

@@ -1,4 +1,4 @@
-use super::{Provider, ProviderUrl};
+use super::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -164,6 +164,20 @@ impl DotEnvProvider {
 }
 
 impl Provider for DotEnvProvider {
+    /// Convention names map straight to the `.env` key named after the
+    /// secret; `.env` files have no project or profile namespacing.
+    fn convention_address(
+        &self,
+        _project: &str,
+        _profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: key.to_string(),
+            ..Default::default()
+        })
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
@@ -216,7 +230,8 @@ impl Provider for DotEnvProvider {
     /// Uses the dotenvy crate for parsing to ensure compatibility with
     /// standard .env file formats and proper handling of quoted values,
     /// multiline strings, and escape sequences.
-    fn get(&self, _project: &str, key: &str, _profile: &str) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let lookup = super::flat_item(self, addr)?;
         if !self.config.path.exists() {
             return Ok(None);
         }
@@ -229,7 +244,9 @@ impl Provider for DotEnvProvider {
             vars.insert(k, v);
         }
 
-        Ok(vars.get(key).map(|v| SecretString::new(v.clone().into())))
+        Ok(vars
+            .get(&*lookup)
+            .map(|v| SecretString::new(v.clone().into())))
     }
 
     /// Sets a secret value in the .env file.
@@ -254,7 +271,8 @@ impl Provider for DotEnvProvider {
     /// 1. Loads existing variables using dotenvy to preserve them
     /// 2. Updates or adds the new key-value pair
     /// 3. Serializes back with `serialize_dotenv` for proper escaping
-    fn set(&self, _project: &str, key: &str, value: &SecretString, _profile: &str) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        let target = super::flat_item(self, addr)?;
         // Load existing vars using dotenvy
         let mut vars = HashMap::new();
         if self.config.path.exists() {
@@ -265,8 +283,7 @@ impl Provider for DotEnvProvider {
             }
         }
 
-        // Update the value
-        vars.insert(key.to_string(), value.expose_secret().to_string());
+        vars.insert(target.into_owned(), value.expose_secret().to_string());
 
         let content = serialize_dotenv(&vars);
         fs::write(&self.config.path, content)?;
@@ -399,7 +416,9 @@ mod tests {
         });
         provider.with_base_dir(root.path());
 
-        let value = provider.get("hello-world", "USER", "default").unwrap();
+        let value = provider
+            .get(Address::convention("hello-world", "default", "USER"))
+            .unwrap();
         assert_eq!(value.unwrap().expose_secret(), "hello");
     }
 
@@ -497,12 +516,17 @@ mod tests {
 
         for (k, v) in cases {
             provider
-                .set("proj", k, &SecretString::new(v.into()), "default")
+                .set(
+                    Address::convention("proj", "default", k),
+                    &SecretString::new(v.into()),
+                )
                 .unwrap();
         }
 
         for (k, v) in cases {
-            let got = provider.get("proj", k, "default").unwrap();
+            let got = provider
+                .get(Address::convention("proj", "default", k))
+                .unwrap();
             assert_eq!(
                 got.map(|s| s.expose_secret().to_string()),
                 Some(v.to_string()),
@@ -526,22 +550,62 @@ mod tests {
 
         provider
             .set(
-                "proj",
-                "BAR",
+                Address::convention("proj", "default", "BAR"),
                 &SecretString::new("foobar".into()),
-                "default",
             )
             .unwrap();
 
-        let foo = provider.get("proj", "FOO", "default").unwrap();
+        let foo = provider
+            .get(Address::convention("proj", "default", "FOO"))
+            .unwrap();
         assert_eq!(
             foo.map(|s| s.expose_secret().to_string()),
             Some(r#"{"bar":"baz"}"#.to_string()),
         );
-        let bar = provider.get("proj", "BAR", "default").unwrap();
+        let bar = provider
+            .get(Address::convention("proj", "default", "BAR"))
+            .unwrap();
         assert_eq!(
             bar.map(|s| s.expose_secret().to_string()),
             Some("foobar".to_string()),
         );
+    }
+
+    /// A native address reads and writes the key its `item` names, regardless
+    /// of the secret's own name or any instance configuration.
+    #[test]
+    fn native_address_reads_and_writes_the_named_key() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        let provider = DotEnvProvider::new(DotEnvConfig { path: path.clone() });
+        let addr = crate::config::NativeAddress {
+            item: "PINNED_KEY".into(),
+            ..Default::default()
+        };
+
+        provider
+            .set(Address::Native(&addr), &SecretString::new("v1".into()))
+            .unwrap();
+        let got = provider.get(Address::Native(&addr)).unwrap();
+        assert_eq!(
+            got.map(|s| s.expose_secret().to_string()),
+            Some("v1".into())
+        );
+
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("PINNED_KEY="), "wrote: {contents}");
+    }
+
+    /// `.env` entries have no sub-components; a `field` coordinate is rejected.
+    #[test]
+    fn native_address_rejects_field() {
+        let provider = DotEnvProvider::new(DotEnvConfig::default());
+        let addr = crate::config::NativeAddress {
+            item: "KEY".into(),
+            field: Some("x".into()),
+            ..Default::default()
+        };
+        let err = provider.get(Address::Native(&addr)).unwrap_err();
+        assert!(err.to_string().contains("`field`"), "{err}");
     }
 }

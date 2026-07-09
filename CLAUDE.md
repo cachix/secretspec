@@ -52,7 +52,7 @@ The project is organized as a Rust workspace with two crates:
 The provider system uses a trait-based architecture defined in `src/provider/mod.rs`. When implementing new providers:
 
 1. Create module in `src/provider/your_provider.rs`
-2. Implement the `Provider` trait with methods: `get()`, `set()`, `allows_set()`, `name()`, `description()`
+2. Implement the `Provider` trait with methods: `get()`, `set()`, `check_writable()`, `name()`, `description()`
 3. Use the `#[provider]` macro for automatic registration
 4. Handle profile-aware storage paths (e.g., `secretspec/{project}/{profile}/{key}`)
 
@@ -101,8 +101,8 @@ GITHUB_TOKEN = { description = "GitHub token from env", providers = ["env"] }
 Provider aliases can be checked into the project in `secretspec.toml` so every team member and CI runner sees them automatically:
 ```toml
 [providers]
-prod_vault = "onepassword://vault/Production"
-shared = "onepassword://vault/Shared"
+prod_vault = "onepassword://Production"
+shared = "onepassword://Shared"
 keyring = "keyring://"
 env = "env://"
 ```
@@ -113,8 +113,8 @@ They can also be defined per-user in `~/.config/secretspec/config.toml` (project
 provider = "keyring"
 
 [defaults.providers]
-prod_vault = "onepassword://vault/Production"
-shared = "onepassword://vault/Shared"
+prod_vault = "onepassword://Production"
+shared = "onepassword://Shared"
 keyring = "keyring://"
 env = "env://"
 ```
@@ -122,7 +122,7 @@ env = "env://"
 Manage the user-level map via CLI (project-level aliases are hand-edited in `secretspec.toml`):
 ```bash
 # Add provider alias to user config
-secretspec config provider add prod_vault "onepassword://vault/Production"
+secretspec config provider add prod_vault "onepassword://Production"
 
 # List user-level aliases
 secretspec config provider list

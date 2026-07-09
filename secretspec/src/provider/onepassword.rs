@@ -1,4 +1,4 @@
-use crate::provider::{Provider, ProviderUrl};
+use crate::provider::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -70,6 +70,20 @@ struct OnePasswordFieldTemplate {
     value: String,
 }
 
+/// The item/field coordinates a native address resolves against 1Password,
+/// consumed by the `op read` / `op item edit` command paths. Built from a
+/// secret's `ref` table (see [`crate::config::NativeAddress`]); the vault is
+/// resolved separately (the address's `vault` key or the store's default).
+#[derive(Debug)]
+pub struct SecretReference {
+    /// The item name or UUID.
+    pub item: String,
+    /// Optional section the field lives under.
+    pub section: Option<String>,
+    /// The field label or ID to read and write.
+    pub field: String,
+}
+
 /// Configuration for the OnePassword provider.
 ///
 /// This struct contains all the necessary configuration options for
@@ -130,10 +144,10 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
         match scheme {
             "1password" => {
                 return Err(SecretSpecError::ProviderOperationFailed(
-                    "Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault/path)".to_string()
+                    "Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault)".to_string()
                 ));
             }
-            "onepassword" | "onepassword+token" => {}
+            "onepassword" | "onepassword+token" | "op" => {}
             _ => {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
                     "Invalid scheme '{}' for OnePassword provider",
@@ -167,6 +181,30 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
                 // No username, so the host is the vault
                 config.default_vault = Some(host);
             }
+        }
+
+        // Item paths (the `op://vault/item/field` form earlier iterations
+        // accepted, including via `onepassword://`) are rejected with the
+        // exact `ref` table translation, instead of being silently ignored
+        // and reading the conventional layout.
+        let path = url.path();
+        let path = path.trim_matches('/');
+        if !path.is_empty() || scheme == "op" {
+            let vault = config.default_vault.as_deref().unwrap_or("<vault>");
+            let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+            let hint = match segments.as_slice() {
+                [item, field] => {
+                    crate::config::ref_table_hint(Some(vault), item, None, Some(field))
+                }
+                [item, section, field] => {
+                    crate::config::ref_table_hint(Some(vault), item, Some(section), Some(field))
+                }
+                _ => crate::config::ref_table_hint(Some(vault), "<item>", None, Some("<field>")),
+            };
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "1Password items are addressed with a secret's `ref`, not in the provider URI: \
+                 use providers = [\"onepassword://{vault}\"] with {hint}"
+            )));
         }
 
         Ok(config)
@@ -233,6 +271,10 @@ fn strip_op_session_env(cmd: &mut Command) {
 /// secrets. It organizes secrets in a hierarchical structure within OnePassword
 /// items using a configurable format string that defaults to: `secretspec/{project}/{profile}/{key}`.
 ///
+/// A secret with native `ref` coordinates instead reads the referenced item
+/// field via `op read` and writes it via `op item edit`, ignoring the layout
+/// above. See [`SecretReference`].
+///
 /// # Authentication
 ///
 /// The provider supports three authentication methods, in order of preference:
@@ -276,7 +318,7 @@ crate::register_provider! {
     config: OnePasswordConfig,
     name: "onepassword",
     description: "OnePassword password manager",
-    schemes: ["onepassword", "onepassword+token"],
+    schemes: ["onepassword", "onepassword+token", "op"],
     examples: ["onepassword://vault", "onepassword://work@Production", "onepassword+token://vault"],
     preflight: check_auth,
 }
@@ -427,18 +469,159 @@ impl OnePasswordProvider {
 
     /// Determines the vault name to use.
     ///
-    /// # Arguments
-    ///
-    /// * `profile` - The profile name (currently unused, but kept for potential future use)
-    ///
     /// # Returns
     ///
     /// The vault name to use - always returns the configured default_vault or "Private"
-    fn get_vault_name(&self, _profile: &str) -> String {
+    fn get_vault_name(&self) -> String {
         self.config
             .default_vault
             .clone()
             .unwrap_or_else(|| "Private".to_string())
+    }
+
+    /// Renders the full `op://` reference string for `op read`.
+    ///
+    /// Names are rendered decoded (spaces and all): the reference is passed to
+    /// `op` as a single process argument, so no URL encoding is involved.
+    fn reference_uri(vault: &str, reference: &SecretReference) -> String {
+        match &reference.section {
+            Some(section) => format!(
+                "op://{}/{}/{}/{}",
+                vault, reference.item, section, reference.field
+            ),
+            None => format!("op://{}/{}/{}", vault, reference.item, reference.field),
+        }
+    }
+
+    /// Reads the pinned reference via `op read` from the given vault.
+    ///
+    /// Returns `Ok(None)` when the referenced item or field does not exist,
+    /// mirroring how the conventional layout reports unprovisioned secrets.
+    fn read_reference(
+        &self,
+        vault: &str,
+        reference: &SecretReference,
+    ) -> Result<Option<SecretString>> {
+        let reference_uri = Self::reference_uri(vault, reference);
+        match self.execute_op_command(&["read", "--no-newline", &reference_uri], None) {
+            Ok(output) => Ok(Some(SecretString::new(output.into()))),
+            Err(SecretSpecError::ProviderOperationFailed(msg))
+                if msg.contains("isn't an item") || msg.contains("doesn't have a field") =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Writes a value to the pinned reference via `op item edit` in the given
+    /// vault.
+    ///
+    /// The referenced item must already exist: references point at externally
+    /// managed items, so the provider never creates one. `op item edit` adds
+    /// the field to the item if it is missing.
+    fn set_reference(
+        &self,
+        vault: &str,
+        reference: &SecretReference,
+        value: &SecretString,
+    ) -> Result<()> {
+        let assignment = format!(
+            "{}={}",
+            Self::assignment_target(reference),
+            value.expose_secret()
+        );
+        let args = vec![
+            "item",
+            "edit",
+            &reference.item,
+            "--vault",
+            vault,
+            &assignment,
+        ];
+        self.execute_op_command(&args, None)?;
+        Ok(())
+    }
+
+    /// Builds the internal reference a native address's coordinates describe,
+    /// resolving the vault (the address's `vault` overrides the store's
+    /// default) and rejecting coordinate combinations 1Password cannot honor.
+    /// Without a `field`, the address names a whole item, read like a
+    /// convention secret and written through its `value` field.
+    ///
+    /// Takes coordinates already resolved (and therefore validated) by
+    /// [`Provider::resolve_coords`].
+    fn native_reference(
+        &self,
+        native: &crate::config::NativeAddress,
+    ) -> Result<(String, Option<SecretReference>)> {
+        let vault = native
+            .vault
+            .clone()
+            .unwrap_or_else(|| self.get_vault_name());
+        let reference = match &native.field {
+            Some(field) => Some(SecretReference {
+                item: native.item.clone(),
+                section: native.section.clone(),
+                field: field.clone(),
+            }),
+            None => {
+                if native.section.is_some() {
+                    return Err(SecretSpecError::ProviderOperationFailed(
+                        "onepassword references with a `section` also need a `field`".to_string(),
+                    ));
+                }
+                None
+            }
+        };
+        Ok((vault, reference))
+    }
+
+    /// Reads a whole item by title (or ID) from a vault and extracts its value:
+    /// the field labeled "value" first, then password/concealed fields. Shared
+    /// by convention reads and whole-item native addresses.
+    ///
+    /// If multiple items share the title, falls back to ID-based lookup for
+    /// the first match.
+    fn read_item(&self, vault: &str, item_name: &str) -> Result<Option<SecretString>> {
+        let args = vec![
+            "item", "get", item_name, "--vault", vault, "--format", "json",
+        ];
+
+        match self.execute_op_command(&args, None) {
+            Ok(output) => self.extract_value_from_item(&output),
+            Err(SecretSpecError::ProviderOperationFailed(msg)) if msg.contains("isn't an item") => {
+                Ok(None)
+            }
+            Err(SecretSpecError::ProviderOperationFailed(msg))
+                if msg.contains("More than one item") =>
+            {
+                // Multiple items with same title - fall back to ID-based lookup
+                if let Some(item_id) = self.find_item_id(item_name, vault)? {
+                    let args = vec![
+                        "item", "get", &item_id, "--vault", vault, "--format", "json",
+                    ];
+                    match self.execute_op_command(&args, None) {
+                        Ok(output) => self.extract_value_from_item(&output),
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Builds the `[section.]field` left-hand side of an `op item edit`
+    /// assignment. Periods are structural in `op`'s assignment syntax and get
+    /// backslash-escaped so they stay part of the name.
+    fn assignment_target(reference: &SecretReference) -> String {
+        let escape = |s: &str| s.replace('.', "\\.");
+        match &reference.section {
+            Some(section) => format!("{}.{}", escape(section), escape(&reference.field)),
+            None => escape(&reference.field),
+        }
     }
 
     /// Finds an item by title in the vault and returns its ID.
@@ -583,21 +766,61 @@ impl OnePasswordProvider {
 
 impl OnePasswordProvider {
     /// Checks that the user is authenticated with OnePassword.
-    /// Called by the preflight guard before any provider operations.
+    /// Called by the preflight guard before any provider operations, which
+    /// dedupes the probe across instances via [`Provider::auth_scope_key`].
     pub(crate) fn check_auth(&self) -> Result<()> {
-        if self.is_authenticated()? {
-            Ok(())
-        } else {
-            Err(SecretSpecError::ProviderOperationFailed(
+        match self.is_authenticated() {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(SecretSpecError::ProviderOperationFailed(
                 AUTH_REQUIRED_HELP.to_string(),
-            ))
+            )),
+            Err(e) => Err(e),
         }
     }
 }
 
 impl Provider for OnePasswordProvider {
+    /// Convention items are titled by the folder-prefix format string,
+    /// `secretspec/{project}/{profile}/{key}` by default, in the store's
+    /// default vault, and read like whole-item references: the `value` field
+    /// first, then password/concealed fields.
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: self.format_item_name(project, key, profile),
+            vault: Some(self.get_vault_name()),
+            ..Default::default()
+        })
+    }
+
+    /// `vault` overrides the store's default vault, `section`/`field` address a
+    /// component within the item. 1Password items are not versioned.
+    fn supported_coords(&self) -> &'static [&'static str] {
+        &["field", "vault", "section"]
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
+    }
+
+    /// Auth state is per account/token (and `op` binary), not per provider
+    /// instance, so the preflight probe is shared across instances with the
+    /// same identity. Pinned secret references produce one instance per
+    /// referenced secret; without this, N references would run N identical
+    /// `op vault list` round-trips.
+    fn auth_scope_key(&self) -> Option<String> {
+        Some(format!(
+            "{:?}",
+            (
+                &self.config.account,
+                &self.config.service_account_token,
+                &self.op_command
+            )
+        ))
     }
 
     fn uri(&self) -> String {
@@ -636,55 +859,24 @@ impl Provider for OnePasswordProvider {
 
     /// Retrieves a secret from OnePassword.
     ///
-    /// Searches for an item with the title formatted according to the folder_prefix
-    /// configuration in the appropriate vault. The method looks for a field labeled "value"
-    /// first, then falls back to password or concealed fields.
-    ///
-    /// If multiple items exist with the same title, falls back to ID-based lookup
-    /// to retrieve the first matching item.
-    ///
-    /// # Arguments
-    ///
-    /// * `project` - The project name
-    /// * `key` - The secret key to retrieve
-    /// * `profile` - The profile to use for vault selection
+    /// If multiple items exist with the same title, falls back to ID-based
+    /// lookup to retrieve the first matching item.
     ///
     /// # Returns
     ///
     /// * `Ok(Some(value))` - The secret value if found
-    /// * `Ok(None)` - No secret found with the given key
+    /// * `Ok(None)` - No secret found at the address
     /// * `Err(_)` - Authentication or retrieval error
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        let vault = self.get_vault_name(profile);
-        let item_name = self.format_item_name(project, key, profile);
-
-        // Try to get the item by title
-        let args = vec![
-            "item", "get", &item_name, "--vault", &vault, "--format", "json",
-        ];
-
-        match self.execute_op_command(&args, None) {
-            Ok(output) => self.extract_value_from_item(&output),
-            Err(SecretSpecError::ProviderOperationFailed(msg)) if msg.contains("isn't an item") => {
-                Ok(None)
-            }
-            Err(SecretSpecError::ProviderOperationFailed(msg))
-                if msg.contains("More than one item") =>
-            {
-                // Multiple items with same title - fall back to ID-based lookup
-                if let Some(item_id) = self.find_item_id(&item_name, &vault)? {
-                    let args = vec![
-                        "item", "get", &item_id, "--vault", &vault, "--format", "json",
-                    ];
-                    match self.execute_op_command(&args, None) {
-                        Ok(output) => self.extract_value_from_item(&output),
-                        Err(e) => Err(e),
-                    }
-                } else {
-                    Ok(None)
-                }
-            }
-            Err(e) => Err(e),
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let coords = self.resolve_coords(addr)?;
+        let (vault, reference) = self.native_reference(&coords)?;
+        match reference {
+            // A field-addressed reference goes through `op read`.
+            Some(reference) => self.read_reference(&vault, &reference),
+            // A whole-item address (every convention secret, and field-less
+            // refs) reads via the value/password field extraction of
+            // `op item get`.
+            None => self.read_item(&vault, &coords.item),
         }
     }
 
@@ -710,8 +902,29 @@ impl Provider for OnePasswordProvider {
     /// - Authentication required if not signed in
     /// - Item creation/update failures
     /// - Temporary file creation errors
-    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        let vault = self.get_vault_name(profile);
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        let (project, profile, key) = match addr {
+            Address::Native(native) => {
+                let coords = self.resolve_coords(addr)?;
+                let (vault, reference) = self.native_reference(&coords)?;
+                // Writes through a native address go to the existing item in
+                // place (`op item edit` adds a missing field but never creates
+                // an item): a whole-item address writes its `value` field, the
+                // same field convention reads extract first.
+                let reference = reference.unwrap_or_else(|| SecretReference {
+                    item: native.item.clone(),
+                    section: None,
+                    field: "value".to_string(),
+                });
+                return self.set_reference(&vault, &reference, value);
+            }
+            Address::Convention {
+                project,
+                profile,
+                key,
+            } => (project, profile, key),
+        };
+        let vault = self.get_vault_name();
         let item_name = self.format_item_name(project, key, profile);
 
         // Check if item exists by listing items (more reliable than get which requires
@@ -745,29 +958,50 @@ impl Provider for OnePasswordProvider {
 
     /// Retrieves multiple secrets from OnePassword in a single batch operation.
     ///
-    /// This optimized implementation:
-    /// 1. Authenticates once (cached)
-    /// 2. Lists all items in the vault once to identify which secrets exist
-    /// 3. Fetches only the items that exist, using parallel threads
-    ///
-    /// This significantly improves performance compared to fetching secrets one-by-one,
-    /// especially when checking many secrets.
-    fn get_batch(
-        &self,
-        project: &str,
-        keys: &[&str],
-        profile: &str,
-    ) -> Result<HashMap<String, SecretString>> {
-        use std::thread;
-
-        if keys.is_empty() {
+    /// Whole-item addresses (every convention secret, and field-less refs)
+    /// are served from one item listing per vault plus parallel `op item get`
+    /// calls for the titles that exist. Field-addressed refs go through
+    /// `op read` each, concurrently.
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+        if requests.is_empty() {
             return Ok(HashMap::new());
         }
 
-        let vault = self.get_vault_name(profile);
+        // Whole-item requests as (request name, item title), grouped by vault.
+        let mut whole_items: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        let mut field_refs: Vec<(&str, Address<'_>)> = Vec::new();
+        for (name, addr) in requests {
+            let coords = self.resolve_coords(*addr)?;
+            let (vault, reference) = self.native_reference(&coords)?;
+            match reference {
+                Some(_) => field_refs.push((name, *addr)),
+                None => whole_items
+                    .entry(vault)
+                    .or_default()
+                    .push((name.to_string(), coords.item.clone())),
+            }
+        }
 
+        let mut results = HashMap::new();
+        for (vault, items) in whole_items {
+            results.extend(self.get_items_batch(&vault, items)?);
+        }
+        results.extend(super::get_each(self, &field_refs)?);
+        Ok(results)
+    }
+}
+
+impl OnePasswordProvider {
+    /// Fetches the given `(request name, item title)` pairs from one vault:
+    /// lists the vault once to resolve titles to ids, then fetches the items
+    /// that exist in parallel threads and extracts their value/password field.
+    fn get_items_batch(
+        &self,
+        vault: &str,
+        items: Vec<(String, String)>,
+    ) -> Result<HashMap<String, SecretString>> {
         // List all items in the vault once
-        let args = vec!["item", "list", "--vault", &vault, "--format", "json"];
+        let args = vec!["item", "list", "--vault", vault, "--format", "json"];
         let output = self.execute_op_command(&args, None)?;
 
         #[derive(Deserialize)]
@@ -776,94 +1010,37 @@ impl Provider for OnePasswordProvider {
             title: String,
         }
 
-        let items: Vec<ListItem> = serde_json::from_str(&output).unwrap_or_default();
+        let listed: Vec<ListItem> = serde_json::from_str(&output).unwrap_or_default();
 
         // Build a map of item titles to IDs for quick lookup
-        let item_map: HashMap<String, String> = items
+        let item_map: HashMap<String, String> = listed
             .into_iter()
             .map(|item| (item.title, item.id))
             .collect();
 
-        // Find which keys exist and need to be fetched
-        let keys_to_fetch: Vec<(&str, String)> = keys
-            .iter()
-            .filter_map(|key| {
-                let item_name = self.format_item_name(project, key, profile);
-                item_map.get(&item_name).map(|id| (*key, id.clone()))
-            })
-            .collect();
-
-        // Fetch items in parallel using threads
-        let vault_clone = vault.clone();
-        let op_command = self.op_command.clone();
-        let service_token = self.config.service_account_token.clone();
-        let account = self.config.account.clone();
-
-        let handles: Vec<_> = keys_to_fetch
+        // Find which titles exist and need to be fetched
+        let to_fetch: Vec<(String, String)> = items
             .into_iter()
-            .map(|(key, item_id)| {
-                let vault = vault_clone.clone();
-                let op_cmd = op_command.clone();
-                let token = service_token.clone();
-                let acct = account.clone();
-                let key_owned = key.to_string();
-
-                thread::spawn(move || {
-                    let mut cmd = Command::new(&op_cmd);
-                    strip_op_session_env(&mut cmd);
-
-                    if let Some(ref t) = token {
-                        cmd.env("OP_SERVICE_ACCOUNT_TOKEN", t);
-                    }
-                    if let Some(ref a) = acct {
-                        cmd.arg("--account").arg(a);
-                    }
-
-                    cmd.args([
-                        "item", "get", &item_id, "--vault", &vault, "--format", "json",
-                    ]);
-
-                    match cmd.output() {
-                        Ok(output) if output.status.success() => {
-                            let stdout = String::from_utf8_lossy(&output.stdout);
-                            // Parse the item and extract value
-                            if let Ok(item) = serde_json::from_str::<OnePasswordItem>(&stdout) {
-                                // Look for "value" field first
-                                for field in &item.fields {
-                                    if field.label.as_deref() == Some("value")
-                                        && let Some(ref v) = field.value
-                                    {
-                                        return Some((
-                                            key_owned,
-                                            SecretString::new(v.clone().into()),
-                                        ));
-                                    }
-                                }
-                                // Fallback: look for password/concealed field
-                                for field in &item.fields {
-                                    if (field.field_type == "CONCEALED" || field.id == "password")
-                                        && let Some(ref v) = field.value
-                                    {
-                                        return Some((
-                                            key_owned,
-                                            SecretString::new(v.clone().into()),
-                                        ));
-                                    }
-                                }
-                            }
-                            None
-                        }
-                        _ => None,
-                    }
-                })
-            })
+            .filter_map(|(name, title)| item_map.get(&title).map(|id| (name, id.clone())))
             .collect();
 
-        // Collect results from all threads
+        // Fetch the items concurrently. Each id came from the listing above, so
+        // it is unambiguous: `read_item`'s duplicate-title fallback never fires.
+        let fetched: Vec<(String, Result<Option<SecretString>>)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = to_fetch
+                .into_iter()
+                .map(|(name, item_id)| (name, scope.spawn(move || self.read_item(vault, &item_id))))
+                .collect();
+            handles
+                .into_iter()
+                .map(|(name, handle)| (name, handle.join().expect("op item get thread panicked")))
+                .collect()
+        });
+
         let mut results = HashMap::new();
-        for handle in handles {
-            if let Ok(Some((key, value))) = handle.join() {
-                results.insert(key, value);
+        for (name, result) in fetched {
+            if let Some(value) = result? {
+                results.insert(name, value);
             }
         }
 
@@ -940,10 +1117,10 @@ mod tests {
     #[test]
     fn get_vault_name_defaults_to_private() {
         let default = OnePasswordProvider::new(OnePasswordConfig::default());
-        assert_eq!(default.get_vault_name("any"), "Private");
+        assert_eq!(default.get_vault_name(), "Private");
 
         let configured = OnePasswordProvider::new(config("onepassword://Production"));
-        assert_eq!(configured.get_vault_name("any"), "Production");
+        assert_eq!(configured.get_vault_name(), "Production");
     }
 
     #[test]
@@ -974,5 +1151,152 @@ mod tests {
         let uri = provider.uri();
         assert_eq!(uri, "onepassword+token://Private");
         assert!(!uri.contains("ops_secret_tok"));
+    }
+
+    fn config_err(s: &str) -> SecretSpecError {
+        OnePasswordConfig::try_from(&ProviderUrl::new(Url::parse(s).unwrap())).unwrap_err()
+    }
+
+    /// Every URI shape that used to be an instance-level reference now errors
+    /// with a pointer at the `ref` table.
+    #[test]
+    fn item_paths_are_rejected_with_ref_hint() {
+        // A full reference gets the exact translation.
+        let err = config_err("op://Infra/db/password");
+        assert!(
+            err.to_string()
+                .contains("ref = { vault = \"Infra\", item = \"db\", field = \"password\" }"),
+            "{err}"
+        );
+
+        // A bare op:// with no path still points at `ref`.
+        let err = config_err("op://Infra");
+        assert!(
+            err.to_string().contains("addressed with a secret's `ref`"),
+            "{err}"
+        );
+
+        // Odd shapes (single segment, too deep) get the generic pointer.
+        let err = config_err("onepassword://vault/Production");
+        assert!(
+            err.to_string().contains("addressed with a secret's `ref`"),
+            "{err}"
+        );
+        let err = config_err("op://Infra/a/b/c/d");
+        assert!(
+            err.to_string().contains("addressed with a secret's `ref`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn assignment_target_escapes_dots() {
+        let reference = SecretReference {
+            item: "db".to_string(),
+            section: Some("api.keys".to_string()),
+            field: "connection.url".to_string(),
+        };
+        assert_eq!(
+            OnePasswordProvider::assignment_target(&reference),
+            "api\\.keys.connection\\.url"
+        );
+
+        let reference = SecretReference {
+            section: None,
+            ..reference
+        };
+        assert_eq!(
+            OnePasswordProvider::assignment_target(&reference),
+            "connection\\.url"
+        );
+    }
+
+    #[test]
+    fn pasted_reference_hint_preserves_spaces() {
+        // Spaces in vault and item names must survive into the translation
+        // hint, since users paste references straight from the 1Password app.
+        let Err(err) = Box::<dyn Provider>::try_from("op://Prod Vault/My Item/field") else {
+            panic!("op:// provider spec must be rejected");
+        };
+        assert!(
+            err.to_string().contains(
+                "ref = { vault = \"Prod Vault\", item = \"My Item\", field = \"field\" }"
+            ),
+            "{err}"
+        );
+    }
+
+    /// A native address maps its coordinates onto the internal reference: the
+    /// `vault` key overrides the store's default vault, `section` and `field`
+    /// carry through.
+    #[test]
+    fn native_address_maps_coordinates_with_vault_override() {
+        let provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        let addr = crate::config::NativeAddress {
+            item: "db".into(),
+            field: Some("password".into()),
+            section: Some("api".into()),
+            vault: Some("Production".into()),
+            ..Default::default()
+        };
+        let (vault, reference) = provider.native_reference(&addr).unwrap();
+        assert_eq!(vault, "Production");
+        let reference = reference.expect("field-addressed reference");
+        assert_eq!(
+            OnePasswordProvider::reference_uri(&vault, &reference),
+            "op://Production/db/api/password"
+        );
+    }
+
+    /// Without a `vault` key, the store URI's vault applies.
+    #[test]
+    fn native_address_vault_defaults_to_store_vault() {
+        let provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        let addr = crate::config::NativeAddress {
+            item: "db".into(),
+            field: Some("password".into()),
+            ..Default::default()
+        };
+        let (vault, _) = provider.native_reference(&addr).unwrap();
+        assert_eq!(vault, "Personal");
+    }
+
+    /// A whole-item address (no `field`) resolves to no internal reference:
+    /// reads go through the convention item extraction.
+    #[test]
+    fn native_address_without_field_names_the_whole_item() {
+        let provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        let addr = crate::config::NativeAddress {
+            item: "My API Item".into(),
+            ..Default::default()
+        };
+        let (_, reference) = provider.native_reference(&addr).unwrap();
+        assert!(reference.is_none());
+    }
+
+    /// 1Password items are not versioned; the coordinate is rejected.
+    #[test]
+    fn native_address_rejects_version() {
+        let provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        let addr = crate::config::NativeAddress {
+            item: "db".into(),
+            version: Some("3".into()),
+            ..Default::default()
+        };
+        let err = provider.resolve_coords(Address::Native(&addr)).unwrap_err();
+        assert!(err.to_string().contains("`version`"), "{err}");
+    }
+
+    /// A `section` only makes sense when addressing a `field` within it.
+    #[test]
+    fn native_address_section_requires_field() {
+        let provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        let addr = crate::config::NativeAddress {
+            item: "db".into(),
+            section: Some("api".into()),
+            ..Default::default()
+        };
+        let err = provider.native_reference(&addr).unwrap_err();
+        assert!(err.to_string().contains("need a `field`"), "{err}");
     }
 }

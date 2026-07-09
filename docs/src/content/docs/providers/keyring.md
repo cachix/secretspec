@@ -45,6 +45,21 @@ $ secretspec set DATABASE_URL --provider keyring
 $ secretspec set DATABASE_URL --provider "keyring://shared/{profile}/{key}"
 ```
 
+## Secret References
+
+By default each secret is stored under `secretspec/{project}/{profile}/{key}` with
+the current system username as the account. A secret's
+[`ref`](/reference/configuration/#secret-references) field names an exact keyring
+entry instead, useful for reading a credential another application already
+stored: `item` is the service, and the optional `field` is the account
+(defaults to the current system username). Reads and writes target that entry in
+place.
+
+```toml
+[profiles.default]
+API_TOKEN = { description = "Token", ref = { item = "com.example.app", field = "me@example.com" }, providers = ["keyring"] }
+```
+
 ## Usage
 
 ```bash

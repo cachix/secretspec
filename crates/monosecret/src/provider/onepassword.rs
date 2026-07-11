@@ -288,7 +288,7 @@ fn is_wsl2() -> bool {
 /// returning `"account is not signed in"` instead. Stripping them lets the
 /// desktop integration (Settings → Developer → Integrate with 1Password CLI)
 /// handle unlock automatically. See
-/// <https://github.com/ifiokjr/monosecret/issues/80>.
+/// <https://github.com/cachix/secretspec/issues/80>.
 const OP_NOT_INSTALLED_HELP: &str = "OnePassword CLI (op) is not installed.\n\n\
     To install it:\n  \
     - macOS: brew install 1password-cli\n  \

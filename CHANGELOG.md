@@ -257,7 +257,7 @@ Both features are purely additive at the TOML level — every existing
   moved from a nested `content.title` to a top-level `title`, and `content` was
   dropped from list output), which made `monosecret` report active secrets as
   missing. Both the old (`<= 2.0.2`) and new (`>= 2.0.3`) list shapes are now
-  accepted. ([#104](https://github.com/cachix/monosecret/issues/104))
+  accepted. ([#104](https://github.com/cachix/secretspec/issues/104))
 
 ## [0.12.0] - 2026-06-08
 
@@ -466,7 +466,7 @@ Both features are purely additive at the TOML level — every existing
   `monosecret.toml`, e.g.
   `Invalid profile: 'production' is not defined in monosecret.toml. Available profiles: default, dev`.
   Affects `check`, `run`, `get`, `set`, and `import`. Surfaced via
-  [#79](https://github.com/ifiokjr/monosecret/issues/79).
+  [#79](https://github.com/cachix/secretspec/issues/79).
 
 ## [0.11.0] - 2026-05-22
 
@@ -476,16 +476,16 @@ Both features are purely additive at the TOML level — every existing
   parameter in the provider URI (e.g., `awssm://us-east-1?prefix=myteam`).
   The prefix is prepended to all secret names
   (`myteam/monosecret/{project}/{profile}/{key}`). Closes
-  [#92](https://github.com/ifiokjr/monosecret/issues/92).
+  [#92](https://github.com/cachix/secretspec/issues/92).
 - Provider aliases can now be declared at the project level in a top-level
   `[providers]` table of `monosecret.toml`. Aliases declared there are visible
   to per-secret `providers = [...]` lists and to `--provider`/`MONOSECRET_PROVIDER`,
   and are merged with the existing user-level `[defaults.providers]` map in
   `~/.config/monosecret/config.toml`. On name conflicts the project entry wins,
   so a team's checked-in mapping cannot be silently shadowed by a stale local
-  config. Closes [#79](https://github.com/ifiokjr/monosecret/issues/79) and
+  config. Closes [#79](https://github.com/cachix/secretspec/issues/79) and
   addresses the "share aliases via VCS" half of
-  [#90](https://github.com/ifiokjr/monosecret/issues/90).
+  [#90](https://github.com/cachix/secretspec/issues/90).
 
 ### Fixed
 
@@ -495,7 +495,7 @@ Both features are purely additive at the TOML level — every existing
   `monosecret.toml`, e.g.
   `Invalid profile: 'production' is not defined in monosecret.toml. Available profiles: default, dev`.
   Affects `check`, `run`, `get`, `set`, and `import`. Surfaced via
-  [#79](https://github.com/ifiokjr/monosecret/issues/79).
+  [#79](https://github.com/cachix/secretspec/issues/79).
 
 ## [0.10.1] - 2026-05-11
 
@@ -508,7 +508,7 @@ Both features are purely additive at the TOML level — every existing
   optional secrets are absent (e.g. `Summary: 4 found, 0 missing, 1 optional`).
   If every optional secret is set, the summary line stays in its previous
   `X found, Y missing` form. Fixes
-  [#72](https://github.com/ifiokjr/monosecret/issues/72).
+  [#72](https://github.com/cachix/secretspec/issues/72).
 
 ## [0.10.0] - 2026-05-11
 
@@ -532,7 +532,7 @@ Both features are purely additive at the TOML level — every existing
   `op` so a stale shell session can't shadow the desktop integration. Auth
   failure and install hints now point users at desktop integration as the
   primary local-dev path. Fixes
-  [#80](https://github.com/ifiokjr/monosecret/issues/80).
+  [#80](https://github.com/cachix/secretspec/issues/80).
 - Vault / OpenBao provider: HTTPS requests now trust certificates from the
   operating system trust store (and honor `SSL_CERT_FILE` / `SSL_CERT_DIR`),
   so servers fronted by a private / internal CA work without modification.
@@ -540,7 +540,7 @@ Both features are purely additive at the TOML level — every existing
   non-public CA produced `Failed to connect to Vault ... error sending
   request`. Switches the `reqwest` workspace dependency from `rustls-tls` to
   `rustls-tls-native-roots`. Fixes
-  [#85](https://github.com/ifiokjr/monosecret/issues/85).
+  [#85](https://github.com/cachix/secretspec/issues/85).
 
 ## [0.9.1] - 2026-05-07
 
@@ -561,7 +561,7 @@ Both features are purely additive at the TOML level — every existing
   consulted before the value forwarded from `--provider` (via `set_provider`),
   so users could not temporarily override the provider on the command line
   while the env var was set. Fixes
-  [#77](https://github.com/ifiokjr/monosecret/issues/77).
+  [#77](https://github.com/cachix/secretspec/issues/77).
 - Per-secret `providers = [...]` chains now behave as a true fallback chain
   when an upstream provider errors (e.g. a 403 from a vault the current user
   cannot access). Previously the first provider's error short-circuited the
@@ -569,12 +569,12 @@ Both features are purely additive at the TOML level — every existing
   in the chain is tried. The original error is only surfaced if every
   provider in the chain failed (so genuine outages still bubble up), or if
   the secret has no alternative to fall back to. Fixes
-  [#83](https://github.com/ifiokjr/monosecret/issues/83).
+  [#83](https://github.com/cachix/secretspec/issues/83).
 - `monosecret run` now removes the temporary files it creates for
   `as_path = true` secrets after the child process exits. Previously the
   files were leaked under `/tmp` because `std::process::exit` skipped the
   destructors that own them. Fixes
-  [#71](https://github.com/ifiokjr/monosecret/issues/71).
+  [#71](https://github.com/cachix/secretspec/issues/71).
 - Provider URIs now support spaces and special characters in names
   (e.g., `onepassword://Home Lab`). All providers receive automatically
   percent-decoded values via a new `ProviderUrl` wrapper type.
@@ -583,7 +583,7 @@ Both features are purely additive at the TOML level — every existing
   (e.g. JSON values). The underlying `serde-envfile` serializer did not
   escape these characters; fix is pinned via a fork until
   [lucagoslar/serde-envfile#6](https://github.com/lucagoslar/serde-envfile/pull/6)
-  lands upstream. Fixes [#74](https://github.com/ifiokjr/monosecret/issues/74).
+  lands upstream. Fixes [#74](https://github.com/cachix/secretspec/issues/74).
 - `--provider` (and `MONOSECRET_PROVIDER`) is now honored on every command
   even when a `providers = [...]` chain is configured for the secret or
   profile. Previously `set`, `get`, `check`, `import`, and `run` silently
@@ -593,7 +593,7 @@ Both features are purely additive at the TOML level — every existing
   generation write only to the chosen provider, and `get`/`validate` read
   only from it (no chain fallback). Provider aliases declared in
   `~/.config/monosecret/config.toml` can now be passed directly to
-  `--provider`. Fixes [#81](https://github.com/ifiokjr/monosecret/issues/81).
+  `--provider`. Fixes [#81](https://github.com/cachix/secretspec/issues/81).
 
 ### Added
 

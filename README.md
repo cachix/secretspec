@@ -83,7 +83,7 @@ DATABASE_URL = { providers = ["vault", "keyring", "env"] }
 ## Install
 
 ```shell-session
-$ curl -sSL https://install.monosecret.dev | sh
+$ npm install --global @monosecret/cli
 ```
 
 See the [installation guide](https://ifiokjr.github.io/monosecret/quick-start/#installation)

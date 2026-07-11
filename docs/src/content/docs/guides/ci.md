@@ -80,9 +80,7 @@ jobs:
           persist-credentials: false
 
       - name: install monosecret
-        run: |
-          curl -sSL https://install.monosecret.dev | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        run: npm install --global @monosecret/cli
 
       - name: load deployment secrets
         env:

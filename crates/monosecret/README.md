@@ -11,7 +11,7 @@ Secrets end up in `.env` files that get accidentally committed, shared over Slac
 
 Monosecret fixes this by separating secret **declaration** from secret **storage**. You commit a `monosecret.toml` that declares what secrets your application needs, while the actual values live in a secure provider like your system keyring, 1Password, or any other backend. No secrets in git, no `.env` files to leak.
 
-[Documentation](https://ifiokjr.github.io/monosecret) | [Quick Start](https://ifiokjr.github.io/monosecret/quick-start) | [Announcement Blog Post](https://devenv.sh/blog/2025/07/21/announcing-monosecret-declarative-secrets-management)
+[Documentation](https://ifiokjr.github.io/monosecret) | [Quick Start](https://ifiokjr.github.io/monosecret/quick-start) | [Original SecretSpec Announcement](https://devenv.sh/blog/2025/07/21/announcing-secretspec-declarative-secrets-management/)
 
 ## Features
 
@@ -70,7 +70,7 @@ See the [Quick Start Guide](https://ifiokjr.github.io/monosecret/quick-start) fo
 ## Installation
 
 ```shell-session
-$ curl -sSL https://install.monosecret.dev | sh
+$ npm install --global @monosecret/cli
 ```
 
 See the [installation guide](https://ifiokjr.github.io/monosecret/quick-start#installation) for more options including Nix and Devenv.

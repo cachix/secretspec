@@ -366,22 +366,6 @@ pub fn providers() -> Vec<ProviderInfo> {
         .collect()
 }
 
-/// Whether `scheme` is registered by some provider. The one place both the
-/// `TryFrom<&str>` URI parser and [`spec_names_known_provider`] check a scheme
-/// against [`PROVIDER_REGISTRY`], so the two cannot drift on what counts as
-/// known.
-fn is_registered_scheme(scheme: &str) -> bool {
-    PROVIDER_REGISTRY
-        .iter()
-        .any(|reg| reg.schemes.contains(&scheme))
-}
-
-/// The `onepassword` misspelling the `TryFrom` parser corrects with a
-/// dedicated "use `onepassword` instead" error. Shared with
-/// [`spec_names_known_provider`] so a spec using it routes to that message
-/// rather than being reported as an undefined alias.
-const ONEPASSWORD_MISSPELLING: &str = "1password";
-
 /// Splits a provider spec at the first `:` into its scheme token and the rest
 /// (empty for a bare provider name). The one definition of "the scheme",
 /// shared by the `TryFrom<&str>` URI parser and [`spec_names_known_provider`],
@@ -399,11 +383,21 @@ fn split_spec(spec: &str) -> (&str, &str) {
 /// provider, so alias resolution can tell a valid provider spec apart from an
 /// undefined alias.
 ///
-/// [`ONEPASSWORD_MISSPELLING`] also counts as naming a provider, so it passes
-/// through alias resolution to reach the parser's corrective error.
-pub(crate) fn spec_names_known_provider(spec: &str) -> bool {
+/// The common `1password` misspelling of `onepassword` errors with its
+/// corrective "use `onepassword` instead" message. Both the `TryFrom<&str>`
+/// URI parser and alias resolution gate specs through here, so the correction
+/// fires in one place no matter which path first sees the spec.
+pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
     let (scheme, _) = split_spec(spec);
-    scheme == ONEPASSWORD_MISSPELLING || is_registered_scheme(scheme)
+    if scheme == "1password" {
+        return Err(SecretSpecError::ProviderOperationFailed(
+            "Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault)"
+                .to_string(),
+        ));
+    }
+    Ok(PROVIDER_REGISTRY
+        .iter()
+        .any(|reg| reg.schemes.contains(&scheme)))
 }
 
 /// Trait defining the interface for secret storage providers.
@@ -942,16 +936,10 @@ impl TryFrom<&str> for Box<dyn Provider> {
         // Parse the scheme from the input string
         let (scheme, rest) = split_spec(s);
 
-        // Validate scheme first
-        if scheme == ONEPASSWORD_MISSPELLING {
-            return Err(SecretSpecError::ProviderOperationFailed(
-                "Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault)"
-                    .to_string(),
-            ));
-        }
-
-        // Check if the scheme is registered
-        if !is_registered_scheme(scheme) {
+        // Reject the `1password` misspelling (with its corrective error) and
+        // check the scheme against the registry, through the same gate alias
+        // resolution uses.
+        if !spec_names_known_provider(s)? {
             // Check if it's a known provider name to give a better error
             if PROVIDER_REGISTRY.iter().any(|reg| reg.info.name == scheme) {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(

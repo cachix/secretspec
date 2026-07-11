@@ -10,111 +10,65 @@
 //! instead of re-deriving per-secret facts across `get`, `set`, and batch
 //! validation.
 //!
-//! Building a plan performs no I/O. Provider-alias resolution is a map lookup,
-//! so the only error it can raise is an undefined alias
-//! ([`SecretSpecError::ProviderNotFound`]); a plan never opens a store.
+//! Building a plan performs no I/O. Provider-spec resolution is a map lookup
+//! plus a registry check, so the only errors it can raise are a routing spec
+//! that names neither an alias nor a provider
+//! ([`SecretSpecError::ProviderNotFound`]) and the corrected `1password`
+//! misspelling; a plan never opens a store.
 
-use crate::config::{NativeAddress, Profile, Secret};
+use crate::config::{NativeAddress, Secret};
 use crate::error::Result;
 use crate::provider::Address;
 use crate::secrets::Secrets;
 use std::collections::HashMap;
 
-/// How a planned secret is named at whichever store resolves it.
-///
-/// Naming is orthogonal to routing: the same address is asked of whatever store
-/// [`Route`] selects. A secret's `ref` supplies native coordinates; otherwise
-/// SecretSpec's own `{project}/{profile}/{key}` convention applies, with the
-/// project and profile carried once on the [`ResolutionPlan`].
-#[derive(Debug)]
-pub(crate) enum PlannedAddress {
-    /// Native coordinates from the secret's `ref`.
-    Native(NativeAddress),
-    /// SecretSpec's naming convention; only the key varies per secret.
-    Convention { key: String },
-}
-
-impl PlannedAddress {
-    /// Borrow this owned address as the [`Address`] the provider trait consumes,
-    /// supplying the plan-level `project`/`profile` for a convention address.
-    pub(crate) fn as_address<'a>(&'a self, project: &'a str, profile: &'a str) -> Address<'a> {
-        match self {
-            PlannedAddress::Native(native) => Address::Native(native),
-            PlannedAddress::Convention { key } => Address::convention(project, profile, key),
-        }
-    }
-}
-
 /// Where a planned secret reads and writes.
 ///
-/// A `providers` chain is a fallback list tried in order. Only the **primary**
-/// (the first entry — always tried first, the write target, and the grouping
-/// key) is resolved to a URI up front; the rest are carried as raw specs and
-/// resolved lazily, when and only when a read actually falls through to them.
-/// That keeps the chain tried in order: an undefined alias further down never
-/// fails an operation the primary satisfies, and never fails a write at all.
+/// A `providers` chain is a fallback list tried in order. Only the primary
+/// (always tried first, the write target, and the grouping key) is resolved to
+/// a URI up front; the rest are carried as raw specs and resolved lazily, when
+/// and only when a read actually falls through to them. That keeps the chain
+/// tried in order: an undefined alias further down never fails an operation
+/// the primary satisfies, and never fails a write at all.
+///
+/// An explicit `--provider`/`SECRETSPEC_PROVIDER`/builder override collapses
+/// any chain to just that store: it becomes the primary with no fallback.
 #[derive(Debug)]
-pub(crate) enum Route {
-    /// An explicit `--provider`/`SECRETSPEC_PROVIDER`/builder override: exactly
-    /// one store, no fallback (the override collapses any per-secret chain).
-    Override(String),
-    /// The secret's `providers` chain. `primary` is the resolved first store;
-    /// `fallback` holds the remaining specs (aliases or URIs) raw, tried in
-    /// order — and resolved — only after the primary misses.
-    Chain {
-        primary: String,
-        fallback: Vec<String>,
-    },
-    /// No routing configured for this secret: the default provider applies.
-    Default,
+pub(crate) struct Route {
+    /// The store consulted first — the resolved chain head or the explicit
+    /// override — or `None` for the default provider.
+    pub primary: Option<String>,
+    /// The chain's remaining specs (aliases or URIs), raw, tried in order —
+    /// and resolved — only after the primary misses.
+    pub fallback: Vec<String>,
 }
 
 impl Route {
-    /// The store consulted first — the override, the chain's primary, or `None`
-    /// for the default provider. This is the grouping key and the write target:
-    /// secrets sharing a primary store are fetched together, and a write goes to
-    /// the primary.
+    /// The store consulted first, `None` meaning the default provider. This is
+    /// the grouping key and the write target: secrets sharing a primary store
+    /// are fetched together, and a write goes to the primary.
     pub(crate) fn primary(&self) -> Option<&str> {
-        match self {
-            Route::Override(uri) => Some(uri),
-            Route::Chain { primary, .. } => Some(primary),
-            Route::Default => None,
-        }
+        self.primary.as_deref()
     }
 
-    /// The raw fallback specs a read walks after the primary misses: a chain's
-    /// entries past the first, when there are any. `None` means the read may
-    /// consult only one store — [`Route::primary`], with `None` meaning the
-    /// default provider — so no other store could answer instead. The one
-    /// definition of "has a fallback" shared by [`Route::has_fallback`] and
-    /// the executor's fallback walk.
+    /// The raw fallback specs a read walks after the primary misses, when
+    /// there are any. `None` means the read may consult only one store —
+    /// [`Route::primary`], with `None` meaning the default provider — so no
+    /// other store could answer instead.
     pub(crate) fn fallback_specs(&self) -> Option<&[String]> {
-        match self {
-            Route::Chain { fallback, .. } if !fallback.is_empty() => Some(fallback),
-            _ => None,
-        }
-    }
-
-    /// Whether a read may consult more than one store: a chain with at least
-    /// one fallback entry.
-    pub(crate) fn has_fallback(&self) -> bool {
-        self.fallback_specs().is_some()
+        (!self.fallback.is_empty()).then_some(self.fallback.as_slice())
     }
 
     /// The ordered provider specs a read walks — the primary followed by the raw
     /// fallback — or `None` for the default provider. Each entry is resolved only
     /// when the read reaches it, so the chain is genuinely tried in order.
     pub(crate) fn specs(&self) -> Option<Vec<String>> {
-        match self {
-            Route::Override(uri) => Some(vec![uri.clone()]),
-            Route::Chain { primary, fallback } => {
-                let mut specs = Vec::with_capacity(1 + fallback.len());
-                specs.push(primary.clone());
-                specs.extend(fallback.iter().cloned());
-                Some(specs)
-            }
-            Route::Default => None,
-        }
+        self.primary.as_ref().map(|primary| {
+            let mut specs = Vec::with_capacity(1 + self.fallback.len());
+            specs.push(primary.clone());
+            specs.extend(self.fallback.iter().cloned());
+            specs
+        })
     }
 }
 
@@ -125,21 +79,25 @@ pub(crate) struct PlannedSecret {
     pub name: String,
     /// The secret's effective config after the profile field-level merge.
     pub config: Secret,
-    /// How the secret is named at whichever store resolves it.
-    pub address: PlannedAddress,
     /// The resolved read/write route.
     pub route: Route,
 }
 
 impl PlannedSecret {
-    /// The native `ref` coordinates the plan derived for this secret, if any.
-    /// Reads the planned address, not the raw config, so audit attribution
-    /// always reports the coordinates the plan actually addresses.
-    pub(crate) fn reference(&self) -> Option<&NativeAddress> {
-        match &self.address {
-            PlannedAddress::Native(native) => Some(native),
-            PlannedAddress::Convention { .. } => None,
+    /// The provider [`Address`] this secret's operations resolve: its native
+    /// `ref` coordinates when it has them, otherwise SecretSpec's own
+    /// `{project}/{profile}/{key}` naming convention. Naming is orthogonal to
+    /// routing: the same address is asked of whichever store [`Route`] selects.
+    pub(crate) fn as_address<'a>(&'a self, project: &'a str, profile: &'a str) -> Address<'a> {
+        match &self.config.reference {
+            Some(native) => Address::Native(native),
+            None => Address::convention(project, profile, &self.name),
         }
+    }
+
+    /// The native `ref` coordinates this secret addresses, if any.
+    pub(crate) fn reference(&self) -> Option<&NativeAddress> {
+        self.config.reference.as_ref()
     }
 
     /// Whether the active profile requires this secret (required by default).
@@ -156,8 +114,6 @@ impl PlannedSecret {
 /// An immutable, fully-decided plan for resolving one profile.
 #[derive(Debug)]
 pub(crate) struct ResolutionPlan {
-    /// The project name (supplies convention addressing).
-    pub project: String,
     /// The resolved profile name.
     pub profile: String,
     /// The explicit provider override in force, if any. `Some` collapses every
@@ -165,73 +121,75 @@ pub(crate) struct ResolutionPlan {
     pub override_uri: Option<String>,
     /// One entry per declared secret, sorted by name for deterministic output.
     pub secrets: Vec<PlannedSecret>,
-    /// Primary-store groups in first-seen order: each maps a store URI (`None` =
-    /// default provider) to the indices into [`ResolutionPlan::secrets`] fetched
-    /// together. A pure function of each secret's [`Route::primary`], surfaced
-    /// so the executor does not recompute it.
-    pub groups: Vec<(Option<String>, Vec<usize>)>,
+}
+
+impl ResolutionPlan {
+    /// Primary-store groups in first-seen order: each pairs a store URI
+    /// (`None` = default provider) with the planned secrets fetched together.
+    /// Derived from each secret's [`Route::primary`] on demand, so grouping
+    /// can never drift from the routes.
+    pub(crate) fn groups(&self) -> Vec<(Option<&str>, Vec<&PlannedSecret>)> {
+        let mut groups: Vec<(Option<&str>, Vec<&PlannedSecret>)> = Vec::new();
+        let mut group_index: HashMap<Option<&str>, usize> = HashMap::new();
+        for secret in &self.secrets {
+            let primary = secret.route.primary();
+            match group_index.get(&primary) {
+                Some(&idx) => groups[idx].1.push(secret),
+                None => {
+                    group_index.insert(primary, groups.len());
+                    groups.push((primary, vec![secret]));
+                }
+            }
+        }
+        groups
+    }
 }
 
 impl Secrets {
     /// Resolve a whole profile into an immutable [`ResolutionPlan`] without any
-    /// I/O: merge the profile, compute each secret's effective config, derive
-    /// its address and resolved route, and group secrets by their primary store.
+    /// I/O: merge the profile, compute each secret's effective config, and
+    /// derive its resolved route.
     ///
     /// The explicit provider override (builder or `SECRETSPEC_PROVIDER`) is
     /// picked up via [`Secrets::resolve_provider_override`]. Production code
-    /// resolves the profile itself and calls [`Secrets::build_plan_from_profile`]
-    /// directly (it needs the profile for audit attribution too, and shouldn't
-    /// merge it twice); this one-call form is for tests that don't.
+    /// resolves the profile itself and calls [`Secrets::build_plan_from_names`]
+    /// directly (it needs the sorted names for audit attribution too, and
+    /// shouldn't merge and sort twice); this one-call form is for tests that
+    /// don't.
     #[cfg(test)]
     pub(crate) fn build_plan(&self, profile: Option<&str>) -> Result<ResolutionPlan> {
         let profile_name = self.resolve_profile_name(profile);
-        let profile_config = self.resolve_profile(Some(&profile_name))?;
-        self.build_plan_from_profile(profile_name, profile_config)
+        let names = self
+            .resolve_profile(Some(&profile_name))?
+            .sorted_secret_names();
+        self.build_plan_from_names(profile_name, names)
     }
 
     /// As [`Secrets::build_plan`], but for a caller that has already resolved
-    /// the profile for another purpose (e.g. attributing an audit event before
-    /// planning can fail) and would otherwise redo that merge a second time.
-    pub(crate) fn build_plan_from_profile(
+    /// the profile and its sorted secret names for another purpose (e.g.
+    /// attributing an audit event before planning can fail) and would otherwise
+    /// redo that work a second time. Sorted names keep planning deterministic
+    /// (grouping order, missing lists) rather than inheriting the profile's
+    /// `HashMap` iteration order.
+    pub(crate) fn build_plan_from_names(
         &self,
         profile_name: String,
-        profile_config: Profile,
+        names: Vec<String>,
     ) -> Result<ResolutionPlan> {
-        // Sorted names make planning deterministic (grouping order, missing
-        // lists) rather than inheriting the profile's HashMap iteration order.
-        let names = profile_config.sorted_secret_names();
-
         let override_uri = self.resolve_provider_override(None);
 
         let mut secrets = Vec::with_capacity(names.len());
-        for name in &names {
+        for name in names {
             let config = self
-                .resolve_secret_config(name, Some(&profile_name))
+                .resolve_secret_config(&name, Some(&profile_name))
                 .expect("secret resolved from the merged profile always has a config");
-            secrets.push(self.plan_one_secret(name.clone(), config, &override_uri)?);
-        }
-
-        // Group by primary store, preserving first-seen order so grouping is
-        // deterministic and independent of hashing.
-        let mut groups: Vec<(Option<String>, Vec<usize>)> = Vec::new();
-        let mut group_index: HashMap<Option<&str>, usize> = HashMap::new();
-        for (i, secret) in secrets.iter().enumerate() {
-            let primary = secret.route.primary();
-            match group_index.get(&primary) {
-                Some(&idx) => groups[idx].1.push(i),
-                None => {
-                    group_index.insert(primary, groups.len());
-                    groups.push((primary.map(String::from), vec![i]));
-                }
-            }
+            secrets.push(self.plan_one_secret(name, config, &override_uri)?);
         }
 
         Ok(ResolutionPlan {
-            project: self.config().project.name.clone(),
             profile: profile_name,
             override_uri,
             secrets,
-            groups,
         })
     }
 
@@ -241,18 +199,17 @@ impl Secrets {
     /// [`Secrets::resolve_secret_config`], so the caller can raise its own
     /// "not found" error and audit it.
     ///
-    /// `override_arg` is the caller's explicit provider (the `--provider`
-    /// flag); like [`Secrets::build_plan`] it also picks up the builder and
-    /// `SECRETSPEC_PROVIDER` via [`Secrets::resolve_provider_override`], and
-    /// profile resolution follows the same precedence.
+    /// `profile_name` is the already-resolved profile. `override_arg` is the
+    /// caller's explicit provider (the `--provider` flag); like
+    /// [`Secrets::build_plan`] it also picks up the builder and
+    /// `SECRETSPEC_PROVIDER` via [`Secrets::resolve_provider_override`].
     pub(crate) fn plan_secret(
         &self,
         name: &str,
-        profile: Option<&str>,
+        profile_name: &str,
         override_arg: Option<&str>,
     ) -> Result<Option<PlannedSecret>> {
-        let profile_name = self.resolve_profile_name(profile);
-        let Some(config) = self.resolve_secret_config(name, Some(&profile_name)) else {
+        let Some(config) = self.resolve_secret_config(name, Some(profile_name)) else {
             return Ok(None);
         };
         let override_uri = self.resolve_provider_override(override_arg);
@@ -265,7 +222,7 @@ impl Secrets {
 
     /// Derive one [`PlannedSecret`] from its effective config and the resolved
     /// override. The single place per-secret decisions are made, shared by the
-    /// whole-profile [`Secrets::build_plan`] and the single-secret
+    /// whole-profile [`Secrets::build_plan_from_names`] and the single-secret
     /// [`Secrets::plan_secret`], so `get`, `set`, and batch validation cannot
     /// drift.
     fn plan_one_secret(
@@ -274,19 +231,10 @@ impl Secrets {
         config: Secret,
         override_uri: &Option<String>,
     ) -> Result<PlannedSecret> {
-        // A `ref` supplies naming only; convention naming otherwise. The address
-        // applies to whichever store the route selects.
-        let address = match &config.reference {
-            Some(native) => PlannedAddress::Native(native.clone()),
-            None => PlannedAddress::Convention { key: name.clone() },
-        };
-
         let route = self.route_for(&config, override_uri)?;
-
         Ok(PlannedSecret {
             name,
             config,
-            address,
             route,
         })
     }
@@ -306,14 +254,20 @@ impl Secrets {
         override_uri: &Option<String>,
     ) -> Result<Route> {
         if let Some(uri) = override_uri {
-            return Ok(Route::Override(uri.clone()));
+            return Ok(Route {
+                primary: Some(uri.clone()),
+                fallback: Vec::new(),
+            });
         }
         match config.providers.as_deref() {
-            Some([first, fallback @ ..]) => Ok(Route::Chain {
-                primary: self.resolve_one_provider(first)?,
+            Some([first, fallback @ ..]) => Ok(Route {
+                primary: Some(self.resolve_one_provider(first)?),
                 fallback: fallback.to_vec(),
             }),
-            _ => Ok(Route::Default),
+            _ => Ok(Route {
+                primary: None,
+                fallback: Vec::new(),
+            }),
         }
     }
 }
@@ -357,6 +311,14 @@ mod tests {
             .expect("secret in plan")
     }
 
+    /// The plan's groups as (primary store, secret names) for easy assertion.
+    fn group_names<'a>(plan: &'a ResolutionPlan) -> Vec<(Option<&'a str>, Vec<&'a str>)> {
+        plan.groups()
+            .into_iter()
+            .map(|(uri, group)| (uri, group.iter().map(|s| s.name.as_str()).collect()))
+            .collect()
+    }
+
     #[test]
     fn no_routing_plans_the_default_store() {
         let _env = scrub_resolution_env();
@@ -364,9 +326,9 @@ mod tests {
         let plan = plan(&spec(secrets, None, &[]));
 
         let planned = find(&plan, "DATABASE_URL");
-        assert!(matches!(planned.route, Route::Default));
         assert_eq!(planned.route.primary(), None);
-        assert_eq!(plan.groups, vec![(None, vec![0])]);
+        assert!(planned.route.fallback.is_empty());
+        assert_eq!(group_names(&plan), vec![(None, vec!["DATABASE_URL"])]);
     }
 
     #[test]
@@ -382,8 +344,11 @@ mod tests {
         let plan = plan(&spec);
 
         let planned = find(&plan, "API_KEY");
-        assert!(matches!(&planned.route, Route::Override(uri) if uri == "dotenv://.env.mock"));
         assert_eq!(planned.route.primary(), Some("dotenv://.env.mock"));
+        assert!(
+            planned.route.fallback.is_empty(),
+            "the override must collapse the chain: no fallback survives"
+        );
         assert_eq!(plan.override_uri, Some("dotenv://.env.mock".to_string()));
     }
 
@@ -397,17 +362,11 @@ mod tests {
             &[("shared", "onepassword://Shared"), ("kr", "keyring://")],
         ));
 
+        // The primary is resolved to its URI; the fallback stays as the raw
+        // alias, resolved only if the primary misses at read time.
         let planned = find(&plan, "API_KEY");
-        match &planned.route {
-            // The primary is resolved to its URI; the fallback stays as the raw
-            // alias, resolved only if the primary misses at read time.
-            Route::Chain { primary, fallback } => {
-                assert_eq!(primary, "onepassword://Shared");
-                assert_eq!(fallback, &vec!["kr".to_string()]);
-            }
-            other => panic!("expected a chain, got {other:?}"),
-        }
         assert_eq!(planned.route.primary(), Some("onepassword://Shared"));
+        assert_eq!(planned.route.fallback, vec!["kr".to_string()]);
     }
 
     #[test]
@@ -419,14 +378,9 @@ mod tests {
         let plan = plan(&spec(secrets, None, &[("kr", "keyring://")]));
 
         let planned = find(&plan, "API_KEY");
-        match &planned.route {
-            Route::Chain { primary, fallback } => {
-                assert_eq!(primary, "keyring://");
-                // The undefined alias is carried raw, not resolved (which would error).
-                assert_eq!(fallback, &vec!["ghost".to_string()]);
-            }
-            other => panic!("expected a chain, got {other:?}"),
-        }
+        assert_eq!(planned.route.primary(), Some("keyring://"));
+        // The undefined alias is carried raw, not resolved (which would error).
+        assert_eq!(planned.route.fallback, vec!["ghost".to_string()]);
     }
 
     #[test]
@@ -464,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ref_plans_a_native_address_convention_otherwise() {
+    fn a_ref_addresses_native_coordinates_convention_otherwise() {
         let _env = scrub_resolution_env();
         let mut referenced = secret(None);
         referenced.reference = Some(NativeAddress {
@@ -478,16 +432,16 @@ mod tests {
         ]);
         let plan = plan(&spec(secrets, None, &[]));
 
-        match &find(&plan, "REFERENCED").address {
-            PlannedAddress::Native(native) => {
+        match find(&plan, "REFERENCED").as_address("proj", "default") {
+            Address::Native(native) => {
                 assert_eq!(native.item, "db");
                 assert_eq!(native.field.as_deref(), Some("password"));
             }
-            PlannedAddress::Convention { .. } => panic!("a ref should plan a native address"),
+            Address::Convention { .. } => panic!("a ref should address native coordinates"),
         }
-        match &find(&plan, "PLAIN").address {
-            PlannedAddress::Convention { key } => assert_eq!(key, "PLAIN"),
-            PlannedAddress::Native(_) => panic!("no ref should plan a convention address"),
+        match find(&plan, "PLAIN").as_address("proj", "default") {
+            Address::Convention { key, .. } => assert_eq!(key, "PLAIN"),
+            Address::Native(_) => panic!("no ref should address the naming convention"),
         }
     }
 
@@ -507,11 +461,8 @@ mod tests {
 
         // A goes to the default group; B and C share the keyring group.
         assert_eq!(
-            plan.groups,
-            vec![
-                (None, vec![0]),
-                (Some("keyring://".to_string()), vec![1, 2]),
-            ]
+            group_names(&plan),
+            vec![(None, vec!["A"]), (Some("keyring://"), vec!["B", "C"])]
         );
     }
 
@@ -521,7 +472,7 @@ mod tests {
         let secrets = HashMap::from([("DECLARED".to_string(), secret(None))]);
         let spec = spec(secrets, None, &[]);
         assert!(
-            spec.plan_secret("NOPE", None, None).unwrap().is_none(),
+            spec.plan_secret("NOPE", "default", None).unwrap().is_none(),
             "an undeclared secret must not plan"
         );
     }
@@ -536,15 +487,12 @@ mod tests {
         )]);
         let spec = spec(secrets, None, &[]);
 
-        let one = spec.plan_secret("API_KEY", None, None).unwrap().unwrap();
+        let one = spec
+            .plan_secret("API_KEY", "default", None)
+            .unwrap()
+            .unwrap();
         assert_eq!(one.route.primary(), Some("onepassword://Production"));
-        match &one.route {
-            Route::Chain { primary, fallback } => {
-                assert_eq!(primary, "onepassword://Production");
-                assert_eq!(fallback, &vec!["keyring://".to_string()]);
-            }
-            other => panic!("expected a chain, got {other:?}"),
-        }
+        assert_eq!(one.route.fallback, vec!["keyring://".to_string()]);
 
         // Same route the whole-profile plan derives.
         let batch = plan(&spec);

@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Previously a chain entry had to be a declared alias or a full `scheme://` URI.
 - An explicitly empty `providers = []` list now uses the default provider for
   `get` as well, matching how `check` and `run` already treated it.
+- A `providers` chain whose *first* entry misspells `onepassword` as
+  `1password` now fails up front with the corrective "use `onepassword`
+  instead" message — the same hard error any other invalid primary gets —
+  instead of warning and falling through to the rest of the chain. As a
+  fallback entry it is still skipped with a warning, like any broken link.
 
 ### Fixed
 - Provider fallback chains (`providers = [...]`) are now tried strictly in

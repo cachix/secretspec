@@ -3,7 +3,7 @@
 use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
 use crate::config::{Config, GlobalConfig, NativeAddress, Profile, RequireReason, Resolved};
 use crate::error::{Result, SecretSpecError};
-use crate::plan::{PlannedAddress, PlannedSecret, ResolutionPlan, Route};
+use crate::plan::{PlannedSecret, ResolutionPlan, Route};
 use crate::provider::{Address, Provider as ProviderTrait};
 use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
 use crate::resolve::{RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource};
@@ -553,15 +553,17 @@ impl Secrets {
     }
 
     /// Records a failed single-secret operation (`get`/`set`) as an `Error`
-    /// event attributed to `key` — and to a provider, when one was determined
-    /// before the failure. The one shape every `get`/`set` failure path
-    /// records, so the paths cannot drift on which fields a failure carries.
+    /// event attributed to `key` — and to a provider and native `ref`
+    /// coordinates, when they were determined before the failure. The one shape
+    /// every `get`/`set` failure path records, so the paths cannot drift on
+    /// which fields a failure carries.
     fn record_key_error(
         &self,
         action: AuditAction,
         profile: &str,
         key: &str,
         provider_uri: Option<String>,
+        reference: Option<&NativeAddress>,
         err: &SecretSpecError,
     ) {
         self.record(
@@ -571,6 +573,7 @@ impl Secrets {
             AuditFields {
                 key: Some(key),
                 provider_uri,
+                reference,
                 error_kind: Some(err.kind()),
                 ..Default::default()
             },
@@ -866,7 +869,9 @@ impl Secrets {
     /// shorthand like `dotenv:.env.production`) also passes through, so the
     /// chain and the resolved override accept exactly the specs `--provider`
     /// and the default provider accept; `build_provider` constructs it later.
-    /// Only a token that names neither an alias nor a provider errors.
+    /// Only a token that names neither an alias nor a provider errors — with
+    /// the corrective "use `onepassword` instead" message when it is the
+    /// common `1password` misspelling.
     ///
     /// Used both to resolve a chain's primary up front and to resolve each
     /// fallback entry lazily, in order, as a read actually reaches it.
@@ -877,7 +882,7 @@ impl Secrets {
         if let Some(uri) = self.lookup_provider_alias(spec) {
             return Ok(uri);
         }
-        if crate::provider::spec_names_known_provider(spec) {
+        if crate::provider::spec_names_known_provider(spec)? {
             return Ok(spec.to_string());
         }
         let known = self.known_provider_aliases();
@@ -931,12 +936,7 @@ impl Secrets {
     ) -> Result<HashMap<String, SecretString>> {
         let requests: Vec<(&str, Address<'_>)> = group
             .iter()
-            .map(|planned| {
-                (
-                    planned.name.as_str(),
-                    planned.address.as_address(project, profile),
-                )
-            })
+            .map(|planned| (planned.name.as_str(), planned.as_address(project, profile)))
             .collect();
         provider.get_many(&requests)
     }
@@ -1008,18 +1008,12 @@ impl Secrets {
             return Ok(crate::audit::redact_uri_strict(uri));
         }
 
-        let mut provider_uris: Vec<&str> = Vec::new();
-        for uri in primary_uris {
-            match uri {
-                // Any secret on the default provider: report that provider.
-                None => return self.get_provider(None).map(|provider| provider.uri()),
-                Some(uri) => provider_uris.push(uri),
-            }
-        }
-        provider_uris.sort_unstable();
-
-        match provider_uris.first() {
+        // Collecting into `Option` yields `None` as soon as any secret sits on
+        // the default provider, which then names the report.
+        let provider_uris: Option<Vec<&str>> = primary_uris.collect();
+        match provider_uris.and_then(|uris| uris.into_iter().min()) {
             Some(uri) => Ok(crate::audit::redact_uri_strict(uri)),
+            // A secret on the default provider, or no secrets at all.
             None => self.get_provider(None).map(|provider| provider.uri()),
         }
     }
@@ -1041,7 +1035,7 @@ impl Secrets {
     /// # Arguments
     ///
     /// * `secret_name` - The secret name, for warning messages
-    /// * `addr` - The secret's [`Address`] (see [`PlannedAddress::as_address`]);
+    /// * `addr` - The secret's [`Address`] (see [`PlannedSecret::as_address`]);
     ///   the same address is asked of every provider in the chain
     /// * `provider_specs` - Optional chain of provider specs (aliases or inline
     ///   URIs) to try in order, resolved lazily per entry
@@ -1169,13 +1163,13 @@ impl Secrets {
         // Plan the secret exactly as batch resolution would, so the write
         // target, address, and effective config are the same decisions
         // `check`/`run` make. `None` means it is not declared in this profile.
-        let planned = match self.plan_secret(name, Some(&profile_name), None) {
+        let planned = match self.plan_secret(name, &profile_name, None) {
             Ok(Some(planned)) => planned,
             // Planning failed (e.g. an undefined provider alias). Still an
             // attempted write, so audit it like the batch path audits every
             // planning failure; no provider can be attributed yet.
             Err(err) => {
-                self.record_key_error(AuditAction::Set, &profile_name, name, None, &err);
+                self.record_key_error(AuditAction::Set, &profile_name, name, None, None, &err);
                 return Err(err);
             }
             Ok(None) => {
@@ -1189,16 +1183,14 @@ impl Secrets {
                     available_secrets.join(", ")
                 ));
                 // Provider is unknown for an undefined secret, so attribute to None.
-                self.record_key_error(AuditAction::Set, &profile_name, name, None, &err);
+                self.record_key_error(AuditAction::Set, &profile_name, name, None, None, &err);
                 return Err(err);
             }
         };
 
         let backend = self.write_provider_for_route(&planned.route)?;
 
-        let addr = planned
-            .address
-            .as_address(&self.config.project.name, &profile_name);
+        let addr = planned.as_address(&self.config.project.name, &profile_name);
         // Refuse before prompting for a value. The provider states the reason:
         // a store may be writable through the convention layout yet reject the
         // `ref` this secret names.
@@ -1208,6 +1200,7 @@ impl Secrets {
                 &profile_name,
                 name,
                 Some(backend.uri()),
+                None,
                 &err,
             );
             return Err(err);
@@ -1238,6 +1231,7 @@ impl Secrets {
                 &profile_name,
                 name,
                 Some(backend.uri()),
+                None,
                 &err,
             );
             return Err(err);
@@ -1291,20 +1285,20 @@ impl Secrets {
         // Plan the secret exactly as batch resolution would, so the read route,
         // address, and effective config are the same decisions `check`/`run`
         // make. `None` means it is not declared in this profile.
-        let planned = match self.plan_secret(name, Some(&profile_name), None) {
+        let planned = match self.plan_secret(name, &profile_name, None) {
             Ok(Some(planned)) => planned,
             // Planning failed (e.g. an undefined provider alias). Still an
             // attempted read, so audit it like the batch path audits every
             // planning failure; no provider can be attributed yet.
             Err(err) => {
-                self.record_key_error(AuditAction::Get, &profile_name, name, None, &err);
+                self.record_key_error(AuditAction::Get, &profile_name, name, None, None, &err);
                 return Err(err);
             }
             Ok(None) => {
                 // The secret is not defined, so no provider can be attributed.
                 // Audit the failed read for parity with `set`'s undefined path.
                 let err = SecretSpecError::SecretNotFound(name.to_string());
-                self.record_key_error(AuditAction::Get, &profile_name, name, None, &err);
+                self.record_key_error(AuditAction::Get, &profile_name, name, None, None, &err);
                 return Err(err);
             }
         };
@@ -1317,9 +1311,7 @@ impl Secrets {
         let read_specs = planned.route.specs();
         let result = self.get_secret_from_providers(
             name,
-            planned
-                .address
-                .as_address(&self.config.project.name, &profile_name),
+            planned.as_address(&self.config.project.name, &profile_name),
             read_specs.as_deref(),
         );
 
@@ -1363,17 +1355,9 @@ impl Secrets {
                     ..Default::default()
                 },
             ),
-            Err(e) => self.record(
-                AuditAction::Get,
-                &profile_name,
-                AuditOutcome::Error,
-                AuditFields {
-                    key: Some(name),
-                    reference,
-                    error_kind: Some(e.kind()),
-                    ..Default::default()
-                },
-            ),
+            Err(e) => {
+                self.record_key_error(AuditAction::Get, &profile_name, name, None, reference, e)
+            }
         }
 
         match result?.0 {
@@ -1504,7 +1488,7 @@ impl Secrets {
                     for (i, secret_name) in missing.iter().enumerate() {
                         if let Some(planned) = self.plan_secret(
                             secret_name,
-                            Some(&profile_display),
+                            &profile_display,
                             provider_arg.as_deref(),
                         )? {
                             let prompt_msg =
@@ -1515,9 +1499,7 @@ impl Secrets {
 
                             let backend = self.write_provider_for_route(&planned.route)?;
                             let set_result = backend.set(
-                                planned
-                                    .address
-                                    .as_address(&self.config.project.name, &profile_display),
+                                planned.as_address(&self.config.project.name, &profile_display),
                                 &SecretString::new(value.into()),
                             );
                             self.audit_write_result(
@@ -1811,7 +1793,7 @@ impl Secrets {
             for name in profile.sorted_secret_names() {
                 read_names.push(name.clone());
                 let planned = self
-                    .plan_secret(&name, Some(&profile_display), None)?
+                    .plan_secret(&name, &profile_display, None)?
                     .expect("Secret should exist since we're iterating over it");
                 let description = planned.config.description.as_deref();
 
@@ -1820,9 +1802,7 @@ impl Secrets {
                 // The secret's address (native `ref` coordinates or convention
                 // naming) applies to both stores: naming is orthogonal to
                 // which store holds the value.
-                let addr = planned
-                    .address
-                    .as_address(&self.config.project.name, &profile_display);
+                let addr = planned.as_address(&self.config.project.name, &profile_display);
                 // First check if the secret exists in the "from" provider
                 match from_provider_instance.get(addr)? {
                     Some(value) => {
@@ -1898,8 +1878,8 @@ impl Secrets {
         })();
 
         if let Err(e) = copy_result {
-            // Record a failed/partial import with the secrets read before the error.
-            read_names.sort();
+            // Record a failed/partial import with the secrets read before the
+            // error (already in sorted order, from the import loop).
             self.record(
                 AuditAction::Import,
                 &profile_display,
@@ -1938,7 +1918,6 @@ impl Secrets {
         // copied and nothing was found anywhere — so a "found nothing" import is
         // not mislabeled as a successful retrieval. Per-secret copies are also
         // recorded individually as `Set`/`Written` events above.
-        read_names.sort();
         let outcome = if imported > 0 {
             AuditOutcome::Written
         } else if already_exists > 0 {
@@ -2001,9 +1980,7 @@ impl Secrets {
 
         // Store the generated value at the plan's address, through the plan's
         // write route: the same decisions every other write path executes.
-        let addr = planned
-            .address
-            .as_address(&self.config.project.name, profile_name);
+        let addr = planned.as_address(&self.config.project.name, profile_name);
         let backend = self.write_provider_for_route(&planned.route)?;
         // The provider states why a write is refused; wrapping it here would
         // only nest a second "Provider operation failed" prefix.
@@ -2303,9 +2280,9 @@ impl Secrets {
         }
 
         let profile_name = self.resolve_profile_name(None);
-        // Resolved once and reused for both the audit keys and the plan, so a
-        // failed read is still attributed to every secret it attempted without
-        // merging the profile twice.
+        // The profile is resolved once; its sorted names serve both as the
+        // audit keys and as the plan's input, so nothing is merged or sorted
+        // twice.
         let profile_result = self.resolve_profile(Some(&profile_name));
         // Keys for the single read-audit event, computed before any planning
         // can fail (e.g. on an undefined alias) so a failed read is still
@@ -2316,22 +2293,16 @@ impl Secrets {
             .map(|profile| profile.sorted_secret_names())
             .unwrap_or_default();
 
-        // Decide the whole profile up front (pure, no I/O), reject any `ref`
-        // routed at a single store that cannot honor its coordinates, then
-        // execute the plan. Each step returns `Result`, so *any* error — an undefined
+        // Decide the whole profile up front (pure, no I/O), then execute the
+        // plan. Each step returns `Result`, so *any* error — an undefined
         // alias, an unsupported `ref` coordinate, a fallback-chain outage, a
         // report-URI failure — is captured in `result` and recorded as the
         // single `Check` event below rather than escaping unaudited. `record`
         // is a no-op when auditing is off.
         let result: Result<std::result::Result<ValidatedSecrets, ValidationErrors>> =
             profile_result
-                .and_then(|profile_config| {
-                    self.build_plan_from_profile(profile_name.clone(), profile_config)
-                })
-                .and_then(|plan| {
-                    self.validate_single_store_ref_coords(&plan)?;
-                    self.execute_plan(&plan, materialize)
-                });
+                .and_then(|_| self.build_plan_from_names(profile_name.clone(), audit_keys.clone()))
+                .and_then(|plan| self.execute_plan(&plan, materialize));
 
         // Record exactly one `Check` event for the whole batch when this is a
         // top-level read, regardless of how the resolution exited — so a failed
@@ -2358,48 +2329,32 @@ impl Secrets {
         result
     }
 
-    /// Reject, before any fetch, a `ref` routed at exactly one store that cannot
-    /// honor its coordinates.
+    /// Rejects a `ref` routed at exactly one store that cannot honor its
+    /// coordinates. Run per primary-store group right after the provider is
+    /// built and before any fetch is spawned, so the definite error surfaces up
+    /// front (and, in the value-free report, without a fetch at all).
     ///
-    /// A single store is consulted when the route is an override, a
-    /// single-provider chain, or the default provider — there is no fallback that
-    /// could answer instead, so an incompatible store is a definite error worth
-    /// surfacing up front rather than at fetch time (and, in the value-free
-    /// report, without a fetch at all). A `ref` on a multi-store chain is
-    /// deliberately skipped: its coordinates are validated per store as the chain
-    /// is walked at read time, so a coordinate a later store cannot express never
-    /// blocks a primary that can.
+    /// A single store is consulted when the route has no fallback — an
+    /// override, a single-provider chain, or the default provider — so no other
+    /// store could answer instead. A `ref` on a multi-store chain is
+    /// deliberately skipped: its coordinates are validated per store as the
+    /// chain is walked at read time, so a coordinate a later store cannot
+    /// express never blocks a primary that can.
     ///
-    /// Building a provider here reads its declared supported coordinates and
-    /// opens no store; [`Provider::resolve_coords`](crate::provider::Provider::resolve_coords)
-    /// does no I/O for a native address. Construction is cheap enough that
-    /// [`Secrets::execute_plan`] simply builds the same providers again.
-    fn validate_single_store_ref_coords(&self, plan: &ResolutionPlan) -> Result<()> {
-        // The plan's groups already partition secrets by primary store, so walk
-        // that partition rather than re-deriving it: one provider per group
-        // that actually has coordinates to check.
-        for (primary, indices) in &plan.groups {
-            let refs_to_check: Vec<&NativeAddress> = indices
-                .iter()
-                .filter_map(|&i| {
-                    let planned = &plan.secrets[i];
-                    // Only the routes that consult exactly one store; a chain
-                    // with a fallback defers coordinate checking to per-store
-                    // read-time.
-                    if planned.route.has_fallback() {
-                        return None;
-                    }
-                    match &planned.address {
-                        PlannedAddress::Native(native) => Some(native),
-                        PlannedAddress::Convention { .. } => None,
-                    }
-                })
-                .collect();
-            if refs_to_check.is_empty() {
+    /// [`Provider::resolve_coords`](crate::provider::Provider::resolve_coords)
+    /// reads the provider's declared supported coordinates and does no I/O for
+    /// a native address.
+    fn check_single_store_ref_coords(
+        group: &[&PlannedSecret],
+        provider: &dyn ProviderTrait,
+    ) -> Result<()> {
+        for planned in group {
+            // Only the routes that consult exactly one store; a chain with a
+            // fallback defers coordinate checking to per-store read time.
+            if planned.route.fallback_specs().is_some() {
                 continue;
             }
-            let provider = self.get_provider(primary.as_deref())?;
-            for native in refs_to_check {
+            if let Some(native) = planned.reference() {
                 provider.resolve_coords(Address::Native(native))?;
             }
         }
@@ -2426,7 +2381,7 @@ impl Secrets {
         plan: &ResolutionPlan,
         materialize: Materialize,
     ) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
-        let project = plan.project.as_str();
+        let project = self.config.project.name.as_str();
         let profile = plan.profile.as_str();
 
         let mut secrets: HashMap<String, SecretString> = HashMap::new();
@@ -2453,8 +2408,7 @@ impl Secrets {
         // concurrently below.
         let mut group_fetches: Vec<(Option<&str>, Vec<&PlannedSecret>, Box<dyn ProviderTrait>)> =
             Vec::new();
-        for (provider_uri, indices) in &plan.groups {
-            let provider_uri = provider_uri.as_deref();
+        for (provider_uri, group) in plan.groups() {
             match self.get_provider(provider_uri) {
                 Ok(provider) => {
                     // Attribute primary hits to the provider's own credential-free
@@ -2462,8 +2416,6 @@ impl Secrets {
                     // token). Recorded before the fetch so attribution survives a
                     // partial batch.
                     group_uris.insert(provider_uri, provider.uri());
-                    let group: Vec<&PlannedSecret> =
-                        indices.iter().map(|&i| &plan.secrets[i]).collect();
                     group_fetches.push((provider_uri, group, provider));
                 }
                 Err(e) => {
@@ -2473,6 +2425,14 @@ impl Secrets {
                     failed_primary_uris.insert(provider_uri, e);
                 }
             }
+        }
+
+        // Reject up front, before any store is contacted, a `ref` routed at
+        // exactly one store that cannot honor its coordinates: with no fallback
+        // to answer instead, the failure is definite and better surfaced now
+        // than mid-fetch.
+        for (_, group, provider) in &group_fetches {
+            Self::check_single_store_ref_coords(group, provider.as_ref())?;
         }
 
         // Fetch the groups concurrently: each group is at least one provider
@@ -2555,7 +2515,7 @@ impl Secrets {
                         Some(fallback) => {
                             let resolved = self.get_secret_from_providers(
                                 name,
-                                planned.address.as_address(project, profile),
+                                planned.as_address(project, profile),
                                 Some(fallback),
                             )?;
                             // A primary that errored plus an exhausted fallback
@@ -2648,7 +2608,7 @@ impl Secrets {
 
         let report_provider_uri = self.validation_report_provider_uri(
             plan.override_uri.as_deref(),
-            plan.groups.iter().map(|(uri, _)| uri.as_deref()),
+            plan.secrets.iter().map(|s| s.route.primary()),
         )?;
 
         if !missing_required.is_empty() {
@@ -3104,14 +3064,19 @@ mod reference_routing_tests {
         assert_eq!(write_provider(Some("dotenv://.env.mock")).name(), "dotenv");
     }
 
-    /// Build a plan over a single `default`-profile secret so its route can be
-    /// handed to the coordinate check.
-    fn plan_of(secret: Secret) -> (Secrets, crate::plan::ResolutionPlan) {
+    /// Run the executor's pre-fetch coordinate check over a plan holding a
+    /// single `default`-profile secret, exactly as `execute_plan` runs it: one
+    /// built provider per primary-store group.
+    fn check_ref_coords_of(secret: Secret) -> Result<()> {
         let mut secrets = HashMap::new();
         secrets.insert("SECRET".to_string(), secret);
         let spec = Secrets::new(crate::tests::resolve_test_config(secrets), None, None, None);
         let plan = spec.build_plan(None).unwrap();
-        (spec, plan)
+        for (primary, group) in plan.groups() {
+            let provider = spec.get_provider(primary).unwrap();
+            Secrets::check_single_store_ref_coords(&group, provider.as_ref())?;
+        }
+        Ok(())
     }
 
     /// A `ref` routed at a single store that cannot honor its coordinates is
@@ -3119,9 +3084,8 @@ mod reference_routing_tests {
     #[test]
     fn single_store_ref_with_unsupported_coord_is_rejected() {
         let _env = crate::tests::scrub_resolution_env();
-        let (spec, plan) = plan_of(ref_secret(Some(vec!["dotenv:///tmp/x"])));
         assert!(
-            spec.validate_single_store_ref_coords(&plan).is_err(),
+            check_ref_coords_of(ref_secret(Some(vec!["dotenv:///tmp/x"]))).is_err(),
             "a single-store ref with an unsupported coordinate must be rejected"
         );
     }
@@ -3132,9 +3096,9 @@ mod reference_routing_tests {
     #[test]
     fn multi_store_ref_defers_coord_validation() {
         let _env = crate::tests::scrub_resolution_env();
-        let (spec, plan) = plan_of(ref_secret(Some(vec!["dotenv:///tmp/a", "dotenv:///tmp/b"])));
         assert!(
-            spec.validate_single_store_ref_coords(&plan).is_ok(),
+            check_ref_coords_of(ref_secret(Some(vec!["dotenv:///tmp/a", "dotenv:///tmp/b"])))
+                .is_ok(),
             "a multi-store ref must defer coordinate checking to read time"
         );
     }

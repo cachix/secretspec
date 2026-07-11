@@ -425,7 +425,7 @@ fn test_resolution_report_provenance() {
     assert!(stripe.required);
 }
 
-fn resolve_test_config(secrets: HashMap<String, Secret>) -> Config {
+pub(crate) fn resolve_test_config(secrets: HashMap<String, Secret>) -> Config {
     let mut profiles = HashMap::new();
     profiles.insert(
         "default".to_string(),
@@ -441,6 +441,49 @@ fn resolve_test_config(secrets: HashMap<String, Secret>) -> Config {
         },
         profiles,
         providers: None,
+    }
+}
+
+/// Serializes tests that scrub the `SECRETSPEC_*` process environment. The
+/// environment is shared across all test threads, so scrub/restore pairs must
+/// not interleave.
+static RESOLUTION_ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Removes `SECRETSPEC_PROVIDER` and `SECRETSPEC_PROFILE` for the guard's
+/// lifetime, restoring any previous values on drop. Tests that exercise
+/// provider or profile resolution hold this so the ambient shell of whoever
+/// runs `cargo test` (a natural place for these variables to be exported)
+/// cannot steer the routes and profiles under test.
+pub(crate) struct ResolutionEnvGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+}
+
+pub(crate) fn scrub_resolution_env() -> ResolutionEnvGuard {
+    let lock = RESOLUTION_ENV_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let saved = ["SECRETSPEC_PROVIDER", "SECRETSPEC_PROFILE"]
+        .into_iter()
+        .map(|key| {
+            let previous = std::env::var_os(key);
+            // SAFETY: `RESOLUTION_ENV_GUARD` is held for the guard's whole
+            // lifetime, so no two guards mutate the environment concurrently.
+            unsafe { std::env::remove_var(key) };
+            (key, previous)
+        })
+        .collect();
+    ResolutionEnvGuard { _lock: lock, saved }
+}
+
+impl Drop for ResolutionEnvGuard {
+    fn drop(&mut self) {
+        for (key, previous) in self.saved.drain(..) {
+            if let Some(value) = previous {
+                // SAFETY: the lock in `_lock` is still held while `drop` runs.
+                unsafe { std::env::set_var(key, value) };
+            }
+        }
     }
 }
 
@@ -3081,40 +3124,16 @@ fn test_provider_alias_resolution() {
     );
 
     // Test resolving dev alias
-    let dev_uris = spec
-        .resolve_provider_aliases(Some(&["dev".to_string()]))
+    let dev_uri = spec
+        .resolve_one_provider("dev")
         .expect("Should resolve dev alias");
-    assert_eq!(
-        dev_uris,
-        Some(vec!["dotenv://.env.development".to_string()])
-    );
+    assert_eq!(dev_uri, "dotenv://.env.development");
 
     // Test resolving prod alias
-    let prod_uris = spec
-        .resolve_provider_aliases(Some(&["prod".to_string()]))
+    let prod_uri = spec
+        .resolve_one_provider("prod")
         .expect("Should resolve prod alias");
-    assert_eq!(
-        prod_uris,
-        Some(vec!["onepassword://Production".to_string()])
-    );
-
-    // Test resolving multiple aliases in order
-    let multi_uris = spec
-        .resolve_provider_aliases(Some(&["dev".to_string(), "prod".to_string()]))
-        .expect("Should resolve multiple aliases");
-    assert_eq!(
-        multi_uris,
-        Some(vec![
-            "dotenv://.env.development".to_string(),
-            "onepassword://Production".to_string(),
-        ])
-    );
-
-    // Test with no aliases
-    let no_uris = spec
-        .resolve_provider_aliases(None)
-        .expect("Should handle no aliases");
-    assert_eq!(no_uris, None);
+    assert_eq!(prod_uri, "onepassword://Production");
 }
 
 #[test]
@@ -3146,7 +3165,7 @@ fn test_provider_alias_not_found() {
     );
 
     // Test resolving non-existent alias
-    let result = spec.resolve_provider_aliases(Some(&["nonexistent".to_string()]));
+    let result = spec.resolve_one_provider("nonexistent");
     assert!(result.is_err());
     match result {
         Err(SecretSpecError::ProviderNotFound(msg)) => {
@@ -4721,6 +4740,66 @@ fn read_env_var(path: &std::path::Path, key: &str) -> Option<String> {
         .map(|(_, v)| v)
 }
 
+/// Builds a `Secrets` whose single required `MY_SECRET` declares the given
+/// per-secret `providers` chain (unlike [`build_chain_scenario`], whose chain
+/// lives in profile defaults). Each `files` entry (alias, initial contents)
+/// becomes a dotenv file in `temp_dir` with a same-named global alias,
+/// returned in order; chain entries without a backing file (e.g. `"ghost"`)
+/// stay undefined. The global default provider is keyring, so a chain bug
+/// cannot fall back to a dotenv store that happens to answer.
+fn chain_walk_spec(
+    temp_dir: &TempDir,
+    files: &[(&str, &str)],
+    chain: &[&str],
+) -> (Secrets, Vec<std::path::PathBuf>) {
+    let mut paths = Vec::new();
+    let mut aliases = Vec::new();
+    for (alias, contents) in files {
+        let path = temp_dir.path().join(format!(".env.{alias}"));
+        fs::write(&path, contents).unwrap();
+        aliases.push((alias.to_string(), format!("dotenv://{}", path.display())));
+        paths.push(path);
+    }
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "MY_SECRET".to_string(),
+        Secret {
+            description: Some("test secret".to_string()),
+            required: Some(true),
+            providers: Some(chain.iter().map(|s| s.to_string()).collect()),
+            ..Default::default()
+        },
+    );
+
+    let alias_refs: Vec<(&str, &str)> = aliases
+        .iter()
+        .map(|(alias, uri)| (alias.as_str(), uri.as_str()))
+        .collect();
+    let mut global_config = global_config_with_aliases(&alias_refs);
+    global_config.defaults.provider = Some("keyring".to_string());
+
+    let spec = Secrets::new(
+        resolve_test_config(secrets),
+        Some(global_config),
+        None,
+        None,
+    );
+    (spec, paths)
+}
+
+/// Runs a full batch resolution and returns the resolved value of `MY_SECRET`,
+/// panicking if validation errors or a required secret is missing.
+fn resolved_my_secret(spec: &Secrets) -> Option<String> {
+    spec.validate()
+        .expect("validation should not error")
+        .expect("required secret should resolve")
+        .resolved
+        .secrets
+        .get("MY_SECRET")
+        .map(|s| s.expose_secret().to_string())
+}
+
 /// Regression test for issue #81: `set --provider <alias>` must override the
 /// per-secret/profile providers chain, writing only to the chosen provider.
 #[test]
@@ -4768,18 +4847,180 @@ fn test_set_without_override_uses_chain_first() {
     );
 }
 
+/// A `providers` chain is tried in order, so an undefined alias *after* a
+/// provider that answers must not fail the operation — the broken link is never
+/// reached. Covers batch resolution (`check`/`run`), single reads (`get`), and
+/// writes (`set`, which uses only the primary).
+#[test]
+fn test_undefined_fallback_alias_is_ignored_when_the_primary_answers() {
+    let _env = scrub_resolution_env();
+    let temp_dir = TempDir::new().unwrap();
+    // The primary already holds the value, so the fallback is never reached;
+    // `ghost` is not defined anywhere.
+    let (spec, paths) = chain_walk_spec(
+        &temp_dir,
+        &[("personal", "MY_SECRET=already_here\n")],
+        &["personal", "ghost"],
+    );
+
+    // Batch resolution succeeds: the primary answers, so `ghost` is never
+    // resolved and its being undefined does not matter.
+    assert_eq!(resolved_my_secret(&spec).as_deref(), Some("already_here"));
+
+    // A single read walks the chain in order: the primary answers, so the
+    // undefined fallback is never resolved.
+    spec.get("MY_SECRET")
+        .expect("get reads the primary and ignores the undefined fallback");
+
+    // A write targets only the primary, so the undefined fallback is irrelevant.
+    spec.set("MY_SECRET", Some("updated".to_string()))
+        .expect("set writes to the primary and ignores the fallback");
+    assert_eq!(
+        read_env_var(&paths[0], "MY_SECRET").as_deref(),
+        Some("updated"),
+        "set must write through the primary"
+    );
+}
+
+/// Because each link is resolved only when reached, a defined provider that
+/// holds the value wins even when a *later* chain entry names an undefined
+/// alias: the primary misses, the second provider answers, and the broken third
+/// link is never resolved.
+#[test]
+fn test_a_live_fallback_before_an_undefined_alias_still_wins() {
+    let _env = scrub_resolution_env();
+    let temp_dir = TempDir::new().unwrap();
+    // Primary is empty (misses); the second provider holds the value; `ghost`
+    // is deliberately not defined.
+    let (spec, _paths) = chain_walk_spec(
+        &temp_dir,
+        &[("personal", ""), ("team", "MY_SECRET=from_team\n")],
+        &["personal", "team", "ghost"],
+    );
+
+    assert_eq!(
+        resolved_my_secret(&spec).as_deref(),
+        Some("from_team"),
+        "the live fallback must answer before the undefined link is reached",
+    );
+}
+
+/// An undefined alias in the *middle* of the chain is one broken link, not a
+/// reason to abandon the walk: the primary misses, the broken second link is
+/// skipped with a warning, and the third provider still answers. Both batch
+/// resolution and a single `get` walk the chain the same way.
+#[test]
+fn test_an_undefined_alias_mid_chain_does_not_block_a_later_provider() {
+    let _env = scrub_resolution_env();
+    let temp_dir = TempDir::new().unwrap();
+    // Primary is empty (misses); `ghost` is deliberately not defined; the
+    // provider after the broken link holds the value.
+    let (spec, _paths) = chain_walk_spec(
+        &temp_dir,
+        &[("personal", ""), ("team", "MY_SECRET=from_team\n")],
+        &["personal", "ghost", "team"],
+    );
+
+    assert_eq!(
+        resolved_my_secret(&spec).as_deref(),
+        Some("from_team"),
+        "a broken link must be skipped, not abort the chain",
+    );
+
+    spec.get("MY_SECRET")
+        .expect("get walks past the broken link to the provider that answers");
+}
+
+/// A chain entry that misspells `onepassword` as `1password` gets the same
+/// corrective message `--provider 1password` gets, not a generic
+/// "alias not defined" error.
+#[test]
+fn test_chain_entry_1password_gets_the_onepassword_hint() {
+    let _env = scrub_resolution_env();
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "API_KEY".to_string(),
+        Secret {
+            description: Some("test secret".to_string()),
+            required: Some(true),
+            providers: Some(vec!["1password".to_string()]),
+            ..Default::default()
+        },
+    );
+    let spec = Secrets::new(resolve_test_config(secrets), None, None, None);
+
+    let err = match spec.validate() {
+        Ok(_) => panic!("the misspelled provider cannot be constructed"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("onepassword"),
+        "the error must point at the correct spelling: {err}"
+    );
+}
+
+/// A `ref` routed at a single store whose coordinates that store cannot honor
+/// is rejected up front — before any fetch — since there is no fallback that
+/// could answer instead. dotenv keys have no sub-fields, so a `field` ref is
+/// unsupported there.
+#[test]
+fn test_single_store_ref_rejects_unsupported_coordinate_up_front() {
+    let _env = scrub_resolution_env();
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    // Value present under a plain key: the failure is the coordinate, not a miss.
+    fs::write(&env_path, "db=secret\n").unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "DB_PASSWORD".to_string(),
+        Secret {
+            description: Some("db password".to_string()),
+            required: Some(true),
+            reference: Some(crate::config::NativeAddress {
+                item: "db".to_string(),
+                field: Some("password".to_string()),
+                ..Default::default()
+            }),
+            providers: Some(vec![format!("dotenv://{}", env_path.display())]),
+            ..Default::default()
+        },
+    );
+    let spec = Secrets::new(resolve_test_config(secrets), None, None, None);
+
+    let err = match spec.validate() {
+        Ok(_) => panic!("an unsupported ref coordinate must be rejected"),
+        Err(e) => e,
+    };
+    match err {
+        SecretSpecError::ProviderOperationFailed(msg) => {
+            assert!(
+                msg.contains("field"),
+                "message should name the coordinate: {msg}"
+            );
+            assert!(
+                msg.contains("dotenv"),
+                "message should name the store: {msg}"
+            );
+        }
+        other => panic!("expected ProviderOperationFailed, got {other:?}"),
+    }
+}
+
 /// `get` with an explicit override must read only from that provider, never
 /// falling back through the chain.
 #[test]
-fn test_resolve_read_provider_uris_override_skips_chain() {
+fn test_override_skips_read_chain() {
     let temp_dir = TempDir::new().unwrap();
     let (config, global_config, _, team_path) = build_chain_scenario(&temp_dir);
 
     let spec = Secrets::new(config, Some(global_config), Some("team".to_string()), None);
     let secret_config = spec.resolve_secret_config("MY_SECRET", None).unwrap();
+    let override_uri = spec.resolve_provider_override(None);
     let uris = spec
-        .resolve_read_provider_uris(&secret_config, None)
+        .route_for(&secret_config, &override_uri)
         .expect("override resolution should succeed")
+        .specs()
         .expect("override should produce a URI list");
 
     assert_eq!(
@@ -4788,6 +5029,51 @@ fn test_resolve_read_provider_uris_override_skips_chain() {
         "override must collapse the chain to a single URI"
     );
     assert_eq!(uris[0], format!("dotenv://{}", team_path.display()));
+}
+
+/// `get` must accept the same provider specs `--provider` accepts everywhere
+/// else: `scheme:path` shorthand (no `://`) is a valid override, not an
+/// undefined alias. Regression test: the plan-routed read used to feed the
+/// already-resolved override back through alias resolution and reject it.
+#[test]
+fn test_get_accepts_provider_shorthand_override() {
+    let _env = scrub_resolution_env();
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "MY_SECRET=hello\n").unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "MY_SECRET".to_string(),
+        Secret {
+            description: Some("test secret".to_string()),
+            required: Some(true),
+            ..Default::default()
+        },
+    );
+    let mut spec = Secrets::new(resolve_test_config(secrets), None, None, None);
+    spec.set_provider(format!("dotenv:{}", env_path.display()));
+
+    spec.get("MY_SECRET")
+        .expect("get must honor a scheme:path shorthand override");
+}
+
+/// Provider spec resolution expands aliases and passes through anything that
+/// names a registered provider (bare name or `scheme:path` shorthand); only a
+/// token that names neither an alias nor a provider errors.
+#[test]
+fn test_resolve_one_provider_accepts_bare_names_and_shorthand() {
+    let spec = Secrets::new(resolve_test_config(HashMap::new()), None, None, None);
+
+    assert_eq!(spec.resolve_one_provider("keyring").unwrap(), "keyring");
+    assert_eq!(
+        spec.resolve_one_provider("dotenv:.env.production").unwrap(),
+        "dotenv:.env.production"
+    );
+    assert!(matches!(
+        spec.resolve_one_provider("ghost"),
+        Err(SecretSpecError::ProviderNotFound(_))
+    ));
 }
 
 /// Strip ANSI escape sequences so summary assertions don't depend on whether
@@ -4892,7 +5178,7 @@ OPTIONAL_MISSING = { description = "optional, not set", required = false }
     );
 }
 
-fn aliases_map(aliases: &[(&str, &str)]) -> HashMap<String, String> {
+pub(crate) fn aliases_map(aliases: &[(&str, &str)]) -> HashMap<String, String> {
     aliases
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -4910,7 +5196,7 @@ fn config_with_project_aliases(aliases: &[(&str, &str)]) -> Config {
     }
 }
 
-fn global_config_with_aliases(aliases: &[(&str, &str)]) -> GlobalConfig {
+pub(crate) fn global_config_with_aliases(aliases: &[(&str, &str)]) -> GlobalConfig {
     GlobalConfig {
         defaults: GlobalDefaults {
             provider: None,
@@ -4962,11 +5248,10 @@ fn test_project_providers_resolve_without_global_config() {
     let spec = Secrets::new(config, None, None, None);
 
     let resolved = spec
-        .resolve_provider_aliases(Some(&["op_infra".to_string()]))
-        .expect("project alias should resolve")
-        .expect("resolved list should be present");
+        .resolve_one_provider("op_infra")
+        .expect("project alias should resolve");
 
-    assert_eq!(resolved, vec!["onepassword://Infra".to_string()]);
+    assert_eq!(resolved, "onepassword://Infra");
 }
 
 #[test]
@@ -4976,13 +5261,11 @@ fn test_project_providers_take_precedence_over_global() {
     let spec = Secrets::new(config, Some(global), None, None);
 
     let resolved = spec
-        .resolve_provider_aliases(Some(&["shared".to_string()]))
-        .expect("alias should resolve")
-        .expect("resolved list should be present");
+        .resolve_one_provider("shared")
+        .expect("alias should resolve");
 
     assert_eq!(
-        resolved,
-        vec!["dotenv://.env.team".to_string()],
+        resolved, "dotenv://.env.team",
         "project alias must win on conflict with global"
     );
 }
@@ -4994,7 +5277,7 @@ fn test_unknown_alias_error_lists_both_sources() {
     let spec = Secrets::new(config, Some(global), None, None);
 
     let err = spec
-        .resolve_provider_aliases(Some(&["does_not_exist".to_string()]))
+        .resolve_one_provider("does_not_exist")
         .expect_err("missing alias must error");
 
     let msg = err.to_string();
@@ -5088,36 +5371,47 @@ fn test_global_alias_still_resolves_when_project_providers_present() {
     let spec = Secrets::new(config, Some(global), None, None);
 
     let resolved = spec
-        .resolve_provider_aliases(Some(&["team".to_string()]))
-        .expect("global alias should resolve when project map exists but doesn't define it")
-        .expect("resolved list should be present");
+        .resolve_one_provider("team")
+        .expect("global alias should resolve when project map exists but doesn't define it");
 
-    assert_eq!(resolved, vec!["onepassword://Team".to_string()]);
+    assert_eq!(resolved, "onepassword://Team");
 }
 
 #[test]
 fn test_fallback_chain_resolves_aliases_from_mixed_sources() {
-    // Chain mixes a project-only alias and a global-only alias; order in the
-    // chain is preserved and each is resolved from whichever source defines it.
-    let config = config_with_project_aliases(&[("project_vault", "onepassword://Team")]);
-    let global = global_config_with_aliases(&[("user_dotenv", "dotenv://.env.user")]);
+    // Chain mixes a project-only alias and a global-only alias: the primary
+    // (defined in the project map) misses, so the read walks to the fallback
+    // resolved from the global map — exercising the same route and lazy
+    // per-link resolution the executor and `get` walk.
+    let _env = scrub_resolution_env();
+    let temp_dir = TempDir::new().unwrap();
+    let team_path = temp_dir.path().join(".env.team");
+    let user_path = temp_dir.path().join(".env.user");
+    // The project-defined primary misses; the global-defined fallback answers.
+    fs::write(&team_path, "").unwrap();
+    fs::write(&user_path, "MY_SECRET=from_user\n").unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "MY_SECRET".to_string(),
+        Secret {
+            description: Some("test secret".to_string()),
+            required: Some(true),
+            providers: Some(vec!["project_team".to_string(), "user_dotenv".to_string()]),
+            ..Default::default()
+        },
+    );
+    let mut config = resolve_test_config(secrets);
+    let team_uri = format!("dotenv://{}", team_path.display());
+    let user_uri = format!("dotenv://{}", user_path.display());
+    config.providers = Some(aliases_map(&[("project_team", &team_uri)]));
+    let global = global_config_with_aliases(&[("user_dotenv", &user_uri)]);
     let spec = Secrets::new(config, Some(global), None, None);
 
-    let resolved = spec
-        .resolve_provider_aliases(Some(&[
-            "project_vault".to_string(),
-            "user_dotenv".to_string(),
-        ]))
-        .expect("mixed-source chain should resolve")
-        .expect("resolved list should be present");
-
     assert_eq!(
-        resolved,
-        vec![
-            "onepassword://Team".to_string(),
-            "dotenv://.env.user".to_string(),
-        ],
-        "chain order must be preserved across sources"
+        resolved_my_secret(&spec).as_deref(),
+        Some("from_user"),
+        "the fallback resolved from the global source must answer after the project-defined primary misses"
     );
 }
 

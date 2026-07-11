@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- A `ref` routed at a single store (an explicit `--provider`, a single-provider
+  chain, or the default provider) is now checked up front, before any store is
+  contacted, for coordinates that store cannot honor (e.g. a `field` ref pointed
+  at a `.env` file), failing fast with a clear message instead of at fetch time.
+  A `ref` on a multi-store fallback chain is still validated per store as the
+  chain is walked, so a coordinate a later store cannot express never blocks a
+  provider earlier in the chain that can.
+- Provider chains accept bare provider names and `scheme:path` shorthand
+  (e.g. `providers = ["keyring"]`), the same specs `--provider` accepts.
+  Previously a chain entry had to be a declared alias or a full `scheme://` URI.
+- An explicitly empty `providers = []` list now uses the default provider for
+  `get` as well, matching how `check` and `run` already treated it.
+
+### Fixed
+- Provider fallback chains (`providers = [...]`) are now tried strictly in
+  order: each link is resolved only when a read actually reaches it, and a
+  broken link (an undefined alias, an unreachable store) is skipped with a
+  warning so a working provider later in the chain still answers. `check`,
+  `run`, and `get` all walk the chain the same way.
+- `get` and `set` now record an audit event when a secret's provider routing
+  fails to resolve (for example an undefined alias), matching how `check` and
+  `run` audit every attempted read.
+- A provider chain entry that misspells `onepassword` as `1password` now gets
+  the same "use `onepassword` instead" correction that `--provider 1password`
+  gives, instead of a generic undefined-alias error.
+- `import` prints its per-secret summary in a stable, name-sorted order.
+
 ## [0.14.0] - 2026-07-09
 
 ### Added

@@ -1,5 +1,12 @@
 [workspace]
-members = ["crates/monosecret", "crates/monosecret_derive", "examples/derive"]
+members = [
+  "crates/monosecret",
+  "crates/monosecret_derive",
+  "crates/monosecret_ffi",
+  "examples/derive",
+  "npm/monosecret__client",
+  "python/monosecret_py",
+]
 resolver = "2"
 
 [workspace.package]
@@ -71,6 +78,7 @@ jiff = { default-features = false, version = "^0.2" }
 # internal crates
 monosecret = { version = "0.1.0", path = "./crates/monosecret", default-features = false }
 monosecret_derive = { version = "0.1.0", path = "./crates/monosecret_derive" }
+monosecret_ffi = { version = "0.1.0", path = "./crates/monosecret_ffi" }
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"

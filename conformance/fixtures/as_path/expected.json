@@ -1,0 +1,8 @@
+{
+  "profile": "default",
+  "secrets": {
+    "TLS_CERT": { "value": "cert-bytes-here", "source": "provider", "as_path": true }
+  },
+  "missing_required": [],
+  "missing_optional": []
+}

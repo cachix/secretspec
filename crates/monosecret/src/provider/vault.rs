@@ -54,6 +54,7 @@ use secrecy::SecretString;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::Address;
 use super::Provider;
 use super::ProviderUrl;
 use crate::MonosecretError;
@@ -449,6 +450,51 @@ impl VaultProvider {
 		}
 	}
 
+	async fn get_native_async(&self, item: &str, field: &str) -> Result<Option<SecretString>> {
+		let url = self.build_url(item);
+		let token = self.resolve_token()?;
+		let headers = Self::build_headers(&token, self.config.namespace.as_deref())?;
+		let response = reqwest::Client::new()
+			.get(&url)
+			.headers(headers)
+			.send()
+			.await
+			.map_err(|error| {
+				MonosecretError::ProviderOperationFailed(format!(
+					"Failed to connect to Vault at {}: {error}",
+					self.config.endpoint
+				))
+			})?;
+		match response.status().as_u16() {
+			200 => {
+				let body: serde_json::Value = response.json().await.map_err(|error| {
+					MonosecretError::ProviderOperationFailed(format!(
+						"Failed to parse Vault response: {error}"
+					))
+				})?;
+				let data = match self.config.kv_version {
+					KvVersion::V2 => body.get("data").and_then(|data| data.get("data")),
+					KvVersion::V1 => body.get("data"),
+				};
+				Ok(data
+					.and_then(|data| data.get(field))
+					.and_then(serde_json::Value::as_str)
+					.map(|value| SecretString::new(value.to_string().into())))
+			}
+			404 => Ok(None),
+			403 => {
+				Err(MonosecretError::ProviderOperationFailed(
+					"Vault authentication failed (403 Forbidden)".into(),
+				))
+			}
+			status => {
+				Err(MonosecretError::ProviderOperationFailed(format!(
+					"Vault returned HTTP {status}"
+				)))
+			}
+		}
+	}
+
 	/// Writes a secret to Vault asynchronously.
 	async fn set_secret_async(
 		&self,
@@ -505,6 +551,42 @@ impl VaultProvider {
 }
 
 impl Provider for VaultProvider {
+	fn supported_coords(&self) -> &'static [&'static str] {
+		&["field"]
+	}
+
+	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
+		match address {
+			Address::Convention {
+				project,
+				profile,
+				key,
+			} => self.get(project, key, profile),
+			Address::Native(native) => {
+				if native.vault.is_some() || native.section.is_some() || native.version.is_some() {
+					return Err(MonosecretError::ProviderOperationFailed(
+						"the vault provider supports only `item` and `field` coordinates".into(),
+					));
+				}
+				let field = native.field.as_deref().ok_or_else(|| {
+					MonosecretError::ProviderOperationFailed(
+						"Vault refs require a `field` coordinate".into(),
+					)
+				})?;
+				super::block_on(self.get_native_async(&native.item, field))
+			}
+		}
+	}
+
+	fn check_writable(&self, address: Address<'_>) -> Result<()> {
+		if matches!(address, Address::Native(_)) {
+			return Err(MonosecretError::ProviderOperationFailed(
+				"Vault refs are read-only to avoid replacing sibling fields".into(),
+			));
+		}
+		Ok(())
+	}
+
 	fn name(&self) -> &'static str {
 		Self::PROVIDER_NAME
 	}

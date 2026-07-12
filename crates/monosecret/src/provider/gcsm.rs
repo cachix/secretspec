@@ -40,6 +40,7 @@ use secrecy::SecretString;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::Address;
 use super::Provider;
 use super::ProviderUrl;
 use crate::MonosecretError;
@@ -269,6 +270,38 @@ impl GcsmProvider {
 		}
 	}
 
+	async fn get_native_async(
+		&self,
+		item: &str,
+		version: Option<&str>,
+	) -> Result<Option<SecretString>> {
+		let version = version.unwrap_or("latest");
+		let path = format!(
+			"projects/{}/secrets/{item}/versions/{version}",
+			self.config.project_id
+		);
+		let client = self.create_client().await?;
+		match client.access_secret_version().set_name(&path).send().await {
+			Ok(response) => {
+				let Some(payload) = response.payload else {
+					return Ok(None);
+				};
+				let value = String::from_utf8(payload.data.to_vec()).map_err(|error| {
+					MonosecretError::ProviderOperationFailed(format!(
+						"Secret data is not valid UTF-8: {error}"
+					))
+				})?;
+				Ok(Some(SecretString::new(value.into())))
+			}
+			Err(error) if Self::is_not_found_error(&error) => Ok(None),
+			Err(error) => {
+				Err(MonosecretError::ProviderOperationFailed(format!(
+					"Failed to access secret '{item}' version '{version}': {error}"
+				)))
+			}
+		}
+	}
+
 	/// Creates or updates a secret in GCP Secret Manager.
 	///
 	/// Always attempts to create the secret first (idempotent operation), then adds a new version.
@@ -328,6 +361,38 @@ impl GcsmProvider {
 }
 
 impl Provider for GcsmProvider {
+	fn supported_coords(&self) -> &'static [&'static str] {
+		&["version"]
+	}
+
+	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
+		match address {
+			Address::Convention {
+				project,
+				profile,
+				key,
+			} => self.get(project, key, profile),
+			Address::Native(native) => {
+				if native.field.is_some() || native.vault.is_some() || native.section.is_some() {
+					return Err(MonosecretError::ProviderOperationFailed(
+						"the gcsm provider supports only `item` and `version` coordinates".into(),
+					));
+				}
+				super::block_on(self.get_native_async(&native.item, native.version.as_deref()))
+			}
+		}
+	}
+
+	fn check_writable(&self, address: Address<'_>) -> Result<()> {
+		if matches!(address, Address::Native(_)) {
+			return Err(MonosecretError::ProviderOperationFailed(
+				"GCP Secret Manager refs are read-only; write convention-addressed secrets instead"
+					.into(),
+			));
+		}
+		Ok(())
+	}
+
 	fn name(&self) -> &'static str {
 		Self::PROVIDER_NAME
 	}

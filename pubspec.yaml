@@ -2,7 +2,12 @@ name: monosecret_workspace
 publish_to: none
 
 environment:
-  sdk: ^3.5.0
+  sdk: ^3.10.0
+
+hooks:
+  user_defines:
+    monosecret:
+      native_library_directory: target/debug
 
 workspace:
   - dart/monosecret

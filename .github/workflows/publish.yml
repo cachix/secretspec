@@ -82,8 +82,16 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --pattern "monosecret-*-${RELEASE_ASSET_TAG}.tar.gz" \
             --pattern "monosecret-*-${RELEASE_ASSET_TAG}.zip" \
+            --pattern "monosecret-ffi-*-${RELEASE_ASSET_TAG}.so" \
+            --pattern "monosecret-ffi-*-${RELEASE_ASSET_TAG}.dylib" \
+            --pattern "monosecret-ffi-*-${RELEASE_ASSET_TAG}.dll" \
+            --pattern "monosecret-ffi-*-${RELEASE_ASSET_TAG}.sha256" \
+            --pattern "monosecret-ffi-*-${RELEASE_ASSET_TAG}.sha512" \
             --dir "$RUNNER_TEMP/release-assets"
           find "$RUNNER_TEMP/release-assets" -maxdepth 1 -type f -print
+          bash scripts/release/verify-ffi-assets.sh \
+            "$RUNNER_TEMP/release-assets" \
+            "$RELEASE_TAG"
         shell: bash
 
       - name: populate cli npm packages with release binaries

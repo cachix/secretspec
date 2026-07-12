@@ -46,6 +46,79 @@ fn help_output() {
 	});
 }
 
+#[test]
+fn schema_and_check_json_are_value_free() {
+	let dir = tempfile::tempdir().unwrap();
+	write_config(
+		dir.path(),
+		r#"
+[project]
+name = "demo"
+revision = "1.0"
+
+[profiles.default]
+TOKEN = { description = "token", required = true }
+OPTIONAL = { description = "optional", required = false }
+"#,
+	);
+	let env_path = dir.path().join("values.env");
+	fs::write(&env_path, "TOKEN=super-secret-value\n").unwrap();
+
+	let schema = Command::new(bin())
+		.args([
+			"--file",
+			dir.path().join("monosecret.toml").to_str().unwrap(),
+			"schema",
+		])
+		.output()
+		.unwrap();
+	assert!(schema.status.success());
+	let schema: serde_json::Value = serde_json::from_slice(&schema.stdout).unwrap();
+	assert_eq!(
+		schema.get("title").and_then(serde_json::Value::as_str),
+		Some("Monosecret")
+	);
+
+	let report = Command::new(bin())
+		.args([
+			"--file",
+			dir.path().join("monosecret.toml").to_str().unwrap(),
+			"check",
+			"--json",
+			"--provider",
+			&format!("dotenv:{}", env_path.display()),
+		])
+		.env("HOME", dir.path())
+		.output()
+		.unwrap();
+	assert!(
+		report.status.success(),
+		"{}",
+		String::from_utf8_lossy(&report.stderr)
+	);
+	let report_text = String::from_utf8(report.stdout).unwrap();
+	assert!(!report_text.contains("super-secret-value"));
+	let report: serde_json::Value = serde_json::from_str(&report_text).unwrap();
+	let entries = report
+		.get("secrets")
+		.and_then(serde_json::Value::as_array)
+		.expect("report secrets array");
+	assert_eq!(
+		entries
+			.first()
+			.and_then(|entry| entry.get("name"))
+			.and_then(serde_json::Value::as_str),
+		Some("OPTIONAL")
+	);
+	assert_eq!(
+		entries
+			.get(1)
+			.and_then(|entry| entry.get("name"))
+			.and_then(serde_json::Value::as_str),
+		Some("TOKEN")
+	);
+}
+
 /// Snapshot `monosecret manifest --format json` — verifies the secret-value-free
 /// manifest output is stable.
 #[test]

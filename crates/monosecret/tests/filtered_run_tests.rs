@@ -740,6 +740,9 @@ revision = "1.0"
 [providers]
 local = "dotenv://{}"
 
+[groups]
+default = "Default secrets"
+
 [profiles.default]
 TOKEN = {{ description = "default token", groups = ["default"] }}
 

@@ -1,5 +1,21 @@
 {
   "nodes": {
+    "dart-nixpkgs": {
+      "locked": {
+        "lastModified": 1770768863,
+        "narHash": "sha256-25FntoUoRG1wYt7XkyjRVWk8CIXSErTYJKpfU5R6Gi8=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "dcb331fe95d903edf906a0970f82e517462a8818",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "dcb331fe95d903edf906a0970f82e517462a8818",
+        "type": "github"
+      }
+    },
     "devenv": {
       "locked": {
         "dir": "src/modules",
@@ -111,6 +127,7 @@
     },
     "root": {
       "inputs": {
+        "dart-nixpkgs": "dart-nixpkgs",
         "devenv": "devenv",
         "git-hooks": "git-hooks",
         "ifiokjr-nixpkgs": "ifiokjr-nixpkgs",

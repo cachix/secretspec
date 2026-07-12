@@ -7,6 +7,8 @@ use secrecy::SecretString;
 use tempfile::NamedTempFile;
 
 use crate::config::Resolved;
+use crate::report::ResolutionReport;
+use crate::report::SecretResolution;
 
 /// Container for validated secrets with metadata
 ///
@@ -19,6 +21,9 @@ pub struct ValidatedSecrets {
 	pub missing_optional: Vec<String>,
 	/// List of secrets using their default values (name, `default_value`)
 	pub with_defaults: Vec<(String, String)>,
+	/// Value-free per-secret resolution provenance (which provider answered,
+	/// generated, defaulted, `as_path`). Drives `check --json`/`--explain`.
+	pub resolution: Vec<SecretResolution>,
 	/// Temporary files for secrets with as_path=true.
 	/// These are kept alive for the lifetime of ValidatedSecrets and automatically
 	/// cleaned up when dropped.
@@ -27,6 +32,15 @@ pub struct ValidatedSecrets {
 }
 
 impl ValidatedSecrets {
+	/// Build the value-free [`ResolutionReport`] for this successful resolution.
+	pub fn report(&self) -> ResolutionReport {
+		ResolutionReport::new(
+			self.resolved.provider.clone(),
+			self.resolved.profile.clone(),
+			self.resolution.clone(),
+		)
+	}
+
 	/// Persist all temporary files, preventing automatic cleanup.
 	///
 	/// This method consumes the temporary file handles and persists them,
@@ -73,6 +87,10 @@ pub struct ValidationErrors {
 	pub provider: String,
 	/// The profile that was used
 	pub profile: String,
+	/// Value-free per-secret resolution provenance, including the missing
+	/// required secrets that caused this error. Empty unless populated by the
+	/// resolver; see [`ValidationErrors::report`].
+	pub resolution: Vec<SecretResolution>,
 }
 
 impl ValidationErrors {
@@ -90,12 +108,24 @@ impl ValidationErrors {
 			with_defaults,
 			provider,
 			profile,
+			resolution: Vec::new(),
 		}
 	}
 
 	/// Check if there are any critical errors (missing required secrets)
 	pub fn has_errors(&self) -> bool {
 		!self.missing_required.is_empty()
+	}
+
+	/// Build the value-free [`ResolutionReport`] for this failed resolution.
+	/// The report still describes every declared secret, including the ones
+	/// that resolved, so consumers see the full picture, not just the gaps.
+	pub fn report(&self) -> ResolutionReport {
+		ResolutionReport::new(
+			self.provider.clone(),
+			self.profile.clone(),
+			self.resolution.clone(),
+		)
 	}
 }
 

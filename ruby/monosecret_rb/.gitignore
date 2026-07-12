@@ -1,0 +1,10 @@
+vendor/
+*.gem
+# Compiled extension + mkmf build artifacts.
+lib/monosecret/monosecret_ext.*
+ext/**/Makefile
+ext/**/*.o
+ext/**/*.so
+ext/**/*.bundle
+ext/**/*.dSYM/
+ext/**/mkmf.log

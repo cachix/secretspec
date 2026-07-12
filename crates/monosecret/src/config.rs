@@ -380,13 +380,50 @@ impl Config {
 			));
 		}
 
-		// Validate each profile
+		// Validate each profile. Non-default profiles are partial overlays, so
+		// validate their effective secret after inheriting omitted fields from the
+		// default profile rather than rejecting a valid override in isolation.
 		for (profile_name, profile) in &self.profiles {
-			profile
-				.validate()
-				.map_err(|e| ParseError::Validation(format!("Profile '{profile_name}': {e}")))?;
+			if profile.secrets.is_empty() {
+				return Err(ParseError::Validation(format!(
+					"Profile '{profile_name}': Profile must define at least one secret"
+				)));
+			}
 
 			for (secret_name, secret) in &profile.secrets {
+				if !is_valid_identifier(secret_name) {
+					return Err(ParseError::Validation(format!(
+						"Profile '{profile_name}': Invalid secret name '{secret_name}': must be a valid identifier (alphanumeric and underscores, not starting with a number)"
+					)));
+				}
+
+				let mut effective = secret.clone();
+				if profile_name != "default"
+					&& let Some(default) = self
+						.profiles
+						.get("default")
+						.and_then(|profile| profile.secrets.get(secret_name))
+				{
+					effective.description = effective
+						.description
+						.or_else(|| default.description.clone());
+					effective.required = effective.required.or(default.required);
+					effective.default = effective.default.or_else(|| default.default.clone());
+					effective.groups = effective.groups.or_else(|| default.groups.clone());
+					effective.providers = effective.providers.or_else(|| default.providers.clone());
+					effective.reference = effective.reference.or_else(|| default.reference.clone());
+					effective.as_path = effective.as_path.or(default.as_path);
+					effective.secret_type = effective
+						.secret_type
+						.or_else(|| default.secret_type.clone());
+					effective.generate = effective.generate.or_else(|| default.generate.clone());
+				}
+				effective.validate().map_err(|error| {
+					ParseError::Validation(format!(
+						"Profile '{profile_name}': Secret '{secret_name}': {error}"
+					))
+				})?;
+
 				if let Some(groups) = &secret.groups {
 					let declared = self.declared_groups().ok_or_else(|| {
 						ParseError::Validation(format!(
@@ -826,6 +863,163 @@ pub struct GenerateOptions {
 	pub bits: Option<usize>,
 }
 
+/// Native coordinates of one externally managed secret: the value of a
+/// secret's canonical `ref` field. Coordinates name a secret, while provider
+/// selection and fallback remain controlled by `providers` and CLI overrides.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize)]
+pub struct NativeAddress {
+	/// Store-native item, path, service, secret id, or variable name.
+	pub item: String,
+	/// Optional field within the item (for example a JSON key or account).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub field: Option<String>,
+	/// Optional 1Password vault override.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub vault: Option<String>,
+	/// Optional 1Password section.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub section: Option<String>,
+	/// Optional provider-native version (currently GCP Secret Manager).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub version: Option<String>,
+}
+
+impl NativeAddress {
+	pub(crate) fn coordinates(&self) -> [(&'static str, Option<&str>); 5] {
+		[
+			("vault", self.vault.as_deref()),
+			("item", Some(self.item.as_str())),
+			("section", self.section.as_deref()),
+			("field", self.field.as_deref()),
+			("version", self.version.as_deref()),
+		]
+	}
+
+	/// Canonical, value-free rendering used by diagnostics and audit metadata.
+	pub fn render(&self) -> String {
+		self.coordinates()
+			.into_iter()
+			.filter_map(|(name, value)| value.map(|value| format!("{name}={value}")))
+			.collect::<Vec<_>>()
+			.join(" ")
+	}
+}
+
+/// Derived deserialization target for [`NativeAddress`]. Table input delegates
+/// here so serde retains precise unknown-field diagnostics, while string input
+/// can provide a useful translation hint.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeAddressFields {
+	item: String,
+	field: Option<String>,
+	vault: Option<String>,
+	section: Option<String>,
+	version: Option<String>,
+}
+
+impl From<NativeAddressFields> for NativeAddress {
+	fn from(fields: NativeAddressFields) -> Self {
+		Self {
+			item: fields.item,
+			field: fields.field,
+			vault: fields.vault,
+			section: fields.section,
+			version: fields.version,
+		}
+	}
+}
+
+/// Render the canonical inline TOML table used in reference diagnostics.
+pub(crate) fn ref_table_hint(
+	vault: Option<&str>,
+	item: &str,
+	section: Option<&str>,
+	field: Option<&str>,
+) -> String {
+	let coordinates = NativeAddress {
+		item: item.to_string(),
+		field: field.map(str::to_string),
+		vault: vault.map(str::to_string),
+		section: section.map(str::to_string),
+		version: None,
+	};
+	let rendered = coordinates
+		.coordinates()
+		.into_iter()
+		.filter_map(|(name, value)| value.map(|value| format!(r#"{name} = "{value}""#)))
+		.collect::<Vec<_>>();
+	format!("ref = {{ {} }}", rendered.join(", "))
+}
+
+fn ref_string_hint(value: &str) -> String {
+	if let Some(reference) = value.strip_prefix("op://") {
+		let segments = reference.split('/').collect::<Vec<_>>();
+		match segments.as_slice() {
+			[vault, item, field] if !vault.is_empty() && !item.is_empty() && !field.is_empty() => {
+				return format!(
+					"`ref` takes a table of coordinates, not a URI. Use: {}",
+					ref_table_hint(Some(vault), item, None, Some(field))
+				);
+			}
+			[vault, item, section, field]
+				if !vault.is_empty()
+					&& !item.is_empty()
+					&& !section.is_empty()
+					&& !field.is_empty() =>
+			{
+				return format!(
+					"`ref` takes a table of coordinates, not a URI. Use: {}",
+					ref_table_hint(Some(vault), item, Some(section), Some(field))
+				);
+			}
+			_ => {}
+		}
+	}
+	format!(
+		"`ref` takes a table of native secret coordinates, not a string: got '{value}'. \
+		 Write e.g. {}; which store resolves the coordinates comes from `providers` \
+		 (or the default provider).",
+		ref_table_hint(None, "db", None, Some("password"))
+	)
+}
+
+impl<'de> Deserialize<'de> for NativeAddress {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		struct AddressVisitor;
+
+		impl<'de> serde::de::Visitor<'de> for AddressVisitor {
+			type Value = NativeAddress;
+
+			fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+				formatter.write_str(
+					r#"a table of native secret coordinates like { item = "db", field = "password" }"#,
+				)
+			}
+
+			fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+			where
+				A: serde::de::MapAccess<'de>,
+			{
+				NativeAddressFields::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+					.map(NativeAddress::from)
+			}
+
+			fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+			where
+				E: serde::de::Error,
+			{
+				Err(E::custom(ref_string_hint(value)))
+			}
+		}
+
+		deserializer.deserialize_any(AddressVisitor)
+	}
+}
+
 /// Configuration for an individual secret.
 ///
 /// Defines the properties of a secret including its documentation,
@@ -855,6 +1049,10 @@ pub struct Secret {
 	/// (`{ provider = "op", path = ["GitHub"], key = "token" }`).
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub providers: Option<Vec<ProviderRef>>,
+	/// Provider-independent native coordinates. Routing still follows
+	/// [`Self::providers`] and provider overrides.
+	#[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+	pub reference: Option<NativeAddress>,
 	/// Whether to write the secret value to a temporary file and return the path.
 	/// If true, the secret will be written to a temporary file and the field
 	/// will contain the path to that file instead of the secret value.
@@ -886,6 +1084,16 @@ impl Secret {
 		// If required is explicitly true and default is set, that's an error
 		if self.required == Some(true) && self.default.is_some() {
 			return Err("Required secrets cannot have default values".into());
+		}
+
+		if let Some(reference) = &self.reference {
+			for (name, value) in reference.coordinates() {
+				if value.is_some_and(|value| value.trim().is_empty()) {
+					return Err(format!(
+						"`ref` coordinate `{name}` cannot be empty or whitespace"
+					));
+				}
+			}
 		}
 
 		// Validate generate config
@@ -1447,6 +1655,21 @@ mod validation_tests {
 			config_with(
 				"proj",
 				vec![("default", vec![("API_KEY", secret(Some("d")))])]
+			)
+			.validate()
+			.is_ok()
+		);
+	}
+
+	#[test]
+	fn config_validate_accepts_partial_profile_override() {
+		assert!(
+			config_with(
+				"proj",
+				vec![
+					("default", vec![("API_KEY", secret(Some("inherited")))]),
+					("production", vec![("API_KEY", secret(None))]),
+				]
 			)
 			.validate()
 			.is_ok()

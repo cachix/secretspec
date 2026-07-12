@@ -44,6 +44,7 @@ use secrecy::SecretString;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::Address;
 use super::Provider;
 use super::ProviderUrl;
 use crate::MonosecretError;
@@ -215,6 +216,46 @@ impl AwssmProvider {
 		}
 	}
 
+	async fn get_native_async(
+		&self,
+		item: &str,
+		field: Option<&str>,
+	) -> Result<Option<SecretString>> {
+		let client = self.create_client().await?;
+		match client.get_secret_value().secret_id(item).send().await {
+			Ok(output) => {
+				let Some(value) = output.secret_string() else {
+					return Ok(None);
+				};
+				let value = if let Some(field) = field {
+					let object: serde_json::Value =
+						serde_json::from_str(value).map_err(|error| {
+							MonosecretError::ProviderOperationFailed(format!(
+								"AWS secret '{item}' is not valid JSON for field '{field}': {error}"
+							))
+						})?;
+					match object.get(field).and_then(serde_json::Value::as_str) {
+						Some(value) => value.to_string(),
+						None => return Ok(None),
+					}
+				} else {
+					value.to_string()
+				};
+				Ok(Some(SecretString::new(value.into())))
+			}
+			Err(error) => {
+				let service_error = error.into_service_error();
+				if service_error.is_resource_not_found_exception() {
+					Ok(None)
+				} else {
+					Err(MonosecretError::ProviderOperationFailed(format!(
+						"Failed to get secret '{item}': {service_error}"
+					)))
+				}
+			}
+		}
+	}
+
 	/// Builds the full AWS secret names and a reverse map back to the original keys.
 	fn build_batch_request_names(
 		prefix: Option<&str>,
@@ -338,6 +379,38 @@ impl AwssmProvider {
 }
 
 impl Provider for AwssmProvider {
+	fn supported_coords(&self) -> &'static [&'static str] {
+		&["field"]
+	}
+
+	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
+		match address {
+			Address::Convention {
+				project,
+				profile,
+				key,
+			} => self.get(project, key, profile),
+			Address::Native(native) => {
+				if native.vault.is_some() || native.section.is_some() || native.version.is_some() {
+					return Err(MonosecretError::ProviderOperationFailed(
+						"the awssm provider supports only `item` and `field` coordinates".into(),
+					));
+				}
+				super::block_on(self.get_native_async(&native.item, native.field.as_deref()))
+			}
+		}
+	}
+
+	fn check_writable(&self, address: Address<'_>) -> Result<()> {
+		if matches!(address, Address::Native(_)) {
+			return Err(MonosecretError::ProviderOperationFailed(
+				"AWS Secrets Manager refs are read-only; write convention-addressed secrets instead"
+					.into(),
+			));
+		}
+		Ok(())
+	}
+
 	fn name(&self) -> &'static str {
 		Self::PROVIDER_NAME
 	}

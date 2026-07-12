@@ -1,49 +1,99 @@
 # monosecret Dart SDK
 
-Dart SDK for invoking Monosecret and loading secrets into Dart applications.
+Native Dart SDK for resolving Monosecret secrets in server applications without installing the `monosecret` CLI.
 
-## Overview
+## Requirements
 
-The SDK has two layers:
+- Dart 3.10 or later
+- Linux with glibc, macOS, or Windows
+- x64 or ARM64
 
-- **`monosecret`** — runtime client that wraps the `monosecret` CLI for ad-hoc secret access and environment loading.
-- **`monosecret_builder`** — build_runner generator that produces typed Dart classes from `monosecret.toml` at compile time.
-
-Generated code contains **no secret values**. All values are resolved at runtime through the CLI and your configured providers.
+The package uses a Dart build hook to download the matching `monosecret_ffi` release library. The hook verifies its SHA-256 sidecar before registering it as a bundled Dart code asset. Android, iOS, Dart web, and Linux musl are not supported.
 
 ## Installation
 
 ```sh
 dart pub add monosecret
+```
+
+For generated typed accessors:
+
+```sh
 dart pub add --dev build_runner monosecret_builder
 ```
 
-## End-to-end setup
+## Resolve secrets
 
-### 1. Create `monosecret.toml`
+```dart
+import 'package:monosecret/monosecret.dart';
 
-```toml
-[project]
-name = "my-app"
-revision = "1.0"
+Future<void> main() async {
+  final resolved = await Monosecret.builder()
+      .withPath('monosecret.toml')
+      .withProfile('production')
+      .withProvider('env://')
+      .withReason('Start the API server')
+      .load();
 
-[profiles.default]
-DATABASE_URL = { description = "PostgreSQL connection string", required = true }
-API_TOKEN = { description = "API authentication token", required = true }
-
-[profiles.development]
-DATABASE_URL = { default = "postgresql://localhost/dev" }
+  try {
+    print(resolved.secrets['DATABASE_URL']?.usable);
+  } finally {
+    await resolved.close();
+  }
+}
 ```
 
-### 2. Set secret values
+`Resolved.close()` removes temporary files created for `as_path` secrets. Secret values are copied into Dart-managed strings and cannot be reliably zeroized; prefer reports, `no_values`, or `as_path` where appropriate.
 
-```sh
-monosecret set DATABASE_URL --provider dotenv:.env.local
-monosecret set API_TOKEN --provider dotenv:.env.local
-monosecret check --provider dotenv:.env.local --no-prompt
+## Value-free reports
+
+```dart
+final report = await Monosecret.builder()
+    .withProfile('production')
+    .withReason('Deployment preflight')
+    .report();
+
+for (final secret in report.secrets) {
+  print('${secret.name}: ${secret.status}');
+}
 ```
 
-### 3. Create `lib/app_secrets.dart`
+Reports describe resolution status and provenance without copying secret values across the native boundary.
+
+## Filtering
+
+```dart
+final resolved = await Monosecret.builder()
+    .withInclude(['DATABASE_URL'])
+    .withGroups(['backend'])
+    .withReason('Start backend workers')
+    .load();
+```
+
+Includes and groups are combined as a union and applied before required-secret validation.
+
+## Convenience client
+
+```dart
+const client = MonosecretClient();
+
+final token = await client.get(
+  'API_TOKEN',
+  profile: 'production',
+  reason: 'Authenticate an upstream request',
+);
+
+final environment = await client.exportEnvironment(
+  groups: ['backend'],
+  reason: 'Configure the server process',
+);
+```
+
+Use `resolve()` instead of `get()` or `exportEnvironment()` when consuming `as_path` secrets so their lifetime can be closed explicitly.
+
+## Typed generated access
+
+Create a library:
 
 ```dart
 @MonosecretConfig(className: 'AppSecrets')
@@ -54,58 +104,19 @@ import 'package:monosecret/monosecret.dart';
 part 'app_secrets.g.dart';
 ```
 
-### 4. Run code generation
+Generate it:
 
 ```sh
 dart run build_runner build --delete-conflicting-outputs
 ```
 
-### 5. Use the generated SDK
+Generated code contains configuration shape only. Values are always resolved at runtime by the bundled native resolver.
 
-```dart
-import 'app_secrets.dart';
+## Native artifact integrity
 
-Future<void> main() async {
-  final secrets = await AppSecrets.load(
-    profile: AppProfile.development,
-    provider: 'dotenv:.env.local',
-  );
+Published package versions download an identically versioned GitHub release asset. The release pipeline builds and attests each C ABI library before publishing the Dart package. The build hook rejects missing assets, unsupported platforms, non-successful downloads, malformed checksum sidecars, and SHA-256 mismatches.
 
-  print(secrets.databaseUrl);
-
-  // Or fetch a single secret at runtime:
-  final token = await MonosecretClient().getAppSecret(AppSecret.apiToken);
-  print(token);
-}
-```
-
-## Runtime client
-
-```dart
-import 'package:monosecret/monosecret.dart';
-
-final client = MonosecretClient();
-
-// Get a single secret value.
-final databaseUrl = await client.get('DATABASE_URL', profile: 'development');
-
-// Resolve all secrets for the active profile as a Map.
-final environment = await client.exportEnvironment(include: ['DATABASE_URL']);
-
-// Run a check (useful in CI).
-await client.check(provider: 'dotenv:.env.local', noPrompt: true);
-```
-
-`exportEnvironment` uses `monosecret env --shell dotenv` and returns only resolved Monosecret secrets. `loadEnvironment` remains available for the older `monosecret run -- env` behavior.
-
-## CI/CD
-
-```sh
-monosecret check --provider env --profile ci --no-prompt
-monosecret run --provider env --profile ci -- dart test
-```
-
-The `monosecret` CLI must be on `PATH` wherever `AppSecrets.load()` runs.
+Repository development uses `hooks.user_defines.monosecret.native_library_directory` to select a locally built `target/debug` library instead of downloading a release.
 
 ## Learn more
 

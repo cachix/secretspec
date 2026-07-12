@@ -55,7 +55,7 @@ pub enum MonosecretError {
 	#[error("Invalid profile: {0}")]
 	InvalidProfile(String),
 	#[error("Validation failed: {0}")]
-	ValidationFailed(ValidationErrors),
+	ValidationFailed(Box<ValidationErrors>),
 	#[error("Secret generation failed: {0}")]
 	GenerationFailed(String),
 	#[error(
@@ -67,6 +67,36 @@ pub enum MonosecretError {
 	ReasonRequired,
 	#[error("Could not emit environment: {0}")]
 	EnvEmit(String),
+}
+
+impl MonosecretError {
+	/// Stable, non-sensitive variant token for SDK and audit boundaries.
+	pub fn kind(&self) -> &'static str {
+		match self {
+			Self::Io(_) => "io",
+			Self::Toml(_) => "toml",
+			Self::UnsupportedRevision(_) => "unsupported_revision",
+			Self::TomlSer(_) => "toml_ser",
+			#[cfg(feature = "keyring")]
+			Self::Keyring(_) => "keyring",
+			Self::Dotenv(_) => "dotenv",
+			Self::NoProviderConfigured => "no_provider_configured",
+			Self::ProviderNotFound(_) => "provider_not_found",
+			Self::SecretNotFound(_) => "secret_not_found",
+			Self::RequiredSecretMissing(_) => "required_secret_missing",
+			Self::NoManifest => "no_manifest",
+			Self::ExtendedConfigNotFound(_) => "extended_config_not_found",
+			Self::NoProjectName => "no_project_name",
+			Self::ProviderOperationFailed(_) => "provider_operation_failed",
+			Self::InquireError(_) => "inquire",
+			Self::Json(_) => "json",
+			Self::InvalidProfile(_) => "invalid_profile",
+			Self::ValidationFailed(_) => "validation_failed",
+			Self::GenerationFailed(_) => "generation_failed",
+			Self::ReasonRequired => "reason_required",
+			Self::EnvEmit(_) => "env_emit",
+		}
+	}
 }
 
 /// A type alias for `Result<T, MonosecretError>`

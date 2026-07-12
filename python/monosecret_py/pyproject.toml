@@ -1,0 +1,22 @@
+[build-system]
+# maturin compiles the pyo3 extension (monosecret_py_native, see Cargo.toml)
+# and statically links it in as monosecret._native; a Rust toolchain must be
+# on PATH.
+requires = ["maturin>=1,<2"]
+build-backend = "maturin"
+
+[project]
+name = "monosecret_py"
+version = "0.1.0"
+description = "Declarative secrets, every environment, any provider (Python SDK)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+
+[project.urls]
+Homepage = "https://ifiokjr.github.io/monosecret/"
+Repository = "https://github.com/ifiokjr/monosecret/tree/main/python/monosecret_py"
+
+[tool.maturin]
+module-name = "monosecret._native"

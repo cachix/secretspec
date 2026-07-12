@@ -43,6 +43,16 @@ PUB_TOKEN = { description = "Pub token", required = true }
         expect(source, contains('Future<AppSecrets> loadAppSecrets'));
         expect(source, contains('Future<String> getAppSecret'));
         expect(source, contains('groups: groups.map((group) => group.name)'));
+        expect(source, contains('String? reason'));
+        expect(source, contains('reason: reason'));
+        expect(
+          source,
+          contains(
+            'groups.isEmpty\n'
+            '            ? AppSecret.values\n'
+            '            : const <AppSecret>[]',
+          ),
+        );
         expect(source, contains('_required(environment, "DATABASE_URL")'));
       },
     );

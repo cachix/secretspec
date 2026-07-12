@@ -1,5 +1,6 @@
 //! Core secrets management functionality
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
@@ -15,6 +16,10 @@ use colored::Colorize;
 use secrecy::ExposeSecret;
 use secrecy::SecretString;
 
+use crate::audit::AuditAction;
+use crate::audit::AuditContext;
+use crate::audit::AuditLogger;
+use crate::audit::AuditOutcome;
 use crate::config::Config;
 use crate::config::GlobalConfig;
 use crate::config::Manifest;
@@ -26,8 +31,16 @@ use crate::config::Resolved;
 use crate::config::SecretRequest;
 use crate::error::MonosecretError;
 use crate::error::Result;
+use crate::provider::Address;
 use crate::provider::Provider as ProviderTrait;
 use crate::provider::provider_from_spec_with_dependencies;
+use crate::report::ResolutionReport;
+use crate::report::ResolutionStatus;
+use crate::report::SecretResolution;
+use crate::resolve::RESOLVE_SCHEMA_VERSION;
+use crate::resolve::ResolveResponse;
+use crate::resolve::ResolvedSecret;
+use crate::resolve::ResolvedSource;
 use crate::validation::ValidatedSecrets;
 use crate::validation::ValidationErrors;
 
@@ -65,18 +78,36 @@ fn warn_provider_failure(uri: &str, secret_name: &str, err: &MonosecretError) {
 	);
 }
 
-/// Emits a warning when the primary provider for a batch fetch fails (either
-/// during construction or during `get_batch`); affected secrets will still be
-/// retried via their per-secret fallback chain below.
+/// Emits a warning when a primary provider cannot be constructed; affected
+/// secrets will still be retried via their per-secret fallback chains below.
 fn warn_primary_provider_failure(uri: Option<&str>, err: &MonosecretError) {
 	let uri = uri.map_or_else(|| "<default>".to_string(), redact_provider_uri);
-	tracing::warn!(provider = %uri, error = %err, "primary batch provider failed");
+	tracing::warn!(provider = %uri, error = %err, "primary provider failed");
 	eprintln!(
 		"{} primary provider {} failed: {}; will try fallback chain for affected secrets",
 		"warning:".yellow(),
 		uri.bold(),
 		err
 	);
+}
+
+/// Emits a warning when an optimized batch lookup fails. The caller retries
+/// each address so a request-specific failure cannot poison its healthy peers.
+fn warn_primary_batch_failure(uri: Option<&str>, err: &MonosecretError) {
+	let uri = uri.map_or_else(|| "<default>".to_string(), redact_provider_uri);
+	tracing::warn!(provider = %uri, error = %err, "primary provider batch failed");
+	eprintln!(
+		"{} primary provider {} batch failed: {}; retrying addresses individually",
+		"warning:".yellow(),
+		uri.bold(),
+		err
+	);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Materialize {
+	Values,
+	None,
 }
 
 /// Walks up from the current directory looking for `monosecret.toml`.
@@ -179,6 +210,8 @@ pub struct Secrets {
 	/// Project policy (`[project].require_reason` in monosecret.toml) controlling
 	/// when secret access requires an explicit reason.
 	require_reason: RequireReason,
+	/// Per-machine value-free audit sink.
+	audit: Option<AuditLogger>,
 }
 
 impl Secrets {
@@ -208,6 +241,7 @@ impl Secrets {
 			profile,
 			reason: None,
 			require_reason: RequireReason::Never,
+			audit: None,
 		}
 	}
 
@@ -250,7 +284,15 @@ impl Secrets {
 	/// * `path` - Path to the `monosecret.toml` file
 	pub fn load_from(path: &Path) -> Result<Self> {
 		let project_config = Config::try_from(path)?;
+		// Every entry point loads through here, so semantic validation must not be
+		// left to individual commands or SDKs.
+		project_config.validate()?;
 		let global_config = GlobalConfig::load()?;
+		let audit_config = global_config
+			.as_ref()
+			.and_then(|config| config.audit.clone())
+			.unwrap_or_default();
+		let audit = AuditLogger::from_config(&audit_config);
 		Ok(Self {
 			require_reason: project_config.project.require_reason.unwrap_or_default(),
 			config: project_config,
@@ -258,6 +300,7 @@ impl Secrets {
 			provider: None,
 			profile: None,
 			reason: env_reason(),
+			audit,
 		})
 	}
 
@@ -328,14 +371,44 @@ impl Secrets {
 		Ok(())
 	}
 
+	#[allow(clippy::too_many_arguments)]
+	fn record_secret_access(
+		&self,
+		action: AuditAction,
+		key: &str,
+		profile: &str,
+		provider_uri: Option<String>,
+		reference: Option<&crate::config::NativeAddress>,
+		outcome: AuditOutcome,
+		error_kind: Option<&str>,
+	) {
+		if let Some(audit) = &self.audit {
+			audit.record(
+				action,
+				&AuditContext {
+					project: &self.config.project.name,
+					profile,
+					key: Some(key),
+					keys: &[],
+					command: None,
+					provider_uri,
+					reference: reference.map(crate::config::NativeAddress::render),
+					outcome,
+					error_kind,
+					reason: self.reason.as_deref(),
+				},
+			);
+		}
+	}
+
 	fn build_provider(&self, spec: &str) -> Result<Box<dyn ProviderTrait>> {
 		let provider = Box::<dyn ProviderTrait>::try_from(spec.to_string())?;
 		provider.set_reason(self.reason.clone());
 		Ok(provider)
 	}
 
-	/// Get a reference to the project configuration (for testing)
-	#[cfg(test)]
+	/// Get the loaded project configuration for value-free code generation.
+	#[allow(dead_code)]
 	pub(crate) fn config(&self) -> &Config {
 		&self.config
 	}
@@ -484,6 +557,10 @@ impl Secrets {
 									.map(|v| v.into_iter().map(ProviderRef::from).collect())
 							})
 						}),
+					reference: current
+						.reference
+						.clone()
+						.or_else(|| default.reference.clone()),
 					as_path: current.as_path.or(default.as_path),
 					secret_type: current
 						.secret_type
@@ -514,6 +591,7 @@ impl Secrets {
 								.map(|v| v.into_iter().map(ProviderRef::from).collect())
 						})
 					}),
+					reference: secret.reference.clone(),
 					as_path: secret.as_path,
 					secret_type: secret.secret_type.clone(),
 					generate: secret.generate.clone(),
@@ -620,11 +698,12 @@ impl Secrets {
 						project_name,
 						secret_name,
 						profile_name,
+						&secret_config,
 						Some(&entries),
 						None,
 					)? {
-						Some(v) => v,
-						None => {
+						(Some(v), _) => v,
+						(None, _) => {
 							return Err(MonosecretError::ProviderOperationFailed(format!(
 								"Provider '{alias}' requires secret '{secret_name}' but it was not found"
 							)));
@@ -634,7 +713,11 @@ impl Secrets {
 				_ => {
 					// Use default provider.
 					let provider = self.get_provider(None)?;
-					match provider.get(project_name, secret_name, profile_name)? {
+					let address = secret_config.reference.as_ref().map_or_else(
+						|| Address::convention(project_name, profile_name, secret_name),
+						Address::Native,
+					);
+					match provider.get_address(address)? {
 						Some(v) => v,
 						None => {
 							return Err(MonosecretError::ProviderOperationFailed(format!(
@@ -693,6 +776,10 @@ impl Secrets {
 		let mut entries = Vec::with_capacity(refs.len());
 		for r in refs {
 			let alias = r.provider_alias();
+			if alias.contains("://") {
+				entries.push((alias.to_string(), SecretRequest::from_provider_ref(r)));
+				continue;
+			}
 			if let Some(uri) = self.lookup_provider_alias(alias) {
 				let request = SecretRequest::from_provider_ref(r);
 				tracing::debug!(
@@ -737,6 +824,10 @@ impl Secrets {
 		};
 		let mut uris = Vec::with_capacity(aliases.len());
 		for alias in aliases {
+			if alias.contains("://") {
+				uris.push(alias.clone());
+				continue;
+			}
 			if let Some(uri) = self.lookup_provider_alias(alias) {
 				uris.push(uri);
 			} else {
@@ -923,9 +1014,15 @@ impl Secrets {
 		project_name: &str,
 		secret_name: &str,
 		profile_name: &str,
+		secret_config: &crate::config::Secret,
 		provider_entries: Option<&[(String, SecretRequest)]>,
 		default_provider_arg: Option<&str>,
-	) -> Result<Option<SecretString>> {
+	) -> Result<(Option<SecretString>, Option<String>)> {
+		let address = secret_config.reference.as_ref().map_or_else(
+			|| Address::convention(project_name, profile_name, secret_name),
+			Address::Native,
+		);
+
 		// If provider entries are specified, try them in order
 		if let Some(entries) = provider_entries {
 			let mut last_error: Option<MonosecretError> = None;
@@ -947,10 +1044,15 @@ impl Secrets {
 						continue;
 					}
 				};
-				match provider.get_with_request(project_name, secret_name, profile_name, request) {
+				let result = if secret_config.reference.is_some() {
+					provider.get_address(address)
+				} else {
+					provider.get_with_request(project_name, secret_name, profile_name, request)
+				};
+				match result {
 					Ok(Some(value)) => {
 						tracing::debug!(provider = %redact_provider_uri(uri), secret = %secret_name, "provider lookup found secret");
-						return Ok(Some(value));
+						return Ok((Some(value), Some(redact_provider_uri(&provider.uri()))));
 					}
 					Ok(None) => {
 						any_healthy = true;
@@ -965,12 +1067,18 @@ impl Secrets {
 			// a healthy "not found" — otherwise the secret is genuinely missing.
 			match last_error {
 				Some(e) if !any_healthy => Err(e),
-				_ => Ok(None),
+				_ => {
+					Ok((
+						None,
+						entries.last().map(|(uri, _)| redact_provider_uri(uri)),
+					))
+				}
 			}
 		} else {
 			// No per-secret providers, use default provider
 			let backend = self.get_provider(default_provider_arg)?;
-			backend.get(project_name, secret_name, profile_name)
+			let uri = redact_provider_uri(&backend.uri());
+			backend.get_address(address).map(|value| (value, Some(uri)))
 		}
 	}
 
@@ -1083,13 +1191,37 @@ impl Secrets {
 			));
 		}
 
-		backend.set_with_request(
-			&self.config.project.name,
+		let address = secret_config.reference.as_ref().map_or_else(
+			|| Address::convention(&self.config.project.name, &profile_name, name),
+			Address::Native,
+		);
+		let result = backend.check_writable(address).and_then(|()| {
+			if secret_config.reference.is_some() {
+				backend.set_address(address, &value)
+			} else {
+				backend.set_with_request(
+					&self.config.project.name,
+					name,
+					&value,
+					&profile_name,
+					&write_request,
+				)
+			}
+		});
+		self.record_secret_access(
+			AuditAction::Set,
 			name,
-			&value,
 			&profile_name,
-			&write_request,
-		)?;
+			Some(backend.uri()),
+			secret_config.reference.as_ref(),
+			if result.is_ok() {
+				AuditOutcome::Written
+			} else {
+				AuditOutcome::Error
+			},
+			result.as_ref().err().map(MonosecretError::kind),
+		);
+		result?;
 		eprintln!(
 			"{} Secret '{}' saved to {} (profile: {})",
 			"✓".green(),
@@ -1133,14 +1265,36 @@ impl Secrets {
 
 		let provider_uris = self.resolve_read_provider_uris(&secret_config, None)?;
 
-		match self.get_secret_from_providers(
+		let result = self.get_secret_from_providers(
 			&self.config.project.name,
 			name,
 			&profile_name,
+			&secret_config,
 			provider_uris.as_deref(),
 			None,
-		)? {
-			Some(value) => {
+		);
+		if let Err(error) = &result {
+			self.record_secret_access(
+				AuditAction::Get,
+				name,
+				&profile_name,
+				None,
+				secret_config.reference.as_ref(),
+				AuditOutcome::Error,
+				Some(error.kind()),
+			);
+		}
+		match result? {
+			(Some(value), source) => {
+				self.record_secret_access(
+					AuditAction::Get,
+					name,
+					&profile_name,
+					source,
+					secret_config.reference.as_ref(),
+					AuditOutcome::Found,
+					None,
+				);
 				if as_path {
 					// Write to temp file and persist it (don't auto-delete)
 					let (temp_file, _path_str) = Self::write_secret_to_temp_file(&value)?;
@@ -1157,7 +1311,20 @@ impl Secrets {
 				}
 				Ok(())
 			}
-			None => {
+			(None, source) => {
+				self.record_secret_access(
+					AuditAction::Get,
+					name,
+					&profile_name,
+					source,
+					secret_config.reference.as_ref(),
+					if default.is_some() {
+						AuditOutcome::Default
+					} else {
+						AuditOutcome::Missing
+					},
+					None,
+				);
 				if let Some(default_value) = default {
 					if as_path {
 						// Write default value to temp file and persist it
@@ -1227,7 +1394,7 @@ impl Secrets {
 		let profile_display = self.resolve_profile_name(profile);
 
 		// First validate to see what's missing
-		let validation_result = self.validate_selected(selected_names)?;
+		let validation_result = self.validate_selected(selected_names, Materialize::Values)?;
 
 		match validation_result {
 			Ok(valid_secrets) => Ok(valid_secrets),
@@ -1323,12 +1490,42 @@ impl Secrets {
 				let value = read_password(&prompt_msg)?;
 
 				let backend = self.resolve_write_provider(&secret_config, provider_arg)?;
-				backend.set(
-					&self.config.project.name,
+				let value = SecretString::new(value.into());
+				let address = secret_config.reference.as_ref().map_or_else(
+					|| Address::convention(&self.config.project.name, profile_display, secret_name),
+					Address::Native,
+				);
+				let result = if secret_config.reference.is_some() {
+					backend.set_address(address, &value)
+				} else {
+					let request = secret_config
+						.providers
+						.as_ref()
+						.and_then(|providers| providers.first())
+						.map(SecretRequest::from_provider_ref)
+						.unwrap_or_default();
+					backend.set_with_request(
+						&self.config.project.name,
+						secret_name,
+						&value,
+						profile_display,
+						&request,
+					)
+				};
+				self.record_secret_access(
+					AuditAction::Set,
 					secret_name,
-					&SecretString::new(value.into()),
 					profile_display,
-				)?;
+					Some(backend.uri()),
+					secret_config.reference.as_ref(),
+					if result.is_ok() {
+						AuditOutcome::Written
+					} else {
+						AuditOutcome::Error
+					},
+					result.as_ref().err().map(MonosecretError::kind),
+				);
+				result?;
 				eprintln!(
 					"{} Secret '{}' saved to {} (profile: {})",
 					"✓".green(),
@@ -1586,15 +1783,17 @@ impl Secrets {
 				.expect("Secret should exist since we're iterating over it");
 
 			let to_provider = self.resolve_write_provider(&secret_config, None)?;
+			let address = secret_config.reference.as_ref().map_or_else(
+				|| Address::convention(&self.config.project.name, &profile_display, &name),
+				Address::Native,
+			);
 
-			// First check if the secret exists in the "from" provider
-			match from_provider_instance.get(&self.config.project.name, &name, &profile_display)? {
+			// The same address applies to source and target; `ref` changes naming,
+			// never routing.
+			match from_provider_instance.get_address(address)? {
 				Some(value) => {
 					// Secret exists in "from" provider, check if it exists in "to" provider
-					if to_provider
-						.get(&self.config.project.name, &name, &profile_display)?
-						.is_some()
-					{
+					if to_provider.get_address(address)?.is_some() {
 						eprintln!(
 							"{} {} - {} {} (→ {})",
 							"○".yellow(),
@@ -1606,12 +1805,21 @@ impl Secrets {
 						already_exists += 1;
 					} else {
 						// Secret doesn't exist in "to" provider, import it
-						to_provider.set(
-							&self.config.project.name,
+						let result = to_provider.set_address(address, &value);
+						self.record_secret_access(
+							AuditAction::Set,
 							&name,
-							&value,
 							&profile_display,
-						)?;
+							Some(to_provider.uri()),
+							secret_config.reference.as_ref(),
+							if result.is_ok() {
+								AuditOutcome::Written
+							} else {
+								AuditOutcome::Error
+							},
+							result.as_ref().err().map(MonosecretError::kind),
+						);
+						result?;
 						eprintln!(
 							"{} {} - {} (→ {})",
 							"✓".green(),
@@ -1625,10 +1833,7 @@ impl Secrets {
 				None => {
 					// Secret doesn't exist in "from" provider
 					// Check if it exists in the "to" provider
-					if to_provider
-						.get(&self.config.project.name, &name, &profile_display)?
-						.is_some()
-					{
+					if to_provider.get_address(address)?.is_some() {
 						eprintln!(
 							"{} {} - {} {} (→ {})",
 							"○".blue(),
@@ -1718,9 +1923,27 @@ impl Secrets {
 
 		let value = crate::generator::generate(secret_type, gen_config)?;
 
-		// Store the generated value
+		// Store at the same native or conventional address used for reads.
 		let backend = self.get_writable_provider_for_secret(secret_config)?;
-		backend.set(&self.config.project.name, name, &value, profile_name)?;
+		let address = secret_config.reference.as_ref().map_or_else(
+			|| Address::convention(&self.config.project.name, profile_name, name),
+			Address::Native,
+		);
+		let result = backend.set_address(address, &value);
+		self.record_secret_access(
+			AuditAction::Set,
+			name,
+			profile_name,
+			Some(backend.uri()),
+			secret_config.reference.as_ref(),
+			if result.is_ok() {
+				AuditOutcome::Written
+			} else {
+				AuditOutcome::Error
+			},
+			result.as_ref().err().map(MonosecretError::kind),
+		);
+		result?;
 
 		eprintln!(
 			"{} {} - generated and saved to {} (profile: {})",
@@ -1791,6 +2014,144 @@ impl Secrets {
 		Ok((temp_file, path_str))
 	}
 
+	/// Resolve all secrets into the value-carrying SDK payload.
+	pub fn resolve(&self) -> Result<ResolveResponse> {
+		self.resolve_impl(true, None)
+	}
+
+	/// Resolve selected secrets into the value-carrying SDK payload.
+	pub fn resolve_filtered(
+		&self,
+		includes: &[String],
+		groups: &[String],
+	) -> Result<ResolveResponse> {
+		let selected = self.selected_secret_names(includes, groups)?;
+		self.resolve_impl(true, selected.as_ref())
+	}
+
+	/// Resolve structure and provenance without values or side effects.
+	pub fn resolve_without_values(&self) -> Result<ResolveResponse> {
+		self.resolve_impl(false, None)
+	}
+
+	/// Resolve selected structure and provenance without values or side effects.
+	pub fn resolve_without_values_filtered(
+		&self,
+		includes: &[String],
+		groups: &[String],
+	) -> Result<ResolveResponse> {
+		let selected = self.selected_secret_names(includes, groups)?;
+		self.resolve_impl(false, selected.as_ref())
+	}
+
+	fn resolve_impl(
+		&self,
+		include_values: bool,
+		selected_names: Option<&HashSet<String>>,
+	) -> Result<ResolveResponse> {
+		self.ensure_reason()?;
+		let materialize = if include_values {
+			Materialize::Values
+		} else {
+			Materialize::None
+		};
+		match self.validate_selected(selected_names, materialize)? {
+			Ok(mut validated) => {
+				if include_values {
+					validated.keep_temp_files()?;
+				}
+				let mut secrets = BTreeMap::new();
+				for entry in &validated.resolution {
+					if entry.status != ResolutionStatus::Resolved {
+						continue;
+					}
+					let source = if entry.generated {
+						ResolvedSource::Generated
+					} else if entry.default_applied {
+						ResolvedSource::Default
+					} else {
+						ResolvedSource::Provider
+					};
+					let (value, path) = if include_values {
+						let raw = validated
+							.resolved
+							.secrets
+							.get(&entry.name)
+							.expect("resolved values pass has every resolved secret")
+							.expose_secret()
+							.to_string();
+						if entry.as_path {
+							(None, Some(raw))
+						} else {
+							(Some(raw), None)
+						}
+					} else {
+						(None, None)
+					};
+					secrets.insert(
+						entry.name.clone(),
+						ResolvedSecret {
+							value,
+							path,
+							as_path: entry.as_path,
+							source,
+							source_provider: entry.source_provider.clone(),
+						},
+					);
+				}
+				let mut missing_optional = validated.missing_optional;
+				missing_optional.sort();
+				Ok(ResolveResponse {
+					schema_version: RESOLVE_SCHEMA_VERSION,
+					provider: validated.resolved.provider,
+					profile: validated.resolved.profile,
+					secrets,
+					missing_required: Vec::new(),
+					missing_optional,
+				})
+			}
+			Err(errors) => {
+				let mut missing_required = errors.missing_required;
+				missing_required.sort();
+				let mut missing_optional = errors.missing_optional;
+				missing_optional.sort();
+				Ok(ResolveResponse {
+					schema_version: RESOLVE_SCHEMA_VERSION,
+					provider: errors.provider,
+					profile: errors.profile,
+					secrets: BTreeMap::new(),
+					missing_required,
+					missing_optional,
+				})
+			}
+		}
+	}
+
+	/// Produce a stable value-free report without generation or temp files.
+	pub fn report(&self) -> Result<ResolutionReport> {
+		self.report_impl(None)
+	}
+
+	/// Produce a stable value-free report for selected secrets.
+	pub fn report_filtered(
+		&self,
+		includes: &[String],
+		groups: &[String],
+	) -> Result<ResolutionReport> {
+		let selected = self.selected_secret_names(includes, groups)?;
+		self.report_impl(selected.as_ref())
+	}
+
+	fn report_impl(&self, selected_names: Option<&HashSet<String>>) -> Result<ResolutionReport> {
+		self.ensure_reason()?;
+		Ok(
+			match self.validate_selected(selected_names, Materialize::None)? {
+				Ok(validated) => validated.report(),
+				Err(errors) => errors.report(),
+			},
+		)
+	}
+
 	/// Validates all secrets in the specification
 	///
 	/// This method checks all secrets defined in the current profile (and default
@@ -1823,18 +2184,20 @@ impl Secrets {
 	/// ```
 	pub fn validate(&self) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
 		self.ensure_reason()?;
-		self.validate_selected(None)
+		self.validate_selected(None, Materialize::Values)
 	}
 
 	fn validate_selected(
 		&self,
 		selected_names: Option<&HashSet<String>>,
+		materialize: Materialize,
 	) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
 		let mut secrets: HashMap<String, SecretString> = HashMap::new();
 		let mut missing_required = Vec::new();
 		let mut missing_optional = Vec::new();
 		let mut with_defaults = Vec::new();
 		let mut temp_files = Vec::new();
+		let mut resolution = Vec::new();
 
 		let profile_name = self.resolve_profile_name(None);
 		let profile = self.resolve_profile(Some(&profile_name))?;
@@ -1849,6 +2212,7 @@ impl Secrets {
 		let mut provider_groups: HashMap<Option<String>, Vec<String>> = HashMap::new();
 		let mut secret_primary_uris: HashMap<String, Option<String>> = HashMap::new();
 		let mut fetched_values: HashMap<String, SecretString> = HashMap::new();
+		let mut fetched_sources: HashMap<String, String> = HashMap::new();
 
 		for (name, _) in &all_secrets {
 			let secret_config = self
@@ -1882,23 +2246,28 @@ impl Secrets {
 			let provider_entries =
 				self.resolve_provider_ref_uris(secret_config.providers.as_deref())?;
 
-			if let Some(value) = self.get_secret_from_providers(
+			if let (Some(value), source) = self.get_secret_from_providers(
 				&self.config.project.name,
 				name,
 				&profile_name,
+				&secret_config,
 				provider_entries.as_deref(),
 				None,
 			)? {
 				fetched_values.insert(name.clone(), value);
+				if let Some(source) = source {
+					fetched_sources.insert(name.clone(), source);
+				}
 			}
 		}
 
-		// Batch fetch from each provider group. A failure here (e.g. an
-		// unauthenticated vault) does not abort validation: secrets that
-		// declare a fallback chain are retried per-secret below. Secrets in
-		// the failed group with no fallback to try will surface the original
-		// error instead of being silently reported as missing.
-		let mut failed_primary_uris: HashMap<Option<String>, MonosecretError> = HashMap::new();
+		// Batch fetch from each provider group. Provider construction failures
+		// apply to the group, while aggregate lookup failures are retried by
+		// address so one invalid request cannot poison healthy peers. Only the
+		// addresses that also fail individually are marked as failed.
+		let mut failed_primary_providers: HashMap<Option<String>, MonosecretError> = HashMap::new();
+		let mut failed_primary_secret_errors: HashMap<String, usize> = HashMap::new();
+		let mut primary_address_errors: Vec<Option<MonosecretError>> = Vec::new();
 
 		for (provider_uri, secret_names) in provider_groups {
 			let provider_result = if let Some(uri) = provider_uri.clone() {
@@ -1911,127 +2280,219 @@ impl Secrets {
 				Ok(p) => p,
 				Err(e) => {
 					warn_primary_provider_failure(provider_uri.as_deref(), &e);
-					failed_primary_uris.insert(provider_uri, e);
+					failed_primary_providers.insert(provider_uri, e);
 					continue;
 				}
 			};
 
-			let keys: Vec<&str> = secret_names.iter().map(String::as_str).collect();
-			match provider.get_batch(&self.config.project.name, &keys, &profile_name) {
-				Ok(batch_results) => fetched_values.extend(batch_results),
-				Err(e) => {
-					warn_primary_provider_failure(provider_uri.as_deref(), &e);
-					failed_primary_uris.insert(provider_uri, e);
+			let configs = secret_names
+				.iter()
+				.map(|name| {
+					self.resolve_secret_config(name, Some(&profile_name))
+						.map(|config| (name, config))
+						.expect("grouped secret exists in resolved profile")
+				})
+				.collect::<Vec<_>>();
+			let requests = configs
+				.iter()
+				.map(|(name, config)| {
+					let address = config.reference.as_ref().map_or_else(
+						|| Address::convention(&self.config.project.name, &profile_name, name),
+						Address::Native,
+					);
+					(name.as_str(), address)
+				})
+				.collect::<Vec<_>>();
+			let provider_source_uri = provider.uri();
+			let source_uri = redact_provider_uri(&provider_source_uri);
+			match provider.get_many(&requests) {
+				Ok(batch_results) => {
+					for name in batch_results.keys() {
+						fetched_sources.insert(name.clone(), source_uri.clone());
+					}
+					fetched_values.extend(batch_results);
+				}
+				Err(batch_error) => {
+					warn_primary_batch_failure(provider_uri.as_deref(), &batch_error);
+					let warning_uri = provider_uri.as_deref().unwrap_or(&provider_source_uri);
+
+					// Preserve `get_many`'s address deduplication and panic isolation
+					// while obtaining a result for every unique address.
+					let mut address_groups: HashMap<Address<'_>, Vec<&str>> = HashMap::new();
+					for (name, address) in requests {
+						address_groups.entry(address).or_default().push(name);
+					}
+					let retry_provider = provider.as_ref();
+					let retries = std::thread::scope(|scope| {
+						address_groups
+							.into_iter()
+							.map(|(address, names)| {
+								(
+									names,
+									scope.spawn(move || retry_provider.get_address(address)),
+								)
+							})
+							.collect::<Vec<_>>()
+							.into_iter()
+							.map(|(names, handle)| {
+								let result = handle.join().unwrap_or_else(|_| {
+									Err(MonosecretError::ProviderOperationFailed(
+										"provider fetch worker panicked".to_string(),
+									))
+								});
+								(names, result)
+							})
+							.collect::<Vec<_>>()
+					});
+
+					for (names, result) in retries {
+						match result {
+							Ok(Some(value)) => {
+								for name in names {
+									fetched_sources.insert(name.to_string(), source_uri.clone());
+									fetched_values.insert(name.to_string(), value.clone());
+								}
+							}
+							Ok(None) => {}
+							Err(error) => {
+								for name in &names {
+									warn_provider_failure(warning_uri, name, &error);
+								}
+								let error_index = primary_address_errors.len();
+								primary_address_errors.push(Some(error));
+								for name in names {
+									failed_primary_secret_errors
+										.insert(name.to_string(), error_index);
+								}
+							}
+						}
+					}
 				}
 			}
 		}
 
-		// Process results - apply defaults, handle as_path, track missing
+		// Apply the resolution waterfall while recording value-free provenance.
 		for (name, _) in all_secrets {
 			let secret_config = self
 				.resolve_secret_config(&name, Some(&profile_name))
-				.expect("Secret should exist in config since we're iterating over it");
+				.expect("secret exists in resolved profile");
 			let required = secret_config.required.unwrap_or(true);
-			let default = secret_config.default.clone();
 			let as_path = secret_config.as_path.unwrap_or(false);
+			let mut source_provider = fetched_sources.remove(&name);
+			let mut generated = false;
+			let mut default_applied = false;
+			let mut value = fetched_values.remove(&name);
 
-			if let Some(value) = fetched_values.remove(&name) {
-				if as_path {
-					// Write secret to temp file and store the path
-					let (temp_file, path_str) = Self::write_secret_to_temp_file(&value)?;
+			if value.is_none() {
+				let primary_uri = &secret_primary_uris[&name];
+				let primary_failed = failed_primary_secret_errors.contains_key(&name)
+					|| failed_primary_providers.contains_key(primary_uri);
+				let fallback = match (override_uri.as_ref(), secret_config.providers.as_deref()) {
+					(None, Some(providers)) if providers.len() > 1 => {
+						let entries = self.resolve_provider_ref_uris(Some(&providers[1..]))?;
+						self.get_secret_from_providers(
+							&self.config.project.name,
+							&name,
+							&profile_name,
+							&secret_config,
+							entries.as_deref(),
+							None,
+						)?
+					}
+					_ if primary_failed => {
+						if let Some(error_index) = failed_primary_secret_errors.remove(&name) {
+							let error = primary_address_errors
+								.get_mut(error_index)
+								.and_then(Option::take)
+								.expect("primary address failure was recorded");
+							return Err(error);
+						}
+						return Err(failed_primary_providers
+							.remove(primary_uri)
+							.expect("primary provider failure was recorded"));
+					}
+					_ => (None, None),
+				};
+				value = fallback.0;
+				if value.is_some() {
+					source_provider = fallback.1;
+				}
+			}
+
+			if value.is_none()
+				&& secret_config
+					.generate
+					.as_ref()
+					.is_some_and(crate::config::GenerateConfig::is_enabled)
+			{
+				generated = true;
+				if materialize == Materialize::Values {
+					value = self.try_generate_secret(&name, &secret_config, &profile_name)?;
+				}
+			}
+
+			if value.is_none()
+				&& !generated
+				&& let Some(default) = secret_config.default.clone()
+			{
+				default_applied = true;
+				with_defaults.push((name.clone(), default.clone()));
+				value = Some(SecretString::new(default.into()));
+			}
+
+			let status = if value.is_some() || generated {
+				ResolutionStatus::Resolved
+			} else if required {
+				missing_required.push(name.clone());
+				ResolutionStatus::MissingRequired
+			} else {
+				missing_optional.push(name.clone());
+				ResolutionStatus::MissingOptional
+			};
+
+			resolution.push(SecretResolution {
+				name: name.clone(),
+				status,
+				required,
+				source_provider,
+				default_applied,
+				generated,
+				as_path,
+			});
+
+			if let Some(value) = value {
+				if as_path && materialize == Materialize::Values {
+					let (temp_file, path) = Self::write_secret_to_temp_file(&value)?;
 					temp_files.push(temp_file);
-					secrets.insert(name.clone(), SecretString::new(path_str.into()));
+					secrets.insert(name, SecretString::new(path.into()));
 				} else {
 					secrets.insert(name, value);
-				}
-			} else {
-				let primary_uri = &secret_primary_uris[&name];
-				let primary_failed = failed_primary_uris.contains_key(primary_uri);
-
-				// An explicit override collapses the chain to one provider, so no fallback.
-				let fallback_value =
-					match (override_uri.as_ref(), secret_config.providers.as_deref()) {
-						(None, Some(providers)) if providers.len() > 1 => {
-							let fallback_entries =
-								self.resolve_provider_ref_uris(Some(&providers[1..]))?;
-							self.get_secret_from_providers(
-								&self.config.project.name,
-								&name,
-								&profile_name,
-								fallback_entries.as_deref(),
-								None,
-							)?
-						}
-						// No alternative chain to try and the primary failed: surface the
-						// original error rather than reporting the secret as merely missing.
-						_ if primary_failed => {
-							return Err(failed_primary_uris
-								.remove(primary_uri)
-								.expect("primary_failed implies entry present"));
-						}
-						_ => None,
-					};
-
-				if let Some(value) = fallback_value {
-					if as_path {
-						let (temp_file, path_str) = Self::write_secret_to_temp_file(&value)?;
-						temp_files.push(temp_file);
-						secrets.insert(name.clone(), SecretString::new(path_str.into()));
-					} else {
-						secrets.insert(name, value);
-					}
-				} else if let Some(generated) =
-					self.try_generate_secret(&name, &secret_config, &profile_name)?
-				{
-					if as_path {
-						let (temp_file, path_str) = Self::write_secret_to_temp_file(&generated)?;
-						temp_files.push(temp_file);
-						secrets.insert(name.clone(), SecretString::new(path_str.into()));
-					} else {
-						secrets.insert(name, generated);
-					}
-				} else if let Some(default_value) = default {
-					if as_path {
-						// Write default value to temp file
-						let (temp_file, path_str) = Self::write_secret_to_temp_file(
-							&SecretString::new(default_value.clone().into()),
-						)?;
-						temp_files.push(temp_file);
-						secrets.insert(name.clone(), SecretString::new(path_str.into()));
-					} else {
-						secrets.insert(
-							name.clone(),
-							SecretString::new(default_value.clone().into()),
-						);
-					}
-					with_defaults.push((name, default_value));
-				} else if required {
-					missing_required.push(name);
-				} else {
-					missing_optional.push(name);
 				}
 			}
 		}
 
-		let report_provider_uri =
-			self.validation_report_provider_uri(override_uri.as_deref(), &secret_primary_uris)?;
+		let report_provider_uri = redact_provider_uri(
+			&self.validation_report_provider_uri(override_uri.as_deref(), &secret_primary_uris)?,
+		);
 
-		// Check if there are any missing required secrets
 		if missing_required.is_empty() {
 			Ok(Ok(ValidatedSecrets {
 				resolved: Resolved::new(secrets, report_provider_uri, profile_name.clone()),
 				missing_optional,
 				with_defaults,
+				resolution,
 				temp_files,
 			}))
 		} else {
-			Ok(Err(ValidationErrors::new(
+			let mut errors = ValidationErrors::new(
 				missing_required,
 				missing_optional,
 				with_defaults,
 				report_provider_uri,
-				profile_name.clone(),
-			)))
+				profile_name,
+			);
+			errors.resolution = resolution;
+			Ok(Err(errors))
 		}
 	}
 

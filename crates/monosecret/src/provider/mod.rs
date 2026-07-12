@@ -63,6 +63,7 @@ use url::Url;
 
 use crate::MonosecretError;
 use crate::Result;
+use crate::config::NativeAddress;
 use crate::config::SecretRequest;
 
 /// Characters that are invalid in URI hosts but might appear in provider config
@@ -285,6 +286,45 @@ pub fn providers() -> Vec<ProviderInfo> {
 		.collect()
 }
 
+/// Provider-independent address passed to storage backends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Address<'a> {
+	/// Monosecret's conventional `{project}/{profile}/{key}` layout.
+	Convention {
+		project: &'a str,
+		profile: &'a str,
+		key: &'a str,
+	},
+	/// Store-native coordinates from a secret's `ref` table.
+	Native(&'a NativeAddress),
+}
+
+impl<'a> Address<'a> {
+	pub(crate) fn convention(project: &'a str, profile: &'a str, key: &'a str) -> Self {
+		Self::Convention {
+			project,
+			profile,
+			key,
+		}
+	}
+}
+
+pub(crate) fn reject_unsupported_coords(
+	provider: &str,
+	address: &NativeAddress,
+	supported: &[&str],
+) -> Result<()> {
+	for (name, value) in address.coordinates() {
+		if name != "item" && value.is_some() && !supported.contains(&name) {
+			return Err(MonosecretError::ProviderOperationFailed(format!(
+				"the {provider} provider does not support the `{name}` coordinate in ref `{}`",
+				address.render()
+			)));
+		}
+	}
+	Ok(())
+}
+
 /// Trait defining the interface for secret storage providers.
 ///
 /// All secret storage backends must implement this trait to integrate with Monosecret.
@@ -308,6 +348,116 @@ pub fn providers() -> Vec<ProviderInfo> {
 /// - Providers may choose to be read-only by overriding [`allows_set`](Provider::allows_set)
 /// - Provider names should be lowercase and descriptive
 pub trait Provider: Send + Sync {
+	/// Optional native coordinates supported in addition to the universal `item`.
+	fn supported_coords(&self) -> &'static [&'static str] {
+		&[]
+	}
+
+	/// Retrieves a secret through either conventional or native addressing.
+	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
+		match address {
+			Address::Convention {
+				project,
+				profile,
+				key,
+			} => self.get(project, key, profile),
+			Address::Native(native) => {
+				reject_unsupported_coords(self.name(), native, self.supported_coords())?;
+				self.get("", &native.item, "")
+			}
+		}
+	}
+
+	/// Writes a secret through either conventional or native addressing.
+	fn set_address(&self, address: Address<'_>, value: &SecretString) -> Result<()> {
+		self.check_writable(address)?;
+		match address {
+			Address::Convention {
+				project,
+				profile,
+				key,
+			} => self.set(project, key, value, profile),
+			Address::Native(native) => self.set("", &native.item, value, ""),
+		}
+	}
+
+	/// Verifies that an address can be written before prompting or generating.
+	fn check_writable(&self, address: Address<'_>) -> Result<()> {
+		if let Address::Native(native) = address {
+			reject_unsupported_coords(self.name(), native, self.supported_coords())?;
+		}
+		if self.allows_set() {
+			Ok(())
+		} else {
+			Err(MonosecretError::ProviderOperationFailed(format!(
+				"Provider '{}' is read-only and does not support setting values",
+				self.name()
+			)))
+		}
+	}
+
+	/// Retrieves named addresses, deduplicating coordinates and fetching unique
+	/// addresses concurrently. Providers retain their existing optimized
+	/// convention-only `get_batch` API for backwards compatibility.
+	fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+		// Preserve provider-specific bulk APIs for the conventional homogeneous
+		// case (AWS chunks, 1Password/BWS/Proton listings, cached env reads).
+		if let Some((
+			_,
+			Address::Convention {
+				project, profile, ..
+			},
+		)) = requests.first()
+			&& requests.iter().all(|(name, address)| {
+				matches!(
+					address,
+					Address::Convention {
+						project: candidate_project,
+						profile: candidate_profile,
+						key,
+					} if candidate_project == project && candidate_profile == profile && key == name
+				)
+			}) {
+			let keys = requests.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+			return self.get_batch(project, &keys, profile);
+		}
+
+		let mut groups: HashMap<Address<'_>, Vec<&str>> = HashMap::new();
+		for (name, address) in requests {
+			groups.entry(*address).or_default().push(name);
+		}
+
+		let fetched = std::thread::scope(|scope| {
+			groups
+				.into_iter()
+				.map(|(address, names)| {
+					let handle = scope.spawn(move || self.get_address(address));
+					(names, handle)
+				})
+				.collect::<Vec<_>>()
+				.into_iter()
+				.map(|(names, handle)| {
+					let result = handle.join().map_err(|_| {
+						MonosecretError::ProviderOperationFailed(
+							"provider fetch worker panicked".to_string(),
+						)
+					})?;
+					Ok((names, result?))
+				})
+				.collect::<Result<Vec<_>>>()
+		})?;
+
+		let mut values = HashMap::new();
+		for (names, value) in fetched {
+			if let Some(value) = value {
+				for name in names {
+					values.insert(name.to_string(), value.clone());
+				}
+			}
+		}
+		Ok(values)
+	}
+
 	/// Retrieves a secret value from the provider.
 	///
 	/// # Arguments
@@ -512,6 +662,26 @@ pub trait Provider: Send + Sync {
 }
 
 impl<T: Provider> Provider for std::sync::Arc<T> {
+	fn supported_coords(&self) -> &'static [&'static str] {
+		(**self).supported_coords()
+	}
+
+	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
+		(**self).get_address(address)
+	}
+
+	fn set_address(&self, address: Address<'_>, value: &SecretString) -> Result<()> {
+		(**self).set_address(address, value)
+	}
+
+	fn check_writable(&self, address: Address<'_>) -> Result<()> {
+		(**self).check_writable(address)
+	}
+
+	fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+		(**self).get_many(requests)
+	}
+
 	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
 		(**self).get(project, key, profile)
 	}
@@ -600,6 +770,29 @@ impl PreflightGuard {
 }
 
 impl Provider for PreflightGuard {
+	fn supported_coords(&self) -> &'static [&'static str] {
+		self.inner.supported_coords()
+	}
+
+	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
+		self.check()?;
+		self.inner.get_address(address)
+	}
+
+	fn set_address(&self, address: Address<'_>, value: &SecretString) -> Result<()> {
+		self.check()?;
+		self.inner.set_address(address, value)
+	}
+
+	fn check_writable(&self, address: Address<'_>) -> Result<()> {
+		self.inner.check_writable(address)
+	}
+
+	fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+		self.check()?;
+		self.inner.get_many(requests)
+	}
+
 	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
 		self.check()?;
 		self.inner.get(project, key, profile)

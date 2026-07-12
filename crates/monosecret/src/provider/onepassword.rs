@@ -9,6 +9,7 @@ use serde::Serialize;
 use crate::MonosecretError;
 use crate::Result;
 use crate::config::SecretRequest;
+use crate::provider::Address;
 use crate::provider::Provider;
 use crate::provider::ProviderUrl;
 
@@ -837,6 +838,117 @@ impl OnePasswordProvider {
 }
 
 impl Provider for OnePasswordProvider {
+	fn supported_coords(&self) -> &'static [&'static str] {
+		&["field", "vault", "section"]
+	}
+
+	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
+		let Address::Native(native) = address else {
+			return match address {
+				Address::Convention {
+					project,
+					profile,
+					key,
+				} => self.get(project, key, profile),
+				Address::Native(_) => unreachable!(),
+			};
+		};
+		crate::provider::reject_unsupported_coords(self.name(), native, self.supported_coords())?;
+		if native.version.is_some() {
+			return Err(MonosecretError::ProviderOperationFailed(
+				"the onepassword provider does not support the `version` coordinate".into(),
+			));
+		}
+		let vault = native
+			.vault
+			.clone()
+			.unwrap_or_else(|| self.get_vault_name("default"));
+		if let Some(field) = native.field.as_deref() {
+			let mut reference = format!(
+				"op://{}/{}",
+				ProviderUrl::encode(&vault),
+				ProviderUrl::encode(&native.item)
+			);
+			if let Some(section) = native.section.as_deref() {
+				reference.push('/');
+				reference.push_str(&ProviderUrl::encode(section));
+			}
+			reference.push('/');
+			reference.push_str(&ProviderUrl::encode(field));
+			return match self.execute_op_command(&["read", &reference], None) {
+				Ok(output) => {
+					Ok(Some(SecretString::new(
+						output.trim_end_matches(['\r', '\n']).to_string().into(),
+					)))
+				}
+				Err(MonosecretError::ProviderOperationFailed(message))
+					if Self::native_missing_message(&message) =>
+				{
+					Ok(None)
+				}
+				Err(error) => Err(error),
+			};
+		}
+		if native.section.is_some() {
+			return Err(MonosecretError::ProviderOperationFailed(
+				"the onepassword `section` coordinate requires `field`".into(),
+			));
+		}
+		let args = [
+			"item",
+			"get",
+			native.item.as_str(),
+			"--vault",
+			vault.as_str(),
+			"--format",
+			"json",
+		];
+		match self.execute_op_command(&args, None) {
+			Ok(output) => Self::extract_value_from_item(&output),
+			Err(MonosecretError::ProviderOperationFailed(message))
+				if Self::native_missing_message(&message) =>
+			{
+				Ok(None)
+			}
+			Err(error) => Err(error),
+		}
+	}
+
+	fn set_address(&self, address: Address<'_>, value: &SecretString) -> Result<()> {
+		let Address::Native(native) = address else {
+			return match address {
+				Address::Convention {
+					project,
+					profile,
+					key,
+				} => self.set(project, key, value, profile),
+				Address::Native(_) => unreachable!(),
+			};
+		};
+		crate::provider::reject_unsupported_coords(self.name(), native, self.supported_coords())?;
+		let vault = native
+			.vault
+			.clone()
+			.unwrap_or_else(|| self.get_vault_name("default"));
+		let field = native.field.as_deref().unwrap_or("value");
+		let assignment = match native.section.as_deref() {
+			Some(section) => format!("{section}.{field}[concealed]={}", value.expose_secret()),
+			None => format!("{field}[concealed]={}", value.expose_secret()),
+		};
+		self.execute_op_command(
+			&[
+				"item",
+				"edit",
+				native.item.as_str(),
+				"--vault",
+				vault.as_str(),
+				assignment.as_str(),
+			],
+			None,
+		)
+		.map(|_| ())
+	}
+
 	fn configure_dependency_secrets(
 		&mut self,
 		dependencies: &[(String, SecretString)],

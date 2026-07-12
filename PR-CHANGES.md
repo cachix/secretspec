@@ -1,5 +1,11 @@
 # PR: Provider-Relative Secret Locations, Structured Configs & 1Password Environments
 
+> [!NOTE]
+> This file preserves historical upstream SecretSpec design notes for attribution.
+> It does not describe current Monosecret names, paths, or APIs. See the
+> [current configuration reference](https://ifiokjr.github.io/monosecret/reference/configuration/)
+> for supported usage.
+
 **Branch:** `feat/provider-secret-locations`  
 **Commits:** 3  
 **Files changed:** 12 files / +2,006 lines / −83 lines

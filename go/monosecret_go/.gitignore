@@ -1,0 +1,7 @@
+# Per-platform native artifacts are staged here for local
+# `-tags monosecret_embed` (cdylibs) and `-tags monosecret_static` (.a archives,
+# the vendored header, and generated cgo LDFLAGS) builds. They are never
+# committed.
+lib/
+include/
+cgo_ldflags_*.go

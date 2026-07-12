@@ -258,6 +258,111 @@ providers = [{ provider = "op", path = ["forges"] }]
 # Reads op://Development/dotfiles/forges/GITHUB_TOKEN
 ```
 
+### Secret References
+
+The `ref` field names one externally managed secret by the store's own
+coordinates instead of Monosecret's `{project}/{profile}/{key}` convention. See
+[Secret References](/concepts/references/) for the concept, model, and examples;
+this section is the specification.
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "Postgres DSN", ref = { item = "db", field = "password" }, providers = [
+  "prod_vault",
+] }
+INFRA_TOKEN = { description = "Infra token", ref = { vault = "Production", item = "infra", field = "token" } }
+GITHUB_TOKEN = { description = "GitHub token", ref = { item = "GITHUB_PAT" }, providers = [
+  "env",
+] }
+```
+
+`ref` is a table of provider-independent coordinates. Unknown keys are rejected
+at parse time. Only `item` is universal; it is the secret's complete name in the
+store and replaces the whole convention path, including any `folder_prefix` or
+format string configured for the provider. A coordinate a store has no equivalent
+for is rejected with an error naming it, never silently ignored.
+
+| Coordinate | Required | Meaning                                                                                                       |
+| ---------- | -------- | ------------------------------------------------------------------------------------------------------------- |
+| `item`     | Yes      | The store's complete name for the secret; replaces the whole convention path                                  |
+| `field`    | No       | A named component inside the item; rejected by stores whose secrets hold a single value                       |
+| `vault`    | No       | The container holding the item; 1Password only, while other stores take their container from the provider URI |
+| `section`  | No       | A named group of fields inside the item; 1Password only and requires `field`                                  |
+| `version`  | No       | Which revision to read; Google Secret Manager only and defaults to the latest                                 |
+
+Stores fall into two groups for `field`:
+
+| Store                                               | Shape of one secret     | `field`                                                |
+| --------------------------------------------------- | ----------------------- | ------------------------------------------------------ |
+| dotenv, env, pass, LastPass, Proton Pass, Bitwarden | A single value          | Rejected: there is nothing to select                   |
+| 1Password, Vault KV, AWS Secrets Manager, keyring   | A record of named parts | Selects the field label, map key, JSON key, or account |
+
+`vault` is the only container coordinate. For every store except 1Password, the
+container is part of the provider URI rather than the ref:
+
+```toml
+# The mount `kv2` comes from the URI; the ref names the path inside it.
+DB = { description = "DB", ref = { item = "myapp/config", field = "pw" }, providers = [
+  "vault://vault.example.com:8200/kv2",
+] }
+
+# On 1Password, `vault` on the ref overrides the URI's default vault.
+TOKEN = { description = "Token", ref = { vault = "Production", item = "infra", field = "token" }, providers = [
+  "onepassword://Private",
+] }
+```
+
+Which provider resolves a `ref` follows the ordinary [provider resolution order](/concepts/providers/). A `ref` composes with the `providers` fallback
+chain, and each provider is asked for the same coordinates.
+
+#### How providers interpret the coordinates
+
+| Provider                                                   | `item`                            | `field`                                  | Without `field`                          | Writes via ref                                             |
+| ---------------------------------------------------------- | --------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------------------------- |
+| [OnePassword](/providers/onepassword/#secret-references)   | Item title or UUID                | Field label; `vault` and `section` apply | Reads the item's value or password field | ✅ via `op item edit`; adds fields but never creates items |
+| [keyring](/providers/keyring/#secret-references)           | Service                           | Account                                  | Current user's entry                     | ✅                                                         |
+| [dotenv](/providers/dotenv/#secret-references)             | `.env` key                        | Rejected                                 | Reads the key                            | ✅                                                         |
+| [env](/providers/env/#secret-references)                   | Variable name                     | Rejected                                 | Reads the variable                       | — (read-only)                                              |
+| [pass](/providers/pass/#secret-references)                 | Entry path                        | Rejected                                 | Reads the entry                          | ✅                                                         |
+| [LastPass](/providers/lastpass/#secret-references)         | Item name                         | Rejected                                 | Reads the item                           | ✅                                                         |
+| [Proton Pass](/providers/protonpass/#secret-references)    | Item title                        | Rejected                                 | Reads the note                           | ✅                                                         |
+| [Vault / OpenBao](/providers/vault/#secret-references)     | KV path relative to the mount     | Required                                 | Error                                    | — (read-only)                                              |
+| [AWS Secrets Manager](/providers/awssm/#secret-references) | Secret name or ARN                | JSON key                                 | Whole secret string                      | — (read-only)                                              |
+| [GCSM](/providers/gcsm/#secret-references)                 | Secret id; `version` also applies | Rejected                                 | Reads latest or the pinned version       | — (read-only)                                              |
+| [Bitwarden (bws)](/providers/bws/#secret-references)       | BWS key name                      | Rejected                                 | Reads the key                            | ✅                                                         |
+
+A provider rejects coordinates it has no equivalent for, with an error naming
+the coordinate (for example, `field` on the env provider).
+
+#### Writing through a ref
+
+Writes are symmetric with reads: `monosecret set` and interactive `check`
+prompting write through the coordinates in place wherever the table above says
+writes are supported. Read-only stores fail with a clear error instead.
+
+#### No string refs
+
+`ref` is always a table. String and URI forms (`ref = "op://vault/item/field"`,
+`ref = "env://VAR"`, query-parameter URIs, and similar) are rejected, and the
+error spells out the exact table translation. For example, a pasted 1Password
+reference `op://Production/infra/token` translates to:
+
+```toml
+INFRA_TOKEN = { description = "Infra token", ref = { vault = "Production", item = "infra", field = "token" }, providers = [
+  "onepassword://Production",
+] }
+```
+
+Provider URIs remain store addresses; the `ref` table provides the complete
+native coordinates for the secret.
+
+#### Deduplication, auditing, and reporting
+
+- Secrets sharing identical coordinates and store are fetched once.
+- [Audit log](/concepts/audit/) events carry a `ref` field with the coordinates.
+- `check --explain` and `check --json` attribute ref secrets to the store URI
+  they resolved from.
+
 ### Structured Provider Configs with Dependencies
 
 Project-level `[providers]` entries can also be tables with an optional
@@ -287,17 +392,17 @@ Each entry under `depends_on` has:
 
 ### Audit Logging
 
-secretspec records every secret access to a local [audit log](/concepts/audit/).
+Monosecret records every secret access to a local [audit log](/concepts/audit/).
 Auditing is a per-machine/operator concern — where the log lives and whether it is
 on — so it is configured in the **user-global config**, not the project's
-`secretspec.toml`. A cloned repository therefore cannot redirect or silence your
+`monosecret.toml`. A cloned repository therefore cannot redirect or silence your
 audit log. Auditing is **on by default**; configure it under the top-level
 `[audit]` table:
 
-```toml title="~/.config/secretspec/config.toml"
+```toml title="~/.config/monosecret/config.toml"
 [audit]
 enabled = true                               # set false to turn auditing off
-path = "~/.local/state/secretspec/audit.log" # default: per-user XDG state dir
+path = "~/.local/state/monosecret/audit.log" # default: per-user XDG state dir
 max_size_bytes = 1048576                     # default: 1 MiB
 ```
 

@@ -245,6 +245,7 @@ fn test_validation_result_structure() {
 		resolved: Resolved::new(HashMap::new(), "keyring".to_string(), "default".to_string()),
 		missing_optional: vec!["optional_secret".to_string()],
 		with_defaults: Vec::new(),
+		resolution: Vec::new(),
 		temp_files: Vec::new(),
 	};
 	assert_eq!(valid_result.missing_optional.len(), 1);
@@ -4224,6 +4225,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
 			default: None,
 			providers: None,
 			groups: None,
+			reference: None,
 			as_path: None,
 			secret_type: Some("password".to_string()),
 			generate: Some(crate::config::GenerateConfig::Bool(true)),
@@ -6031,6 +6033,208 @@ SOURCE_TOKEN = {{ providers = ["source"] }}
 				"RENAMED_TOKEN".to_string(),
 				"resolved-token".to_string()
 			)]]
+		);
+	}
+}
+
+mod native_batch_failure_isolation_tests {
+	use secrecy::SecretString;
+
+	use super::*;
+	use crate::config::NativeAddress;
+	use crate::provider::Provider;
+	use crate::provider::ProviderUrl;
+
+	#[derive(Clone, Copy)]
+	enum ProviderMode {
+		Primary,
+		Fallback,
+	}
+
+	#[derive(Clone, Copy)]
+	struct BatchIsolationConfig {
+		mode: ProviderMode,
+	}
+
+	impl TryFrom<&ProviderUrl> for BatchIsolationConfig {
+		type Error = MonosecretError;
+
+		fn try_from(url: &ProviderUrl) -> Result<Self> {
+			let mode = match url.host().as_deref() {
+				Some("primary") => ProviderMode::Primary,
+				Some("fallback") => ProviderMode::Fallback,
+				other => {
+					return Err(MonosecretError::ProviderOperationFailed(format!(
+						"unexpected batch isolation provider mode: {other:?}"
+					)));
+				}
+			};
+			Ok(Self { mode })
+		}
+	}
+
+	struct BatchIsolationProvider {
+		mode: ProviderMode,
+	}
+
+	impl BatchIsolationProvider {
+		fn new(config: BatchIsolationConfig) -> Self {
+			let BatchIsolationConfig { mode } = config;
+			Self { mode }
+		}
+	}
+
+	crate::register_provider! {
+		struct: BatchIsolationProvider,
+		config: BatchIsolationConfig,
+		name: "batch-isolation-test",
+		description: "Native batch failure isolation test provider",
+		schemes: ["batch-isolation-test"],
+		examples: ["batch-isolation-test://primary"],
+	}
+
+	impl Provider for BatchIsolationProvider {
+		fn supported_coords(&self) -> &'static [&'static str] {
+			match self.mode {
+				ProviderMode::Primary => &[],
+				ProviderMode::Fallback => &["field"],
+			}
+		}
+
+		fn get(&self, _project: &str, key: &str, _profile: &str) -> Result<Option<SecretString>> {
+			let value = match (self.mode, key) {
+				(ProviderMode::Primary, "healthy-native") => Some("from-primary"),
+				(ProviderMode::Fallback, "needs-fallback") => Some("from-fallback"),
+				_ => None,
+			};
+			Ok(value.map(|value| SecretString::new(value.into())))
+		}
+
+		fn set(
+			&self,
+			_project: &str,
+			_key: &str,
+			_value: &SecretString,
+			_profile: &str,
+		) -> Result<()> {
+			Ok(())
+		}
+
+		fn name(&self) -> &'static str {
+			Self::PROVIDER_NAME
+		}
+
+		fn uri(&self) -> String {
+			match self.mode {
+				ProviderMode::Primary => "batch-isolation-test://primary".to_string(),
+				ProviderMode::Fallback => "batch-isolation-test://fallback".to_string(),
+			}
+		}
+	}
+
+	fn secret(reference: NativeAddress, providers: &[&str]) -> Secret {
+		Secret {
+			required: Some(true),
+			providers: Some(providers.iter().copied().map(ProviderRef::from).collect()),
+			reference: Some(reference),
+			..Default::default()
+		}
+	}
+
+	fn secrets_with_unsupported_ref(providers: &[&str]) -> Secrets {
+		let mut profile_secrets = HashMap::new();
+		profile_secrets.insert(
+			"HEALTHY".to_string(),
+			secret(
+				NativeAddress {
+					item: "healthy-native".to_string(),
+					..Default::default()
+				},
+				&["primary"],
+			),
+		);
+		profile_secrets.insert(
+			"UNSUPPORTED".to_string(),
+			secret(
+				NativeAddress {
+					item: "needs-fallback".to_string(),
+					field: Some("password".to_string()),
+					..Default::default()
+				},
+				providers,
+			),
+		);
+
+		let mut profiles = HashMap::new();
+		profiles.insert(
+			"default".to_string(),
+			Profile {
+				defaults: None,
+				secrets: profile_secrets,
+			},
+		);
+
+		let mut provider_aliases = HashMap::new();
+		provider_aliases.insert(
+			"primary".to_string(),
+			"batch-isolation-test://primary".into(),
+		);
+		provider_aliases.insert(
+			"fallback".to_string(),
+			"batch-isolation-test://fallback".into(),
+		);
+
+		Secrets::new(
+			Config {
+				project: Project {
+					name: "native-batch-isolation".to_string(),
+					revision: "1.0".to_string(),
+					extends: None,
+					require_reason: None,
+				},
+				profiles,
+				providers: None,
+				groups: None,
+			},
+			Some(GlobalConfig {
+				audit: None,
+				defaults: GlobalDefaults {
+					provider: None,
+					profile: None,
+					providers: Some(provider_aliases),
+				},
+			}),
+			None,
+			None,
+		)
+	}
+
+	#[test]
+	fn aggregate_native_failure_is_isolated_and_fallback_remains_usable() {
+		let resolved = secrets_with_unsupported_ref(&["primary", "fallback"])
+			.validate()
+			.expect("isolated primary error should not abort validation")
+			.expect("both required secrets should resolve")
+			.resolved;
+
+		assert_eq!(resolved.secrets["HEALTHY"].expose_secret(), "from-primary");
+		assert_eq!(
+			resolved.secrets["UNSUPPORTED"].expose_secret(),
+			"from-fallback"
+		);
+	}
+
+	#[test]
+	fn isolated_native_failure_surfaces_without_fallback() {
+		let Err(error) = secrets_with_unsupported_ref(&["primary"]).validate() else {
+			panic!("unsupported primary ref without fallback must surface");
+		};
+
+		assert!(
+			error
+				.to_string()
+				.contains("does not support the `field` coordinate"),
+			"unexpected error: {error}"
 		);
 	}
 }

@@ -32,20 +32,32 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            ffi_library: libmonosecret_ffi.so
+            ffi_extension: so
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
+            ffi_library: libmonosecret_ffi.so
+            ffi_extension: so
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
           - target: x86_64-apple-darwin
             os: macos-26
+            ffi_library: libmonosecret_ffi.dylib
+            ffi_extension: dylib
           - target: aarch64-apple-darwin
             os: macos-14
+            ffi_library: libmonosecret_ffi.dylib
+            ffi_extension: dylib
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+            ffi_library: monosecret_ffi.dll
+            ffi_extension: dll
           - target: aarch64-pc-windows-msvc
             os: windows-latest
+            ffi_library: monosecret_ffi.dll
+            ffi_extension: dll
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -91,6 +103,41 @@ jobs:
           zip: windows
           token: ${{ secrets.GITHUB_TOKEN }}
           checksum: sha256,sha512
+      - name: build and upload C ABI
+        if: matrix.ffi_library
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FFI_EXTENSION: ${{ matrix.ffi_extension }}
+          FFI_LIBRARY: ${{ matrix.ffi_library }}
+          RUST_TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +stable build --locked --release -p monosecret_ffi --target "$RUST_TARGET"
+
+          asset_dir="$RUNNER_TEMP/monosecret-ffi-assets"
+          stem="monosecret-ffi-${RUST_TARGET}-${RELEASE_TAG}"
+          payload="${stem}.${FFI_EXTENSION}"
+          mkdir -p "$asset_dir"
+          cp "target/${RUST_TARGET}/release/${FFI_LIBRARY}" "$asset_dir/$payload"
+
+          (
+            cd "$asset_dir"
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$payload" > "${stem}.sha256"
+              sha512sum "$payload" > "${stem}.sha512"
+            else
+              shasum -a 256 "$payload" > "${stem}.sha256"
+              shasum -a 512 "$payload" > "${stem}.sha512"
+            fi
+          )
+
+          gh release upload "$RELEASE_TAG" \
+            "$asset_dir/$payload" \
+            "$asset_dir/${stem}.sha256" \
+            "$asset_dir/${stem}.sha512" \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"
 
   attest_assets:
     if: >-
@@ -106,6 +153,11 @@ jobs:
     env:
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
+      - name: checkout release tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
       - name: download all release archives for attestation
         env:
           GH_TOKEN: ${{ github.token }}
@@ -125,6 +177,7 @@ jobs:
             exit 1
           fi
           sha256sum "$asset_dir"/*
+          bash scripts/release/verify-ffi-assets.sh "$asset_dir" "$RELEASE_TAG"
       - name: attest all release archives
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:

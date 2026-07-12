@@ -44,6 +44,11 @@ changelog = { path = "crates/monosecret/CHANGELOG.md", format = "keep_a_changelo
 path = "crates/monosecret_derive"
 changelog = { path = "crates/monosecret_derive/CHANGELOG.md", format = "keep_a_changelog" }
 
+[package."rust:monosecret_ffi"]
+path = "crates/monosecret_ffi"
+changelog = false
+publish = { enabled = false }
+
 [package."@monosecret/cli"]
 type = "npm"
 path = "npm/monosecret__cli"
@@ -51,6 +56,33 @@ path = "npm/monosecret__cli"
 [package."@monosecret/client"]
 type = "npm"
 path = "npm/monosecret__client"
+# Keep the canonical client versioned, but do not publish a manifest whose
+# optional native packages are unavailable while native distribution is deferred.
+publish = { enabled = false }
+
+[package."@monosecret/client-darwin-arm64"]
+type = "npm"
+path = "npm/monosecret__client-darwin-arm64"
+changelog = false
+publish = { enabled = false }
+
+[package."@monosecret/client-linux-arm64-gnu"]
+type = "npm"
+path = "npm/monosecret__client-linux-arm64-gnu"
+changelog = false
+publish = { enabled = false }
+
+[package."@monosecret/client-linux-x64-gnu"]
+type = "npm"
+path = "npm/monosecret__client-linux-x64-gnu"
+changelog = false
+publish = { enabled = false }
+
+[package."@monosecret/client-win32-x64-msvc"]
+type = "npm"
+path = "npm/monosecret__client-win32-x64-msvc"
+changelog = false
+publish = { enabled = false }
 
 [package."@monosecret/skill"]
 type = "npm"
@@ -109,8 +141,13 @@ changelog = { path = "dart/monosecret_builder/CHANGELOG.md", format = "keep_a_ch
 packages = [
   "rust:monosecret",
   "rust:monosecret_derive",
+  "rust:monosecret_ffi",
   "@monosecret/cli",
   "@monosecret/client",
+  "@monosecret/client-darwin-arm64",
+  "@monosecret/client-linux-arm64-gnu",
+  "@monosecret/client-linux-x64-gnu",
+  "@monosecret/client-win32-x64-msvc",
   "@monosecret/skill",
   "@monosecret/cli-darwin-arm64",
   "@monosecret/cli-darwin-x64",
@@ -131,6 +168,10 @@ versioned_files = [
   { path = "Cargo.toml", type = "cargo", fields = [
     "workspace.package.version",
   ] },
+  { path = "python/monosecret_py/pyproject.toml", regex = 'version = "(?<version>[0-9]+[.][0-9]+[.][0-9]+[^\"]*)"' },
+  { path = "ruby/monosecret_rb/monosecret_rb.gemspec", regex = 'spec[.]version *= *"(?<version>[0-9]+[.][0-9]+[.][0-9]+[^\"]*)"' },
+  { path = "haskell/monosecret_hs/monosecret.cabal", regex = 'version: *(?<version>[0-9]+[.][0-9]+[.][0-9]+)' },
+  { path = "dart/monosecret/lib/src/version.dart", regex = "const monosecretVersion = '(?<version>[^']+)';" },
 ]
 
 [ecosystems.crates]

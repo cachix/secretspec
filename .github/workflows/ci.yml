@@ -94,7 +94,12 @@ jobs:
         run: cargo test --all --all-features --locked
         shell: devenv shell -- bash -e {0}
       - name: dart tests
-        run: dart run melos exec --fail-fast -- dart test
+        run: |
+          cargo build -p monosecret_ffi
+          dart run melos exec --fail-fast -- dart test
+        shell: devenv shell -- bash -e {0}
+      - name: native language SDK tests
+        run: bash scripts/ci-sdks.sh
         shell: devenv shell -- bash -e {0}
 
   build:
@@ -149,9 +154,12 @@ jobs:
         shell: devenv shell -- bash -e {0}
       - name: npm package dry-run
         run: |
-          for package in npm/monosecret__cli npm/monosecret__client npm/monosecret__skill npm/monosecret__cli-*; do
-            npm --prefix "$package" pack --dry-run
+          for package in npm/monosecret__cli npm/monosecret__client npm/monosecret__skill npm/monosecret__cli-* npm/monosecret__client-*; do
+            (cd "$package" && npm pack --dry-run)
           done
+        shell: devenv shell -- bash -e {0}
+      - name: native SDK non-publishing package checks
+        run: package:sdks:check
         shell: devenv shell -- bash -e {0}
       - name: dart publish dry-run
         run: |
@@ -185,6 +193,7 @@ jobs:
       - name: dart coverage
         run: |
           dart pub get
+          cargo build -p monosecret_ffi
           dart run melos exec --fail-fast -- dart test --coverage=coverage
           for package in dart/monosecret dart/monosecret_builder; do
             (

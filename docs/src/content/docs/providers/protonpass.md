@@ -35,6 +35,20 @@ protonpass://Work
 protonpass://Work/{project}/{profile}/{key}
 ```
 
+## Secret References
+
+By default each secret maps to an item titled `{project}/{profile}/{key}`. A
+secret's [`ref`](/reference/configuration/#secret-references) field names an
+existing item instead: `item` is the exact item title, whose note is read
+(`field` is not supported). Reads and writes target that item in place.
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "DB", ref = { item = "Production Database" }, providers = [
+  "protonpass://Work",
+] }
+```
+
 ## Usage
 
 ```bash
@@ -69,23 +83,24 @@ $ monosecret run -- deploy
 
 `pass-cli` 2.1.0 introduced agent sessions, which require a
 `PROTON_PASS_AGENT_REASON` to be set for audited item operations (reading,
-creating, and deleting items). SecretSpec sets this automatically, so existing
+creating, and deleting items). Monosecret sets this automatically, so existing
 secrets resolve correctly under an agent session.
 
 The reason recorded in the Proton Pass audit log is resolved in this order:
 
-1. The `--reason` flag (or `SECRETSPEC_REASON` environment variable):
+1. The `--reason` flag (or `MONOSECRET_REASON` environment variable; legacy:
+   `SECRETSPEC_REASON`):
 
    ```bash
-   $ secretspec run --reason "Deploying app from CI" -- ./deploy.sh
+   $ monosecret run --reason "Deploying app from CI" -- ./deploy.sh
    ```
 
    When using the Rust SDK, set it for the session with `with_reason`:
 
    ```rust
-   use secretspec::Secrets;
+   use monosecret::Secrets;
 
-   let spec = Secrets::load()?.with_reason("Deploying app from CI");
+   let secrets = Secrets::load()?.with_reason("Deploying app from CI");
    ```
 
 2. The `PROTON_PASS_AGENT_REASON` environment variable read by `pass-cli`:
@@ -94,11 +109,12 @@ The reason recorded in the Proton Pass audit log is resolved in this order:
    $ export PROTON_PASS_AGENT_REASON="Deploying app from CI"
    ```
 
-3. A default that identifies the secretspec version (e.g. `secretspec/0.11.0 (https://secretspec.dev)`).
+3. A default that identifies the Monosecret version (for example,
+   `monosecret/0.1.0 (https://ifiokjr.github.io/monosecret/)`).
 
 To force a meaningful reason instead of falling back to the default, use the
 [`require_reason`](/reference/configuration/#requiring-a-reason-for-secret-access)
-policy in `secretspec.toml`. It defaults to `"agents"`, so AI agents must always
+policy in `monosecret.toml`. It defaults to `"agents"`, so AI agents must always
 explain why they read a secret (humans are unaffected); set it to `true` to require
-a reason from every caller. secretspec then refuses any access that does not supply
+a reason from every caller. Monosecret then refuses any access that does not supply
 an explicit reason.

@@ -2,3 +2,4 @@
 channel = "nightly-2026-06-29"
 components = ["clippy", "rustfmt"]
 profile = "default"
+targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]

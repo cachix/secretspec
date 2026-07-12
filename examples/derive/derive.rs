@@ -1,5 +1,5 @@
 // Use the proc macro to generate typed structs from monosecret.toml
-// This generates: Monosecret, MonosecretProfile, Profile, and Provider types
+// This generates: Monosecret, MonosecretProfile, Profile, and MonosecretBuilder types
 monosecret_derive::declare_secrets!("monosecret.toml");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -134,6 +134,21 @@ enum Commands {
 		/// Don't prompt for missing secrets (exit with error if any are missing)
 		#[arg(short = 'n', long)]
 		no_prompt: bool,
+		/// Print the value-free resolution report as JSON.
+		#[arg(long, conflicts_with = "explain")]
+		json: bool,
+		/// Print a value-free human-readable resolution trace.
+		#[arg(long)]
+		explain: bool,
+	},
+	/// Emit JSON Schema for the union or one profile's typed shape.
+	Schema {
+		/// Emit only this profile's exact fields.
+		#[arg(short = 'P', long)]
+		profile: Option<String>,
+		/// Write to a file instead of stdout.
+		#[arg(short, long)]
+		output: Option<PathBuf>,
 	},
 	/// Init or show ~/.config/monosecret/config.toml
 	Config {
@@ -1067,6 +1082,8 @@ pub fn main() -> Result<()> {
 			provider,
 			profile,
 			no_prompt,
+			json,
+			explain,
 		} => {
 			let mut app = load_secrets(cli.file.as_ref(), cli.reason.as_deref())?;
 			if let Some(p) = provider {
@@ -1074,6 +1091,26 @@ pub fn main() -> Result<()> {
 			}
 			if let Some(p) = profile {
 				app.set_profile(p);
+			}
+			if json || explain {
+				let report = app
+					.report()
+					.into_diagnostic()
+					.wrap_err("Failed to resolve secrets")?;
+				if json {
+					println!(
+						"{}",
+						serde_json::to_string_pretty(&report)
+							.into_diagnostic()
+							.wrap_err("Failed to serialize resolution report")?
+					);
+				} else {
+					print!("{}", report.to_explain_string());
+				}
+				if !report.all_required_present() {
+					return Err(miette!("required secrets are missing"));
+				}
+				return Ok(());
 			}
 			let mut validated = app
 				.check(no_prompt)
@@ -1084,6 +1121,21 @@ pub fn main() -> Result<()> {
 				.keep_temp_files()
 				.into_diagnostic()
 				.wrap_err("Failed to persist temporary files")?;
+			Ok(())
+		}
+		Commands::Schema { profile, output } => {
+			let app = load_secrets(cli.file.as_ref(), cli.reason.as_deref())?;
+			let ir = crate::codegen::build_ir(app.config());
+			let schema = crate::codegen::schema::emit(&ir, profile.as_deref())
+				.map_err(|error| miette!("{error}"))?;
+			match output {
+				Some(path) => {
+					fs::write(&path, schema)
+						.into_diagnostic()
+						.wrap_err_with(|| format!("Failed to write {}", path.display()))?;
+				}
+				None => print!("{schema}"),
+			}
 			Ok(())
 		}
 		// Import secrets from one provider to another

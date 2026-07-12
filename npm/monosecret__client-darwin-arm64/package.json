@@ -1,0 +1,24 @@
+{
+  "name": "@monosecret/client-darwin-arm64",
+  "version": "0.1.0",
+  "private": true,
+  "cpu": [
+    "arm64"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "main": "monosecret-client.darwin-arm64.node",
+  "files": [
+    "monosecret-client.darwin-arm64.node",
+    "README.md"
+  ],
+  "description": "Native resolver for @monosecret/client on darwin-arm64",
+  "homepage": "https://github.com/ifiokjr/monosecret",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/ifiokjr/monosecret/tree/main/npm/monosecret__client-darwin-arm64",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

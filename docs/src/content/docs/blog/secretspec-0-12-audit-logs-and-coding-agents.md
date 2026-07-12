@@ -6,6 +6,12 @@ authors:
   - domen
 ---
 
+:::caution[Historical upstream article]
+This article is preserved from the upstream SecretSpec 0.12 release. For current
+usage, use `monosecret`, `monosecret.toml`, and `MONOSECRET_*`; see the
+[Monosecret audit documentation](/concepts/audit/).
+:::
+
 A coding agent reaches for the same secrets you do, but on its own initiative and
 many times a session: a read looks identical whether it came from you running a
 deploy or an agent exploring the codebase.

@@ -65,7 +65,7 @@ To reduce repetition when multiple secrets in a profile share the same settings,
 
 ```toml
 [providers]
-prod_vault = "onepassword://vault/Production"
+prod_vault = "onepassword://Production"
 keyring = "keyring://"
 
 [profiles.production.defaults]

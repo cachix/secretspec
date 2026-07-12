@@ -1,0 +1,30 @@
+[package]
+name = "monosecret_ffi"
+version.workspace = true
+edition.workspace = true
+repository = "https://github.com/ifiokjr/monosecret/tree/main/crates/monosecret_ffi"
+description = "C ABI for Monosecret: resolve secrets from any language"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "monosecret_ffi"
+# cdylib for dynamic loading (the SDK distribution target); staticlib for
+# embedding; lib (rlib) so Rust integration tests can call the entry points.
+# All expose the same narrow C ABI.
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[dependencies]
+# The envelope/resolve logic lives in the monosecret crate (resolve_json); this
+# crate is only the C ABI wrapper.
+monosecret = { workspace = true, features = [
+  "keyring",
+  "gcsm",
+  "awssm",
+  "vault",
+  "bws",
+] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }

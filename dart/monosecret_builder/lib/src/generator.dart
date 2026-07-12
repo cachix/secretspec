@@ -62,24 +62,34 @@ String _classDeclaration(
   final constructorFields = secrets.entries
       .map((entry) => '    required this.${entry.value},')
       .join('\n');
-  final fields = secrets.entries.map((entry) {
-    final nullable = manifest.isSecretNullable(entry.key) ? '?' : '';
-    return '  final String$nullable ${entry.value};';
-  }).join('\n');
-  final assignments = secrets.entries.map((entry) {
-    final fieldName = entry.value;
-    final secretName = entry.key;
-    final read = manifest.isSecretNullable(secretName)
-        ? 'environment[${jsonEncode(secretName)}]'
-        : '_required(environment, ${jsonEncode(secretName)})';
-    return '      $fieldName: $read,';
-  }).join('\n');
+  final fields = secrets.entries
+      .map((entry) {
+        final nullable = manifest.isSecretNullable(entry.key) ? '?' : '';
+        return '  final String$nullable ${entry.value};';
+      })
+      .join('\n');
+  final assignments = secrets.entries
+      .map((entry) {
+        final fieldName = entry.value;
+        final secretName = entry.key;
+        final read = manifest.isSecretNullable(secretName)
+            ? 'environment[${jsonEncode(secretName)}]'
+            : '_required(environment, ${jsonEncode(secretName)})';
+        return '      $fieldName: $read,';
+      })
+      .join('\n');
   final groupParameter = groups.isEmpty
       ? ''
       : '    Iterable<${names.groupEnum}> groups = const [],\n';
   final groupArgument = groups.isEmpty
       ? '      groups: const [],\n'
       : '      groups: groups.map((group) => group.name),\n';
+  final selectedSecrets = groups.isEmpty
+      ? 'include ?? ${names.secretEnum}.values'
+      : 'include ??\n'
+            '        (groups.isEmpty\n'
+            '            ? ${names.secretEnum}.values\n'
+            '            : const <${names.secretEnum}>[])';
 
   return '''final class $className {
   const $className({
@@ -93,14 +103,16 @@ $fields
     ${names.profileEnum}? profile,
     String? provider,
     String? file,
+    String? reason,
     Iterable<${names.secretEnum}>? include,
 $groupParameter  }) async {
-    final selectedSecrets = include ?? ${names.secretEnum}.values;
+    final selectedSecrets = $selectedSecrets;
     final environment = await (client ?? MonosecretClient()).exportEnvironment(
       include: selectedSecrets.map((secret) => secret.name),
 $groupArgument      profile: profile?.name,
       provider: provider,
       file: file,
+      reason: reason,
     );
 
     return $className.fromEnvironment(environment);
@@ -138,12 +150,14 @@ String _extensionDeclaration(
     ${names.profileEnum}? profile,
     String? provider,
     String? file,
+    String? reason,
   }) {
     return get(
       secret.name,
       profile: profile?.name,
       provider: provider,
       file: file,
+      reason: reason,
     );
   }
 
@@ -151,6 +165,7 @@ String _extensionDeclaration(
     ${names.profileEnum}? profile,
     String? provider,
     String? file,
+    String? reason,
     Iterable<${names.secretEnum}>? include,
 $groupParameter  }) {
     return $className.load(
@@ -158,6 +173,7 @@ $groupParameter  }) {
       profile: profile,
       provider: provider,
       file: file,
+      reason: reason,
       include: include,
 $groupArgument    );
   }
@@ -200,8 +216,9 @@ String _lowerCamel(String value, {required String fallbackPrefix}) {
 
 String _upperCamel(String value, {required String fallbackPrefix}) {
   final words = _words(value);
-  final identifier =
-      words.isEmpty ? fallbackPrefix : words.map(_upperFirst).join();
+  final identifier = words.isEmpty
+      ? fallbackPrefix
+      : words.map(_upperFirst).join();
   return _safeIdentifier(identifier, fallbackPrefix: fallbackPrefix);
 }
 
@@ -256,8 +273,8 @@ final class _GeneratedNames {
   factory _GeneratedNames.fromClassName(String className) {
     final base =
         className.endsWith('Secrets') && className.length > 'Secrets'.length
-            ? className.substring(0, className.length - 'Secrets'.length)
-            : className;
+        ? className.substring(0, className.length - 'Secrets'.length)
+        : className;
     final safeBase = _upperCamel(base, fallbackPrefix: 'Monosecret');
     return _GeneratedNames(
       profileEnum: '${safeBase}Profile',

@@ -1,0 +1,5 @@
+# Per-platform cdylibs are never committed to this repo: the Go module proxy
+# does not run git-LFS smudge filters, so LFS-tracked binaries reach `go get`
+# consumers as pointer files, and plain git would bloat history. They are staged
+# locally for `-tags monosecret_embed` builds (see lib/ in .gitignore) and may be
+# attached to GitHub releases by a future publishing workflow.

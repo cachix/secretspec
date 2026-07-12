@@ -1,0 +1,24 @@
+{
+  "name": "@monosecret/client-win32-x64-msvc",
+  "version": "0.1.0",
+  "private": true,
+  "cpu": [
+    "x64"
+  ],
+  "os": [
+    "win32"
+  ],
+  "main": "monosecret-client.win32-x64-msvc.node",
+  "files": [
+    "monosecret-client.win32-x64-msvc.node",
+    "README.md"
+  ],
+  "description": "Native resolver for @monosecret/client on win32-x64-msvc",
+  "homepage": "https://github.com/ifiokjr/monosecret",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/ifiokjr/monosecret/tree/main/npm/monosecret__client-win32-x64-msvc",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

@@ -157,13 +157,13 @@ monosecret_derive::declare_secrets!("monosecret.toml");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// Load secrets with type safety
-	let secrets = Monosecret::load(Provider::Keyring)?;
+	let resolved = Monosecret::builder().with_provider("keyring").load()?;
 
 	// Access secrets as struct fields
-	println!("Database: {}", secrets.database_url);
+	println!("Database: {}", resolved.secrets.database_url);
 
 	// Optional secrets are Option<String>
-	if let Some(redis) = &secrets.redis_url {
+	if let Some(redis) = &resolved.secrets.redis_url {
 		println!("Redis: {}", redis);
 	}
 

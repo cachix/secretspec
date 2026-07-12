@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "provider": "keyring://",
+  "profile": "production",
+  "secrets": [
+    {
+      "name": "DATABASE_URL",
+      "status": "resolved",
+      "required": true,
+      "source_provider": "keyring://",
+      "default_applied": false,
+      "generated": false,
+      "as_path": false
+    },
+    {
+      "name": "JWT_SECRET",
+      "status": "resolved",
+      "required": true,
+      "default_applied": false,
+      "generated": true,
+      "as_path": false
+    },
+    {
+      "name": "LOG_LEVEL",
+      "status": "resolved",
+      "required": false,
+      "default_applied": true,
+      "generated": false,
+      "as_path": false
+    },
+    {
+      "name": "SENTRY_DSN",
+      "status": "missing_optional",
+      "required": false,
+      "default_applied": false,
+      "generated": false,
+      "as_path": false
+    },
+    {
+      "name": "STRIPE_KEY",
+      "status": "missing_required",
+      "required": true,
+      "default_applied": false,
+      "generated": false,
+      "as_path": false
+    }
+  ]
+}

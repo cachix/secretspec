@@ -125,6 +125,47 @@ providers = [
 
 `monosecret set` can update an existing native 1Password reference. It first verifies that the reference exists; it will not create a new native item/section/field for `op://` providers.
 
+## Secret References
+
+Use a secret's provider-independent [`ref`](/reference/configuration/#secret-references)
+table when the item coordinates belong to that secret rather than the provider:
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "Production DB", ref = { item = "Postgres", field = "connection-url" }, providers = [
+  "onepassword://Infra",
+] }
+STRIPE_API_KEY = { description = "Stripe key", ref = { vault = "Payments", item = "Stripe", field = "api key" }, providers = [
+  "onepassword://Infra",
+] }
+```
+
+The coordinates translate to 1Password as follows:
+
+- `item`: the item title or UUID. It is the complete item name; provider URI
+  paths and Monosecret's convention prefix are not prepended.
+- `field`: the field label. Without `field`, reads use the item's `value` or
+  password field and writes edit `value`.
+- `vault`: overrides the provider URI's default vault for this secret.
+- `section`: addresses a field inside a section and requires `field`.
+
+Writes use `op item edit`: `monosecret set` updates the referenced field in
+place, adding the field when it is missing. A ref never creates an item.
+
+A ref names the secret but does not pin its store. Provider resolution and
+fallbacks still apply, so `--provider dotenv:.env.fixtures` can redirect the same
+coordinates to a test fixture.
+
+Native reference strings copied from the 1Password app are not accepted directly
+as `ref` values. Translate them to a table:
+
+```toml
+# op://Infra/Postgres/connection-url becomes:
+DATABASE_URL = { description = "Production DB", ref = { vault = "Infra", item = "Postgres", field = "connection-url" }, providers = [
+  "onepassword://Infra",
+] }
+```
+
 ### Examples
 
 ```bash

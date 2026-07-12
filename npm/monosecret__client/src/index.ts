@@ -1,3 +1,15 @@
+export {
+  abiVersion,
+  Builder,
+  MissingRequiredError,
+  Monosecret,
+  MonosecretError,
+  Report,
+  Resolved,
+  ResolvedSecret,
+  SecretReport,
+} from "./native-client.js";
+
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 

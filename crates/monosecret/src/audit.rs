@@ -18,13 +18,14 @@
 //!   write error, serialization error) emits a single `warning:` to stderr and
 //!   returns, so a logging problem can never break `get`/`set`/`run`.
 //!
-//! The log assumes a single writer at a time. Several secretspec processes
+//! The log assumes a single writer at a time. Several monosecret processes
 //! writing the same log file concurrently may, around the size-cap rotation,
 //! interleave or lose entries, because rotation is not synchronized across
 //! processes. Operators who need strong guarantees should give each concurrent
 //! context its own `[audit] path`.
 
 use std::fs::OpenOptions;
+use std::io::IsTerminal;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -46,15 +47,15 @@ const SCHEMA_VERSION: u32 = 1;
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AuditAction {
-	/// Read a single secret (`secretspec get`).
+	/// Read a single secret (`monosecret get`).
 	Get,
-	/// Write a single secret (`secretspec set`).
+	/// Write a single secret (`monosecret set`).
 	Set,
-	/// Validate availability of all secrets (`secretspec check`).
+	/// Validate availability of all secrets (`monosecret check`).
 	Check,
-	/// Inject all secrets into a subprocess (`secretspec run`).
+	/// Inject all secrets into a subprocess (`monosecret run`).
 	Run,
-	/// Copy secrets from one provider to another (`secretspec import`).
+	/// Copy secrets from one provider to another (`monosecret import`).
 	Import,
 }
 
@@ -86,7 +87,7 @@ struct Actor {
 	/// Detected coding-agent id (e.g. `claude-code`), if any.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	agent: Option<&'static str>,
-	/// Whether secretspec considers this an agent session.
+	/// Whether monosecret considers this an agent session.
 	is_agent: bool,
 }
 
@@ -124,6 +125,8 @@ pub(crate) struct AuditContext<'a> {
 	/// The provider URI that served (or was consulted for) the access. Redacted
 	/// before it is written.
 	pub provider_uri: Option<String>,
+	/// Canonical native coordinates; serialized as `ref`, never a value.
+	pub reference: Option<String>,
 	pub outcome: AuditOutcome,
 	pub error_kind: Option<&'a str>,
 	pub reason: Option<&'a str>,
@@ -156,13 +159,15 @@ struct AuditEvent<'a> {
 	/// Redacted provider URI.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	provider: Option<String>,
+	#[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+	reference: Option<&'a str>,
 	outcome: AuditOutcome,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	error_kind: Option<&'a str>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	reason: Option<&'a str>,
 	actor: &'a Actor,
-	/// secretspec version that produced the event.
+	/// monosecret version that produced the event.
 	version: &'static str,
 }
 
@@ -326,7 +331,7 @@ impl AuditLogger {
 			if config.has_relative_path() {
 				eprintln!(
 					"{} [audit] path {} is not absolute; auditing is disabled \
-                     (use an absolute path, e.g. ~/.local/state/secretspec/audit.log)",
+                     (use an absolute path, e.g. ~/.local/state/monosecret/audit.log)",
 					"warning:".yellow(),
 					config
 						.path
@@ -338,7 +343,7 @@ impl AuditLogger {
 			} else {
 				eprintln!(
 					"{} could not determine an audit log location; auditing is disabled \
-                     (set [audit] path in ~/.config/secretspec/config.toml)",
+                     (set [audit] path in ~/.config/monosecret/config.toml)",
 					"warning:".yellow()
 				);
 			}
@@ -358,10 +363,10 @@ impl AuditLogger {
 			}
 		};
 
-		if first_run {
+		if first_run && std::io::stderr().is_terminal() {
 			eprintln!(
-				"{} secretspec is now recording secret access to {} \
-                 (disable with [audit] enabled = false in ~/.config/secretspec/config.toml)",
+				"{} monosecret is now recording secret access to {} \
+                 (disable with [audit] enabled = false in ~/.config/monosecret/config.toml)",
 				"note:".cyan(),
 				path.display().to_string().bold()
 			);
@@ -390,6 +395,7 @@ impl AuditLogger {
 			keys: ctx.keys,
 			command: ctx.command,
 			provider: ctx.provider_uri.as_deref().map(redact_uri),
+			reference: ctx.reference.as_deref(),
 			outcome: ctx.outcome,
 			error_kind: ctx.error_kind,
 			reason: ctx.reason,
@@ -637,6 +643,7 @@ mod tests {
 				keys: &[],
 				command: None,
 				provider_uri: Some("vault://user:s3cr3t@host/kv".to_string()),
+				reference: Some("item=database field=password".to_string()),
 				outcome: AuditOutcome::Found,
 				error_kind: None,
 				reason: Some("deploy web frontend"),
@@ -674,6 +681,7 @@ mod tests {
 				keys: &keys,
 				command: Some("./deploy.sh"),
 				provider_uri: None,
+				reference: None,
 				outcome: AuditOutcome::Found,
 				error_kind: None,
 				reason: None,
@@ -706,6 +714,7 @@ mod tests {
 					keys: &[],
 					command: None,
 					provider_uri: None,
+					reference: None,
 					outcome: AuditOutcome::Written,
 					error_kind: None,
 					reason: None,
@@ -862,6 +871,7 @@ mod tests {
 				keys: &[],
 				command: None,
 				provider_uri: None,
+				reference: None,
 				outcome: AuditOutcome::Found,
 				error_kind: None,
 				reason: None,

@@ -11,8 +11,8 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-monosecret = { version = "0.2.0" }
-monosecret_derive = { version = "0.2.0" }
+monosecret = { version = "0.1" }
+monosecret_derive = { version = "0.1" }
 ```
 
 Basic example:
@@ -56,7 +56,7 @@ monosecret_derive::declare_secrets!("monosecret.toml");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// Load secrets with profile-specific types
-	let secrets = Secrets::builder()
+	let secrets = Monosecret::builder()
 		.with_provider("keyring")
 		.with_profile(Profile::Production)
 		.load_profile()?;
@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	// Access secrets through profile-specific enum
 	match secrets.secrets {
-		SecretsProfile::Production {
+		MonosecretProfile::Production {
 			database_url,
 			api_key,
 			..
@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			println!("Database: {}", database_url);
 			println!("API Key: {}", api_key);
 		}
-		SecretsProfile::Development {
+		MonosecretProfile::Development {
 			database_url,
 			api_key,
 			..
@@ -108,19 +108,16 @@ TLS_KEY = { description = "TLS private key", as_path = true, required = false }
 monosecret_derive::declare_secrets!("monosecret.toml");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-	let validated = Secrets::builder().check()?;
+	let resolved = Monosecret::builder().load()?;
 
 	// Required as_path secrets are PathBuf
-	let cert_path: &std::path::PathBuf = &validated.secrets.tls_cert;
+	let cert_path: &std::path::PathBuf = &resolved.secrets.tls_cert;
+	println!("Certificate at: {}", cert_path.display());
 
 	// Optional as_path secrets are Option<PathBuf>
-	if let Some(key_path) = &validated.secrets.tls_key {
+	if let Some(key_path) = &resolved.secrets.tls_key {
 		println!("Key at: {}", key_path.display());
 	}
-
-	// Temporary files are cleaned up when `validated` is dropped
-	// To persist files beyond the struct's lifetime:
-	let paths = validated.keep_temp_files()?;
 
 	Ok(())
 }

@@ -6,6 +6,7 @@ use secrecy::SecretString;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::Address;
 use super::Provider;
 use super::ProviderUrl;
 use crate::MonosecretError;
@@ -116,6 +117,60 @@ impl KeyringProvider {
 }
 
 impl Provider for KeyringProvider {
+	fn supported_coords(&self) -> &'static [&'static str] {
+		&["field"]
+	}
+
+	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
+		let Address::Native(native) = address else {
+			return match address {
+				Address::Convention {
+					project,
+					profile,
+					key,
+				} => self.get(project, key, profile),
+				Address::Native(_) => unreachable!(),
+			};
+		};
+		super::reject_unsupported_coords(self.name(), native, self.supported_coords())?;
+		let account = match native.field.as_deref() {
+			Some(account) => account.to_string(),
+			None => {
+				whoami::username()
+					.map_err(|error| MonosecretError::ProviderOperationFailed(error.to_string()))?
+			}
+		};
+		let entry = Self::entry(&native.item, &account)?;
+		match entry.get_password() {
+			Ok(password) => Ok(Some(SecretString::new(password.into()))),
+			Err(keyring_core::Error::NoEntry) => Ok(None),
+			Err(error) => Err(error.into()),
+		}
+	}
+
+	fn set_address(&self, address: Address<'_>, value: &SecretString) -> Result<()> {
+		let Address::Native(native) = address else {
+			return match address {
+				Address::Convention {
+					project,
+					profile,
+					key,
+				} => self.set(project, key, value, profile),
+				Address::Native(_) => unreachable!(),
+			};
+		};
+		super::reject_unsupported_coords(self.name(), native, self.supported_coords())?;
+		let account = match native.field.as_deref() {
+			Some(account) => account.to_string(),
+			None => {
+				whoami::username()
+					.map_err(|error| MonosecretError::ProviderOperationFailed(error.to_string()))?
+			}
+		};
+		Self::entry(&native.item, &account)?.set_password(value.expose_secret())?;
+		Ok(())
+	}
+
 	fn name(&self) -> &'static str {
 		Self::PROVIDER_NAME
 	}

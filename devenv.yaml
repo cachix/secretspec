@@ -6,6 +6,9 @@ inputs:
         follows: nixpkgs
   nixpkgs:
     url: github:NixOS/nixpkgs/nixos-25.11
+  dart-nixpkgs:
+    # Last Nixpkgs revision before Dart 3.11, pinning the development SDK to 3.10.9.
+    url: github:NixOS/nixpkgs/dcb331fe95d903edf906a0970f82e517462a8818
   ifiokjr-nixpkgs:
     url: github:ifiokjr/nixpkgs
     inputs:

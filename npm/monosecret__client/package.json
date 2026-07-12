@@ -4,6 +4,7 @@
   },
   "description": "TypeScript client for Monosecret declarative secrets management",
   "devDependencies": {
+    "@napi-rs/cli": "^3.7.2",
     "@types/node": "^24.10.1",
     "@vitest/coverage-v8": "^4.1.8",
     "tsdown": "^0.15.12",
@@ -34,8 +35,24 @@
     "provenance": true
   },
   "repository": "https://github.com/ifiokjr/monosecret/tree/main/npm/monosecret__client",
+  "napi": {
+    "binaryName": "monosecret-client",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "optionalDependencies": {
+    "@monosecret/client-darwin-arm64": "workspace:*",
+    "@monosecret/client-linux-arm64-gnu": "workspace:*",
+    "@monosecret/client-linux-x64-gnu": "workspace:*",
+    "@monosecret/client-win32-x64-msvc": "workspace:*"
+  },
   "scripts": {
     "build": "tsdown",
+    "build:native": "bash scripts/build-native.sh",
     "check": "tsc --noEmit",
     "coverage": "vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text",
     "prepack": "pnpm run build",

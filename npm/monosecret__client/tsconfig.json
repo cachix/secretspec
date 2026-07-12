@@ -3,7 +3,7 @@
     "declaration": true,
     "declarationMap": true,
     "exactOptionalPropertyTypes": true,
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "ESNext.Disposable"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "noEmit": true,

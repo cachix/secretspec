@@ -1,0 +1,27 @@
+[package]
+name = "monosecret_client_native"
+version.workspace = true
+edition.workspace = true
+repository = "https://github.com/ifiokjr/monosecret/tree/main/npm/monosecret__client"
+description = "napi-rs native resolver for @monosecret/client"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "monosecret_client_native"
+path = "src/native.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+monosecret = { workspace = true, features = [
+  "keyring",
+  "gcsm",
+  "awssm",
+  "vault",
+  "bws",
+] }
+napi = { version = "2.16", default-features = false, features = ["napi8"] }
+napi-derive = "2.16"
+
+[build-dependencies]
+napi-build = "2.1"

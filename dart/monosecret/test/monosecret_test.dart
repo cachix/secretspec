@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:monosecret/monosecret.dart';
@@ -6,14 +5,14 @@ import 'package:test/test.dart';
 
 void main() {
   group('MonosecretConfig', () {
-    test('defaults to the conventional manifest and class name', () {
+    test('uses conventional defaults', () {
       const config = MonosecretConfig();
 
       expect(config.path, 'monosecret.toml');
       expect(config.className, 'MonosecretSecrets');
     });
 
-    test('accepts custom code generation options', () {
+    test('accepts generated library options', () {
       const config = MonosecretConfig(
         path: 'config/monosecret.toml',
         className: 'AppSecrets',
@@ -24,363 +23,124 @@ void main() {
     });
   });
 
-  group('MonosecretClient.get', () {
-    test('returns stdout with trailing CLI whitespace removed', () async {
-      final cli = await _fakeCli(r'''
-#!/usr/bin/env sh
-printf 'secret-value  \n\n'
+  test('native ABI matches the Dart package', () {
+    expect(abiVersion(), monosecretVersion);
+  });
+
+  test('filtered resolution ignores unrelated required secrets', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'monosecret_dart_filter_',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+
+    final manifest = File('${directory.path}/monosecret.toml');
+    final dotenv = File('${directory.path}/.env');
+    await manifest.writeAsString('''
+[project]
+name = "dart-filter"
+revision = "1.0"
+
+[groups]
+backend = "Backend"
+observability = "Observability"
+
+[profiles.default]
+DATABASE_URL = { description = "Database", required = true, groups = ["backend"] }
+LOG_LEVEL = { description = "Logs", default = "info", required = false, groups = ["observability"] }
 ''');
+    await dotenv.writeAsString('');
 
-      final client = MonosecretClient(executable: cli.path);
+    final resolved = await Monosecret.builder()
+        .withPath(manifest.path)
+        .withProvider('dotenv://${dotenv.path}')
+        .withReason('Dart filtered resolution test')
+        .withGroups(['observability'])
+        .load();
+    addTearDown(resolved.close);
 
-      expect(await client.get('API_KEY'), 'secret-value');
-    });
+    expect(resolved.fields, {'LOG_LEVEL': 'info'});
 
-    test(
-      'passes secret name and optional profile/provider/file flags',
-      () async {
-        final dir = await Directory.systemTemp.createTemp(
-          'monosecret_dart_test_',
-        );
-        addTearDown(() => dir.delete(recursive: true));
-
-        final argsFile = File('${dir.path}/args.json');
-        final cli = await _recordingCli(argsFile: argsFile, stdout: 'value\n');
-        final client = MonosecretClient(executable: cli.path);
-
-        await client.get(
-          'DATABASE_URL',
-          profile: 'production',
-          provider: 'op',
-          file: 'monosecret.production.toml',
-        );
-
-        expect(await _readRecordedArgs(argsFile), [
-          'get',
-          'DATABASE_URL',
-          '--profile',
-          'production',
-          '--provider',
-          'op',
-          '--file',
-          'monosecret.production.toml',
-        ]);
-      },
+    await expectLater(
+      Monosecret.builder()
+          .withPath(manifest.path)
+          .withProvider('dotenv://${dotenv.path}')
+          .withReason('Dart invalid filter test')
+          .withInclude(['UNKNOWN'])
+          .load(),
+      throwsA(
+        isA<MonosecretException>()
+            .having((error) => error.kind, 'kind', 'io')
+            .having(
+              (error) => error.message,
+              'message',
+              contains("Included secret 'UNKNOWN'"),
+            ),
+      ),
     );
   });
 
-  group('MonosecretClient.check', () {
-    test('uses --no-prompt by default and forwards selectors', () async {
-      final dir = await Directory.systemTemp.createTemp(
-        'monosecret_dart_test_',
-      );
-      addTearDown(() => dir.delete(recursive: true));
-
-      final argsFile = File('${dir.path}/args.json');
-      final cli = await _recordingCli(argsFile: argsFile);
-      final client = MonosecretClient(executable: cli.path);
-
-      await client.check(
-        profile: 'ci',
-        provider: 'env',
-        file: 'monosecret.ci.toml',
-      );
-
-      expect(await _readRecordedArgs(argsFile), [
-        'check',
-        '--no-prompt',
-        '--profile',
-        'ci',
-        '--provider',
-        'env',
-        '--file',
-        'monosecret.ci.toml',
-      ]);
-    });
-
-    test('omits --no-prompt when disabled', () async {
-      final dir = await Directory.systemTemp.createTemp(
-        'monosecret_dart_test_',
-      );
-      addTearDown(() => dir.delete(recursive: true));
-
-      final argsFile = File('${dir.path}/args.json');
-      final cli = await _recordingCli(argsFile: argsFile);
-      final client = MonosecretClient(executable: cli.path);
-
-      await client.check(noPrompt: false);
-
-      expect(await _readRecordedArgs(argsFile), ['check']);
-    });
-  });
-
-  group('MonosecretClient.loadEnvironment', () {
-    test(
-      'passes include/group selectors and returns injected environment',
-      () async {
-        final dir = await Directory.systemTemp.createTemp(
-          'monosecret_dart_test_',
-        );
-        addTearDown(() => dir.delete(recursive: true));
-
-        final argsFile = File('${dir.path}/args.json');
-        final cli = await _environmentCli(
-          argsFile: argsFile,
-          injectedEnvironment: {
-            'DATABASE_URL': 'postgres://localhost/app',
-            'API_KEY': 'abc123',
-          },
-        );
-        final client = MonosecretClient(executable: cli.path);
-
-        final environment = await client.loadEnvironment(
-          include: ['DATABASE_URL', 'API_KEY'],
-          groups: ['backend', 'workers'],
-          profile: 'development',
-          provider: 'dotenv',
-          file: 'monosecret.toml',
-        );
-
-        expect(
-          environment,
-          containsPair('DATABASE_URL', 'postgres://localhost/app'),
-        );
-        expect(environment, containsPair('API_KEY', 'abc123'));
-        expect(await _readRecordedArgs(argsFile), [
-          'run',
-          '--profile',
-          'development',
-          '--provider',
-          'dotenv',
-          '--file',
-          'monosecret.toml',
-          '--include',
-          'DATABASE_URL',
-          '--include',
-          'API_KEY',
-          '--group',
-          'backend',
-          '--group',
-          'workers',
-          '--',
-          if (Platform.isWindows) ...['cmd', '/c', 'set'] else ...['env'],
-        ]);
-      },
+  test('close removes native as_path temporary files', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'monosecret_dart_cleanup_',
     );
+    addTearDown(() => directory.delete(recursive: true));
 
-    test(
-      'parses environment lines and preserves equals signs in values',
-      () async {
-        final cli = await _fakeCli('''
-#!/usr/bin/env sh
-printf 'DATABASE_URL=postgres://localhost/app\nTOKEN=value=with=equals\nIGNORED_LINE\n'
+    final manifest = File('${directory.path}/monosecret.toml');
+    final dotenv = File('${directory.path}/.env');
+    await manifest.writeAsString('''
+[project]
+name = "dart-cleanup"
+revision = "1.0"
+
+[profiles.default]
+TLS_CERT = { description = "Certificate", required = false, default = "certificate", as_path = true }
 ''');
-        final client = MonosecretClient(executable: cli.path);
+    await dotenv.writeAsString('');
 
-        expect(await client.loadEnvironment(), {
-          'DATABASE_URL': 'postgres://localhost/app',
-          'TOKEN': 'value=with=equals',
-        });
-      },
+    final resolved = await Monosecret.builder()
+        .withPath(manifest.path)
+        .withProvider('dotenv://${dotenv.path}')
+        .withReason('Dart as_path cleanup test')
+        .load();
+    addTearDown(resolved.close);
+    final path = resolved.secrets['TLS_CERT']!.path!;
+
+    expect(await File(path).exists(), isTrue);
+    await resolved.close();
+    expect(await File(path).exists(), isFalse);
+  });
+
+  test('missing required secrets use the domain exception', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'monosecret_dart_missing_',
     );
-  });
+    addTearDown(() => directory.delete(recursive: true));
 
-  group('MonosecretClient.exportEnvironment', () {
-    test('uses monosecret env dotenv output with typed selectors', () async {
-      final dir = await Directory.systemTemp.createTemp(
-        'monosecret_dart_test_',
-      );
-      addTearDown(() => dir.delete(recursive: true));
+    final manifest = File('${directory.path}/monosecret.toml');
+    final dotenv = File('${directory.path}/.env');
+    await manifest.writeAsString('''
+[project]
+name = "dart-missing"
+revision = "1.0"
 
-      final argsFile = File('${dir.path}/args.json');
-      final cli = await _recordingCli(
-        argsFile: argsFile,
-        stdout: 'DATABASE_URL="postgres://localhost/app"\nAPI_KEY="abc123"\n',
-      );
-      final client = MonosecretClient(executable: cli.path);
-
-      final environment = await client.exportEnvironment(
-        include: ['DATABASE_URL', 'API_KEY'],
-        groups: ['backend'],
-        profile: 'development',
-        provider: 'dotenv',
-        file: 'monosecret.toml',
-      );
-
-      expect(environment, {
-        'DATABASE_URL': 'postgres://localhost/app',
-        'API_KEY': 'abc123',
-      });
-      expect(await _readRecordedArgs(argsFile), [
-        'env',
-        '--shell',
-        'dotenv',
-        '--profile',
-        'development',
-        '--provider',
-        'dotenv',
-        '--file',
-        'monosecret.toml',
-        '--include',
-        'DATABASE_URL',
-        '--include',
-        'API_KEY',
-        '--group',
-        'backend',
-      ]);
-    });
-
-    test('decodes dotenv quotes and escaped characters', () async {
-      final cli = await _fakeCli(r'''
-#!/usr/bin/env sh
-printf '%s\n' 'TOKEN="value=with=equals"' 'MULTILINE="first\nsecond"' 'CR="first\rsecond"' 'QUOTE="say \"hello\""' 'PATH="C:\\tmp"' 'UNKNOWN="keep\q"' 'RAW=unquoted' '# comment'
+[profiles.default]
+API_TOKEN = { description = "API token", required = true }
 ''');
-      final client = MonosecretClient(executable: cli.path);
+    await dotenv.writeAsString('');
 
-      expect(await client.exportEnvironment(), {
-        'TOKEN': 'value=with=equals',
-        'MULTILINE': 'first\nsecond',
-        'CR': 'first\rsecond',
-        'QUOTE': 'say "hello"',
-        'PATH': r'C:\tmp',
-        'UNKNOWN': r'keep\q',
-        'RAW': 'unquoted',
-      });
-    });
-  });
-
-  group('process configuration', () {
-    test('passes custom environment to the CLI process', () async {
-      final cli = await _fakeCli(r'''
-#!/usr/bin/env sh
-printf '%s' "$MONOSECRET_TEST_TOKEN"
-''');
-      final client = MonosecretClient(
-        executable: cli.path,
-        environment: {'MONOSECRET_TEST_TOKEN': 'from-client-env'},
-      );
-
-      expect(await client.get('TOKEN'), 'from-client-env');
-    });
-
-    test('runs the CLI from the configured working directory', () async {
-      final dir = await Directory.systemTemp.createTemp(
-        'monosecret_dart_test_',
-      );
-      addTearDown(() => dir.delete(recursive: true));
-
-      final cli = await _fakeCli(r'''
-#!/usr/bin/env sh
-pwd
-''');
-      final client = MonosecretClient(
-        executable: cli.path,
-        workingDirectory: dir.path,
-      );
-
-      expect(
-        await File(await client.get('PWD')).resolveSymbolicLinks(),
-        await dir.resolveSymbolicLinks(),
-      );
-    });
-  });
-
-  group('MonosecretException', () {
-    test('captures command, exit code, stdout, stderr, and message', () async {
-      final cli = await _fakeCli(r'''
-#!/usr/bin/env sh
-echo "partial output"
-echo "boom" >&2
-exit 7
-''');
-      final client = MonosecretClient(executable: cli.path);
-
-      await expectLater(
-        client.check(profile: 'ci'),
-        throwsA(
-          isA<MonosecretException>()
-              .having((error) => error.args, 'args', [
-                'check',
-                '--no-prompt',
-                '--profile',
-                'ci',
-              ])
-              .having((error) => error.exitCode, 'exitCode', 7)
-              .having((error) => error.stdout, 'stdout', 'partial output\n')
-              .having((error) => error.stderr, 'stderr', 'boom\n')
-              .having(
-                (error) => error.toString(),
-                'toString',
-                contains(
-                  'monosecret check --no-prompt --profile ci failed with exit code 7: boom',
-                ),
-              ),
+    await expectLater(
+      Monosecret.builder()
+          .withPath(manifest.path)
+          .withProvider('dotenv://${dotenv.path}')
+          .withReason('Dart missing required test')
+          .load(),
+      throwsA(
+        isA<MissingRequiredException>().having(
+          (error) => error.missing,
+          'missing',
+          ['API_TOKEN'],
         ),
-      );
-    });
+      ),
+    );
   });
 }
-
-Future<File> _fakeCli(String source) async {
-  final dir = await Directory.systemTemp.createTemp('monosecret_dart_test_');
-  addTearDown(() => dir.delete(recursive: true));
-
-  final file = File('${dir.path}/monosecret');
-  await file.writeAsString(source);
-  await _makeExecutable(file);
-  return file;
-}
-
-Future<File> _recordingCli({required File argsFile, String stdout = ''}) {
-  return _fakeCli('''
-#!/usr/bin/env sh
-${_writeArgsSnippet(argsFile.path)}
-printf '%s' ${shellQuote(stdout)}
-''');
-}
-
-Future<File> _environmentCli({
-  required File argsFile,
-  required Map<String, String> injectedEnvironment,
-}) {
-  final exports = injectedEnvironment.entries
-      .map((entry) => 'export ${entry.key}=${shellQuote(entry.value)}')
-      .join('\n');
-
-  return _fakeCli('''
-#!/usr/bin/env sh
-${_writeArgsSnippet(argsFile.path)}
-while [ "\$#" -gt 0 ]; do
-  if [ "\$1" = "--" ]; then
-    shift
-    break
-  fi
-  shift
-done
-$exports
-exec "\$@"
-''');
-}
-
-String _writeArgsSnippet(String path) {
-  return '''
-ARGS_FILE=${shellQuote(path)}
-: > "\$ARGS_FILE"
-for arg do
-  printf '%s\n' "\$arg" >> "\$ARGS_FILE"
-done
-''';
-}
-
-Future<List<String>> _readRecordedArgs(File file) async {
-  return const LineSplitter().convert(await file.readAsString());
-}
-
-Future<void> _makeExecutable(File file) async {
-  final result = await Process.run('chmod', ['+x', file.path]);
-  if (result.exitCode != 0) {
-    throw StateError('chmod failed: ${result.stderr}');
-  }
-}
-
-String shellQuote(String value) => "'${value.replaceAll("'", "'\\''")}'";

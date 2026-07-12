@@ -1,5 +1,6 @@
 ---
 source: crates/monosecret/tests/cli_snapshots.rs
+assertion_line: 45
 info:
   program: monosecret
   args:
@@ -19,6 +20,7 @@ Commands:
   run       Run a command with secrets injected
   manifest  Emit a secret-value-free manifest for SDK code generation
   check     Check if all required secrets are in the provider, if not set them
+  schema    Emit JSON Schema for the union or one profile's typed shape
   config    Init or show ~/.config/monosecret/config.toml
   import    Import secrets from a provider to another provider
   audit     Show the local audit log of secret access

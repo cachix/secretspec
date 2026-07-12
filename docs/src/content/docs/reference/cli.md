@@ -18,19 +18,6 @@ These options are available on every command:
 $ monosecret run --reason "Deploying web frontend" -- ./deploy.sh
 ```
 
-## Global Options
-
-These options are available on every command:
-
-| Option              | Description                                                                                                                                                                                  |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-f, --file <FILE>` | Path to `secretspec.toml` (default: auto-detect). Env: `SECRETSPEC_FILE`                                                                                                                     |
-| `--reason <REASON>` | Reason for accessing secrets, recorded by providers that support audit logging (e.g. Proton Pass agent sessions). Takes precedence over `PROTON_PASS_AGENT_REASON`. Env: `SECRETSPEC_REASON` |
-
-```bash
-$ secretspec run --reason "Deploying web frontend" -- ./deploy.sh
-```
-
 ## Commands
 
 ### init
@@ -371,7 +358,7 @@ $ monosecret import dotenv:/home/user/old-project/.env
 Show the local [audit log](/concepts/audit/) of secret access.
 
 ```bash
-secretspec audit [--project <NAME>] [--action <ACTION>] [-n <N>] [--json]
+monosecret audit [--project <NAME>] [--action <ACTION>] [-n <N>] [--json]
 ```
 
 **Options:**
@@ -381,16 +368,16 @@ secretspec audit [--project <NAME>] [--action <ACTION>] [-n <N>] [--json]
 - `-n, --tail <N>` - Show only the last N entries
 - `--json` - Output raw JSON Lines instead of the formatted summary
 
-The log location is read from your user-global config (`[audit]` in `~/.config/secretspec/config.toml`), defaulting to the per-user state directory.
+The log location is read from your user-global config (`[audit]` in `~/.config/monosecret/config.toml`), defaulting to the per-user state directory.
 
 **Example:**
 
 ```bash
-$ secretspec audit --action run -n 5
+$ monosecret audit --action run -n 5
 2026-06-04T18:06:29Z  run    found  ./deploy.sh  API_KEY,DATABASE_URL  (my-app/production)  reason: deploy  [claude-code]
 
 # Pipe raw entries to jq
-$ secretspec audit --json | jq 'select(.outcome == "missing")'
+$ monosecret audit --json | jq 'select(.outcome == "missing")'
 ```
 
 ## Environment Variables

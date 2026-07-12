@@ -68,6 +68,13 @@ op+token://user:op_token@Development/dotfiles   # Native reference with service 
 **Prerequisites**: `op` CLI, authenticated with `op signin` or a service account token
 **Storage**: `onepassword://` uses Monosecret-owned items; `op://` reads native 1Password references and can edit existing fields
 
+For `onepassword://`, the URI path configures Monosecret-owned storage. For
+`op://`, it is a native item/section prefix used by convention secrets and
+detailed `providers` entries. To give one secret complete provider-independent
+coordinates, use its `ref` table
+(`SECRET = { description = "…", ref = { item = "…", field = "…" } }`); see
+[Secret References](/reference/configuration/#secret-references).
+
 ## Pass Provider
 
 **URI**: `pass://` - Uses Unix password manager with GPG encryption

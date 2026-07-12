@@ -161,7 +161,7 @@ _Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #11](https://gi
   fail unless `PROTON_PASS_AGENT_REASON` is set, which made existing secrets
   appear missing under an agent session. The provider now sets this variable on
   every `pass-cli` invocation. The reason is resolved as `--reason`/`with_reason`,
-  then `PROTON_PASS_AGENT_REASON`, then a secretspec-versioned default
+  then `PROTON_PASS_AGENT_REASON`, then a Monosecret-versioned default
   (`monosecret/<version> (https://ifiokjr.github.io/monosecret)`); each source is normalized first,
   so a blank reason falls through to the next rather than masking it. It is ignored by
   older releases and non-agent sessions.

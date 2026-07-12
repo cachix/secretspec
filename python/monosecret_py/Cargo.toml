@@ -1,0 +1,25 @@
+[package]
+name = "monosecret_py_native"
+version.workspace = true
+edition.workspace = true
+repository = "https://github.com/ifiokjr/monosecret"
+description = "pyo3 extension for the Python SDK"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[build-dependencies]
+pyo3-build-config = "0.29"
+
+[dependencies]
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
+monosecret = { workspace = true, features = [
+  "keyring",
+  "gcsm",
+  "awssm",
+  "vault",
+  "bws",
+] }

@@ -1,0 +1,27 @@
+{
+  "name": "@monosecret/client-linux-x64-gnu",
+  "version": "0.1.0",
+  "private": true,
+  "cpu": [
+    "x64"
+  ],
+  "os": [
+    "linux"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "main": "monosecret-client.linux-x64-gnu.node",
+  "files": [
+    "monosecret-client.linux-x64-gnu.node",
+    "README.md"
+  ],
+  "description": "Native resolver for @monosecret/client on linux-x64-gnu",
+  "homepage": "https://github.com/ifiokjr/monosecret",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/ifiokjr/monosecret/tree/main/npm/monosecret__client-linux-x64-gnu",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

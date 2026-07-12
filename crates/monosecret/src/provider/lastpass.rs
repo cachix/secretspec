@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::MonosecretError;
 use crate::Result;
+use crate::provider::Address;
 use crate::provider::Provider;
 use crate::provider::ProviderUrl;
 
@@ -244,6 +245,46 @@ impl LastPassProvider {
 }
 
 impl Provider for LastPassProvider {
+	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
+		match address {
+			Address::Convention {
+				project,
+				profile,
+				key,
+			} => self.get(project, key, profile),
+			Address::Native(native) => {
+				crate::provider::reject_unsupported_coords(
+					self.name(),
+					native,
+					self.supported_coords(),
+				)?;
+				let mut config = self.config.clone();
+				config.folder_prefix = Some("{key}".to_string());
+				Self::new(config).get("", &native.item, "")
+			}
+		}
+	}
+
+	fn set_address(&self, address: Address<'_>, value: &SecretString) -> Result<()> {
+		match address {
+			Address::Convention {
+				project,
+				profile,
+				key,
+			} => self.set(project, key, value, profile),
+			Address::Native(native) => {
+				crate::provider::reject_unsupported_coords(
+					self.name(),
+					native,
+					self.supported_coords(),
+				)?;
+				let mut config = self.config.clone();
+				config.folder_prefix = Some("{key}".to_string());
+				Self::new(config).set("", &native.item, value, "")
+			}
+		}
+	}
+
 	fn name(&self) -> &'static str {
 		Self::PROVIDER_NAME
 	}

@@ -18,7 +18,7 @@ This example demonstrates how to use Monosecret's proc macro to create strongly-
 cargo run
 
 # Or from the workspace root
-cargo run -p codegen-example
+cargo run -p monosecret_derive-example --bin derive
 ```
 
 ## Generated Code
@@ -51,8 +51,12 @@ pub enum MonosecretProfile {
 }
 
 impl Monosecret {
-    pub fn load(provider: Provider) -> Result<Self, MonosecretError> { ... }
-    pub fn load_profile(provider: Provider, profile: Profile) -> Result<MonosecretProfile, MonosecretError> { ... }
+    pub fn builder() -> MonosecretBuilder { ... }
     pub fn set_as_env_vars(&self) { ... }
+}
+
+impl MonosecretBuilder {
+    pub fn load(self) -> Result<Resolved<Monosecret>, MonosecretError> { ... }
+    pub fn load_profile(self) -> Result<Resolved<MonosecretProfile>, MonosecretError> { ... }
 }
 ```

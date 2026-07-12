@@ -109,7 +109,7 @@ DATABASE_URL = { default = "postgresql://localhost/dev" }
 monosecret_derive::declare_secrets!("monosecret.toml");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let secrets = Secrets::builder()
+    let secrets = Monosecret::builder()
         .with_provider("keyring")
         .with_profile(Profile::Production)
         .load()?;
@@ -181,6 +181,7 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
               slug: "concepts/inheritance",
             },
             { label: "Secret Generation", slug: "concepts/generation" },
+            { label: "Secret References", slug: "concepts/references" },
             { label: "Audit Logging", slug: "concepts/audit" },
           ],
         },
@@ -215,8 +216,14 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
         {
           label: "SDK",
           items: [
+            { label: "Overview", slug: "sdk/overview" },
             { label: "Rust SDK", slug: "sdk/rust" },
             { label: "Dart SDK", slug: "sdk/dart" },
+            { label: "Python SDK", slug: "sdk/python" },
+            { label: "Go SDK", slug: "sdk/go" },
+            { label: "Ruby SDK", slug: "sdk/ruby" },
+            { label: "Node.js SDK", slug: "sdk/nodejs" },
+            { label: "Haskell SDK", slug: "sdk/haskell" },
           ],
         },
         {

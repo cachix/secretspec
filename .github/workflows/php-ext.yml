@@ -35,15 +35,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Non-thread-safe (NTS) is the default CLI/FPM build. 8.1 is omitted (it
-        # reaches end of life; 8.1 users can use the ext-ffi fallback or build
-        # from source). ZTS builds are a follow-up.
+        # Full php x target cross-product: the `include` entries share the
+        # `target` key with the axis, so they merge in the runner (rather than
+        # creating standalone combinations). Non-thread-safe (NTS) is the default
+        # CLI/FPM build. 8.1 is omitted (end of life). Windows and ZTS builds are
+        # a follow-up (ext-php-rs on Windows needs the PHP SDK dev pack + rust-lld;
+        # Windows users can use the ext-ffi backend meanwhile).
         php: ["8.2", "8.3", "8.4"]
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - aarch64-apple-darwin
         include:
-          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-latest, ext: so }
-          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm, ext: so }
-          - { target: aarch64-apple-darwin, runner: macos-latest, ext: so }
-          - { target: x86_64-pc-windows-msvc, runner: windows-latest, ext: dll }
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-latest }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm }
+          - { target: aarch64-apple-darwin, runner: macos-latest }
 
     steps:
       - uses: actions/checkout@v5
@@ -62,33 +68,30 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y llvm-dev libclang-dev clang libdbus-1-dev pkg-config
 
-      - name: Install LLVM (clang for bindgen)
-        if: runner.os == 'Windows'
-        run: choco install llvm -y
-
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
 
       - name: Build the extension
-        shell: bash
-        run: cargo build --release -p secretspec-php-native --target ${{ matrix.target }}
+        # Each runner is the target's native arch, so a plain release build emits
+        # the target's binary (no cross-compilation).
+        run: cargo build --release -p secretspec-php-native
 
       - name: Stage the extension under its distribution name
         id: stage
         shell: bash
         run: |
           set -euo pipefail
-          case "${{ matrix.ext }}" in
-            dll) built="secretspec_php_native.dll" ;;
-            *)   built="libsecretspec_php_native.$(test '${{ runner.os }}' = 'macOS' && echo dylib || echo so)" ;;
+          case "$(uname -s)" in
+            Darwin) built="libsecretspec_php_native.dylib" ;;
+            *)      built="libsecretspec_php_native.so" ;;
           esac
-          asset="secretspec-php-native-${{ matrix.php }}-nts-${{ matrix.target }}.${{ matrix.ext }}"
-          cp "target/${{ matrix.target }}/release/$built" "$asset"
+          # dlopen resolves by path, not suffix, so the macOS .dylib ships as .so.
+          asset="secretspec-php-native-${{ matrix.php }}-nts-${{ matrix.target }}.so"
+          cp "target/release/$built" "$asset"
           echo "asset=$asset" >> "$GITHUB_OUTPUT"
 
       - name: Smoke test (load the extension, check it registers)
-        # Cross-built binaries cannot be loaded on the runner; only smoke test the
-        # native-arch builds (all matrix rows here run on a native-arch runner).
+        # Every row builds natively, so the runner can load what it built.
         shell: bash
         run: |
           php -d extension="$PWD/${{ steps.stage.outputs.asset }}" -r '

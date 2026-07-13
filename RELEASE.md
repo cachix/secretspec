@@ -202,8 +202,11 @@ through Composer.
   project, and a secrets tool should not silently fetch a binary during
   `composer install`).
 - **Gaps (follow-up, unvalidated cross-platform):** the extension matrix is
-  NTS-only (no ZTS) and links the runner's glibc/system libs (same portability
-  caveat as the Ruby/Python jobs — a baseline/manylinux build is the fix); a
-  one-command PIE install is not wired (PIE builds non-Windows extensions from
-  source via phpize, which does not fit a Cargo extension); and the release-asset
-  uploads race cargo-dist's release creation, so they wait-then-`--clobber`.
+  Linux + macOS, NTS-only (no ZTS), and links the runner's glibc/system libs
+  (same portability caveat as the Ruby/Python jobs — a baseline/manylinux build
+  is the fix). A **Windows** extension build is deferred (ext-php-rs on Windows
+  needs the PHP SDK dev pack + `rust-lld`; Windows users can use the ext-ffi
+  backend, whose cdylib `ffi-build.yml` does build for Windows). A one-command
+  PIE install is not wired (PIE builds non-Windows extensions from source via
+  phpize, which does not fit a Cargo extension); and the release-asset uploads
+  race cargo-dist's release creation, so they wait-then-`--clobber`.

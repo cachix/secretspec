@@ -1,0 +1,22 @@
+[package]
+name = "secretspec-php-native"
+version.workspace = true
+edition.workspace = true
+repository = "https://github.com/cachix/secretspec"
+description = "ext-php-rs extension for the PHP SDK"
+license = "Apache-2.0"
+# The PHP client (PSR-4) lives in src/; keep the Rust source out of the way in
+# native/ so the two toolchains do not fight over the same directory.
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+
+[lib]
+name = "secretspec_php_native"
+path = "native/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+ext-php-rs = "0.13"
+secretspec = { workspace = true }

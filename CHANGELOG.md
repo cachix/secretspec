@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- PHP SDK (`cachix/secretspec`): resolve secrets from PHP, Laravel, and Symfony
+  over the same shared resolver as the other language SDKs. It ships as a native
+  PHP extension that embeds the resolver (works under PHP-FPM with no
+  `ffi.enable`, like `ext-redis`), with an `ext-ffi` fallback that dlopens the
+  library at runtime for CLI and local development.
+
 ### Changed
 - A `ref` routed at a single store (an explicit `--provider`, a single-provider
   chain, or the default provider) is now checked up front, before any store is

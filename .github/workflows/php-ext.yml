@@ -1,0 +1,119 @@
+name: "PHP extension"
+
+# Builds the secretspec-php-native PHP extension (ext-php-rs) as a prebuilt
+# shared object for each supported PHP minor x platform, smoke tests that it
+# loads and registers its functions, and on a version tag attaches the binaries
+# to the GitHub Release.
+#
+# DISTRIBUTION STATUS (see RELEASE.md): this builds and publishes prebuilt
+# extension binaries. Installing them is documented in the PHP SDK docs
+# (download + `extension=`, or `docker-php-ext-enable`, or build from source with
+# cargo). A one-command PIE install is a follow-up: PIE builds non-Windows
+# extensions from source via phpize, which does not apply to a Cargo/ext-php-rs
+# extension, so the prebuilt-binary path here is what is validated.
+#
+# The SDK itself is exercised on every PR by the devenv-based sdks.yml (both the
+# extension and the ext-ffi fallback); this workflow only builds the
+# distributable extension binaries.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - v**
+  pull_request:
+    paths:
+      - "secretspec-php/**"
+      - ".github/workflows/php-ext.yml"
+
+jobs:
+  build:
+    name: php-${{ matrix.php }}-${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write # attach binaries to the release (tag runs only)
+    strategy:
+      fail-fast: false
+      matrix:
+        # Non-thread-safe (NTS) is the default CLI/FPM build. 8.1 is omitted (it
+        # reaches end of life; 8.1 users can use the ext-ffi fallback or build
+        # from source). ZTS builds are a follow-up.
+        php: ["8.2", "8.3", "8.4"]
+        include:
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-latest, ext: so }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm, ext: so }
+          - { target: aarch64-apple-darwin, runner: macos-latest, ext: so }
+          - { target: x86_64-pc-windows-msvc, runner: windows-latest, ext: dll }
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          # php-config + headers, needed by ext-php-rs's build.
+          tools: none
+        env:
+          # Ensure the dev headers are available for the build.
+          phpts: nts
+
+      - name: Install Linux build dependencies (clang for bindgen, dbus for keyring)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y llvm-dev libclang-dev clang libdbus-1-dev pkg-config
+
+      - name: Install LLVM (clang for bindgen)
+        if: runner.os == 'Windows'
+        run: choco install llvm -y
+
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - name: Build the extension
+        shell: bash
+        run: cargo build --release -p secretspec-php-native --target ${{ matrix.target }}
+
+      - name: Stage the extension under its distribution name
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.ext }}" in
+            dll) built="secretspec_php_native.dll" ;;
+            *)   built="libsecretspec_php_native.$(test '${{ runner.os }}' = 'macOS' && echo dylib || echo so)" ;;
+          esac
+          asset="secretspec-php-native-${{ matrix.php }}-nts-${{ matrix.target }}.${{ matrix.ext }}"
+          cp "target/${{ matrix.target }}/release/$built" "$asset"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test (load the extension, check it registers)
+        # Cross-built binaries cannot be loaded on the runner; only smoke test the
+        # native-arch builds (all matrix rows here run on a native-arch runner).
+        shell: bash
+        run: |
+          php -d extension="$PWD/${{ steps.stage.outputs.asset }}" -r '
+            assert(function_exists("secretspec_native_resolve"));
+            assert(function_exists("secretspec_native_abi_version"));
+            echo secretspec_native_abi_version(), PHP_EOL;
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: php-ext-${{ matrix.php }}-${{ matrix.target }}
+          path: ${{ steps.stage.outputs.asset }}
+
+      - name: Publish extension to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          asset="${{ steps.stage.outputs.asset }}"
+          if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"
+          else shasum -a 256 "$asset" > "$asset.sha256"; fi
+          # cargo-dist's release.yml creates the release for this tag; wait for it.
+          for _ in $(seq 1 30); do
+            gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 && break || sleep 20
+          done
+          gh release upload "${GITHUB_REF_NAME}" "$asset" "$asset.sha256" --clobber

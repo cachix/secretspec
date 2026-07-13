@@ -78,6 +78,21 @@ No registry involved. `go get` reads the tag directly from git; `go-embed.yml`
 just attaches per-platform cdylibs to the GitHub Release for the optional
 self-contained build.
 
+### Packagist (PHP) — not yet set up
+
+Packagist has no OIDC/Trusted-Publishing mechanism; it reads a git repo and its
+root `composer.json` directly. This repo publishes the PHP package straight from
+the monorepo — the manifest lives at the repository root (`/composer.json`, with
+`vendor-dir` pointed into `secretspec-php/` and autoload sourcing
+`secretspec-php/src/`), so no split/mirror repo is needed. One-time setup:
+
+1. Submit `https://github.com/cachix/secretspec` on
+   [packagist.org](https://packagist.org) as package `cachix/secretspec`.
+2. Enable the GitHub auto-update hook (the Packagist GitHub app), so each
+   `vX.Y.Z` tag becomes a Composer version automatically.
+
+No CI workflow or token is involved — Packagist pulls from the tag on push.
+
 ## Python (PyPI) — `python-wheels.yml`
 
 - **Build:** the Rust resolver is statically linked into a pyo3 extension
@@ -159,3 +174,36 @@ self-contained, vendored build — not a module-proxy install).
   `napi pre-publish`). Authenticated via **npm Trusted Publishing** (OIDC); no
   token stored in CI.
 - **One-time setup:** already done — see "Before your first release" above.
+
+## PHP (Packagist + extension) — `php-ext.yml`
+
+The PHP SDK ships as two artifacts, because PHP delivers native code as an
+*extension* (provisioned at the image/php.ini level, like `ext-redis`), not
+through Composer.
+
+- **Client → Packagist.** The pure-PHP client (`cachix/secretspec`) is published
+  straight from the monorepo: the Composer manifest is the repository-root
+  `/composer.json` (autoload sources `secretspec-php/src/`; `vendor-dir` points
+  into `secretspec-php/` so the tooling stays there), which Packagist reads
+  directly — no split/mirror repo, no CI, no token. Packagist auto-updates from
+  each `vX.Y.Z` tag. No version-sync is needed — Composer takes the version from
+  the git tag (like Go), so `sync-sdk-versions.sh` does not touch it. One-time
+  setup: see "Packagist (PHP)" above.
+- **Extension → GitHub Release (`php-ext.yml`).** The `secretspec-php-native`
+  extension (an ext-php-rs cdylib embedding the resolver) is built as a prebuilt
+  shared object per PHP minor (8.2–8.4, NTS) × platform, smoke-tested, and
+  attached to the release. Users install it by dropping the `.so` in and
+  `extension=` / `docker-php-ext-enable`, or by building from source with cargo.
+- **ext-ffi fallback library.** For the no-extension path, `ffi-build.yml`
+  attaches the per-target `secretspec-ffi` library (with a `.sha256`) to the
+  release; the client's `vendor/bin/secretspec-install-lib` command downloads the
+  right one on demand. It is a deliberate opt-in command, not a Composer
+  post-install hook (a dependency's install scripts do not run in the consumer
+  project, and a secrets tool should not silently fetch a binary during
+  `composer install`).
+- **Gaps (follow-up, unvalidated cross-platform):** the extension matrix is
+  NTS-only (no ZTS) and links the runner's glibc/system libs (same portability
+  caveat as the Ruby/Python jobs — a baseline/manylinux build is the fix); a
+  one-command PIE install is not wired (PIE builds non-Windows extensions from
+  source via phpize, which does not fit a Cargo extension); and the release-asset
+  uploads race cargo-dist's release creation, so they wait-then-`--clobber`.

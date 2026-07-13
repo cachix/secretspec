@@ -509,7 +509,7 @@ $ secretspec audit -n 1
       <span class="landing-showcase-eyebrow">Language SDKs</span>
       <h2 class="landing-section-title">Use it from any language.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Rust, Python, Go, Ruby, Node.js/TypeScript, and Haskell all resolve from the same <code class="inline-code">secretspec.toml</code> through one Rust core — every provider, chain, and profile behaves identically, with no per-language logic. <a href="/sdk/overview/" class="landing-link">How the SDKs work →</a>
+        Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, and PHP all resolve from the same <code class="inline-code">secretspec.toml</code> through one Rust core — every provider, chain, and profile behaves identically, with no per-language logic. <a href="/sdk/overview/" class="landing-link">How the SDKs work →</a>
       </p>
     </div>
 
@@ -598,7 +598,7 @@ println!<span class="tok-pun">(</span><span class="tok-str">"{}"</span><span cla
     </div>
 
     <p class="landing-chain-result" style="margin-top: 2.5rem;">
-      Every SDK is a thin client over one native core — the <code class="inline-code">secretspec-ffi</code> library (or a napi-rs addon for Node) — so a new provider is available everywhere at once. For typed access in the dynamic languages, <code class="inline-code">secretspec schema</code> feeds <a href="https://quicktype.io" class="landing-link">quicktype</a> to generate typed classes. <a href="/sdk/overview/" class="landing-link">SDK overview →</a>
+      Every SDK is a thin client over one native core — the <code class="inline-code">secretspec-ffi</code> library, or a native extension that embeds it for Python, Node, and PHP — so a new provider is available everywhere at once. For typed access in the dynamic languages, <code class="inline-code">secretspec schema</code> feeds <a href="https://quicktype.io" class="landing-link">quicktype</a> to generate typed classes. <a href="/sdk/overview/" class="landing-link">SDK overview →</a>
     </p>
   </div>
 </section>

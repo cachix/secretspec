@@ -190,6 +190,7 @@ works identically with no per-language resolution logic:
 - [Ruby](https://secretspec.dev/sdk/ruby) (via a native C extension)
 - [Node.js / TypeScript](https://secretspec.dev/sdk/nodejs) (napi-rs addon)
 - [Haskell](https://secretspec.dev/sdk/haskell) (build-time FFI link)
+- [PHP](https://secretspec.dev/sdk/php) (ext-php-rs extension, with an `ext-ffi` fallback)
 
 ```python
 from secretspec import SecretSpec

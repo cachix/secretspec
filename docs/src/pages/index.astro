@@ -36,6 +36,7 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'vault', slug: 'vault', label: 'Vault / OpenBao' },
   { slug: 'awssm', label: 'AWS Secrets Manager' },
   { icon: 'googlecloud', slug: 'gcsm', label: 'Google Cloud Secret Manager' },
+  { icon: 'microsoftazure', slug: 'akv', label: 'Azure Key Vault' },
   { slug: 'protonpass', label: 'Proton Pass' },
   { icon: 'gnuprivacyguard', slug: 'pass', label: 'Pass (GPG)' },
   { icon: 'dotenv', slug: 'dotenv', label: '.env files' },
@@ -50,7 +51,7 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
 <StarlightPage
   frontmatter={{
     title: 'Declare secrets once. Store them anywhere.',
-    description: 'Declare what your application needs in secretspec.toml — store the values in any of 11 backends. No secrets in git. Same code, every environment.',
+    description: 'Declare what your application needs in secretspec.toml — store the values in any of 12 backends. No secrets in git. Same code, every environment.',
     template: 'splash',
     hero: { tagline: '' },
   }}
@@ -82,7 +83,7 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
       <p class="landing-badge">Declarative secrets manager</p>
       <h1 id="_top" class="landing-hero-title">Declare secrets once.<br>Store them anywhere.</h1>
       <p class="landing-hero-subtitle">
-        Stop leaking <code class="inline-code">.env</code> files. Define what your application needs in <code class="inline-code">secretspec.toml</code>, then plug in keyring, 1Password, Vault, AWS, or any of 11 backends — same code, every environment.
+        Stop leaking <code class="inline-code">.env</code> files. Define what your application needs in <code class="inline-code">secretspec.toml</code>, then plug in keyring, 1Password, Vault, AWS, Azure, or any of 12 backends — same code, every environment.
       </p>
       <div class="landing-hero-actions">
         <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
@@ -186,7 +187,7 @@ $ secretspec run --profile production -- npm start
       <div class="landing-step">
         <span class="landing-step-num">2</span>
         <p class="landing-step-title">Configure</p>
-        <p class="landing-step-desc">Pick a backend: system keyring, 1Password, Vault, AWS, GCP, Bitwarden, Pass, dotenv, or env vars.</p>
+        <p class="landing-step-desc">Pick a backend: system keyring, 1Password, Vault, AWS, GCP, Azure, Bitwarden, Pass, dotenv, or env vars.</p>
         <pre is:raw class="landing-step-code"><code>$ secretspec config init
 ? Default provider: keyring</code></pre>
       </div>

@@ -40,6 +40,9 @@ rustls = { workspace = true, optional = true }
 google-cloud-secretmanager-v1 = { workspace = true, optional = true }
 aws-config = { workspace = true, optional = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
+azure_core = { workspace = true, optional = true }
+azure_identity = { workspace = true, optional = true }
+azure_security_keyvault_secrets = { workspace = true, optional = true }
 tokio.workspace = true
 reqwest = { workspace = true, optional = true }
 rand.workspace = true
@@ -49,10 +52,11 @@ data-encoding.workspace = true
 detect-coding-agent.workspace = true
 
 [features]
-default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws"]
+default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws", "akv"]
 cli = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]
 awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
 vault = ["dep:reqwest"]
 bws = ["dep:bitwarden", "dep:rustls"]
+akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secrets"]

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Azure Key Vault provider (`akv://`). Authenticates via a service principal
+  (`AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`), falling back to
+  a signed-in Azure CLI / Azure Developer CLI session; managed identity and
+  AKS workload identity are also available via `?auth=managed_identity` and
+  `?auth=workload_identity`.
+
 ### Changed
 - A `ref` routed at a single store (an explicit `--provider`, a single-provider
   chain, or the default provider) is now checked up front, before any store is

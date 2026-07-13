@@ -20,6 +20,7 @@
 //! - [`EnvProvider`]: Environment variables (read-only)
 //! - [`OnePasswordProvider`]: OnePassword integration
 //! - [`LastPassProvider`]: LastPass integration
+//! - [`AkvProvider`]: Azure Key Vault integration
 //!
 //! ## URI-Based Configuration
 //!
@@ -193,6 +194,8 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
     }
 }
 
+#[cfg(feature = "akv")]
+pub mod akv;
 #[cfg(feature = "awssm")]
 pub mod awssm;
 #[cfg(feature = "bws")]

@@ -11,6 +11,9 @@ autobins = false
 autoexamples = false
 autotests = false
 autobenches = false
+# build.rs adds the macOS `-undefined dynamic_lookup` linker flag (Zend symbols
+# resolve at dlopen time); no-op on Linux.
+build = "build.rs"
 
 [lib]
 name = "secretspec_php_native"

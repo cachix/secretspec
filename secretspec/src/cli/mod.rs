@@ -257,10 +257,8 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
         let profile_config = &config.profiles[*profile_name];
         let mut profile_table = Table::new();
 
-        let mut secret_names: Vec<&String> = profile_config.secrets.keys().collect();
-        secret_names.sort();
-        for secret_name in secret_names {
-            let secret_config = &profile_config.secrets[secret_name];
+        for secret_name in profile_config.sorted_secret_names() {
+            let secret_config = &profile_config.secrets[&secret_name];
             let mut inline = InlineTable::new();
             inline.insert(
                 "description",
@@ -272,7 +270,7 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
             if let Some(default) = &secret_config.default {
                 inline.insert("default", Value::from(default.as_str()));
             }
-            profile_table.insert(secret_name, toml_edit::value(inline));
+            profile_table.insert(&secret_name, toml_edit::value(inline));
         }
 
         // Surface the `extends` option as a comment before the first profile,

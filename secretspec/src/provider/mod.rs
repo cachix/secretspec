@@ -366,6 +366,40 @@ pub fn providers() -> Vec<ProviderInfo> {
         .collect()
 }
 
+/// Splits a provider spec at the first `:` into its scheme token and the rest
+/// (empty for a bare provider name). The one definition of "the scheme",
+/// shared by the `TryFrom<&str>` URI parser and [`spec_names_known_provider`],
+/// so the two cannot disagree on how a spec is split.
+fn split_spec(spec: &str) -> (&str, &str) {
+    match spec.find(':') {
+        Some(pos) => (&spec[..pos], &spec[pos + 1..]),
+        None => (spec, ""),
+    }
+}
+
+/// Whether `spec` names a registered provider: a bare name (`keyring`), a
+/// `scheme:path` shorthand (`dotenv:.env.production`), or a full URI. Checks
+/// the leading scheme token against the registry without constructing a
+/// provider, so alias resolution can tell a valid provider spec apart from an
+/// undefined alias.
+///
+/// The common `1password` misspelling of `onepassword` errors with its
+/// corrective "use `onepassword` instead" message. Both the `TryFrom<&str>`
+/// URI parser and alias resolution gate specs through here, so the correction
+/// fires in one place no matter which path first sees the spec.
+pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
+    let (scheme, _) = split_spec(spec);
+    if scheme == "1password" {
+        return Err(SecretSpecError::ProviderOperationFailed(
+            "Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault)"
+                .to_string(),
+        ));
+    }
+    Ok(PROVIDER_REGISTRY
+        .iter()
+        .any(|reg| reg.schemes.contains(&scheme)))
+}
+
 /// Trait defining the interface for secret storage providers.
 ///
 /// All secret storage backends must implement this trait to integrate with SecretSpec.
@@ -900,29 +934,12 @@ impl TryFrom<&str> for Box<dyn Provider> {
 
     fn try_from(s: &str) -> Result<Self> {
         // Parse the scheme from the input string
-        let (scheme, rest) = if let Some(pos) = s.find(':') {
-            let scheme = &s[..pos];
-            let rest = &s[pos + 1..];
-            (scheme, rest)
-        } else {
-            // Just a provider name, no URI components
-            (s, "")
-        };
+        let (scheme, rest) = split_spec(s);
 
-        // Validate scheme first
-        if scheme == "1password" {
-            return Err(SecretSpecError::ProviderOperationFailed(
-                "Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault)"
-                    .to_string(),
-            ));
-        }
-
-        // Check if the scheme is registered
-        let is_valid_scheme = PROVIDER_REGISTRY
-            .iter()
-            .any(|reg| reg.schemes.contains(&scheme));
-
-        if !is_valid_scheme {
+        // Reject the `1password` misspelling (with its corrective error) and
+        // check the scheme against the registry, through the same gate alias
+        // resolution uses.
+        if !spec_names_known_provider(s)? {
             // Check if it's a known provider name to give a better error
             if PROVIDER_REGISTRY.iter().any(|reg| reg.info.name == scheme) {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(

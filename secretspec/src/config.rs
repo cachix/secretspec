@@ -542,6 +542,14 @@ impl Profile {
     pub fn iter(&self) -> hash_map::Iter<'_, String, Secret> {
         self.secrets.iter()
     }
+
+    /// Secret names declared in this profile, sorted for deterministic
+    /// ordering (grouping, missing lists) instead of the map's hash order.
+    pub(crate) fn sorted_secret_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.secrets.keys().cloned().collect();
+        names.sort();
+        names
+    }
 }
 
 impl Default for Profile {

@@ -73,12 +73,20 @@ run_haskell() { (
   for l in $SECRETSPEC_FFI_NATIVE_LIBS; do ghc_optl+=("--ghc-options=-optl$l"); done
   cabal test --extra-lib-dirs="$hs_lib_dir" "${ghc_optl[@]}" --test-show-details=streaming
 ); }
+run_php() { (
+  # The PHP SDK dlopens the cdylib via ext-ffi at runtime, located through
+  # SECRETSPEC_FFI_LIB exported above. The Composer manifest is at the repo root;
+  # vendor-dir points into secretspec-php/, so phpunit runs from there.
+  [ -d secretspec-php/vendor ] || composer install --no-interaction --no-progress >/dev/null
+  cd secretspec-php && ./vendor/bin/phpunit tests/ConformanceTest.php
+); }
 
 run "Python"  python run_python
 run "Go"      go     run_go
 run "Ruby"    ruby   run_ruby
 run "Node"    node   run_node
 run "Haskell" cabal  run_haskell
+run "PHP"     php    run_php
 
 echo
 echo "==> Conformance summary"

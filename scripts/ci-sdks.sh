@@ -85,4 +85,24 @@ echo "==> Haskell"
     --write-ghc-environment-files=always
 )
 
+echo "==> PHP"
+# The PHP SDK has two native backends over the same resolver; exercise both.
+# The Composer manifest is at the repo root (so Packagist can read it from the
+# monorepo); vendor-dir points into secretspec-php/, so phpunit still runs there.
+composer validate --no-check-lock --no-check-publish
+composer install --no-interaction --no-progress
+
+echo "==> PHP (ext-ffi fallback, dlopens the cdylib via SECRETSPEC_FFI_LIB)"
+( cd secretspec-php && php ./vendor/bin/phpunit )
+
+echo "==> PHP (secretspec-php-native extension, ext-php-rs)"
+# Build the extension in debug and load it directly; when it is present the SDK
+# prefers it over ext-ffi. This also proves the extension registers its functions.
+cargo build -p secretspec-php-native
+case "$(uname -s)" in
+  Darwin) php_ext="$target_dir/debug/libsecretspec_php_native.dylib" ;;
+  *)      php_ext="$target_dir/debug/libsecretspec_php_native.so" ;;
+esac
+( cd secretspec-php && php -d extension="$php_ext" ./vendor/bin/phpunit )
+
 echo "==> All SDK suites passed"

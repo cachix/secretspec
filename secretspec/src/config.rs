@@ -568,6 +568,16 @@ impl<'a> IntoIterator for &'a Profile {
     }
 }
 
+impl IntoIterator for Profile {
+    type Item = (String, Secret);
+    type IntoIter = hash_map::IntoIter<String, Secret>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.secrets.into_iter()
+    }
+}
+
 /// Configuration for auto-generation of a secret.
 ///
 /// Can be either a simple boolean (`generate = true`) or a table with

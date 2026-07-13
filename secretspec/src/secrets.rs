@@ -1188,7 +1188,13 @@ impl Secrets {
             }
         };
 
-        let backend = self.write_provider_for_route(&planned.route)?;
+        let backend = match self.write_provider_for_route(&planned.route) {
+            Ok(backend) => backend,
+            Err(err) => {
+                self.record_key_error(AuditAction::Set, &profile_name, name, None, None, &err);
+                return Err(err);
+            }
+        };
 
         let addr = planned.as_address(&self.config.project.name, &profile_name);
         // Refuse before prompting for a value. The provider states the reason:

@@ -48,6 +48,18 @@ fn test_new_with_project_config() {
 }
 
 #[test]
+fn profile_supports_consuming_iteration() {
+    let profile = Profile {
+        defaults: None,
+        secrets: HashMap::from([("API_KEY".to_string(), Secret::default())]),
+    };
+
+    let secrets: HashMap<String, Secret> = profile.into_iter().collect();
+
+    assert!(secrets.contains_key("API_KEY"));
+}
+
+#[test]
 fn test_new_with_custom_configs() {
     let temp_dir = TempDir::new().unwrap();
     let project_path = temp_dir.path().join("custom-secretspec.toml");
@@ -5895,6 +5907,27 @@ fn audit_set_undefined_records_error() {
     assert_eq!(events[0]["action"], "set");
     assert_eq!(events[0]["outcome"], "error");
     assert_eq!(events[0]["error_kind"], "secret_not_found");
+}
+
+#[test]
+fn audit_set_provider_construction_failure_records_error() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec("", required_secret_profile("REQUIRED"), &temp_dir);
+    spec.set_provider("ghost");
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    assert!(matches!(
+        spec.set("REQUIRED", Some("v".to_string())),
+        Err(SecretSpecError::ProviderNotFound(_))
+    ));
+
+    let events = audit_events(&lines);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["action"], "set");
+    assert_eq!(events[0]["outcome"], "error");
+    assert_eq!(events[0]["error_kind"], "provider_not_found");
+    assert_eq!(events[0]["key"], "REQUIRED");
 }
 
 #[test]

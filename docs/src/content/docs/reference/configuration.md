@@ -186,6 +186,31 @@ $ secretspec config provider remove prod_vault
 
 The CLI commands operate on the user-global config only — edit `secretspec.toml` by hand to change project-level aliases.
 
+#### Alias value forms
+
+An alias value is either a bare provider URI string, or a table that also declares the bootstrap credentials the provider needs. Both forms are accepted in the project `[providers]` and user `[defaults.providers]` tables.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `uri` | string | Yes (table form) | The provider URI. A bare-string alias is shorthand for `{ uri = "..." }`. |
+| `env` | table | No | Maps an environment variable the provider needs to a [bootstrap source](/concepts/providers/#bootstrap-credentials). |
+
+Each `env` value is itself either a bare provider spec — read at the convention path for the active project and profile — or a table `{ provider = "...", ref = { ... } }` that pins the exact location with the same `ref` coordinates a secret uses.
+
+```toml title="secretspec.toml"
+[providers]
+keyring = "keyring://"
+# bare string: read BWS_ACCESS_TOKEN from keyring at the convention path
+bws = { uri = "bws://project-uuid", env = { BWS_ACCESS_TOKEN = "keyring" } }
+
+[providers.vault_prod]
+uri = "vault://secret/myapp?auth=approle"
+env = { VAULT_ROLE_ID   = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "role_id" } },
+        VAULT_SECRET_ID = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "secret_id" } } }
+```
+
+A variable already set in the environment takes precedence over its declared source, bootstrap chains are limited to one hop, and a fetched credential is never written to the environment. Store the credentials with [`secretspec config provider login`](/reference/cli/#config-provider-login). See [Bootstrap Credentials](/concepts/providers/#bootstrap-credentials) for the full behavior.
+
 ### Audit Logging
 
 secretspec records every secret access to a local [audit log](/concepts/audit/).

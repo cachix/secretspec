@@ -73,20 +73,25 @@ Add a provider alias to your user-level configuration (`~/.config/secretspec/con
 To share aliases with your team, declare them in a top-level `[providers]` table in `secretspec.toml` instead — they take precedence over user-level aliases on name conflict.
 
 ```bash
-secretspec config provider add <ALIAS> <URI>
+secretspec config provider add <ALIAS> <URI> [--env VAR=PROVIDER]...
 ```
 
 **Arguments:**
 - `<ALIAS>` - Short name for the provider (e.g., `prod_vault`, `shared`)
 - `<URI>` - Provider URI (e.g., `onepassword://Production`, `env://`)
 
+**Options:**
+- `--env <VAR=PROVIDER>` - Declare a [bootstrap credential](/concepts/providers/#bootstrap-credentials) the provider needs: the environment variable `VAR` is read from `PROVIDER` before the environment. Repeatable. Only the bare-string source form is expressible on the command line; add a `ref` by editing the config.
+
 **Example:**
 ```bash
 $ secretspec config provider add prod_vault "onepassword://Production"
-✓ Provider alias 'prod_vault' saved
+✓ Provider alias 'prod_vault' added: 'onepassword://Production'
 
-$ secretspec config provider add shared "onepassword://Shared"
-✓ Provider alias 'shared' saved
+$ secretspec config provider add bws "bws://project-uuid" --env BWS_ACCESS_TOKEN=keyring
+✓ Provider alias 'bws' added: 'bws://project-uuid'
+  bootstrap: BWS_ACCESS_TOKEN=keyring
+  run 'secretspec config provider login bws' to store the credentials
 ```
 
 ### config provider list
@@ -119,6 +124,27 @@ secretspec config provider remove <ALIAS>
 $ secretspec config provider remove prod_vault
 ✓ Provider alias 'prod_vault' removed
 ```
+
+### config provider login
+Store the [bootstrap credentials](/concepts/providers/#bootstrap-credentials) a provider alias declares in its `env` map. Prompts (hidden input) for each variable and writes it to its source provider at the exact location resolution reads it back from. Runs in a project, like `set` and `check`.
+
+```bash
+secretspec config provider login <ALIAS>
+```
+
+**Arguments:**
+- `<ALIAS>` - Name of the alias whose credentials to store
+
+**Example:**
+```bash
+$ secretspec config provider login bws
+Enter BWS_ACCESS_TOKEN for provider 'bws' (source: keyring): ****
+✓ stored BWS_ACCESS_TOKEN in keyring at myproject/default/BWS_ACCESS_TOKEN
+
+Run 'secretspec check --provider bws' to verify authentication.
+```
+
+A read-only source provider is rejected. An alias that declares no bootstrap credentials reports that there is nothing to store.
 
 ### check
 Check if all required secrets are available, with interactive prompting for missing secrets.

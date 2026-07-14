@@ -123,6 +123,46 @@ keyring = "keyring://"
 env = "env://"
 ```
 
+### Bootstrap Credentials
+
+:::note
+Bootstrap providers are available since version 0.15.
+:::
+
+Some providers need a secret of their own before they can serve any secrets — a Bitwarden machine token (`BWS_ACCESS_TOKEN`), a Vault token or AppRole credentials, a 1Password service account token. Normally these come from environment variables, which pushes plaintext tokens back into shell profiles and CI variable pages. An alias can instead source them from another provider, so the token lives in your keyring or vault:
+
+```toml title="secretspec.toml"
+[providers]
+keyring = "keyring://"
+
+# BWS_ACCESS_TOKEN is read from keyring before the provider is used
+bws = { uri = "bws://a9230ec4-5507-4870-b8b5-b3f500587e4c", env = { BWS_ACCESS_TOKEN = "keyring" } }
+```
+
+Each entry in `env` binds an environment variable the provider needs to a source. A bare string is a provider spec and reads the credential at the convention path (`{project}/{profile}/{VAR}`) for the active profile. A table pins the exact location with the same `ref` coordinates a secret uses:
+
+```toml title="secretspec.toml"
+[providers.vault_prod]
+uri = "vault://secret/myapp?auth=approle"
+env = { VAULT_ROLE_ID   = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "role_id" } },
+        VAULT_SECRET_ID = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "secret_id" } } }
+```
+
+Store the credentials once with [`secretspec config provider login`](/reference/cli/#config-provider-login), which prompts for each one and writes it to its source:
+
+```bash
+$ secretspec config provider login bws
+Enter BWS_ACCESS_TOKEN for provider 'bws' (source: keyring): ****
+✓ stored BWS_ACCESS_TOKEN in keyring at smoke/default/BWS_ACCESS_TOKEN
+```
+
+A few things hold by design:
+
+- **The environment still wins.** If the variable is already exported (as in CI), that value is used and the source is not consulted, so CI keeps working with no extra configuration.
+- **Nothing leaks.** The credential is handed to the provider in memory; it is never written to the environment, and never reaches processes started by `secretspec run`.
+- **One hop.** A bootstrap source may not itself declare bootstrap credentials, which is validated up front and makes cycles impossible.
+- **Machine-wide vs per-profile.** A bare-string source is stored per project and profile; use a `ref` to pin a token to one location shared across projects.
+
 ### Fallback Chains
 
 When a secret specifies multiple providers, SecretSpec tries each provider in order until it finds the secret:
@@ -145,6 +185,12 @@ Use CLI commands to manage user-level provider aliases in `~/.config/secretspec/
 ```bash
 # Add a provider alias
 $ secretspec config provider add prod_vault "onepassword://Production"
+
+# Add an alias whose provider bootstraps a credential from another provider
+$ secretspec config provider add bws "bws://project-uuid" --env BWS_ACCESS_TOKEN=keyring
+
+# Store the bootstrap credentials an alias declares
+$ secretspec config provider login bws
 
 # List all aliases
 $ secretspec config provider list

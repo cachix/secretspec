@@ -46,6 +46,15 @@ Set `OP_SERVICE_ACCOUNT_TOKEN` in the environment, or use the
 `onepassword+token://` URI scheme. See the [CI/CD section](#cicd-with-service-accounts)
 below.
 
+The token can also be read from another provider (for example your keyring)
+rather than the environment or a plaintext URI — see
+[Bootstrap Credentials](/concepts/providers/#bootstrap-credentials):
+
+```toml title="secretspec.toml"
+[providers]
+op = { uri = "onepassword://Production", env = { OP_SERVICE_ACCOUNT_TOKEN = "keyring" } }
+```
+
 ### Manual signin (legacy)
 
 Run `eval $(op signin)` to set per-shell `OP_SESSION_*` tokens. These

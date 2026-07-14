@@ -74,6 +74,13 @@ Set the `BWS_ACCESS_TOKEN` environment variable with your machine account access
 export BWS_ACCESS_TOKEN="0.your-access-token..."
 ```
 
+Instead of an environment variable, the token can come from another provider (for example your keyring), so it never lives in a shell profile — see [Bootstrap Credentials](/concepts/providers/#bootstrap-credentials):
+
+```toml title="secretspec.toml"
+[providers]
+bws = { uri = "bws://a9230ec4-5507-4870-b8b5-b3f500587e4c", env = { BWS_ACCESS_TOKEN = "keyring" } }
+```
+
 ### Basic Commands
 
 ```bash

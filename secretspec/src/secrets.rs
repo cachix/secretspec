@@ -845,6 +845,14 @@ impl Secrets {
         }
     }
 
+    /// Resolve the effective (merged) config for a secret that is known to
+    /// belong to `profile`. Any secret yielded by iterating that profile is
+    /// guaranteed to have an effective config, so a missing one is a bug.
+    fn effective_secret_config(&self, name: &str, profile: &str) -> crate::config::Secret {
+        self.resolve_secret_config(name, Some(profile))
+            .expect("secret from the resolved profile must have an effective config")
+    }
+
     /// Provider-alias maps in lookup order: project `secretspec.toml` first,
     /// then user-global config. Project entries win on conflict so teams can
     /// pin shareable mappings in version control while still allowing per-user
@@ -1636,7 +1644,8 @@ impl Secrets {
             .collect::<HashSet<_>>();
         let missing_optional: HashSet<&String> = valid.missing_optional.iter().collect();
 
-        for (name, config) in profile.iter() {
+        for (name, _) in profile.iter() {
+            let config = self.effective_secret_config(name, &valid.resolved.profile);
             if missing_optional.contains(&name) {
                 optional_count += 1;
                 eprintln!(
@@ -1683,7 +1692,8 @@ impl Secrets {
             .map(|(name, _)| name)
             .collect::<HashSet<_>>();
 
-        for (name, config) in &profile {
+        for (name, _) in &profile {
+            let config = self.effective_secret_config(name, &errors.profile);
             if errors.missing_required.contains(name) {
                 missing_count += 1;
                 eprintln!(

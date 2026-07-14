@@ -84,11 +84,17 @@ impl Config {
             ));
         }
 
-        // Validate each profile
+        let default_profile = self.profiles.get("default");
+
+        // Validate each profile. Non-default profiles are partial overrides, so
+        // their secrets may inherit descriptions from the default profile. The
+        // default profile inheriting from itself is a no-op.
         for (profile_name, profile) in &self.profiles {
-            profile.validate().map_err(|e| {
-                ParseError::Validation(format!("Profile '{}': {}", profile_name, e))
-            })?;
+            profile
+                .validate_with_default(default_profile)
+                .map_err(|e| {
+                    ParseError::Validation(format!("Profile '{}': {}", profile_name, e))
+                })?;
         }
 
         Ok(())
@@ -504,6 +510,10 @@ impl Profile {
     ///
     /// Ensures all secrets have valid names and configurations.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_with_default(None)
+    }
+
+    fn validate_with_default(&self, default_profile: Option<&Profile>) -> Result<(), String> {
         if self.secrets.is_empty() {
             return Err("Profile must define at least one secret".into());
         }
@@ -517,8 +527,12 @@ impl Profile {
                 ));
             }
 
+            let inherited_description = default_profile
+                .and_then(|profile| profile.secrets.get(name))
+                .and_then(|secret| secret.description.as_deref());
+
             secret
-                .validate()
+                .validate_with_description(inherited_description)
                 .map_err(|e| format!("Secret '{}': {}", name, e))?;
         }
 
@@ -889,12 +903,14 @@ impl Secret {
     /// Ensures that required secrets don't have default values,
     /// and that generation config is consistent with type.
     pub fn validate(&self) -> Result<(), String> {
-        if let Some(desc) = &self.description {
-            if desc.is_empty() {
-                return Err("description cannot be empty".into());
-            }
-        } else {
-            return Err("missing description".into());
+        self.validate_with_description(None)
+    }
+
+    fn validate_with_description(&self, inherited_description: Option<&str>) -> Result<(), String> {
+        match self.description.as_deref().or(inherited_description) {
+            Some("") => return Err("description cannot be empty".into()),
+            None => return Err("missing description".into()),
+            Some(_) => {}
         }
 
         // If required is explicitly true and default is set, that's an error
@@ -1587,6 +1603,50 @@ mod validation_tests {
             .validate()
             .is_ok()
         );
+    }
+
+    #[test]
+    fn config_validate_allows_profile_override_to_inherit_description() {
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "tmp"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "Database connection string", required = true }
+
+[profiles.development]
+DATABASE_URL = { default = "sqlite:///dev.db" }
+"#,
+        )
+        .unwrap();
+
+        config.validate().unwrap();
+
+        let spec = crate::Secrets::new(config, None, Some("development".to_string()), None);
+        let resolved = spec
+            .resolve_secret_config("DATABASE_URL", Some("development"))
+            .unwrap();
+        assert_eq!(
+            resolved.description.as_deref(),
+            Some("Database connection string")
+        );
+        assert_eq!(resolved.default.as_deref(), Some("sqlite:///dev.db"));
+    }
+
+    #[test]
+    fn config_validate_requires_description_for_profile_only_secret() {
+        let config = config_with(
+            "proj",
+            vec![
+                ("default", vec![("API_KEY", secret(Some("API key")))]),
+                ("development", vec![("DATABASE_URL", secret(None))]),
+            ],
+        );
+
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("missing description"));
     }
 
     #[test]

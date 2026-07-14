@@ -33,22 +33,48 @@ use std::collections::HashMap;
 ///
 /// An explicit `--provider`/`SECRETSPEC_PROVIDER`/builder override collapses
 /// any chain to just that store: it becomes the primary with no fallback.
+/// The resolved primary store: the raw spec used to build it, plus its resolved
+/// URI for display.
+///
+/// Construction and grouping key on [`spec`](Self::spec) rather than the URI so
+/// that an alias's bootstrap `env` map is still reachable when the provider is
+/// built (a resolved URI is not an alias and has lost it), and so two aliases
+/// that happen to share a URI but declare different credentials never merge into
+/// one group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedPrimary {
+    /// The raw primary chain entry: an alias name, a bare provider name, or a
+    /// URI. The build key.
+    pub spec: String,
+    /// The resolved, credential-free URI, for display and the resolution report.
+    pub uri: String,
+}
+
 #[derive(Debug)]
 pub(crate) struct Route {
     /// The store consulted first — the resolved chain head or the explicit
     /// override — or `None` for the default provider.
-    pub primary: Option<String>,
+    pub primary: Option<ResolvedPrimary>,
     /// The chain's remaining specs (aliases or URIs), raw, tried in order —
     /// and resolved — only after the primary misses.
     pub fallback: Vec<String>,
 }
 
 impl Route {
-    /// The store consulted first, `None` meaning the default provider. This is
-    /// the grouping key and the write target: secrets sharing a primary store
-    /// are fetched together, and a write goes to the primary.
+    /// The resolved, credential-free URI of the store consulted first, `None`
+    /// meaning the default provider. Used for display and the resolution report,
+    /// never as the grouping/build key — see [`Route::group_key`].
     pub(crate) fn primary(&self) -> Option<&str> {
-        self.primary.as_deref()
+        self.primary.as_ref().map(|primary| primary.uri.as_str())
+    }
+
+    /// The raw primary spec that groups secrets and builds the store, `None`
+    /// meaning the default provider. Distinct from [`Route::primary`] (the
+    /// resolved URI): secrets sharing a primary store are fetched together and a
+    /// write goes to the primary, and keying on the spec keeps an alias's
+    /// bootstrap `env` reachable at build time.
+    pub(crate) fn group_key(&self) -> Option<&str> {
+        self.primary.as_ref().map(|primary| primary.spec.as_str())
     }
 
     /// The raw fallback specs a read walks after the primary misses, when
@@ -59,13 +85,14 @@ impl Route {
         (!self.fallback.is_empty()).then_some(self.fallback.as_slice())
     }
 
-    /// The ordered provider specs a read walks — the primary followed by the raw
-    /// fallback — or `None` for the default provider. Each entry is resolved only
-    /// when the read reaches it, so the chain is genuinely tried in order.
+    /// The ordered provider specs a read walks — the primary spec followed by
+    /// the raw fallback — or `None` for the default provider. Each entry is
+    /// resolved (and bootstrapped) only when the read reaches it, so the chain
+    /// is genuinely tried in order.
     pub(crate) fn specs(&self) -> Option<Vec<String>> {
         self.primary.as_ref().map(|primary| {
             let mut specs = Vec::with_capacity(1 + self.fallback.len());
-            specs.push(primary.clone());
+            specs.push(primary.spec.clone());
             specs.extend(self.fallback.iter().cloned());
             specs
         })
@@ -124,15 +151,17 @@ pub(crate) struct ResolutionPlan {
 }
 
 impl ResolutionPlan {
-    /// Primary-store groups in first-seen order: each pairs a store URI
+    /// Primary-store groups in first-seen order: each pairs a primary spec
     /// (`None` = default provider) with the planned secrets fetched together.
-    /// Derived from each secret's [`Route::primary`] on demand, so grouping
-    /// can never drift from the routes.
+    /// Derived from each secret's [`Route::group_key`] on demand, so grouping
+    /// can never drift from the routes. Keying on the spec (not the resolved
+    /// URI) keeps an alias's bootstrap `env` reachable at build time and keeps
+    /// two aliases that share a URI but differ in credentials in separate groups.
     pub(crate) fn groups(&self) -> Vec<(Option<&str>, Vec<&PlannedSecret>)> {
         let mut groups: Vec<(Option<&str>, Vec<&PlannedSecret>)> = Vec::new();
         let mut group_index: HashMap<Option<&str>, usize> = HashMap::new();
         for secret in &self.secrets {
-            let primary = secret.route.primary();
+            let primary = secret.route.group_key();
             match group_index.get(&primary) {
                 Some(&idx) => groups[idx].1.push(secret),
                 None => {
@@ -252,16 +281,33 @@ impl Secrets {
         override_uri: &Option<String>,
     ) -> Result<Route> {
         if let Some(uri) = override_uri {
+            // An override is already resolved to a URI, so it carries no alias
+            // and no bootstrap `env`; spec and uri are the same.
             return Ok(Route {
-                primary: Some(uri.clone()),
+                primary: Some(ResolvedPrimary {
+                    spec: uri.clone(),
+                    uri: uri.clone(),
+                }),
                 fallback: Vec::new(),
             });
         }
         match config.providers.as_deref() {
-            Some([first, fallback @ ..]) => Ok(Route {
-                primary: Some(self.resolve_one_provider(first)?),
-                fallback: fallback.to_vec(),
-            }),
+            Some([first, fallback @ ..]) => {
+                // Resolve the primary URI for display and to fail fast on an
+                // undefined primary alias, and validate its bootstrap `env`
+                // (unknown source, one-hop) — both pure map lookups. The raw
+                // spec is kept as the build key so the alias's `env` is still
+                // reachable when the store is constructed.
+                let uri = self.resolve_one_provider(first)?;
+                self.validate_primary_bootstrap(first)?;
+                Ok(Route {
+                    primary: Some(ResolvedPrimary {
+                        spec: first.clone(),
+                        uri,
+                    }),
+                    fallback: fallback.to_vec(),
+                })
+            }
             _ => Ok(Route {
                 primary: None,
                 fallback: Vec::new(),
@@ -461,6 +507,27 @@ mod tests {
         assert_eq!(
             group_names(&plan),
             vec![(None, vec!["A"]), (Some("keyring://"), vec!["B", "C"])]
+        );
+    }
+
+    #[test]
+    fn distinct_aliases_sharing_a_uri_do_not_merge() {
+        let _env = scrub_resolution_env();
+        let secrets = HashMap::from([
+            ("A".to_string(), secret(Some(vec!["one"]))),
+            ("B".to_string(), secret(Some(vec!["two"]))),
+        ]);
+        // Two aliases, same URI, different names: grouping keys on the spec, so
+        // they stay in separate groups (they could carry different bootstrap
+        // credentials, which the resolved URI has lost).
+        let plan = plan(&spec(
+            secrets,
+            None,
+            &[("one", "keyring://"), ("two", "keyring://")],
+        ));
+        assert_eq!(
+            group_names(&plan),
+            vec![(Some("one"), vec!["A"]), (Some("two"), vec!["B"])]
         );
     }
 

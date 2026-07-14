@@ -984,71 +984,79 @@ impl TryFrom<&str> for Box<dyn Provider> {
     type Error = SecretSpecError;
 
     fn try_from(s: &str) -> Result<Self> {
-        // Parse the scheme from the input string
-        let (scheme, rest) = split_spec(s);
+        provider_from_spec(s, BootstrapEnv::new())
+    }
+}
 
-        // Reject the `1password` misspelling (with its corrective error) and
-        // check the scheme against the registry, through the same gate alias
-        // resolution uses.
-        if !spec_names_known_provider(s)? {
-            // Check if it's a known provider name to give a better error
-            if PROVIDER_REGISTRY.iter().any(|reg| reg.info.name == scheme) {
-                return Err(SecretSpecError::ProviderOperationFailed(format!(
-                    "Provider '{}' exists but URI parsing failed",
-                    scheme
-                )));
-            } else {
-                return Err(SecretSpecError::ProviderNotFound(scheme.to_string()));
-            }
-        }
+/// Builds a boxed provider from a spec string (a bare name, `scheme:...`
+/// shorthand, or full URI), handing it the given bootstrap overlay. The shared
+/// body of the string `TryFrom` impls: construction funnels here so URL
+/// normalization and overlay injection have exactly one home.
+pub(crate) fn provider_from_spec(s: &str, bootstrap: BootstrapEnv) -> Result<Box<dyn Provider>> {
+    // Parse the scheme from the input string
+    let (scheme, rest) = split_spec(s);
 
-        // Build a proper URL with the correct scheme.
-        //
-        // Windows absolute paths (e.g. `dotenv://C:\path\.env`) need special care:
-        // the drive-letter colon looks like a `host:port` separator and parsing
-        // fails with "invalid port number". Encode the whole path (drive colon and
-        // backslashes included) into an opaque host so it round-trips back out via
-        // `ProviderUrl::host()`. A Unix absolute path stays in the authority-less
-        // `scheme:///abs/path` form, which already parses cleanly.
-        let path_candidate = rest.trim_start_matches('/');
-        let url_string = if is_windows_abs_path(path_candidate) {
-            format!(
-                "{}://{}",
-                scheme,
-                percent_encode(path_candidate.as_bytes(), WINDOWS_PATH_ENCODE_SET)
-            )
+    // Reject the `1password` misspelling (with its corrective error) and
+    // check the scheme against the registry, through the same gate alias
+    // resolution uses.
+    if !spec_names_known_provider(s)? {
+        // Check if it's a known provider name to give a better error
+        if PROVIDER_REGISTRY.iter().any(|reg| reg.info.name == scheme) {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Provider '{}' exists but URI parsing failed",
+                scheme
+            )));
         } else {
-            let url_string = match rest {
-                // Just scheme name (e.g., "keyring")
-                "" | ":" => format!("{}://", scheme),
-                // Standard URI format already has // (e.g., "onepassword://vault")
-                s if s.starts_with("//") => format!("{}:{}", scheme, s),
-                // Path only format (e.g., "dotenv:/path/to/.env")
-                s if s.starts_with('/') => format!("{}://{}", scheme, s),
-                // Everything else - assume it's a host or path component
-                s => format!("{}://{}", scheme, s),
-            };
+            return Err(SecretSpecError::ProviderNotFound(scheme.to_string()));
+        }
+    }
 
-            // Percent-encode characters that are invalid in URIs but might appear in
-            // provider config values (e.g., spaces in 1Password vault names like "Home Lab")
-            let scheme_end = url_string.find("://").unwrap() + 3;
-            let (prefix, rest) = url_string.split_at(scheme_end);
-            format!(
-                "{}{}",
-                prefix,
-                percent_encode(rest.as_bytes(), URI_ENCODE_SET)
-            )
+    // Build a proper URL with the correct scheme.
+    //
+    // Windows absolute paths (e.g. `dotenv://C:\path\.env`) need special care:
+    // the drive-letter colon looks like a `host:port` separator and parsing
+    // fails with "invalid port number". Encode the whole path (drive colon and
+    // backslashes included) into an opaque host so it round-trips back out via
+    // `ProviderUrl::host()`. A Unix absolute path stays in the authority-less
+    // `scheme:///abs/path` form, which already parses cleanly.
+    let path_candidate = rest.trim_start_matches('/');
+    let url_string = if is_windows_abs_path(path_candidate) {
+        format!(
+            "{}://{}",
+            scheme,
+            percent_encode(path_candidate.as_bytes(), WINDOWS_PATH_ENCODE_SET)
+        )
+    } else {
+        let url_string = match rest {
+            // Just scheme name (e.g., "keyring")
+            "" | ":" => format!("{}://", scheme),
+            // Standard URI format already has // (e.g., "onepassword://vault")
+            s if s.starts_with("//") => format!("{}:{}", scheme, s),
+            // Path only format (e.g., "dotenv:/path/to/.env")
+            s if s.starts_with('/') => format!("{}://{}", scheme, s),
+            // Everything else - assume it's a host or path component
+            s => format!("{}://{}", scheme, s),
         };
 
-        let proper_url = Url::parse(&url_string).map_err(|e| {
-            SecretSpecError::ProviderOperationFailed(format!(
-                "Invalid provider specification '{}': {}",
-                s, e
-            ))
-        })?;
+        // Percent-encode characters that are invalid in URIs but might appear in
+        // provider config values (e.g., spaces in 1Password vault names like "Home Lab")
+        let scheme_end = url_string.find("://").unwrap() + 3;
+        let (prefix, rest) = url_string.split_at(scheme_end);
+        format!(
+            "{}{}",
+            prefix,
+            percent_encode(rest.as_bytes(), URI_ENCODE_SET)
+        )
+    };
 
-        provider_from_url(&ProviderUrl::new(proper_url), BootstrapEnv::new())
-    }
+    let proper_url = Url::parse(&url_string).map_err(|e| {
+        SecretSpecError::ProviderOperationFailed(format!(
+            "Invalid provider specification '{}': {}",
+            s, e
+        ))
+    })?;
+
+    provider_from_url(&ProviderUrl::new(proper_url), bootstrap)
 }
 
 impl TryFrom<&Url> for Box<dyn Provider> {

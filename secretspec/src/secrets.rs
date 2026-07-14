@@ -1,10 +1,13 @@
 //! Core secrets management functionality
 
 use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
-use crate::config::{Config, GlobalConfig, NativeAddress, Profile, RequireReason, Resolved};
+use crate::config::{
+    BootstrapSource, Config, GlobalConfig, NativeAddress, Profile, ProviderAlias, RequireReason,
+    Resolved,
+};
 use crate::error::{Result, SecretSpecError};
 use crate::plan::{PlannedSecret, ResolutionPlan, Route};
-use crate::provider::{Address, Provider as ProviderTrait};
+use crate::provider::{Address, BootstrapEnv, Provider as ProviderTrait};
 use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
 use crate::resolve::{RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource};
 use crate::validation::{ValidatedSecrets, ValidationErrors};
@@ -35,6 +38,25 @@ fn warn_provider_failure(display_uri: &str, secret_name: &str, err: &SecretSpecE
         secret_name.bold(),
         err
     );
+}
+
+/// The error for a declared bootstrap credential that could not be found in its
+/// source provider. Names the variable, the provider needing it, the source, and
+/// exactly how to fix it.
+fn bootstrap_missing_error(
+    var: &str,
+    alias_spec: &str,
+    source: &BootstrapSource,
+) -> SecretSpecError {
+    let location = match &source.reference {
+        Some(reference) => format!("at {}", reference.render()),
+        None => "at the convention path".to_string(),
+    };
+    SecretSpecError::ProviderOperationFailed(format!(
+        "bootstrap credential '{var}' for provider '{alias_spec}' was not found in '{}' {location}; \
+         store it there, or set {var} in the environment",
+        source.provider
+    ))
 }
 
 /// Emits a warning when the primary provider for a batch fetch fails (either
@@ -483,12 +505,115 @@ impl Secrets {
         // free and no new entry point can forget it. Resolution is a no-op on an
         // already-resolved URI (a `scheme://...` string is never an alias key), so
         // callers that pass pre-resolved URIs (the per-secret chain) are unaffected.
+        //
+        // When `spec` names an alias with a bootstrap `env` map, resolve those
+        // credentials from their source providers into an overlay the built
+        // provider reads before the process environment. Sources are built
+        // non-bootstrap (see `build_source_provider`), so a chain is at most one
+        // hop and cannot recurse.
+        let overlay = self.resolve_bootstrap_overlay(&spec)?;
         let resolved = self.resolve_provider_spec(spec);
-        let mut provider = Box::<dyn ProviderTrait>::try_from(resolved.as_str())
+        let mut provider = crate::provider::provider_from_spec(resolved.as_str(), overlay)
             .map_err(|err| self.explain_unknown_provider(err, &resolved))?;
         provider.with_base_dir(&self.config_dir);
         provider.set_reason(self.reason.clone());
         Ok(provider)
+    }
+
+    /// Builds a bootstrap *source* provider: like [`Self::build_provider`] but
+    /// never itself bootstrapped, so a bootstrap chain is at most one hop and can
+    /// never recurse. This is the store an alias's `env` credential is read from.
+    fn build_source_provider(&self, spec: &str) -> Result<Box<dyn ProviderTrait>> {
+        let resolved = self.resolve_provider_spec(spec.to_string());
+        let mut provider =
+            crate::provider::provider_from_spec(resolved.as_str(), BootstrapEnv::new())
+                .map_err(|err| self.explain_unknown_provider(err, &resolved))?;
+        provider.with_base_dir(&self.config_dir);
+        provider.set_reason(self.reason.clone());
+        Ok(provider)
+    }
+
+    /// Resolves the bootstrap overlay for a provider spec: for each `(VAR, source)`
+    /// its alias declares in `env`, fetch the credential from the source provider
+    /// and collect it, so the built provider reads it before the environment.
+    ///
+    /// Returns an empty overlay for a spec that is not an alias, or an alias with
+    /// no `env`. A variable already present (non-empty) in the process
+    /// environment wins and is not fetched. A declared credential that cannot be
+    /// found is a hard error naming exactly how to fix it.
+    pub(crate) fn resolve_bootstrap_overlay(&self, spec: &str) -> Result<BootstrapEnv> {
+        let mut overlay = BootstrapEnv::new();
+        let Some(alias) = self.lookup_provider_alias_entry(spec) else {
+            return Ok(overlay);
+        };
+        let Some(env) = alias.env.as_ref() else {
+            return Ok(overlay);
+        };
+
+        let profile = self.resolve_profile_name(None);
+        let project = self.config.project.name.clone();
+
+        // Sorted for deterministic fetch order and error messages.
+        let mut vars: Vec<(&String, &BootstrapSource)> = env.iter().collect();
+        vars.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        for (var, source) in vars {
+            // Env wins: an exported value is used by the provider directly, so
+            // the declared chain is not consulted (this is what keeps CI working
+            // with plain environment variables and no extra configuration).
+            if env::var(var)
+                .map(|value| !value.is_empty())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
+            let source_provider = self.build_source_provider(&source.provider)?;
+            let value = match &source.reference {
+                Some(reference) => source_provider.get(Address::Native(reference))?,
+                None => source_provider.get(Address::convention(&project, &profile, var))?,
+            };
+            match value {
+                Some(value) => {
+                    overlay.insert(var.clone(), value);
+                }
+                None => return Err(bootstrap_missing_error(var, spec, source)),
+            }
+        }
+
+        Ok(overlay)
+    }
+
+    /// Validates a primary spec's bootstrap `env` at plan time (pure): every
+    /// source must resolve to a known provider, and no source may itself declare
+    /// bootstrap `env` (chains are limited to one hop, which also makes cycles
+    /// impossible). A no-op for a spec that is not an alias or has no `env`.
+    pub(crate) fn validate_primary_bootstrap(&self, spec: &str) -> Result<()> {
+        let Some(alias) = self.lookup_provider_alias_entry(spec) else {
+            return Ok(());
+        };
+        let Some(env) = alias.env.as_ref() else {
+            return Ok(());
+        };
+        for (var, source) in env {
+            self.resolve_one_provider(&source.provider).map_err(|_| {
+                SecretSpecError::ProviderNotFound(format!(
+                    "bootstrap source for '{var}' in provider alias '{spec}' names an unknown \
+                     provider '{}'",
+                    source.provider
+                ))
+            })?;
+            if let Some(source_alias) = self.lookup_provider_alias_entry(&source.provider)
+                && source_alias.env.is_some()
+            {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "provider alias '{}' cannot be a bootstrap source for '{spec}' because it \
+                     declares its own bootstrap env; bootstrap chains are limited to one hop",
+                    source.provider
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Enriches a provider-construction failure: when a bare token (no scheme
@@ -829,9 +954,7 @@ impl Secrets {
     /// then user-global config. Project entries win on conflict so teams can
     /// pin shareable mappings in version control while still allowing per-user
     /// overrides via the global config.
-    fn provider_alias_sources(
-        &self,
-    ) -> impl Iterator<Item = &HashMap<String, crate::config::ProviderAlias>> {
+    fn provider_alias_sources(&self) -> impl Iterator<Item = &HashMap<String, ProviderAlias>> {
         self.config.providers.iter().chain(
             self.global_config
                 .as_ref()
@@ -839,11 +962,17 @@ impl Secrets {
         )
     }
 
+    /// Resolves a provider alias to its full entry (URI plus any bootstrap
+    /// `env`), walking [`Self::provider_alias_sources`] in order. Project
+    /// entries win over user-global ones.
+    fn lookup_provider_alias_entry(&self, alias: &str) -> Option<&ProviderAlias> {
+        self.provider_alias_sources().find_map(|m| m.get(alias))
+    }
+
     /// Resolves a single provider alias to its URI, walking
     /// [`Self::provider_alias_sources`] in order.
     fn lookup_provider_alias(&self, alias: &str) -> Option<String> {
-        self.provider_alias_sources()
-            .find_map(|m| m.get(alias))
+        self.lookup_provider_alias_entry(alias)
             .map(|alias| alias.uri.clone())
     }
 
@@ -950,7 +1079,9 @@ impl Secrets {
     /// consults the fallback, so an undefined alias further down the chain does
     /// not affect it.
     fn write_provider_for_route(&self, route: &Route) -> Result<Box<dyn ProviderTrait>> {
-        self.get_provider(route.primary())
+        // Build from the primary spec (not the resolved URI) so an alias's
+        // bootstrap `env` is applied to the write target too.
+        self.get_provider(route.group_key())
     }
 
     /// Gets the provider instance to use for secret operations
@@ -1079,7 +1210,9 @@ impl Secrets {
                         continue;
                     }
                 };
-                let provider = match self.build_provider(uri.clone()) {
+                // Build from the raw spec (not the resolved URI) so an alias's
+                // bootstrap `env` is applied to this chain link too.
+                let provider = match self.build_provider(spec.clone()) {
                     Ok(p) => p,
                     Err(e) => {
                         // Construction failed after resolution, so redact the
@@ -2487,7 +2620,9 @@ impl Secrets {
             let name = &planned.name;
             let required = planned.required();
             let as_path = planned.as_path();
-            let primary_uri = planned.route.primary();
+            // The group key (primary spec), matching how `group_uris` and
+            // `failed_primary_uris` were keyed from `plan.groups()` above.
+            let primary_uri = planned.route.group_key();
 
             let status;
             let mut source_provider = None;

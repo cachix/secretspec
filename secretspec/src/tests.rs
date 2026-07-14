@@ -1,6 +1,6 @@
 use crate::config::{
-    Config, GlobalConfig, GlobalDefaults, ParseError, Profile, Project, ProviderAlias,
-    RequireReason, Resolved, Secret,
+    BootstrapSource, Config, GlobalConfig, GlobalDefaults, NativeAddress, ParseError, Profile,
+    Project, ProviderAlias, RequireReason, Resolved, Secret,
 };
 use crate::error::{Result, SecretSpecError};
 use crate::secrets::Secrets;
@@ -6100,4 +6100,184 @@ fn test_resolve_profile_unknown_returns_invalid_profile() {
         }
         other => panic!("expected InvalidProfile, got {other:?}"),
     }
+}
+
+// --- Provider bootstrap: overlay resolution and validation ---
+
+/// Builds a `Secrets` whose only project provider alias is `target`, carrying
+/// the given bootstrap `env` map.
+fn secrets_with_bootstrap_alias(
+    target_uri: &str,
+    env: HashMap<String, BootstrapSource>,
+) -> Secrets {
+    let mut config = resolve_test_config(HashMap::new());
+    config.providers = Some(HashMap::from([(
+        "target".to_string(),
+        ProviderAlias {
+            uri: target_uri.to_string(),
+            env: Some(env),
+        },
+    )]));
+    Secrets::new(config, None, None, None)
+}
+
+#[test]
+fn bootstrap_overlay_reads_convention_credential_from_source() {
+    let _guard = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    // dotenv addresses a convention secret by the flat key name.
+    std::fs::write(&source, "BOOTSTRAP_READ_VAR=secret-abc\n").unwrap();
+
+    let secrets = secrets_with_bootstrap_alias(
+        "env://",
+        HashMap::from([(
+            "BOOTSTRAP_READ_VAR".to_string(),
+            BootstrapSource::from(format!("dotenv://{}", source.display())),
+        )]),
+    );
+
+    let overlay = secrets.resolve_bootstrap_overlay("target").unwrap();
+    assert_eq!(
+        overlay
+            .get("BOOTSTRAP_READ_VAR")
+            .map(|value| value.expose_secret().to_string()),
+        Some("secret-abc".to_string()),
+    );
+}
+
+#[test]
+fn bootstrap_overlay_reads_ref_addressed_credential() {
+    let _guard = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    std::fs::write(&source, "SOURCE_KEY=secret-xyz\n").unwrap();
+
+    // The env variable name (MY_TOKEN) and the source key (SOURCE_KEY) differ;
+    // `ref` pins the exact location.
+    let secrets = secrets_with_bootstrap_alias(
+        "env://",
+        HashMap::from([(
+            "MY_TOKEN".to_string(),
+            BootstrapSource {
+                provider: format!("dotenv://{}", source.display()),
+                reference: Some(NativeAddress {
+                    item: "SOURCE_KEY".to_string(),
+                    ..Default::default()
+                }),
+            },
+        )]),
+    );
+
+    let overlay = secrets.resolve_bootstrap_overlay("target").unwrap();
+    assert_eq!(
+        overlay
+            .get("MY_TOKEN")
+            .map(|value| value.expose_secret().to_string()),
+        Some("secret-xyz".to_string()),
+    );
+}
+
+#[test]
+fn bootstrap_overlay_lets_the_environment_win() {
+    let _guard = scrub_resolution_env();
+    const VAR: &str = "BOOTSTRAP_ENVWINS_VAR";
+    let previous = std::env::var_os(VAR);
+    // SAFETY: serialized by the `scrub_resolution_env` guard held above.
+    unsafe { std::env::set_var(VAR, "from-env") };
+
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    std::fs::write(&source, format!("{VAR}=from-source\n")).unwrap();
+
+    let secrets = secrets_with_bootstrap_alias(
+        "env://",
+        HashMap::from([(
+            VAR.to_string(),
+            BootstrapSource::from(format!("dotenv://{}", source.display())),
+        )]),
+    );
+
+    let overlay = secrets.resolve_bootstrap_overlay("target").unwrap();
+    // The environment satisfies the variable, so the chain is not consulted and
+    // the overlay carries nothing for it (the provider reads the env directly).
+    assert!(!overlay.contains_key(VAR));
+
+    match previous {
+        Some(value) => unsafe { std::env::set_var(VAR, value) },
+        None => unsafe { std::env::remove_var(VAR) },
+    }
+}
+
+#[test]
+fn bootstrap_overlay_missing_credential_is_an_actionable_error() {
+    let _guard = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    std::fs::write(&source, "").unwrap();
+
+    let secrets = secrets_with_bootstrap_alias(
+        "env://",
+        HashMap::from([(
+            "BOOTSTRAP_MISSING_VAR".to_string(),
+            BootstrapSource::from(format!("dotenv://{}", source.display())),
+        )]),
+    );
+
+    let error = secrets.resolve_bootstrap_overlay("target").unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("BOOTSTRAP_MISSING_VAR") && message.contains("not found"),
+        "error should name the variable and say it was not found: {message}"
+    );
+}
+
+#[test]
+fn bootstrap_source_must_name_a_known_provider() {
+    let secrets = secrets_with_bootstrap_alias(
+        "bws://project",
+        HashMap::from([(
+            "TOKEN".to_string(),
+            BootstrapSource::from("not_a_real_provider"),
+        )]),
+    );
+    let error = secrets.validate_primary_bootstrap("target").unwrap_err();
+    assert!(
+        error.to_string().contains("not_a_real_provider"),
+        "error should name the unknown source: {error}"
+    );
+}
+
+#[test]
+fn bootstrap_chain_is_limited_to_one_hop() {
+    let mut config = resolve_test_config(HashMap::new());
+    config.providers = Some(HashMap::from([
+        // `chained` itself declares bootstrap env, so it may not be a source.
+        (
+            "chained".to_string(),
+            ProviderAlias {
+                uri: "keyring://".to_string(),
+                env: Some(HashMap::from([(
+                    "INNER".to_string(),
+                    BootstrapSource::from("keyring"),
+                )])),
+            },
+        ),
+        (
+            "target".to_string(),
+            ProviderAlias {
+                uri: "bws://project".to_string(),
+                env: Some(HashMap::from([(
+                    "TOKEN".to_string(),
+                    BootstrapSource::from("chained"),
+                )])),
+            },
+        ),
+    ]));
+    let secrets = Secrets::new(config, None, None, None);
+    let error = secrets.validate_primary_bootstrap("target").unwrap_err();
+    assert!(
+        error.to_string().contains("one hop"),
+        "error should explain the one-hop limit: {error}"
+    );
 }

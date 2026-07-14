@@ -27,6 +27,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PHP extension that embeds the resolver (works under PHP-FPM with no
   `ffi.enable`, like `ext-redis`), with an `ext-ffi` fallback that dlopens the
   library at runtime for CLI and local development.
+- Provider aliases can now source their own credentials from another provider.
+  An alias in `[providers]` may declare an `env` map binding an environment
+  variable the provider needs (such as `BWS_ACCESS_TOKEN` or `VAULT_TOKEN`) to a
+  source: a bare provider spec, which reads the value at the convention path, or
+  a table with a `ref` giving the exact coordinates. The credential is fetched
+  from that provider and handed to the store, so a machine token can live in the
+  OS keyring instead of a plaintext environment variable, and it is never
+  written into the environment of processes started by `secretspec run`. An
+  environment variable that is already set still wins, so CI keeps working with
+  no extra configuration. Chains are limited to one hop.
+
+  ```toml
+  [providers]
+  bws = { uri = "bws://project-uuid", env = { BWS_ACCESS_TOKEN = "keyring" } }
+  vault = { uri = "vault://kv/app?auth=approle", env = {
+    VAULT_ROLE_ID   = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "role_id" } },
+    VAULT_SECRET_ID = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "secret_id" } },
+  } }
+  ```
 
 ### Changed
 - A `ref` routed at a single store (an explicit `--provider`, a single-provider

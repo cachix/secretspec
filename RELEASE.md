@@ -210,3 +210,27 @@ through Composer.
   PIE install is not wired (PIE builds non-Windows extensions from source via
   phpize, which does not fit a Cargo extension); and the release-asset uploads
   race cargo-dist's release creation, so they wait-then-`--clobber`.
+
+### First PHP release — checklist
+
+Everything through the CI is green, but the live Packagist + release-asset paths
+can only be exercised for real once the package is registered and a tag exists.
+In order:
+
+1. **Merge to `main`** so the repo-root `composer.json` is on the default branch.
+2. **Register on Packagist** — the one-time "Packagist (PHP)" setup above.
+3. **Smoke-test off `main` before tagging.** In a scratch project, confirm the
+   manifest resolves:
+
+   ```bash
+   composer require cachix/secretspec:dev-main
+   ```
+
+4. **Cut the `vX.Y.Z` tag.** Packagist ingests the tag as a version, and
+   `php-ext.yml` / `ffi-build.yml` attach the extension + cdylib binaries to the
+   GitHub Release.
+5. **Verify against the live release** (the one path CI cannot cover): in a clean
+   project, `composer require cachix/secretspec`, then exercise **both** backends —
+   `vendor/bin/secretspec-install-lib` for the ext-ffi path, and a downloaded
+   `secretspec-php-native` `.so` (`extension=…`) for the extension path — and
+   confirm a resolve works under each.

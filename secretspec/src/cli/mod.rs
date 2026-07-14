@@ -517,7 +517,7 @@ pub fn main() -> Result<()> {
 
                         // Add or update the provider alias
                         if let Some(providers) = &mut config.defaults.providers {
-                            let existing = providers.insert(name.clone(), uri.clone());
+                            let existing = providers.insert(name.clone(), uri.clone().into());
                             config.save().into_diagnostic()?;
 
                             if existing.is_some() {

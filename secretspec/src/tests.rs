@@ -1,6 +1,6 @@
 use crate::config::{
-    Config, GlobalConfig, GlobalDefaults, ParseError, Profile, Project, RequireReason, Resolved,
-    Secret,
+    Config, GlobalConfig, GlobalDefaults, ParseError, Profile, Project, ProviderAlias,
+    RequireReason, Resolved, Secret,
 };
 use crate::error::{Result, SecretSpecError};
 use crate::secrets::Secrets;
@@ -822,10 +822,13 @@ fn test_chain_primary_error_surfaces_instead_of_missing() {
     // Primary alias resolves to an unbuildable provider (the "outage"); fallback
     // is a healthy dotenv that simply lacks the key.
     let mut provider_aliases = HashMap::new();
-    provider_aliases.insert("primary".to_string(), "bogus://unreachable".to_string());
+    provider_aliases.insert(
+        "primary".to_string(),
+        ProviderAlias::from("bogus://unreachable"),
+    );
     provider_aliases.insert(
         "fallback".to_string(),
-        format!("dotenv://{}", env_path.display()),
+        ProviderAlias::from(format!("dotenv://{}", env_path.display())),
     );
 
     let mut config = resolve_test_config(secrets);
@@ -3086,7 +3089,12 @@ fn test_per_secret_provider_configuration() {
         defaults: GlobalDefaults {
             provider: Some("env".to_string()),
             profile: None,
-            providers: Some(providers_map),
+            providers: Some(
+                providers_map
+                    .into_iter()
+                    .map(|(k, v)| (k, ProviderAlias::from(v)))
+                    .collect(),
+            ),
         },
         audit: None,
     };
@@ -3116,7 +3124,12 @@ fn test_provider_alias_resolution() {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: None,
-            providers: Some(providers_map),
+            providers: Some(
+                providers_map
+                    .into_iter()
+                    .map(|(k, v)| (k, ProviderAlias::from(v)))
+                    .collect(),
+            ),
         },
         audit: None,
     };
@@ -3157,7 +3170,12 @@ fn test_provider_alias_not_found() {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: None,
-            providers: Some(providers_map),
+            providers: Some(
+                providers_map
+                    .into_iter()
+                    .map(|(k, v)| (k, ProviderAlias::from(v)))
+                    .collect(),
+            ),
         },
         audit: None,
     };
@@ -3259,7 +3277,12 @@ fn test_per_secret_provider_with_fallback_chain() {
         defaults: GlobalDefaults {
             provider: None,
             profile: None,
-            providers: Some(providers_map),
+            providers: Some(
+                providers_map
+                    .into_iter()
+                    .map(|(k, v)| (k, ProviderAlias::from(v)))
+                    .collect(),
+            ),
         },
         audit: None,
     };
@@ -3357,7 +3380,12 @@ fn test_get_secret_with_fallback_chain() {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()), // Default fallback provider
             profile: None,
-            providers: Some(providers_map),
+            providers: Some(
+                providers_map
+                    .into_iter()
+                    .map(|(k, v)| (k, ProviderAlias::from(v)))
+                    .collect(),
+            ),
         },
         audit: None,
     };
@@ -3440,7 +3468,12 @@ fn test_validate_falls_back_on_primary_provider_error() {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: None,
-            providers: Some(providers_map),
+            providers: Some(
+                providers_map
+                    .into_iter()
+                    .map(|(k, v)| (k, ProviderAlias::from(v)))
+                    .collect(),
+            ),
         },
         audit: None,
     };
@@ -3508,7 +3541,12 @@ fn test_validate_surfaces_error_when_all_providers_fail() {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: None,
-            providers: Some(providers_map),
+            providers: Some(
+                providers_map
+                    .into_iter()
+                    .map(|(k, v)| (k, ProviderAlias::from(v)))
+                    .collect(),
+            ),
         },
         audit: None,
     };
@@ -3607,7 +3645,12 @@ fn test_validate_with_per_secret_providers() {
         defaults: GlobalDefaults {
             provider: Some("env".to_string()),
             profile: None,
-            providers: Some(providers_map),
+            providers: Some(
+                providers_map
+                    .into_iter()
+                    .map(|(k, v)| (k, ProviderAlias::from(v)))
+                    .collect(),
+            ),
         },
         audit: None,
     };
@@ -3868,15 +3911,21 @@ provider = "keyring"
         config.defaults.providers = Some(HashMap::new());
     }
     if let Some(providers) = &mut config.defaults.providers {
-        providers.insert("shared".to_string(), "onepassword://Shared".to_string());
-        providers.insert("prod".to_string(), "onepassword://Production".to_string());
+        providers.insert(
+            "shared".to_string(),
+            ProviderAlias::from("onepassword://Shared"),
+        );
+        providers.insert(
+            "prod".to_string(),
+            ProviderAlias::from("onepassword://Production"),
+        );
     }
 
     // Verify providers were added
     assert_eq!(config.defaults.providers.as_ref().unwrap().len(), 2);
     assert_eq!(
         config.defaults.providers.as_ref().unwrap().get("shared"),
-        Some(&"onepassword://Shared".to_string())
+        Some(&ProviderAlias::from("onepassword://Shared"))
     );
 
     // Simulate removing a provider alias
@@ -4736,7 +4785,12 @@ fn build_chain_scenario(
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: Some("development".to_string()),
-            providers: Some(providers_map),
+            providers: Some(
+                providers_map
+                    .into_iter()
+                    .map(|(k, v)| (k, ProviderAlias::from(v)))
+                    .collect(),
+            ),
         },
         audit: None,
     };
@@ -5190,10 +5244,10 @@ OPTIONAL_MISSING = { description = "optional, not set", required = false }
     );
 }
 
-pub(crate) fn aliases_map(aliases: &[(&str, &str)]) -> HashMap<String, String> {
+pub(crate) fn aliases_map(aliases: &[(&str, &str)]) -> HashMap<String, ProviderAlias> {
     aliases
         .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .map(|(k, v)| (k.to_string(), ProviderAlias::from(*v)))
         .collect()
 }
 
@@ -5348,12 +5402,14 @@ APP_SECRET = { description = "App", required = true }
         .expect("merged config should carry [providers]");
 
     assert_eq!(
-        providers.get("op_infra").map(String::as_str),
+        providers.get("op_infra").map(|alias| alias.uri.as_str()),
         Some("onepassword://Shared"),
         "alias defined only in extended config should be inherited"
     );
     assert_eq!(
-        providers.get("op_overridden").map(String::as_str),
+        providers
+            .get("op_overridden")
+            .map(|alias| alias.uri.as_str()),
         Some("onepassword://NewVault"),
         "alias defined in both should resolve to the current (extending) config's value"
     );

@@ -829,7 +829,9 @@ impl Secrets {
     /// then user-global config. Project entries win on conflict so teams can
     /// pin shareable mappings in version control while still allowing per-user
     /// overrides via the global config.
-    fn provider_alias_sources(&self) -> impl Iterator<Item = &HashMap<String, String>> {
+    fn provider_alias_sources(
+        &self,
+    ) -> impl Iterator<Item = &HashMap<String, crate::config::ProviderAlias>> {
         self.config.providers.iter().chain(
             self.global_config
                 .as_ref()
@@ -842,7 +844,7 @@ impl Secrets {
     fn lookup_provider_alias(&self, alias: &str) -> Option<String> {
         self.provider_alias_sources()
             .find_map(|m| m.get(alias))
-            .cloned()
+            .map(|alias| alias.uri.clone())
     }
 
     fn resolve_provider_spec(&self, spec: String) -> String {

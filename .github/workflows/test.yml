@@ -35,4 +35,8 @@ jobs:
     - name: Install Rust
       run: rustup toolchain install stable --profile minimal
     - name: cargo test
-      run: cargo test --all
+      # Exclude secretspec-php-native: it is an ext-php-rs extension that needs a
+      # PHP dev toolchain (php-config/headers) this bare runner does not have, and
+      # ext-php-rs rejects the runner's PHP version anyway. The PHP SDK is built
+      # and tested by sdks.yml / php-ext.yml instead.
+      run: cargo test --workspace --exclude secretspec-php-native

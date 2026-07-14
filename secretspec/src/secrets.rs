@@ -584,6 +584,48 @@ impl Secrets {
         Ok(overlay)
     }
 
+    /// The bootstrap credentials a provider alias declares, sorted by variable
+    /// name, for the `config provider login` flow. Errors if the alias is not
+    /// defined; returns an empty list for an alias with no `env`.
+    pub(crate) fn bootstrap_credentials(
+        &self,
+        alias: &str,
+    ) -> Result<Vec<(String, BootstrapSource)>> {
+        let entry = self
+            .lookup_provider_alias_entry(alias)
+            .ok_or_else(|| SecretSpecError::ProviderNotFound(alias.to_string()))?;
+        let mut credentials: Vec<(String, BootstrapSource)> =
+            entry.env.clone().unwrap_or_default().into_iter().collect();
+        credentials.sort_by(|(a, _), (b, _)| a.cmp(b));
+        Ok(credentials)
+    }
+
+    /// Stores one bootstrap credential at its source provider — the exact
+    /// location [`Self::resolve_bootstrap_overlay`] later reads it from (a `ref`
+    /// or the convention path for the active project and profile). Errors if the
+    /// source provider is read-only. Returns a human-readable description of
+    /// where it was stored.
+    pub(crate) fn store_bootstrap_credential(
+        &self,
+        source: &BootstrapSource,
+        var: &str,
+        value: &SecretString,
+    ) -> Result<String> {
+        let provider = self.build_source_provider(&source.provider)?;
+        let profile = self.resolve_profile_name(None);
+        let project = self.config.project.name.clone();
+        let address = match &source.reference {
+            Some(reference) => Address::Native(reference),
+            None => Address::convention(&project, &profile, var),
+        };
+        provider.check_writable(address)?;
+        provider.set(address, value)?;
+        Ok(match &source.reference {
+            Some(reference) => format!("{} at {}", source.provider, reference.render()),
+            None => format!("{} at {project}/{profile}/{var}", source.provider),
+        })
+    }
+
     /// Validates a primary spec's bootstrap `env` at plan time (pure): every
     /// source must resolve to a known provider, and no source may itself declare
     /// bootstrap `env` (chains are limited to one hop, which also makes cycles

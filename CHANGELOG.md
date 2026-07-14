@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     VAULT_SECRET_ID = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "secret_id" } },
   } }
   ```
+- `secretspec config provider login <alias>` prompts for each bootstrap
+  credential a provider alias declares and stores it in its source provider, so
+  it can be read back on the next resolution. `secretspec config provider add`
+  gains a repeatable `--env VAR=PROVIDER` flag for declaring bootstrap sources
+  from the command line.
 
 ### Changed
 - A `ref` routed at a single store (an explicit `--provider`, a single-provider

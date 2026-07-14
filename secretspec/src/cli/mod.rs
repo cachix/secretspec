@@ -173,6 +173,12 @@ enum ProviderAction {
         name: String,
         /// Provider URI (e.g., "keyring://", "onepassword://Shared", "dotenv://.env.local")
         uri: String,
+        /// Bootstrap credential binding `VAR=PROVIDER` (repeatable): the alias's
+        /// provider reads `VAR` from `PROVIDER` before the environment. Only the
+        /// bare-string source form is expressible here; add a `ref` by editing
+        /// the config.
+        #[arg(long = "env", value_name = "VAR=PROVIDER")]
+        env: Vec<String>,
     },
     /// Remove a provider alias
     Remove {
@@ -181,6 +187,11 @@ enum ProviderAction {
     },
     /// List all configured provider aliases
     List,
+    /// Store the bootstrap credentials a provider alias declares in `env`
+    Login {
+        /// Name of the provider alias to store credentials for
+        name: String,
+    },
 }
 
 /// Returns an example TOML configuration string
@@ -496,7 +507,32 @@ pub fn main() -> Result<()> {
             // Manage provider aliases
             ConfigAction::Provider(action) => {
                 match action {
-                    ProviderAction::Add { name, uri } => {
+                    ProviderAction::Add { name, uri, env } => {
+                        // Parse each `VAR=PROVIDER` binding into a bootstrap source.
+                        let mut bootstrap = HashMap::new();
+                        for binding in &env {
+                            let (var, spec) = binding.split_once('=').ok_or_else(|| {
+                                miette!("--env expects VAR=PROVIDER, got '{binding}'")
+                            })?;
+                            if var.is_empty() || spec.is_empty() {
+                                return Err(miette!(
+                                    "--env expects a non-empty VAR=PROVIDER, got '{binding}'"
+                                ));
+                            }
+                            bootstrap.insert(
+                                var.to_string(),
+                                crate::config::BootstrapSource::from(spec),
+                            );
+                        }
+                        let alias_value = if bootstrap.is_empty() {
+                            crate::config::ProviderAlias::from(uri.clone())
+                        } else {
+                            crate::config::ProviderAlias {
+                                uri: uri.clone(),
+                                env: Some(bootstrap),
+                            }
+                        };
+
                         // Load or create config
                         let mut config =
                             GlobalConfig::load()
@@ -517,13 +553,19 @@ pub fn main() -> Result<()> {
 
                         // Add or update the provider alias
                         if let Some(providers) = &mut config.defaults.providers {
-                            let existing = providers.insert(name.clone(), uri.clone().into());
+                            let display = providers
+                                .insert(name.clone(), alias_value)
+                                .map_or("added", |_| "updated");
                             config.save().into_diagnostic()?;
-
-                            if existing.is_some() {
-                                println!("✓ Provider alias '{}' updated to '{}'", name, uri);
-                            } else {
-                                println!("✓ Provider alias '{}' added: '{}'", name, uri);
+                            println!("✓ Provider alias '{name}' {display}: '{uri}'");
+                            if !env.is_empty() {
+                                println!(
+                                    "  bootstrap: {}",
+                                    env.iter().cloned().collect::<Vec<_>>().join(", ")
+                                );
+                                println!(
+                                    "  run 'secretspec config provider login {name}' to store the credentials"
+                                );
                             }
                         }
                         Ok(())
@@ -575,6 +617,41 @@ pub fn main() -> Result<()> {
                                 );
                             }
                         }
+                        Ok(())
+                    }
+                    ProviderAction::Login { name } => {
+                        let app = load_secrets(&cli.file, &cli.reason)?;
+                        let credentials = app.bootstrap_credentials(&name).into_diagnostic()?;
+                        if credentials.is_empty() {
+                            println!(
+                                "Provider alias '{name}' declares no bootstrap credentials (no `env`)."
+                            );
+                            return Ok(());
+                        }
+                        for (var, source) in credentials {
+                            let entered = inquire::Password::new(&format!(
+                                "Enter {var} for provider '{name}' (source: {}):",
+                                source.provider
+                            ))
+                            .without_confirmation()
+                            .prompt()
+                            .into_diagnostic()?;
+                            if entered.is_empty() {
+                                println!("✗ Skipped {var} (empty)");
+                                continue;
+                            }
+                            let location = app
+                                .store_bootstrap_credential(
+                                    &source,
+                                    &var,
+                                    &secrecy::SecretString::new(entered.into()),
+                                )
+                                .into_diagnostic()?;
+                            println!("✓ stored {var} in {location}");
+                        }
+                        println!(
+                            "\nRun 'secretspec check --provider {name}' to verify authentication."
+                        );
                         Ok(())
                     }
                 }
@@ -1200,6 +1277,47 @@ mod tests {
         match cli.command {
             Commands::Check { no_prompt, .. } => assert!(no_prompt),
             _ => panic!("expected Check command"),
+        }
+    }
+
+    #[test]
+    fn provider_add_parses_repeated_env_bindings() {
+        let cli = Cli::try_parse_from([
+            "secretspec",
+            "config",
+            "provider",
+            "add",
+            "bws",
+            "bws://proj",
+            "--env",
+            "BWS_ACCESS_TOKEN=keyring",
+            "--env",
+            "OTHER=dotenv://.env",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Config {
+                action: ConfigAction::Provider(ProviderAction::Add { name, uri, env }),
+            } => {
+                assert_eq!(name, "bws");
+                assert_eq!(uri, "bws://proj");
+                assert_eq!(env, vec!["BWS_ACCESS_TOKEN=keyring", "OTHER=dotenv://.env"]);
+            }
+            _ => panic!("expected config provider add"),
+        }
+    }
+
+    #[test]
+    fn provider_login_parses() {
+        let cli =
+            Cli::try_parse_from(["secretspec", "config", "provider", "login", "bws"]).unwrap();
+        match cli.command {
+            Commands::Config {
+                action: ConfigAction::Provider(ProviderAction::Login { name }),
+            } => {
+                assert_eq!(name, "bws");
+            }
+            _ => panic!("expected config provider login"),
         }
     }
 }

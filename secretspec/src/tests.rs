@@ -6281,3 +6281,73 @@ fn bootstrap_chain_is_limited_to_one_hop() {
         "error should explain the one-hop limit: {error}"
     );
 }
+
+#[test]
+fn bootstrap_credential_round_trips_through_its_source() {
+    let _guard = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    std::fs::write(&source, "").unwrap();
+
+    let secrets = secrets_with_bootstrap_alias(
+        "env://",
+        HashMap::from([(
+            "ROUND_TRIP_VAR".to_string(),
+            BootstrapSource::from(format!("dotenv://{}", source.display())),
+        )]),
+    );
+
+    let credentials = secrets.bootstrap_credentials("target").unwrap();
+    assert_eq!(credentials.len(), 1);
+    let (var, source_spec) = &credentials[0];
+
+    secrets
+        .store_bootstrap_credential(
+            source_spec,
+            var,
+            &secrecy::SecretString::new("stored-value".into()),
+        )
+        .unwrap();
+
+    // Stored and read back through the same address the resolver uses.
+    let overlay = secrets.resolve_bootstrap_overlay("target").unwrap();
+    assert_eq!(
+        overlay
+            .get("ROUND_TRIP_VAR")
+            .map(|value| value.expose_secret().to_string()),
+        Some("stored-value".to_string()),
+    );
+}
+
+#[test]
+fn bootstrap_credentials_errors_for_an_unknown_alias() {
+    let secrets = Secrets::new(resolve_test_config(HashMap::new()), None, None, None);
+    assert!(secrets.bootstrap_credentials("nope").is_err());
+}
+
+#[test]
+fn bootstrap_credentials_is_empty_for_an_alias_without_env() {
+    let mut config = resolve_test_config(HashMap::new());
+    config.providers = Some(HashMap::from([(
+        "plain".to_string(),
+        ProviderAlias::from("keyring://"),
+    )]));
+    let secrets = Secrets::new(config, None, None, None);
+    assert!(secrets.bootstrap_credentials("plain").unwrap().is_empty());
+}
+
+#[test]
+fn store_bootstrap_credential_rejects_a_read_only_source() {
+    let secrets = secrets_with_bootstrap_alias(
+        "env://",
+        HashMap::from([("V".to_string(), BootstrapSource::from("env://"))]),
+    );
+    let credentials = secrets.bootstrap_credentials("target").unwrap();
+    let (var, source_spec) = &credentials[0];
+    let result = secrets.store_bootstrap_credential(
+        source_spec,
+        var,
+        &secrecy::SecretString::new("x".into()),
+    );
+    assert!(result.is_err(), "the env provider is read-only");
+}

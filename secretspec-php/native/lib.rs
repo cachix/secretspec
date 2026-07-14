@@ -18,8 +18,8 @@ use ext_php_rs::prelude::*;
 ///
 /// Exposed to PHP as the global function `secretspec_native_resolve()`.
 #[php_function]
-pub fn secretspec_native_resolve(request_json: String) -> String {
-    secretspec::resolve_json(&request_json)
+pub fn secretspec_native_resolve(request_json: &str) -> String {
+    secretspec::resolve_json(request_json)
 }
 
 /// The extension's version (tracks the crate version). Exposed to PHP as

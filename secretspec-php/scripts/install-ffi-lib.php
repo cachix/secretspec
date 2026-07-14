@@ -56,12 +56,17 @@ if (is_string($override) && $override !== '') {
     note('SECRETSPEC_FFI_LIB is set; skipping download.');
 }
 
-// Map the running platform to the release target triple + library file name.
-[$target, $libName] = secretspec_target();
+// Map the running platform to the release target triple; the library file name
+// comes from Native so the download target and the loader agree on one name.
+$target = secretspec_target();
 if ($target === null) {
     note('no prebuilt secretspec-ffi library for this platform; set '
         . 'SECRETSPEC_FFI_LIB or install the secretspec extension.');
 }
+if (!class_exists(\Secretspec\Native::class)) {
+    note('the Secretspec classes are not autoloadable; run `composer install` first.');
+}
+$libName = \Secretspec\Native::libraryFileName();
 
 $libDir = dirname(__DIR__) . '/lib';
 $dest = $libDir . '/' . $libName;
@@ -106,10 +111,10 @@ fwrite(STDERR, "[secretspec] installed {$dest} ({$target}).\n");
 exit(0);
 
 /**
- * @return array{0: ?string, 1: string} the release target triple (or null if
- *   unsupported) and the platform library file name
+ * The release target triple for the running platform, or null if no prebuilt
+ * secretspec-ffi library is published for it.
  */
-function secretspec_target(): array
+function secretspec_target(): ?string
 {
     $machine = strtolower(php_uname('m'));
     $isArm = in_array($machine, ['arm64', 'aarch64'], true);
@@ -118,25 +123,25 @@ function secretspec_target(): array
     switch (PHP_OS_FAMILY) {
         case 'Linux':
             if ($isX64) {
-                return ['x86_64-unknown-linux-gnu', 'libsecretspec_ffi.so'];
+                return 'x86_64-unknown-linux-gnu';
             }
             if ($isArm) {
-                return ['aarch64-unknown-linux-gnu', 'libsecretspec_ffi.so'];
+                return 'aarch64-unknown-linux-gnu';
             }
             break;
         case 'Darwin':
             if ($isArm) {
-                return ['aarch64-apple-darwin', 'libsecretspec_ffi.dylib'];
+                return 'aarch64-apple-darwin';
             }
             break;
         case 'Windows':
             if ($isX64) {
-                return ['x86_64-pc-windows-msvc', 'secretspec_ffi.dll'];
+                return 'x86_64-pc-windows-msvc';
             }
             break;
     }
 
-    return [null, ''];
+    return null;
 }
 
 /** The installed version of this package, or null in a dev/path checkout. */
@@ -163,10 +168,10 @@ function secretspec_installed_version(): ?string
 /** GET a URL, returning the body or null on any failure. */
 function secretspec_fetch(string $url): ?string
 {
+    // PHP's HTTP stream wrapper reads its options from the 'http' key for both
+    // http:// and https:// URLs, so a single entry covers both.
     $context = stream_context_create([
         'http' => ['method' => 'GET', 'follow_location' => 1, 'timeout' => 30,
-            'header' => 'User-Agent: secretspec-php-installer'],
-        'https' => ['method' => 'GET', 'follow_location' => 1, 'timeout' => 30,
             'header' => 'User-Agent: secretspec-php-installer'],
     ]);
     $body = @file_get_contents($url, false, $context);

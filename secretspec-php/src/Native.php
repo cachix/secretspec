@@ -125,14 +125,12 @@ final class Native
             return $env;
         }
 
-        $names = self::libraryNames();
+        $name = self::libraryFileName();
 
         // A copy bundled alongside the package (distribution layout).
-        foreach ($names as $name) {
-            $bundled = \dirname(__DIR__) . \DIRECTORY_SEPARATOR . 'lib' . \DIRECTORY_SEPARATOR . $name;
-            if (\is_file($bundled)) {
-                return $bundled;
-            }
+        $bundled = \dirname(__DIR__) . \DIRECTORY_SEPARATOR . 'lib' . \DIRECTORY_SEPARATOR . $name;
+        if (\is_file($bundled)) {
+            return $bundled;
         }
 
         // Walk up from the package looking for a Cargo target dir; pick the most
@@ -143,15 +141,13 @@ final class Native
             $best = null;
             $bestMtime = -1;
             foreach (['release', 'debug'] as $profile) {
-                foreach ($names as $name) {
-                    $candidate = $dir . \DIRECTORY_SEPARATOR . 'target'
-                        . \DIRECTORY_SEPARATOR . $profile . \DIRECTORY_SEPARATOR . $name;
-                    if (\is_file($candidate)) {
-                        $mtime = \filemtime($candidate);
-                        if ($mtime !== false && $mtime > $bestMtime) {
-                            $best = $candidate;
-                            $bestMtime = $mtime;
-                        }
+                $candidate = $dir . \DIRECTORY_SEPARATOR . 'target'
+                    . \DIRECTORY_SEPARATOR . $profile . \DIRECTORY_SEPARATOR . $name;
+                if (\is_file($candidate)) {
+                    $mtime = \filemtime($candidate);
+                    if ($mtime !== false && $mtime > $bestMtime) {
+                        $best = $candidate;
+                        $bestMtime = $mtime;
                     }
                 }
             }
@@ -171,13 +167,17 @@ final class Native
         );
     }
 
-    /** @return list<string> platform-specific shared-library file names. */
-    private static function libraryNames(): array
+    /**
+     * The platform-specific `libsecretspec_ffi` file name the loader looks for.
+     * Shared with the `secretspec-install-lib` script so the downloaded copy and
+     * the loader agree on one name.
+     */
+    public static function libraryFileName(): string
     {
         return match (\PHP_OS_FAMILY) {
-            'Darwin' => ['libsecretspec_ffi.dylib'],
-            'Windows' => ['secretspec_ffi.dll'],
-            default => ['libsecretspec_ffi.so'],
+            'Darwin' => 'libsecretspec_ffi.dylib',
+            'Windows' => 'secretspec_ffi.dll',
+            default => 'libsecretspec_ffi.so',
         };
     }
 }

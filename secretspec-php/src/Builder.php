@@ -29,38 +29,32 @@ final class Builder
     /** Path to a `secretspec.toml`; omit to walk up from the working directory. */
     public function withPath(?string $path): self
     {
-        if ($path !== null) {
-            $this->request['path'] = $path;
-        }
-
-        return $this;
+        return $this->set('path', $path);
     }
 
     /** Provider address, e.g. `keyring://` or `dotenv://.env.production`. */
     public function withProvider(?string $provider): self
     {
-        if ($provider !== null) {
-            $this->request['provider'] = $provider;
-        }
-
-        return $this;
+        return $this->set('provider', $provider);
     }
 
     /** Profile to resolve, e.g. `production`. */
     public function withProfile(?string $profile): self
     {
-        if ($profile !== null) {
-            $this->request['profile'] = $profile;
-        }
-
-        return $this;
+        return $this->set('profile', $profile);
     }
 
     /** Human-readable reason for the access, surfaced to reason-policy providers. */
     public function withReason(?string $reason): self
     {
-        if ($reason !== null) {
-            $this->request['reason'] = $reason;
+        return $this->set('reason', $reason);
+    }
+
+    /** Set a request field when the value is provided; a no-op for null. */
+    private function set(string $key, ?string $value): self
+    {
+        if ($value !== null) {
+            $this->request[$key] = $value;
         }
 
         return $this;

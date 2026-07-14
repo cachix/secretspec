@@ -1065,4 +1065,33 @@ mod integration_tests {
         let provider = Box::<dyn Provider>::try_from("gcsm://project123").unwrap();
         assert_eq!(provider.name(), "gcsm");
     }
+
+    /// The bootstrap overlay must reach a preflight-wrapped provider. onepassword
+    /// is built as `Box<Arc<OnePasswordProvider>>` behind a `PreflightGuard`, so a
+    /// `&mut self` hook applied post-construction would be swallowed by the `Arc`
+    /// layer (which cannot forward `&mut self`); this passes only because the
+    /// overlay is injected inside the factory, before wrapping. The delivered
+    /// token surfaces in `auth_scope_key`.
+    #[test]
+    fn bootstrap_overlay_reaches_preflight_wrapped_provider() {
+        use crate::provider::{BootstrapEnv, ProviderUrl, provider_from_url};
+        use url::Url;
+
+        let mut overlay = BootstrapEnv::new();
+        overlay.insert(
+            "OP_SERVICE_ACCOUNT_TOKEN".to_string(),
+            SecretString::new("tok-xyz".into()),
+        );
+
+        let url = ProviderUrl::new(Url::parse("onepassword://Private").unwrap());
+        let provider = provider_from_url(&url, overlay).unwrap();
+
+        let scope = provider
+            .auth_scope_key()
+            .expect("onepassword advertises an auth scope");
+        assert!(
+            scope.contains("tok-xyz"),
+            "bootstrap token should be injected before Arc-wrapping, got: {scope}"
+        );
+    }
 }

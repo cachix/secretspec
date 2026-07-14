@@ -36,7 +36,7 @@
 //! secretspec check --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c
 //! ```
 
-use super::{Address, Provider, ProviderUrl};
+use super::{Address, BootstrapEnv, Provider, ProviderUrl, env_or_overlay_var};
 use crate::{Result, SecretSpecError};
 use bitwarden::auth::login::AccessTokenLoginRequest;
 use bitwarden::secrets_manager::ClientSecretsExt;
@@ -110,6 +110,8 @@ pub struct BwsProvider {
     config: BwsConfig,
     client: OnceLock<Client>,
     secrets_cache: OnceLock<Vec<SecretResponse>>,
+    /// Bootstrap-credential overlay consulted after the process environment.
+    bootstrap_env: BootstrapEnv,
 }
 
 crate::register_provider! {
@@ -128,12 +130,18 @@ impl BwsProvider {
             config,
             client: OnceLock::new(),
             secrets_cache: OnceLock::new(),
+            bootstrap_env: BootstrapEnv::new(),
         }
     }
 
+    /// Resolves the BWS access token from the environment or bootstrap overlay.
+    fn access_token(&self) -> Option<String> {
+        env_or_overlay_var(&self.bootstrap_env, "BWS_ACCESS_TOKEN")
+    }
+
     /// Strips the BWS access token from error messages to avoid leaking credentials.
-    fn sanitize_error(message: &str) -> String {
-        if let Ok(token) = std::env::var("BWS_ACCESS_TOKEN") {
+    fn sanitize_error(&self, message: &str) -> String {
+        if let Some(token) = self.access_token() {
             if !token.is_empty() {
                 return message.replace(&token, "[REDACTED]");
             }
@@ -150,7 +158,7 @@ impl BwsProvider {
             return Ok(client);
         }
 
-        let token = std::env::var("BWS_ACCESS_TOKEN").map_err(|_| {
+        let token = self.access_token().ok_or_else(|| {
             SecretSpecError::ProviderOperationFailed(
                 "BWS_ACCESS_TOKEN environment variable is not set. \
                  Generate an access token from the Bitwarden Secrets Manager web interface \
@@ -189,7 +197,7 @@ impl BwsProvider {
             })
             .await
             .map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(Self::sanitize_error(&format!(
+                SecretSpecError::ProviderOperationFailed(self.sanitize_error(&format!(
                     "Failed to authenticate with Bitwarden Secrets Manager: {}",
                     e
                 )))
@@ -223,7 +231,7 @@ impl BwsProvider {
             })
             .await
             .map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(Self::sanitize_error(&format!(
+                SecretSpecError::ProviderOperationFailed(self.sanitize_error(&format!(
                     "Failed to list secrets in BWS project '{}': {}",
                     self.config.project_id, e
                 )))
@@ -240,7 +248,7 @@ impl BwsProvider {
             .get_by_ids(SecretsGetRequest { ids })
             .await
             .map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(Self::sanitize_error(&format!(
+                SecretSpecError::ProviderOperationFailed(self.sanitize_error(&format!(
                     "Failed to fetch secret values from BWS project '{}': {}",
                     self.config.project_id, e
                 )))
@@ -302,7 +310,7 @@ impl BwsProvider {
                 })
                 .await
                 .map_err(|e| {
-                    SecretSpecError::ProviderOperationFailed(Self::sanitize_error(&format!(
+                    SecretSpecError::ProviderOperationFailed(self.sanitize_error(&format!(
                         "Failed to update secret '{}' in BWS: {}",
                         key, e
                     )))
@@ -320,7 +328,7 @@ impl BwsProvider {
                 })
                 .await
                 .map_err(|e| {
-                    SecretSpecError::ProviderOperationFailed(Self::sanitize_error(&format!(
+                    SecretSpecError::ProviderOperationFailed(self.sanitize_error(&format!(
                         "Failed to create secret '{}' in BWS: {}",
                         key, e
                     )))
@@ -344,6 +352,10 @@ impl Provider for BwsProvider {
             item: key.to_string(),
             ..Default::default()
         })
+    }
+
+    fn with_bootstrap_env(&mut self, env: BootstrapEnv) {
+        self.bootstrap_env = env;
     }
 
     fn name(&self) -> &'static str {

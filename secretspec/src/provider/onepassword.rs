@@ -1,4 +1,4 @@
-use crate::provider::{Address, Provider, ProviderUrl};
+use crate::provider::{Address, BootstrapEnv, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -801,6 +801,22 @@ impl Provider for OnePasswordProvider {
     /// component within the item. 1Password items are not versioned.
     fn supported_coords(&self) -> &'static [&'static str] {
         &["field", "vault", "section"]
+    }
+
+    fn with_bootstrap_env(&mut self, env: BootstrapEnv) {
+        // Fill the service account token from the overlay only when the URI form
+        // (`onepassword+token://`) has not already supplied one. When neither is
+        // set, `op` inherits `OP_SERVICE_ACCOUNT_TOKEN` from the process
+        // environment exactly as before, so an empty overlay changes nothing.
+        if self.config.service_account_token.is_none() {
+            if let Some(token) = env
+                .get("OP_SERVICE_ACCOUNT_TOKEN")
+                .map(|secret| secret.expose_secret().to_string())
+                .filter(|token| !token.is_empty())
+            {
+                self.config.service_account_token = Some(token);
+            }
+        }
     }
 
     fn name(&self) -> &'static str {

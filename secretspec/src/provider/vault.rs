@@ -47,7 +47,7 @@
 //! secretspec check --provider vault://team-a@vault.example.com:8200/secret
 //! ```
 
-use super::{Address, Provider, ProviderUrl};
+use super::{Address, BootstrapEnv, Provider, ProviderUrl, env_or_overlay_var};
 use crate::{Result, SecretSpecError};
 use reqwest::header::{HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
@@ -222,6 +222,8 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
 /// KV secrets engine (v1 or v2) with token-based authentication.
 pub struct VaultProvider {
     config: VaultConfig,
+    /// Bootstrap-credential overlay consulted after the process environment.
+    bootstrap_env: BootstrapEnv,
 }
 
 crate::register_provider! {
@@ -236,7 +238,10 @@ crate::register_provider! {
 impl VaultProvider {
     /// Creates a new VaultProvider with the given configuration.
     pub fn new(config: VaultConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            bootstrap_env: BootstrapEnv::new(),
+        }
     }
 
     /// Formats the secret path within the KV engine.
@@ -265,14 +270,14 @@ impl VaultProvider {
     /// Resolves the Vault token using the configured authentication method.
     fn resolve_token(&self) -> Result<SecretString> {
         match self.config.auth {
-            AuthMethod::Token => Self::resolve_token_auth(),
+            AuthMethod::Token => self.resolve_token_auth(),
             AuthMethod::AppRole => super::block_on(self.resolve_approle_auth()),
         }
     }
 
     /// Resolves a token via static token sources.
-    fn resolve_token_auth() -> Result<SecretString> {
-        if let Ok(token) = std::env::var("VAULT_TOKEN") {
+    fn resolve_token_auth(&self) -> Result<SecretString> {
+        if let Some(token) = env_or_overlay_var(&self.bootstrap_env, "VAULT_TOKEN") {
             if !token.is_empty() {
                 return Ok(SecretString::new(token.into()));
             }
@@ -300,19 +305,21 @@ impl VaultProvider {
 
     /// Authenticates via AppRole and returns a client token.
     async fn resolve_approle_auth(&self) -> Result<SecretString> {
-        let role_id = std::env::var("VAULT_ROLE_ID").map_err(|_| {
-            SecretSpecError::ProviderOperationFailed(
-                "VAULT_ROLE_ID environment variable is required for AppRole authentication."
-                    .to_string(),
-            )
-        })?;
+        let role_id =
+            env_or_overlay_var(&self.bootstrap_env, "VAULT_ROLE_ID").ok_or_else(|| {
+                SecretSpecError::ProviderOperationFailed(
+                    "VAULT_ROLE_ID environment variable is required for AppRole authentication."
+                        .to_string(),
+                )
+            })?;
 
-        let secret_id = std::env::var("VAULT_SECRET_ID").map_err(|_| {
-            SecretSpecError::ProviderOperationFailed(
-                "VAULT_SECRET_ID environment variable is required for AppRole authentication."
-                    .to_string(),
-            )
-        })?;
+        let secret_id =
+            env_or_overlay_var(&self.bootstrap_env, "VAULT_SECRET_ID").ok_or_else(|| {
+                SecretSpecError::ProviderOperationFailed(
+                    "VAULT_SECRET_ID environment variable is required for AppRole authentication."
+                        .to_string(),
+                )
+            })?;
 
         let url = format!("{}/v1/auth/approle/login", self.config.endpoint);
         let body = serde_json::json!({
@@ -512,6 +519,10 @@ impl Provider for VaultProvider {
             field: Some("value".to_string()),
             ..Default::default()
         })
+    }
+
+    fn with_bootstrap_env(&mut self, env: BootstrapEnv) {
+        self.bootstrap_env = env;
     }
 
     fn name(&self) -> &'static str {

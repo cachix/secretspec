@@ -1,4 +1,4 @@
-use super::{ProviderInfo, ProviderUrl, ProviderWithPreflight};
+use super::{BootstrapEnv, ProviderInfo, ProviderUrl, ProviderWithPreflight};
 use crate::Result;
 
 /// Internal registration structure used by the macro.
@@ -6,7 +6,7 @@ use crate::Result;
 pub struct ProviderRegistration {
     pub info: ProviderInfo,
     pub schemes: &'static [&'static str],
-    pub factory: fn(&ProviderUrl) -> Result<ProviderWithPreflight>,
+    pub factory: fn(&ProviderUrl, BootstrapEnv) -> Result<ProviderWithPreflight>,
 }
 
 /// Distributed slice that collects all provider registrations.
@@ -113,9 +113,14 @@ macro_rules! register_provider {
                     examples: &[$($example,)*],
                 },
                 schemes: &[$($scheme,)*],
-                factory: |url| {
+                factory: |url, bootstrap| {
                     let config = <$config_type>::try_from(url)?;
-                    let provider = <$struct_name>::new(config);
+                    let mut provider = <$struct_name>::new(config);
+                    // Inject the bootstrap overlay while the provider is still a
+                    // concrete `&mut` value, before any Arc/Box wrapping — a
+                    // preflight provider becomes `Box<Arc<P>>`, through which a
+                    // `&mut self` hook cannot be forwarded.
+                    $crate::provider::Provider::with_bootstrap_env(&mut provider, bootstrap);
                     let wrap: fn($struct_name) -> $crate::Result<$crate::provider::ProviderWithPreflight> = $wrap;
                     wrap(provider)
                 },

@@ -56,10 +56,38 @@
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, percent_encode};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+
+/// An overlay of bootstrap credentials handed to a provider at construction.
+///
+/// Maps an environment variable name (e.g. `BWS_ACCESS_TOKEN`) to a value a
+/// participating provider consults *after* the real process environment (see
+/// [`env_or_overlay_var`]). It exists so a provider's own credentials can be
+/// sourced from another provider without ever calling `std::env::set_var`,
+/// which would leak them into the child environment of `secretspec run`. In the
+/// current slice the overlay is always empty in production, so every path
+/// behaves exactly as it would reading the environment directly.
+pub(crate) type BootstrapEnv = HashMap<String, SecretString>;
+
+/// Resolves a bootstrap variable, preferring the process environment over the
+/// overlay.
+///
+/// A variable set in the environment (even to an empty string) wins, preserving
+/// the exact behavior of the direct `std::env::var` reads this replaces. Only
+/// when the variable is absent from the environment is the overlay consulted,
+/// and an empty overlay value is treated as unset.
+pub(crate) fn env_or_overlay_var(overlay: &BootstrapEnv, var: &str) -> Option<String> {
+    if let Ok(value) = std::env::var(var) {
+        return Some(value);
+    }
+    overlay
+        .get(var)
+        .map(|secret| secret.expose_secret().to_string())
+        .filter(|value| !value.is_empty())
+}
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use url::Url;
 
@@ -595,6 +623,22 @@ pub trait Provider: Send + Sync {
     /// [`Secrets`]: crate::Secrets
     fn with_base_dir(&mut self, _base_dir: &std::path::Path) {}
 
+    /// Hands the provider its bootstrap-credential overlay (see [`BootstrapEnv`])
+    /// so credential reads can prefer it over the process environment.
+    ///
+    /// Called once inside the registration factory, on the concrete provider
+    /// value *before* any `Arc`/`Box` wrapping. This must not be a
+    /// post-construction call on a `Box<dyn Provider>`: like [`with_base_dir`],
+    /// a `&mut self` hook cannot be forwarded through the blanket
+    /// `impl Provider for Arc<T>` (an `Arc` gives no `&mut` access to its
+    /// inner value), so a preflight provider — wrapped as `Box<Arc<P>>` — would
+    /// silently receive the default no-op. The default implementation ignores
+    /// the overlay, which is correct for providers that read no bootstrap
+    /// credentials.
+    ///
+    /// [`with_base_dir`]: Provider::with_base_dir
+    fn with_bootstrap_env(&mut self, _env: BootstrapEnv) {}
+
     /// Discovers and returns all secrets available in this provider.
     ///
     /// This method is used to introspect the provider and find all available secrets.
@@ -885,6 +929,10 @@ impl Provider for PreflightGuard {
         self.inner.with_base_dir(base_dir);
     }
 
+    fn with_bootstrap_env(&mut self, env: BootstrapEnv) {
+        self.inner.with_bootstrap_env(env);
+    }
+
     fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
         self.check()?;
         self.inner.reflect()
@@ -999,7 +1047,7 @@ impl TryFrom<&str> for Box<dyn Provider> {
             ))
         })?;
 
-        provider_from_url(&ProviderUrl::new(proper_url))
+        provider_from_url(&ProviderUrl::new(proper_url), BootstrapEnv::new())
     }
 }
 
@@ -1007,11 +1055,14 @@ impl TryFrom<&Url> for Box<dyn Provider> {
     type Error = SecretSpecError;
 
     fn try_from(url: &Url) -> Result<Self> {
-        provider_from_url(&ProviderUrl::new(url.clone()))
+        provider_from_url(&ProviderUrl::new(url.clone()), BootstrapEnv::new())
     }
 }
 
-fn provider_from_url(url: &ProviderUrl) -> Result<Box<dyn Provider>> {
+pub(crate) fn provider_from_url(
+    url: &ProviderUrl,
+    bootstrap: BootstrapEnv,
+) -> Result<Box<dyn Provider>> {
     let scheme = url.scheme();
 
     // Find the provider registration for this scheme
@@ -1020,7 +1071,7 @@ fn provider_from_url(url: &ProviderUrl) -> Result<Box<dyn Provider>> {
         .find(|reg| reg.schemes.contains(&scheme))
         .ok_or_else(|| SecretSpecError::ProviderNotFound(scheme.to_string()))?;
 
-    let pwp = (registration.factory)(url)?;
+    let pwp = (registration.factory)(url, bootstrap)?;
     if pwp.preflight.is_some() {
         Ok(Box::new(PreflightGuard::new(pwp)))
     } else {
@@ -1223,5 +1274,59 @@ mod url_tests {
             without.display_with_examples(),
             "env: Environment variables"
         );
+    }
+}
+
+#[cfg(test)]
+mod bootstrap_env_tests {
+    use super::{BootstrapEnv, env_or_overlay_var};
+    use secrecy::SecretString;
+
+    fn overlay(var: &str, value: &str) -> BootstrapEnv {
+        let mut overlay = BootstrapEnv::new();
+        overlay.insert(var.to_string(), SecretString::new(value.into()));
+        overlay
+    }
+
+    #[test]
+    fn env_var_wins_over_overlay() {
+        // Unique per-test var name so the process-global mutation cannot race
+        // other tests that touch the environment.
+        const VAR: &str = "SECRETSPEC_TEST_BOOTSTRAP_ENV_WINS";
+        let prev = std::env::var(VAR).ok();
+        // SAFETY: unique-per-test var, restored below (mirrors tests.rs).
+        unsafe { std::env::set_var(VAR, "from-env") };
+
+        assert_eq!(
+            env_or_overlay_var(&overlay(VAR, "from-overlay"), VAR).as_deref(),
+            Some("from-env"),
+        );
+
+        match prev {
+            Some(value) => unsafe { std::env::set_var(VAR, value) },
+            None => unsafe { std::env::remove_var(VAR) },
+        }
+    }
+
+    #[test]
+    fn overlay_used_only_when_env_absent() {
+        const VAR: &str = "SECRETSPEC_TEST_BOOTSTRAP_OVERLAY_FALLBACK";
+        let prev = std::env::var(VAR).ok();
+        // SAFETY: unique-per-test var, restored below.
+        unsafe { std::env::remove_var(VAR) };
+
+        // Overlay hit when the environment has nothing.
+        assert_eq!(
+            env_or_overlay_var(&overlay(VAR, "from-overlay"), VAR).as_deref(),
+            Some("from-overlay"),
+        );
+        // No environment value and no overlay entry -> None.
+        assert_eq!(env_or_overlay_var(&BootstrapEnv::new(), VAR), None);
+        // An empty overlay value is treated as unset.
+        assert_eq!(env_or_overlay_var(&overlay(VAR, ""), VAR), None);
+
+        if let Some(value) = prev {
+            unsafe { std::env::set_var(VAR, value) };
+        }
     }
 }

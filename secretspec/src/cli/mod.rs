@@ -524,13 +524,11 @@ pub fn main() -> Result<()> {
                                 crate::config::BootstrapSource::from(spec),
                             );
                         }
-                        let alias_value = if bootstrap.is_empty() {
-                            crate::config::ProviderAlias::from(uri.clone())
-                        } else {
-                            crate::config::ProviderAlias {
-                                uri: uri.clone(),
-                                env: Some(bootstrap),
-                            }
+                        // An empty map means no `env`, so a plain add round-trips
+                        // as a bare-string alias.
+                        let alias_value = crate::config::ProviderAlias {
+                            uri: uri.clone(),
+                            env: (!bootstrap.is_empty()).then_some(bootstrap),
                         };
 
                         // Load or create config
@@ -559,10 +557,7 @@ pub fn main() -> Result<()> {
                             config.save().into_diagnostic()?;
                             println!("✓ Provider alias '{name}' {display}: '{uri}'");
                             if !env.is_empty() {
-                                println!(
-                                    "  bootstrap: {}",
-                                    env.iter().cloned().collect::<Vec<_>>().join(", ")
-                                );
+                                println!("  bootstrap: {}", env.join(", "));
                                 println!(
                                     "  run 'secretspec config provider login {name}' to store the credentials"
                                 );

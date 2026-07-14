@@ -22,17 +22,6 @@ use crate::provider::Address;
 use crate::secrets::Secrets;
 use std::collections::HashMap;
 
-/// Where a planned secret reads and writes.
-///
-/// A `providers` chain is a fallback list tried in order. Only the primary
-/// (always tried first, the write target, and the grouping key) is resolved to
-/// a URI up front; the rest are carried as raw specs and resolved lazily, when
-/// and only when a read actually falls through to them. That keeps the chain
-/// tried in order: an undefined alias further down never fails an operation
-/// the primary satisfies, and never fails a write at all.
-///
-/// An explicit `--provider`/`SECRETSPEC_PROVIDER`/builder override collapses
-/// any chain to just that store: it becomes the primary with no fallback.
 /// The resolved primary store: the raw spec used to build it, plus its resolved
 /// URI for display.
 ///
@@ -50,6 +39,17 @@ pub(crate) struct ResolvedPrimary {
     pub uri: String,
 }
 
+/// Where a planned secret reads and writes.
+///
+/// A `providers` chain is a fallback list tried in order. Only the primary
+/// (always tried first, the write target, and the grouping key) is resolved to
+/// a URI up front; the rest are carried as raw specs and resolved lazily, when
+/// and only when a read actually falls through to them. That keeps the chain
+/// tried in order: an undefined alias further down never fails an operation
+/// the primary satisfies, and never fails a write at all.
+///
+/// An explicit `--provider`/`SECRETSPEC_PROVIDER`/builder override collapses
+/// any chain to just that store: it becomes the primary with no fallback.
 #[derive(Debug)]
 pub(crate) struct Route {
     /// The store consulted first — the resolved chain head or the explicit
@@ -180,7 +180,7 @@ impl Secrets {
     /// derive its resolved route.
     ///
     /// The explicit provider override (builder or `SECRETSPEC_PROVIDER`) is
-    /// picked up via [`Secrets::resolve_provider_override`]. Production code
+    /// picked up via [`Secrets::explicit_provider_spec`]. Production code
     /// resolves the profile itself and calls [`Secrets::build_plan_from_names`]
     /// directly (it needs the sorted names for audit attribution too, and
     /// shouldn't merge and sort twice); this one-call form is for tests that
@@ -205,17 +205,20 @@ impl Secrets {
         profile_name: String,
         names: Vec<String>,
     ) -> Result<ResolutionPlan> {
-        let override_uri = self.resolve_provider_override(None);
+        // Routes carry the raw override spec (it may be an alias whose bootstrap
+        // `env` must stay reachable at build time); the plan's `override_uri`
+        // field is the resolved form, for display and the resolution report.
+        let override_spec = self.explicit_provider_spec(None);
 
         let mut secrets = Vec::with_capacity(names.len());
         for name in names {
             let config = self.effective_secret_config(&name, &profile_name);
-            secrets.push(self.plan_one_secret(name, config, &override_uri)?);
+            secrets.push(self.plan_one_secret(name, config, &override_spec)?);
         }
 
         Ok(ResolutionPlan {
             profile: profile_name,
-            override_uri,
+            override_uri: override_spec.map(|spec| self.resolve_provider_spec(spec)),
             secrets,
         })
     }
@@ -229,7 +232,7 @@ impl Secrets {
     /// `profile_name` is the already-resolved profile. `override_arg` is the
     /// caller's explicit provider (the `--provider` flag); like
     /// [`Secrets::build_plan`] it also picks up the builder and
-    /// `SECRETSPEC_PROVIDER` via [`Secrets::resolve_provider_override`].
+    /// `SECRETSPEC_PROVIDER` via [`Secrets::explicit_provider_spec`].
     pub(crate) fn plan_secret(
         &self,
         name: &str,
@@ -239,26 +242,26 @@ impl Secrets {
         let Some(config) = self.resolve_secret_config(name, Some(profile_name)) else {
             return Ok(None);
         };
-        let override_uri = self.resolve_provider_override(override_arg);
+        let override_spec = self.explicit_provider_spec(override_arg);
         Ok(Some(self.plan_one_secret(
             name.to_string(),
             config,
-            &override_uri,
+            &override_spec,
         )?))
     }
 
-    /// Derive one [`PlannedSecret`] from its effective config and the resolved
-    /// override. The single place per-secret decisions are made, shared by the
-    /// whole-profile [`Secrets::build_plan_from_names`] and the single-secret
-    /// [`Secrets::plan_secret`], so `get`, `set`, and batch validation cannot
-    /// drift.
+    /// Derive one [`PlannedSecret`] from its effective config and the raw
+    /// override spec. The single place per-secret decisions are made, shared by
+    /// the whole-profile [`Secrets::build_plan_from_names`] and the
+    /// single-secret [`Secrets::plan_secret`], so `get`, `set`, and batch
+    /// validation cannot drift.
     fn plan_one_secret(
         &self,
         name: String,
         config: Secret,
-        override_uri: &Option<String>,
+        override_spec: &Option<String>,
     ) -> Result<PlannedSecret> {
-        let route = self.route_for(&config, override_uri)?;
+        let route = self.route_for(&config, override_spec)?;
         Ok(PlannedSecret {
             name,
             config,
@@ -278,28 +281,29 @@ impl Secrets {
     pub(crate) fn route_for(
         &self,
         config: &Secret,
-        override_uri: &Option<String>,
+        override_spec: &Option<String>,
     ) -> Result<Route> {
-        if let Some(uri) = override_uri {
-            // An override is already resolved to a URI, so it carries no alias
-            // and no bootstrap `env`; spec and uri are the same.
+        // Either arm keeps the raw spec as the build key (the spec may be an
+        // alias whose bootstrap `env` must stay reachable when the store is
+        // constructed — a resolved URI has lost it), resolves the URI for
+        // display, and validates any bootstrap `env` (unknown source, one-hop)
+        // up front — all pure map lookups.
+        if let Some(spec) = override_spec {
+            self.validate_bootstrap_sources(spec)?;
             return Ok(Route {
                 primary: Some(ResolvedPrimary {
-                    spec: uri.clone(),
-                    uri: uri.clone(),
+                    spec: spec.clone(),
+                    uri: self.resolve_provider_spec(spec.clone()),
                 }),
                 fallback: Vec::new(),
             });
         }
         match config.providers.as_deref() {
             Some([first, fallback @ ..]) => {
-                // Resolve the primary URI for display and to fail fast on an
-                // undefined primary alias, and validate its bootstrap `env`
-                // (unknown source, one-hop) — both pure map lookups. The raw
-                // spec is kept as the build key so the alias's `env` is still
-                // reachable when the store is constructed.
+                // Unlike an override, an undefined alias as chain primary is a
+                // hard error here (`resolve_one_provider` fails fast).
                 let uri = self.resolve_one_provider(first)?;
-                self.validate_primary_bootstrap(first)?;
+                self.validate_bootstrap_sources(first)?;
                 Ok(Route {
                     primary: Some(ResolvedPrimary {
                         spec: first.clone(),
@@ -393,6 +397,22 @@ mod tests {
             planned.route.fallback.is_empty(),
             "the override must collapse the chain: no fallback survives"
         );
+        assert_eq!(plan.override_uri, Some("dotenv://.env.mock".to_string()));
+    }
+
+    #[test]
+    fn override_alias_keeps_the_raw_spec_as_build_key() {
+        let _env = scrub_resolution_env();
+        let secrets = HashMap::from([("API_KEY".to_string(), secret(None))]);
+        // `--provider mock` names an alias: the route keeps the raw spec so the
+        // alias's bootstrap `env` stays reachable at build time, and resolves
+        // the URI for display and the report.
+        let spec = spec(secrets, Some("mock"), &[("mock", "dotenv://.env.mock")]);
+        let plan = plan(&spec);
+
+        let planned = find(&plan, "API_KEY");
+        assert_eq!(planned.route.group_key(), Some("mock"));
+        assert_eq!(planned.route.primary(), Some("dotenv://.env.mock"));
         assert_eq!(plan.override_uri, Some("dotenv://.env.mock".to_string()));
     }
 

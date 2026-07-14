@@ -3082,19 +3082,13 @@ fn test_per_secret_provider_configuration() {
     };
 
     // Create global config with provider aliases
-    let mut providers_map = HashMap::new();
-    providers_map.insert("shared".to_string(), "keyring://".to_string());
+    let providers_map = aliases_map(&[("shared", "keyring://")]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
             provider: Some("env".to_string()),
             profile: None,
-            providers: Some(
-                providers_map
-                    .into_iter()
-                    .map(|(k, v)| (k, ProviderAlias::from(v)))
-                    .collect(),
-            ),
+            providers: Some(providers_map),
         },
         audit: None,
     };
@@ -3116,20 +3110,16 @@ fn test_per_secret_provider_configuration() {
 
 #[test]
 fn test_provider_alias_resolution() {
-    let mut providers_map = HashMap::new();
-    providers_map.insert("dev".to_string(), "dotenv://.env.development".to_string());
-    providers_map.insert("prod".to_string(), "onepassword://Production".to_string());
+    let providers_map = aliases_map(&[
+        ("dev", "dotenv://.env.development"),
+        ("prod", "onepassword://Production"),
+    ]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: None,
-            providers: Some(
-                providers_map
-                    .into_iter()
-                    .map(|(k, v)| (k, ProviderAlias::from(v)))
-                    .collect(),
-            ),
+            providers: Some(providers_map),
         },
         audit: None,
     };
@@ -3163,19 +3153,13 @@ fn test_provider_alias_resolution() {
 
 #[test]
 fn test_provider_alias_not_found() {
-    let mut providers_map = HashMap::new();
-    providers_map.insert("existing".to_string(), "dotenv://.env".to_string());
+    let providers_map = aliases_map(&[("existing", "dotenv://.env")]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: None,
-            providers: Some(
-                providers_map
-                    .into_iter()
-                    .map(|(k, v)| (k, ProviderAlias::from(v)))
-                    .collect(),
-            ),
+            providers: Some(providers_map),
         },
         audit: None,
     };
@@ -3263,26 +3247,16 @@ fn test_per_secret_provider_with_fallback_chain() {
         providers: None,
     };
 
-    let mut providers_map = HashMap::new();
-    providers_map.insert(
-        "primary".to_string(),
-        format!("dotenv://{}", env_file.display()),
-    );
-    providers_map.insert(
-        "fallback".to_string(),
-        format!("dotenv://{}", keyring_file.display()),
-    );
+    let providers_map = aliases_map(&[
+        ("primary", &format!("dotenv://{}", env_file.display())),
+        ("fallback", &format!("dotenv://{}", keyring_file.display())),
+    ]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
             provider: None,
             profile: None,
-            providers: Some(
-                providers_map
-                    .into_iter()
-                    .map(|(k, v)| (k, ProviderAlias::from(v)))
-                    .collect(),
-            ),
+            providers: Some(providers_map),
         },
         audit: None,
     };
@@ -3366,26 +3340,16 @@ fn test_get_secret_with_fallback_chain() {
         providers: None,
     };
 
-    let mut providers_map = HashMap::new();
-    providers_map.insert(
-        "primary".to_string(),
-        format!("dotenv://{}", primary_file.display()),
-    );
-    providers_map.insert(
-        "fallback".to_string(),
-        format!("dotenv://{}", fallback_file.display()),
-    );
+    let providers_map = aliases_map(&[
+        ("primary", &format!("dotenv://{}", primary_file.display())),
+        ("fallback", &format!("dotenv://{}", fallback_file.display())),
+    ]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()), // Default fallback provider
             profile: None,
-            providers: Some(
-                providers_map
-                    .into_iter()
-                    .map(|(k, v)| (k, ProviderAlias::from(v)))
-                    .collect(),
-            ),
+            providers: Some(providers_map),
         },
         audit: None,
     };
@@ -3454,26 +3418,16 @@ fn test_validate_falls_back_on_primary_provider_error() {
         providers: None,
     };
 
-    let mut providers_map = HashMap::new();
-    providers_map.insert(
-        "primary".to_string(),
-        format!("dotenv://{}", primary_dir.display()),
-    );
-    providers_map.insert(
-        "fallback".to_string(),
-        format!("dotenv://{}", fallback_file.display()),
-    );
+    let providers_map = aliases_map(&[
+        ("primary", &format!("dotenv://{}", primary_dir.display())),
+        ("fallback", &format!("dotenv://{}", fallback_file.display())),
+    ]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: None,
-            providers: Some(
-                providers_map
-                    .into_iter()
-                    .map(|(k, v)| (k, ProviderAlias::from(v)))
-                    .collect(),
-            ),
+            providers: Some(providers_map),
         },
         audit: None,
     };
@@ -3533,20 +3487,16 @@ fn test_validate_surfaces_error_when_all_providers_fail() {
         providers: None,
     };
 
-    let mut providers_map = HashMap::new();
-    providers_map.insert("a".to_string(), format!("dotenv://{}", broken_a.display()));
-    providers_map.insert("b".to_string(), format!("dotenv://{}", broken_b.display()));
+    let providers_map = aliases_map(&[
+        ("a", &format!("dotenv://{}", broken_a.display())),
+        ("b", &format!("dotenv://{}", broken_b.display())),
+    ]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: None,
-            providers: Some(
-                providers_map
-                    .into_iter()
-                    .map(|(k, v)| (k, ProviderAlias::from(v)))
-                    .collect(),
-            ),
+            providers: Some(providers_map),
         },
         audit: None,
     };
@@ -3631,26 +3581,19 @@ fn test_validate_with_per_secret_providers() {
         providers: None,
     };
 
-    let mut providers_map = HashMap::new();
-    providers_map.insert(
-        "env_provider".to_string(),
-        format!("dotenv://{}", env_file.display()),
-    );
-    providers_map.insert(
-        "keyring_provider".to_string(),
-        format!("dotenv://{}", keyring_file.display()),
-    );
+    let providers_map = aliases_map(&[
+        ("env_provider", &format!("dotenv://{}", env_file.display())),
+        (
+            "keyring_provider",
+            &format!("dotenv://{}", keyring_file.display()),
+        ),
+    ]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
             provider: Some("env".to_string()),
             profile: None,
-            providers: Some(
-                providers_map
-                    .into_iter()
-                    .map(|(k, v)| (k, ProviderAlias::from(v)))
-                    .collect(),
-            ),
+            providers: Some(providers_map),
         },
         audit: None,
     };
@@ -4772,25 +4715,15 @@ fn build_chain_scenario(
         providers: None,
     };
 
-    let mut providers_map = HashMap::new();
-    providers_map.insert(
-        "personal".to_string(),
-        format!("dotenv://{}", personal_path.display()),
-    );
-    providers_map.insert(
-        "team".to_string(),
-        format!("dotenv://{}", team_path.display()),
-    );
+    let providers_map = aliases_map(&[
+        ("personal", &format!("dotenv://{}", personal_path.display())),
+        ("team", &format!("dotenv://{}", team_path.display())),
+    ]);
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
             profile: Some("development".to_string()),
-            providers: Some(
-                providers_map
-                    .into_iter()
-                    .map(|(k, v)| (k, ProviderAlias::from(v)))
-                    .collect(),
-            ),
+            providers: Some(providers_map),
         },
         audit: None,
     };
@@ -5082,19 +5015,23 @@ fn test_override_skips_read_chain() {
 
     let spec = Secrets::new(config, Some(global_config), Some("team".to_string()), None);
     let secret_config = spec.resolve_secret_config("MY_SECRET", None).unwrap();
-    let override_uri = spec.resolve_provider_override(None);
-    let uris = spec
-        .route_for(&secret_config, &override_uri)
-        .expect("override resolution should succeed")
-        .specs()
-        .expect("override should produce a URI list");
+    let override_spec = spec.explicit_provider_spec(None);
+    let route = spec
+        .route_for(&secret_config, &override_spec)
+        .expect("override resolution should succeed");
 
+    // The read walks the raw override spec only (the alias is expanded at build
+    // time, where its bootstrap `env` is still reachable); the resolved URI is
+    // carried for display.
     assert_eq!(
-        uris.len(),
-        1,
-        "override must collapse the chain to a single URI"
+        route.specs(),
+        Some(vec!["team".to_string()]),
+        "override must collapse the chain to the single override spec"
     );
-    assert_eq!(uris[0], format!("dotenv://{}", team_path.display()));
+    assert_eq!(
+        route.primary(),
+        Some(format!("dotenv://{}", team_path.display()).as_str())
+    );
 }
 
 /// `get` must accept the same provider specs `--provider` accepts everywhere
@@ -5424,7 +5361,8 @@ fn test_provider_override_expands_project_alias() {
     spec.set_provider("op_infra");
 
     let resolved = spec
-        .resolve_provider_override(None)
+        .explicit_provider_spec(None)
+        .map(|spec_str| spec.resolve_provider_spec(spec_str))
         .expect("override should resolve to a URI");
 
     assert_eq!(resolved, "onepassword://Infra");
@@ -5494,7 +5432,8 @@ fn test_provider_override_resolves_global_alias_when_project_providers_present()
     spec.set_provider("team");
 
     let resolved = spec
-        .resolve_provider_override(None)
+        .explicit_provider_spec(None)
+        .map(|spec_str| spec.resolve_provider_spec(spec_str))
         .expect("override should resolve to a URI");
 
     assert_eq!(resolved, "onepassword://Team");
@@ -6241,7 +6180,7 @@ fn bootstrap_source_must_name_a_known_provider() {
             BootstrapSource::from("not_a_real_provider"),
         )]),
     );
-    let error = secrets.validate_primary_bootstrap("target").unwrap_err();
+    let error = secrets.validate_bootstrap_sources("target").unwrap_err();
     assert!(
         error.to_string().contains("not_a_real_provider"),
         "error should name the unknown source: {error}"
@@ -6275,7 +6214,7 @@ fn bootstrap_chain_is_limited_to_one_hop() {
         ),
     ]));
     let secrets = Secrets::new(config, None, None, None);
-    let error = secrets.validate_primary_bootstrap("target").unwrap_err();
+    let error = secrets.validate_bootstrap_sources("target").unwrap_err();
     assert!(
         error.to_string().contains("one hop"),
         "error should explain the one-hop limit: {error}"

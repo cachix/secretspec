@@ -277,10 +277,9 @@ impl VaultProvider {
 
     /// Resolves a token via static token sources.
     fn resolve_token_auth(&self) -> Result<SecretString> {
+        // `env_or_overlay_var` never yields an empty value.
         if let Some(token) = env_or_overlay_var(&self.bootstrap_env, "VAULT_TOKEN") {
-            if !token.is_empty() {
-                return Ok(SecretString::new(token.into()));
-            }
+            return Ok(SecretString::new(token.into()));
         }
 
         let token_path = std::env::var_os("HOME")

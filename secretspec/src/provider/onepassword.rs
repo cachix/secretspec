@@ -1,4 +1,4 @@
-use crate::provider::{Address, BootstrapEnv, Provider, ProviderUrl};
+use crate::provider::{Address, BootstrapEnv, Provider, ProviderUrl, env_or_overlay_var};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -311,6 +311,8 @@ pub struct OnePasswordProvider {
     config: OnePasswordConfig,
     /// The OnePassword CLI command to use (either "op" or a custom path).
     op_command: String,
+    /// Bootstrap-credential overlay consulted after the process environment.
+    bootstrap_env: BootstrapEnv,
 }
 
 crate::register_provider! {
@@ -337,7 +339,22 @@ impl OnePasswordProvider {
                 "op".to_string()
             }
         });
-        Self { config, op_command }
+        Self {
+            config,
+            op_command,
+            bootstrap_env: BootstrapEnv::new(),
+        }
+    }
+
+    /// The service account token in effect: the URI-supplied one
+    /// (`onepassword+token://`), else the environment or bootstrap overlay via
+    /// the shared env-wins rule. When all are absent, `op` falls back to its
+    /// own authentication (desktop app or manual signin) exactly as before.
+    fn effective_service_account_token(&self) -> Option<String> {
+        self.config
+            .service_account_token
+            .clone()
+            .or_else(|| env_or_overlay_var(&self.bootstrap_env, "OP_SERVICE_ACCOUNT_TOKEN"))
     }
 
     /// Executes a OnePassword CLI command with proper error handling.
@@ -371,8 +388,9 @@ impl OnePasswordProvider {
         let mut cmd = Command::new(&self.op_command);
         strip_op_session_env(&mut cmd);
 
-        // Set service account token if provided
-        if let Some(token) = &self.config.service_account_token {
+        // Set service account token if provided. Passing an environment-supplied
+        // token explicitly is equivalent to `op` inheriting it.
+        if let Some(token) = self.effective_service_account_token() {
             cmd.env("OP_SERVICE_ACCOUNT_TOKEN", token);
         }
 
@@ -804,19 +822,11 @@ impl Provider for OnePasswordProvider {
     }
 
     fn with_bootstrap_env(&mut self, env: BootstrapEnv) {
-        // Fill the service account token from the overlay only when the URI form
-        // (`onepassword+token://`) has not already supplied one. When neither is
-        // set, `op` inherits `OP_SERVICE_ACCOUNT_TOKEN` from the process
-        // environment exactly as before, so an empty overlay changes nothing.
-        if self.config.service_account_token.is_none() {
-            if let Some(token) = env
-                .get("OP_SERVICE_ACCOUNT_TOKEN")
-                .map(|secret| secret.expose_secret().to_string())
-                .filter(|token| !token.is_empty())
-            {
-                self.config.service_account_token = Some(token);
-            }
-        }
+        // Stored, not folded into the config: the token is resolved through the
+        // shared env-wins rule where it is consumed (`execute_op_command`,
+        // `auth_scope_key`), and `uri()` keeps reporting the scheme the user
+        // actually configured rather than flipping to `onepassword+token://`.
+        self.bootstrap_env = env;
     }
 
     fn name(&self) -> &'static str {
@@ -833,7 +843,9 @@ impl Provider for OnePasswordProvider {
             "{:?}",
             (
                 &self.config.account,
-                &self.config.service_account_token,
+                // The token actually in effect, so two instances bootstrapped
+                // with different tokens never share a preflight probe.
+                self.effective_service_account_token(),
                 &self.op_command
             )
         ))

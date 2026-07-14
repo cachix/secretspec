@@ -35,8 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from that provider and handed to the store, so a machine token can live in the
   OS keyring instead of a plaintext environment variable, and it is never
   written into the environment of processes started by `secretspec run`. An
-  environment variable that is already set still wins, so CI keeps working with
-  no extra configuration. Chains are limited to one hop.
+  environment variable that is already set (non empty) still wins, so CI keeps
+  working with no extra configuration. Chains are limited to one hop, and that
+  limit is enforced wherever the alias appears, as a chain fallback or the
+  default provider included. Bootstrap credentials also apply when the alias is
+  selected with an explicit `--provider <alias>` or `SECRETSPEC_PROVIDER`, and
+  they are fetched from their source once per invocation and reused across all
+  secrets routed at the alias.
 
   ```toml
   [providers]

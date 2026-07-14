@@ -60,6 +60,8 @@ use secrecy::{ExposeSecret, SecretString};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use url::Url;
 
 /// An overlay of bootstrap credentials handed to a provider at construction.
 ///
@@ -67,29 +69,34 @@ use std::convert::TryFrom;
 /// participating provider consults *after* the real process environment (see
 /// [`env_or_overlay_var`]). It exists so a provider's own credentials can be
 /// sourced from another provider without ever calling `std::env::set_var`,
-/// which would leak them into the child environment of `secretspec run`. In the
-/// current slice the overlay is always empty in production, so every path
-/// behaves exactly as it would reading the environment directly.
+/// which would leak them into the child environment of `secretspec run`.
 pub(crate) type BootstrapEnv = HashMap<String, SecretString>;
+
+/// A bootstrap variable's value from the process environment, with a
+/// set-but-empty variable treated as unset.
+///
+/// The single owner of the env-wins rule: the overlay resolver skips fetching a
+/// credential exactly when this returns `Some`, and [`env_or_overlay_var`]
+/// prefers the same value on the provider side, so the two layers can never
+/// disagree about whether the environment already satisfies a variable.
+pub(crate) fn bootstrap_env_var(var: &str) -> Option<String> {
+    std::env::var(var).ok().filter(|value| !value.is_empty())
+}
 
 /// Resolves a bootstrap variable, preferring the process environment over the
 /// overlay.
 ///
-/// A variable set in the environment (even to an empty string) wins, preserving
-/// the exact behavior of the direct `std::env::var` reads this replaces. Only
-/// when the variable is absent from the environment is the overlay consulted,
-/// and an empty overlay value is treated as unset.
+/// A variable set (non-empty) in the environment wins — see
+/// [`bootstrap_env_var`]. Only otherwise is the overlay consulted, and an empty
+/// overlay value is likewise treated as unset.
 pub(crate) fn env_or_overlay_var(overlay: &BootstrapEnv, var: &str) -> Option<String> {
-    if let Ok(value) = std::env::var(var) {
-        return Some(value);
-    }
-    overlay
-        .get(var)
-        .map(|secret| secret.expose_secret().to_string())
-        .filter(|value| !value.is_empty())
+    bootstrap_env_var(var).or_else(|| {
+        overlay
+            .get(var)
+            .map(|secret| secret.expose_secret().to_string())
+            .filter(|value| !value.is_empty())
+    })
 }
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
-use url::Url;
 
 /// Characters that are invalid in URI hosts but might appear in provider config
 /// values like vault names (e.g., 1Password vault "Home Lab").
@@ -1287,7 +1294,7 @@ mod url_tests {
 
 #[cfg(test)]
 mod bootstrap_env_tests {
-    use super::{BootstrapEnv, env_or_overlay_var};
+    use super::{BootstrapEnv, bootstrap_env_var, env_or_overlay_var};
     use secrecy::SecretString;
 
     fn overlay(var: &str, value: &str) -> BootstrapEnv {
@@ -1333,8 +1340,18 @@ mod bootstrap_env_tests {
         // An empty overlay value is treated as unset.
         assert_eq!(env_or_overlay_var(&overlay(VAR, ""), VAR), None);
 
-        if let Some(value) = prev {
-            unsafe { std::env::set_var(VAR, value) };
+        // A set-but-empty environment value is also treated as unset, so the
+        // overlay still wins — matching the resolver's fetch-skip predicate.
+        unsafe { std::env::set_var(VAR, "") };
+        assert_eq!(bootstrap_env_var(VAR), None);
+        assert_eq!(
+            env_or_overlay_var(&overlay(VAR, "from-overlay"), VAR).as_deref(),
+            Some("from-overlay"),
+        );
+
+        match prev {
+            Some(value) => unsafe { std::env::set_var(VAR, value) },
+            None => unsafe { std::env::remove_var(VAR) },
         }
     }
 }

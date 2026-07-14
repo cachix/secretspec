@@ -40,6 +40,112 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+/// Where one bootstrap credential of a provider comes from.
+///
+/// Written in an alias's `env` map either as a bare provider spec, which reads
+/// the credential from that provider at the convention path for the active
+/// project and profile:
+///
+/// ```toml
+/// env = { BWS_ACCESS_TOKEN = "keyring" }
+/// ```
+///
+/// or as a table that pins the exact location with the same `ref` coordinates a
+/// secret uses:
+///
+/// ```toml
+/// env = { VAULT_ROLE_ID = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "role_id" } } }
+/// ```
+///
+/// Reusing `ref` means bootstrap credentials are addressed exactly like every
+/// other secret — no separate storage convention. A bare spec round-trips back
+/// to a bare string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapSource {
+    /// Provider spec (alias, bare provider name, or URI) supplying the credential.
+    pub provider: String,
+    /// Native coordinates within that provider. When absent, the credential is
+    /// read at the convention path (the variable name as key) for the active
+    /// project and profile.
+    pub reference: Option<NativeAddress>,
+}
+
+impl BootstrapSource {
+    /// A source that reads from `provider` using convention naming.
+    pub fn from_provider(provider: impl Into<String>) -> Self {
+        Self {
+            provider: provider.into(),
+            reference: None,
+        }
+    }
+}
+
+impl From<String> for BootstrapSource {
+    fn from(provider: String) -> Self {
+        Self::from_provider(provider)
+    }
+}
+
+impl From<&str> for BootstrapSource {
+    fn from(provider: &str) -> Self {
+        Self::from_provider(provider)
+    }
+}
+
+impl Serialize for BootstrapSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match &self.reference {
+            // A ref-less source round-trips back to the bare-string form.
+            None => serializer.serialize_str(&self.provider),
+            Some(reference) => {
+                use serde::ser::SerializeStruct;
+                let mut table = serializer.serialize_struct("BootstrapSource", 2)?;
+                table.serialize_field("provider", &self.provider)?;
+                table.serialize_field("ref", reference)?;
+                table.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BootstrapSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct SourceVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for SourceVisitor {
+            type Value = BootstrapSource;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a provider spec string or a { provider, ref } table")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, provider: &str) -> Result<BootstrapSource, E> {
+                Ok(BootstrapSource::from_provider(provider))
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<BootstrapSource, M::Error> {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Table {
+                    provider: String,
+                    #[serde(default, rename = "ref")]
+                    reference: Option<NativeAddress>,
+                }
+                let table = Table::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(BootstrapSource {
+                    provider: table.provider,
+                    reference: table.reference,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(SourceVisitor)
+    }
+}
+
 /// A provider alias: a provider URI plus an optional bootstrap-credential map.
 ///
 /// In TOML an alias is written either as a bare string, which is just the URI:
@@ -65,10 +171,9 @@ use std::str::FromStr;
 pub struct ProviderAlias {
     /// The provider URI (e.g. `keyring://`, `bws://project-uuid`).
     pub uri: String,
-    /// Bootstrap credentials: environment variable name to the provider spec
-    /// (alias, bare provider name, or URI) that supplies it. `None` for a bare
-    /// string alias.
-    pub env: Option<HashMap<String, String>>,
+    /// Bootstrap credentials: environment variable name to the [`BootstrapSource`]
+    /// that supplies it. `None` for a bare string alias.
+    pub env: Option<HashMap<String, BootstrapSource>>,
 }
 
 impl ProviderAlias {
@@ -96,12 +201,12 @@ impl From<&str> for ProviderAlias {
 impl std::fmt::Display for ProviderAlias {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.uri)?;
-        if let Some(env) = &self.env {
-            if !env.is_empty() {
-                let mut vars: Vec<&str> = env.keys().map(String::as_str).collect();
-                vars.sort();
-                write!(f, " (bootstrap: {})", vars.join(", "))?;
-            }
+        if let Some(env) = &self.env
+            && !env.is_empty()
+        {
+            let mut vars: Vec<&str> = env.keys().map(String::as_str).collect();
+            vars.sort();
+            write!(f, " (bootstrap: {})", vars.join(", "))?;
         }
         Ok(())
     }
@@ -151,7 +256,7 @@ impl<'de> Deserialize<'de> for ProviderAlias {
                 struct Table {
                     uri: String,
                     #[serde(default)]
-                    env: Option<HashMap<String, String>>,
+                    env: Option<HashMap<String, BootstrapSource>>,
                 }
                 let table = Table::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
                 Ok(ProviderAlias {
@@ -2305,14 +2410,50 @@ mod provider_alias_tests {
         let map = parse(r#"bws = { uri = "bws://proj", env = { BWS_ACCESS_TOKEN = "keyring" } }"#);
         let alias = &map["bws"];
         assert_eq!(alias.uri, "bws://proj");
-        assert_eq!(
-            alias
-                .env
-                .as_ref()
-                .and_then(|env| env.get("BWS_ACCESS_TOKEN"))
-                .map(String::as_str),
-            Some("keyring"),
+        let source = alias
+            .env
+            .as_ref()
+            .and_then(|env| env.get("BWS_ACCESS_TOKEN"))
+            .expect("env carries the variable");
+        assert_eq!(source, &BootstrapSource::from("keyring"));
+    }
+
+    #[test]
+    fn env_source_with_ref_parses_provider_and_coordinates() {
+        let map = parse(
+            r#"vault = { uri = "vault://kv", env = { VAULT_ROLE_ID = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "role_id" } } } }"#,
         );
+        let source = map["vault"].env.as_ref().unwrap()["VAULT_ROLE_ID"].clone();
+        assert_eq!(source.provider, "onepassword");
+        let reference = source.reference.expect("ref present");
+        assert_eq!(reference.vault.as_deref(), Some("Infra"));
+        assert_eq!(reference.item, "approle");
+        assert_eq!(reference.field.as_deref(), Some("role_id"));
+    }
+
+    #[test]
+    fn env_source_round_trips() {
+        let bare = BootstrapSource::from("keyring");
+        let with_ref = BootstrapSource {
+            provider: "onepassword".to_string(),
+            reference: Some(NativeAddress {
+                item: "approle".to_string(),
+                field: Some("role_id".to_string()),
+                ..Default::default()
+            }),
+        };
+        for source in [bare, with_ref] {
+            let alias = ProviderAlias {
+                uri: "vault://kv".to_string(),
+                env: Some(HashMap::from([(
+                    "VAULT_ROLE_ID".to_string(),
+                    source.clone(),
+                )])),
+            };
+            let map = HashMap::from([("vault".to_string(), alias.clone())]);
+            let serialized = toml::to_string(&map).unwrap();
+            assert_eq!(parse(&serialized)["vault"], alias);
+        }
     }
 
     #[test]
@@ -2349,7 +2490,7 @@ mod provider_alias_tests {
             uri: "bws://proj".to_string(),
             env: Some(HashMap::from([(
                 "BWS_ACCESS_TOKEN".to_string(),
-                "keyring".to_string(),
+                BootstrapSource::from("keyring"),
             )])),
         };
         let map = HashMap::from([("bws".to_string(), alias.clone())]);

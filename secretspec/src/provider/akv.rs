@@ -53,7 +53,7 @@
 
 use super::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
-use azure_core::credentials::TokenCredential;
+use azure_core::credentials::{Secret, TokenCredential};
 use azure_identity::{
     ClientSecretCredential, DeveloperToolsCredential, ManagedIdentityCredential,
     WorkloadIdentityCredential,
@@ -264,14 +264,10 @@ impl AkvProvider {
                 if let (Some(tenant_id), Some(client_id), Some(client_secret)) =
                     (tenant_id, client_id, client_secret)
                 {
-                    // NOTE: `azure_identity` is a very new (v1.0), fast-moving
-                    // crate; verify this constructor's exact parameter types
-                    // with `cargo check --features akv` before relying on it,
-                    // in case the secret parameter type has changed.
                     Ok(ClientSecretCredential::new(
-                        tenant_id,
+                        &tenant_id,
                         client_id,
-                        SecretString::new(client_secret.into()),
+                        Secret::new(client_secret),
                         None,
                     )
                     .map_err(|e| {

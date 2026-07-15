@@ -783,66 +783,9 @@ impl Secrets {
             None
         };
 
-        match (current_secret, default_secret) {
-            (Some(current), Some(default)) => {
-                // Merge: current profile takes precedence, then default profile, then profile defaults
-                Some(crate::config::Secret {
-                    description: current
-                        .description
-                        .clone()
-                        .or_else(|| default.description.clone()),
-                    required: current
-                        .required
-                        .or(default.required)
-                        .or(current_defaults.and_then(|d| d.required)),
-                    default: current
-                        .default
-                        .clone()
-                        .or_else(|| default.default.clone())
-                        .or_else(|| current_defaults.and_then(|d| d.default.clone())),
-                    providers: current
-                        .providers
-                        .clone()
-                        .or_else(|| default.providers.clone())
-                        .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
-                    reference: current
-                        .reference
-                        .clone()
-                        .or_else(|| default.reference.clone()),
-                    as_path: current.as_path.or(default.as_path),
-                    secret_type: current
-                        .secret_type
-                        .clone()
-                        .or_else(|| default.secret_type.clone()),
-                    generate: current
-                        .generate
-                        .clone()
-                        .or_else(|| default.generate.clone()),
-                })
-            }
-            (Some(secret), None) | (None, Some(secret)) => {
-                // Apply profile defaults to the found secret
-                Some(crate::config::Secret {
-                    description: secret.description.clone(),
-                    required: secret
-                        .required
-                        .or(current_defaults.and_then(|d| d.required)),
-                    default: secret
-                        .default
-                        .clone()
-                        .or_else(|| current_defaults.and_then(|d| d.default.clone())),
-                    providers: secret
-                        .providers
-                        .clone()
-                        .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
-                    reference: secret.reference.clone(),
-                    as_path: secret.as_path,
-                    secret_type: secret.secret_type.clone(),
-                    generate: secret.generate.clone(),
-                })
-            }
-            (None, None) => None,
-        }
+        // The field-level merge lives on `Secret` so `Config::validate`
+        // checks exactly the effective config this method produces.
+        crate::config::Secret::resolved(current_secret, default_secret, current_defaults)
     }
 
     /// Resolve the effective (merged) config for a secret that is known to
@@ -1644,7 +1587,7 @@ impl Secrets {
             .collect::<HashSet<_>>();
         let missing_optional: HashSet<&String> = valid.missing_optional.iter().collect();
 
-        for (name, _) in profile.iter() {
+        for name in &profile.sorted_secret_names() {
             let config = self.effective_secret_config(name, &valid.resolved.profile);
             if missing_optional.contains(&name) {
                 optional_count += 1;
@@ -1692,7 +1635,7 @@ impl Secrets {
             .map(|(name, _)| name)
             .collect::<HashSet<_>>();
 
-        for (name, _) in &profile {
+        for name in &profile.sorted_secret_names() {
             let config = self.effective_secret_config(name, &errors.profile);
             if errors.missing_required.contains(name) {
                 missing_count += 1;

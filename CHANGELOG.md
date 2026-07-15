@@ -40,6 +40,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallback entry it is still skipped with a warning, like any broken link.
 
 ### Fixed
+- Profile overrides no longer need to repeat the secret's `description`:
+  validation now checks each secret's effective, merged configuration, so a
+  partial override like `[profiles.development] DATABASE_URL = { default =
+  "sqlite:///dev.db" }` inherits the description (and `type`, for `generate`)
+  from the default profile instead of failing with "missing description".
+  The merged view is also validated for real conflicts, so a `generate`
+  secret in the default profile combined with a `default` value from an
+  override or a profile `[defaults]` table is now rejected at load instead of
+  silently generating a random value and ignoring the default. Validation
+  errors are reported deterministically, attributed to the profile that
+  declares the offending field, and `check` and `run` list secrets in stable
+  name-sorted order.
 - Provider fallback chains (`providers = [...]`) are now tried strictly in
   order: each link is resolved only when a read actually reaches it, and a
   broken link (an undefined alias, an unreachable store) is skipped with a

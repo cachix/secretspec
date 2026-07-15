@@ -86,12 +86,25 @@ impl Config {
 
         let default_profile = self.profiles.get("default");
 
-        // Validate each profile. Non-default profiles are partial overrides, so
-        // their secrets may inherit descriptions from the default profile. The
-        // default profile inheriting from itself is a no-op.
-        for (profile_name, profile) in &self.profiles {
-            profile
-                .validate_with_default(default_profile)
+        // Validate each profile against the same effective view resolution
+        // uses: non-default profiles are partial overrides whose secrets merge
+        // field by field with the default profile's entries. The default
+        // profile is validated first and profiles are ordered, so an error
+        // (e.g. an empty description in the default profile) is always
+        // attributed to the profile that declares it, deterministically.
+        let mut profile_names: Vec<&String> = self.profiles.keys().collect();
+        profile_names.sort_by(|a, b| {
+            (a.as_str() != "default", a.as_str()).cmp(&(b.as_str() != "default", b.as_str()))
+        });
+
+        for profile_name in profile_names {
+            let inherit_from = if profile_name == "default" {
+                None
+            } else {
+                default_profile
+            };
+            self.profiles[profile_name]
+                .validate_with_default(inherit_from)
                 .map_err(|e| {
                     ParseError::Validation(format!("Profile '{}': {}", profile_name, e))
                 })?;
@@ -518,21 +531,51 @@ impl Profile {
             return Err("Profile must define at least one secret".into());
         }
 
-        for (name, secret) in &self.secrets {
-            // Validate secret name is a valid identifier
-            if !is_valid_identifier(name) {
-                return Err(format!(
-                    "Invalid secret name '{}': must be a valid identifier (alphanumeric and underscores, not starting with a number)",
-                    name
-                ));
+        // Resolution acts on the union of this profile's secrets and the
+        // default profile's, merged field by field together with this
+        // profile's `[defaults]` table. Validate that same effective view so
+        // validation and resolution cannot disagree. Names are sorted so
+        // error attribution is deterministic.
+        let mut names: Vec<&String> = self.secrets.keys().collect();
+        if let Some(default_profile) = default_profile {
+            names.extend(
+                default_profile
+                    .secrets
+                    .keys()
+                    .filter(|name| !self.secrets.contains_key(*name)),
+            );
+        }
+        names.sort();
+
+        for name in names {
+            let secret = self.secrets.get(name);
+
+            if let Some(secret) = secret {
+                // Validate secret name is a valid identifier
+                if !is_valid_identifier(name) {
+                    return Err(format!(
+                        "Invalid secret name '{}': must be a valid identifier (alphanumeric and underscores, not starting with a number)",
+                        name
+                    ));
+                }
+
+                // Raw-entry rule: `required = true` plus an inline `default`
+                // contradicts itself within one entry. Across profiles the
+                // same combination is the override mechanism working as
+                // intended (e.g. dev supplies a default for a secret the
+                // default profile requires), so it is not checked on the
+                // merged view below.
+                secret
+                    .validate_required_default()
+                    .map_err(|e| format!("Secret '{}': {}", name, e))?;
             }
 
-            let inherited_description = default_profile
-                .and_then(|profile| profile.secrets.get(name))
-                .and_then(|secret| secret.description.as_deref());
+            let inherited = default_profile.and_then(|profile| profile.secrets.get(name));
+            let merged = Secret::resolved(secret, inherited, self.defaults.as_ref())
+                .expect("every validated name comes from one of the two secret maps");
 
-            secret
-                .validate_with_description(inherited_description)
+            merged
+                .validate_effective()
                 .map_err(|e| format!("Secret '{}': {}", name, e))?;
         }
 
@@ -903,21 +946,39 @@ impl Secret {
     /// Ensures that required secrets don't have default values,
     /// and that generation config is consistent with type.
     pub fn validate(&self) -> Result<(), String> {
-        self.validate_with_description(None)
+        self.validate_description()?;
+        self.validate_required_default()?;
+        self.validate_semantics()
     }
 
-    fn validate_with_description(&self, inherited_description: Option<&str>) -> Result<(), String> {
-        match self.description.as_deref().or(inherited_description) {
-            Some("") => return Err("description cannot be empty".into()),
-            None => return Err("missing description".into()),
-            Some(_) => {}
-        }
+    /// Rules that apply to the effective (merged) configuration of a secret,
+    /// i.e. what a resolver actually acts on. `Config::validate` calls this on
+    /// the merged view so overrides may inherit fields (description, type,
+    /// generate, ...) from the default profile.
+    fn validate_effective(&self) -> Result<(), String> {
+        self.validate_description()?;
+        self.validate_semantics()
+    }
 
-        // If required is explicitly true and default is set, that's an error
+    fn validate_description(&self) -> Result<(), String> {
+        match self.description.as_deref() {
+            Some("") => Err("description cannot be empty".into()),
+            None => Err("missing description".into()),
+            Some(_) => Ok(()),
+        }
+    }
+
+    /// If required is explicitly true and default is set, that's an error.
+    /// Checked on raw entries only, not on merged views (see
+    /// `Profile::validate_with_default`).
+    fn validate_required_default(&self) -> Result<(), String> {
         if self.required == Some(true) && self.default.is_some() {
             return Err("Required secrets cannot have default values".into());
         }
+        Ok(())
+    }
 
+    fn validate_semantics(&self) -> Result<(), String> {
         // A `ref` supplies naming only: it composes with `providers` routing
         // and with `generate` (a missing referenced secret is minted and
         // written to its coordinates, like any other generated value).
@@ -993,6 +1054,73 @@ impl Secret {
         }
 
         Ok(())
+    }
+
+    /// Field-level merge producing the effective configuration a resolver
+    /// acts on.
+    ///
+    /// Precedence (highest to lowest): the current profile's entry, the
+    /// default profile's entry, then the current profile's `[defaults]` table
+    /// (for the fields it can supply). Shared by secret resolution
+    /// (`Secrets::resolve_secret_config`) and `Config::validate` so the two
+    /// can never disagree about what a merged secret looks like.
+    pub(crate) fn resolved(
+        current: Option<&Secret>,
+        default: Option<&Secret>,
+        defaults: Option<&ProfileDefaults>,
+    ) -> Option<Secret> {
+        match (current, default) {
+            (Some(current), Some(default)) => Some(Secret {
+                description: current
+                    .description
+                    .clone()
+                    .or_else(|| default.description.clone()),
+                required: current
+                    .required
+                    .or(default.required)
+                    .or(defaults.and_then(|d| d.required)),
+                default: current
+                    .default
+                    .clone()
+                    .or_else(|| default.default.clone())
+                    .or_else(|| defaults.and_then(|d| d.default.clone())),
+                providers: current
+                    .providers
+                    .clone()
+                    .or_else(|| default.providers.clone())
+                    .or_else(|| defaults.and_then(|d| d.providers.clone())),
+                reference: current
+                    .reference
+                    .clone()
+                    .or_else(|| default.reference.clone()),
+                as_path: current.as_path.or(default.as_path),
+                secret_type: current
+                    .secret_type
+                    .clone()
+                    .or_else(|| default.secret_type.clone()),
+                generate: current
+                    .generate
+                    .clone()
+                    .or_else(|| default.generate.clone()),
+            }),
+            (Some(secret), None) | (None, Some(secret)) => Some(Secret {
+                description: secret.description.clone(),
+                required: secret.required.or(defaults.and_then(|d| d.required)),
+                default: secret
+                    .default
+                    .clone()
+                    .or_else(|| defaults.and_then(|d| d.default.clone())),
+                providers: secret
+                    .providers
+                    .clone()
+                    .or_else(|| defaults.and_then(|d| d.providers.clone())),
+                reference: secret.reference.clone(),
+                as_path: secret.as_path,
+                secret_type: secret.secret_type.clone(),
+                generate: secret.generate.clone(),
+            }),
+            (None, None) => None,
+        }
     }
 }
 
@@ -1624,7 +1752,7 @@ DATABASE_URL = { default = "sqlite:///dev.db" }
 
         config.validate().unwrap();
 
-        let spec = crate::Secrets::new(config, None, Some("development".to_string()), None);
+        let spec = crate::Secrets::new(config, None, None, Some("development".to_string()));
         let resolved = spec
             .resolve_secret_config("DATABASE_URL", Some("development"))
             .unwrap();
@@ -1647,6 +1775,130 @@ DATABASE_URL = { default = "sqlite:///dev.db" }
 
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("missing description"));
+    }
+
+    #[test]
+    fn config_validate_rejects_generate_and_default_split_across_profiles() {
+        // The merged production config carries generate (inherited) plus an
+        // inline default; the executor would generate and silently ignore the
+        // default, so validation must reject the combination.
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "tmp"
+revision = "1.0"
+
+[profiles.default]
+API_TOKEN = { description = "t", type = "password", generate = true }
+
+[profiles.production]
+API_TOKEN = { default = "placeholder" }
+"#,
+        )
+        .unwrap();
+
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("Profile 'production'"), "{err}");
+        assert!(
+            err.contains("'generate' and 'default' cannot both be set"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn config_validate_allows_generate_with_type_inherited_from_default_profile() {
+        // Resolution merges `type` from the default profile, so the override
+        // only enabling `generate` is a coherent effective config.
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "tmp"
+revision = "1.0"
+
+[profiles.default]
+TOKEN = { description = "t", type = "password" }
+
+[profiles.production]
+TOKEN = { generate = true }
+"#,
+        )
+        .unwrap();
+
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn config_validate_allows_required_in_default_with_override_default() {
+        // required=true in the default profile plus a default value supplied
+        // by an override is the override mechanism working as intended; only
+        // the same combination within a single raw entry is a contradiction.
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "tmp"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "db", required = true }
+
+[profiles.development]
+DATABASE_URL = { default = "sqlite:///dev.db" }
+"#,
+        )
+        .unwrap();
+
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn config_validate_blames_default_profile_for_empty_inherited_description() {
+        // The empty description lives in the default profile; the error must
+        // name that profile deterministically, not the override that inherits
+        // the empty value.
+        let config = config_with(
+            "proj",
+            vec![
+                ("default", vec![("DB", secret(Some("")))]),
+                ("development", vec![("DB", secret(None))]),
+            ],
+        );
+
+        for _ in 0..8 {
+            let err = config.validate().unwrap_err().to_string();
+            assert!(err.contains("Profile 'default'"), "{err}");
+            assert!(err.contains("description cannot be empty"), "{err}");
+        }
+    }
+
+    #[test]
+    fn config_validate_checks_profile_defaults_in_merged_config() {
+        // A [defaults] table participates in resolution, so a default value it
+        // injects next to an inherited generate must fail validation too, even
+        // though the production profile never declares the secret itself.
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "tmp"
+revision = "1.0"
+
+[profiles.default]
+API_TOKEN = { description = "t", type = "password", generate = true }
+
+[profiles.production]
+OTHER = { description = "o" }
+
+[profiles.production.defaults]
+default = "placeholder"
+"#,
+        )
+        .unwrap();
+
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("Profile 'production'"), "{err}");
+        assert!(
+            err.contains("'generate' and 'default' cannot both be set"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -32,7 +32,7 @@ SECRET_NAME = {
 ```
 
 **Options:**
-- `description`: Explains the secret's purpose (required)
+- `description`: Explains the secret's purpose (required in the `default` profile; profile overrides inherit it when omitted)
 - `required`: Whether the secret must be provided (default: `true`)
 - `default`: Fallback value for optional secrets
 - `type`: Secret type for auto-generation (`password`, `hex`, `base64`, `uuid`, `command`)

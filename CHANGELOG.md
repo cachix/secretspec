@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a customer-managed KMS key or "tag-on-create" guardrails (an SCP requiring
   `aws:RequestTag/*` on `CreateSecret`) can now store secrets. A pre-existing
   secret keeps the key and tags it was created with.
+- PHP SDK (`cachix/secretspec`): resolve secrets from PHP, Laravel, and Symfony
+  over the same shared resolver as the other language SDKs. It ships as a native
+  PHP extension that embeds the resolver (works under PHP-FPM with no
+  `ffi.enable`, like `ext-redis`), with an `ext-ffi` fallback that dlopens the
+  library at runtime for CLI and local development.
 
 ### Changed
 - A `ref` routed at a single store (an explicit `--provider`, a single-provider
@@ -47,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same "use `onepassword` instead" correction that `--provider 1password`
   gives, instead of a generic undefined-alias error.
 - `import` prints its per-secret summary in a stable, name-sorted order.
+- `run` no longer aborts when the environment contains a non-UTF-8 variable.
+  Such variables are now passed through to the child process untouched, with
+  resolved secrets overlaid on top.
 
 ## [0.14.0] - 2026-07-09
 

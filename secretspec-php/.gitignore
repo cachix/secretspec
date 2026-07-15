@@ -1,0 +1,6 @@
+/vendor/
+.phpunit.result.cache
+/.phpunit.cache/
+# Native artifacts staged for distribution, never committed (see RELEASE.md):
+# the bundled secretspec-ffi cdylib and the staged secretspec.so extension.
+/lib/

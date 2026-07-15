@@ -4,3 +4,6 @@
 target
 
 .DS_Store
+
+# PHP (Composer) — manifest at repo root, vendor-dir points into secretspec-php/
+/composer.lock

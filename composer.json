@@ -1,0 +1,44 @@
+{
+    "name": "cachix/secretspec",
+    "description": "PHP SDK for SecretSpec, a declarative secrets manager. A thin client over the shared Rust resolver; sources live in secretspec-php/.",
+    "type": "library",
+    "keywords": ["secrets", "secret", "configuration", "environment", "dotenv", "secretspec", "vault"],
+    "homepage": "https://secretspec.dev",
+    "license": "Apache-2.0",
+    "support": {
+        "issues": "https://github.com/cachix/secretspec/issues",
+        "source": "https://github.com/cachix/secretspec"
+    },
+    "require": {
+        "php": ">=8.1",
+        "ext-json": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5 || ^11.0"
+    },
+    "suggest": {
+        "ext-ffi": "Zero-install backend (set ffi.enable for web/FPM); run vendor/bin/secretspec-install-lib to fetch the native library",
+        "ext-secretspec-php-native": "Native extension that embeds the resolver; works under FPM with no ffi.enable (see https://secretspec.dev/sdk/php)"
+    },
+    "autoload": {
+        "psr-4": {
+            "Secretspec\\": "secretspec-php/src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Secretspec\\Tests\\": "secretspec-php/tests/"
+        }
+    },
+    "bin": [
+        "secretspec-php/bin/secretspec-install-lib"
+    ],
+    "scripts": {
+        "test": "phpunit -c secretspec-php/phpunit.xml.dist",
+        "secretspec:install-lib": "@php secretspec-php/scripts/install-ffi-lib.php"
+    },
+    "config": {
+        "sort-packages": true,
+        "vendor-dir": "secretspec-php/vendor"
+    }
+}

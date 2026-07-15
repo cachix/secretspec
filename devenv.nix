@@ -39,6 +39,20 @@
   languages.ruby.enable = true;
   # Haskell SDK (secretspec-hs) links the C ABI at build time via the FFI.
   languages.haskell.enable = true;
+  # PHP SDK (secretspec-php) has two native backends over the same resolver:
+  #   * secretspec-php-native, an ext-php-rs extension that embeds the resolver
+  #     (the production path: no ffi.enable, works in FPM like ext-redis); and
+  #   * a runtime ext-ffi fallback that dlopens the secretspec-ffi cdylib.
+  # The pure-PHP client prefers the extension when loaded. ext-ffi (enabled here)
+  # covers the fallback + dev; composer (bundled with languages.php) manages the
+  # dev-only phpunit dependency.
+  languages.php = {
+    enable = true;
+    extensions = [ "ffi" ];
+    ini = ''
+      ffi.enable = true;
+    '';
+  };
 
   packages = [
     # keyring
@@ -47,6 +61,11 @@
     pkgs.cargo-tarpaulin
     # installers
     pkgs.cargo-dist
+    # Building the secretspec-php-native extension (ext-php-rs) needs php-config +
+    # the PHP dev headers, and bindgenHook wires libclang/clang system headers so
+    # ext-php-rs's bindgen step can parse php.h.
+    pkgs.php.unwrapped.dev
+    pkgs.rustPlatform.bindgenHook
   ];
 
   # Fully-static musl build of the Go SDK (-tags static + -extldflags -static).

@@ -4,6 +4,7 @@ members = [
   "secretspec-derive",
   "secretspec-ffi",
   "secretspec-node",
+  "secretspec-php",
   "secretspec-py",
   "examples/derive",
 ]

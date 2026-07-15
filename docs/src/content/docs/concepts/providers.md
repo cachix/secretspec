@@ -20,6 +20,7 @@ Providers are pluggable storage backends that handle the storage and retrieval o
 | **awssm** | AWS Secrets Manager (requires `--features awssm`) | ✓ | ✓ | ✓ |
 | **vault** | HashiCorp Vault / OpenBao (requires `--features vault`) | ✓ | ✓ | ✓ |
 | **bws** | Bitwarden Secrets Manager (requires `--features bws`) | ✓ | ✓ | ✓ |
+| **akv** | Azure Key Vault (requires `--features akv`) | ✓ | ✓ | ✓ |
 
 ## Provider Selection
 

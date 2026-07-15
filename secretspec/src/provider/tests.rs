@@ -479,6 +479,23 @@ mod integration_tests {
                     .expect("Should create vault provider");
                 (provider, None)
             }
+            #[cfg(feature = "akv")]
+            // Bare "akv" has no vault name, so route it through a real
+            // AKV_TEST_VAULT instead of falling into the generic `_` branch
+            // below, where `try_from("akv")` fails to parse and panics with
+            // a misleading "akv provider should exist" instead of pointing
+            // at the missing configuration. Set AKV_TEST_VAULT to a real Key
+            // Vault name and authenticate via AZURE_TENANT_ID/AZURE_CLIENT_ID/
+            // AZURE_CLIENT_SECRET or `az login` to exercise this provider.
+            "akv" => {
+                let vault = std::env::var("AKV_TEST_VAULT").expect(
+                    "Testing the akv provider requires a real Key Vault: set AKV_TEST_VAULT to a vault name (and authenticate via AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET or `az login`).",
+                );
+                let provider_spec = format!("akv://{vault}");
+                let provider = Box::<dyn Provider>::try_from(provider_spec.as_str())
+                    .expect("Should create akv provider");
+                (provider, None)
+            }
             _ => {
                 let provider = Box::<dyn Provider>::try_from(provider_name)
                     .expect(&format!("{} provider should exist", provider_name));

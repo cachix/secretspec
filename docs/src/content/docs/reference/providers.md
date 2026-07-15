@@ -158,6 +158,22 @@ API endpoints are derived as `https://SERVER_BASE/identity` and
 **Prerequisites**: BWS subscription, machine account access token, build with `--features bws`
 **Storage**: Flat key names in the specified BWS project
 
+## Azure Key Vault Provider
+
+**URI**: `akv://VAULT_NAME[?auth=env|cli|managed_identity|workload_identity][&suffix=DNS_SUFFIX]` - Stores secrets in Azure Key Vault
+
+```bash
+akv://myvault                            # Service principal env vars, falling back to `az login`
+akv://myvault?auth=managed_identity      # VM / App Service / AKS system-assigned managed identity
+akv://myvault?auth=workload_identity     # AKS workload identity federation
+akv://myvault.vault.azure.cn             # Sovereign cloud (full DNS name)
+akv://myvault?suffix=vault.azure.cn      # Sovereign cloud (explicit suffix, bare vault name)
+```
+
+**Features**: Read/write, cloud sync, profiles, service principal/managed identity/workload identity auth
+**Prerequisites**: An Azure Key Vault instance, authenticated via one of the methods above, build with `--features akv`
+**Storage**: Secret name `secretspec--{project}--{profile}--{key}` (underscores rewritten to hyphens; Azure Key Vault secret names allow only letters, digits, and hyphens)
+
 ## Provider Selection
 
 ### Command Line
@@ -195,3 +211,4 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |
 | Vault/OpenBao | ✅ Vault encryption | Vault/OpenBao server | ✅ Yes |
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
+| AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Azure Key Vault provider (`akv://`). Authenticates via a service principal
+  (`AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`), falling back to
+  a signed-in Azure CLI / Azure Developer CLI session; managed identity and
+  AKS workload identity are also available via `?auth=managed_identity` and
+  `?auth=workload_identity`. Sovereign clouds can be addressed with a full
+  DNS hostname or an explicit `?suffix=` override. Project/profile/key
+  combinations that would collide once mapped to Azure's secret-name
+  charset are rejected rather than silently colliding with another secret.
 - The `awssm` provider accepts `kms_key_id` and `tag.NAME=VALUE` query
   parameters (e.g. `awssm://prod@us-east-1?kms_key_id=alias/my-key&tag.team=platform`).
   Both are applied only when secretspec creates a secret, so accounts that enforce

@@ -1,154 +1,238 @@
 ---
 title: Providers
-description: Understanding secret storage providers in SecretSpec
+description: Choose and configure the storage backends SecretSpec uses for secrets
 ---
 
-Providers are pluggable storage backends that handle the storage and retrieval of secrets. They allow the same `secretspec.toml` to work across development machines, CI/CD pipelines, and production environments.
+A provider is a storage backend from which SecretSpec reads secrets and, when
+supported, writes them. Providers let one `secretspec.toml` describe the secrets
+an application needs without requiring every environment to use the same secret
+store.
 
-## Available Providers
+For example, a developer can use the system keyring, CI can supply environment
+variables, and production can use a shared password manager or cloud secret
+manager. The secret definitions stay the same; only their provider configuration
+changes.
 
-| Provider | Description | Read | Write | Encrypted |
-|----------|-------------|------|-------|-----------|
-| **keyring** | System credential storage (macOS Keychain, Windows Credential Manager, Linux Secret Service) | ✓ | ✓ | ✓ |
-| **dotenv** | Traditional `.env` file in your project directory | ✓ | ✓ | ✗ |
-| **env** | Read-only access to existing environment variables | ✓ | ✗ | ✗ |
-| **pass** | Unix password manager with GPG encryption | ✓ | ✓ | ✓ |
-| **protonpass** | Integration with Proton password manager | ✓ | ✓ | ✓ |
-| **onepassword** | Integration with OnePassword password manager | ✓ | ✓ | ✓ |
-| **lastpass** | Integration with LastPass password manager | ✓ | ✓ | ✓ |
-| **gcsm** | Google Cloud Secret Manager (requires `--features gcsm`) | ✓ | ✓ | ✓ |
-| **awssm** | AWS Secrets Manager (requires `--features awssm`) | ✓ | ✓ | ✓ |
-| **vault** | HashiCorp Vault / OpenBao (requires `--features vault`) | ✓ | ✓ | ✓ |
-| **bws** | Bitwarden Secrets Manager (requires `--features bws`) | ✓ | ✓ | ✓ |
-| **akv** | Azure Key Vault (requires `--features akv`) | ✓ | ✓ | ✓ |
+## Provider specifications
 
-## Provider Selection
+Anywhere SecretSpec accepts a provider, you can use one of three forms:
 
-SecretSpec determines which provider to use for each secret in this order:
+- A provider name, such as `keyring` or `env`.
+- A provider URI, such as `dotenv://.env.local` or
+  `onepassword://Production`. The URI configures a particular instance of the
+  provider.
+- A provider alias, such as `prod_vault`, defined in project or user
+  configuration.
 
-1. **Explicit override**: the `--provider` CLI flag or the `SECRETSPEC_PROVIDER` environment variable
-2. **Per-secret providers**: `providers` field in `secretspec.toml` (with fallback chain)
-3. **Profile defaults**: `providers` under `[profiles.<name>.defaults]`
-4. **Global default**: Default provider in user config set via `secretspec config init`
+Aliases are useful when a URI is shared by several secrets or should have a
+meaningful, store-independent name.
 
-A secret's [`ref`](/reference/configuration/#secret-references) field never
-affects provider selection: it only changes what name is looked up in the store,
-not which store is used. The same order above picks the store for ref secrets
-and convention secrets alike.
+```toml title="secretspec.toml"
+[providers]
+prod_vault = "onepassword://Production"
 
-## Configuration
+[profiles.production]
+DATABASE_URL = { description = "Production database", providers = ["prod_vault"] }
+```
 
-Set your default provider:
+## Available providers
+
+| Provider | Storage backend | Read | Write | Encrypted at rest |
+|----------|-----------------|------|-------|-------------------|
+| [keyring](/providers/keyring/) | macOS Keychain, Windows Credential Manager, or Linux Secret Service | ✓ | ✓ | ✓ |
+| [dotenv](/providers/dotenv/) | A `.env` file | ✓ | ✓ | ✗ |
+| [env](/providers/env/) | Current process environment | ✓ | ✗ | ✗ |
+| [pass](/providers/pass/) | Unix `pass` password store | ✓ | ✓ | ✓ |
+| [protonpass](/providers/protonpass/) | Proton Pass | ✓ | ✓ | ✓ |
+| [onepassword](/providers/onepassword/) | 1Password | ✓ | ✓ | ✓ |
+| [lastpass](/providers/lastpass/) | LastPass | ✓ | ✓ | ✓ |
+| [gcsm](/providers/gcsm/) | Google Cloud Secret Manager (requires the `gcsm` build feature) | ✓ | ✓ | ✓ |
+| [awssm](/providers/awssm/) | AWS Secrets Manager (requires the `awssm` build feature) | ✓ | ✓ | ✓ |
+| [vault](/providers/vault/) | HashiCorp Vault or OpenBao (requires the `vault` build feature) | ✓ | ✓ | ✓ |
+| [bws](/providers/bws/) | Bitwarden Secrets Manager (requires the `bws` build feature) | ✓ | ✓ | ✓ |
+| [akv](/providers/akv/) | Azure Key Vault (requires the `akv` build feature) | ✓ | ✓ | ✓ |
+
+See each provider's page for its URI format, authentication requirements, and
+storage conventions.
+
+## How SecretSpec selects a provider
+
+SecretSpec resolves the provider for each secret in the following order:
+
+1. The `--provider` command-line option.
+2. The `SECRETSPEC_PROVIDER` environment variable.
+3. The secret's effective `providers` list after profile inheritance and
+   `[profiles.<name>.defaults]` are applied.
+4. The default provider in the user configuration.
+
+The first two options are explicit overrides. They route every secret to one
+provider and disable any configured fallback chain for that command.
+
+If no override is set, SecretSpec tries the effective `providers` list from
+left to right until a provider returns the secret. If the secret has no
+`providers` list, SecretSpec uses the user-level default provider.
+
+```toml title="secretspec.toml"
+[providers]
+prod_vault = "onepassword://Production"
+local = "keyring://"
+
+[profiles.production.defaults]
+providers = ["prod_vault", "local"]
+
+[profiles.production]
+# Uses the profile default: prod_vault, then local.
+DATABASE_URL = { description = "Production database" }
+
+# Overrides the profile default and reads only from the environment.
+DEPLOY_TOKEN = { description = "Deployment token", providers = ["env"] }
+```
+
+The fallback order applies to reads. Writes go only to the first provider in
+the effective list. In the example above, SecretSpec reads `DATABASE_URL` from
+`prod_vault` first and falls back to `local` only when the secret is not found;
+it writes `DATABASE_URL` only to `prod_vault`.
+
+:::note
+A secret's [`ref`](/reference/configuration/#secret-references) changes the
+address looked up inside a provider, not the provider selection rules. Explicit
+overrides and fallback chains work the same way for referenced secrets and
+convention-based secrets.
+:::
+
+## Configure the default provider
+
+Run the interactive configuration command to select the provider SecretSpec
+uses when a secret has no provider-specific configuration:
 
 ```bash
 $ secretspec config init
 ```
 
-Override for specific commands:
-
-```bash
-# Use dotenv for this command
-$ secretspec run --provider dotenv -- npm start
-
-# Set for shell session
-$ export SECRETSPEC_PROVIDER=env
-$ secretspec check
-```
-
-Configure providers with URIs:
-
-```toml
-# ~/.config/secretspec/config.toml
-[defaults]
-provider = "keyring"
-profile = "development"  # optional default profile
-```
-
-You can use provider URIs for more specific configuration:
-
-```bash
-# Use a specific OnePassword vault
-$ secretspec run --provider "onepassword://Development" -- npm start
-
-# Use a specific dotenv file
-$ secretspec run --provider "dotenv:/home/user/work/.env" -- npm test
-```
-
-## Per-Secret Provider Configuration
-
-For fine-grained control, you can specify different providers for individual secrets using the `providers` field in `secretspec.toml`. This enables fallback chains where secrets are retrieved from multiple providers in order of preference:
-
-```toml
-[profiles.production]
-DATABASE_URL = { description = "Production DB", providers = ["prod_vault", "keyring"] }
-API_KEY = { description = "API key from env", providers = ["env"] }
-SENTRY_DSN = { description = "Error tracking", providers = ["shared_vault", "keyring"] }
-```
-
-Chain entries are provider aliases (see below) or inline provider URIs, which
-need no alias declaration:
-
-```toml
-[profiles.production]
-DATABASE_URL = { description = "Production DB", providers = ["onepassword://Production", "keyring"] }
-```
-
-### Profile-Level Default Providers
-
-You can also set default providers for an entire profile using `profiles.<name>.defaults`. See [Profile-Level Defaults](/concepts/profiles/#profile-level-defaults) for details.
-
-Provider aliases can be defined in two places:
-
-- **Project-level** — a top-level `[providers]` table in `secretspec.toml`. Check this into version control so the whole team and CI runners share the same mapping.
-- **User-level** — a `[defaults.providers]` table in `~/.config/secretspec/config.toml` for personal overrides.
-
-On name conflicts the project-level alias wins, so a stale user config cannot silently shadow the team's mapping.
-
-```toml title="secretspec.toml"
-[providers]
-prod_vault = "onepassword://Production"
-shared_vault = "onepassword://Shared"
-keyring = "keyring://"
-env = "env://"
-```
+The resulting user configuration contains a default provider:
 
 ```toml title="~/.config/secretspec/config.toml"
 [defaults]
 provider = "keyring"
-
-[defaults.providers]
-prod_vault = "onepassword://Production"
-shared_vault = "onepassword://Shared"
-keyring = "keyring://"
-env = "env://"
+profile = "development" # Optional default profile
 ```
 
-### Bootstrap Credentials
+Use `--provider` for a one-off override, or `SECRETSPEC_PROVIDER` for commands
+in the current shell or CI job:
+
+```bash
+# Route every secret in this command to a project .env file.
+$ secretspec run --provider dotenv -- npm start
+
+# Route every secret in subsequent commands to existing environment variables.
+$ export SECRETSPEC_PROVIDER=env
+$ secretspec check
+```
+
+A provider URI can configure the selected backend more precisely:
+
+```bash
+# Select a specific 1Password vault.
+$ secretspec run --provider "onepassword://Development" -- npm start
+
+# Select a specific dotenv file.
+$ secretspec run --provider "dotenv:/home/user/work/.env" -- npm test
+```
+
+## Configure provider aliases
+
+Provider aliases can be declared at either project or user scope:
+
+- Define project aliases in the top-level `[providers]` table in
+  `secretspec.toml`. Commit these aliases so team members and CI use the same
+  mapping.
+- Define user aliases in `[defaults.providers]` in
+  `~/.config/secretspec/config.toml`. Use these for personal mappings that
+  should apply across projects.
+
+If both scopes define the same alias, the project alias takes precedence.
+
+```toml title="secretspec.toml"
+[providers]
+prod_vault = "onepassword://Production"
+shared_vault = "onepassword://Shared"
+local = "keyring://"
+
+[profiles.production]
+DATABASE_URL = { description = "Production database", providers = ["prod_vault", "local"] }
+SENTRY_DSN = { description = "Error reporting", providers = ["shared_vault", "local"] }
+```
+
+Provider lists may combine aliases, provider names, and inline provider URIs:
+
+```toml title="secretspec.toml"
+[profiles.production]
+DATABASE_URL = { description = "Production database", providers = ["onepassword://Production", "keyring"] }
+```
+
+Use the CLI to manage user-level aliases:
+
+```bash
+$ secretspec config provider add prod_vault "onepassword://Production"
+$ secretspec config provider list
+$ secretspec config provider remove prod_vault
+```
+
+These commands modify only `~/.config/secretspec/config.toml`. Edit the
+top-level `[providers]` table directly to change project aliases.
+
+## Bootstrap provider credentials
 
 :::note
-Bootstrap providers are available since version 0.15.
+Bootstrap credentials are supported in version 0.15 and later.
 :::
 
-Some providers need a secret of their own before they can serve any secrets — a Bitwarden machine token (`BWS_ACCESS_TOKEN`), a Vault token or AppRole credentials, a 1Password service account token. Normally these come from environment variables, which pushes plaintext tokens back into shell profiles and CI variable pages. An alias can instead source them from another provider, so the token lives in your keyring or vault:
+Some providers need credentials before they can retrieve secrets. Examples
+include `BWS_ACCESS_TOKEN` for Bitwarden Secrets Manager, a Vault token or
+AppRole credentials, and a 1Password service account token.
+
+An alias can load these credentials from another provider. This avoids storing
+long-lived provider credentials in a shell profile or CI variable when a secure
+store is available.
+
+### Use the convention address
+
+In an alias's `env` table, map each required environment variable to the
+provider that stores it:
 
 ```toml title="secretspec.toml"
 [providers]
 keyring = "keyring://"
 
-# BWS_ACCESS_TOKEN is read from keyring before the provider is used
+# Read BWS_ACCESS_TOKEN from keyring before connecting to Bitwarden.
 bws = { uri = "bws://a9230ec4-5507-4870-b8b5-b3f500587e4c", env = { BWS_ACCESS_TOKEN = "keyring" } }
 ```
 
-Each entry in `env` binds an environment variable the provider needs to a source. A bare string is a provider spec and reads the credential at the convention path (`{project}/{profile}/{VAR}`) for the active profile. A table pins the exact location with the same `ref` coordinates a secret uses:
+A string value such as `"keyring"` is a provider specification. SecretSpec
+reads the credential from that provider at the conventional
+`{project}/{profile}/{VAR}` address for the active project and profile.
+
+### Use an explicit address
+
+Use a table with `provider` and `ref` when the credential already exists at a
+specific provider-native address:
 
 ```toml title="secretspec.toml"
 [providers.vault_prod]
 uri = "vault://secret/myapp?auth=approle"
-env = { VAULT_ROLE_ID   = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "role_id" } },
-        VAULT_SECRET_ID = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "secret_id" } } }
+env = {
+  VAULT_ROLE_ID = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "role_id" } },
+  VAULT_SECRET_ID = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "secret_id" } }
+}
 ```
 
-Store the credentials once with [`secretspec config provider login`](/reference/cli/#config-provider-login), which prompts for each one and writes it to its source:
+The `ref` table uses the same provider-native coordinates as a secret
+[`ref`](/reference/configuration/#secret-references).
+
+### Store bootstrap credentials
+
+Use `config provider login` to prompt for every credential declared by an
+alias and write it to the configured source:
 
 ```bash
 $ secretspec config provider login bws
@@ -156,53 +240,33 @@ Enter BWS_ACCESS_TOKEN for provider 'bws' (source: keyring): ****
 ✓ stored BWS_ACCESS_TOKEN in keyring at smoke/default/BWS_ACCESS_TOKEN
 ```
 
-A few things hold by design:
-
-- **The environment still wins.** If the variable is already exported (as in CI), that value is used and the source is not consulted, so CI keeps working with no extra configuration.
-- **Nothing leaks.** The credential is handed to the provider in memory; it is never written to the environment, and never reaches processes started by `secretspec run`.
-- **One hop.** A bootstrap source may not itself declare bootstrap credentials, which is validated up front and makes cycles impossible.
-- **Machine-wide vs per-profile.** A bare-string source is stored per project and profile; use a `ref` to pin a token to one location shared across projects.
-
-### Fallback Chains
-
-When a secret specifies multiple providers, SecretSpec tries each provider in order until it finds the secret:
-
-```toml
-# Try OnePassword first, then fall back to keyring if not found
-DATABASE_URL = { description = "DB", providers = ["prod_vault", "keyring"] }
-```
-
-This enables complex workflows:
-- **Shared vs environment-specific**: Try a shared vault first, fall back to local keyring
-- **Redundancy**: Maintain secrets in multiple locations for backup
-- **Migration**: Gradually move secrets from one provider to another
-- **Multi-team setups**: Different teams can manage different providers
-
-### Managing Provider Aliases
-
-Use CLI commands to manage user-level provider aliases in `~/.config/secretspec/config.toml`:
+You can also create a user-level alias with a convention-address bootstrap
+source from the CLI:
 
 ```bash
-# Add a provider alias
-$ secretspec config provider add prod_vault "onepassword://Production"
-
-# Add an alias whose provider bootstraps a credential from another provider
 $ secretspec config provider add bws "bws://project-uuid" --env BWS_ACCESS_TOKEN=keyring
-
-# Store the bootstrap credentials an alias declares
 $ secretspec config provider login bws
-
-# List all aliases
-$ secretspec config provider list
-
-# Remove an alias
-$ secretspec config provider remove prod_vault
 ```
 
-These commands operate on the user-level config only. To change project-level aliases, edit the `[providers]` table in `secretspec.toml` directly.
+Bootstrap credentials follow these rules:
 
-## Next Steps
+- **Existing environment variables take precedence.** If a required variable
+  is already set, SecretSpec uses it and does not query the configured source.
+- **Credentials remain internal.** SecretSpec passes a retrieved credential to
+  the destination provider in memory. It does not export the credential or
+  include it in the environment of a process started by `secretspec run`.
+- **Bootstrap chains are one hop.** A source provider cannot require bootstrap
+  credentials of its own. SecretSpec validates this before accessing the
+  provider, preventing dependency cycles.
+- **Convention addresses are profile-specific.** A string source uses the
+  active project and profile. Use a `ref` source when multiple projects or
+  profiles should share one provider credential.
 
-- Browse individual provider docs in the [Providers](/providers/keyring/) section
-- Learn how [Profiles](/concepts/profiles/) control per-environment behavior
-- Share secret definitions across projects with [Configuration Inheritance](/concepts/inheritance/)
+## Next steps
+
+- Review the URI and authentication details for an individual provider in the
+  [Providers](/providers/keyring/) section.
+- Learn how [Profiles](/concepts/profiles/) apply provider defaults to an
+  environment.
+- Learn how [Secret references](/concepts/references/) separate provider
+  selection from provider-native addresses.

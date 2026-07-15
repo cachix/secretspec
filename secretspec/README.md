@@ -82,7 +82,7 @@ See the [Quick Start Guide](https://secretspec.dev/quick-start) for detailed ins
 ## Installation
 
 ```shell-session
-$ curl -sSL https://install.secretspec.dev | sh
+curl -sSL https://install.secretspec.dev | sh
 ```
 
 See the [installation guide](https://secretspec.dev/quick-start#installation) for more options including Nix and Devenv.

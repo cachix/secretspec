@@ -121,6 +121,7 @@ crate::register_provider! {
     description: "Bitwarden Secrets Manager",
     schemes: ["bws"],
     examples: ["bws://a9230ec4-5507-4870-b8b5-b3f500587e4c"],
+    bootstrap_vars: ["BWS_ACCESS_TOKEN"],
 }
 
 impl BwsProvider {

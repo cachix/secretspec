@@ -65,11 +65,15 @@ impl BootstrapSource {
     }
 
     /// Human-readable `<provider> at <location>` for prompts and errors,
-    /// describing exactly what [`Self::address`] resolves to.
+    /// describing exactly what [`Self::address`] resolves to. The source spec
+    /// is redacted: a URI-form source may embed an inline credential
+    /// (`onepassword+token://tok@Vault`), and this string reaches stderr and
+    /// the `config provider login` output.
     fn location(&self, project: &str, profile: &str, var: &str) -> String {
+        let provider = crate::audit::redact_uri_strict(&self.provider);
         match &self.reference {
-            Some(reference) => format!("{} at {}", self.provider, reference.render()),
-            None => format!("{} at {project}/{profile}/{var}", self.provider),
+            Some(reference) => format!("{provider} at {}", reference.render()),
+            None => format!("{provider} at {project}/{profile}/{var}"),
         }
     }
 }
@@ -171,10 +175,15 @@ pub struct Secrets {
     /// Audit logger, if auditing is enabled (user-global `[audit]` config). `None`
     /// disables auditing. Built once per `Secrets` so all events share a session id.
     audit: Option<AuditLogger>,
-    /// Bootstrap overlays memoized per raw provider spec, so N secrets routed
-    /// at one bootstrapped alias fetch its credentials from the source provider
-    /// once per session, not once per provider build.
-    bootstrap_overlays: Mutex<HashMap<String, BootstrapEnv>>,
+    /// Bootstrap overlays memoized per (profile, raw provider spec), so N
+    /// secrets routed at one bootstrapped alias fetch its credentials from the
+    /// source provider once per session, not once per provider build. Keyed by
+    /// profile because a convention-path credential lives at
+    /// `{project}/{profile}/{VAR}`: switching profiles on one instance must
+    /// not reuse the other profile's credential. Cleared by
+    /// [`Secrets::store_bootstrap_credential`] so a freshly stored credential
+    /// is re-read.
+    bootstrap_overlays: Mutex<HashMap<(String, String), BootstrapEnv>>,
 }
 
 /// secretspec's own opt-in for marking the current process as an agent. Lets any
@@ -520,21 +529,35 @@ impl Secrets {
     ///
     /// All provider construction in this module goes through here so that the
     /// reason set via [`Secrets::with_reason`] reaches every provider instance.
-    fn build_provider(&self, spec: String) -> Result<Box<dyn ProviderTrait>> {
+    ///
+    /// `profile` is the profile the caller resolved for the surrounding
+    /// operation (`None` falls back to the session profile): a bootstrapped
+    /// alias's convention-path credentials live at `{project}/{profile}/{VAR}`,
+    /// so the provider must be built for the same profile its secrets are
+    /// addressed under.
+    fn build_provider(
+        &self,
+        spec: String,
+        profile: Option<&str>,
+    ) -> Result<Box<dyn ProviderTrait>> {
         // When `spec` names an alias with a bootstrap `env` map, resolve those
         // credentials from their source providers into an overlay the built
-        // provider reads before the process environment. Memoized per spec so
-        // rebuilding a provider (per-secret chain walks, interactive prompting)
-        // does not refetch the same credentials from the source store.
-        let cached = self.bootstrap_overlays.lock().unwrap().get(&spec).cloned();
+        // provider reads before the process environment. Memoized per
+        // (profile, spec) so rebuilding a provider (per-secret chain walks,
+        // interactive prompting) does not refetch the same credentials from
+        // the source store, while a profile switch on this instance does not
+        // reuse the other profile's credentials.
+        let profile = self.resolve_profile_name(profile);
+        let key = (profile.clone(), spec.clone());
+        let cached = self.bootstrap_overlays.lock().unwrap().get(&key).cloned();
         let overlay = match cached {
             Some(overlay) => overlay,
             None => {
-                let overlay = self.resolve_bootstrap_overlay(&spec)?;
+                let overlay = self.resolve_bootstrap_overlay(&spec, &profile)?;
                 self.bootstrap_overlays
                     .lock()
                     .unwrap()
-                    .insert(spec.clone(), overlay.clone());
+                    .insert(key, overlay.clone());
                 overlay
             }
         };
@@ -573,13 +596,20 @@ impl Secrets {
     /// its alias declares in `env`, fetch the credential from the source provider
     /// and collect it, so the built provider reads it before the environment.
     ///
+    /// `profile` scopes the convention path a bare-string source reads from.
     /// Returns an empty overlay for a spec that is not an alias, or an alias with
     /// no `env`. A variable already set (non-empty) in the process environment
     /// wins and is not fetched. A declared credential that cannot be found is a
     /// hard error naming exactly how to fix it. Sources pass
     /// [`Self::validate_bootstrap_sources`] and are built non-bootstrap, so a
-    /// chain is at most one hop and cannot recurse.
-    pub(crate) fn resolve_bootstrap_overlay(&self, spec: &str) -> Result<BootstrapEnv> {
+    /// chain is at most one hop and cannot recurse. Each source read is audited
+    /// with a `bootstrap` marker, so the audit trail explains why the source
+    /// store was touched during an operation on the target provider.
+    pub(crate) fn resolve_bootstrap_overlay(
+        &self,
+        spec: &str,
+        profile: &str,
+    ) -> Result<BootstrapEnv> {
         let mut overlay = BootstrapEnv::new();
         if self
             .lookup_provider_alias_entry(spec)
@@ -588,8 +618,8 @@ impl Secrets {
             return Ok(overlay);
         }
         self.validate_bootstrap_sources(spec)?;
+        self.warn_unconsumed_bootstrap_vars(spec);
 
-        let profile = self.resolve_profile_name(None);
         let project = self.config.project.name.clone();
 
         // One provider per distinct source spec, so credentials sharing a source
@@ -613,7 +643,30 @@ impl Secrets {
                     entry.insert(self.build_source_provider(&source.provider)?)
                 }
             };
-            match source_provider.get(source.address(&project, &profile, &var))? {
+            let fetched = source_provider.get(source.address(&project, profile, &var));
+            // Audit the source read (design: every secret access is recorded).
+            // The key is the bootstrap variable and the event carries a
+            // `bootstrap` marker plus the source provider's credential-free
+            // `uri()`, so the trail explains why this store was touched.
+            let (outcome, error_kind) = match &fetched {
+                Ok(Some(_)) => (AuditOutcome::Found, None),
+                Ok(None) => (AuditOutcome::Missing, None),
+                Err(e) => (AuditOutcome::Error, Some(e.kind())),
+            };
+            self.record(
+                AuditAction::Get,
+                profile,
+                outcome,
+                AuditFields {
+                    key: Some(&var),
+                    command: Some("bootstrap"),
+                    provider_uri: Some(source_provider.uri()),
+                    reference: source.reference.as_ref(),
+                    error_kind,
+                    ..Default::default()
+                },
+            );
+            match fetched? {
                 Some(value) => {
                     overlay.insert(var, value);
                 }
@@ -621,13 +674,47 @@ impl Secrets {
                     return Err(bootstrap_missing_error(
                         &var,
                         spec,
-                        &source.location(&project, &profile, &var),
+                        &source.location(&project, profile, &var),
                     ));
                 }
             }
         }
 
         Ok(overlay)
+    }
+
+    /// Warns once (per overlay resolution, which is memoized per session) about
+    /// each declared bootstrap variable the target provider never reads: only
+    /// providers that register `bootstrap_vars` consult the overlay, and only
+    /// for those names, so any other declaration is fetched and then silently
+    /// ignored. A warning rather than an error, because a declaration can be
+    /// legitimate for values the provider reads from the real environment.
+    fn warn_unconsumed_bootstrap_vars(&self, spec: &str) {
+        let Some(env) = self
+            .lookup_provider_alias_entry(spec)
+            .and_then(|alias| alias.env.as_ref())
+        else {
+            return;
+        };
+        let resolved = self.resolve_provider_spec(spec.to_string());
+        let supported = crate::provider::bootstrap_vars_for_spec(&resolved);
+        let provider_name = crate::provider::provider_display_name_for_spec(&resolved);
+        let mut vars: Vec<&String> = env.keys().collect();
+        vars.sort();
+        for var in vars {
+            if !supported.contains(&var.as_str()) {
+                let supported_display = if supported.is_empty() {
+                    format!("provider '{provider_name}' reads no bootstrap credentials")
+                } else {
+                    format!("provider '{provider_name}' reads: {}", supported.join(", "))
+                };
+                eprintln!(
+                    "{} bootstrap variable '{var}' declared for provider alias '{spec}' is not \
+                     read by its provider and will be ignored ({supported_display})",
+                    "⚠".yellow(),
+                );
+            }
+        }
     }
 
     /// The bootstrap credentials a provider alias declares, sorted by variable
@@ -651,18 +738,46 @@ impl Secrets {
     /// or the convention path for the active project and profile). Errors if the
     /// source provider is read-only. Returns a human-readable description of
     /// where it was stored.
+    ///
+    /// Like every other write path, the write is gated by the `require_reason`
+    /// policy and audited (with a `bootstrap` marker). A successful store also
+    /// clears the overlay memo, so a credential rotated through this instance
+    /// is re-read instead of resolving to the stale cached value.
     pub(crate) fn store_bootstrap_credential(
         &self,
         source: &BootstrapSource,
         var: &str,
         value: &SecretString,
     ) -> Result<String> {
+        self.ensure_reason_for(AuditAction::Set, Some(var))?;
         let provider = self.build_source_provider(&source.provider)?;
         let profile = self.resolve_profile_name(None);
         let project = self.config.project.name.clone();
         let address = source.address(&project, &profile, var);
-        provider.check_writable(address)?;
-        provider.set(address, value)?;
+        let result = provider
+            .check_writable(address)
+            .and_then(|()| provider.set(address, value));
+        let (outcome, error_kind) = match &result {
+            Ok(()) => (AuditOutcome::Written, None),
+            Err(e) => (AuditOutcome::Error, Some(e.kind())),
+        };
+        self.record(
+            AuditAction::Set,
+            &profile,
+            outcome,
+            AuditFields {
+                key: Some(var),
+                command: Some("bootstrap"),
+                provider_uri: Some(provider.uri()),
+                reference: source.reference.as_ref(),
+                error_kind,
+                ..Default::default()
+            },
+        );
+        result?;
+        // The stored credential replaces whatever an earlier resolution
+        // memoized; drop the memo so the next build re-reads it.
+        self.bootstrap_overlays.lock().unwrap().clear();
         Ok(source.location(&project, &profile, var))
     }
 
@@ -681,16 +796,38 @@ impl Secrets {
         let Some(env) = alias.env.as_ref() else {
             return Ok(());
         };
-        for (var, source) in env {
-            self.resolve_one_provider(&source.provider).map_err(|_| {
-                SecretSpecError::ProviderNotFound(format!(
-                    "bootstrap source for '{var}' in provider alias '{spec}' names an unknown \
-                     provider '{}'",
-                    source.provider
+        // Sorted so the reported error is deterministic when several entries
+        // are invalid, matching the sorted fetch order of the resolver.
+        let mut entries: Vec<(&String, &BootstrapSource)> = env.iter().collect();
+        entries.sort_by_key(|(var, _)| var.as_str());
+        for (var, source) in entries {
+            // Compose the underlying error into the message instead of
+            // replacing it: it carries the corrective guidance (the
+            // `1password` -> `onepassword` hint, the defined-aliases listing)
+            // that the other resolution paths give for the same mistakes.
+            let resolved = self.resolve_one_provider(&source.provider).map_err(|err| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "bootstrap source for '{var}' in provider alias '{spec}': {err}"
                 ))
             })?;
+            // `resolve_one_provider` passes URI-form specs through untouched,
+            // so gate the resolved spec's scheme against the registry here:
+            // a typo'd scheme should fail at plan time, not surface later as
+            // a construction failure a fallback chain downgrades to a warning.
+            let known = crate::provider::spec_names_known_provider(&resolved).map_err(|err| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "bootstrap source for '{var}' in provider alias '{spec}': {err}"
+                ))
+            })?;
+            if !known {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "bootstrap source for '{var}' in provider alias '{spec}' names an unknown \
+                     provider '{}'",
+                    crate::audit::redact_uri_strict(&source.provider)
+                )));
+            }
             if let Some(source_alias) = self.lookup_provider_alias_entry(&source.provider)
-                && source_alias.env.is_some()
+                && source_alias.env.as_ref().is_some_and(|env| !env.is_empty())
             {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
                     "provider alias '{}' cannot be a bootstrap source for '{spec}' because it \
@@ -1154,11 +1291,15 @@ impl Secrets {
     /// Builds the provider a write goes to for a resolved [`Route`]: the primary
     /// store, or the default provider when the route sets none. A write never
     /// consults the fallback, so an undefined alias further down the chain does
-    /// not affect it.
-    fn write_provider_for_route(&self, route: &Route) -> Result<Box<dyn ProviderTrait>> {
+    /// not affect it. `profile` is the profile the write is addressed under.
+    fn write_provider_for_route(
+        &self,
+        route: &Route,
+        profile: Option<&str>,
+    ) -> Result<Box<dyn ProviderTrait>> {
         // Build from the primary spec (not the resolved URI) so an alias's
         // bootstrap `env` is applied to the write target too.
-        self.get_provider(route.group_key())
+        self.get_provider(route.group_key(), profile)
     }
 
     /// Gets the provider instance to use for secret operations
@@ -1173,6 +1314,9 @@ impl Secrets {
     /// # Arguments
     ///
     /// * `provider_arg` - Optional provider specification (name or URI)
+    /// * `profile` - The profile the operation is addressed under (`None`
+    ///   falls back to the session profile); scopes any bootstrap credentials
+    ///   fetched during construction
     ///
     /// # Returns
     ///
@@ -1186,20 +1330,29 @@ impl Secrets {
     pub(crate) fn get_provider(
         &self,
         provider_arg: Option<&str>,
+        profile: Option<&str>,
     ) -> Result<Box<dyn ProviderTrait>> {
-        let provider_spec = self
-            .explicit_provider_spec(provider_arg)
+        let provider_spec = self.default_provider_spec(provider_arg)?;
+
+        // Alias resolution happens inside `build_provider`.
+        let provider = self.build_provider(provider_spec, profile)?;
+
+        Ok(provider)
+    }
+
+    /// The raw provider spec [`Self::get_provider`] would build for
+    /// `provider_arg`: the explicit override, else the user-global default.
+    /// Split out so display paths can name the provider without constructing
+    /// it (construction fetches bootstrap credentials, so a display-only build
+    /// could fail or do I/O).
+    fn default_provider_spec(&self, provider_arg: Option<&str>) -> Result<String> {
+        self.explicit_provider_spec(provider_arg)
             .or_else(|| {
                 self.global_config
                     .as_ref()
                     .and_then(|gc| gc.defaults.provider.clone())
             })
-            .ok_or(SecretSpecError::NoProviderConfigured)?;
-
-        // Alias resolution happens inside `build_provider`.
-        let provider = self.build_provider(provider_spec)?;
-
-        Ok(provider)
+            .ok_or(SecretSpecError::NoProviderConfigured)
     }
 
     /// Returns a provider URI for validation result metadata without forcing a
@@ -1215,6 +1368,7 @@ impl Secrets {
         &self,
         override_uri: Option<&str>,
         primary_uris: impl Iterator<Item = Option<&'a str>>,
+        profile: Option<&str>,
     ) -> Result<String> {
         if let Some(uri) = override_uri {
             return Ok(crate::audit::redact_uri_strict(uri));
@@ -1226,7 +1380,9 @@ impl Secrets {
         match provider_uris.and_then(|uris| uris.into_iter().min()) {
             Some(uri) => Ok(crate::audit::redact_uri_strict(uri)),
             // A secret on the default provider, or no secrets at all.
-            None => self.get_provider(None).map(|provider| provider.uri()),
+            None => self
+                .get_provider(None, profile)
+                .map(|provider| provider.uri()),
         }
     }
 
@@ -1251,6 +1407,8 @@ impl Secrets {
     ///   the same address is asked of every provider in the chain
     /// * `provider_specs` - Optional chain of provider specs (aliases or inline
     ///   URIs) to try in order, resolved lazily per entry
+    /// * `profile` - The profile the read is addressed under; scopes any
+    ///   bootstrap credentials fetched when a chain link is built
     ///
     /// # Returns
     ///
@@ -1263,6 +1421,7 @@ impl Secrets {
         secret_name: &str,
         addr: Address<'_>,
         provider_specs: Option<&[String]>,
+        profile: Option<&str>,
     ) -> Result<(Option<SecretString>, Option<String>)> {
         // If a provider chain is supplied, try it in order.
         if let Some(specs) = provider_specs {
@@ -1289,7 +1448,7 @@ impl Secrets {
                 };
                 // Build from the raw spec (not the resolved URI) so an alias's
                 // bootstrap `env` is applied to this chain link too.
-                let provider = match self.build_provider(spec.clone()) {
+                let provider = match self.build_provider(spec.clone(), profile) {
                     Ok(p) => p,
                     Err(e) => {
                         // Construction failed after resolution, so redact the
@@ -1332,7 +1491,7 @@ impl Secrets {
             }
         } else {
             // No per-secret providers, use default provider
-            let backend = self.get_provider(None)?;
+            let backend = self.get_provider(None, profile)?;
             let uri = backend.uri();
             backend.get(addr).map(|opt| (opt, Some(uri)))
         }
@@ -1402,7 +1561,7 @@ impl Secrets {
             }
         };
 
-        let backend = match self.write_provider_for_route(&planned.route) {
+        let backend = match self.write_provider_for_route(&planned.route, Some(&profile_name)) {
             Ok(backend) => backend,
             Err(err) => {
                 self.record_key_error(AuditAction::Set, &profile_name, name, None, None, &err);
@@ -1533,6 +1692,7 @@ impl Secrets {
             name,
             planned.as_address(&self.config.project.name, &profile_name),
             read_specs.as_deref(),
+            Some(&profile_name),
         );
 
         // Audit the access at the provider boundary, before defaults are applied.
@@ -1671,7 +1831,16 @@ impl Secrets {
 
                     let missing = &validation_errors.missing_required;
                     let total = missing.len();
-                    let default_backend = self.get_provider(provider_arg.as_deref())?;
+                    // Name the provider without constructing it: this value is
+                    // display-only (each prompted write builds its own route's
+                    // provider below), and construction now fetches bootstrap
+                    // credentials, so a display-only build could hard-error on
+                    // a bootstrapped default alias no missing secret routes to.
+                    let default_backend_name = crate::provider::provider_display_name_for_spec(
+                        &self.resolve_provider_spec(
+                            self.default_provider_spec(provider_arg.as_deref())?,
+                        ),
+                    );
 
                     // List all missing secrets upfront
                     eprintln!(
@@ -1683,7 +1852,7 @@ impl Secrets {
                             "secrets are"
                         },
                         profile_display.bold(),
-                        default_backend.name().bold(),
+                        default_backend_name.bold(),
                     );
                     for secret_name in missing {
                         let description = self
@@ -1717,7 +1886,8 @@ impl Secrets {
 
                             let value = prompt.prompt()?;
 
-                            let backend = self.write_provider_for_route(&planned.route)?;
+                            let backend = self
+                                .write_provider_for_route(&planned.route, Some(&profile_display))?;
                             let set_result = backend.set(
                                 planned.as_address(&self.config.project.name, &profile_display),
                                 &SecretString::new(value.into()),
@@ -1992,7 +2162,8 @@ impl Secrets {
         let copy_result = (|| -> Result<()> {
             // Create the "from" provider and check availability. `build_provider`
             // expands a provider alias used as the import source.
-            let from_provider_instance = self.build_provider(from_provider.to_string())?;
+            let from_provider_instance =
+                self.build_provider(from_provider.to_string(), Some(&profile_display))?;
             source_uri = Some(from_provider_instance.uri());
 
             eprintln!(
@@ -2015,7 +2186,8 @@ impl Secrets {
                     .expect("Secret should exist since we're iterating over it");
                 let description = planned.config.description.as_deref();
 
-                let to_provider = self.write_provider_for_route(&planned.route)?;
+                let to_provider =
+                    self.write_provider_for_route(&planned.route, Some(&profile_display))?;
 
                 // The secret's address (native `ref` coordinates or convention
                 // naming) applies to both stores: naming is orthogonal to
@@ -2199,7 +2371,7 @@ impl Secrets {
         // Store the generated value at the plan's address, through the plan's
         // write route: the same decisions every other write path executes.
         let addr = planned.as_address(&self.config.project.name, profile_name);
-        let backend = self.write_provider_for_route(&planned.route)?;
+        let backend = self.write_provider_for_route(&planned.route, Some(profile_name))?;
         // The provider states why a write is refused; wrapping it here would
         // only nest a second "Provider operation failed" prefix.
         backend.check_writable(addr)?;
@@ -2630,7 +2802,7 @@ impl Secrets {
         let mut group_fetches: Vec<(Option<&str>, Vec<&PlannedSecret>, Box<dyn ProviderTrait>)> =
             Vec::new();
         for (provider_uri, group) in plan.groups() {
-            match self.get_provider(provider_uri) {
+            match self.get_provider(provider_uri, Some(&plan.profile)) {
                 Ok(provider) => {
                     // Attribute primary hits to the provider's own credential-free
                     // `uri()`, never the raw configured alias (which may embed a
@@ -2740,6 +2912,7 @@ impl Secrets {
                                 name,
                                 planned.as_address(project, profile),
                                 Some(fallback),
+                                Some(profile),
                             )?;
                             // A primary that errored plus an exhausted fallback
                             // chain is not "missing": the authoritative provider
@@ -2832,6 +3005,7 @@ impl Secrets {
         let report_provider_uri = self.validation_report_provider_uri(
             plan.override_uri.as_deref(),
             plan.secrets.iter().map(|s| s.route.primary()),
+            Some(&plan.profile),
         )?;
 
         if !missing_required.is_empty() {
@@ -3209,6 +3383,7 @@ mod report_provider_tests {
             .validation_report_provider_uri(
                 Some("vault+token:s3cr3t@host/db?token=abc"),
                 std::iter::empty(),
+                None,
             )
             .unwrap();
         assert_eq!(got, "vault+token:host/db");
@@ -3216,7 +3391,11 @@ mod report_provider_tests {
 
         // Per-secret alias branch: the first sorted primary URI is redacted too.
         let got = spec
-            .validation_report_provider_uri(None, [Some("vault://host?token=zzz")].into_iter())
+            .validation_report_provider_uri(
+                None,
+                [Some("vault://host?token=zzz")].into_iter(),
+                None,
+            )
             .unwrap();
         assert_eq!(got, "vault://host");
         assert!(!got.contains("zzz"));
@@ -3325,7 +3504,7 @@ mod reference_routing_tests {
                     &override_spec,
                 )
                 .unwrap();
-            spec.write_provider_for_route(&route).unwrap()
+            spec.write_provider_for_route(&route, None).unwrap()
         };
 
         assert_eq!(write_provider(None).name(), "onepassword");
@@ -3341,7 +3520,7 @@ mod reference_routing_tests {
         let spec = Secrets::new(crate::tests::resolve_test_config(secrets), None, None, None);
         let plan = spec.build_plan(None).unwrap();
         for (primary, group) in plan.groups() {
-            let provider = spec.get_provider(primary).unwrap();
+            let provider = spec.get_provider(primary, None).unwrap();
             Secrets::check_single_store_ref_coords(&group, provider.as_ref())?;
         }
         Ok(())

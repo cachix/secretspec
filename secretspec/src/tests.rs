@@ -499,6 +499,42 @@ impl Drop for ResolutionEnvGuard {
     }
 }
 
+/// Sets or removes one environment variable and restores its previous value on
+/// drop, so a failing assertion cannot leak the mutation. The caller must hold
+/// the crate-wide env lock (via [`scrub_resolution_env`]) for the guard's
+/// lifetime: `set_var`/`remove_var` mutate the shared process environment and
+/// are only sound while no other thread touches it.
+pub(crate) struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    pub(crate) fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(key);
+        // SAFETY: serialized by the env lock the caller holds.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, previous }
+    }
+
+    pub(crate) fn remove(key: &'static str) -> Self {
+        let previous = std::env::var_os(key);
+        // SAFETY: serialized by the env lock the caller holds.
+        unsafe { std::env::remove_var(key) };
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            // SAFETY: serialized by the env lock the caller holds.
+            Some(value) => unsafe { std::env::set_var(self.key, value) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
+
 #[test]
 fn test_resolve_carries_values_and_provenance() {
     use crate::resolve::ResolvedSource;
@@ -1035,7 +1071,7 @@ fn test_get_provider_error_cases() {
     );
 
     // Test with no provider configured
-    let result = spec.get_provider(None);
+    let result = spec.get_provider(None, None);
     assert!(matches!(result, Err(SecretSpecError::NoProviderConfigured)));
 }
 
@@ -1065,7 +1101,7 @@ fn test_get_provider_with_global_config() {
     );
 
     // Should not error with global config
-    let result = spec.get_provider(None);
+    let result = spec.get_provider(None, None);
     assert!(result.is_ok());
 }
 
@@ -6076,7 +6112,9 @@ fn bootstrap_overlay_reads_convention_credential_from_source() {
         )]),
     );
 
-    let overlay = secrets.resolve_bootstrap_overlay("target").unwrap();
+    let overlay = secrets
+        .resolve_bootstrap_overlay("target", "default")
+        .unwrap();
     assert_eq!(
         overlay
             .get("BOOTSTRAP_READ_VAR")
@@ -6108,7 +6146,9 @@ fn bootstrap_overlay_reads_ref_addressed_credential() {
         )]),
     );
 
-    let overlay = secrets.resolve_bootstrap_overlay("target").unwrap();
+    let overlay = secrets
+        .resolve_bootstrap_overlay("target", "default")
+        .unwrap();
     assert_eq!(
         overlay
             .get("MY_TOKEN")
@@ -6137,7 +6177,9 @@ fn bootstrap_overlay_lets_the_environment_win() {
         )]),
     );
 
-    let overlay = secrets.resolve_bootstrap_overlay("target").unwrap();
+    let overlay = secrets
+        .resolve_bootstrap_overlay("target", "default")
+        .unwrap();
     // The environment satisfies the variable, so the chain is not consulted and
     // the overlay carries nothing for it (the provider reads the env directly).
     assert!(!overlay.contains_key(VAR));
@@ -6163,7 +6205,9 @@ fn bootstrap_overlay_missing_credential_is_an_actionable_error() {
         )]),
     );
 
-    let error = secrets.resolve_bootstrap_overlay("target").unwrap_err();
+    let error = secrets
+        .resolve_bootstrap_overlay("target", "default")
+        .unwrap_err();
     let message = error.to_string();
     assert!(
         message.contains("BOOTSTRAP_MISSING_VAR") && message.contains("not found"),
@@ -6249,12 +6293,92 @@ fn bootstrap_credential_round_trips_through_its_source() {
         .unwrap();
 
     // Stored and read back through the same address the resolver uses.
-    let overlay = secrets.resolve_bootstrap_overlay("target").unwrap();
+    let overlay = secrets
+        .resolve_bootstrap_overlay("target", "default")
+        .unwrap();
     assert_eq!(
         overlay
             .get("ROUND_TRIP_VAR")
             .map(|value| value.expose_secret().to_string()),
         Some("stored-value".to_string()),
+    );
+}
+
+/// The overlay memo is keyed by profile: building the target for one profile
+/// memoizes only that profile's credentials, and another profile re-fetches
+/// from the source instead of reusing them.
+#[test]
+fn bootstrap_overlay_memoizes_per_profile() {
+    let _guard = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    std::fs::write(&source, "SECRETSPEC_TEST_PROFILE_SCOPED_VAR=v1\n").unwrap();
+
+    let secrets = secrets_with_bootstrap_alias(
+        "env://",
+        HashMap::from([(
+            "SECRETSPEC_TEST_PROFILE_SCOPED_VAR".to_string(),
+            BootstrapSource::from(format!("dotenv://{}", source.display())),
+        )]),
+    );
+
+    // First build fetches the credential and memoizes it for this profile.
+    secrets
+        .get_provider(Some("target"), Some("default"))
+        .expect("the source supplies the credential");
+
+    // Empty the source: a fresh fetch can no longer succeed.
+    std::fs::write(&source, "").unwrap();
+
+    // Same profile: served from the memo, so the emptied source is not read.
+    secrets
+        .get_provider(Some("target"), Some("default"))
+        .expect("the memoized credential must be reused for the same profile");
+
+    // Another profile must not reuse the memo: it re-fetches and hard-misses.
+    assert!(
+        secrets.get_provider(Some("target"), Some("other")).is_err(),
+        "another profile must re-fetch rather than reuse the memoized credential"
+    );
+}
+
+/// Storing a credential through its source (the `login` flow) clears the
+/// overlay memo, so the next build re-reads the store instead of resolving to
+/// the stale cached value.
+#[test]
+fn storing_a_bootstrap_credential_invalidates_the_memo() {
+    let _guard = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    std::fs::write(&source, "SECRETSPEC_TEST_ROTATED_VAR=old\n").unwrap();
+
+    let secrets = secrets_with_bootstrap_alias(
+        "env://",
+        HashMap::from([(
+            "SECRETSPEC_TEST_ROTATED_VAR".to_string(),
+            BootstrapSource::from(format!("dotenv://{}", source.display())),
+        )]),
+    );
+
+    // Memoize the old credential.
+    secrets
+        .get_provider(Some("target"), Some("default"))
+        .expect("the source supplies the credential");
+
+    let credentials = secrets.bootstrap_credentials("target").unwrap();
+    let (var, source_spec) = &credentials[0];
+    secrets
+        .store_bootstrap_credential(source_spec, var, &secrecy::SecretString::new("new".into()))
+        .unwrap();
+
+    // Empty the source: only a memo hit could satisfy the next build, so a
+    // success here would prove the store had NOT invalidated it.
+    std::fs::write(&source, "").unwrap();
+    assert!(
+        secrets
+            .get_provider(Some("target"), Some("default"))
+            .is_err(),
+        "the store must clear the memo so the credential is re-read"
     );
 }
 

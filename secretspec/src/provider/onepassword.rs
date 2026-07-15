@@ -322,6 +322,7 @@ crate::register_provider! {
     description: "OnePassword password manager",
     schemes: ["onepassword", "onepassword+token", "op"],
     examples: ["onepassword://vault", "onepassword://work@Production", "onepassword+token://vault"],
+    bootstrap_vars: ["OP_SERVICE_ACCOUNT_TOKEN"],
     preflight: check_auth,
 }
 
@@ -839,15 +840,18 @@ impl Provider for OnePasswordProvider {
     /// referenced secret; without this, N references would run N identical
     /// `op vault list` round-trips.
     fn auth_scope_key(&self) -> Option<String> {
+        // The token actually in effect, so two instances bootstrapped with
+        // different tokens never share a preflight probe. Hashed rather than
+        // embedded: the scope key lives in a process-lifetime cache, and a
+        // bootstrap-sourced token is kept as a `SecretString` precisely so its
+        // plaintext never sits in long-lived memory.
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.effective_service_account_token().hash(&mut hasher);
+        let token_scope = hasher.finish();
         Some(format!(
             "{:?}",
-            (
-                &self.config.account,
-                // The token actually in effect, so two instances bootstrapped
-                // with different tokens never share a preflight probe.
-                self.effective_service_account_token(),
-                &self.op_command
-            )
+            (&self.config.account, token_scope, &self.op_command)
         ))
     }
 

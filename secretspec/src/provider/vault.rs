@@ -233,6 +233,7 @@ crate::register_provider! {
     description: "HashiCorp Vault / OpenBao secret management",
     schemes: ["vault", "openbao"],
     examples: ["vault://vault.example.com:8200/secret", "openbao://bao.internal:8200/secret"],
+    bootstrap_vars: ["VAULT_ROLE_ID", "VAULT_SECRET_ID", "VAULT_TOKEN"],
 }
 
 impl VaultProvider {

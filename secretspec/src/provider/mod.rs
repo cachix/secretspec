@@ -438,6 +438,32 @@ pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
         .any(|reg| reg.schemes.contains(&scheme)))
 }
 
+/// The bootstrap variables the provider named by `spec` reads through the
+/// overlay (its registration's `bootstrap_vars`), or an empty slice for an
+/// unknown scheme. Lets alias validation diagnose an `env` declaration the
+/// provider would silently ignore.
+pub(crate) fn bootstrap_vars_for_spec(spec: &str) -> &'static [&'static str] {
+    let (scheme, _) = split_spec(spec);
+    PROVIDER_REGISTRY
+        .iter()
+        .find(|reg| reg.schemes.contains(&scheme))
+        .map(|reg| reg.bootstrap_vars)
+        .unwrap_or(&[])
+}
+
+/// The registered display name for the provider `spec` names, falling back to
+/// the spec's scheme token. Pure registry lookup: lets callers show which
+/// provider a spec routes to without constructing it (construction now fetches
+/// bootstrap credentials, so a display-only build could fail or do I/O).
+pub(crate) fn provider_display_name_for_spec(spec: &str) -> String {
+    let (scheme, _) = split_spec(spec);
+    PROVIDER_REGISTRY
+        .iter()
+        .find(|reg| reg.schemes.contains(&scheme))
+        .map(|reg| reg.info.name.to_string())
+        .unwrap_or_else(|| scheme.to_string())
+}
+
 /// Trait defining the interface for secret storage providers.
 ///
 /// All secret storage backends must implement this trait to integrate with SecretSpec.
@@ -1295,6 +1321,7 @@ mod url_tests {
 #[cfg(test)]
 mod bootstrap_env_tests {
     use super::{BootstrapEnv, bootstrap_env_var, env_or_overlay_var};
+    use crate::tests::EnvVarGuard;
     use secrecy::SecretString;
 
     fn overlay(var: &str, value: &str) -> BootstrapEnv {
@@ -1305,30 +1332,23 @@ mod bootstrap_env_tests {
 
     #[test]
     fn env_var_wins_over_overlay() {
-        // Unique per-test var name so the process-global mutation cannot race
-        // other tests that touch the environment.
+        // The lock guard serializes all env mutation across the test binary;
+        // the var guard restores the previous value even if an assert panics.
+        let _lock = crate::tests::scrub_resolution_env();
         const VAR: &str = "SECRETSPEC_TEST_BOOTSTRAP_ENV_WINS";
-        let prev = std::env::var(VAR).ok();
-        // SAFETY: unique-per-test var, restored below (mirrors tests.rs).
-        unsafe { std::env::set_var(VAR, "from-env") };
+        let _var = EnvVarGuard::set(VAR, "from-env");
 
         assert_eq!(
             env_or_overlay_var(&overlay(VAR, "from-overlay"), VAR).as_deref(),
             Some("from-env"),
         );
-
-        match prev {
-            Some(value) => unsafe { std::env::set_var(VAR, value) },
-            None => unsafe { std::env::remove_var(VAR) },
-        }
     }
 
     #[test]
     fn overlay_used_only_when_env_absent() {
+        let _lock = crate::tests::scrub_resolution_env();
         const VAR: &str = "SECRETSPEC_TEST_BOOTSTRAP_OVERLAY_FALLBACK";
-        let prev = std::env::var(VAR).ok();
-        // SAFETY: unique-per-test var, restored below.
-        unsafe { std::env::remove_var(VAR) };
+        let _var = EnvVarGuard::remove(VAR);
 
         // Overlay hit when the environment has nothing.
         assert_eq!(
@@ -1341,17 +1361,12 @@ mod bootstrap_env_tests {
         assert_eq!(env_or_overlay_var(&overlay(VAR, ""), VAR), None);
 
         // A set-but-empty environment value is also treated as unset, so the
-        // overlay still wins — matching the resolver's fetch-skip predicate.
-        unsafe { std::env::set_var(VAR, "") };
+        // overlay still wins, matching the resolver's fetch-skip predicate.
+        let _empty = EnvVarGuard::set(VAR, "");
         assert_eq!(bootstrap_env_var(VAR), None);
         assert_eq!(
             env_or_overlay_var(&overlay(VAR, "from-overlay"), VAR).as_deref(),
             Some("from-overlay"),
         );
-
-        match prev {
-            Some(value) => unsafe { std::env::set_var(VAR, value) },
-            None => unsafe { std::env::remove_var(VAR) },
-        }
     }
 }

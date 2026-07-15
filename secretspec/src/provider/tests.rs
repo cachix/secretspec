@@ -1071,27 +1071,48 @@ mod integration_tests {
     /// `&mut self` hook applied post-construction would be swallowed by the `Arc`
     /// layer (which cannot forward `&mut self`); this passes only because the
     /// overlay is injected inside the factory, before wrapping. The delivered
-    /// token surfaces in `auth_scope_key`.
+    /// token folds into `auth_scope_key` as a hash, so injection shows up as a
+    /// scope-key difference while the plaintext never reaches the
+    /// process-lifetime preflight cache.
     #[test]
     fn bootstrap_overlay_reaches_preflight_wrapped_provider() {
         use crate::provider::{BootstrapEnv, ProviderUrl, provider_from_url};
         use url::Url;
 
-        let mut overlay = BootstrapEnv::new();
-        overlay.insert(
-            "OP_SERVICE_ACCOUNT_TOKEN".to_string(),
-            SecretString::new("tok-xyz".into()),
+        // Clear any ambient token under the env lock: with one exported, every
+        // instance would resolve the same effective token and the scope keys
+        // below could not tell injection from a silent no-op.
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = crate::tests::EnvVarGuard::remove("OP_SERVICE_ACCOUNT_TOKEN");
+
+        let scope_with = |token: Option<&str>| {
+            let mut overlay = BootstrapEnv::new();
+            if let Some(token) = token {
+                overlay.insert(
+                    "OP_SERVICE_ACCOUNT_TOKEN".to_string(),
+                    SecretString::new(token.into()),
+                );
+            }
+            let url = ProviderUrl::new(Url::parse("onepassword://Private").unwrap());
+            provider_from_url(&url, overlay)
+                .unwrap()
+                .auth_scope_key()
+                .expect("onepassword advertises an auth scope")
+        };
+
+        let without_token = scope_with(None);
+        let with_token = scope_with(Some("tok-xyz"));
+        assert_ne!(
+            with_token, without_token,
+            "bootstrap token should be injected before Arc-wrapping"
         );
-
-        let url = ProviderUrl::new(Url::parse("onepassword://Private").unwrap());
-        let provider = provider_from_url(&url, overlay).unwrap();
-
-        let scope = provider
-            .auth_scope_key()
-            .expect("onepassword advertises an auth scope");
+        // Same token, same scope; different tokens probe auth separately.
+        assert_eq!(with_token, scope_with(Some("tok-xyz")));
+        assert_ne!(with_token, scope_with(Some("tok-other")));
+        // The scope key carries a hash of the token, never its plaintext.
         assert!(
-            scope.contains("tok-xyz"),
-            "bootstrap token should be injected before Arc-wrapping, got: {scope}"
+            !with_token.contains("tok-xyz"),
+            "auth scope key must not embed the plaintext token: {with_token}"
         );
     }
 }

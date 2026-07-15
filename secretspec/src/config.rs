@@ -261,7 +261,12 @@ impl<'de> Deserialize<'de> for ProviderAlias {
                 let table = Table::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
                 Ok(ProviderAlias {
                     uri: table.uri,
-                    env: table.env,
+                    // Normalize an explicit empty table (`env = {}`) to `None`:
+                    // "declares no bootstrap credentials" then has a single
+                    // representation, so consumers checking `env.is_some()`
+                    // (e.g. the one-hop rule) cannot disagree with consumers
+                    // iterating the entries.
+                    env: table.env.filter(|env| !env.is_empty()),
                 })
             }
         }
@@ -2460,6 +2465,16 @@ mod provider_alias_tests {
     fn table_without_env_is_equivalent_to_bare_string() {
         let map = parse(r#"bws = { uri = "bws://proj" }"#);
         assert_eq!(map["bws"], ProviderAlias::from("bws://proj"));
+    }
+
+    #[test]
+    fn empty_env_table_is_equivalent_to_no_env() {
+        // `env = {}` declares nothing, so it must normalize to `None`: the
+        // one-hop rule checks `env.is_some()` and would otherwise reject the
+        // alias as a bootstrap source while login reports nothing to store.
+        let map = parse(r#"keyring = { uri = "keyring://", env = {} }"#);
+        assert_eq!(map["keyring"], ProviderAlias::from("keyring://"));
+        assert_eq!(map["keyring"].env, None);
     }
 
     #[test]

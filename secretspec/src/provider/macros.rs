@@ -6,6 +6,11 @@ use crate::Result;
 pub struct ProviderRegistration {
     pub info: ProviderInfo,
     pub schemes: &'static [&'static str],
+    /// Environment variables the provider reads through the bootstrap overlay
+    /// (see [`super::BootstrapEnv`]). Empty for providers that consult no
+    /// bootstrap credentials; used to warn when an alias declares a variable
+    /// the provider would silently ignore.
+    pub bootstrap_vars: &'static [&'static str],
     pub factory: fn(&ProviderUrl, BootstrapEnv) -> Result<ProviderWithPreflight>,
 }
 
@@ -28,6 +33,23 @@ pub static PROVIDER_REGISTRY: [ProviderRegistration];
 ///     description: "Uses system keychain (Recommended)",
 ///     schemes: ["keyring"],
 ///     examples: ["keyring://"],
+/// }
+/// ```
+///
+/// Providers that read bootstrap credentials through the overlay (see
+/// [`Provider::with_bootstrap_env`](super::Provider::with_bootstrap_env)) declare
+/// the variable names in a `bootstrap_vars` field, so an alias declaring a
+/// variable the provider never reads can be diagnosed:
+///
+/// ```ignore
+/// register_provider! {
+///     struct: BwsProvider,
+///     config: BwsConfig,
+///     name: "bws",
+///     description: "Bitwarden Secrets Manager",
+///     schemes: ["bws"],
+///     examples: ["bws://project-uuid"],
+///     bootstrap_vars: ["BWS_ACCESS_TOKEN"],
 /// }
 /// ```
 ///
@@ -55,11 +77,13 @@ macro_rules! register_provider {
         name: $name:expr,
         description: $description:expr,
         schemes: [$($scheme:expr),* $(,)?],
-        examples: [$($example:expr),* $(,)?] $(,)?
+        examples: [$($example:expr),* $(,)?]
+        $(, bootstrap_vars: [$($bootstrap_var:expr),* $(,)?])? $(,)?
     ) => {
         $crate::register_provider!(@register
             $struct_name, $config_type, $name, $description,
             [$($scheme,)*], [$($example,)*],
+            [$($($bootstrap_var,)*)?],
             |provider| {
                 Ok($crate::provider::ProviderWithPreflight {
                     provider: Box::new(provider),
@@ -77,11 +101,13 @@ macro_rules! register_provider {
         description: $description:expr,
         schemes: [$($scheme:expr),* $(,)?],
         examples: [$($example:expr),* $(,)?],
+        $(bootstrap_vars: [$($bootstrap_var:expr),* $(,)?],)?
         preflight: $preflight:ident $(,)?
     ) => {
         $crate::register_provider!(@register
             $struct_name, $config_type, $name, $description,
             [$($scheme,)*], [$($example,)*],
+            [$($($bootstrap_var,)*)?],
             |provider| {
                 let provider = std::sync::Arc::new(provider);
                 let preflight_provider = std::sync::Arc::clone(&provider);
@@ -97,6 +123,7 @@ macro_rules! register_provider {
     (@register
         $struct_name:ident, $config_type:ty, $name:expr, $description:expr,
         [$($scheme:expr,)*], [$($example:expr,)*],
+        [$($bootstrap_var:expr,)*],
         $wrap:expr
     ) => {
         impl $struct_name {
@@ -113,6 +140,7 @@ macro_rules! register_provider {
                     examples: &[$($example,)*],
                 },
                 schemes: &[$($scheme,)*],
+                bootstrap_vars: &[$($bootstrap_var,)*],
                 factory: |url, bootstrap| {
                     let config = <$config_type>::try_from(url)?;
                     let mut provider = <$struct_name>::new(config);

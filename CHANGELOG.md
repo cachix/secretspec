@@ -55,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `run` no longer aborts when the environment contains a non-UTF-8 variable.
   Such variables are now passed through to the child process untouched, with
   resolved secrets overlaid on top.
+- The prebuilt Linux addons of the Node SDK are now built against glibc 2.28
+  (manylinux_2_28) with libdbus compiled in statically, so `npm install
+  secretspec` works on Amazon Linux 2023, RHEL 8/9, and other distros with an
+  older glibc, instead of the addon failing to load with "version `GLIBC_2.38'
+  not found". ([#136](https://github.com/cachix/secretspec/issues/136))
 
 ## [0.14.0] - 2026-07-09
 

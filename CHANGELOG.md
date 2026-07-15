@@ -81,6 +81,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead" message — the same hard error any other invalid primary gets —
   instead of warning and falling through to the rest of the chain. As a
   fallback entry it is still skipped with a warning, like any broken link.
+- Rust SDK: `ProviderAlias::env` is a plain map whose empty state means "no
+  bootstrap credentials", rather than an `Option`, so the two ways of spelling
+  an alias without credentials cannot diverge.
 
 ### Fixed
 - Profile overrides no longer need to repeat the secret's `description`:

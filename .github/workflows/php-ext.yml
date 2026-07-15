@@ -71,23 +71,17 @@ jobs:
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
 
-      - name: Build the extension
-        # Each runner is the target's native arch, so a plain release build emits
-        # the target's binary (no cross-compilation).
-        run: cargo build --release -p secretspec-php-native
-
-      - name: Stage the extension under its distribution name
+      - name: Build and stage the extension under its distribution name
         id: stage
         shell: bash
+        # Each runner is the target's native arch, so a plain release build emits
+        # the target's binary (no cross-compilation). build-ext.sh owns the
+        # platform-to-library-name mapping and stages lib/secretspec.so.
         run: |
           set -euo pipefail
-          case "$(uname -s)" in
-            Darwin) built="libsecretspec_php_native.dylib" ;;
-            *)      built="libsecretspec_php_native.so" ;;
-          esac
-          # dlopen resolves by path, not suffix, so the macOS .dylib ships as .so.
+          bash secretspec-php/scripts/build-ext.sh
           asset="secretspec-php-native-${{ matrix.php }}-nts-${{ matrix.target }}.so"
-          cp "target/release/$built" "$asset"
+          cp secretspec-php/lib/secretspec.so "$asset"
           echo "asset=$asset" >> "$GITHUB_OUTPUT"
 
       - name: Smoke test (load the extension, check it registers)
@@ -110,13 +104,4 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          asset="${{ steps.stage.outputs.asset }}"
-          if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"
-          else shasum -a 256 "$asset" > "$asset.sha256"; fi
-          # cargo-dist's release.yml creates the release for this tag; wait for it.
-          for _ in $(seq 1 30); do
-            gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 && break || sleep 20
-          done
-          gh release upload "${GITHUB_REF_NAME}" "$asset" "$asset.sha256" --clobber
+        run: bash scripts/upload-release-asset.sh "${GITHUB_REF_NAME}" "${{ steps.stage.outputs.asset }}"

@@ -226,6 +226,13 @@ pub struct VaultProvider {
     bootstrap_env: BootstrapEnv,
 }
 
+/// The credential variables this provider reads through the bootstrap overlay.
+/// Shared between the registration's `bootstrap_vars` and the read sites, so
+/// the declared list cannot drift from what the provider actually consults.
+const VAULT_ROLE_ID: &str = "VAULT_ROLE_ID";
+const VAULT_SECRET_ID: &str = "VAULT_SECRET_ID";
+const VAULT_TOKEN: &str = "VAULT_TOKEN";
+
 crate::register_provider! {
     struct: VaultProvider,
     config: VaultConfig,
@@ -233,7 +240,7 @@ crate::register_provider! {
     description: "HashiCorp Vault / OpenBao secret management",
     schemes: ["vault", "openbao"],
     examples: ["vault://vault.example.com:8200/secret", "openbao://bao.internal:8200/secret"],
-    bootstrap_vars: ["VAULT_ROLE_ID", "VAULT_SECRET_ID", "VAULT_TOKEN"],
+    bootstrap_vars: [VAULT_ROLE_ID, VAULT_SECRET_ID, VAULT_TOKEN],
 }
 
 impl VaultProvider {
@@ -279,7 +286,7 @@ impl VaultProvider {
     /// Resolves a token via static token sources.
     fn resolve_token_auth(&self) -> Result<SecretString> {
         // `env_or_overlay_var` never yields an empty value.
-        if let Some(token) = env_or_overlay_var(&self.bootstrap_env, "VAULT_TOKEN") {
+        if let Some(token) = env_or_overlay_var(&self.bootstrap_env, VAULT_TOKEN) {
             return Ok(SecretString::new(token.into()));
         }
 
@@ -305,16 +312,15 @@ impl VaultProvider {
 
     /// Authenticates via AppRole and returns a client token.
     async fn resolve_approle_auth(&self) -> Result<SecretString> {
-        let role_id =
-            env_or_overlay_var(&self.bootstrap_env, "VAULT_ROLE_ID").ok_or_else(|| {
-                SecretSpecError::ProviderOperationFailed(
-                    "VAULT_ROLE_ID environment variable is required for AppRole authentication."
-                        .to_string(),
-                )
-            })?;
+        let role_id = env_or_overlay_var(&self.bootstrap_env, VAULT_ROLE_ID).ok_or_else(|| {
+            SecretSpecError::ProviderOperationFailed(
+                "VAULT_ROLE_ID environment variable is required for AppRole authentication."
+                    .to_string(),
+            )
+        })?;
 
         let secret_id =
-            env_or_overlay_var(&self.bootstrap_env, "VAULT_SECRET_ID").ok_or_else(|| {
+            env_or_overlay_var(&self.bootstrap_env, VAULT_SECRET_ID).ok_or_else(|| {
                 SecretSpecError::ProviderOperationFailed(
                     "VAULT_SECRET_ID environment variable is required for AppRole authentication."
                         .to_string(),

@@ -415,6 +415,15 @@ fn split_spec(spec: &str) -> (&str, &str) {
     }
 }
 
+/// The registry entry whose schemes contain `scheme`. The one definition of
+/// "which registration a scheme resolves to", shared by every lookup below and
+/// by [`provider_from_url`], so they cannot drift on the matching rule.
+fn registration_for_scheme(scheme: &str) -> Option<&'static ProviderRegistration> {
+    PROVIDER_REGISTRY
+        .iter()
+        .find(|reg| reg.schemes.contains(&scheme))
+}
+
 /// Whether `spec` names a registered provider: a bare name (`keyring`), a
 /// `scheme:path` shorthand (`dotenv:.env.production`), or a full URI. Checks
 /// the leading scheme token against the registry without constructing a
@@ -433,9 +442,7 @@ pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
                 .to_string(),
         ));
     }
-    Ok(PROVIDER_REGISTRY
-        .iter()
-        .any(|reg| reg.schemes.contains(&scheme)))
+    Ok(registration_for_scheme(scheme).is_some())
 }
 
 /// The bootstrap variables the provider named by `spec` reads through the
@@ -444,11 +451,7 @@ pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
 /// provider would silently ignore.
 pub(crate) fn bootstrap_vars_for_spec(spec: &str) -> &'static [&'static str] {
     let (scheme, _) = split_spec(spec);
-    PROVIDER_REGISTRY
-        .iter()
-        .find(|reg| reg.schemes.contains(&scheme))
-        .map(|reg| reg.bootstrap_vars)
-        .unwrap_or(&[])
+    registration_for_scheme(scheme).map_or(&[], |reg| reg.bootstrap_vars)
 }
 
 /// The registered display name for the provider `spec` names, falling back to
@@ -457,9 +460,7 @@ pub(crate) fn bootstrap_vars_for_spec(spec: &str) -> &'static [&'static str] {
 /// bootstrap credentials, so a display-only build could fail or do I/O).
 pub(crate) fn provider_display_name_for_spec(spec: &str) -> String {
     let (scheme, _) = split_spec(spec);
-    PROVIDER_REGISTRY
-        .iter()
-        .find(|reg| reg.schemes.contains(&scheme))
+    registration_for_scheme(scheme)
         .map(|reg| reg.info.name.to_string())
         .unwrap_or_else(|| scheme.to_string())
 }
@@ -1106,10 +1107,7 @@ pub(crate) fn provider_from_url(
 ) -> Result<Box<dyn Provider>> {
     let scheme = url.scheme();
 
-    // Find the provider registration for this scheme
-    let registration = PROVIDER_REGISTRY
-        .iter()
-        .find(|reg| reg.schemes.contains(&scheme))
+    let registration = registration_for_scheme(scheme)
         .ok_or_else(|| SecretSpecError::ProviderNotFound(scheme.to_string()))?;
 
     let pwp = (registration.factory)(url, bootstrap)?;

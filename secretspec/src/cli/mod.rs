@@ -528,7 +528,7 @@ pub fn main() -> Result<()> {
                         // as a bare-string alias.
                         let alias_value = crate::config::ProviderAlias {
                             uri: uri.clone(),
-                            env: (!bootstrap.is_empty()).then_some(bootstrap),
+                            env: bootstrap,
                         };
 
                         // Load or create config

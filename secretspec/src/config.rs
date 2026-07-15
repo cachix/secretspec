@@ -172,8 +172,9 @@ pub struct ProviderAlias {
     /// The provider URI (e.g. `keyring://`, `bws://project-uuid`).
     pub uri: String,
     /// Bootstrap credentials: environment variable name to the [`BootstrapSource`]
-    /// that supplies it. `None` for a bare string alias.
-    pub env: Option<HashMap<String, BootstrapSource>>,
+    /// that supplies it. Empty for a bare string alias, so "declares no
+    /// bootstrap credentials" has exactly one representation.
+    pub env: HashMap<String, BootstrapSource>,
 }
 
 impl ProviderAlias {
@@ -181,7 +182,7 @@ impl ProviderAlias {
     pub fn from_uri(uri: impl Into<String>) -> Self {
         Self {
             uri: uri.into(),
-            env: None,
+            env: HashMap::new(),
         }
     }
 }
@@ -201,10 +202,8 @@ impl From<&str> for ProviderAlias {
 impl std::fmt::Display for ProviderAlias {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.uri)?;
-        if let Some(env) = &self.env
-            && !env.is_empty()
-        {
-            let mut vars: Vec<&str> = env.keys().map(String::as_str).collect();
+        if !self.env.is_empty() {
+            let mut vars: Vec<&str> = self.env.keys().map(String::as_str).collect();
             vars.sort();
             write!(f, " (bootstrap: {})", vars.join(", "))?;
         }
@@ -214,17 +213,16 @@ impl std::fmt::Display for ProviderAlias {
 
 impl Serialize for ProviderAlias {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match &self.env {
+        if self.env.is_empty() {
             // A bare alias serializes back to the plain-string form, so an alias
             // that was written as a string round-trips unchanged.
-            None => serializer.serialize_str(&self.uri),
-            Some(env) => {
-                use serde::ser::SerializeStruct;
-                let mut table = serializer.serialize_struct("ProviderAlias", 2)?;
-                table.serialize_field("uri", &self.uri)?;
-                table.serialize_field("env", env)?;
-                table.end()
-            }
+            serializer.serialize_str(&self.uri)
+        } else {
+            use serde::ser::SerializeStruct;
+            let mut table = serializer.serialize_struct("ProviderAlias", 2)?;
+            table.serialize_field("uri", &self.uri)?;
+            table.serialize_field("env", &self.env)?;
+            table.end()
         }
     }
 }
@@ -261,12 +259,7 @@ impl<'de> Deserialize<'de> for ProviderAlias {
                 let table = Table::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
                 Ok(ProviderAlias {
                     uri: table.uri,
-                    // Normalize an explicit empty table (`env = {}`) to `None`:
-                    // "declares no bootstrap credentials" then has a single
-                    // representation, so consumers checking `env.is_some()`
-                    // (e.g. the one-hop rule) cannot disagree with consumers
-                    // iterating the entries.
-                    env: table.env.filter(|env| !env.is_empty()),
+                    env: table.env.unwrap_or_default(),
                 })
             }
         }
@@ -2407,7 +2400,7 @@ mod provider_alias_tests {
     fn bare_string_parses_as_uri_without_env() {
         let map = parse(r#"keyring = "keyring://""#);
         assert_eq!(map["keyring"], ProviderAlias::from("keyring://"));
-        assert_eq!(map["keyring"].env, None);
+        assert!(map["keyring"].env.is_empty());
     }
 
     #[test]
@@ -2417,8 +2410,7 @@ mod provider_alias_tests {
         assert_eq!(alias.uri, "bws://proj");
         let source = alias
             .env
-            .as_ref()
-            .and_then(|env| env.get("BWS_ACCESS_TOKEN"))
+            .get("BWS_ACCESS_TOKEN")
             .expect("env carries the variable");
         assert_eq!(source, &BootstrapSource::from("keyring"));
     }
@@ -2428,7 +2420,7 @@ mod provider_alias_tests {
         let map = parse(
             r#"vault = { uri = "vault://kv", env = { VAULT_ROLE_ID = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "role_id" } } } }"#,
         );
-        let source = map["vault"].env.as_ref().unwrap()["VAULT_ROLE_ID"].clone();
+        let source = map["vault"].env["VAULT_ROLE_ID"].clone();
         assert_eq!(source.provider, "onepassword");
         let reference = source.reference.expect("ref present");
         assert_eq!(reference.vault.as_deref(), Some("Infra"));
@@ -2450,10 +2442,7 @@ mod provider_alias_tests {
         for source in [bare, with_ref] {
             let alias = ProviderAlias {
                 uri: "vault://kv".to_string(),
-                env: Some(HashMap::from([(
-                    "VAULT_ROLE_ID".to_string(),
-                    source.clone(),
-                )])),
+                env: HashMap::from([("VAULT_ROLE_ID".to_string(), source.clone())]),
             };
             let map = HashMap::from([("vault".to_string(), alias.clone())]);
             let serialized = toml::to_string(&map).unwrap();
@@ -2469,12 +2458,10 @@ mod provider_alias_tests {
 
     #[test]
     fn empty_env_table_is_equivalent_to_no_env() {
-        // `env = {}` declares nothing, so it must normalize to `None`: the
-        // one-hop rule checks `env.is_some()` and would otherwise reject the
-        // alias as a bootstrap source while login reports nothing to store.
+        // `env = {}` declares nothing: the alias equals its bare-string form
+        // and serializes back to it.
         let map = parse(r#"keyring = { uri = "keyring://", env = {} }"#);
         assert_eq!(map["keyring"], ProviderAlias::from("keyring://"));
-        assert_eq!(map["keyring"].env, None);
     }
 
     #[test]
@@ -2503,10 +2490,10 @@ mod provider_alias_tests {
     fn alias_with_env_round_trips_through_toml() {
         let alias = ProviderAlias {
             uri: "bws://proj".to_string(),
-            env: Some(HashMap::from([(
+            env: HashMap::from([(
                 "BWS_ACCESS_TOKEN".to_string(),
                 BootstrapSource::from("keyring"),
-            )])),
+            )]),
         };
         let map = HashMap::from([("bws".to_string(), alias.clone())]);
         let serialized = toml::to_string(&map).unwrap();
@@ -2533,12 +2520,6 @@ API_KEY = { description = "key", required = true }
         let providers = config.providers.expect("[providers] present");
         assert_eq!(providers["keyring"], ProviderAlias::from("keyring://"));
         assert_eq!(providers["bws"].uri, "bws://proj");
-        assert!(
-            providers["bws"]
-                .env
-                .as_ref()
-                .unwrap()
-                .contains_key("BWS_ACCESS_TOKEN")
-        );
+        assert!(providers["bws"].env.contains_key("BWS_ACCESS_TOKEN"));
     }
 }

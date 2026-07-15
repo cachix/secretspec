@@ -114,6 +114,11 @@ pub struct BwsProvider {
     bootstrap_env: BootstrapEnv,
 }
 
+/// The credential variable this provider reads through the bootstrap overlay.
+/// Shared between the registration's `bootstrap_vars` and the read site, so
+/// the declared list cannot drift from what the provider actually consults.
+const BWS_ACCESS_TOKEN: &str = "BWS_ACCESS_TOKEN";
+
 crate::register_provider! {
     struct: BwsProvider,
     config: BwsConfig,
@@ -121,7 +126,7 @@ crate::register_provider! {
     description: "Bitwarden Secrets Manager",
     schemes: ["bws"],
     examples: ["bws://a9230ec4-5507-4870-b8b5-b3f500587e4c"],
-    bootstrap_vars: ["BWS_ACCESS_TOKEN"],
+    bootstrap_vars: [BWS_ACCESS_TOKEN],
 }
 
 impl BwsProvider {
@@ -137,7 +142,7 @@ impl BwsProvider {
 
     /// Resolves the BWS access token from the environment or bootstrap overlay.
     fn access_token(&self) -> Option<String> {
-        env_or_overlay_var(&self.bootstrap_env, "BWS_ACCESS_TOKEN")
+        env_or_overlay_var(&self.bootstrap_env, BWS_ACCESS_TOKEN)
     }
 
     /// Strips the BWS access token from error messages to avoid leaking credentials.

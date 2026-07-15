@@ -6090,7 +6090,7 @@ fn secrets_with_bootstrap_alias(
         "target".to_string(),
         ProviderAlias {
             uri: target_uri.to_string(),
-            env: Some(env),
+            env,
         },
     )]));
     Secrets::new(config, None, None, None)
@@ -6161,9 +6161,7 @@ fn bootstrap_overlay_reads_ref_addressed_credential() {
 fn bootstrap_overlay_lets_the_environment_win() {
     let _guard = scrub_resolution_env();
     const VAR: &str = "BOOTSTRAP_ENVWINS_VAR";
-    let previous = std::env::var_os(VAR);
-    // SAFETY: serialized by the `scrub_resolution_env` guard held above.
-    unsafe { std::env::set_var(VAR, "from-env") };
+    let _var = EnvVarGuard::set(VAR, "from-env");
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source.env");
@@ -6183,11 +6181,6 @@ fn bootstrap_overlay_lets_the_environment_win() {
     // The environment satisfies the variable, so the chain is not consulted and
     // the overlay carries nothing for it (the provider reads the env directly).
     assert!(!overlay.contains_key(VAR));
-
-    match previous {
-        Some(value) => unsafe { std::env::set_var(VAR, value) },
-        None => unsafe { std::env::remove_var(VAR) },
-    }
 }
 
 #[test]
@@ -6240,20 +6233,14 @@ fn bootstrap_chain_is_limited_to_one_hop() {
             "chained".to_string(),
             ProviderAlias {
                 uri: "keyring://".to_string(),
-                env: Some(HashMap::from([(
-                    "INNER".to_string(),
-                    BootstrapSource::from("keyring"),
-                )])),
+                env: HashMap::from([("INNER".to_string(), BootstrapSource::from("keyring"))]),
             },
         ),
         (
             "target".to_string(),
             ProviderAlias {
                 uri: "bws://project".to_string(),
-                env: Some(HashMap::from([(
-                    "TOKEN".to_string(),
-                    BootstrapSource::from("chained"),
-                )])),
+                env: HashMap::from([("TOKEN".to_string(), BootstrapSource::from("chained"))]),
             },
         ),
     ]));

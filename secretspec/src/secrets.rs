@@ -51,6 +51,17 @@ fn bootstrap_missing_error(var: &str, alias_spec: &str, location: &str) -> Secre
     ))
 }
 
+/// An alias's bootstrap `env` entries sorted by variable name. The one
+/// ordering rule, so fetch order, validation-error order, and the login prompt
+/// order all agree.
+fn sorted_bootstrap_entries(
+    env: &HashMap<String, BootstrapSource>,
+) -> Vec<(&String, &BootstrapSource)> {
+    let mut entries: Vec<(&String, &BootstrapSource)> = env.iter().collect();
+    entries.sort_by_key(|(var, _)| var.as_str());
+    entries
+}
+
 impl BootstrapSource {
     /// The store location this source reads and writes: the pinned `ref`, or
     /// the convention path for the active project and profile. The single
@@ -611,14 +622,15 @@ impl Secrets {
         profile: &str,
     ) -> Result<BootstrapEnv> {
         let mut overlay = BootstrapEnv::new();
-        if self
+        let Some(env) = self
             .lookup_provider_alias_entry(spec)
-            .is_none_or(|alias| alias.env.is_none())
-        {
+            .map(|alias| &alias.env)
+            .filter(|env| !env.is_empty())
+        else {
             return Ok(overlay);
-        }
+        };
         self.validate_bootstrap_sources(spec)?;
-        self.warn_unconsumed_bootstrap_vars(spec);
+        self.warn_unconsumed_bootstrap_vars(spec, env);
 
         let project = self.config.project.name.clone();
 
@@ -627,13 +639,11 @@ impl Secrets {
         // and whatever it caches, instead of authenticating once per variable.
         let mut sources: HashMap<String, Box<dyn ProviderTrait>> = HashMap::new();
 
-        // `bootstrap_credentials` sorts by variable name, so fetch order, error
-        // messages, and the login prompt order all agree.
-        for (var, source) in self.bootstrap_credentials(spec)? {
+        for (var, source) in sorted_bootstrap_entries(env) {
             // Env wins: an exported value is used by the provider directly, so
             // the declared chain is not consulted (this is what keeps CI working
             // with plain environment variables and no extra configuration).
-            if crate::provider::bootstrap_env_var(&var).is_some() {
+            if crate::provider::bootstrap_env_var(var).is_some() {
                 continue;
             }
 
@@ -643,7 +653,7 @@ impl Secrets {
                     entry.insert(self.build_source_provider(&source.provider)?)
                 }
             };
-            let fetched = source_provider.get(source.address(&project, profile, &var));
+            let fetched = source_provider.get(source.address(&project, profile, var));
             // Audit the source read (design: every secret access is recorded).
             // The key is the bootstrap variable and the event carries a
             // `bootstrap` marker plus the source provider's credential-free
@@ -658,7 +668,7 @@ impl Secrets {
                 profile,
                 outcome,
                 AuditFields {
-                    key: Some(&var),
+                    key: Some(var),
                     command: Some("bootstrap"),
                     provider_uri: Some(source_provider.uri()),
                     reference: source.reference.as_ref(),
@@ -668,13 +678,13 @@ impl Secrets {
             );
             match fetched? {
                 Some(value) => {
-                    overlay.insert(var, value);
+                    overlay.insert(var.clone(), value);
                 }
                 None => {
                     return Err(bootstrap_missing_error(
-                        &var,
+                        var,
                         spec,
-                        &source.location(&project, profile, &var),
+                        &source.location(&project, profile, var),
                     ));
                 }
             }
@@ -684,18 +694,14 @@ impl Secrets {
     }
 
     /// Warns once (per overlay resolution, which is memoized per session) about
-    /// each declared bootstrap variable the target provider never reads: only
-    /// providers that register `bootstrap_vars` consult the overlay, and only
-    /// for those names, so any other declaration is fetched and then silently
-    /// ignored. A warning rather than an error, because a declaration can be
-    /// legitimate for values the provider reads from the real environment.
-    fn warn_unconsumed_bootstrap_vars(&self, spec: &str) {
-        let Some(env) = self
-            .lookup_provider_alias_entry(spec)
-            .and_then(|alias| alias.env.as_ref())
-        else {
-            return;
-        };
+    /// each declared bootstrap variable in `env` the target provider never
+    /// reads: only providers that register `bootstrap_vars` consult the
+    /// overlay, and only for those names, so any other declaration is fetched
+    /// and then silently ignored. A warning rather than an error, because a
+    /// declaration can be legitimate for values the provider reads from the
+    /// real environment. `spec` is the alias declaring `env`, named in the
+    /// warning.
+    fn warn_unconsumed_bootstrap_vars(&self, spec: &str, env: &HashMap<String, BootstrapSource>) {
         let resolved = self.resolve_provider_spec(spec.to_string());
         let supported = crate::provider::bootstrap_vars_for_spec(&resolved);
         let provider_name = crate::provider::provider_display_name_for_spec(&resolved);
@@ -727,10 +733,10 @@ impl Secrets {
         let entry = self
             .lookup_provider_alias_entry(alias)
             .ok_or_else(|| SecretSpecError::ProviderNotFound(alias.to_string()))?;
-        let mut credentials: Vec<(String, BootstrapSource)> =
-            entry.env.clone().unwrap_or_default().into_iter().collect();
-        credentials.sort_by(|(a, _), (b, _)| a.cmp(b));
-        Ok(credentials)
+        Ok(sorted_bootstrap_entries(&entry.env)
+            .into_iter()
+            .map(|(var, source)| (var.clone(), source.clone()))
+            .collect())
     }
 
     /// Stores one bootstrap credential at its source provider — the exact
@@ -757,22 +763,13 @@ impl Secrets {
         let result = provider
             .check_writable(address)
             .and_then(|()| provider.set(address, value));
-        let (outcome, error_kind) = match &result {
-            Ok(()) => (AuditOutcome::Written, None),
-            Err(e) => (AuditOutcome::Error, Some(e.kind())),
-        };
-        self.record(
-            AuditAction::Set,
+        self.audit_write_result(
+            &result,
+            var,
             &profile,
-            outcome,
-            AuditFields {
-                key: Some(var),
-                command: Some("bootstrap"),
-                provider_uri: Some(provider.uri()),
-                reference: source.reference.as_ref(),
-                error_kind,
-                ..Default::default()
-            },
+            Some(provider.uri()),
+            source.reference.as_ref(),
+            Some("bootstrap"),
         );
         result?;
         // The stored credential replaces whatever an earlier resolution
@@ -793,32 +790,24 @@ impl Secrets {
         let Some(alias) = self.lookup_provider_alias_entry(spec) else {
             return Ok(());
         };
-        let Some(env) = alias.env.as_ref() else {
-            return Ok(());
-        };
-        // Sorted so the reported error is deterministic when several entries
-        // are invalid, matching the sorted fetch order of the resolver.
-        let mut entries: Vec<(&String, &BootstrapSource)> = env.iter().collect();
-        entries.sort_by_key(|(var, _)| var.as_str());
-        for (var, source) in entries {
+        for (var, source) in sorted_bootstrap_entries(&alias.env) {
             // Compose the underlying error into the message instead of
             // replacing it: it carries the corrective guidance (the
             // `1password` -> `onepassword` hint, the defined-aliases listing)
             // that the other resolution paths give for the same mistakes.
-            let resolved = self.resolve_one_provider(&source.provider).map_err(|err| {
+            let context = |err: SecretSpecError| {
                 SecretSpecError::ProviderOperationFailed(format!(
                     "bootstrap source for '{var}' in provider alias '{spec}': {err}"
                 ))
-            })?;
+            };
+            let resolved = self
+                .resolve_one_provider(&source.provider)
+                .map_err(context)?;
             // `resolve_one_provider` passes URI-form specs through untouched,
             // so gate the resolved spec's scheme against the registry here:
             // a typo'd scheme should fail at plan time, not surface later as
             // a construction failure a fallback chain downgrades to a warning.
-            let known = crate::provider::spec_names_known_provider(&resolved).map_err(|err| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "bootstrap source for '{var}' in provider alias '{spec}': {err}"
-                ))
-            })?;
+            let known = crate::provider::spec_names_known_provider(&resolved).map_err(context)?;
             if !known {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
                     "bootstrap source for '{var}' in provider alias '{spec}' names an unknown \
@@ -827,7 +816,7 @@ impl Secrets {
                 )));
             }
             if let Some(source_alias) = self.lookup_provider_alias_entry(&source.provider)
-                && source_alias.env.as_ref().is_some_and(|env| !env.is_empty())
+                && !source_alias.env.is_empty()
             {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
                     "provider alias '{}' cannot be a bootstrap source for '{spec}' because it \
@@ -892,10 +881,12 @@ impl Secrets {
         }
     }
 
-    /// Audits the result of a single secret write (`set`/generate/prompt): a
-    /// `Written` event on success, an `Error` event (tagged with the error kind)
-    /// on failure. Centralizes the write-audit so every write path records the
-    /// same way and a new one cannot accidentally diverge or skip auditing.
+    /// Audits the result of a single secret write (`set`/generate/prompt/
+    /// bootstrap): a `Written` event on success, an `Error` event (tagged with
+    /// the error kind) on failure. Centralizes the write-audit so every write
+    /// path records the same way and a new one cannot accidentally diverge or
+    /// skip auditing. `command` marks a special-purpose write (the `bootstrap`
+    /// credential store); `None` for a plain secret write.
     fn audit_write_result(
         &self,
         result: &Result<()>,
@@ -903,6 +894,7 @@ impl Secrets {
         profile: &str,
         provider_uri: Option<String>,
         reference: Option<&NativeAddress>,
+        command: Option<&str>,
     ) {
         let (outcome, error_kind) = match result {
             Ok(()) => (AuditOutcome::Written, None),
@@ -914,6 +906,7 @@ impl Secrets {
             outcome,
             AuditFields {
                 key: Some(key),
+                command,
                 provider_uri,
                 reference,
                 error_kind,
@@ -1623,6 +1616,7 @@ impl Secrets {
             &profile_name,
             Some(backend.uri()),
             planned.reference(),
+            None,
         );
         result?;
 
@@ -1898,6 +1892,7 @@ impl Secrets {
                                 &profile_display,
                                 Some(backend.uri()),
                                 planned.reference(),
+                                None,
                             );
                             set_result?;
                             eprintln!(
@@ -2222,6 +2217,7 @@ impl Secrets {
                                     &profile_display,
                                     Some(to_provider.uri()),
                                     planned.reference(),
+                                    None,
                                 );
                                 set_result?;
                                 eprintln!(
@@ -2384,6 +2380,7 @@ impl Secrets {
             profile_name,
             Some(backend.uri()),
             planned.reference(),
+            None,
         );
         set_result?;
 

@@ -315,6 +315,11 @@ pub struct OnePasswordProvider {
     bootstrap_env: BootstrapEnv,
 }
 
+/// The credential variable this provider reads through the bootstrap overlay.
+/// Shared between the registration's `bootstrap_vars` and the read site, so
+/// the declared list cannot drift from what the provider actually consults.
+const OP_SERVICE_ACCOUNT_TOKEN: &str = "OP_SERVICE_ACCOUNT_TOKEN";
+
 crate::register_provider! {
     struct: OnePasswordProvider,
     config: OnePasswordConfig,
@@ -322,7 +327,7 @@ crate::register_provider! {
     description: "OnePassword password manager",
     schemes: ["onepassword", "onepassword+token", "op"],
     examples: ["onepassword://vault", "onepassword://work@Production", "onepassword+token://vault"],
-    bootstrap_vars: ["OP_SERVICE_ACCOUNT_TOKEN"],
+    bootstrap_vars: [OP_SERVICE_ACCOUNT_TOKEN],
     preflight: check_auth,
 }
 
@@ -355,7 +360,7 @@ impl OnePasswordProvider {
         self.config
             .service_account_token
             .clone()
-            .or_else(|| env_or_overlay_var(&self.bootstrap_env, "OP_SERVICE_ACCOUNT_TOKEN"))
+            .or_else(|| env_or_overlay_var(&self.bootstrap_env, OP_SERVICE_ACCOUNT_TOKEN))
     }
 
     /// Executes a OnePassword CLI command with proper error handling.
@@ -392,7 +397,7 @@ impl OnePasswordProvider {
         // Set service account token if provided. Passing an environment-supplied
         // token explicitly is equivalent to `op` inheriting it.
         if let Some(token) = self.effective_service_account_token() {
-            cmd.env("OP_SERVICE_ACCOUNT_TOKEN", token);
+            cmd.env(OP_SERVICE_ACCOUNT_TOKEN, token);
         }
 
         // Add account if specified

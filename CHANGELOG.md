@@ -12,7 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`), falling back to
   a signed-in Azure CLI / Azure Developer CLI session; managed identity and
   AKS workload identity are also available via `?auth=managed_identity` and
-  `?auth=workload_identity`.
+  `?auth=workload_identity`. Sovereign clouds can be addressed with a full
+  DNS hostname or an explicit `?suffix=` override. Project/profile/key
+  combinations that would collide once mapped to Azure's secret-name
+  charset are rejected rather than silently colliding with another secret.
 
 ### Changed
 - A `ref` routed at a single store (an explicit `--provider`, a single-provider

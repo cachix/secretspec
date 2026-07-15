@@ -160,13 +160,14 @@ API endpoints are derived as `https://SERVER_BASE/identity` and
 
 ## Azure Key Vault Provider
 
-**URI**: `akv://VAULT_NAME[?auth=env|cli|managed_identity|workload_identity]` - Stores secrets in Azure Key Vault
+**URI**: `akv://VAULT_NAME[?auth=env|cli|managed_identity|workload_identity][&suffix=DNS_SUFFIX]` - Stores secrets in Azure Key Vault
 
 ```bash
 akv://myvault                            # Service principal env vars, falling back to `az login`
-akv://myvault?auth=managed_identity      # VM / App Service / AKS managed identity
+akv://myvault?auth=managed_identity      # VM / App Service / AKS system-assigned managed identity
 akv://myvault?auth=workload_identity     # AKS workload identity federation
 akv://myvault.vault.azure.cn             # Sovereign cloud (full DNS name)
+akv://myvault?suffix=vault.azure.cn      # Sovereign cloud (explicit suffix, bare vault name)
 ```
 
 **Features**: Read/write, cloud sync, profiles, service principal/managed identity/workload identity auth

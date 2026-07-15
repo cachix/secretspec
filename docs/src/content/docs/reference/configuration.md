@@ -85,21 +85,24 @@ Each secret variable is defined as a table with the following fields:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `description` | string | Yes* | Human-readable description of the secret |
-| `required` | boolean | No** | Whether the value must be provided (default: true) |
-| `default` | string | No*** | Default value if not provided |
+| `description` | string | Yes (see notes) | Human-readable description of the secret |
+| `required` | boolean | No | Whether the value must be provided (default: true) |
+| `default` | string | No | Default value if not provided |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `ref` | table | No | Coordinates naming an externally managed secret in the provider's store (e.g. `ref = { item = "db", field = "password" }`) |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
-| `type` | string | No**** | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
-| `generate` | boolean or table | No**** | Enable auto-generation when secret is missing |
+| `type` | string | No | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
+| `generate` | boolean or table | No | Enable auto-generation when secret is missing |
 
-*Required in the `default` profile. A secret overriding one that the default
-profile already declares inherits its `description` (and other omitted fields)
-and may leave it out.
-**If `default` is provided, `required` defaults to false
-***Only valid when `required = false`
-****`type` is required when `generate` is enabled; `generate` and `default` cannot both be set
+Field notes:
+
+- `description` is required in the `default` profile. A secret overriding one
+  that the default profile already declares inherits its `description` (and
+  other omitted fields) and may leave it out.
+- `required` defaults to false when `default` is provided.
+- `default` is only valid when `required = false`.
+- `type` is required when `generate` is enabled.
+- `generate` and `default` cannot both be set.
 
 ## Complete Example
 

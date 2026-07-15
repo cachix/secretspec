@@ -791,9 +791,38 @@ impl Secrets {
     /// Resolve the effective (merged) config for a secret that is known to
     /// belong to `profile`. Any secret yielded by iterating that profile is
     /// guaranteed to have an effective config, so a missing one is a bug.
-    fn effective_secret_config(&self, name: &str, profile: &str) -> crate::config::Secret {
+    pub(crate) fn effective_secret_config(
+        &self,
+        name: &str,
+        profile: &str,
+    ) -> crate::config::Secret {
         self.resolve_secret_config(name, Some(profile))
             .expect("secret from the resolved profile must have an effective config")
+    }
+
+    /// The effective (field-level merged) secrets of `profile_name` in
+    /// name-sorted order: the union of the profile's and the default
+    /// profile's names, each resolved via [`Secrets::resolve_secret_config`].
+    /// This is the view `check`/`run` list, matching what resolution acts on.
+    fn effective_secrets(&self, profile_name: &str) -> Vec<(String, crate::config::Secret)> {
+        let Some(current) = self.config.profiles.get(profile_name) else {
+            return Vec::new();
+        };
+        let default_profile = if profile_name != "default" {
+            self.config.profiles.get("default")
+        } else {
+            None
+        };
+        current
+            .sorted_secret_names_with(default_profile)
+            .into_iter()
+            .map(|name| {
+                (
+                    name.clone(),
+                    self.effective_secret_config(name, profile_name),
+                )
+            })
+            .collect()
     }
 
     /// Provider-alias maps in lookup order: project `secretspec.toml` first,
@@ -1577,7 +1606,6 @@ impl Secrets {
 
     /// Display validation success results
     fn display_validation_success(&self, valid: &ValidatedSecrets) -> Result<()> {
-        let profile = self.resolve_profile(Some(&valid.resolved.profile))?;
         let mut found_count = 0;
         let mut optional_count = 0;
         let default_names = valid
@@ -1587,8 +1615,7 @@ impl Secrets {
             .collect::<HashSet<_>>();
         let missing_optional: HashSet<&String> = valid.missing_optional.iter().collect();
 
-        for name in &profile.sorted_secret_names() {
-            let config = self.effective_secret_config(name, &valid.resolved.profile);
+        for (name, config) in &self.effective_secrets(&valid.resolved.profile) {
             if missing_optional.contains(&name) {
                 optional_count += 1;
                 eprintln!(
@@ -1625,7 +1652,6 @@ impl Secrets {
 
     /// Display validation error results
     fn display_validation_errors(&self, errors: &ValidationErrors) -> Result<()> {
-        let profile = self.resolve_profile(Some(&errors.profile))?;
         let mut found_count = 0;
         let mut missing_count = 0;
         let mut optional_count = 0;
@@ -1635,8 +1661,7 @@ impl Secrets {
             .map(|(name, _)| name)
             .collect::<HashSet<_>>();
 
-        for name in &profile.sorted_secret_names() {
-            let config = self.effective_secret_config(name, &errors.profile);
+        for (name, config) in &self.effective_secrets(&errors.profile) {
             if errors.missing_required.contains(name) {
                 missing_count += 1;
                 eprintln!(

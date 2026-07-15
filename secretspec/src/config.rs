@@ -84,27 +84,30 @@ impl Config {
             ));
         }
 
-        let default_profile = self.profiles.get("default");
-
         // Validate each profile against the same effective view resolution
         // uses: non-default profiles are partial overrides whose secrets merge
         // field by field with the default profile's entries. The default
-        // profile is validated first and profiles are ordered, so an error
-        // (e.g. an empty description in the default profile) is always
-        // attributed to the profile that declares it, deterministically.
-        let mut profile_names: Vec<&String> = self.profiles.keys().collect();
-        profile_names.sort_by(|a, b| {
-            (a.as_str() != "default", a.as_str()).cmp(&(b.as_str() != "default", b.as_str()))
-        });
+        // profile is validated first, so an error it declares (e.g. an empty
+        // description) is attributed to it rather than to an override that
+        // inherits the broken value; the remaining profiles follow in name
+        // order so attribution stays deterministic.
+        let default_profile = self.profiles.get("default");
+        if let Some(default_profile) = default_profile {
+            default_profile
+                .validate_with_default(None)
+                .map_err(|e| ParseError::Validation(format!("Profile 'default': {}", e)))?;
+        }
+
+        let mut profile_names: Vec<&String> = self
+            .profiles
+            .keys()
+            .filter(|name| name.as_str() != "default")
+            .collect();
+        profile_names.sort();
 
         for profile_name in profile_names {
-            let inherit_from = if profile_name == "default" {
-                None
-            } else {
-                default_profile
-            };
             self.profiles[profile_name]
-                .validate_with_default(inherit_from)
+                .validate_with_default(default_profile)
                 .map_err(|e| {
                     ParseError::Validation(format!("Profile '{}': {}", profile_name, e))
                 })?;
@@ -519,35 +522,18 @@ impl Profile {
         }
     }
 
-    /// Validate the profile configuration.
-    ///
-    /// Ensures all secrets have valid names and configurations.
-    pub fn validate(&self) -> Result<(), String> {
-        self.validate_with_default(None)
-    }
-
+    /// Validate the profile configuration against the effective view
+    /// resolution uses: the union of this profile's secrets and the default
+    /// profile's, merged field by field together with this profile's
+    /// `[defaults]` table, so validation and resolution cannot disagree.
+    /// Pass `None` when this profile has nothing to inherit from (it is the
+    /// default profile itself).
     fn validate_with_default(&self, default_profile: Option<&Profile>) -> Result<(), String> {
         if self.secrets.is_empty() {
             return Err("Profile must define at least one secret".into());
         }
 
-        // Resolution acts on the union of this profile's secrets and the
-        // default profile's, merged field by field together with this
-        // profile's `[defaults]` table. Validate that same effective view so
-        // validation and resolution cannot disagree. Names are sorted so
-        // error attribution is deterministic.
-        let mut names: Vec<&String> = self.secrets.keys().collect();
-        if let Some(default_profile) = default_profile {
-            names.extend(
-                default_profile
-                    .secrets
-                    .keys()
-                    .filter(|name| !self.secrets.contains_key(*name)),
-            );
-        }
-        names.sort();
-
-        for name in names {
+        for name in self.sorted_secret_names_with(default_profile) {
             let secret = self.secrets.get(name);
 
             if let Some(secret) = secret {
@@ -604,6 +590,27 @@ impl Profile {
     /// ordering (grouping, missing lists) instead of the map's hash order.
     pub(crate) fn sorted_secret_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.secrets.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// Sorted union of this profile's secret names and the default profile's:
+    /// the name set resolution acts on when this profile overrides
+    /// `default_profile`, with the same deterministic ordering as
+    /// [`Profile::sorted_secret_names`].
+    pub(crate) fn sorted_secret_names_with<'a>(
+        &'a self,
+        default_profile: Option<&'a Profile>,
+    ) -> Vec<&'a String> {
+        let mut names: Vec<&String> = self.secrets.keys().collect();
+        if let Some(default_profile) = default_profile {
+            names.extend(
+                default_profile
+                    .secrets
+                    .keys()
+                    .filter(|name| !self.secrets.contains_key(*name)),
+            );
+        }
         names.sort();
         names
     }
@@ -1069,58 +1076,37 @@ impl Secret {
         default: Option<&Secret>,
         defaults: Option<&ProfileDefaults>,
     ) -> Option<Secret> {
-        match (current, default) {
-            (Some(current), Some(default)) => Some(Secret {
-                description: current
-                    .description
-                    .clone()
-                    .or_else(|| default.description.clone()),
-                required: current
-                    .required
-                    .or(default.required)
-                    .or(defaults.and_then(|d| d.required)),
-                default: current
-                    .default
-                    .clone()
-                    .or_else(|| default.default.clone())
-                    .or_else(|| defaults.and_then(|d| d.default.clone())),
-                providers: current
-                    .providers
-                    .clone()
-                    .or_else(|| default.providers.clone())
-                    .or_else(|| defaults.and_then(|d| d.providers.clone())),
-                reference: current
-                    .reference
-                    .clone()
-                    .or_else(|| default.reference.clone()),
-                as_path: current.as_path.or(default.as_path),
-                secret_type: current
-                    .secret_type
-                    .clone()
-                    .or_else(|| default.secret_type.clone()),
-                generate: current
-                    .generate
-                    .clone()
-                    .or_else(|| default.generate.clone()),
-            }),
-            (Some(secret), None) | (None, Some(secret)) => Some(Secret {
-                description: secret.description.clone(),
-                required: secret.required.or(defaults.and_then(|d| d.required)),
-                default: secret
-                    .default
-                    .clone()
-                    .or_else(|| defaults.and_then(|d| d.default.clone())),
-                providers: secret
-                    .providers
-                    .clone()
-                    .or_else(|| defaults.and_then(|d| d.providers.clone())),
-                reference: secret.reference.clone(),
-                as_path: secret.as_path,
-                secret_type: secret.secret_type.clone(),
-                generate: secret.generate.clone(),
-            }),
-            (None, None) => None,
+        if current.is_none() && default.is_none() {
+            return None;
         }
+
+        // One field's value from the profile entries in precedence order: the
+        // current profile's entry, then the default profile's. A missing
+        // entry simply contributes nothing. The `[defaults]` table tail is
+        // appended per field below, for the fields it can supply.
+        fn inherit<T>(
+            current: Option<&Secret>,
+            default: Option<&Secret>,
+            field: impl Fn(&Secret) -> Option<T>,
+        ) -> Option<T> {
+            current
+                .and_then(&field)
+                .or_else(|| default.and_then(&field))
+        }
+
+        Some(Secret {
+            description: inherit(current, default, |s| s.description.clone()),
+            required: inherit(current, default, |s| s.required)
+                .or(defaults.and_then(|d| d.required)),
+            default: inherit(current, default, |s| s.default.clone())
+                .or_else(|| defaults.and_then(|d| d.default.clone())),
+            providers: inherit(current, default, |s| s.providers.clone())
+                .or_else(|| defaults.and_then(|d| d.providers.clone())),
+            reference: inherit(current, default, |s| s.reference.clone()),
+            as_path: inherit(current, default, |s| s.as_path),
+            secret_type: inherit(current, default, |s| s.secret_type.clone()),
+            generate: inherit(current, default, |s| s.generate.clone()),
+        })
     }
 }
 
@@ -1735,6 +1721,9 @@ mod validation_tests {
 
     #[test]
     fn config_validate_allows_profile_override_to_inherit_description() {
+        // required = true in the default profile plus a default value from
+        // the override is also fine: only that combination within a single
+        // raw entry is a contradiction.
         let config: Config = toml::from_str(
             r#"
 [project]
@@ -1828,42 +1817,20 @@ TOKEN = { generate = true }
     }
 
     #[test]
-    fn config_validate_allows_required_in_default_with_override_default() {
-        // required=true in the default profile plus a default value supplied
-        // by an override is the override mechanism working as intended; only
-        // the same combination within a single raw entry is a contradiction.
-        let config: Config = toml::from_str(
-            r#"
-[project]
-name = "tmp"
-revision = "1.0"
-
-[profiles.default]
-DATABASE_URL = { description = "db", required = true }
-
-[profiles.development]
-DATABASE_URL = { default = "sqlite:///dev.db" }
-"#,
-        )
-        .unwrap();
-
-        config.validate().unwrap();
-    }
-
-    #[test]
     fn config_validate_blames_default_profile_for_empty_inherited_description() {
         // The empty description lives in the default profile; the error must
         // name that profile deterministically, not the override that inherits
-        // the empty value.
-        let config = config_with(
-            "proj",
-            vec![
-                ("default", vec![("DB", secret(Some("")))]),
-                ("development", vec![("DB", secret(None))]),
-            ],
-        );
-
+        // the empty value. The config is rebuilt each iteration so every
+        // HashMap gets a fresh hash seed and seed-dependent iteration order
+        // would surface here.
         for _ in 0..8 {
+            let config = config_with(
+                "proj",
+                vec![
+                    ("default", vec![("DB", secret(Some("")))]),
+                    ("development", vec![("DB", secret(None))]),
+                ],
+            );
             let err = config.validate().unwrap_err().to_string();
             assert!(err.contains("Profile 'default'"), "{err}");
             assert!(err.contains("description cannot be empty"), "{err}");

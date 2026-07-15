@@ -14,8 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   AKS workload identity are also available via `?auth=managed_identity` and
   `?auth=workload_identity`. Sovereign clouds can be addressed with a full
   DNS hostname or an explicit `?suffix=` override. Project/profile/key
-  combinations that would collide once mapped to Azure's secret-name
-  charset are rejected rather than silently colliding with another secret.
+  components use lowercase, unpadded Base32 so case and punctuation remain
+  distinct within Azure's restricted, case-insensitive secret-name namespace.
 - The `awssm` provider accepts `kms_key_id` and `tag.NAME=VALUE` query
   parameters (e.g. `awssm://prod@us-east-1?kms_key_id=alias/my-key&tag.team=platform`).
   Both are applied only when secretspec creates a secret, so accounts that enforce

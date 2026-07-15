@@ -172,7 +172,7 @@ akv://myvault?suffix=vault.azure.cn      # Sovereign cloud (explicit suffix, bar
 
 **Features**: Read/write, cloud sync, profiles, service principal/managed identity/workload identity auth
 **Prerequisites**: An Azure Key Vault instance, authenticated via one of the methods above, build with `--features akv`
-**Storage**: Secret name `secretspec--{project}--{profile}--{key}` (underscores rewritten to hyphens; Azure Key Vault secret names allow only letters, digits, and hyphens)
+**Storage**: Secret name `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}` (lowercase, unpadded Base32 preserves case and punctuation distinctions within Azure's case-insensitive secret-name namespace)
 
 ## Provider Selection
 

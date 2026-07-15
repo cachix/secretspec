@@ -37,16 +37,13 @@
 //! # Secret Naming
 //!
 //! Azure Key Vault secret names may only contain ASCII letters, digits and
-//! hyphens (`^[0-9a-zA-Z-]+$`, 1-127 characters) -- notably, unlike every other
-//! cloud provider in this codebase, *not* underscores or slashes. Convention
-//! secrets are named `secretspec--{project}--{profile}--{key}`, with each
-//! component's underscores rewritten to hyphens to fit that charset. This is
-//! lossy: `FOO_BAR` and `FOO-BAR` map to the same Key Vault secret name. Prefer
-//! hyphens over underscores in project/profile/key names if that matters to
-//! you. A component containing a literal `--` or a `__` (which sanitizes to
-//! `--`) is rejected outright, since it would be indistinguishable from the
-//! delimiter joining project/profile/key and could silently collide with a
-//! different secret.
+//! hyphens (`^[0-9a-zA-Z-]+$`, 1-127 characters), and Key Vault compares object
+//! identifiers case-insensitively. Convention secrets are therefore named
+//! `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}`. Encoding
+//! each component as lowercase, unpadded Base32 preserves case and punctuation
+//! distinctions while producing only Azure-compatible characters. It also
+//! keeps the `--` separators unambiguous because encoded components contain no
+//! hyphens.
 //!
 //! Native `ref` addresses (naming a secret that already exists in the vault)
 //! are validated against this same charset but never rewritten: silently
@@ -73,6 +70,7 @@ use azure_identity::{
     WorkloadIdentityCredential,
 };
 use azure_security_keyvault_secrets::{SecretClient, models::SetSecretParameters};
+use data_encoding::BASE32_NOPAD;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -222,10 +220,7 @@ impl AkvProvider {
         Self { config }
     }
 
-    /// Validates a secret name component against the characters Azure Key
-    /// Vault allows once mapped (alphanumeric, underscore, hyphen -- the
-    /// underscore is rewritten to a hyphen by the caller, everything else is
-    /// rejected up front rather than silently dropped).
+    /// Validates a convention-name component before encoding it.
     fn validate_name_component(name: &str, component: &str) -> Result<()> {
         if component.is_empty() {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
@@ -245,34 +240,23 @@ impl AkvProvider {
         Ok(())
     }
 
-    /// Sanitizes a single name component (`_` -> `-`) and rejects the result
-    /// if it contains `--`, which is indistinguishable from the delimiter
-    /// used to join `project`/`profile`/`key` in [`format_secret_name`].
-    /// Without this check, a literal `--` or a `__` (which sanitizes to `--`)
-    /// in one component can produce the exact same secret name as different
-    /// project/profile/key values -- e.g. `("a", "b__c", "d")` and
-    /// `("a", "b", "c__d")` would otherwise both map to
-    /// `secretspec--a--b--c--d`.
-    fn sanitize_name_component(name: &str, component: &str) -> Result<String> {
-        let sanitized = component.replace('_', "-");
-        if sanitized.contains("--") {
-            return Err(SecretSpecError::ProviderOperationFailed(format!(
-                "{name} '{component}' contains a double underscore or double hyphen, which \
-                 sanitizes to the same '--' delimiter used between project/profile/key and \
-                 can collide with a different secret. Use single underscores or hyphens instead."
-            )));
-        }
-        Ok(sanitized)
+    /// Encodes a component into a lowercase, Azure-compatible and injective
+    /// representation. Lowercasing the Base32 output is safe because Base32's
+    /// alphabet is case-insensitive, while the encoded bytes preserve the
+    /// original component's case. The output contains no hyphens, so it cannot
+    /// consume or shift the `--` delimiter between components.
+    fn encode_name_component(component: &str) -> String {
+        BASE32_NOPAD
+            .encode(component.as_bytes())
+            .to_ascii_lowercase()
     }
 
     /// Formats and validates the secret name for Azure Key Vault.
     ///
     /// Converts the SecretSpec path format to an Azure-compatible name:
-    /// `secretspec--{project}--{profile}--{key}`, with underscores in each
-    /// component rewritten to hyphens (Azure Key Vault secret names may only
-    /// contain `[0-9a-zA-Z-]`, 1-127 characters). Rejects components that
-    /// would collide with a different project/profile/key combination once
-    /// sanitized (see [`sanitize_name_component`](Self::sanitize_name_component)).
+    /// `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}`.
+    /// Lowercase, unpadded Base32 avoids both Key Vault's case-insensitive
+    /// identifier comparisons and ambiguity with the `--` component delimiter.
     fn format_secret_name(project: &str, profile: &str, key: &str) -> Result<String> {
         Self::validate_name_component("project", project)?;
         Self::validate_name_component("profile", profile)?;
@@ -280,9 +264,9 @@ impl AkvProvider {
 
         let secret_name = format!(
             "secretspec--{}--{}--{}",
-            Self::sanitize_name_component("project", project)?,
-            Self::sanitize_name_component("profile", profile)?,
-            Self::sanitize_name_component("key", key)?
+            Self::encode_name_component(project),
+            Self::encode_name_component(profile),
+            Self::encode_name_component(key)
         );
 
         if secret_name.len() > 127 {
@@ -366,14 +350,12 @@ impl AkvProvider {
                     e
                 ))
             })? as Arc<dyn TokenCredential>),
-            AuthMethod::ManagedIdentity => {
-                Ok(ManagedIdentityCredential::new(None).map_err(|e| {
-                    SecretSpecError::ProviderOperationFailed(format!(
-                        "Failed to create managed identity credential: {}",
-                        e
-                    ))
-                })? as Arc<dyn TokenCredential>)
-            }
+            AuthMethod::ManagedIdentity => Ok(ManagedIdentityCredential::new(None).map_err(|e| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to create managed identity credential: {}",
+                    e
+                ))
+            })? as Arc<dyn TokenCredential>),
             AuthMethod::WorkloadIdentity => {
                 Ok(WorkloadIdentityCredential::new(None).map_err(|e| {
                     SecretSpecError::ProviderOperationFailed(format!(
@@ -391,21 +373,20 @@ impl AkvProvider {
                 let client_secret = Self::non_empty_env("AZURE_CLIENT_SECRET");
 
                 match Self::classify_env_credentials(tenant_id, client_id, client_secret)? {
-                    Some((tenant_id, client_id, client_secret)) => {
-                        Ok(ClientSecretCredential::new(
-                            &tenant_id,
-                            client_id,
-                            Secret::new(client_secret),
-                            None,
-                        )
-                        .map_err(|e| {
-                            SecretSpecError::ProviderOperationFailed(format!(
-                                "Failed to create service principal credential from \
+                    Some((tenant_id, client_id, client_secret)) => Ok(ClientSecretCredential::new(
+                        &tenant_id,
+                        client_id,
+                        Secret::new(client_secret),
+                        None,
+                    )
+                    .map_err(|e| {
+                        SecretSpecError::ProviderOperationFailed(format!(
+                            "Failed to create service principal credential from \
                                 AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET: {}",
-                                e
-                            ))
-                        })? as Arc<dyn TokenCredential>)
-                    }
+                            e
+                        ))
+                    })?
+                        as Arc<dyn TokenCredential>),
                     None => {
                         // No service principal env vars: fall back to the signed-in
                         // Azure CLI / azd session so local development works after
@@ -503,8 +484,8 @@ impl AkvProvider {
 }
 
 impl Provider for AkvProvider {
-    /// Convention secrets are named `secretspec--{project}--{profile}--{key}`
-    /// (Azure Key Vault secret names cannot contain underscores or slashes).
+    /// Convention names use lowercase Base32 components so they remain
+    /// injective despite Azure Key Vault's restricted, case-insensitive names.
     fn convention_address(
         &self,
         project: &str,
@@ -573,7 +554,7 @@ mod tests {
     #[test]
     fn test_format_secret_name() {
         let name = AkvProvider::format_secret_name("myapp", "prod", "DB_URL").unwrap();
-        assert_eq!(name, "secretspec--myapp--prod--DB-URL");
+        assert_eq!(name, "secretspec--nv4wc4dq--obzg6za--irbf6vksjq");
     }
 
     #[test]
@@ -590,16 +571,26 @@ mod tests {
     }
 
     #[test]
-    fn test_format_secret_name_rejects_double_underscore_collision() {
-        // Without rejection, "b__c" and "b" + "c__d" would both sanitize to
-        // the same "secretspec--a--b--c--d" name.
-        assert!(AkvProvider::format_secret_name("a", "b__c", "d").is_err());
-        assert!(AkvProvider::format_secret_name("a", "b", "c__d").is_err());
+    fn test_format_secret_name_preserves_case_distinctions() {
+        let upper = AkvProvider::format_secret_name("app", "prod", "API_KEY").unwrap();
+        let lower = AkvProvider::format_secret_name("app", "prod", "api_key").unwrap();
+        assert_ne!(upper, lower);
+        assert_eq!(upper, upper.to_ascii_lowercase());
+        assert_eq!(lower, lower.to_ascii_lowercase());
     }
 
     #[test]
-    fn test_format_secret_name_rejects_double_hyphen_collision() {
-        assert!(AkvProvider::format_secret_name("a--b", "c", "d").is_err());
+    fn test_format_secret_name_prevents_boundary_delimiter_collision() {
+        let trailing = AkvProvider::format_secret_name("a", "b-", "C").unwrap();
+        let leading = AkvProvider::format_secret_name("a", "b", "_C").unwrap();
+        assert_ne!(trailing, leading);
+    }
+
+    #[test]
+    fn test_format_secret_name_encodes_internal_delimiters() {
+        let left = AkvProvider::format_secret_name("a", "b__c", "d").unwrap();
+        let right = AkvProvider::format_secret_name("a", "b", "c__d").unwrap();
+        assert_ne!(left, right);
     }
 
     #[test]
@@ -714,17 +705,19 @@ mod tests {
 
     #[test]
     fn test_unknown_auth_method_errors() {
-        assert!(AkvConfig::try_from(&ProviderUrl::new(
-            Url::parse("akv://myvault?auth=bogus").unwrap()
-        ))
-        .is_err());
+        assert!(
+            AkvConfig::try_from(&ProviderUrl::new(
+                Url::parse("akv://myvault?auth=bogus").unwrap()
+            ))
+            .is_err()
+        );
     }
 
     #[test]
     fn test_convention_address() {
         let p = AkvProvider::new(config("akv://myvault"));
         let coords = p.convention_address("proj", "default", "A").unwrap();
-        assert_eq!(coords.item, "secretspec--proj--default--A");
+        assert_eq!(coords.item, "secretspec--obzg62q--mrswmylvnr2a--ie");
         assert_eq!(coords.field, None);
     }
 
@@ -774,7 +767,8 @@ mod tests {
         };
         let err = p.get(Address::Native(&addr)).unwrap_err();
         assert!(
-            err.to_string().contains("not a valid Azure Key Vault secret name"),
+            err.to_string()
+                .contains("not a valid Azure Key Vault secret name"),
             "{err}"
         );
     }

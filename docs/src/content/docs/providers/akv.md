@@ -48,8 +48,9 @@ $ secretspec check --provider akv://myvault?suffix=vault.azure.cn
 
 ## Secret References
 
-By default each secret is stored as `secretspec--{project}--{profile}--{key}`. A
-secret's [`ref`](/reference/configuration/#secret-references) field names an
+By default each secret is stored as
+`secretspec--{base32(project)}--{base32(profile)}--{base32(key)}`. A secret's
+[`ref`](/reference/configuration/#secret-references) field names an
 existing secret instead: `item` is the secret name (`field` and `version` are
 not yet supported). References are **read-only** in this provider, and `item`
 must already be a valid Azure Key Vault secret name (letters, digits, and
@@ -80,20 +81,16 @@ postgresql://localhost/mydb
 ### Secret Naming
 
 Azure Key Vault secret names may only contain ASCII letters, digits and
-hyphens — notably, unlike every other cloud provider, not underscores or
-slashes. Secrets are stored as: `secretspec--{project}--{profile}--{key}`,
-with underscores in each component rewritten to hyphens.
+hyphens, and Azure compares object identifiers case-insensitively. SecretSpec
+stores convention names as
+`secretspec--{base32(project)}--{base32(profile)}--{base32(key)}`, using
+lowercase, unpadded Base32 for each component.
 
-Example: `DATABASE_URL` in project `myapp`, profile `production` becomes
-`secretspec--myapp--production--DATABASE-URL`.
-
-This rewrite is lossy: a project, profile, or key that differs only in using
-hyphens versus underscores (e.g. `FOO_BAR` and `FOO-BAR`) maps to the same Key
-Vault secret name. Prefer hyphens if that distinction matters to you. A
-project, profile, or key containing a literal `--` or a `__` (which sanitizes
-to `--`) is rejected outright — it would be indistinguishable from the `--`
-delimiter between components and could otherwise silently collide with an
-unrelated secret.
+This encoding is deterministic and injective: names that differ by case,
+underscores versus hyphens, or leading/trailing hyphens remain distinct even
+though Key Vault's identifiers do not preserve all of those distinctions. The
+encoded components contain no hyphens, so the `--` component separators cannot
+be confused with component data.
 
 ### CI/CD with a Service Principal
 

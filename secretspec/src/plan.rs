@@ -180,9 +180,7 @@ impl Secrets {
 
         let mut secrets = Vec::with_capacity(names.len());
         for name in names {
-            let config = self
-                .resolve_secret_config(&name, Some(&profile_name))
-                .expect("secret resolved from the merged profile always has a config");
+            let config = self.effective_secret_config(&name, &profile_name);
             secrets.push(self.plan_one_secret(name, config, &override_uri)?);
         }
 

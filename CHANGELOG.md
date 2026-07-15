@@ -48,6 +48,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallback entry it is still skipped with a warning, like any broken link.
 
 ### Fixed
+- Profile overrides no longer need to repeat the secret's `description`:
+  validation now checks each secret's effective, merged configuration, so a
+  partial override like `[profiles.development] DATABASE_URL = { default =
+  "sqlite:///dev.db" }` inherits the description (and `type`, for `generate`)
+  from the default profile instead of failing with "missing description".
+  The merged view is also validated for real conflicts, so a `generate`
+  secret in the default profile combined with a `default` value from an
+  override or a profile `[defaults]` table is now rejected at load instead of
+  silently generating a random value and ignoring the default. Validation
+  errors are reported deterministically, attributed to the profile that
+  declares the offending field, and `check` and `run` list secrets in stable
+  name-sorted order.
 - Provider fallback chains (`providers = [...]`) are now tried strictly in
   order: each link is resolved only when a read actually reaches it, and a
   broken link (an undefined alias, an unreachable store) is skipped with a
@@ -63,6 +75,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `run` no longer aborts when the environment contains a non-UTF-8 variable.
   Such variables are now passed through to the child process untouched, with
   resolved secrets overlaid on top.
+- The prebuilt Linux addons of the Node SDK are now built against glibc 2.28
+  (manylinux_2_28) with libdbus compiled in statically, so `npm install
+  secretspec` works on Amazon Linux 2023, RHEL 8/9, and other distros with an
+  older glibc, instead of the addon failing to load with "version `GLIBC_2.38'
+  not found". ([#136](https://github.com/cachix/secretspec/issues/136))
 
 ## [0.14.0] - 2026-07-09
 

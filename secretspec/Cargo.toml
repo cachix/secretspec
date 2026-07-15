@@ -55,6 +55,10 @@ detect-coding-agent.workspace = true
 default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws", "akv"]
 cli = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
+# Compile libdbus from source into the binary instead of linking the system
+# library at runtime (keyring's secret-service transport on Linux). Used by
+# prebuilt release artifacts that must run on distros we don't build on.
+vendored-dbus = ["keyring?/vendored"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]
 awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
 vault = ["dep:reqwest"]

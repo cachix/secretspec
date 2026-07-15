@@ -783,66 +783,46 @@ impl Secrets {
             None
         };
 
-        match (current_secret, default_secret) {
-            (Some(current), Some(default)) => {
-                // Merge: current profile takes precedence, then default profile, then profile defaults
-                Some(crate::config::Secret {
-                    description: current
-                        .description
-                        .clone()
-                        .or_else(|| default.description.clone()),
-                    required: current
-                        .required
-                        .or(default.required)
-                        .or(current_defaults.and_then(|d| d.required)),
-                    default: current
-                        .default
-                        .clone()
-                        .or_else(|| default.default.clone())
-                        .or_else(|| current_defaults.and_then(|d| d.default.clone())),
-                    providers: current
-                        .providers
-                        .clone()
-                        .or_else(|| default.providers.clone())
-                        .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
-                    reference: current
-                        .reference
-                        .clone()
-                        .or_else(|| default.reference.clone()),
-                    as_path: current.as_path.or(default.as_path),
-                    secret_type: current
-                        .secret_type
-                        .clone()
-                        .or_else(|| default.secret_type.clone()),
-                    generate: current
-                        .generate
-                        .clone()
-                        .or_else(|| default.generate.clone()),
-                })
-            }
-            (Some(secret), None) | (None, Some(secret)) => {
-                // Apply profile defaults to the found secret
-                Some(crate::config::Secret {
-                    description: secret.description.clone(),
-                    required: secret
-                        .required
-                        .or(current_defaults.and_then(|d| d.required)),
-                    default: secret
-                        .default
-                        .clone()
-                        .or_else(|| current_defaults.and_then(|d| d.default.clone())),
-                    providers: secret
-                        .providers
-                        .clone()
-                        .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
-                    reference: secret.reference.clone(),
-                    as_path: secret.as_path,
-                    secret_type: secret.secret_type.clone(),
-                    generate: secret.generate.clone(),
-                })
-            }
-            (None, None) => None,
-        }
+        // The field-level merge lives on `Secret` so `Config::validate`
+        // checks exactly the effective config this method produces.
+        crate::config::Secret::resolved(current_secret, default_secret, current_defaults)
+    }
+
+    /// Resolve the effective (merged) config for a secret that is known to
+    /// belong to `profile`. Any secret yielded by iterating that profile is
+    /// guaranteed to have an effective config, so a missing one is a bug.
+    pub(crate) fn effective_secret_config(
+        &self,
+        name: &str,
+        profile: &str,
+    ) -> crate::config::Secret {
+        self.resolve_secret_config(name, Some(profile))
+            .expect("secret from the resolved profile must have an effective config")
+    }
+
+    /// The effective (field-level merged) secrets of `profile_name` in
+    /// name-sorted order: the union of the profile's and the default
+    /// profile's names, each resolved via [`Secrets::resolve_secret_config`].
+    /// This is the view `check`/`run` list, matching what resolution acts on.
+    fn effective_secrets(&self, profile_name: &str) -> Vec<(String, crate::config::Secret)> {
+        let Some(current) = self.config.profiles.get(profile_name) else {
+            return Vec::new();
+        };
+        let default_profile = if profile_name != "default" {
+            self.config.profiles.get("default")
+        } else {
+            None
+        };
+        current
+            .sorted_secret_names_with(default_profile)
+            .into_iter()
+            .map(|name| {
+                (
+                    name.clone(),
+                    self.effective_secret_config(name, profile_name),
+                )
+            })
+            .collect()
     }
 
     /// Provider-alias maps in lookup order: project `secretspec.toml` first,
@@ -1626,7 +1606,6 @@ impl Secrets {
 
     /// Display validation success results
     fn display_validation_success(&self, valid: &ValidatedSecrets) -> Result<()> {
-        let profile = self.resolve_profile(Some(&valid.resolved.profile))?;
         let mut found_count = 0;
         let mut optional_count = 0;
         let default_names = valid
@@ -1636,7 +1615,7 @@ impl Secrets {
             .collect::<HashSet<_>>();
         let missing_optional: HashSet<&String> = valid.missing_optional.iter().collect();
 
-        for (name, config) in profile.iter() {
+        for (name, config) in &self.effective_secrets(&valid.resolved.profile) {
             if missing_optional.contains(&name) {
                 optional_count += 1;
                 eprintln!(
@@ -1673,7 +1652,6 @@ impl Secrets {
 
     /// Display validation error results
     fn display_validation_errors(&self, errors: &ValidationErrors) -> Result<()> {
-        let profile = self.resolve_profile(Some(&errors.profile))?;
         let mut found_count = 0;
         let mut missing_count = 0;
         let mut optional_count = 0;
@@ -1683,7 +1661,7 @@ impl Secrets {
             .map(|(name, _)| name)
             .collect::<HashSet<_>>();
 
-        for (name, config) in &profile {
+        for (name, config) in &self.effective_secrets(&errors.profile) {
             if errors.missing_required.contains(name) {
                 missing_count += 1;
                 eprintln!(

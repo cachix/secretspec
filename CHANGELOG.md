@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The `awssm` provider accepts `kms_key_id` and `tag.NAME=VALUE` query
+  parameters (e.g. `awssm://prod@us-east-1?kms_key_id=alias/my-key&tag.team=platform`).
+  Both are applied only when secretspec creates a secret, so accounts that enforce
+  a customer-managed KMS key or "tag-on-create" guardrails (an SCP requiring
+  `aws:RequestTag/*` on `CreateSecret`) can now store secrets. A pre-existing
+  secret keeps the key and tags it was created with.
 - PHP SDK (`cachix/secretspec`): resolve secrets from PHP, Laravel, and Symfony
   over the same shared resolver as the other language SDKs. It ships as a native
   PHP extension that embeds the resolver (works under PHP-FPM with no

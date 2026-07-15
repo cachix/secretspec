@@ -46,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same "use `onepassword` instead" correction that `--provider 1password`
   gives, instead of a generic undefined-alias error.
 - `import` prints its per-secret summary in a stable, name-sorted order.
+- `run` no longer aborts when the environment contains a non-UTF-8 variable.
+  Such variables are now passed through to the child process untouched, with
+  resolved secrets overlaid on top.
 
 ## [0.14.0] - 2026-07-09
 

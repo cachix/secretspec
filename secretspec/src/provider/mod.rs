@@ -658,7 +658,7 @@ pub trait Provider: Send + Sync {
     fn with_base_dir(&mut self, _base_dir: &std::path::Path) {}
 
     /// Hands the provider its bootstrap-credential overlay (see [`BootstrapEnv`])
-    /// so credential reads can prefer it over the process environment.
+    /// as a fallback when the process environment has no non-empty value.
     ///
     /// Called once inside the registration factory, on the concrete provider
     /// value *before* any `Arc`/`Box` wrapping. This must not be a

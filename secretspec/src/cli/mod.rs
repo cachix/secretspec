@@ -174,9 +174,9 @@ enum ProviderAction {
         /// Provider URI (e.g., "keyring://", "onepassword://Shared", "dotenv://.env.local")
         uri: String,
         /// Bootstrap credential binding `VAR=PROVIDER` (repeatable): the alias's
-        /// provider reads `VAR` from `PROVIDER` before the environment. Only the
-        /// bare-string source form is expressible here; add a `ref` by editing
-        /// the config.
+        /// provider uses a non-empty `VAR` from the environment first, falling
+        /// back to `PROVIDER`. Only the bare-string source form is expressible
+        /// here; add a `ref` by editing the config.
         #[arg(long = "env", value_name = "VAR=PROVIDER")]
         env: Vec<String>,
     },
@@ -626,7 +626,7 @@ pub fn main() -> Result<()> {
                         for (var, source) in credentials {
                             let entered = inquire::Password::new(&format!(
                                 "Enter {var} for provider '{name}' (source: {}):",
-                                source.provider
+                                source.display_provider()
                             ))
                             .without_confirmation()
                             .prompt()
@@ -1300,6 +1300,18 @@ mod tests {
             }
             _ => panic!("expected config provider add"),
         }
+    }
+
+    #[test]
+    fn provider_add_help_describes_environment_first_precedence() {
+        let help = Cli::try_parse_from(["secretspec", "config", "provider", "add", "--help"])
+            .err()
+            .expect("--help should stop parsing")
+            .to_string();
+
+        assert!(help.contains("uses a non-empty `VAR` from the environment first"));
+        assert!(help.contains("falling back to `PROVIDER`"));
+        assert!(!help.contains("from `PROVIDER` before the environment"));
     }
 
     #[test]

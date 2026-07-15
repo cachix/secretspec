@@ -6124,6 +6124,46 @@ fn bootstrap_overlay_reads_convention_credential_from_source() {
 }
 
 #[test]
+fn bootstrap_source_credential_reaches_target_provider_end_to_end() {
+    let _guard = scrub_resolution_env();
+    let _token = EnvVarGuard::remove("OP_SERVICE_ACCOUNT_TOKEN");
+    let temp = TempDir::new().unwrap();
+
+    let target_scope = |filename: &str, token: &str| {
+        let source = temp.path().join(filename);
+        std::fs::write(&source, format!("OP_SERVICE_ACCOUNT_TOKEN={token}\n")).unwrap();
+        let secrets = secrets_with_bootstrap_alias(
+            "onepassword://Private",
+            HashMap::from([(
+                "OP_SERVICE_ACCOUNT_TOKEN".to_string(),
+                BootstrapSource::from(format!("dotenv://{}", source.display())),
+            )]),
+        );
+
+        secrets
+            .get_provider(Some("target"), Some("default"))
+            .expect("the source credential should build the target provider")
+            .auth_scope_key()
+            .expect("onepassword should identify its effective authentication scope")
+    };
+
+    let first = target_scope("first.env", "source-token-a");
+    let same = target_scope("same.env", "source-token-a");
+    let different = target_scope("different.env", "source-token-b");
+
+    assert_eq!(
+        first, same,
+        "the same fetched credential yields the same scope"
+    );
+    assert_ne!(
+        first, different,
+        "changing the source credential must change the target's effective auth scope"
+    );
+    assert!(!first.contains("source-token-a"));
+    assert!(!different.contains("source-token-b"));
+}
+
+#[test]
 fn bootstrap_overlay_reads_ref_addressed_credential() {
     let _guard = scrub_resolution_env();
     let temp = TempDir::new().unwrap();
@@ -6222,6 +6262,35 @@ fn bootstrap_source_must_name_a_known_provider() {
         error.to_string().contains("not_a_real_provider"),
         "error should name the unknown source: {error}"
     );
+}
+
+#[test]
+fn bootstrap_credentials_validates_every_source_before_login() {
+    let secrets = secrets_with_bootstrap_alias(
+        "bws://project",
+        HashMap::from([
+            (
+                "A_VALID_FIRST".to_string(),
+                BootstrapSource::from("dotenv://source.env"),
+            ),
+            (
+                "Z_INVALID_LAST".to_string(),
+                BootstrapSource::from("not_a_real_provider"),
+            ),
+        ]),
+    );
+
+    let error = secrets.bootstrap_credentials("target").unwrap_err();
+    assert!(error.to_string().contains("Z_INVALID_LAST"));
+}
+
+#[test]
+fn bootstrap_source_display_redacts_inline_credentials() {
+    let source = BootstrapSource::from("onepassword+token://ops_secret@Vault");
+    let displayed = source.display_provider();
+
+    assert_eq!(displayed, "onepassword+token://Vault");
+    assert!(!displayed.contains("ops_secret"));
 }
 
 #[test]

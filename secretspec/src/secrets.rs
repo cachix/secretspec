@@ -19,7 +19,7 @@ use std::env;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Emits a warning when a provider in a fallback chain fails so the user
 /// can see why a particular link was skipped, without aborting the chain.
@@ -63,6 +63,11 @@ fn sorted_bootstrap_entries(
 }
 
 impl BootstrapSource {
+    /// Credential-free provider text for prompts and diagnostics.
+    pub(crate) fn display_provider(&self) -> String {
+        crate::audit::redact_uri_strict(&self.provider)
+    }
+
     /// The store location this source reads and writes: the pinned `ref`, or
     /// the convention path for the active project and profile. The single
     /// derivation both [`Secrets::resolve_bootstrap_overlay`] (read) and
@@ -81,11 +86,69 @@ impl BootstrapSource {
     /// (`onepassword+token://tok@Vault`), and this string reaches stderr and
     /// the `config provider login` output.
     fn location(&self, project: &str, profile: &str, var: &str) -> String {
-        let provider = crate::audit::redact_uri_strict(&self.provider);
+        let provider = self.display_provider();
         match &self.reference {
             Some(reference) => format!("{provider} at {}", reference.render()),
             None => format!("{provider} at {project}/{profile}/{var}"),
         }
+    }
+}
+
+type BootstrapOverlayKey = (String, String);
+type BootstrapOverlaySlot = Arc<Mutex<Option<BootstrapEnv>>>;
+
+/// Memoized bootstrap overlays with single-flight population per key.
+///
+/// The outer mutex protects only the key-to-slot map. Resolution runs while
+/// holding the selected slot, so callers for the same alias/profile wait for
+/// its first fetch while unrelated keys can populate concurrently.
+#[derive(Default)]
+struct BootstrapOverlayCache {
+    entries: Mutex<HashMap<BootstrapOverlayKey, BootstrapOverlaySlot>>,
+}
+
+impl BootstrapOverlayCache {
+    fn get_or_try_init<F>(&self, key: BootstrapOverlayKey, resolve: F) -> Result<BootstrapEnv>
+    where
+        F: FnOnce() -> Result<BootstrapEnv>,
+    {
+        let slot = {
+            let mut entries = self.entries.lock().unwrap();
+            Arc::clone(
+                entries
+                    .entry(key.clone())
+                    .or_insert_with(|| Arc::new(Mutex::new(None))),
+            )
+        };
+
+        let mut cached = slot.lock().unwrap();
+        if let Some(overlay) = cached.as_ref() {
+            return Ok(overlay.clone());
+        }
+
+        match resolve() {
+            Ok(overlay) => {
+                *cached = Some(overlay.clone());
+                Ok(overlay)
+            }
+            Err(err) => {
+                // Do not memoize failures: a later operation may succeed after
+                // credentials or provider availability change.
+                drop(cached);
+                let mut entries = self.entries.lock().unwrap();
+                if entries
+                    .get(&key)
+                    .is_some_and(|current| Arc::ptr_eq(current, &slot))
+                {
+                    entries.remove(&key);
+                }
+                Err(err)
+            }
+        }
+    }
+
+    fn clear(&self) {
+        self.entries.lock().unwrap().clear();
     }
 }
 
@@ -194,7 +257,7 @@ pub struct Secrets {
     /// not reuse the other profile's credential. Cleared by
     /// [`Secrets::store_bootstrap_credential`] so a freshly stored credential
     /// is re-read.
-    bootstrap_overlays: Mutex<HashMap<(String, String), BootstrapEnv>>,
+    bootstrap_overlays: BootstrapOverlayCache,
 }
 
 /// secretspec's own opt-in for marking the current process as an agent. Lets any
@@ -363,7 +426,7 @@ impl Secrets {
             reason: None,
             require_reason: RequireReason::Never,
             audit: None,
-            bootstrap_overlays: Mutex::new(HashMap::new()),
+            bootstrap_overlays: BootstrapOverlayCache::default(),
         }
     }
 
@@ -439,7 +502,7 @@ impl Secrets {
             profile: None,
             reason: env_reason(),
             audit,
-            bootstrap_overlays: Mutex::new(HashMap::new()),
+            bootstrap_overlays: BootstrapOverlayCache::default(),
         })
     }
 
@@ -553,25 +616,16 @@ impl Secrets {
     ) -> Result<Box<dyn ProviderTrait>> {
         // When `spec` names an alias with a bootstrap `env` map, resolve those
         // credentials from their source providers into an overlay the built
-        // provider reads before the process environment. Memoized per
-        // (profile, spec) so rebuilding a provider (per-secret chain walks,
+        // provider uses when the process environment has no non-empty value.
+        // Memoized per (profile, spec) so rebuilding a provider (per-secret chain walks,
         // interactive prompting) does not refetch the same credentials from
         // the source store, while a profile switch on this instance does not
         // reuse the other profile's credentials.
         let profile = self.resolve_profile_name(profile);
         let key = (profile.clone(), spec.clone());
-        let cached = self.bootstrap_overlays.lock().unwrap().get(&key).cloned();
-        let overlay = match cached {
-            Some(overlay) => overlay,
-            None => {
-                let overlay = self.resolve_bootstrap_overlay(&spec, &profile)?;
-                self.bootstrap_overlays
-                    .lock()
-                    .unwrap()
-                    .insert(key, overlay.clone());
-                overlay
-            }
-        };
+        let overlay = self
+            .bootstrap_overlays
+            .get_or_try_init(key, || self.resolve_bootstrap_overlay(&spec, &profile))?;
         self.build_provider_with_overlay(&spec, overlay)
     }
 
@@ -605,7 +659,7 @@ impl Secrets {
 
     /// Resolves the bootstrap overlay for a provider spec: for each `(VAR, source)`
     /// its alias declares in `env`, fetch the credential from the source provider
-    /// and collect it, so the built provider reads it before the environment.
+    /// and collect it as a fallback for a missing or empty environment value.
     ///
     /// `profile` scopes the convention path a bare-string source reads from.
     /// Returns an empty overlay for a spec that is not an alias, or an alias with
@@ -724,12 +778,17 @@ impl Secrets {
     }
 
     /// The bootstrap credentials a provider alias declares, sorted by variable
-    /// name, for the `config provider login` flow. Errors if the alias is not
-    /// defined; returns an empty list for an alias with no `env`.
+    /// name, for the `config provider login` flow. Validates every source before
+    /// returning any credentials. Errors if the alias is not defined; returns
+    /// an empty list for an alias with no `env`.
     pub(crate) fn bootstrap_credentials(
         &self,
         alias: &str,
     ) -> Result<Vec<(String, BootstrapSource)>> {
+        // Validate the complete map before returning any entry. The login CLI
+        // prompts and writes only after this method succeeds, so a later-sorted
+        // invalid source cannot leave earlier credentials partially stored.
+        self.validate_bootstrap_sources(alias)?;
         let entry = self
             .lookup_provider_alias_entry(alias)
             .ok_or_else(|| SecretSpecError::ProviderNotFound(alias.to_string()))?;
@@ -774,7 +833,7 @@ impl Secrets {
         result?;
         // The stored credential replaces whatever an earlier resolution
         // memoized; drop the memo so the next build re-reads it.
-        self.bootstrap_overlays.lock().unwrap().clear();
+        self.bootstrap_overlays.clear();
         Ok(source.location(&project, &profile, var))
     }
 
@@ -3249,6 +3308,54 @@ mod policy_tests {
             Some(&OsString::from("secret_wins"))
         );
         assert_eq!(env.len(), 4);
+    }
+}
+
+#[cfg(test)]
+mod bootstrap_overlay_cache_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn concurrent_population_for_one_key_is_single_flight() {
+        const CALLERS: usize = 8;
+        let cache = Arc::new(BootstrapOverlayCache::default());
+        let start = Arc::new(Barrier::new(CALLERS));
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        let threads: Vec<_> = (0..CALLERS)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                let start = Arc::clone(&start);
+                let fetches = Arc::clone(&fetches);
+                thread::spawn(move || {
+                    start.wait();
+                    cache
+                        .get_or_try_init(("default".into(), "target".into()), || {
+                            fetches.fetch_add(1, Ordering::SeqCst);
+                            // Keep the first population in flight long enough for
+                            // every caller to contend on the same key.
+                            thread::sleep(Duration::from_millis(50));
+                            let mut overlay = BootstrapEnv::new();
+                            overlay.insert("TOKEN".into(), SecretString::new("value".into()));
+                            Ok(overlay)
+                        })
+                        .unwrap()
+                })
+            })
+            .collect();
+
+        for thread in threads {
+            let overlay = thread.join().unwrap();
+            assert_eq!(
+                overlay.get("TOKEN").map(|value| value.expose_secret()),
+                Some("value")
+            );
+        }
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
     }
 }
 

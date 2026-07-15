@@ -166,6 +166,28 @@ where
         .collect()
 }
 
+/// The child-process environment for `run`: the parent environment plus the
+/// resolved secrets.
+///
+/// Kept as `OsString` end to end and captured with `vars_os` (never `vars`,
+/// whose iterator panics on non-UTF-8 entries — env vars are arbitrary bytes on
+/// Unix). Unlike agent detection ([`utf8_env`]), which may safely *drop*
+/// non-UTF-8 entries, `run` must stay transparent: the child inherits every
+/// parent variable untouched, UTF-8 or not. Secrets overwrite same-named vars.
+fn child_env_from<I, S>(
+    vars: I,
+    secrets: S,
+) -> std::collections::HashMap<std::ffi::OsString, std::ffi::OsString>
+where
+    I: IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    S: IntoIterator<Item = (String, String)>,
+{
+    let mut env: std::collections::HashMap<std::ffi::OsString, std::ffi::OsString> =
+        vars.into_iter().collect();
+    env.extend(secrets.into_iter().map(|(k, v)| (k.into(), v.into())));
+    env
+}
+
 /// The id of the detected coding agent (e.g. `"claude-code"`), or `None`.
 ///
 /// Routes through [`detect_with_env`](detect_coding_agent::detect_with_env) with a
@@ -2710,10 +2732,14 @@ impl Secrets {
             }
         };
 
-        let mut env_vars = env::vars().collect::<HashMap<_, _>>();
-        for (key, secret) in &validation_result.resolved.secrets {
-            env_vars.insert(key.clone(), secret.expose_secret().to_string());
-        }
+        let env_vars = child_env_from(
+            env::vars_os(),
+            validation_result
+                .resolved
+                .secrets
+                .iter()
+                .map(|(key, secret)| (key.clone(), secret.expose_secret().to_string())),
+        );
 
         // Record which secrets were injected into which command (argv[0] only —
         // arguments may contain secrets). Keys are computed before the spawn but
@@ -2816,6 +2842,47 @@ mod policy_tests {
             Some("clean_value")
         );
         assert_eq!(env.len(), 1);
+    }
+
+    /// The `run` child environment must tolerate non-UTF-8 parent variables
+    /// (`env::vars()` would panic on them — see #140) AND pass them through to
+    /// the child untouched, unlike agent detection which drops them. Resolved
+    /// secrets are added on top and overwrite same-named parent variables.
+    #[cfg(unix)]
+    #[test]
+    fn child_env_passes_through_non_utf8_and_overlays_secrets() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let bad_val = OsString::from_vec(vec![0x64, 0x61, 0x63, 0xa3]); // "dac\xa3"
+        let vars = vec![
+            (OsString::from("CLEAN_KEY"), OsString::from("clean_value")),
+            (OsString::from("BAD"), bad_val.clone()),
+            (OsString::from("OVERRIDDEN"), OsString::from("parent_value")),
+        ];
+        let secrets = vec![
+            ("SECRET_KEY".to_string(), "secret_value".to_string()),
+            ("OVERRIDDEN".to_string(), "secret_wins".to_string()),
+        ];
+
+        let env = child_env_from(vars, secrets);
+
+        // Non-UTF-8 parent entry survives byte-for-byte instead of panicking.
+        assert_eq!(env.get(&OsString::from("BAD")), Some(&bad_val));
+        assert_eq!(
+            env.get(&OsString::from("CLEAN_KEY")),
+            Some(&OsString::from("clean_value"))
+        );
+        // Secrets are injected and win over same-named parent variables.
+        assert_eq!(
+            env.get(&OsString::from("SECRET_KEY")),
+            Some(&OsString::from("secret_value"))
+        );
+        assert_eq!(
+            env.get(&OsString::from("OVERRIDDEN")),
+            Some(&OsString::from("secret_wins"))
+        );
+        assert_eq!(env.len(), 4);
     }
 }
 

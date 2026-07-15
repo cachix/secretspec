@@ -529,7 +529,10 @@ impl Profile {
     /// Pass `None` when this profile has nothing to inherit from (it is the
     /// default profile itself).
     fn validate_with_default(&self, default_profile: Option<&Profile>) -> Result<(), String> {
-        if self.secrets.is_empty() {
+        // A non-default profile may be an empty marker that inherits every
+        // secret from `default`. Profiles with nothing to inherit still need
+        // to declare at least one secret.
+        if self.secrets.is_empty() && default_profile.is_none() {
             return Err("Profile must define at least one secret".into());
         }
 
@@ -1697,6 +1700,39 @@ mod validation_tests {
             .validate()
             .unwrap_err();
         assert!(err.to_string().contains("at least one secret"));
+    }
+
+    /// Regression for https://github.com/cachix/secretspec/issues/144: an
+    /// explicitly declared empty profile inherits the complete default
+    /// profile and is therefore not empty from the resolver's perspective.
+    #[test]
+    fn config_validate_allows_empty_profile_to_inherit_default_secrets() {
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "lm04-stats"
+revision = "1.0"
+
+[profiles.default]
+ADMIN_PASSWORD = { description = "Password securing the admin page", required = true, type = "password" }
+
+[profiles.production]
+"#,
+        )
+        .unwrap();
+
+        config.validate().unwrap();
+
+        let spec = crate::Secrets::new(config, None, None, Some("production".to_string()));
+        let resolved = spec
+            .resolve_secret_config("ADMIN_PASSWORD", Some("production"))
+            .expect("production should inherit ADMIN_PASSWORD from default");
+        assert_eq!(
+            resolved.description.as_deref(),
+            Some("Password securing the admin page")
+        );
+        assert_eq!(resolved.required, Some(true));
+        assert_eq!(resolved.secret_type.as_deref(), Some("password"));
     }
 
     #[test]

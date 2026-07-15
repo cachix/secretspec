@@ -32,8 +32,13 @@ jobs:
     - name: Install devenv.sh
       run: nix profile install nixpkgs#devenv
 
-    - name: Build the devenv shell and run any pre-commit hooks
-      run: devenv test
+    # `devenv test` also starts every configured process. The docs dev server is
+    # unrelated to this suite and makes process-compose wait for its timeout when
+    # docs dependencies are not installed, so run the hooks and tests directly.
+    - name: Run pre-commit hooks
+      run: devenv tasks run devenv:git-hooks:run --show-output
+    - name: Run tests
+      run: devenv shell -- cargo test --all
 
   # Windows runners can't run Nix/devenv, so the suite runs here natively via
   # rustup + cargo. This exists specifically to catch Windows-only path handling

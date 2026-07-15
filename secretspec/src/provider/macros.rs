@@ -1,4 +1,4 @@
-use super::{BootstrapEnv, ProviderInfo, ProviderUrl, ProviderWithPreflight};
+use super::{ProviderCredentials, ProviderInfo, ProviderUrl, ProviderWithPreflight};
 use crate::Result;
 
 /// Internal registration structure used by the macro.
@@ -6,12 +6,10 @@ use crate::Result;
 pub struct ProviderRegistration {
     pub info: ProviderInfo,
     pub schemes: &'static [&'static str],
-    /// Environment variables the provider reads through the bootstrap overlay
-    /// (see [`super::BootstrapEnv`]). Empty for providers that consult no
-    /// bootstrap credentials; used to warn when an alias declares a variable
-    /// the provider would silently ignore.
-    pub bootstrap_vars: &'static [&'static str],
-    pub factory: fn(&ProviderUrl, BootstrapEnv) -> Result<ProviderWithPreflight>,
+    /// Semantic credential names accepted by the provider. Empty for providers
+    /// that accept no injected credentials; used to reject unsupported names.
+    pub credential_names: &'static [&'static str],
+    pub factory: fn(&ProviderUrl, ProviderCredentials) -> Result<ProviderWithPreflight>,
 }
 
 /// Distributed slice that collects all provider registrations.
@@ -36,10 +34,9 @@ pub static PROVIDER_REGISTRY: [ProviderRegistration];
 /// }
 /// ```
 ///
-/// Providers that read bootstrap credentials through the overlay (see
-/// [`Provider::with_bootstrap_env`](super::Provider::with_bootstrap_env)) declare
-/// the variable names in a `bootstrap_vars` field, so an alias declaring a
-/// variable the provider never reads can be diagnosed:
+/// Providers that accept injected credentials declare their semantic names in
+/// a `credential_names` field, so an alias declaring an unsupported credential
+/// can be diagnosed:
 ///
 /// ```ignore
 /// register_provider! {
@@ -49,7 +46,7 @@ pub static PROVIDER_REGISTRY: [ProviderRegistration];
 ///     description: "Bitwarden Secrets Manager",
 ///     schemes: ["bws"],
 ///     examples: ["bws://project-uuid"],
-///     bootstrap_vars: ["BWS_ACCESS_TOKEN"],
+///     credential_names: ["access_token"],
 /// }
 /// ```
 ///
@@ -78,12 +75,12 @@ macro_rules! register_provider {
         description: $description:expr,
         schemes: [$($scheme:expr),* $(,)?],
         examples: [$($example:expr),* $(,)?]
-        $(, bootstrap_vars: [$($bootstrap_var:expr),* $(,)?])? $(,)?
+        $(, credential_names: [$($credential_name:expr),* $(,)?])? $(,)?
     ) => {
         $crate::register_provider!(@register
             $struct_name, $config_type, $name, $description,
             [$($scheme,)*], [$($example,)*],
-            [$($($bootstrap_var,)*)?],
+            [$($($credential_name,)*)?],
             |provider| {
                 Ok($crate::provider::ProviderWithPreflight {
                     provider: Box::new(provider),
@@ -101,13 +98,13 @@ macro_rules! register_provider {
         description: $description:expr,
         schemes: [$($scheme:expr),* $(,)?],
         examples: [$($example:expr),* $(,)?],
-        $(bootstrap_vars: [$($bootstrap_var:expr),* $(,)?],)?
+        $(credential_names: [$($credential_name:expr),* $(,)?],)?
         preflight: $preflight:ident $(,)?
     ) => {
         $crate::register_provider!(@register
             $struct_name, $config_type, $name, $description,
             [$($scheme,)*], [$($example,)*],
-            [$($($bootstrap_var,)*)?],
+            [$($($credential_name,)*)?],
             |provider| {
                 let provider = std::sync::Arc::new(provider);
                 let preflight_provider = std::sync::Arc::clone(&provider);
@@ -123,7 +120,7 @@ macro_rules! register_provider {
     (@register
         $struct_name:ident, $config_type:ty, $name:expr, $description:expr,
         [$($scheme:expr,)*], [$($example:expr,)*],
-        [$($bootstrap_var:expr,)*],
+        [$($credential_name:expr,)*],
         $wrap:expr
     ) => {
         impl $struct_name {
@@ -140,15 +137,15 @@ macro_rules! register_provider {
                     examples: &[$($example,)*],
                 },
                 schemes: &[$($scheme,)*],
-                bootstrap_vars: &[$($bootstrap_var,)*],
-                factory: |url, bootstrap| {
+                credential_names: &[$($credential_name,)*],
+                factory: |url, credentials| {
                     let config = <$config_type>::try_from(url)?;
                     let mut provider = <$struct_name>::new(config);
-                    // Inject the bootstrap overlay while the provider is still a
+                    // Inject credentials while the provider is still a
                     // concrete `&mut` value, before any Arc/Box wrapping — a
                     // preflight provider becomes `Box<Arc<P>>`, through which a
                     // `&mut self` hook cannot be forwarded.
-                    $crate::provider::Provider::with_bootstrap_env(&mut provider, bootstrap);
+                    $crate::provider::Provider::with_credentials(&mut provider, credentials);
                     let wrap: fn($struct_name) -> $crate::Result<$crate::provider::ProviderWithPreflight> = $wrap;
                     wrap(provider)
                 },

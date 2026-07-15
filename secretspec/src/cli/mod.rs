@@ -173,12 +173,12 @@ enum ProviderAction {
         name: String,
         /// Provider URI (e.g., "keyring://", "onepassword://Shared", "dotenv://.env.local")
         uri: String,
-        /// Bootstrap credential binding `VAR=PROVIDER` (repeatable): the alias's
-        /// provider uses a non-empty `VAR` from the environment first, falling
-        /// back to `PROVIDER`. Only the bare-string source form is expressible
-        /// here; add a `ref` by editing the config.
-        #[arg(long = "env", value_name = "VAR=PROVIDER")]
-        env: Vec<String>,
+        /// Provider credential binding `NAME=PROVIDER` (repeatable). `NAME` is
+        /// semantic and provider-specific, such as `access_token` or `role_id`.
+        /// Only the bare-string source form is expressible here; add a `ref` by
+        /// editing the config.
+        #[arg(long = "credential", value_name = "NAME=PROVIDER")]
+        credential: Vec<String>,
     },
     /// Remove a provider alias
     Remove {
@@ -187,7 +187,7 @@ enum ProviderAction {
     },
     /// List all configured provider aliases
     List,
-    /// Store the bootstrap credentials a provider alias declares in `env`
+    /// Store the credentials declared by a provider alias
     Login {
         /// Name of the provider alias to store credentials for
         name: String,
@@ -507,28 +507,32 @@ pub fn main() -> Result<()> {
             // Manage provider aliases
             ConfigAction::Provider(action) => {
                 match action {
-                    ProviderAction::Add { name, uri, env } => {
-                        // Parse each `VAR=PROVIDER` binding into a bootstrap source.
-                        let mut bootstrap = HashMap::new();
-                        for binding in &env {
-                            let (var, spec) = binding.split_once('=').ok_or_else(|| {
-                                miette!("--env expects VAR=PROVIDER, got '{binding}'")
-                            })?;
-                            if var.is_empty() || spec.is_empty() {
+                    ProviderAction::Add {
+                        name,
+                        uri,
+                        credential,
+                    } => {
+                        // Parse each `NAME=PROVIDER` binding into a credential source.
+                        let mut credentials = HashMap::new();
+                        for binding in &credential {
+                            let (credential_name, spec) =
+                                binding.split_once('=').ok_or_else(|| {
+                                    miette!("--credential expects NAME=PROVIDER, got '{binding}'")
+                                })?;
+                            if credential_name.is_empty() || spec.is_empty() {
                                 return Err(miette!(
-                                    "--env expects a non-empty VAR=PROVIDER, got '{binding}'"
+                                    "--credential expects a non-empty NAME=PROVIDER, got '{binding}'"
                                 ));
                             }
-                            bootstrap.insert(
-                                var.to_string(),
-                                crate::config::BootstrapSource::from(spec),
+                            credentials.insert(
+                                credential_name.to_string(),
+                                crate::config::CredentialSource::from(spec),
                             );
                         }
-                        // An empty map means no `env`, so a plain add round-trips
-                        // as a bare-string alias.
+                        // An empty map keeps the compact bare-string alias form.
                         let alias_value = crate::config::ProviderAlias {
                             uri: uri.clone(),
-                            env: bootstrap,
+                            credentials,
                         };
 
                         // Load or create config
@@ -556,8 +560,8 @@ pub fn main() -> Result<()> {
                                 .map_or("added", |_| "updated");
                             config.save().into_diagnostic()?;
                             println!("✓ Provider alias '{name}' {display}: '{uri}'");
-                            if !env.is_empty() {
-                                println!("  bootstrap: {}", env.join(", "));
+                            if !credential.is_empty() {
+                                println!("  credentials: {}", credential.join(", "));
                                 println!(
                                     "  run 'secretspec config provider login {name}' to store the credentials"
                                 );
@@ -616,33 +620,32 @@ pub fn main() -> Result<()> {
                     }
                     ProviderAction::Login { name } => {
                         let app = load_secrets(&cli.file, &cli.reason)?;
-                        let credentials = app.bootstrap_credentials(&name).into_diagnostic()?;
+                        let credentials =
+                            app.declared_provider_credentials(&name).into_diagnostic()?;
                         if credentials.is_empty() {
-                            println!(
-                                "Provider alias '{name}' declares no bootstrap credentials (no `env`)."
-                            );
+                            println!("Provider alias '{name}' declares no credentials.");
                             return Ok(());
                         }
-                        for (var, source) in credentials {
+                        for (credential_name, source) in credentials {
                             let entered = inquire::Password::new(&format!(
-                                "Enter {var} for provider '{name}' (source: {}):",
+                                "Enter {credential_name} for provider '{name}' (source: {}):",
                                 source.display_provider()
                             ))
                             .without_confirmation()
                             .prompt()
                             .into_diagnostic()?;
                             if entered.is_empty() {
-                                println!("✗ Skipped {var} (empty)");
+                                println!("✗ Skipped {credential_name} (empty)");
                                 continue;
                             }
                             let location = app
-                                .store_bootstrap_credential(
+                                .store_provider_credential(
                                     &source,
-                                    &var,
+                                    &credential_name,
                                     &secrecy::SecretString::new(entered.into()),
                                 )
                                 .into_diagnostic()?;
-                            println!("✓ stored {var} in {location}");
+                            println!("✓ stored {credential_name} in {location}");
                         }
                         println!(
                             "\nRun 'secretspec check --provider {name}' to verify authentication."
@@ -1276,8 +1279,54 @@ mod tests {
     }
 
     #[test]
-    fn provider_add_parses_repeated_env_bindings() {
+    fn provider_add_parses_repeated_credential_bindings() {
         let cli = Cli::try_parse_from([
+            "secretspec",
+            "config",
+            "provider",
+            "add",
+            "bws",
+            "bws://proj",
+            "--credential",
+            "access_token=keyring",
+            "--credential",
+            "other=dotenv://.env",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Config {
+                action:
+                    ConfigAction::Provider(ProviderAction::Add {
+                        name,
+                        uri,
+                        credential,
+                    }),
+            } => {
+                assert_eq!(name, "bws");
+                assert_eq!(uri, "bws://proj");
+                assert_eq!(
+                    credential,
+                    vec!["access_token=keyring", "other=dotenv://.env"]
+                );
+            }
+            _ => panic!("expected config provider add"),
+        }
+    }
+
+    #[test]
+    fn provider_add_help_describes_semantic_credentials() {
+        let help = Cli::try_parse_from(["secretspec", "config", "provider", "add", "--help"])
+            .err()
+            .expect("--help should stop parsing")
+            .to_string();
+
+        assert!(help.contains("semantic and provider-specific"));
+        assert!(help.contains("access_token"));
+    }
+
+    #[test]
+    fn provider_add_rejects_the_environment_shaped_flag() {
+        let error = Cli::try_parse_from([
             "secretspec",
             "config",
             "provider",
@@ -1286,32 +1335,11 @@ mod tests {
             "bws://proj",
             "--env",
             "BWS_ACCESS_TOKEN=keyring",
-            "--env",
-            "OTHER=dotenv://.env",
         ])
-        .unwrap();
-        match cli.command {
-            Commands::Config {
-                action: ConfigAction::Provider(ProviderAction::Add { name, uri, env }),
-            } => {
-                assert_eq!(name, "bws");
-                assert_eq!(uri, "bws://proj");
-                assert_eq!(env, vec!["BWS_ACCESS_TOKEN=keyring", "OTHER=dotenv://.env"]);
-            }
-            _ => panic!("expected config provider add"),
-        }
-    }
+        .err()
+        .expect("--env should be rejected");
 
-    #[test]
-    fn provider_add_help_describes_environment_first_precedence() {
-        let help = Cli::try_parse_from(["secretspec", "config", "provider", "add", "--help"])
-            .err()
-            .expect("--help should stop parsing")
-            .to_string();
-
-        assert!(help.contains("uses a non-empty `VAR` from the environment first"));
-        assert!(help.contains("falling back to `PROVIDER`"));
-        assert!(!help.contains("from `PROVIDER` before the environment"));
+        assert!(error.to_string().contains("--env"));
     }
 
     #[test]

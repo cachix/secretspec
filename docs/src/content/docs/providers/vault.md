@@ -143,11 +143,11 @@ secretspec run --provider "vault://vault.example.com:8200/secret?auth=approle" -
 
 #### Sourcing credentials from another provider
 
-Any of these variables can be read from another provider instead of the environment, so a Vault token or AppRole credentials never live in a shell profile — see [Bootstrap Credentials](/concepts/providers/#bootstrap-credentials):
+These credentials can be read from another provider instead of the environment, so a Vault token or AppRole credentials never live in a shell profile — see [Provider Credentials](/concepts/providers/#provider-credentials):
 
 ```toml title="secretspec.toml"
 [providers.vault_prod]
 uri = "vault://vault.example.com:8200/secret?auth=approle"
-env = { VAULT_ROLE_ID   = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "role_id" } },
-        VAULT_SECRET_ID = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "secret_id" } } }
+credentials = { role_id   = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "role_id" } },
+                secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "secret_id" } } }
 ```

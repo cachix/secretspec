@@ -28,40 +28,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ffi.enable`, like `ext-redis`), with an `ext-ffi` fallback that dlopens the
   library at runtime for CLI and local development.
 - Provider aliases can now source their own credentials from another provider.
-  An alias in `[providers]` may declare an `env` map binding an environment
-  variable the provider needs (such as `BWS_ACCESS_TOKEN` or `VAULT_TOKEN`) to a
+  An alias in `[providers]` may declare a `credentials` map binding a semantic,
+  provider-specific name (such as `access_token`, `token`, or `role_id`) to a
   source: a bare provider spec, which reads the value at the convention path, or
   a table with a `ref` giving the exact coordinates. The credential is fetched
   from that provider and handed to the store, so a machine token can live in the
-  OS keyring instead of a plaintext environment variable, and it is never
-  written into the environment of processes started by `secretspec run`. An
-  environment variable that is already set (non empty) still wins, so CI keeps
-  working with no extra configuration. Chains are limited to one hop, and that
-  limit is enforced wherever the alias appears, as a chain fallback or the
-  default provider included. Bootstrap credentials also apply when the alias is
-  selected with an explicit `--provider <alias>` or `SECRETSPEC_PROVIDER`, and
+  OS keyring instead of a plaintext environment variable, and is never written
+  into the environment of processes started by `secretspec run`. A configured
+  credential is authoritative; providers retain their conventional environment
+  fallback when no explicit credential is supplied. Chains are limited to one
+  hop, and that limit is enforced wherever the alias appears, as a chain
+  fallback or the default provider included. Provider credentials also apply
+  when the alias is selected with an explicit `--provider <alias>` or
+  `SECRETSPEC_PROVIDER`, and
   they are fetched from their source once per invocation and profile, then
   reused across all secrets routed at the alias (convention-path credentials
   live under a profile, so switching profiles re-reads them). Each source read,
-  and each credential stored through `login`, is audited with a `bootstrap`
-  marker naming the variable and the source store; a credential stored through
-  `login` takes effect immediately. Declaring an `env` variable the target
-  provider never reads prints a warning naming the variables it does read,
-  instead of fetching a value that would be silently ignored.
+  and each credential stored through `login`, is audited with a `credential`
+  marker naming the semantic credential and the source store; a credential
+  stored through `login` takes effect immediately. Unsupported credential names
+  fail validation before a source is accessed.
 
   ```toml
   [providers]
-  bws = { uri = "bws://project-uuid", env = { BWS_ACCESS_TOKEN = "keyring" } }
-  vault = { uri = "vault://kv/app?auth=approle", env = {
-    VAULT_ROLE_ID   = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "role_id" } },
-    VAULT_SECRET_ID = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "secret_id" } },
+  bws = { uri = "bws://project-uuid", credentials = { access_token = "keyring" } }
+  vault = { uri = "vault://kv/app?auth=approle", credentials = {
+    role_id   = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "role_id" } },
+    secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "secret_id" } },
   } }
   ```
-- `secretspec config provider login <alias>` prompts for each bootstrap
+- `secretspec config provider login <alias>` prompts for each provider
   credential a provider alias declares and stores it in its source provider, so
   it can be read back on the next resolution. `secretspec config provider add`
-  gains a repeatable `--env VAR=PROVIDER` flag for declaring bootstrap sources
-  from the command line.
+  gains a repeatable `--credential NAME=PROVIDER` flag for declaring credential
+  sources from the command line.
 
 ### Changed
 - A `ref` routed at a single store (an explicit `--provider`, a single-provider
@@ -81,8 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead" message — the same hard error any other invalid primary gets —
   instead of warning and falling through to the rest of the chain. As a
   fallback entry it is still skipped with a warning, like any broken link.
-- Rust SDK: `ProviderAlias::env` is a plain map whose empty state means "no
-  bootstrap credentials", rather than an `Option`, so the two ways of spelling
+- Rust SDK: `ProviderAlias::credentials` is a plain map whose empty state means
+  "no provider credentials", rather than an `Option`, so the two ways of spelling
   an alias without credentials cannot diverge.
 
 ### Fixed

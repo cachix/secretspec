@@ -47,7 +47,7 @@
 //! secretspec check --provider vault://team-a@vault.example.com:8200/secret
 //! ```
 
-use super::{Address, BootstrapEnv, Provider, ProviderUrl, env_or_overlay_var};
+use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
 use crate::{Result, SecretSpecError};
 use reqwest::header::{HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
@@ -222,16 +222,16 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
 /// KV secrets engine (v1 or v2) with token-based authentication.
 pub struct VaultProvider {
     config: VaultConfig,
-    /// Bootstrap-credential overlay consulted after the process environment.
-    bootstrap_env: BootstrapEnv,
+    /// Credentials supplied by the provider alias.
+    credentials: ProviderCredentials,
 }
 
-/// The credential variables this provider reads through the bootstrap overlay.
-/// Shared between the registration's `bootstrap_vars` and the read sites, so
-/// the declared list cannot drift from what the provider actually consults.
-const VAULT_ROLE_ID: &str = "VAULT_ROLE_ID";
-const VAULT_SECRET_ID: &str = "VAULT_SECRET_ID";
-const VAULT_TOKEN: &str = "VAULT_TOKEN";
+const ROLE_ID: &str = "role_id";
+const SECRET_ID: &str = "secret_id";
+const TOKEN: &str = "token";
+const VAULT_ROLE_ID_ENV: &str = "VAULT_ROLE_ID";
+const VAULT_SECRET_ID_ENV: &str = "VAULT_SECRET_ID";
+const VAULT_TOKEN_ENV: &str = "VAULT_TOKEN";
 
 crate::register_provider! {
     struct: VaultProvider,
@@ -240,7 +240,7 @@ crate::register_provider! {
     description: "HashiCorp Vault / OpenBao secret management",
     schemes: ["vault", "openbao"],
     examples: ["vault://vault.example.com:8200/secret", "openbao://bao.internal:8200/secret"],
-    bootstrap_vars: [VAULT_ROLE_ID, VAULT_SECRET_ID, VAULT_TOKEN],
+    credential_names: [ROLE_ID, SECRET_ID, TOKEN],
 }
 
 impl VaultProvider {
@@ -248,7 +248,7 @@ impl VaultProvider {
     pub fn new(config: VaultConfig) -> Self {
         Self {
             config,
-            bootstrap_env: BootstrapEnv::new(),
+            credentials: ProviderCredentials::new(),
         }
     }
 
@@ -285,8 +285,8 @@ impl VaultProvider {
 
     /// Resolves a token via static token sources.
     fn resolve_token_auth(&self) -> Result<SecretString> {
-        // `env_or_overlay_var` never yields an empty value.
-        if let Some(token) = env_or_overlay_var(&self.bootstrap_env, VAULT_TOKEN) {
+        // `credential_or_env` never yields an empty value.
+        if let Some(token) = credential_or_env(&self.credentials, TOKEN, VAULT_TOKEN_ENV) {
             return Ok(SecretString::new(token.into()));
         }
 
@@ -304,25 +304,28 @@ impl VaultProvider {
         }
 
         Err(SecretSpecError::ProviderOperationFailed(
-            "No Vault token found. Set the VAULT_TOKEN environment variable \
-             or create a ~/.vault-token file."
+            "No Vault token found. Configure the token provider credential, set the \
+             VAULT_TOKEN environment variable, or create a ~/.vault-token file."
                 .to_string(),
         ))
     }
 
     /// Authenticates via AppRole and returns a client token.
     async fn resolve_approle_auth(&self) -> Result<SecretString> {
-        let role_id = env_or_overlay_var(&self.bootstrap_env, VAULT_ROLE_ID).ok_or_else(|| {
-            SecretSpecError::ProviderOperationFailed(
-                "VAULT_ROLE_ID environment variable is required for AppRole authentication."
-                    .to_string(),
-            )
-        })?;
-
-        let secret_id =
-            env_or_overlay_var(&self.bootstrap_env, VAULT_SECRET_ID).ok_or_else(|| {
+        let role_id =
+            credential_or_env(&self.credentials, ROLE_ID, VAULT_ROLE_ID_ENV).ok_or_else(|| {
                 SecretSpecError::ProviderOperationFailed(
-                    "VAULT_SECRET_ID environment variable is required for AppRole authentication."
+                    "Vault role_id credential is required for AppRole authentication; configure \
+                     credentials.role_id or set VAULT_ROLE_ID."
+                        .to_string(),
+                )
+            })?;
+
+        let secret_id = credential_or_env(&self.credentials, SECRET_ID, VAULT_SECRET_ID_ENV)
+            .ok_or_else(|| {
+                SecretSpecError::ProviderOperationFailed(
+                    "Vault secret_id credential is required for AppRole authentication; configure \
+                     credentials.secret_id or set VAULT_SECRET_ID."
                         .to_string(),
                 )
             })?;
@@ -527,8 +530,8 @@ impl Provider for VaultProvider {
         })
     }
 
-    fn with_bootstrap_env(&mut self, env: BootstrapEnv) {
-        self.bootstrap_env = env;
+    fn with_credentials(&mut self, credentials: ProviderCredentials) {
+        self.credentials = credentials;
     }
 
     fn name(&self) -> &'static str {

@@ -1,5 +1,5 @@
 use crate::config::{
-    BootstrapSource, Config, GlobalConfig, GlobalDefaults, NativeAddress, ParseError, Profile,
+    Config, CredentialSource, GlobalConfig, GlobalDefaults, NativeAddress, ParseError, Profile,
     Project, ProviderAlias, RequireReason, Resolved, Secret,
 };
 use crate::error::{Result, SecretSpecError};
@@ -5057,7 +5057,7 @@ fn test_override_skips_read_chain() {
         .expect("override resolution should succeed");
 
     // The read walks the raw override spec only (the alias is expanded at build
-    // time, where its bootstrap `env` is still reachable); the resolved URI is
+    // time, where its `credentials` is still reachable); the resolved URI is
     // carried for display.
     assert_eq!(
         route.specs(),
@@ -6077,66 +6077,66 @@ fn test_resolve_profile_unknown_returns_invalid_profile() {
     }
 }
 
-// --- Provider bootstrap: overlay resolution and validation ---
+// --- Provider credential resolution and validation ---
 
 /// Builds a `Secrets` whose only project provider alias is `target`, carrying
-/// the given bootstrap `env` map.
-fn secrets_with_bootstrap_alias(
+/// the given semantic credential-source map.
+fn secrets_with_credential_alias(
     target_uri: &str,
-    env: HashMap<String, BootstrapSource>,
+    credentials: HashMap<String, CredentialSource>,
 ) -> Secrets {
     let mut config = resolve_test_config(HashMap::new());
     config.providers = Some(HashMap::from([(
         "target".to_string(),
         ProviderAlias {
             uri: target_uri.to_string(),
-            env,
+            credentials,
         },
     )]));
     Secrets::new(config, None, None, None)
 }
 
 #[test]
-fn bootstrap_overlay_reads_convention_credential_from_source() {
+fn provider_credentials_read_convention_credential_from_source() {
     let _guard = scrub_resolution_env();
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source.env");
     // dotenv addresses a convention secret by the flat key name.
-    std::fs::write(&source, "BOOTSTRAP_READ_VAR=secret-abc\n").unwrap();
+    std::fs::write(&source, "access_token=secret-abc\n").unwrap();
 
-    let secrets = secrets_with_bootstrap_alias(
-        "env://",
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
         HashMap::from([(
-            "BOOTSTRAP_READ_VAR".to_string(),
-            BootstrapSource::from(format!("dotenv://{}", source.display())),
+            "access_token".to_string(),
+            CredentialSource::from(format!("dotenv://{}", source.display())),
         )]),
     );
 
-    let overlay = secrets
-        .resolve_bootstrap_overlay("target", "default")
+    let credentials = secrets
+        .resolve_provider_credentials("target", "default")
         .unwrap();
     assert_eq!(
-        overlay
-            .get("BOOTSTRAP_READ_VAR")
+        credentials
+            .get("access_token")
             .map(|value| value.expose_secret().to_string()),
         Some("secret-abc".to_string()),
     );
 }
 
 #[test]
-fn bootstrap_source_credential_reaches_target_provider_end_to_end() {
+fn sourced_credential_reaches_target_provider_end_to_end() {
     let _guard = scrub_resolution_env();
     let _token = EnvVarGuard::remove("OP_SERVICE_ACCOUNT_TOKEN");
     let temp = TempDir::new().unwrap();
 
     let target_scope = |filename: &str, token: &str| {
         let source = temp.path().join(filename);
-        std::fs::write(&source, format!("OP_SERVICE_ACCOUNT_TOKEN={token}\n")).unwrap();
-        let secrets = secrets_with_bootstrap_alias(
+        std::fs::write(&source, format!("service_account_token={token}\n")).unwrap();
+        let secrets = secrets_with_credential_alias(
             "onepassword://Private",
             HashMap::from([(
-                "OP_SERVICE_ACCOUNT_TOKEN".to_string(),
-                BootstrapSource::from(format!("dotenv://{}", source.display())),
+                "service_account_token".to_string(),
+                CredentialSource::from(format!("dotenv://{}", source.display())),
             )]),
         );
 
@@ -6164,19 +6164,19 @@ fn bootstrap_source_credential_reaches_target_provider_end_to_end() {
 }
 
 #[test]
-fn bootstrap_overlay_reads_ref_addressed_credential() {
+fn provider_credentials_read_ref_addressed_credential() {
     let _guard = scrub_resolution_env();
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source.env");
     std::fs::write(&source, "SOURCE_KEY=secret-xyz\n").unwrap();
 
-    // The env variable name (MY_TOKEN) and the source key (SOURCE_KEY) differ;
+    // The semantic credential name and the source key differ;
     // `ref` pins the exact location.
-    let secrets = secrets_with_bootstrap_alias(
-        "env://",
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
         HashMap::from([(
-            "MY_TOKEN".to_string(),
-            BootstrapSource {
+            "access_token".to_string(),
+            CredentialSource {
                 provider: format!("dotenv://{}", source.display()),
                 reference: Some(NativeAddress {
                     item: "SOURCE_KEY".to_string(),
@@ -6186,78 +6186,80 @@ fn bootstrap_overlay_reads_ref_addressed_credential() {
         )]),
     );
 
-    let overlay = secrets
-        .resolve_bootstrap_overlay("target", "default")
+    let credentials = secrets
+        .resolve_provider_credentials("target", "default")
         .unwrap();
     assert_eq!(
-        overlay
-            .get("MY_TOKEN")
+        credentials
+            .get("access_token")
             .map(|value| value.expose_secret().to_string()),
         Some("secret-xyz".to_string()),
     );
 }
 
 #[test]
-fn bootstrap_overlay_lets_the_environment_win() {
+fn configured_credential_is_resolved_even_when_provider_env_is_set() {
     let _guard = scrub_resolution_env();
-    const VAR: &str = "BOOTSTRAP_ENVWINS_VAR";
-    let _var = EnvVarGuard::set(VAR, "from-env");
+    let _var = EnvVarGuard::set("BWS_ACCESS_TOKEN", "from-env");
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source.env");
-    std::fs::write(&source, format!("{VAR}=from-source\n")).unwrap();
+    std::fs::write(&source, "access_token=from-source\n").unwrap();
 
-    let secrets = secrets_with_bootstrap_alias(
-        "env://",
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
         HashMap::from([(
-            VAR.to_string(),
-            BootstrapSource::from(format!("dotenv://{}", source.display())),
+            "access_token".to_string(),
+            CredentialSource::from(format!("dotenv://{}", source.display())),
         )]),
     );
 
-    let overlay = secrets
-        .resolve_bootstrap_overlay("target", "default")
+    let credentials = secrets
+        .resolve_provider_credentials("target", "default")
         .unwrap();
-    // The environment satisfies the variable, so the chain is not consulted and
-    // the overlay carries nothing for it (the provider reads the env directly).
-    assert!(!overlay.contains_key(VAR));
+    assert_eq!(
+        credentials
+            .get("access_token")
+            .map(|value| value.expose_secret()),
+        Some("from-source")
+    );
 }
 
 #[test]
-fn bootstrap_overlay_missing_credential_is_an_actionable_error() {
+fn missing_provider_credential_is_an_actionable_error() {
     let _guard = scrub_resolution_env();
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source.env");
     std::fs::write(&source, "").unwrap();
 
-    let secrets = secrets_with_bootstrap_alias(
-        "env://",
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
         HashMap::from([(
-            "BOOTSTRAP_MISSING_VAR".to_string(),
-            BootstrapSource::from(format!("dotenv://{}", source.display())),
+            "access_token".to_string(),
+            CredentialSource::from(format!("dotenv://{}", source.display())),
         )]),
     );
 
     let error = secrets
-        .resolve_bootstrap_overlay("target", "default")
+        .resolve_provider_credentials("target", "default")
         .unwrap_err();
     let message = error.to_string();
     assert!(
-        message.contains("BOOTSTRAP_MISSING_VAR") && message.contains("not found"),
-        "error should name the variable and say it was not found: {message}"
+        message.contains("access_token") && message.contains("not found"),
+        "error should name the credential and say it was not found: {message}"
     );
 }
 
 #[test]
-fn bootstrap_source_must_name_a_known_provider() {
-    let secrets = secrets_with_bootstrap_alias(
-        "bws://project",
+fn credential_source_must_name_a_known_provider() {
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
         HashMap::from([(
-            "TOKEN".to_string(),
-            BootstrapSource::from("not_a_real_provider"),
+            "access_token".to_string(),
+            CredentialSource::from("not_a_real_provider"),
         )]),
     );
-    let error = secrets.validate_bootstrap_sources("target").unwrap_err();
+    let error = secrets.validate_credential_sources("target").unwrap_err();
     assert!(
         error.to_string().contains("not_a_real_provider"),
         "error should name the unknown source: {error}"
@@ -6265,28 +6267,44 @@ fn bootstrap_source_must_name_a_known_provider() {
 }
 
 #[test]
-fn bootstrap_credentials_validates_every_source_before_login() {
-    let secrets = secrets_with_bootstrap_alias(
-        "bws://project",
+fn credential_name_must_be_supported_by_target_provider() {
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
+        HashMap::from([(
+            "BWS_ACCESS_TOKEN".to_string(),
+            CredentialSource::from("keyring"),
+        )]),
+    );
+
+    let error = secrets.validate_credential_sources("target").unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("BWS_ACCESS_TOKEN"), "{message}");
+    assert!(message.contains("access_token"), "{message}");
+}
+
+#[test]
+fn declared_provider_credentials_validates_every_source_before_login() {
+    let secrets = secrets_with_credential_alias(
+        "vault://secret/app?auth=approle",
         HashMap::from([
             (
-                "A_VALID_FIRST".to_string(),
-                BootstrapSource::from("dotenv://source.env"),
+                "role_id".to_string(),
+                CredentialSource::from("dotenv://source.env"),
             ),
             (
-                "Z_INVALID_LAST".to_string(),
-                BootstrapSource::from("not_a_real_provider"),
+                "secret_id".to_string(),
+                CredentialSource::from("not_a_real_provider"),
             ),
         ]),
     );
 
-    let error = secrets.bootstrap_credentials("target").unwrap_err();
-    assert!(error.to_string().contains("Z_INVALID_LAST"));
+    let error = secrets.declared_provider_credentials("target").unwrap_err();
+    assert!(error.to_string().contains("secret_id"));
 }
 
 #[test]
-fn bootstrap_source_display_redacts_inline_credentials() {
-    let source = BootstrapSource::from("onepassword+token://ops_secret@Vault");
+fn credential_source_display_redacts_inline_credentials() {
+    let source = CredentialSource::from("onepassword+token://ops_secret@Vault");
     let displayed = source.display_provider();
 
     assert_eq!(displayed, "onepassword+token://Vault");
@@ -6294,27 +6312,33 @@ fn bootstrap_source_display_redacts_inline_credentials() {
 }
 
 #[test]
-fn bootstrap_chain_is_limited_to_one_hop() {
+fn credential_chain_is_limited_to_one_hop() {
     let mut config = resolve_test_config(HashMap::new());
     config.providers = Some(HashMap::from([
-        // `chained` itself declares bootstrap env, so it may not be a source.
+        // `chained` itself declares credentials, so it may not be a source.
         (
             "chained".to_string(),
             ProviderAlias {
                 uri: "keyring://".to_string(),
-                env: HashMap::from([("INNER".to_string(), BootstrapSource::from("keyring"))]),
+                credentials: HashMap::from([(
+                    "access_token".to_string(),
+                    CredentialSource::from("keyring"),
+                )]),
             },
         ),
         (
             "target".to_string(),
             ProviderAlias {
-                uri: "bws://project".to_string(),
-                env: HashMap::from([("TOKEN".to_string(), BootstrapSource::from("chained"))]),
+                uri: "bws://00000000-0000-0000-0000-000000000000".to_string(),
+                credentials: HashMap::from([(
+                    "access_token".to_string(),
+                    CredentialSource::from("chained"),
+                )]),
             },
         ),
     ]));
     let secrets = Secrets::new(config, None, None, None);
-    let error = secrets.validate_bootstrap_sources("target").unwrap_err();
+    let error = secrets.validate_credential_sources("target").unwrap_err();
     assert!(
         error.to_string().contains("one hop"),
         "error should explain the one-hop limit: {error}"
@@ -6322,26 +6346,26 @@ fn bootstrap_chain_is_limited_to_one_hop() {
 }
 
 #[test]
-fn bootstrap_credential_round_trips_through_its_source() {
+fn provider_credential_round_trips_through_its_source() {
     let _guard = scrub_resolution_env();
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source.env");
     std::fs::write(&source, "").unwrap();
 
-    let secrets = secrets_with_bootstrap_alias(
-        "env://",
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
         HashMap::from([(
-            "ROUND_TRIP_VAR".to_string(),
-            BootstrapSource::from(format!("dotenv://{}", source.display())),
+            "access_token".to_string(),
+            CredentialSource::from(format!("dotenv://{}", source.display())),
         )]),
     );
 
-    let credentials = secrets.bootstrap_credentials("target").unwrap();
+    let credentials = secrets.declared_provider_credentials("target").unwrap();
     assert_eq!(credentials.len(), 1);
     let (var, source_spec) = &credentials[0];
 
     secrets
-        .store_bootstrap_credential(
+        .store_provider_credential(
             source_spec,
             var,
             &secrecy::SecretString::new("stored-value".into()),
@@ -6349,32 +6373,32 @@ fn bootstrap_credential_round_trips_through_its_source() {
         .unwrap();
 
     // Stored and read back through the same address the resolver uses.
-    let overlay = secrets
-        .resolve_bootstrap_overlay("target", "default")
+    let resolved = secrets
+        .resolve_provider_credentials("target", "default")
         .unwrap();
     assert_eq!(
-        overlay
-            .get("ROUND_TRIP_VAR")
+        resolved
+            .get("access_token")
             .map(|value| value.expose_secret().to_string()),
         Some("stored-value".to_string()),
     );
 }
 
-/// The overlay memo is keyed by profile: building the target for one profile
+/// The credential memo is keyed by profile: building the target for one profile
 /// memoizes only that profile's credentials, and another profile re-fetches
 /// from the source instead of reusing them.
 #[test]
-fn bootstrap_overlay_memoizes_per_profile() {
+fn provider_credentials_memoize_per_profile() {
     let _guard = scrub_resolution_env();
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source.env");
-    std::fs::write(&source, "SECRETSPEC_TEST_PROFILE_SCOPED_VAR=v1\n").unwrap();
+    std::fs::write(&source, "access_token=v1\n").unwrap();
 
-    let secrets = secrets_with_bootstrap_alias(
-        "env://",
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
         HashMap::from([(
-            "SECRETSPEC_TEST_PROFILE_SCOPED_VAR".to_string(),
-            BootstrapSource::from(format!("dotenv://{}", source.display())),
+            "access_token".to_string(),
+            CredentialSource::from(format!("dotenv://{}", source.display())),
         )]),
     );
 
@@ -6399,20 +6423,20 @@ fn bootstrap_overlay_memoizes_per_profile() {
 }
 
 /// Storing a credential through its source (the `login` flow) clears the
-/// overlay memo, so the next build re-reads the store instead of resolving to
+/// credential memo, so the next build re-reads the store instead of resolving to
 /// the stale cached value.
 #[test]
-fn storing_a_bootstrap_credential_invalidates_the_memo() {
+fn storing_a_provider_credential_invalidates_the_memo() {
     let _guard = scrub_resolution_env();
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source.env");
-    std::fs::write(&source, "SECRETSPEC_TEST_ROTATED_VAR=old\n").unwrap();
+    std::fs::write(&source, "access_token=old\n").unwrap();
 
-    let secrets = secrets_with_bootstrap_alias(
-        "env://",
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
         HashMap::from([(
-            "SECRETSPEC_TEST_ROTATED_VAR".to_string(),
-            BootstrapSource::from(format!("dotenv://{}", source.display())),
+            "access_token".to_string(),
+            CredentialSource::from(format!("dotenv://{}", source.display())),
         )]),
     );
 
@@ -6421,10 +6445,10 @@ fn storing_a_bootstrap_credential_invalidates_the_memo() {
         .get_provider(Some("target"), Some("default"))
         .expect("the source supplies the credential");
 
-    let credentials = secrets.bootstrap_credentials("target").unwrap();
+    let credentials = secrets.declared_provider_credentials("target").unwrap();
     let (var, source_spec) = &credentials[0];
     secrets
-        .store_bootstrap_credential(source_spec, var, &secrecy::SecretString::new("new".into()))
+        .store_provider_credential(source_spec, var, &secrecy::SecretString::new("new".into()))
         .unwrap();
 
     // Empty the source: only a memo hit could satisfy the next build, so a
@@ -6439,31 +6463,36 @@ fn storing_a_bootstrap_credential_invalidates_the_memo() {
 }
 
 #[test]
-fn bootstrap_credentials_errors_for_an_unknown_alias() {
+fn declared_provider_credentials_errors_for_an_unknown_alias() {
     let secrets = Secrets::new(resolve_test_config(HashMap::new()), None, None, None);
-    assert!(secrets.bootstrap_credentials("nope").is_err());
+    assert!(secrets.declared_provider_credentials("nope").is_err());
 }
 
 #[test]
-fn bootstrap_credentials_is_empty_for_an_alias_without_env() {
+fn declared_provider_credentials_is_empty_for_an_alias_without_credentials() {
     let mut config = resolve_test_config(HashMap::new());
     config.providers = Some(HashMap::from([(
         "plain".to_string(),
         ProviderAlias::from("keyring://"),
     )]));
     let secrets = Secrets::new(config, None, None, None);
-    assert!(secrets.bootstrap_credentials("plain").unwrap().is_empty());
+    assert!(
+        secrets
+            .declared_provider_credentials("plain")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
-fn store_bootstrap_credential_rejects_a_read_only_source() {
-    let secrets = secrets_with_bootstrap_alias(
-        "env://",
-        HashMap::from([("V".to_string(), BootstrapSource::from("env://"))]),
+fn store_provider_credential_rejects_a_read_only_source() {
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
+        HashMap::from([("access_token".to_string(), CredentialSource::from("env://"))]),
     );
-    let credentials = secrets.bootstrap_credentials("target").unwrap();
+    let credentials = secrets.declared_provider_credentials("target").unwrap();
     let (var, source_spec) = &credentials[0];
-    let result = secrets.store_bootstrap_credential(
+    let result = secrets.store_provider_credential(
         source_spec,
         var,
         &secrecy::SecretString::new("x".into()),

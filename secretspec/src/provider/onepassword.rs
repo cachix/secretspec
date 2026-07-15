@@ -1,4 +1,4 @@
-use crate::provider::{Address, BootstrapEnv, Provider, ProviderUrl, env_or_overlay_var};
+use crate::provider::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -311,14 +311,12 @@ pub struct OnePasswordProvider {
     config: OnePasswordConfig,
     /// The OnePassword CLI command to use (either "op" or a custom path).
     op_command: String,
-    /// Bootstrap-credential overlay consulted after the process environment.
-    bootstrap_env: BootstrapEnv,
+    /// Credentials supplied by the provider alias.
+    credentials: ProviderCredentials,
 }
 
-/// The credential variable this provider reads through the bootstrap overlay.
-/// Shared between the registration's `bootstrap_vars` and the read site, so
-/// the declared list cannot drift from what the provider actually consults.
-const OP_SERVICE_ACCOUNT_TOKEN: &str = "OP_SERVICE_ACCOUNT_TOKEN";
+const SERVICE_ACCOUNT_TOKEN: &str = "service_account_token";
+const OP_SERVICE_ACCOUNT_TOKEN_ENV: &str = "OP_SERVICE_ACCOUNT_TOKEN";
 
 crate::register_provider! {
     struct: OnePasswordProvider,
@@ -327,7 +325,7 @@ crate::register_provider! {
     description: "OnePassword password manager",
     schemes: ["onepassword", "onepassword+token", "op"],
     examples: ["onepassword://vault", "onepassword://work@Production", "onepassword+token://vault"],
-    bootstrap_vars: [OP_SERVICE_ACCOUNT_TOKEN],
+    credential_names: [SERVICE_ACCOUNT_TOKEN],
     preflight: check_auth,
 }
 
@@ -348,19 +346,22 @@ impl OnePasswordProvider {
         Self {
             config,
             op_command,
-            bootstrap_env: BootstrapEnv::new(),
+            credentials: ProviderCredentials::new(),
         }
     }
 
     /// The service account token in effect: the URI-supplied one
-    /// (`onepassword+token://`), else the environment or bootstrap overlay via
-    /// the shared env-wins rule. When all are absent, `op` falls back to its
-    /// own authentication (desktop app or manual signin) exactly as before.
+    /// (`onepassword+token://`), else an explicitly supplied credential, then
+    /// the conventional environment variable. When all are absent, `op` falls
+    /// back to its own authentication (desktop app or manual signin) exactly as before.
     fn effective_service_account_token(&self) -> Option<String> {
-        self.config
-            .service_account_token
-            .clone()
-            .or_else(|| env_or_overlay_var(&self.bootstrap_env, OP_SERVICE_ACCOUNT_TOKEN))
+        self.config.service_account_token.clone().or_else(|| {
+            credential_or_env(
+                &self.credentials,
+                SERVICE_ACCOUNT_TOKEN,
+                OP_SERVICE_ACCOUNT_TOKEN_ENV,
+            )
+        })
     }
 
     /// Executes a OnePassword CLI command with proper error handling.
@@ -397,7 +398,7 @@ impl OnePasswordProvider {
         // Set service account token if provided. Passing an environment-supplied
         // token explicitly is equivalent to `op` inheriting it.
         if let Some(token) = self.effective_service_account_token() {
-            cmd.env(OP_SERVICE_ACCOUNT_TOKEN, token);
+            cmd.env(OP_SERVICE_ACCOUNT_TOKEN_ENV, token);
         }
 
         // Add account if specified
@@ -827,12 +828,12 @@ impl Provider for OnePasswordProvider {
         &["field", "vault", "section"]
     }
 
-    fn with_bootstrap_env(&mut self, env: BootstrapEnv) {
-        // Stored, not folded into the config: the token is resolved through the
-        // shared env-wins rule where it is consumed (`execute_op_command`,
-        // `auth_scope_key`), and `uri()` keeps reporting the scheme the user
-        // actually configured rather than flipping to `onepassword+token://`.
-        self.bootstrap_env = env;
+    fn with_credentials(&mut self, credentials: ProviderCredentials) {
+        // Stored, not folded into the config: the token is resolved where it is
+        // consumed (`execute_op_command`, `auth_scope_key`), and `uri()` keeps
+        // reporting the scheme the user actually configured rather than
+        // flipping to `onepassword+token://`.
+        self.credentials = credentials;
     }
 
     fn name(&self) -> &'static str {
@@ -845,10 +846,10 @@ impl Provider for OnePasswordProvider {
     /// referenced secret; without this, N references would run N identical
     /// `op vault list` round-trips.
     fn auth_scope_key(&self) -> Option<String> {
-        // The token actually in effect, so two instances bootstrapped with
+        // The token actually in effect, so two instances supplied with
         // different tokens never share a preflight probe. Hashed rather than
         // embedded: the scope key lives in a process-lifetime cache, and a
-        // bootstrap-sourced token is kept as a `SecretString` precisely so its
+        // sourced token is kept as a `SecretString` precisely so its
         // plaintext never sits in long-lived memory.
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();

@@ -181,15 +181,15 @@ $ secretspec config provider remove prod_vault
 These commands modify only `~/.config/secretspec/config.toml`. Edit the
 top-level `[providers]` table directly to change project aliases.
 
-## Bootstrap provider credentials
+## Provider credentials
 
 :::note
-Bootstrap credentials are supported in version 0.15 and later.
+Provider credentials are supported in version 0.15 and later.
 :::
 
 Some providers need credentials before they can retrieve secrets. Examples
-include `BWS_ACCESS_TOKEN` for Bitwarden Secrets Manager, a Vault token or
-AppRole credentials, and a 1Password service account token.
+include an access token for Bitwarden Secrets Manager, a Vault token or AppRole
+credentials, and a 1Password service account token.
 
 An alias can load these credentials from another provider. This avoids storing
 long-lived provider credentials in a shell profile or CI variable when a secure
@@ -197,20 +197,20 @@ store is available.
 
 ### Use the convention address
 
-In an alias's `env` table, map each required environment variable to the
+In an alias's `credentials` table, map each semantic credential name to the
 provider that stores it:
 
 ```toml title="secretspec.toml"
 [providers]
 keyring = "keyring://"
 
-# Read BWS_ACCESS_TOKEN from keyring before connecting to Bitwarden.
-bws = { uri = "bws://a9230ec4-5507-4870-b8b5-b3f500587e4c", env = { BWS_ACCESS_TOKEN = "keyring" } }
+# Read the access token from keyring before connecting to Bitwarden.
+bws = { uri = "bws://a9230ec4-5507-4870-b8b5-b3f500587e4c", credentials = { access_token = "keyring" } }
 ```
 
 A string value such as `"keyring"` is a provider specification. SecretSpec
 reads the credential from that provider at the conventional
-`{project}/{profile}/{VAR}` address for the active project and profile.
+`{project}/{profile}/{credential}` address for the active project and profile.
 
 ### Use an explicit address
 
@@ -220,47 +220,53 @@ specific provider-native address:
 ```toml title="secretspec.toml"
 [providers.vault_prod]
 uri = "vault://secret/myapp?auth=approle"
-env = {
-  VAULT_ROLE_ID = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "role_id" } },
-  VAULT_SECRET_ID = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "secret_id" } }
+credentials = {
+  role_id = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "role_id" } },
+  secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "secret_id" } }
 }
 ```
 
 The `ref` table uses the same provider-native coordinates as a secret
 [`ref`](/reference/configuration/#secret-references).
 
-### Store bootstrap credentials
+### Store provider credentials
 
 Use `config provider login` to prompt for every credential declared by an
 alias and write it to the configured source:
 
 ```bash
 $ secretspec config provider login bws
-Enter BWS_ACCESS_TOKEN for provider 'bws' (source: keyring): ****
-✓ stored BWS_ACCESS_TOKEN in keyring at smoke/default/BWS_ACCESS_TOKEN
+Enter access_token for provider 'bws' (source: keyring): ****
+✓ stored access_token in keyring at smoke/default/access_token
 ```
 
-You can also create a user-level alias with a convention-address bootstrap
+You can also create a user-level alias with a convention-address credential
 source from the CLI:
 
 ```bash
-$ secretspec config provider add bws "bws://project-uuid" --env BWS_ACCESS_TOKEN=keyring
+$ secretspec config provider add bws "bws://project-uuid" --credential access_token=keyring
 $ secretspec config provider login bws
 ```
 
-Bootstrap credentials follow these rules:
+Provider credentials follow these rules:
 
-- **Existing environment variables take precedence.** If a required variable
-  is already set, SecretSpec uses it and does not query the configured source.
+- **Configured credentials are authoritative.** When an alias declares a
+  credential, SecretSpec reads its configured source. Providers may still use
+  their conventional environment variables when no explicit credential is
+  supplied.
 - **Credentials remain internal.** SecretSpec passes a retrieved credential to
   the destination provider in memory. It does not export the credential or
   include it in the environment of a process started by `secretspec run`.
-- **Bootstrap chains are one hop.** A source provider cannot require bootstrap
+- **Credential chains are one hop.** A source provider cannot require provider
   credentials of its own. SecretSpec validates this before accessing the
   provider, preventing dependency cycles.
 - **Convention addresses are profile-specific.** A string source uses the
   active project and profile. Use a `ref` source when multiple projects or
   profiles should share one provider credential.
+- **Names are provider-specific.** Bitwarden accepts `access_token`; Vault
+  accepts `token`, `role_id`, and `secret_id`; 1Password accepts
+  `service_account_token`. Unsupported names are rejected before any source is
+  read.
 
 ## Next steps
 

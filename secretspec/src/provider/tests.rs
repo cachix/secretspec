@@ -1066,17 +1066,17 @@ mod integration_tests {
         assert_eq!(provider.name(), "gcsm");
     }
 
-    /// The bootstrap overlay must reach a preflight-wrapped provider. onepassword
+    /// Provider credentials must reach a preflight-wrapped provider. onepassword
     /// is built as `Box<Arc<OnePasswordProvider>>` behind a `PreflightGuard`, so a
     /// `&mut self` hook applied post-construction would be swallowed by the `Arc`
     /// layer (which cannot forward `&mut self`); this passes only because the
-    /// overlay is injected inside the factory, before wrapping. The delivered
+    /// credentials are injected inside the factory, before wrapping. The delivered
     /// token folds into `auth_scope_key` as a hash, so injection shows up as a
     /// scope-key difference while the plaintext never reaches the
     /// process-lifetime preflight cache.
     #[test]
-    fn bootstrap_overlay_reaches_preflight_wrapped_provider() {
-        use crate::provider::{BootstrapEnv, ProviderUrl, provider_from_url};
+    fn credentials_reach_preflight_wrapped_provider() {
+        use crate::provider::{ProviderCredentials, ProviderUrl, provider_from_url};
         use url::Url;
 
         // Clear any ambient token under the env lock: with one exported, every
@@ -1086,15 +1086,15 @@ mod integration_tests {
         let _env = crate::tests::EnvVarGuard::remove("OP_SERVICE_ACCOUNT_TOKEN");
 
         let scope_with = |token: Option<&str>| {
-            let mut overlay = BootstrapEnv::new();
+            let mut credentials = ProviderCredentials::new();
             if let Some(token) = token {
-                overlay.insert(
-                    "OP_SERVICE_ACCOUNT_TOKEN".to_string(),
+                credentials.insert(
+                    "service_account_token".to_string(),
                     SecretString::new(token.into()),
                 );
             }
             let url = ProviderUrl::new(Url::parse("onepassword://Private").unwrap());
-            provider_from_url(&url, overlay)
+            provider_from_url(&url, credentials)
                 .unwrap()
                 .auth_scope_key()
                 .expect("onepassword advertises an auth scope")
@@ -1104,7 +1104,7 @@ mod integration_tests {
         let with_token = scope_with(Some("tok-xyz"));
         assert_ne!(
             with_token, without_token,
-            "bootstrap token should be injected before Arc-wrapping"
+            "provider credential should be injected before Arc-wrapping"
         );
         // Same token, same scope; different tokens probe auth separately.
         assert_eq!(with_token, scope_with(Some("tok-xyz")));

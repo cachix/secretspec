@@ -4,7 +4,8 @@
 //!
 //! # Authentication
 //!
-//! Uses a machine account access token via the `BWS_ACCESS_TOKEN` environment variable.
+//! Uses a machine account access token supplied as a provider credential or via
+//! the `BWS_ACCESS_TOKEN` environment variable.
 //! Generate access tokens from the Bitwarden Secrets Manager web interface.
 //!
 //! # URI Format
@@ -36,7 +37,7 @@
 //! secretspec check --provider bws://a9230ec4-5507-4870-b8b5-b3f500587e4c
 //! ```
 
-use super::{Address, BootstrapEnv, Provider, ProviderUrl, env_or_overlay_var};
+use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
 use crate::{Result, SecretSpecError};
 use bitwarden::auth::login::AccessTokenLoginRequest;
 use bitwarden::secrets_manager::ClientSecretsExt;
@@ -110,14 +111,12 @@ pub struct BwsProvider {
     config: BwsConfig,
     client: OnceLock<Client>,
     secrets_cache: OnceLock<Vec<SecretResponse>>,
-    /// Bootstrap-credential overlay consulted after the process environment.
-    bootstrap_env: BootstrapEnv,
+    /// Credentials supplied by the provider alias.
+    credentials: ProviderCredentials,
 }
 
-/// The credential variable this provider reads through the bootstrap overlay.
-/// Shared between the registration's `bootstrap_vars` and the read site, so
-/// the declared list cannot drift from what the provider actually consults.
-const BWS_ACCESS_TOKEN: &str = "BWS_ACCESS_TOKEN";
+const ACCESS_TOKEN: &str = "access_token";
+const BWS_ACCESS_TOKEN_ENV: &str = "BWS_ACCESS_TOKEN";
 
 crate::register_provider! {
     struct: BwsProvider,
@@ -126,7 +125,7 @@ crate::register_provider! {
     description: "Bitwarden Secrets Manager",
     schemes: ["bws"],
     examples: ["bws://a9230ec4-5507-4870-b8b5-b3f500587e4c"],
-    bootstrap_vars: [BWS_ACCESS_TOKEN],
+    credential_names: [ACCESS_TOKEN],
 }
 
 impl BwsProvider {
@@ -136,13 +135,14 @@ impl BwsProvider {
             config,
             client: OnceLock::new(),
             secrets_cache: OnceLock::new(),
-            bootstrap_env: BootstrapEnv::new(),
+            credentials: ProviderCredentials::new(),
         }
     }
 
-    /// Resolves the BWS access token from the environment or bootstrap overlay.
+    /// Resolves the supplied access token, with the conventional environment
+    /// variable retained as a provider-level fallback.
     fn access_token(&self) -> Option<String> {
-        env_or_overlay_var(&self.bootstrap_env, BWS_ACCESS_TOKEN)
+        credential_or_env(&self.credentials, ACCESS_TOKEN, BWS_ACCESS_TOKEN_ENV)
     }
 
     /// Strips the BWS access token from error messages to avoid leaking credentials.
@@ -157,7 +157,7 @@ impl BwsProvider {
 
     /// Returns a reference to the authenticated Client, creating it if needed.
     ///
-    /// Reads `BWS_ACCESS_TOKEN` from the environment and authenticates on first call.
+    /// Resolves an access token and authenticates on first call.
     /// Subsequent calls return the cached client.
     async fn ensure_client(&self) -> Result<&Client> {
         if let Some(client) = self.client.get() {
@@ -166,17 +166,16 @@ impl BwsProvider {
 
         let token = self.access_token().ok_or_else(|| {
             SecretSpecError::ProviderOperationFailed(
-                "BWS_ACCESS_TOKEN environment variable is not set. \
-                 Generate an access token from the Bitwarden Secrets Manager web interface \
-                 and set it as BWS_ACCESS_TOKEN."
+                "BWS access_token credential is not set. Configure \
+                 credentials.access_token or set the BWS_ACCESS_TOKEN environment variable."
                     .to_string(),
             )
         })?;
 
         if token.is_empty() {
             return Err(SecretSpecError::ProviderOperationFailed(
-                "BWS_ACCESS_TOKEN environment variable is empty. \
-                 Generate an access token from the Bitwarden Secrets Manager web interface."
+                "BWS access_token credential is empty. Configure \
+                 credentials.access_token or set a non-empty BWS_ACCESS_TOKEN environment variable."
                     .to_string(),
             ));
         }
@@ -360,8 +359,8 @@ impl Provider for BwsProvider {
         })
     }
 
-    fn with_bootstrap_env(&mut self, env: BootstrapEnv) {
-        self.bootstrap_env = env;
+    fn with_credentials(&mut self, credentials: ProviderCredentials) {
+        self.credentials = credentials;
     }
 
     fn name(&self) -> &'static str {

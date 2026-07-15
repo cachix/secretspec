@@ -63,39 +63,29 @@ use std::convert::TryFrom;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use url::Url;
 
-/// An overlay of bootstrap credentials handed to a provider at construction.
+/// Credentials handed to a provider at construction.
 ///
-/// Maps an environment variable name (e.g. `BWS_ACCESS_TOKEN`) to a value a
-/// participating provider consults *after* the real process environment (see
-/// [`env_or_overlay_var`]). It exists so a provider's own credentials can be
-/// sourced from another provider without ever calling `std::env::set_var`,
-/// which would leak them into the child environment of `secretspec run`.
-pub(crate) type BootstrapEnv = HashMap<String, SecretString>;
+/// Maps semantic provider-specific names (for example `access_token`) to
+/// secret values. Providers may retain environment-variable fallback for
+/// standalone compatibility, but environment names are not part of this API.
+pub(crate) type ProviderCredentials = HashMap<String, SecretString>;
 
-/// A bootstrap variable's value from the process environment, with a
-/// set-but-empty variable treated as unset.
-///
-/// The single owner of the env-wins rule: the overlay resolver skips fetching a
-/// credential exactly when this returns `Some`, and [`env_or_overlay_var`]
-/// prefers the same value on the provider side, so the two layers can never
-/// disagree about whether the environment already satisfies a variable.
-pub(crate) fn bootstrap_env_var(var: &str) -> Option<String> {
-    std::env::var(var).ok().filter(|value| !value.is_empty())
-}
-
-/// Resolves a bootstrap variable, preferring the process environment over the
-/// overlay.
-///
-/// A variable set (non-empty) in the environment wins — see
-/// [`bootstrap_env_var`]. Only otherwise is the overlay consulted, and an empty
-/// overlay value is likewise treated as unset.
-pub(crate) fn env_or_overlay_var(overlay: &BootstrapEnv, var: &str) -> Option<String> {
-    bootstrap_env_var(var).or_else(|| {
-        overlay
-            .get(var)
-            .map(|secret| secret.expose_secret().to_string())
-            .filter(|value| !value.is_empty())
-    })
+/// Resolves a semantic provider credential, falling back to the provider's
+/// conventional environment variable when no explicit credential was supplied.
+pub(crate) fn credential_or_env(
+    credentials: &ProviderCredentials,
+    name: &str,
+    env_var: &str,
+) -> Option<String> {
+    credentials
+        .get(name)
+        .map(|secret| secret.expose_secret().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            std::env::var(env_var)
+                .ok()
+                .filter(|value| !value.is_empty())
+        })
 }
 
 /// Characters that are invalid in URI hosts but might appear in provider config
@@ -445,19 +435,18 @@ pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
     Ok(registration_for_scheme(scheme).is_some())
 }
 
-/// The bootstrap variables the provider named by `spec` reads through the
-/// overlay (its registration's `bootstrap_vars`), or an empty slice for an
-/// unknown scheme. Lets alias validation diagnose an `env` declaration the
-/// provider would silently ignore.
-pub(crate) fn bootstrap_vars_for_spec(spec: &str) -> &'static [&'static str] {
+/// The semantic credential names accepted by the provider named by `spec`, or
+/// an empty slice for an unknown scheme. Lets alias validation reject a
+/// declaration the provider would silently ignore.
+pub(crate) fn credential_names_for_spec(spec: &str) -> &'static [&'static str] {
     let (scheme, _) = split_spec(spec);
-    registration_for_scheme(scheme).map_or(&[], |reg| reg.bootstrap_vars)
+    registration_for_scheme(scheme).map_or(&[], |reg| reg.credential_names)
 }
 
 /// The registered display name for the provider `spec` names, falling back to
 /// the spec's scheme token. Pure registry lookup: lets callers show which
 /// provider a spec routes to without constructing it (construction now fetches
-/// bootstrap credentials, so a display-only build could fail or do I/O).
+/// provider credentials, so a display-only build could fail or do I/O).
 pub(crate) fn provider_display_name_for_spec(spec: &str) -> String {
     let (scheme, _) = split_spec(spec);
     registration_for_scheme(scheme)
@@ -657,8 +646,7 @@ pub trait Provider: Send + Sync {
     /// [`Secrets`]: crate::Secrets
     fn with_base_dir(&mut self, _base_dir: &std::path::Path) {}
 
-    /// Hands the provider its bootstrap-credential overlay (see [`BootstrapEnv`])
-    /// as a fallback when the process environment has no non-empty value.
+    /// Hands semantic credentials to the provider.
     ///
     /// Called once inside the registration factory, on the concrete provider
     /// value *before* any `Arc`/`Box` wrapping. This must not be a
@@ -667,11 +655,10 @@ pub trait Provider: Send + Sync {
     /// `impl Provider for Arc<T>` (an `Arc` gives no `&mut` access to its
     /// inner value), so a preflight provider — wrapped as `Box<Arc<P>>` — would
     /// silently receive the default no-op. The default implementation ignores
-    /// the overlay, which is correct for providers that read no bootstrap
-    /// credentials.
+    /// the values, which is correct for providers that need no credentials.
     ///
     /// [`with_base_dir`]: Provider::with_base_dir
-    fn with_bootstrap_env(&mut self, _env: BootstrapEnv) {}
+    fn with_credentials(&mut self, _credentials: ProviderCredentials) {}
 
     /// Discovers and returns all secrets available in this provider.
     ///
@@ -963,8 +950,8 @@ impl Provider for PreflightGuard {
         self.inner.with_base_dir(base_dir);
     }
 
-    fn with_bootstrap_env(&mut self, env: BootstrapEnv) {
-        self.inner.with_bootstrap_env(env);
+    fn with_credentials(&mut self, credentials: ProviderCredentials) {
+        self.inner.with_credentials(credentials);
     }
 
     fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
@@ -1018,15 +1005,18 @@ impl TryFrom<&str> for Box<dyn Provider> {
     type Error = SecretSpecError;
 
     fn try_from(s: &str) -> Result<Self> {
-        provider_from_spec(s, BootstrapEnv::new())
+        provider_from_spec(s, ProviderCredentials::new())
     }
 }
 
 /// Builds a boxed provider from a spec string (a bare name, `scheme:...`
-/// shorthand, or full URI), handing it the given bootstrap overlay. The shared
+/// shorthand, or full URI), handing it the supplied credentials. The shared
 /// body of the string `TryFrom` impls: construction funnels here so URL
-/// normalization and overlay injection have exactly one home.
-pub(crate) fn provider_from_spec(s: &str, bootstrap: BootstrapEnv) -> Result<Box<dyn Provider>> {
+/// normalization and credential injection have exactly one home.
+pub(crate) fn provider_from_spec(
+    s: &str,
+    credentials: ProviderCredentials,
+) -> Result<Box<dyn Provider>> {
     // Parse the scheme from the input string
     let (scheme, rest) = split_spec(s);
 
@@ -1090,27 +1080,27 @@ pub(crate) fn provider_from_spec(s: &str, bootstrap: BootstrapEnv) -> Result<Box
         ))
     })?;
 
-    provider_from_url(&ProviderUrl::new(proper_url), bootstrap)
+    provider_from_url(&ProviderUrl::new(proper_url), credentials)
 }
 
 impl TryFrom<&Url> for Box<dyn Provider> {
     type Error = SecretSpecError;
 
     fn try_from(url: &Url) -> Result<Self> {
-        provider_from_url(&ProviderUrl::new(url.clone()), BootstrapEnv::new())
+        provider_from_url(&ProviderUrl::new(url.clone()), ProviderCredentials::new())
     }
 }
 
 pub(crate) fn provider_from_url(
     url: &ProviderUrl,
-    bootstrap: BootstrapEnv,
+    credentials: ProviderCredentials,
 ) -> Result<Box<dyn Provider>> {
     let scheme = url.scheme();
 
     let registration = registration_for_scheme(scheme)
         .ok_or_else(|| SecretSpecError::ProviderNotFound(scheme.to_string()))?;
 
-    let pwp = (registration.factory)(url, bootstrap)?;
+    let pwp = (registration.factory)(url, credentials)?;
     if pwp.preflight.is_some() {
         Ok(Box::new(PreflightGuard::new(pwp)))
     } else {
@@ -1317,54 +1307,49 @@ mod url_tests {
 }
 
 #[cfg(test)]
-mod bootstrap_env_tests {
-    use super::{BootstrapEnv, bootstrap_env_var, env_or_overlay_var};
+mod provider_credentials_tests {
+    use super::{ProviderCredentials, credential_or_env};
     use crate::tests::EnvVarGuard;
     use secrecy::SecretString;
 
-    fn overlay(var: &str, value: &str) -> BootstrapEnv {
-        let mut overlay = BootstrapEnv::new();
-        overlay.insert(var.to_string(), SecretString::new(value.into()));
-        overlay
+    fn credentials(name: &str, value: &str) -> ProviderCredentials {
+        let mut credentials = ProviderCredentials::new();
+        credentials.insert(name.to_string(), SecretString::new(value.into()));
+        credentials
     }
 
     #[test]
-    fn env_var_wins_over_overlay() {
+    fn explicit_credential_wins_over_environment() {
         // The lock guard serializes all env mutation across the test binary;
         // the var guard restores the previous value even if an assert panics.
         let _lock = crate::tests::scrub_resolution_env();
-        const VAR: &str = "SECRETSPEC_TEST_BOOTSTRAP_ENV_WINS";
-        let _var = EnvVarGuard::set(VAR, "from-env");
+        const NAME: &str = "access_token";
+        const ENV_VAR: &str = "SECRETSPEC_TEST_PROVIDER_CREDENTIAL";
+        let _var = EnvVarGuard::set(ENV_VAR, "from-env");
 
         assert_eq!(
-            env_or_overlay_var(&overlay(VAR, "from-overlay"), VAR).as_deref(),
-            Some("from-env"),
+            credential_or_env(&credentials(NAME, "explicit"), NAME, ENV_VAR).as_deref(),
+            Some("explicit"),
         );
     }
 
     #[test]
-    fn overlay_used_only_when_env_absent() {
+    fn environment_is_a_fallback() {
         let _lock = crate::tests::scrub_resolution_env();
-        const VAR: &str = "SECRETSPEC_TEST_BOOTSTRAP_OVERLAY_FALLBACK";
-        let _var = EnvVarGuard::remove(VAR);
+        const NAME: &str = "access_token";
+        const ENV_VAR: &str = "SECRETSPEC_TEST_PROVIDER_CREDENTIAL_FALLBACK";
+        let _var = EnvVarGuard::set(ENV_VAR, "from-env");
 
-        // Overlay hit when the environment has nothing.
+        // With no explicit credential, the provider's conventional environment
+        // variable remains available as a fallback.
         assert_eq!(
-            env_or_overlay_var(&overlay(VAR, "from-overlay"), VAR).as_deref(),
-            Some("from-overlay"),
+            credential_or_env(&ProviderCredentials::new(), NAME, ENV_VAR).as_deref(),
+            Some("from-env"),
         );
-        // No environment value and no overlay entry -> None.
-        assert_eq!(env_or_overlay_var(&BootstrapEnv::new(), VAR), None);
-        // An empty overlay value is treated as unset.
-        assert_eq!(env_or_overlay_var(&overlay(VAR, ""), VAR), None);
-
-        // A set-but-empty environment value is also treated as unset, so the
-        // overlay still wins, matching the resolver's fetch-skip predicate.
-        let _empty = EnvVarGuard::set(VAR, "");
-        assert_eq!(bootstrap_env_var(VAR), None);
+        // Empty explicit values are ignored and fall through as well.
         assert_eq!(
-            env_or_overlay_var(&overlay(VAR, "from-overlay"), VAR).as_deref(),
-            Some("from-overlay"),
+            credential_or_env(&credentials(NAME, ""), NAME, ENV_VAR).as_deref(),
+            Some("from-env"),
         );
     }
 }

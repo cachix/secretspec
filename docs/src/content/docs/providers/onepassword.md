@@ -42,18 +42,18 @@ service account token for headless setups.
 
 ### Service account tokens (recommended for CI/CD)
 
-Set `OP_SERVICE_ACCOUNT_TOKEN` in the environment, or use the
-`onepassword+token://` URI scheme. See the [CI/CD section](#cicd-with-service-accounts)
-below.
-
-The token can also be read from another provider (for example your keyring)
-rather than the environment or a plaintext URI — see
-[Bootstrap Credentials](/concepts/providers/#bootstrap-credentials):
+Supply the service account token as a provider credential, for example from
+your keyring — see
+[Provider Credentials](/concepts/providers/#provider-credentials):
 
 ```toml title="secretspec.toml"
 [providers]
-op = { uri = "onepassword://Production", env = { OP_SERVICE_ACCOUNT_TOKEN = "keyring" } }
+op = { uri = "onepassword://Production", credentials = { service_account_token = "keyring" } }
 ```
+
+When no explicit `service_account_token` is supplied, the provider supports
+`OP_SERVICE_ACCOUNT_TOKEN` and the `onepassword+token://` URI scheme for
+compatibility. See the [CI/CD section](#cicd-with-service-accounts) below.
 
 ### Manual signin (legacy)
 

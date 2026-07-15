@@ -26,7 +26,7 @@ use std::collections::HashMap;
 /// URI for display.
 ///
 /// Construction and grouping key on [`spec`](Self::spec) rather than the URI so
-/// that an alias's bootstrap `env` map is still reachable when the provider is
+/// that an alias's `credentials` map is still reachable when the provider is
 /// built (a resolved URI is not an alias and has lost it), and so two aliases
 /// that happen to share a URI but declare different credentials never merge into
 /// one group.
@@ -72,7 +72,7 @@ impl Route {
     /// meaning the default provider. Distinct from [`Route::primary`] (the
     /// resolved URI): secrets sharing a primary store are fetched together and a
     /// write goes to the primary, and keying on the spec keeps an alias's
-    /// bootstrap `env` reachable at build time.
+    /// `credentials` reachable at build time.
     pub(crate) fn group_key(&self) -> Option<&str> {
         self.primary.as_ref().map(|primary| primary.spec.as_str())
     }
@@ -87,7 +87,7 @@ impl Route {
 
     /// The ordered provider specs a read walks — the primary spec followed by
     /// the raw fallback — or `None` for the default provider. Each entry is
-    /// resolved (and bootstrapped) only when the read reaches it, so the chain
+    /// resolved (and credential-backed) only when the read reaches it, so the chain
     /// is genuinely tried in order.
     pub(crate) fn specs(&self) -> Option<Vec<String>> {
         self.primary.as_ref().map(|primary| {
@@ -155,7 +155,7 @@ impl ResolutionPlan {
     /// (`None` = default provider) with the planned secrets fetched together.
     /// Derived from each secret's [`Route::group_key`] on demand, so grouping
     /// can never drift from the routes. Keying on the spec (not the resolved
-    /// URI) keeps an alias's bootstrap `env` reachable at build time and keeps
+    /// URI) keeps an alias's `credentials` reachable at build time and keeps
     /// two aliases that share a URI but differ in credentials in separate groups.
     pub(crate) fn groups(&self) -> Vec<(Option<&str>, Vec<&PlannedSecret>)> {
         let mut groups: Vec<(Option<&str>, Vec<&PlannedSecret>)> = Vec::new();
@@ -205,7 +205,7 @@ impl Secrets {
         profile_name: String,
         names: Vec<String>,
     ) -> Result<ResolutionPlan> {
-        // Routes carry the raw override spec (it may be an alias whose bootstrap
+        // Routes carry the raw override spec (it may be an alias whose provider
         // `env` must stay reachable at build time); the plan's `override_uri`
         // field is the resolved form, for display and the resolution report.
         let override_spec = self.explicit_provider_spec(None);
@@ -284,12 +284,12 @@ impl Secrets {
         override_spec: &Option<String>,
     ) -> Result<Route> {
         // Either arm keeps the raw spec as the build key (the spec may be an
-        // alias whose bootstrap `env` must stay reachable when the store is
+        // alias whose `credentials` must stay reachable when the store is
         // constructed — a resolved URI has lost it), resolves the URI for
-        // display, and validates any bootstrap `env` (unknown source, one-hop)
+        // display, and validates any `credentials` (unknown source, one-hop)
         // up front — all pure map lookups.
         if let Some(spec) = override_spec {
-            self.validate_bootstrap_sources(spec)?;
+            self.validate_credential_sources(spec)?;
             return Ok(Route {
                 primary: Some(ResolvedPrimary {
                     spec: spec.clone(),
@@ -303,7 +303,7 @@ impl Secrets {
                 // Unlike an override, an undefined alias as chain primary is a
                 // hard error here (`resolve_one_provider` fails fast).
                 let uri = self.resolve_one_provider(first)?;
-                self.validate_bootstrap_sources(first)?;
+                self.validate_credential_sources(first)?;
                 Ok(Route {
                     primary: Some(ResolvedPrimary {
                         spec: first.clone(),
@@ -405,7 +405,7 @@ mod tests {
         let _env = scrub_resolution_env();
         let secrets = HashMap::from([("API_KEY".to_string(), secret(None))]);
         // `--provider mock` names an alias: the route keeps the raw spec so the
-        // alias's bootstrap `env` stays reachable at build time, and resolves
+        // alias's `credentials` stays reachable at build time, and resolves
         // the URI for display and the report.
         let spec = spec(secrets, Some("mock"), &[("mock", "dotenv://.env.mock")]);
         let plan = plan(&spec);
@@ -538,7 +538,7 @@ mod tests {
             ("B".to_string(), secret(Some(vec!["two"]))),
         ]);
         // Two aliases, same URI, different names: grouping keys on the spec, so
-        // they stay in separate groups (they could carry different bootstrap
+        // they stay in separate groups (they could carry different provider
         // credentials, which the resolved URI has lost).
         let plan = plan(&spec(
             secrets,

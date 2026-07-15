@@ -16,12 +16,21 @@ The AWS Secrets Manager provider integrates with AWS for centralized secret mana
 ### URI Format
 
 ```
-awssm://[AWS_PROFILE@]REGION[?prefix=PREFIX]
+awssm://[AWS_PROFILE@]REGION[?prefix=PREFIX][&kms_key_id=KEY][&tag.NAME=VALUE...]
 ```
 
 - `REGION`: AWS region (e.g., `us-east-1`). If omitted, the SDK default region chain is used.
 - `AWS_PROFILE`: Optional AWS profile from `~/.aws/credentials`. If omitted, the SDK default credential chain is used.
 - `PREFIX`: Optional root prefix prepended to all secret names. Useful when IAM policies scope access by prefix (e.g., only allow `myteam/*`).
+- `kms_key_id`: Optional KMS key (id, ARN, or `alias/...`) used to encrypt secrets that secretspec creates.
+- `tag.NAME=VALUE`: Optional tags applied to secrets that secretspec creates. Repeat for multiple tags.
+
+`kms_key_id` and `tag.NAME=VALUE` are applied **only when secretspec creates a
+secret** (`CreateSecret`); updating a value (`PutSecretValue`) accepts neither,
+and a pre-existing secret keeps the key and tags it was created with. This
+supports AWS "tag-on-create" guardrails, where an SCP or IAM condition denies
+`CreateSecret` unless required `aws:RequestTag/*` tags (and often a
+customer-managed key) are present in the same call.
 
 ### Examples
 
@@ -35,6 +44,9 @@ $ secretspec check --provider awssm://production@us-east-1
 # Use a prefix to scope secrets under "myteam/"
 $ secretspec set DATABASE_URL --provider "awssm://us-east-1?prefix=myteam"
 
+# Create secrets with a customer-managed KMS key and required tags
+$ secretspec set DATABASE_URL --provider "awssm://prod@us-east-1?kms_key_id=alias/my-key&tag.team=platform&tag.env=prod"
+
 # Get a secret
 $ secretspec get DATABASE_URL --provider awssm://us-east-1
 
@@ -43,6 +55,15 @@ $ secretspec run --provider awssm://us-east-1 -- npm start
 
 # Use SDK defaults for both profile and region
 $ secretspec set DATABASE_URL --provider awssm
+```
+
+Because guardrail tags and keys usually vary per environment, they are a natural
+fit for a checked-in [provider alias](/reference/configuration/) in
+`secretspec.toml`:
+
+```toml
+[providers]
+prod = "awssm://prod@us-east-1?kms_key_id=alias/my-key&tag.team=platform&tag.env=prod"
 ```
 
 ## Secret References
@@ -120,6 +141,11 @@ arn:aws:secretsmanager:*:*:secret:myteam/secretspec/*
 
 :::note
 The `BatchGetSecretValue` permission is required for batch fetching, which is used automatically during `check` and `run` commands to reduce API calls. If your IAM policy was created before this feature, you may need to add this permission.
+:::
+
+:::note
+Using `tag.NAME=VALUE` additionally requires `secretsmanager:TagResource`, and a
+`kms_key_id` requires `kms:GenerateDataKey` and `kms:Decrypt` on that key.
 :::
 
 ### CI/CD

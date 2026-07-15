@@ -3,8 +3,8 @@ title: SDK Overview
 description: How the SecretSpec language SDKs work
 ---
 
-SecretSpec ships SDKs for Rust, Python, Go, Ruby, Node.js/TypeScript, and
-Haskell. They all resolve secrets from the same declarative `secretspec.toml`,
+SecretSpec ships SDKs for Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell,
+and PHP. They all resolve secrets from the same declarative `secretspec.toml`,
 and they all behave identically, because they share one resolver.
 
 ## One resolver, thin clients
@@ -23,6 +23,9 @@ that core rather than a reimplementation:
   **Node.js/TypeScript** uses a [napi-rs](https://napi.rs/) native addon; both
   embed the same resolver directly and exchange the same JSON request/response
   shape as the C ABI.
+- **PHP** prefers an [ext-php-rs](https://github.com/davidcole1340/ext-php-rs)
+  extension that embeds the resolver (working under FPM with no `ffi.enable`),
+  and falls back to loading the same C ABI at runtime through `ext-ffi`.
 
 Because resolution happens in one place, every provider, chain, profile, and
 generator works the same in every language, and a new provider added to the core
@@ -47,7 +50,7 @@ print(resolved.secrets["DATABASE_URL"].get)
 
 See each language's page for the idiomatic spelling: [Rust](/sdk/rust),
 [Python](/sdk/python), [Go](/sdk/go), [Ruby](/sdk/ruby),
-[Node.js](/sdk/nodejs), and [Haskell](/sdk/haskell).
+[Node.js](/sdk/nodejs), [Haskell](/sdk/haskell), and [PHP](/sdk/php).
 
 ## Typed access
 
@@ -76,7 +79,10 @@ no runtime library path to set:
 - **Go** embeds the `cdylib` in the module and loads it at runtime via purego
   (no cgo); an opt-in `-tags static` build links it statically instead.
 - **Node.js** builds the resolver into a napi-rs addon.
+- **PHP** ships as a normal PHP extension (provisioned like `ext-redis`), with an
+  `ext-ffi` fallback that dlopens the bundled `cdylib`.
 
-Because the resolver is linked or embedded directly, none of the SDKs depend on a
+Because the resolver is linked or embedded directly, the SDKs do not depend on a
 separately installed `cdylib` or an `LD_LIBRARY_PATH`/`SECRETSPEC_FFI_LIB`
-override at runtime.
+override at runtime — the one exception being PHP's optional `ext-ffi` fallback,
+where `SECRETSPEC_FFI_LIB` can point at a specific library build.

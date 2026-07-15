@@ -2,7 +2,7 @@ name: "SDKs"
 
 # Runs every language SDK's full test suite (unit + cross-language conformance +
 # the schema/quicktype codegen pipeline) against a freshly built cdylib, so the
-# Python/Go/Ruby/Node/Haskell bindings cannot silently rot.
+# Python/Go/Ruby/Node/Haskell/PHP bindings cannot silently rot.
 
 on:
   pull_request:

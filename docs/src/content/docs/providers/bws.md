@@ -68,18 +68,26 @@ DATABASE_URL = { description = "DB", ref = { item = "prod-db-connection" }, prov
 
 ### Authentication
 
-Supply the machine account access token as a provider credential. For example,
-store it in your system keyring so it never lives in a shell profile. Generate
-access tokens from the Bitwarden Secrets Manager web interface. See
-[Provider Credentials](/concepts/providers/#provider-credentials):
+Generate a machine account access token from the Bitwarden Secrets Manager web
+interface.
+
+In SecretSpec 0.14, supply it through `BWS_ACCESS_TOKEN`:
+
+```bash
+export BWS_ACCESS_TOKEN="0.your-access-token..."
+```
+
+Starting with SecretSpec 0.15, you can instead declare the access token as a
+[provider credential](/concepts/providers/#provider-credentials), for example
+to store it in your system keyring so it never lives in a shell profile:
 
 ```toml title="secretspec.toml"
 [providers]
 bws = { uri = "bws://a9230ec4-5507-4870-b8b5-b3f500587e4c", credentials = { access_token = "keyring" } }
 ```
 
-For compatibility with standalone BWS tooling, the provider falls back to
-`BWS_ACCESS_TOKEN` when no explicit `access_token` credential is supplied.
+In 0.15 and later, the provider continues to fall back to `BWS_ACCESS_TOKEN`
+when no explicit `access_token` credential is supplied.
 
 ### Basic Commands
 

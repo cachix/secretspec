@@ -72,6 +72,11 @@ Add a provider alias to your user-level configuration (`~/.config/secretspec/con
 
 To share aliases with your team, declare them in a top-level `[providers]` table in `secretspec.toml` instead — they take precedence over user-level aliases on name conflict.
 
+:::note[Version compatibility]
+SecretSpec 0.14 supports adding aliases with `<ALIAS>` and `<URI>`.
+The `--credential` option is available starting with SecretSpec 0.15.
+:::
+
 ```bash
 secretspec config provider add <ALIAS> <URI> [--credential NAME=PROVIDER]...
 ```
@@ -127,6 +132,12 @@ $ secretspec config provider remove prod_vault
 
 ### config provider login
 Store the [credentials](/concepts/providers/#provider-credentials) a provider alias declares. Prompts (hidden input) for each credential and writes it to its source provider at the exact location resolution reads it back from. Runs in a project, like `set` and `check`.
+
+:::note[Version compatibility]
+`config provider login` is available starting with SecretSpec 0.15. In
+SecretSpec 0.14, supply provider credentials through the provider's existing
+environment variables.
+:::
 
 ```bash
 secretspec config provider login <ALIAS>

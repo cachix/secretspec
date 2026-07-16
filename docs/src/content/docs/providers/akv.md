@@ -5,6 +5,11 @@ description: Azure Key Vault integration
 
 The Azure Key Vault provider integrates with Azure for centralized secret management.
 
+:::note[Version compatibility]
+The Azure Key Vault provider is an upcoming SecretSpec 0.15 feature and is not
+available in SecretSpec 0.14.
+:::
+
 ## Prerequisites
 
 - An Azure Key Vault instance

@@ -42,18 +42,22 @@ service account token for headless setups.
 
 ### Service account tokens (recommended for CI/CD)
 
-Supply the service account token as a provider credential, for example from
-your keyring — see
-[Provider Credentials](/concepts/providers/#provider-credentials):
+In SecretSpec 0.14, supply the service account token through
+`OP_SERVICE_ACCOUNT_TOKEN` or the `onepassword+token://` URI scheme.
+
+Starting with SecretSpec 0.15, you can instead declare it as a
+[provider credential](/concepts/providers/#provider-credentials), for example
+to load it from your keyring:
 
 ```toml title="secretspec.toml"
 [providers]
 op = { uri = "onepassword://Production", credentials = { service_account_token = "keyring" } }
 ```
 
-When no explicit `service_account_token` is supplied, the provider supports
-`OP_SERVICE_ACCOUNT_TOKEN` and the `onepassword+token://` URI scheme for
-compatibility. See the [CI/CD section](#cicd-with-service-accounts) below.
+In 0.15 and later, the provider continues to support
+`OP_SERVICE_ACCOUNT_TOKEN` and the `onepassword+token://` URI scheme when no
+explicit `service_account_token` is supplied. See the
+[CI/CD section](#cicd-with-service-accounts) below.
 
 ### Manual signin (legacy)
 

@@ -151,6 +151,13 @@ Provider aliases may be declared in two places:
 
 On conflict the project-level alias wins, so a stale local config cannot silently shadow the team's mapping.
 
+:::note[Version compatibility]
+SecretSpec 0.14 accepts provider alias values only as bare URI strings.
+The table form with `uri` and `credentials` is an upcoming SecretSpec 0.15
+feature. If you use 0.14, configure provider credentials through the
+provider's existing environment variables, such as `BWS_ACCESS_TOKEN`.
+:::
+
 ```toml title="secretspec.toml"
 [providers]
 prod_vault = "onepassword://Production"
@@ -188,9 +195,29 @@ $ secretspec config provider remove prod_vault
 
 The CLI commands operate on the user-global config only — edit `secretspec.toml` by hand to change project-level aliases.
 
-#### Alias value forms
+#### SecretSpec 0.14 alias values
 
-An alias value is either a bare provider URI string, or a table that also declares the credentials the provider needs. Both forms are accepted in the project `[providers]` and user `[defaults.providers]` tables.
+In SecretSpec 0.14, every alias value must be a provider URI string:
+
+```toml title="secretspec.toml"
+[providers]
+bws = "bws://project-uuid"
+```
+
+For example, authenticate the 0.14 BWS provider by setting its environment
+variable before running SecretSpec:
+
+```bash
+export BWS_ACCESS_TOKEN="0.your-access-token..."
+secretspec check
+```
+
+#### SecretSpec 0.15 alias values
+
+Starting with SecretSpec 0.15, an alias value is either a bare provider URI
+string or a table that also declares the credentials the provider needs. Both
+forms are accepted in the project `[providers]` and user
+`[defaults.providers]` tables.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|

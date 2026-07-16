@@ -143,6 +143,12 @@ secretspec run --provider "vault://vault.example.com:8200/secret?auth=approle" -
 
 #### Sourcing credentials from another provider
 
+:::note[Version compatibility]
+Sourcing Vault credentials from another provider is available starting with
+SecretSpec 0.15. In SecretSpec 0.14, use the Vault environment variables shown
+above.
+:::
+
 These credentials can be read from another provider instead of the environment, so a Vault token or AppRole credentials never live in a shell profile — see [Provider Credentials](/concepts/providers/#provider-credentials):
 
 ```toml title="secretspec.toml"

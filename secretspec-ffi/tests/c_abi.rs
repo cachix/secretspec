@@ -31,6 +31,14 @@ fn write_project(dir: &TempDir, manifest: &str, dotenv: &str) -> (String, String
     )
 }
 
+/// Find one secret entry by name in a `report` response's `secrets` array.
+fn secret<'a>(secrets: &'a [Value], name: &str) -> &'a Value {
+    secrets
+        .iter()
+        .find(|s| s["name"] == name)
+        .unwrap_or_else(|| panic!("no secret named {name} in report"))
+}
+
 const MANIFEST: &str = r#"
 [project]
 name = "ffi-test"
@@ -119,6 +127,90 @@ fn resolve_missing_required_is_ok_envelope_with_error_list() {
     assert_eq!(env["ok"], true, "envelope: {env}");
     assert_eq!(env["response"]["missing_required"][0], "DATABASE_URL");
     assert!(env["response"]["secrets"].as_object().unwrap().is_empty());
+}
+
+#[test]
+fn report_mode_returns_requiredness_and_status() {
+    let dir = TempDir::new().unwrap();
+    let (manifest_path, provider) = write_project(&dir, MANIFEST, "DATABASE_URL=postgres://db\n");
+
+    let request = serde_json::json!({
+        "path": manifest_path,
+        "provider": provider,
+        "reason": "ffi test",
+        "mode": "report",
+    })
+    .to_string();
+
+    let env = resolve(&request);
+    assert_eq!(env["ok"], true, "envelope: {env}");
+    let response = &env["response"];
+    assert_eq!(response["schema_version"], 1);
+    assert_eq!(response["profile"], "default");
+
+    // `report` answers with a list, not the name-keyed map `resolve` returns.
+    let secrets = response["secrets"].as_array().unwrap();
+    assert_eq!(secrets.len(), 3);
+
+    // Requiredness is reachable only here: `resolve` never reports it.
+    let db = secret(secrets, "DATABASE_URL");
+    assert_eq!(db["required"], true);
+    assert_eq!(db["status"], "resolved");
+    assert!(db.get("value").is_none(), "report must not carry a value");
+
+    let log = secret(secrets, "LOG_LEVEL");
+    assert_eq!(log["required"], false);
+    assert_eq!(log["default_applied"], true);
+
+    let sentry = secret(secrets, "SENTRY_DSN");
+    assert_eq!(sentry["status"], "missing_optional");
+}
+
+#[test]
+fn report_mode_keeps_the_inventory_when_a_required_secret_is_missing() {
+    let dir = TempDir::new().unwrap();
+    // DATABASE_URL is required but absent from the backend.
+    let (manifest_path, provider) = write_project(&dir, MANIFEST, "");
+
+    let request = serde_json::json!({
+        "path": manifest_path,
+        "provider": provider,
+        "reason": "ffi test",
+        "mode": "report",
+    })
+    .to_string();
+
+    let env = resolve(&request);
+    assert_eq!(env["ok"], true, "envelope: {env}");
+
+    // The contrast with `resolve`, which empties `secrets` in this situation
+    // (see `resolve_missing_required_is_ok_envelope_with_error_list`): a report
+    // still describes every declared secret, so a preflight consumer can say
+    // which one is missing and whether anything else resolved.
+    let secrets = env["response"]["secrets"].as_array().unwrap();
+    assert_eq!(secrets.len(), 3);
+    let db = secret(secrets, "DATABASE_URL");
+    assert_eq!(db["status"], "missing_required");
+    assert_eq!(db["required"], true);
+    let log = secret(secrets, "LOG_LEVEL");
+    assert_eq!(log["status"], "resolved");
+}
+
+#[test]
+fn unknown_mode_yields_error_envelope() {
+    let dir = TempDir::new().unwrap();
+    let (manifest_path, provider) = write_project(&dir, MANIFEST, "");
+
+    let request = serde_json::json!({
+        "path": manifest_path,
+        "provider": provider,
+        "mode": "inventory",
+    })
+    .to_string();
+
+    let env = resolve(&request);
+    assert_eq!(env["ok"], false, "envelope: {env}");
+    assert_eq!(env["error"]["kind"], "invalid_request");
 }
 
 #[test]

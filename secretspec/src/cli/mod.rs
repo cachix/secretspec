@@ -1,5 +1,5 @@
 use crate::provider::{Provider, providers};
-use crate::{Config, GlobalConfig, GlobalDefaults, Profile, Project, Secrets};
+use crate::{Config, ExportFormat, GlobalConfig, GlobalDefaults, Profile, Project, Secrets};
 use clap::{Parser, Subcommand};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use std::collections::HashMap;
@@ -83,6 +83,18 @@ enum Commands {
         #[arg(trailing_var_arg = true)]
         command: Vec<String>,
     },
+    /// Resolve secrets and print them for another tool to consume
+    Export {
+        /// Provider backend to use
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        provider: Option<String>,
+        /// Profile to use
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        profile: Option<String>,
+        /// Output format
+        #[arg(long, value_enum, default_value = "shell")]
+        format: ExportFormat,
+    },
     /// Check if all required secrets are in the provider, if not set them
     Check {
         /// Provider backend to use
@@ -135,7 +147,7 @@ enum Commands {
         /// Only show entries for this project
         #[arg(long)]
         project: Option<String>,
-        /// Only show entries for this action (get, set, check, run, import)
+        /// Only show entries for this action (get, set, check, run, import, export)
         #[arg(long)]
         action: Option<String>,
         /// Show only the last N entries
@@ -633,6 +645,24 @@ pub fn main() -> Result<()> {
             app.run(command)
                 .into_diagnostic()
                 .wrap_err("Failed to run command")?;
+            Ok(())
+        }
+        // Resolve secrets and print them without running a command
+        Commands::Export {
+            provider,
+            profile,
+            format,
+        } => {
+            let mut app = load_secrets(&cli.file, &cli.reason)?;
+            if let Some(p) = provider {
+                app.set_provider(p);
+            }
+            if let Some(p) = profile {
+                app.set_profile(p);
+            }
+            app.export(format)
+                .into_diagnostic()
+                .wrap_err("Failed to export secrets")?;
             Ok(())
         }
         // Verify all required secrets are available

@@ -51,6 +51,8 @@ pub(crate) enum AuditAction {
     Run,
     /// Copy secrets from one provider to another (`secretspec import`).
     Import,
+    /// Resolve all secrets and emit them for another tool (`secretspec export`)
+    Export,
 }
 
 /// The result of an audited operation.

@@ -2761,6 +2761,235 @@ impl Secrets {
         let status = child?.wait()?;
         Ok(status.code().unwrap_or(1))
     }
+
+    /// Resolves every secret for the active profile and emits them in `format`,
+    /// without executing a command. This is the non-interactive, scripting
+    /// counterpart to [`Secrets::run`]: it never prompts and errors when a
+    /// required secret is missing, so CI can gate on it.
+    ///
+    /// `as_path` secrets keep their backing temp files, like [`Secrets::check`],
+    /// so the emitted paths stay valid for whatever consumes the output.
+    pub fn export(&self, format: ExportFormat) -> Result<()> {
+        self.ensure_reason_for(AuditAction::Export, None)?;
+        let profile = self.resolve_profile_name(None);
+
+        let mut validated = match self.ensure_secrets(None, None, false) {
+            Ok(v) => v,
+            Err(e) => {
+                self.record(
+                    AuditAction::Export,
+                    &profile,
+                    AuditOutcome::Error,
+                    AuditFields {
+                        error_kind: Some(e.kind()),
+                        ..Default::default()
+                    },
+                );
+                return Err(e);
+            }
+        };
+
+        // Deterministic key order regardless of HashMap iteration
+        let mut entries: Vec<(String, String)> = validated
+            .resolved
+            .secrets
+            .iter()
+            .map(|(key, value)| (key.clone(), value.expose_secret().to_string()))
+            .collect();
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        let keys: Vec<String> = if self.audit.is_some() {
+            entries.iter().map(|(key, _)| key.clone()).collect()
+        } else {
+            Vec::new()
+        };
+
+        let result = write_export(format, &entries);
+        self.record(
+            AuditAction::Export,
+            &validated.resolved.profile,
+            if result.is_ok() {
+                AuditOutcome::Found
+            } else {
+                AuditOutcome::Error
+            },
+            AuditFields {
+                keys: &keys,
+                error_kind: result.as_ref().err().map(|e| e.kind()),
+                ..Default::default()
+            },
+        );
+        result?;
+
+        // Persist as_path temp files so emitted paths outlive this process
+        validated.keep_temp_files().map_err(SecretSpecError::Io)?;
+
+        Ok(())
+    }
+}
+
+/// Output format for [`Secrets::export`]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+pub enum ExportFormat {
+    /// `export KEY='value'` lines for `eval "$(secretspec export)"`
+    #[default]
+    Shell,
+    /// `KEY=value` lines in dotenv syntax
+    Dotenv,
+    /// A single JSON object mapping each secret name to its value
+    Json,
+    /// GitHub/Forgejo Actions `$GITHUB_ENV` file plus `::add-mask::` on stdout
+    Gha,
+}
+
+/// Write entries (pre-sorted by key) to stdout in the given format
+fn write_export(format: ExportFormat, entries: &[(String, String)]) -> Result<()> {
+    match format {
+        ExportFormat::Shell => {
+            let mut out = String::new();
+            for (key, value) in entries {
+                out.push_str("export ");
+                out.push_str(key);
+                out.push('=');
+                out.push_str(&shell_single_quote(value));
+                out.push('\n');
+            }
+            print!("{out}");
+        }
+        ExportFormat::Dotenv => {
+            let vars: HashMap<String, String> = entries.iter().cloned().collect();
+            print!("{}", crate::provider::dotenv::serialize_dotenv(&vars));
+        }
+        ExportFormat::Json => {
+            let map: BTreeMap<&str, &str> = entries
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str()))
+                .collect();
+            let json = serde_json::to_string_pretty(&map)
+                .map_err(|e| SecretSpecError::Io(io::Error::other(e)))?;
+            println!("{json}");
+        }
+        ExportFormat::Gha => write_gha(entries)?,
+    }
+
+    Ok(())
+}
+
+/// POSIX single-quote escaping so the value survives `eval` verbatim
+fn shell_single_quote(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('\'');
+    for ch in value.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// GitHub/Forgejo Actions writer that masks every value line on stdout and
+/// appends the assignments to `$GITHUB_ENV`. Multi-line values use the heredoc
+/// form so they survive. Errors when `$GITHUB_ENV` is unset.
+fn write_gha(entries: &[(String, String)]) -> Result<()> {
+    use std::io::Write;
+
+    let github_env = env::var("GITHUB_ENV").map_err(|_| {
+        SecretSpecError::Io(io::Error::new(
+            io::ErrorKind::NotFound,
+            "GITHUB_ENV is not set; `--format gha` only works inside a GitHub/Forgejo Actions runner",
+        ))
+    })?;
+
+    // Mask every value line so the runner scrubs accidental echoes
+    let mut masks = String::new();
+    for (_, value) in entries {
+        for line in value.split('\n') {
+            if !line.is_empty() {
+                masks.push_str("::add-mask::");
+                masks.push_str(line);
+                masks.push('\n');
+            }
+        }
+    }
+    print!("{masks}");
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&github_env)
+        .map_err(SecretSpecError::Io)?;
+
+    let mut block = String::new();
+    for (key, value) in entries {
+        if value.contains('\n') {
+            let delimiter = gha_heredoc_delimiter(value);
+            block.push_str(key);
+            block.push_str("<<");
+            block.push_str(&delimiter);
+            block.push('\n');
+            block.push_str(value);
+            block.push('\n');
+            block.push_str(&delimiter);
+            block.push('\n');
+        } else {
+            block.push_str(key);
+            block.push('=');
+            block.push_str(value);
+            block.push('\n');
+        }
+    }
+
+    file.write_all(block.as_bytes())
+        .map_err(SecretSpecError::Io)?;
+
+    Ok(())
+}
+
+/// A heredoc delimiter that does not collide with any line of `value`
+fn gha_heredoc_delimiter(value: &str) -> String {
+    loop {
+        let delimiter = format!("ghadelimiter_{}", uuid::Uuid::new_v4().simple());
+        if !value.lines().any(|line| line == delimiter) {
+            return delimiter;
+        }
+    }
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+
+    /// A POSIX shell evaluating `export K=<quoted>` must read the variable back
+    /// as exactly the original value. This round-trip is the real contract that
+    /// `shell_single_quote` defends, across quotes, spaces, `$`, `"`, and empty.
+    #[cfg(unix)]
+    #[test]
+    fn shell_single_quote_round_trips_through_sh() {
+        let cases = ["abc'123", "a b c", "pa$$word", "he said \"hi\"", "", "'"];
+
+        for value in cases {
+            let script = format!("export K={}; printf '%s' \"$K\"", shell_single_quote(value));
+
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&script)
+                .output()
+                .expect("sh should be available in the test environment");
+
+            assert!(
+                output.status.success(),
+                "sh failed for {value:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+
+            let read_back = String::from_utf8(output.stdout).expect("sh stdout is utf-8");
+            assert_eq!(read_back, value, "round-trip mismatch for {value:?}");
+        }
+    }
 }
 
 #[cfg(test)]

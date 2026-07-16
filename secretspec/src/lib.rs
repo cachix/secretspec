@@ -80,6 +80,7 @@ pub use report::{
 pub use resolve::{
     RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource, resolve_json,
 };
+pub use secrets::ExportFormat;
 pub use secrets::Secrets;
 pub use validation::ValidatedSecrets;
 

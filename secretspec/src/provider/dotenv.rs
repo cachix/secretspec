@@ -13,7 +13,7 @@ use std::path::PathBuf;
 /// `\$` (suppresses variable substitution), and `\n` (literal
 /// newlines folded onto a single line). Keys are sorted for stable
 /// output.
-fn serialize_dotenv(vars: &HashMap<String, String>) -> String {
+pub(crate) fn serialize_dotenv(vars: &HashMap<String, String>) -> String {
     let sorted: BTreeMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let mut out = String::new();
     for (key, value) in sorted {

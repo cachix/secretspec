@@ -327,6 +327,33 @@ $ secretspec run -- node app.js  # app.js reads process.env.DATABASE_URL
 ```
 :::
 
+### export
+Resolve every secret for the active profile and write it to stdout in a chosen format, without running a command. Unlike `run`, it never prompts and exits non-zero when a required secret is missing, so CI can gate on it.
+
+```bash
+secretspec export [OPTIONS]
+```
+
+Options are `-p, --provider <PROVIDER>`, `-P, --profile <PROFILE>`, and `--format <FORMAT>` (default `shell`).
+
+| Format | Output |
+|--------|--------|
+| `shell` | `export KEY='value'` lines, ready for `eval "$(secretspec export)"` |
+| `dotenv` | `KEY=value` lines in dotenv syntax |
+| `json` | a single JSON object mapping each secret name to its value |
+| `gha` | appends `KEY=value` to the file named by `$GITHUB_ENV` and prints an `::add-mask::` command per value to stdout, so later workflow steps and third-party actions see the secrets |
+
+```bash
+# Load secrets into the current shell
+$ eval "$(secretspec export --profile production)"
+
+# Emit JSON for another tool to consume
+$ secretspec export --profile production --format json
+{ "DATABASE_URL": "postgresql://prod.example.com/mydb" }
+```
+
+The `gha` format targets a `secretspec export --format gha` step in a GitHub or Forgejo Actions job: it masks the values in the runner log and persists them to the job environment for the steps that follow.
+
 ### import
 Import secrets from one provider to another.
 
@@ -370,7 +397,7 @@ secretspec audit [--project <NAME>] [--action <ACTION>] [-n <N>] [--json]
 
 **Options:**
 - `--project <NAME>` - Only show entries for this project
-- `--action <ACTION>` - Only show entries for this action (`get`, `set`, `check`, `run`, `import`)
+- `--action <ACTION>` - Only show entries for this action (`get`, `set`, `check`, `run`, `import`, `export`)
 - `-n, --tail <N>` - Show only the last N entries
 - `--json` - Output raw JSON Lines instead of the formatted summary
 

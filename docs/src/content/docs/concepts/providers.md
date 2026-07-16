@@ -189,7 +189,8 @@ Provider credentials are supported in version 0.15 and later.
 
 Some providers need credentials before they can retrieve secrets. Examples
 include an access token for Bitwarden Secrets Manager, a Vault token or AppRole
-credentials, and a 1Password service account token.
+credentials, a 1Password service account token, and Azure service-principal
+credentials.
 
 An alias can load these credentials from another provider. This avoids storing
 long-lived provider credentials in a shell profile or CI variable when a secure
@@ -265,8 +266,8 @@ Provider credentials follow these rules:
   profiles should share one provider credential.
 - **Names are provider-specific.** Bitwarden accepts `access_token`; Vault
   accepts `token`, `role_id`, and `secret_id`; 1Password accepts
-  `service_account_token`. Unsupported names are rejected before any source is
-  read.
+  `service_account_token`; Azure Key Vault accepts `tenant_id`, `client_id`, and
+  `client_secret`. Unsupported names are rejected before any source is read.
 
 ## Next steps
 

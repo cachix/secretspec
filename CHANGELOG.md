@@ -9,8 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Azure Key Vault provider (`akv://`). Authenticates via a service principal
-  (`AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`), falling back to
-  a signed-in Azure CLI / Azure Developer CLI session; managed identity and
+  whose `tenant_id`, `client_id`, and `client_secret` can be sourced as provider
+  credentials (with `AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`
+  fallbacks), falling back to a signed-in Azure CLI / Azure Developer CLI
+  session when none are available; managed identity and
   AKS workload identity are also available via `?auth=managed_identity` and
   `?auth=workload_identity`. Sovereign clouds can be addressed with a full
   DNS hostname or an explicit `?suffix=` override. Project/profile/key
@@ -29,11 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   library at runtime for CLI and local development.
 - Provider aliases can now source their own credentials from another provider.
   An alias in `[providers]` may declare a `credentials` map binding a semantic,
-  provider-specific name (such as `access_token`, `token`, or `role_id`) to a
-  source: a bare provider spec, which reads the value at the convention path, or
-  a table with a `ref` giving the exact coordinates. The credential is fetched
-  from that provider and handed to the store, so a machine token can live in the
-  OS keyring instead of a plaintext environment variable, and is never written
+  provider-specific name (such as `access_token`, `token`, `role_id`, or
+  `client_secret`) to a source: a bare provider spec, which reads the value at
+  the convention path, or a table with a `ref` giving the exact coordinates.
+  The credential is fetched from that provider and handed to the store, so a
+  machine token can live in the OS keyring instead of a plaintext environment
+  variable, and is never written
   into the environment of processes started by `secretspec run`. A configured
   credential is authoritative; providers retain their conventional environment
   fallback when no explicit credential is supplied. Chains are limited to one
@@ -52,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```toml
   [providers]
   bws = { uri = "bws://project-uuid", credentials = { access_token = "keyring" } }
+  akv = { uri = "akv://myvault", credentials = { tenant_id = "keyring", client_id = "keyring", client_secret = "keyring" } }
   vault = { uri = "vault://kv/app?auth=approle", credentials = {
     role_id   = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "role_id" } },
     secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "secret_id" } },

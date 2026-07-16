@@ -46,6 +46,7 @@ pub mod codegen;
 mod config;
 mod error;
 pub(crate) mod generator;
+mod manifest;
 mod plan;
 mod report;
 mod resolve;

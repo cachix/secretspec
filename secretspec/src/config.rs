@@ -33,6 +33,7 @@
 //! DATABASE_URL = { description = "Production database", required = true }
 //! ```
 
+use crate::manifest::CompiledManifest;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, hash_map};
 use std::fs;
@@ -310,18 +311,17 @@ impl Config {
             ));
         }
 
-        // Validate each profile against the same effective view resolution
-        // uses: non-default profiles are partial overrides whose secrets merge
-        // field by field with the default profile's entries. The default
-        // profile is validated first, so an error it declares (e.g. an empty
-        // description) is attributed to it rather than to an override that
-        // inherits the broken value; the remaining profiles follow in name
-        // order so attribution stays deterministic.
+        // Raw syntax checks stay on the document model; effective semantic
+        // checks consume the same compiled manifest as runtime and codegen.
+        // Validate `default` first, then remaining profiles in name order so
+        // error attribution is deterministic.
+        let compiled = CompiledManifest::compile(self);
         let default_profile = self.profiles.get("default");
         if let Some(default_profile) = default_profile {
             default_profile
-                .validate_with_default(None)
+                .validate_raw(false)
                 .map_err(|e| ParseError::Validation(format!("Profile 'default': {}", e)))?;
+            validate_compiled_profile(&compiled, "default")?;
         }
 
         let mut profile_names: Vec<&String> = self
@@ -333,10 +333,11 @@ impl Config {
 
         for profile_name in profile_names {
             self.profiles[profile_name]
-                .validate_with_default(default_profile)
+                .validate_raw(default_profile.is_some())
                 .map_err(|e| {
                     ParseError::Validation(format!("Profile '{}': {}", profile_name, e))
                 })?;
+            validate_compiled_profile(&compiled, profile_name)?;
         }
 
         Ok(())
@@ -388,13 +389,93 @@ impl Config {
         }
     }
 
+    /// Overlay a later manifest document onto an earlier one.
+    ///
+    /// This is deliberately separate from [`Self::merge_with`], whose public
+    /// contract is "self wins". A source graph is linearized from least to most
+    /// specific, so folding it needs the inverse operation: every later source
+    /// wins while absent fields continue to inherit.
+    fn overlay_with(&mut self, later: Config) {
+        let inherited_require_reason = self.project.require_reason;
+        self.project = later.project;
+        if self.project.require_reason.is_none() {
+            self.project.require_reason = inherited_require_reason;
+        }
+
+        for (profile_name, later_profile) in later.profiles {
+            match self.profiles.get_mut(&profile_name) {
+                Some(profile) => profile.overlay_with(later_profile),
+                None => {
+                    self.profiles.insert(profile_name, later_profile);
+                }
+            }
+        }
+
+        if let Some(later_providers) = later.providers {
+            self.providers
+                .get_or_insert_with(HashMap::new)
+                .extend(later_providers);
+        }
+    }
+
     // Internal methods
 
-    fn from_path_with_visited(
-        path: &Path,
-        visited: &mut HashSet<PathBuf>,
-    ) -> Result<Self, ParseError> {
-        // Get canonical path to handle symlinks and relative paths consistently
+    fn parse_document(content: &str) -> Result<Self, ParseError> {
+        let config: Config = toml::from_str(content)?;
+        if config.project.revision != "1.0" {
+            return Err(ParseError::UnsupportedRevision(config.project.revision));
+        }
+        Ok(config)
+    }
+}
+
+fn validate_compiled_profile(
+    manifest: &CompiledManifest,
+    profile_name: &str,
+) -> Result<(), ParseError> {
+    let profile = manifest
+        .profile(profile_name)
+        .expect("compiled profiles mirror parsed profiles");
+    for (name, secret) in &profile.secrets {
+        secret.config.validate_effective().map_err(|e| {
+            ParseError::Validation(format!(
+                "Profile '{}': Secret '{}': {}",
+                profile_name, name, e
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+/// Loads an inheritance graph and emits each source exactly once in deterministic
+/// post-order. `active` detects genuine back-edges; `emitted` separately handles
+/// shared ancestors, which are valid DAG nodes rather than cycles.
+struct ConfigGraphLoader {
+    active: HashSet<PathBuf>,
+    emitted: HashSet<PathBuf>,
+    documents: Vec<Config>,
+}
+
+impl ConfigGraphLoader {
+    fn load(path: &Path) -> Result<Config, ParseError> {
+        let mut loader = Self {
+            active: HashSet::new(),
+            emitted: HashSet::new(),
+            documents: Vec::new(),
+        };
+        loader.visit(path)?;
+
+        let mut documents = loader.documents.into_iter();
+        let mut merged = documents
+            .next()
+            .expect("visiting a root always emits at least one document");
+        for document in documents {
+            merged.overlay_with(document);
+        }
+        Ok(merged)
+    }
+
+    fn visit(&mut self, path: &Path) -> Result<(), ParseError> {
         let canonical_path = path.canonicalize().map_err(|e| {
             ParseError::Io(io::Error::new(
                 e.kind(),
@@ -402,67 +483,38 @@ impl Config {
             ))
         })?;
 
-        // Check for circular dependency
-        if !visited.insert(canonical_path.clone()) {
+        if self.emitted.contains(&canonical_path) {
+            return Ok(());
+        }
+        if !self.active.insert(canonical_path.clone()) {
             return Err(ParseError::CircularDependency(format!(
                 "Configuration file {} is part of a circular dependency chain",
                 canonical_path.display()
             )));
         }
 
-        let content = fs::read_to_string(path)?;
-        Self::from_str_with_visited(&content, Some(path), visited)
-    }
-
-    fn from_str_with_visited(
-        content: &str,
-        base_path: Option<&Path>,
-        visited: &mut HashSet<PathBuf>,
-    ) -> Result<Self, ParseError> {
-        let mut config: Config = toml::from_str(content)?;
-
-        // Validate revision
-        if config.project.revision != "1.0" {
-            return Err(ParseError::UnsupportedRevision(config.project.revision));
-        }
-
-        // Process extends if present
-        if let Some(extends_paths) = config.project.extends.clone()
-            && let Some(base) = base_path
-        {
-            let base_dir = base.parent().unwrap_or(Path::new("."));
-            config = Self::merge_extended_configs(config, &extends_paths, base_dir, visited)?;
-        }
-
-        Ok(config)
-    }
-
-    fn merge_extended_configs(
-        mut base_config: Config,
-        extends_paths: &[String],
-        base_dir: &Path,
-        visited: &mut HashSet<PathBuf>,
-    ) -> Result<Config, ParseError> {
-        for extend_path in extends_paths {
-            // If path ends with .toml, use it as-is; otherwise append secretspec.toml
+        let content = fs::read_to_string(&canonical_path)?;
+        let config = Config::parse_document(&content)?;
+        let base_dir = canonical_path.parent().unwrap_or(Path::new("."));
+        for extend_path in config.project.extends.iter().flatten() {
             let joined_path = base_dir.join(extend_path);
             let full_path = if extend_path.ends_with(".toml") {
                 joined_path
             } else {
                 joined_path.join("secretspec.toml")
             };
-
             if !full_path.exists() {
                 return Err(ParseError::ExtendedConfigNotFound(
                     full_path.display().to_string(),
                 ));
             }
-
-            let extended_config = Self::from_path_with_visited(&full_path, visited)?;
-            base_config.merge_with(extended_config);
+            self.visit(&full_path)?;
         }
 
-        Ok(base_config)
+        self.active.remove(&canonical_path);
+        self.emitted.insert(canonical_path);
+        self.documents.push(config);
+        Ok(())
     }
 }
 
@@ -474,8 +526,7 @@ impl FromStr for Config {
     /// Note: Configuration inheritance (`extends`) is not supported when parsing
     /// from a string since there's no base path to resolve relative paths.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut visited = HashSet::new();
-        Self::from_str_with_visited(s, None, &mut visited)
+        Self::parse_document(s)
     }
 }
 
@@ -486,8 +537,7 @@ impl TryFrom<&Path> for Config {
     ///
     /// This supports configuration inheritance via `extends` and circular dependency detection.
     fn try_from(path: &Path) -> Result<Self, Self::Error> {
-        let mut visited = HashSet::new();
-        Self::from_path_with_visited(path, &mut visited)
+        ConfigGraphLoader::load(path)
     }
 }
 
@@ -749,49 +799,25 @@ impl Profile {
         }
     }
 
-    /// Validate the profile configuration against the effective view
-    /// resolution uses: the union of this profile's secrets and the default
-    /// profile's, merged field by field together with this profile's
-    /// `[defaults]` table, so validation and resolution cannot disagree.
-    /// Pass `None` when this profile has nothing to inherit from (it is the
-    /// default profile itself).
-    fn validate_with_default(&self, default_profile: Option<&Profile>) -> Result<(), String> {
+    /// Validate declarations before profile/default inheritance is compiled.
+    fn validate_raw(&self, can_inherit_secrets: bool) -> Result<(), String> {
         // A non-default profile may be an empty marker that inherits every
         // secret from `default`. Profiles with nothing to inherit still need
         // to declare at least one secret.
-        if self.secrets.is_empty() && default_profile.is_none() {
+        if self.secrets.is_empty() && !can_inherit_secrets {
             return Err("Profile must define at least one secret".into());
         }
 
-        for name in self.sorted_secret_names_with(default_profile) {
-            let secret = self.secrets.get(name);
-
-            if let Some(secret) = secret {
-                // Validate secret name is a valid identifier
-                if !is_valid_identifier(name) {
-                    return Err(format!(
-                        "Invalid secret name '{}': must be a valid identifier (alphanumeric and underscores, not starting with a number)",
-                        name
-                    ));
-                }
-
-                // Raw-entry rule: `required = true` plus an inline `default`
-                // contradicts itself within one entry. Across profiles the
-                // same combination is the override mechanism working as
-                // intended (e.g. dev supplies a default for a secret the
-                // default profile requires), so it is not checked on the
-                // merged view below.
-                secret
-                    .validate_required_default()
-                    .map_err(|e| format!("Secret '{}': {}", name, e))?;
+        for name in self.sorted_secret_names() {
+            let secret = &self.secrets[&name];
+            if !is_valid_identifier(&name) {
+                return Err(format!(
+                    "Invalid secret name '{}': must be a valid identifier (alphanumeric and underscores, not starting with a number)",
+                    name
+                ));
             }
-
-            let inherited = default_profile.and_then(|profile| profile.secrets.get(name));
-            let merged = Secret::resolved(secret, inherited, self.defaults.as_ref())
-                .expect("every validated name comes from one of the two secret maps");
-
-            merged
-                .validate_effective()
+            secret
+                .validate_required_default()
                 .map_err(|e| format!("Secret '{}': {}", name, e))?;
         }
 
@@ -803,9 +829,30 @@ impl Profile {
     /// The current profile takes precedence - secrets from `other`
     /// are only added if they don't already exist.
     pub fn merge_with(&mut self, other: Profile) {
+        if self.defaults.is_none() {
+            self.defaults = other.defaults;
+        }
         for (secret_name, secret_config) in other.secrets {
             self.secrets.entry(secret_name).or_insert(secret_config);
         }
+    }
+
+    /// Overlay a later profile document while inheriting individual default
+    /// fields that the later document leaves absent.
+    fn overlay_with(&mut self, later: Profile) {
+        if let Some(mut later_defaults) = later.defaults {
+            if let Some(earlier_defaults) = &self.defaults {
+                later_defaults.required = later_defaults.required.or(earlier_defaults.required);
+                later_defaults.default = later_defaults
+                    .default
+                    .or_else(|| earlier_defaults.default.clone());
+                later_defaults.providers = later_defaults
+                    .providers
+                    .or_else(|| earlier_defaults.providers.clone());
+            }
+            self.defaults = Some(later_defaults);
+        }
+        self.secrets.extend(later.secrets);
     }
 
     /// Returns an iterator over the secrets in this profile.
@@ -820,27 +867,6 @@ impl Profile {
     /// ordering (grouping, missing lists) instead of the map's hash order.
     pub(crate) fn sorted_secret_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.secrets.keys().cloned().collect();
-        names.sort();
-        names
-    }
-
-    /// Sorted union of this profile's secret names and the default profile's:
-    /// the name set resolution acts on when this profile overrides
-    /// `default_profile`, with the same deterministic ordering as
-    /// [`Profile::sorted_secret_names`].
-    pub(crate) fn sorted_secret_names_with<'a>(
-        &'a self,
-        default_profile: Option<&'a Profile>,
-    ) -> Vec<&'a String> {
-        let mut names: Vec<&String> = self.secrets.keys().collect();
-        if let Some(default_profile) = default_profile {
-            names.extend(
-                default_profile
-                    .secrets
-                    .keys()
-                    .filter(|name| !self.secrets.contains_key(*name)),
-            );
-        }
         names.sort();
         names
     }

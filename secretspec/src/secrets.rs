@@ -6,6 +6,7 @@ use crate::config::{
     Resolved,
 };
 use crate::error::{Result, SecretSpecError};
+use crate::manifest::{CompiledManifest, MissingPolicy};
 use crate::plan::{PlannedSecret, ResolutionPlan, Route};
 use crate::provider::{Address, Provider as ProviderTrait, ProviderCredentials};
 use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
@@ -232,6 +233,9 @@ fn find_config_file_from(start: PathBuf) -> Result<PathBuf> {
 pub struct Secrets {
     /// The project-specific configuration
     config: Config,
+    /// Effective profile semantics compiled once from `config` and shared by
+    /// planning, runtime resolution, and inventory surfaces.
+    pub(crate) manifest: CompiledManifest,
     /// Directory containing the loaded `secretspec.toml`. Relative filesystem
     /// paths held by file-backed providers (e.g. `dotenv`) are resolved against
     /// this rather than the process's current working directory, so running
@@ -421,8 +425,10 @@ impl Secrets {
         provider: Option<String>,
         profile: Option<String>,
     ) -> Self {
+        let manifest = CompiledManifest::compile(&config);
         Self {
             config,
+            manifest,
             config_dir: PathBuf::from("."),
             global_config,
             provider,
@@ -496,10 +502,12 @@ impl Secrets {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
+        let manifest = CompiledManifest::compile(&project_config);
 
         Ok(Self {
             require_reason: project_config.project.require_reason.unwrap_or_default(),
             config: project_config,
+            manifest,
             config_dir,
             global_config,
             provider: None,
@@ -1105,16 +1113,19 @@ impl Secrets {
         let profile_name = profile
             .map(str::to_string)
             .unwrap_or_else(|| self.resolve_profile_name(None));
-        let mut profile_config = self.require_profile(&profile_name)?.clone();
-
-        // If not the default profile, also add secrets from default profile
-        if profile_name != "default"
-            && let Some(default_profile) = self.config.profiles.get("default").cloned()
-        {
-            profile_config.merge_with(default_profile);
-        }
-
-        Ok(profile_config)
+        self.require_profile(&profile_name)?;
+        let compiled = self
+            .manifest
+            .profile(&profile_name)
+            .expect("raw and compiled profile sets stay identical");
+        Ok(Profile {
+            defaults: None,
+            secrets: compiled
+                .secrets
+                .iter()
+                .map(|(name, secret)| (name.clone(), secret.config.clone()))
+                .collect(),
+        })
     }
 
     /// Resolves the configuration for a specific secret
@@ -1143,37 +1154,10 @@ impl Secrets {
         profile: Option<&str>,
     ) -> Option<crate::config::Secret> {
         let profile_name = self.resolve_profile_name(profile);
-
-        let current_profile = self.config.profiles.get(&profile_name);
-        let current_secret =
-            current_profile.and_then(|profile_config| profile_config.secrets.get(name));
-        let current_defaults =
-            current_profile.and_then(|profile_config| profile_config.defaults.as_ref());
-
-        let default_secret = if profile_name != "default" {
-            self.config
-                .profiles
-                .get("default")
-                .and_then(|default_profile| default_profile.secrets.get(name))
-        } else {
-            None
-        };
-
-        // The field-level merge lives on `Secret` so `Config::validate`
-        // checks exactly the effective config this method produces.
-        crate::config::Secret::resolved(current_secret, default_secret, current_defaults)
-    }
-
-    /// Resolve the effective (merged) config for a secret that is known to
-    /// belong to `profile`. Any secret yielded by iterating that profile is
-    /// guaranteed to have an effective config, so a missing one is a bug.
-    pub(crate) fn effective_secret_config(
-        &self,
-        name: &str,
-        profile: &str,
-    ) -> crate::config::Secret {
-        self.resolve_secret_config(name, Some(profile))
-            .expect("secret from the resolved profile must have an effective config")
+        self.manifest
+            .profile(&profile_name)
+            .and_then(|profile| profile.secrets.get(name))
+            .map(|secret| secret.config.clone())
     }
 
     /// The effective (field-level merged) secrets of `profile_name` in
@@ -1181,23 +1165,11 @@ impl Secrets {
     /// profile's names, each resolved via [`Secrets::resolve_secret_config`].
     /// This is the view `check`/`run` list, matching what resolution acts on.
     fn effective_secrets(&self, profile_name: &str) -> Vec<(String, crate::config::Secret)> {
-        let Some(current) = self.config.profiles.get(profile_name) else {
-            return Vec::new();
-        };
-        let default_profile = if profile_name != "default" {
-            self.config.profiles.get("default")
-        } else {
-            None
-        };
-        current
-            .sorted_secret_names_with(default_profile)
+        self.manifest
+            .profile(profile_name)
             .into_iter()
-            .map(|name| {
-                (
-                    name.clone(),
-                    self.effective_secret_config(name, profile_name),
-                )
-            })
+            .flat_map(|profile| &profile.secrets)
+            .map(|(name, secret)| (name.clone(), secret.config.clone()))
             .collect()
     }
 
@@ -2360,17 +2332,6 @@ impl Secrets {
         Ok(())
     }
 
-    /// Whether an absent secret would be auto-generated on a full resolve: it
-    /// declares an enabled `generate` config. Lets the value-free pass report
-    /// that a missing secret *would* resolve via generation without minting and
-    /// storing it (the side effect [`Self::try_generate_secret`] performs). A
-    /// `generate`-enabled secret with no declared type still counts here; the
-    /// resulting "no type" error is raised only on the full pass that actually
-    /// generates, keeping the value-free preflight failure-free.
-    fn would_generate(secret_config: &crate::config::Secret) -> bool {
-        matches!(&secret_config.generate, Some(g) if g.is_enabled())
-    }
-
     /// Attempts to generate a secret if it has generation config.
     ///
     /// Returns `Ok(Some(value))` if generation succeeded,
@@ -2981,44 +2942,55 @@ impl Secrets {
                             )?;
                         }
                         status = ResolutionStatus::Resolved;
-                    } else if Self::would_generate(&planned.config) {
-                        // The secret would be auto-generated. A full pass mints and
-                        // stores it (writing a temp file when `as_path`); a
-                        // value-free pass reports that it would resolve without
-                        // minting or storing anything.
-                        generated = true;
-                        if materialize == Materialize::Values {
-                            let generated_value = self
-                                .try_generate_secret(planned, profile)?
-                                .expect("would_generate implies a generated value");
-                            self.insert_resolved(
-                                &mut secrets,
-                                &mut temp_files,
-                                name.clone(),
-                                generated_value,
-                                as_path,
-                            )?;
-                        }
-                        status = ResolutionStatus::Resolved;
-                    } else if let Some(default_value) = &planned.config.default {
-                        default_applied = true;
-                        if materialize == Materialize::Values {
-                            self.insert_resolved(
-                                &mut secrets,
-                                &mut temp_files,
-                                name.clone(),
-                                SecretString::new(default_value.clone().into()),
-                                as_path,
-                            )?;
-                            with_defaults.push((name.clone(), default_value.clone()));
-                        }
-                        status = ResolutionStatus::Resolved;
-                    } else if required {
-                        missing_required.push(name.clone());
-                        status = ResolutionStatus::MissingRequired;
                     } else {
-                        missing_optional.push(name.clone());
-                        status = ResolutionStatus::MissingOptional;
+                        match planned.missing {
+                            MissingPolicy::Generate => {
+                                // A full pass mints and stores; a value-free pass
+                                // reports that generation would resolve without
+                                // performing that side effect.
+                                generated = true;
+                                if materialize == Materialize::Values {
+                                    let generated_value = self
+                                        .try_generate_secret(planned, profile)?
+                                        .expect("compiled Generate policy has a generator");
+                                    self.insert_resolved(
+                                        &mut secrets,
+                                        &mut temp_files,
+                                        name.clone(),
+                                        generated_value,
+                                        as_path,
+                                    )?;
+                                }
+                                status = ResolutionStatus::Resolved;
+                            }
+                            MissingPolicy::UseDefault => {
+                                let default_value = planned
+                                    .config
+                                    .default
+                                    .as_ref()
+                                    .expect("compiled UseDefault policy has a default");
+                                default_applied = true;
+                                if materialize == Materialize::Values {
+                                    self.insert_resolved(
+                                        &mut secrets,
+                                        &mut temp_files,
+                                        name.clone(),
+                                        SecretString::new(default_value.clone().into()),
+                                        as_path,
+                                    )?;
+                                    with_defaults.push((name.clone(), default_value.clone()));
+                                }
+                                status = ResolutionStatus::Resolved;
+                            }
+                            MissingPolicy::Error => {
+                                missing_required.push(name.clone());
+                                status = ResolutionStatus::MissingRequired;
+                            }
+                            MissingPolicy::Omit => {
+                                missing_optional.push(name.clone());
+                                status = ResolutionStatus::MissingOptional;
+                            }
+                        }
                     }
                 }
             }

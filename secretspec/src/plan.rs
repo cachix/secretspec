@@ -18,6 +18,7 @@
 
 use crate::config::{NativeAddress, Secret};
 use crate::error::Result;
+use crate::manifest::{CompiledSecret, MissingPolicy};
 use crate::provider::Address;
 use crate::secrets::Secrets;
 use std::collections::HashMap;
@@ -106,6 +107,10 @@ pub(crate) struct PlannedSecret {
     pub name: String,
     /// The secret's effective config after the profile field-level merge.
     pub config: Secret,
+    /// Compiled behavior when every provider misses.
+    pub missing: MissingPolicy,
+    /// Effective required marker retained for the resolution report.
+    pub declared_required: bool,
     /// The resolved read/write route.
     pub route: Route,
 }
@@ -129,7 +134,7 @@ impl PlannedSecret {
 
     /// Whether the active profile requires this secret (required by default).
     pub(crate) fn required(&self) -> bool {
-        self.config.required.unwrap_or(true)
+        self.declared_required
     }
 
     /// Whether the value is materialized to a temp file and exposed as a path.
@@ -211,9 +216,16 @@ impl Secrets {
         let override_spec = self.explicit_provider_spec(None);
 
         let mut secrets = Vec::with_capacity(names.len());
+        let profile = self
+            .manifest
+            .profile(&profile_name)
+            .expect("profile names are validated before planning");
         for name in names {
-            let config = self.effective_secret_config(&name, &profile_name);
-            secrets.push(self.plan_one_secret(name, config, &override_spec)?);
+            let secret = profile
+                .secrets
+                .get(&name)
+                .expect("planned names come from the compiled profile");
+            secrets.push(self.plan_one_secret(name, secret, &override_spec)?);
         }
 
         Ok(ResolutionPlan {
@@ -239,13 +251,17 @@ impl Secrets {
         profile_name: &str,
         override_arg: Option<&str>,
     ) -> Result<Option<PlannedSecret>> {
-        let Some(config) = self.resolve_secret_config(name, Some(profile_name)) else {
+        let Some(secret) = self
+            .manifest
+            .profile(profile_name)
+            .and_then(|profile| profile.secrets.get(name))
+        else {
             return Ok(None);
         };
         let override_spec = self.explicit_provider_spec(override_arg);
         Ok(Some(self.plan_one_secret(
             name.to_string(),
-            config,
+            secret,
             &override_spec,
         )?))
     }
@@ -258,13 +274,15 @@ impl Secrets {
     fn plan_one_secret(
         &self,
         name: String,
-        config: Secret,
+        secret: &CompiledSecret,
         override_spec: &Option<String>,
     ) -> Result<PlannedSecret> {
-        let route = self.route_for(&config, override_spec)?;
+        let route = self.route_for(&secret.config, override_spec)?;
         Ok(PlannedSecret {
             name,
-            config,
+            config: secret.config.clone(),
+            missing: secret.missing,
+            declared_required: secret.declared_required,
             route,
         })
     }

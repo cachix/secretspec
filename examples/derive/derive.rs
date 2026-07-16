@@ -20,20 +20,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 result.provider, result.profile
             );
             let secrets = &result.secrets;
-            if let Some(database_url) = &secrets.database_url {
-                println!("   - Database URL: {}", database_url);
-            }
-            if let Some(api_key) = &secrets.api_key {
-                println!("   - API Key: {} (found)", api_key);
-            } else {
-                println!("   - API Key: None");
-            }
-            if let Some(redis_url) = &secrets.redis_url {
-                println!("   - Redis URL: {}", redis_url);
-            }
-            if let Some(log_level) = &secrets.log_level {
-                println!("   - Log Level: {}", log_level);
-            }
+            println!("   - Database URL: {}", secrets.database_url);
+            println!("   - API Key: {} (found)", secrets.api_key);
+            println!("   - Redis URL: {}", secrets.redis_url);
+            println!("   - Log Level: {}", secrets.log_level);
         }
         Err(e) => {
             println!("   ✗ Failed to load secrets: {}", e);
@@ -53,20 +43,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 result.provider, result.profile
             );
             let secrets = &result.secrets;
-            if let Some(database_url) = &secrets.database_url {
-                println!("   - Database URL: {}", database_url);
-            }
-            if let Some(api_key) = &secrets.api_key {
-                println!("   - API Key: {} (found)", api_key);
-            } else {
-                println!("   - API Key: None");
-            }
-            if let Some(redis_url) = &secrets.redis_url {
-                println!("   - Redis URL: {}", redis_url);
-            }
-            if let Some(log_level) = &secrets.log_level {
-                println!("   - Log Level: {}", log_level);
-            }
+            println!("   - Database URL: {}", secrets.database_url);
+            println!("   - API Key: {} (found)", secrets.api_key);
+            println!("   - Redis URL: {}", secrets.redis_url);
+            println!("   - Log Level: {}", secrets.log_level);
         }
         Err(e) => {
             println!("   ✗ Failed to load development profile: {}", e);

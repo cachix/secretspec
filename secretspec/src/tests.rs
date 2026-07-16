@@ -1672,6 +1672,60 @@ CHILD_ONLY = { description = "child", required = true }
     );
 }
 
+/// A symlinked manifest resolves its relative `extends` against the symlink's
+/// own directory, not the canonicalized target directory. Here the `base`
+/// dependency lives next to the symlink; resolving against the real file's
+/// directory (which has no `base`) would raise `ExtendedConfigNotFound`.
+#[test]
+#[cfg(unix)]
+fn test_extends_resolves_relative_to_symlink_location() {
+    use std::os::unix::fs::symlink;
+
+    let temp_dir = TempDir::new().unwrap();
+    let link_dir = temp_dir.path().join("linkdir");
+    let real_dir = temp_dir.path().join("realdir");
+    fs::create_dir_all(link_dir.join("base")).unwrap();
+    fs::create_dir_all(&real_dir).unwrap();
+
+    // The `extends` target sits beside the SYMLINK, not the real file.
+    fs::write(
+        link_dir.join("base/secretspec.toml"),
+        r#"
+[project]
+name = "base"
+revision = "1.0"
+
+[profiles.default]
+SHARED = { description = "from base", required = true }
+"#,
+    )
+    .unwrap();
+
+    // The real manifest extends "base" with a path relative to itself.
+    fs::write(
+        real_dir.join("app.toml"),
+        r#"
+[project]
+name = "app"
+revision = "1.0"
+extends = ["base"]
+
+[profiles.default]
+APP_ONLY = { description = "app", required = true }
+"#,
+    )
+    .unwrap();
+
+    let manifest = link_dir.join("secretspec.toml");
+    symlink(real_dir.join("app.toml"), &manifest).unwrap();
+
+    let config = Config::try_from(manifest.as_path())
+        .expect("extends should resolve relative to the symlink's directory");
+    let secrets = &config.profiles["default"].secrets;
+    assert!(secrets.contains_key("SHARED"), "inherited from ../base");
+    assert!(secrets.contains_key("APP_ONLY"));
+}
+
 #[test]
 fn test_extends_with_path_resolution_edge_cases() {
     let temp_dir = TempDir::new().unwrap();

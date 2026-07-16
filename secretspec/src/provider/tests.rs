@@ -118,6 +118,81 @@ impl Provider for CountingProvider {
     }
 }
 
+/// Process-global store backing [`MemTestProvider`], so a freshly built instance
+/// observes writes made through an earlier one — required to exercise
+/// store-then-resolve of a provider credential across separate `Secrets`.
+static MEM_STORE: std::sync::LazyLock<Mutex<HashMap<String, String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Registered, writable, profile-namespacing in-memory provider (`memtest://`).
+/// Unlike `dotenv` (which ignores project/profile), this keys secrets by
+/// `{project}/{profile}/{key}`, so tests can prove whether a store location
+/// depends on the active profile.
+pub(crate) struct MemTestProvider;
+pub(crate) struct MemTestConfig;
+
+impl TryFrom<&super::ProviderUrl> for MemTestConfig {
+    type Error = crate::SecretSpecError;
+    fn try_from(_url: &super::ProviderUrl) -> Result<Self> {
+        Ok(Self)
+    }
+}
+
+impl MemTestProvider {
+    fn new(_config: MemTestConfig) -> Self {
+        Self
+    }
+}
+
+crate::register_provider! {
+    struct: MemTestProvider,
+    config: MemTestConfig,
+    name: "memtest",
+    description: "In-memory provider for tests",
+    schemes: ["memtest"],
+    examples: ["memtest://"],
+}
+
+impl Provider for MemTestProvider {
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: format!("{}/{}/{}", project, profile, key),
+            ..Default::default()
+        })
+    }
+
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let item = super::flat_item(self, addr)?.into_owned();
+        Ok(MEM_STORE
+            .lock()
+            .unwrap()
+            .get(&item)
+            .map(|v| SecretString::new(v.clone().into())))
+    }
+
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        let item = super::flat_item(self, addr)?.into_owned();
+        MEM_STORE
+            .lock()
+            .unwrap()
+            .insert(item, value.expose_secret().to_string());
+        Ok(())
+    }
+
+    fn name(&self) -> &'static str {
+        Self::PROVIDER_NAME
+    }
+
+    fn uri(&self) -> String {
+        "memtest://".to_string()
+    }
+}
+
 /// A single distinct address (the common case: one secret, or several sharing
 /// one `ref`) is fetched once and its value shared, via the inline fast path.
 #[test]

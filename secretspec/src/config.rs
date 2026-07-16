@@ -465,7 +465,11 @@ impl ConfigGraphLoader {
 
         let content = fs::read_to_string(&canonical_path)?;
         let config = Config::parse_document(&content)?;
-        let base_dir = canonical_path.parent().unwrap_or(Path::new("."));
+        // Resolve `extends` relative to the manifest's referenced location, not
+        // its canonicalized target: a symlinked manifest inherits from paths
+        // relative to the symlink, not to the file it points at. Cycle detection
+        // and dedup still key on `canonical_path`.
+        let base_dir = path.parent().unwrap_or(Path::new("."));
         for extend_path in config.project.extends.iter().flatten() {
             let joined_path = base_dir.join(extend_path);
             let full_path = if extend_path.ends_with(".toml") {

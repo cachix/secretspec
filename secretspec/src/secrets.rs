@@ -63,6 +63,15 @@ fn sorted_credential_entries(
     entries
 }
 
+/// Convention-path profile segment for provider credentials. A provider's
+/// authentication (an access token, an AppRole id) is a property of the alias,
+/// not of any one profile, so a convention-path credential is stored under one
+/// fixed segment rather than the active profile. Scoping it by profile would
+/// make a credential stored via `config provider login` (which runs under the
+/// session profile) invisible when the provider is later used under a different
+/// profile, hard-erroring with "credential not found".
+const PROVIDER_CREDENTIAL_SCOPE: &str = "_provider";
+
 impl CredentialSource {
     /// Credential-free provider text for prompts and diagnostics.
     pub(crate) fn display_provider(&self) -> String {
@@ -70,14 +79,15 @@ impl CredentialSource {
     }
 
     /// The store location this source reads and writes: the pinned `ref`, or
-    /// the convention path for the active project and profile. The single
-    /// derivation both [`Secrets::resolve_provider_credentials`] (read) and
-    /// [`Secrets::store_provider_credential`] (write) use, so login-then-resolve
-    /// round-trips by construction.
-    fn address<'a>(&'a self, project: &'a str, profile: &'a str, name: &'a str) -> Address<'a> {
+    /// the profile-independent convention path for the active project. The
+    /// single derivation both [`Secrets::resolve_provider_credentials`] (read)
+    /// and [`Secrets::store_provider_credential`] (write) use, so
+    /// login-then-resolve round-trips regardless of the profile either runs
+    /// under.
+    fn address<'a>(&'a self, project: &'a str, name: &'a str) -> Address<'a> {
         match &self.reference {
             Some(reference) => Address::Native(reference),
-            None => Address::convention(project, profile, name),
+            None => Address::convention(project, PROVIDER_CREDENTIAL_SCOPE, name),
         }
     }
 
@@ -86,11 +96,11 @@ impl CredentialSource {
     /// is redacted: a URI-form source may embed an inline credential
     /// (`onepassword+token://tok@Vault`), and this string reaches stderr and
     /// the `config provider login` output.
-    fn location(&self, project: &str, profile: &str, name: &str) -> String {
+    fn location(&self, project: &str, name: &str) -> String {
         let provider = self.display_provider();
         match &self.reference {
             Some(reference) => format!("{provider} at {}", reference.render()),
-            None => format!("{provider} at {project}/{profile}/{name}"),
+            None => format!("{provider} at {project}/{PROVIDER_CREDENTIAL_SCOPE}/{name}"),
         }
     }
 }
@@ -258,13 +268,12 @@ pub struct Secrets {
     /// disables auditing. Built once per `Secrets` so all events share a session id.
     audit: Option<AuditLogger>,
     /// Provider credentials memoized per (profile, raw provider spec), so N
-    /// secrets routed at one alias fetch its credentials from the
-    /// source provider once per session, not once per provider build. Keyed by
-    /// profile because a convention-path credential lives at
-    /// `{project}/{profile}/{credential}`: switching profiles on one instance must
-    /// not reuse the other profile's credential. Cleared by
-    /// [`Secrets::store_provider_credential`] so a freshly stored credential
-    /// is re-read.
+    /// secrets routed at one alias fetch its credentials from the source provider
+    /// once per session, not once per provider build. The stored *values* are
+    /// profile-independent (see `PROVIDER_CREDENTIAL_SCOPE`); the profile is kept
+    /// in the key only so each profile's operations audit their own credential
+    /// read. Cleared by [`Secrets::store_provider_credential`] so a freshly
+    /// stored credential is re-read.
     provider_credentials_cache: ProviderCredentialsCache,
 }
 
@@ -708,7 +717,7 @@ impl Secrets {
                     entry.insert(self.build_source_provider(&source.provider)?)
                 }
             };
-            let fetched = source_provider.get(source.address(&project, profile, name));
+            let fetched = source_provider.get(source.address(&project, name));
             // Audit the source read (design: every secret access is recorded).
             // The key is the semantic credential name and the event carries a
             // `credential` marker plus the source provider's credential-free
@@ -739,7 +748,7 @@ impl Secrets {
                     return Err(credential_missing_error(
                         name,
                         spec,
-                        &source.location(&project, profile, name),
+                        &source.location(&project, name),
                     ));
                 }
             }
@@ -771,9 +780,9 @@ impl Secrets {
 
     /// Stores one provider credential at its source provider — the exact
     /// location [`Self::resolve_provider_credentials`] later reads it from (a `ref`
-    /// or the convention path for the active project and profile). Errors if the
-    /// source provider is read-only. Returns a human-readable description of
-    /// where it was stored.
+    /// or the profile-independent convention path for the active project). Errors
+    /// if the source provider is read-only. Returns a human-readable description
+    /// of where it was stored.
     ///
     /// Like every other write path, the write is gated by the `require_reason`
     /// policy and audited (with a `credential` marker). A successful store also
@@ -787,9 +796,11 @@ impl Secrets {
     ) -> Result<String> {
         self.ensure_reason_for(AuditAction::Set, Some(name))?;
         let provider = self.build_source_provider(&source.provider)?;
+        // The store location is profile-independent (see `PROVIDER_CREDENTIAL_SCOPE`);
+        // the session profile is used only to attribute the audit event.
         let profile = self.resolve_profile_name(None);
         let project = self.config.project.name.clone();
-        let address = source.address(&project, &profile, name);
+        let address = source.address(&project, name);
         let result = provider
             .check_writable(address)
             .and_then(|()| provider.set(address, value));
@@ -805,7 +816,7 @@ impl Secrets {
         // The stored credential replaces whatever an earlier resolution
         // memoized; drop the memo so the next build re-reads it.
         self.provider_credentials_cache.clear();
-        Ok(source.location(&project, &profile, name))
+        Ok(source.location(&project, name))
     }
 
     /// Validates a spec's `credentials` (pure map lookups, no I/O): every name
@@ -3288,6 +3299,79 @@ mod provider_credentials_cache_tests {
             );
         }
         assert_eq!(fetches.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[cfg(test)]
+mod provider_credential_scope_tests {
+    use super::*;
+    use crate::config::{CredentialSource, Profile, ProviderAlias, Secret};
+    use crate::tests::{resolve_test_config, scrub_resolution_env};
+    use tempfile::TempDir;
+
+    /// A provider's authentication credential belongs to the alias, not to any
+    /// one profile: `config provider login` stores under the session profile,
+    /// but the same credential must resolve when the provider is used under a
+    /// different profile. Before the fix the convention path embedded the active
+    /// profile, so a credential stored under `default` was invisible to
+    /// `production` and resolution hard-errored "credential not found".
+    #[test]
+    fn provider_credentials_resolve_under_any_profile() {
+        let _env = scrub_resolution_env();
+        let _cwd = crate::secrets::lock_cwd();
+        let _store = TempDir::new().unwrap();
+
+        // `access_token` is sourced from a writable, profile-namespacing store.
+        let providers = HashMap::from([(
+            "bws".to_string(),
+            ProviderAlias {
+                uri: "bws://proj".to_string(),
+                credentials: HashMap::from([(
+                    "access_token".to_string(),
+                    CredentialSource::from("memtest://"),
+                )]),
+            },
+        )]);
+
+        let mut config =
+            resolve_test_config(HashMap::from([("API_KEY".to_string(), Secret::default())]));
+        config.profiles.insert(
+            "production".to_string(),
+            Profile {
+                defaults: None,
+                secrets: HashMap::new(),
+            },
+        );
+        config.providers = Some(providers);
+
+        // `login` runs under the session/default profile.
+        let logged_in = Secrets::new(config.clone(), None, None, None);
+        let source = logged_in
+            .declared_provider_credentials("bws")
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("alias declares one credential")
+            .1;
+        logged_in
+            .store_provider_credential(
+                &source,
+                "access_token",
+                &SecretString::new("tok-123".into()),
+            )
+            .unwrap();
+
+        // Resolving the same alias under `production` must still find it.
+        let resolver = Secrets::new(config, None, None, Some("production".to_string()));
+        let resolved = resolver
+            .resolve_provider_credentials("bws", "production")
+            .expect("a stored provider credential must resolve under any profile");
+        assert_eq!(
+            resolved
+                .get("access_token")
+                .map(|value| value.expose_secret()),
+            Some("tok-123"),
+        );
     }
 }
 

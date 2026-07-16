@@ -20,24 +20,50 @@
 //!
 //! ```json
 //! { "path": "…/secretspec.toml", "provider": "keyring://",
-//!   "profile": "production", "reason": "boot", "no_values": false }
+//!   "profile": "production", "reason": "boot", "no_values": false,
+//!   "mode": "resolve" }
 //! ```
 //!
 //! All fields are optional. `path` omitted means "walk up from the working
-//! directory" like the CLI. `no_values` strips secret values from the response.
+//! directory" like the CLI.
+//!
+//! `mode` selects which shape comes back, and defaults to `"resolve"`:
+//!
+//! - `"resolve"` — the value-carrying [`secretspec::ResolveResponse`]. Set
+//!   `no_values` to strip the values from it.
+//! - `"report"` — the value-free [`secretspec::ResolutionReport`]: the
+//!   inventory/preflight view the CLI exposes as `check --json`.
+//!
+//! Any other value is rejected with an `invalid_request` error.
+//!
+//! ### `no_values` is not `mode: "report"`
+//!
+//! They are different shapes, and a consumer that wants an inventory wants
+//! `report`:
+//!
+//! - `no_values` returns a `ResolveResponse` with the values blanked. Its
+//!   `secrets` is an object keyed by name, it never reports whether a secret is
+//!   *declared* required, and when a required secret is missing that object is
+//!   **empty** — so the one case a preflight check exists to describe is the case
+//!   it tells you least about.
+//! - `report` returns a `ResolutionReport`, whose `secrets` is an **array** of
+//!   per-secret entries carrying `name`, `required`, `status`
+//!   (`resolved` / `missing_required` / `missing_optional`) and provenance. Every
+//!   declared secret is listed whether or not it resolved. `required` is
+//!   reachable *only* here.
 //!
 //! ## Response envelope
 //!
 //! ```json
-//! { "ok": true,  "response": { …ResolveResponse… } }
+//! { "ok": true,  "response": { …ResolveResponse | ResolutionReport… } }
 //! { "ok": false, "error": { "kind": "io", "message": "…" } }
 //! ```
 //!
-//! `ok: true` carries the value-carrying [`secretspec::ResolveResponse`] (which
-//! still reports domain failures like `missing_required` in its own fields).
-//! `ok: false` means the call itself failed (bad manifest, provider error,
-//! reason policy). This separates transport failure from "a required secret is
-//! missing", which the SDK surfaces differently.
+//! `ok: true` carries whichever shape `mode` selected. `ok: false` means the call
+//! itself failed (bad manifest, provider error, reason policy, unknown `mode`).
+//! This separates transport failure from "a required secret is missing", which is
+//! a domain result reported inside an `ok: true` response and which the SDK
+//! surfaces differently.
 //!
 //! # Safety
 //!

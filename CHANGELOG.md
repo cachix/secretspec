@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Gopass provider (`gopass://`) for GPG-based password manager with git-synced password store.
+- `secretspec export` command that resolves every secret for the active profile
+  and writes them to stdout without running a command, in a chosen `--format`:
+  `shell` (`export KEY='value'`, for `eval "$(secretspec export)"`), `dotenv`,
+  `json`, or `gha` (appends to `$GITHUB_ENV` and emits `::add-mask::` for each
+  value). Unlike `run` it never prompts and exits non-zero on a missing required
+  secret, so CI can gate on it.
 - Azure Key Vault provider (`akv://`). Authenticates via a service principal
   whose `tenant_id`, `client_id`, and `client_secret` can be sourced as provider
   credentials (with `AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`

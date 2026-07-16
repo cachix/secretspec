@@ -15,8 +15,18 @@ use std::path::PathBuf;
 /// output.
 pub(crate) fn serialize_dotenv(vars: &HashMap<String, String>) -> String {
     let sorted: BTreeMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    serialize_dotenv_pairs(sorted.into_iter())
+}
+
+/// Serializes key/value pairs (already in the desired order) into `.env`
+/// content, applying the same double-quoting and escaping as
+/// [`serialize_dotenv`]. Shared with `secretspec export`, which passes its
+/// pre-sorted entries directly instead of rebuilding and re-sorting a map.
+pub(crate) fn serialize_dotenv_pairs<'a>(
+    pairs: impl Iterator<Item = (&'a str, &'a str)>,
+) -> String {
     let mut out = String::new();
-    for (key, value) in sorted {
+    for (key, value) in pairs {
         out.push_str(key);
         out.push_str("=\"");
         for ch in value.chars() {

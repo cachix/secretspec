@@ -735,7 +735,8 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
-            app.export(format)
+            let mut out = std::io::stdout().lock();
+            app.export(format, &mut out)
                 .into_diagnostic()
                 .wrap_err("Failed to export secrets")?;
             Ok(())

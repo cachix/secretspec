@@ -1272,8 +1272,15 @@ mod builder_generation {
                             .map_err(|e| secretspec::SecretSpecError::InvalidProfile(e))?;
                         (Some(profile.as_str().to_string()), profile)
                     } else {
-                        // Check env var for profile
-                        let profile_str = std::env::var("SECRETSPEC_PROFILE").ok();
+                        // Check env var for profile. A blank value is treated as
+                        // unset (matching `secretspec::Secrets`) and a padded
+                        // value is trimmed, so a stray empty var or a `$(cat
+                        // file)` trailing newline neither errors here nor selects
+                        // a nonexistent profile.
+                        let profile_str = std::env::var("SECRETSPEC_PROFILE")
+                            .ok()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty());
                         let selected_profile = if let Some(ref profile_name) = profile_str {
                             Profile::try_from(profile_name.as_str())?
                         } else {

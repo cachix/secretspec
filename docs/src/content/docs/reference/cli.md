@@ -339,8 +339,8 @@ Options are `-p, --provider <PROVIDER>`, `-P, --profile <PROFILE>`, and `--forma
 | Format | Output |
 |--------|--------|
 | `shell` | `export KEY='value'` lines, ready for `eval "$(secretspec export)"` |
-| `dotenv` | `KEY=value` lines in dotenv syntax |
-| `json` | a single JSON object mapping each secret name to its value |
+| `dotenv` | `KEY="value"` lines in dotenv syntax (double-quoted, with `\`, `"`, `$`, and newline escaped) |
+| `json` | a single compact JSON object mapping each secret name to its value |
 | `gha` | appends `KEY=value` to the file named by `$GITHUB_ENV` and prints an `::add-mask::` command per value to stdout, so later workflow steps and third-party actions see the secrets |
 
 ```bash
@@ -349,7 +349,7 @@ $ eval "$(secretspec export --profile production)"
 
 # Emit JSON for another tool to consume
 $ secretspec export --profile production --format json
-{ "DATABASE_URL": "postgresql://prod.example.com/mydb" }
+{"DATABASE_URL":"postgresql://prod.example.com/mydb"}
 ```
 
 The `gha` format targets a `secretspec export --format gha` step in a GitHub or Forgejo Actions job: it masks the values in the runner log and persists them to the job environment for the steps that follow.

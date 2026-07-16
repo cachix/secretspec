@@ -371,6 +371,17 @@ fn policy_requires_reason(mode: RequireReason, is_agent: bool) -> bool {
 /// changes, mirroring how `SECRETSPEC_PROVIDER`/`SECRETSPEC_PROFILE` are honored.
 const REASON_ENV: &str = "SECRETSPEC_REASON";
 
+/// Trims `value` and returns it owned when non-empty, or `None` when the input
+/// is blank (empty or whitespace-only). The single choke point for the "blank
+/// means unset" rule: a stray empty `--provider`/`--profile`, a whitespace-only
+/// override, or a padded env var (a trailing newline from `$(cat file)` is the
+/// common CI case) neither shadows the configured fallback chain nor is stored
+/// verbatim — the value that survives is always trimmed.
+pub(crate) fn non_blank(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 /// Normalizes a session reason: trims surrounding whitespace and treats a blank
 /// result as "no reason given". Applied to every reason source so the policy gate
 /// and the audit log agree on what counts as a real reason (a blank `--reason ""`
@@ -379,8 +390,7 @@ const REASON_ENV: &str = "SECRETSPEC_REASON";
 /// Shared with providers (e.g. Proton Pass) so the gate and the audit reason agree
 /// on what counts as a real reason.
 pub(crate) fn normalize_reason(reason: &str) -> Option<String> {
-    let trimmed = reason.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
+    non_blank(reason)
 }
 
 /// Resolves the session reason from the `SECRETSPEC_REASON` environment variable,
@@ -534,7 +544,9 @@ impl Secrets {
     /// Blank input (empty or whitespace-only) is ignored, so a blank
     /// `--provider` or `SECRETSPEC_PROVIDER` cannot shadow the configured
     /// fallback chain. CI templates and workflow `env:` maps routinely
-    /// materialize unset values as empty strings.
+    /// materialize unset values as empty strings. A padded-but-nonblank value
+    /// is trimmed before it is stored, so a trailing newline from `$(cat file)`
+    /// does not select a nonexistent provider (see [`non_blank`]).
     ///
     /// # Arguments
     ///
@@ -550,8 +562,7 @@ impl Secrets {
     /// spec.check(false).unwrap();
     /// ```
     pub fn set_provider(&mut self, provider: impl Into<String>) {
-        let provider = provider.into();
-        if !provider.trim().is_empty() {
+        if let Some(provider) = non_blank(&provider.into()) {
             self.provider = Some(provider);
         }
     }
@@ -575,8 +586,7 @@ impl Secrets {
     /// spec.check(false).unwrap();
     /// ```
     pub fn set_profile(&mut self, profile: impl Into<String>) {
-        let profile = profile.into();
-        if !profile.trim().is_empty() {
+        if let Some(profile) = non_blank(&profile.into()) {
             self.profile = Some(profile);
         }
     }
@@ -1102,7 +1112,8 @@ impl Secrets {
             .or_else(|| {
                 env::var("SECRETSPEC_PROFILE")
                     .ok()
-                    .filter(|s| !s.trim().is_empty())
+                    .as_deref()
+                    .and_then(non_blank)
             })
             .or_else(|| {
                 self.global_config
@@ -1285,7 +1296,8 @@ impl Secrets {
             .or_else(|| {
                 env::var("SECRETSPEC_PROVIDER")
                     .ok()
-                    .filter(|s| !s.trim().is_empty())
+                    .as_deref()
+                    .and_then(non_blank)
             })
     }
 
@@ -3182,7 +3194,12 @@ impl Secrets {
     ///
     /// `as_path` secrets keep their backing temp files, like [`Secrets::check`],
     /// so the emitted paths stay valid for whatever consumes the output.
-    pub fn export(&self, format: ExportFormat) -> Result<()> {
+    ///
+    /// Output is written to `out` rather than directly to stdout, so an SDK/FFI
+    /// caller can capture the formatted bytes and a broken pipe surfaces as a
+    /// returned error (and is audited) instead of a panic. The CLI passes a
+    /// locked stdout handle.
+    pub fn export(&self, format: ExportFormat, out: &mut dyn io::Write) -> Result<()> {
         self.ensure_reason_for(AuditAction::Export, None)?;
         let profile = self.resolve_profile_name(None);
 
@@ -3202,22 +3219,43 @@ impl Secrets {
             }
         };
 
-        // Deterministic key order regardless of HashMap iteration
-        let mut entries: Vec<(String, String)> = validated
+        // Persist as_path temp files *before* emitting, so a persistence failure
+        // aborts up front rather than after the paths have already been written
+        // out (a consumer captures stdout regardless of the exit code) and the
+        // temp files are then deleted on drop. The path strings already live in
+        // `resolved.secrets`, so keeping first does not change what is emitted.
+        if let Err(e) = validated.keep_temp_files() {
+            let err = SecretSpecError::Io(e);
+            self.record(
+                AuditAction::Export,
+                &validated.resolved.profile,
+                AuditOutcome::Error,
+                AuditFields {
+                    error_kind: Some(err.kind()),
+                    ..Default::default()
+                },
+            );
+            return Err(err);
+        }
+
+        // Deterministic key order regardless of HashMap iteration. Values are
+        // borrowed (not copied) out of the resolved map, so secret material is
+        // not duplicated into a second set of heap buffers.
+        let mut entries: Vec<(&str, &str)> = validated
             .resolved
             .secrets
             .iter()
-            .map(|(key, value)| (key.clone(), value.expose_secret().to_string()))
+            .map(|(key, value)| (key.as_str(), value.expose_secret()))
             .collect();
         entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         let keys: Vec<String> = if self.audit.is_some() {
-            entries.iter().map(|(key, _)| key.clone()).collect()
+            entries.iter().map(|(key, _)| key.to_string()).collect()
         } else {
             Vec::new()
         };
 
-        let result = write_export(format, &entries);
+        let result = write_export(format, &entries, out);
         self.record(
             AuditAction::Export,
             &validated.resolved.profile,
@@ -3233,9 +3271,6 @@ impl Secrets {
             },
         );
         result?;
-
-        // Persist as_path temp files so emitted paths outlive this process
-        validated.keep_temp_files().map_err(SecretSpecError::Io)?;
 
         Ok(())
     }
@@ -3256,34 +3291,44 @@ pub enum ExportFormat {
     Gha,
 }
 
-/// Write entries (pre-sorted by key) to stdout in the given format
-fn write_export(format: ExportFormat, entries: &[(String, String)]) -> Result<()> {
+/// Write entries (pre-sorted by key) to `out` in the given format. Writing to
+/// an injected sink (rather than `print!`) lets an SDK caller capture the bytes
+/// and turns a broken pipe into a returned error instead of a panic.
+fn write_export(
+    format: ExportFormat,
+    entries: &[(&str, &str)],
+    out: &mut dyn io::Write,
+) -> Result<()> {
     match format {
         ExportFormat::Shell => {
-            let mut out = String::new();
+            let mut buf = String::new();
             for (key, value) in entries {
-                out.push_str("export ");
-                out.push_str(key);
-                out.push('=');
-                out.push_str(&shell_single_quote(value));
-                out.push('\n');
+                buf.push_str("export ");
+                buf.push_str(key);
+                buf.push('=');
+                buf.push_str(&shell_single_quote(value));
+                buf.push('\n');
             }
-            print!("{out}");
+            out.write_all(buf.as_bytes()).map_err(SecretSpecError::Io)?;
         }
         ExportFormat::Dotenv => {
-            let vars: HashMap<String, String> = entries.iter().cloned().collect();
-            print!("{}", crate::provider::dotenv::serialize_dotenv(&vars));
+            // entries are already sorted, so serialize them directly instead of
+            // rebuilding and re-sorting a map (which would also re-copy values).
+            let content = crate::provider::dotenv::serialize_dotenv_pairs(
+                entries.iter().map(|(key, value)| (*key, *value)),
+            );
+            out.write_all(content.as_bytes())
+                .map_err(SecretSpecError::Io)?;
         }
         ExportFormat::Json => {
-            let map: BTreeMap<&str, &str> = entries
-                .iter()
-                .map(|(key, value)| (key.as_str(), value.as_str()))
-                .collect();
-            let json = serde_json::to_string_pretty(&map)
+            let map: BTreeMap<&str, &str> = entries.iter().copied().collect();
+            let json = serde_json::to_string(&map)
                 .map_err(|e| SecretSpecError::Io(io::Error::other(e)))?;
-            println!("{json}");
+            out.write_all(json.as_bytes())
+                .and_then(|()| out.write_all(b"\n"))
+                .map_err(SecretSpecError::Io)?;
         }
-        ExportFormat::Gha => write_gha(entries)?,
+        ExportFormat::Gha => write_gha(entries, out)?,
     }
 
     Ok(())
@@ -3304,10 +3349,10 @@ fn shell_single_quote(value: &str) -> String {
     out
 }
 
-/// GitHub/Forgejo Actions writer that masks every value line on stdout and
+/// GitHub/Forgejo Actions writer that masks every value line on `out` and
 /// appends the assignments to `$GITHUB_ENV`. Multi-line values use the heredoc
 /// form so they survive. Errors when `$GITHUB_ENV` is unset.
-fn write_gha(entries: &[(String, String)]) -> Result<()> {
+fn write_gha(entries: &[(&str, &str)], out: &mut dyn io::Write) -> Result<()> {
     use std::io::Write;
 
     let github_env = env::var("GITHUB_ENV").map_err(|_| {
@@ -3317,18 +3362,22 @@ fn write_gha(entries: &[(String, String)]) -> Result<()> {
         ))
     })?;
 
-    // Mask every value line so the runner scrubs accidental echoes
+    // Mask every value line so the runner scrubs accidental echoes. The data
+    // must be percent-encoded the way the runner expects, since it *unescapes*
+    // add-mask data before registering the mask; emitting the raw value would
+    // register a different string and leave the true secret unmasked.
     let mut masks = String::new();
     for (_, value) in entries {
         for line in value.split('\n') {
             if !line.is_empty() {
                 masks.push_str("::add-mask::");
-                masks.push_str(line);
+                masks.push_str(&gha_escape_data(line));
                 masks.push('\n');
             }
         }
     }
-    print!("{masks}");
+    out.write_all(masks.as_bytes())
+        .map_err(SecretSpecError::Io)?;
 
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -3356,10 +3405,28 @@ fn write_gha(entries: &[(String, String)]) -> Result<()> {
         }
     }
 
-    file.write_all(block.as_bytes())
-        .map_err(SecretSpecError::Io)?;
+    // Record the length before appending so a partial write can be rolled back:
+    // a truncated heredoc opener with no closing delimiter would otherwise
+    // corrupt `$GITHUB_ENV` parsing for every later step in the job.
+    let start_len = file.metadata().map_err(SecretSpecError::Io)?.len();
+    if let Err(e) = file.write_all(block.as_bytes()) {
+        let _ = file.set_len(start_len);
+        return Err(SecretSpecError::Io(e));
+    }
 
     Ok(())
+}
+
+/// Percent-encodes workflow-command data the way the Actions runner expects (it
+/// unescapes the data before registering the mask), so the masked string equals
+/// the real secret. Mirrors `@actions/core`'s `escapeData`. `%` is escaped first
+/// so an embedded `%25`/`%0D`/`%0A` in the value is not later read back as `%`,
+/// CR, or LF.
+fn gha_escape_data(value: &str) -> String {
+    value
+        .replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
 }
 
 /// A heredoc delimiter that does not collide with any line of `value`
@@ -3403,6 +3470,42 @@ mod export_tests {
             assert_eq!(read_back, value, "round-trip mismatch for {value:?}");
         }
     }
+
+    fn rendered(format: ExportFormat, entries: &[(&str, &str)]) -> String {
+        let mut buf = Vec::new();
+        write_export(format, entries, &mut buf).expect("write_export should succeed");
+        String::from_utf8(buf).expect("export output is utf-8")
+    }
+
+    #[test]
+    fn shell_format_quotes_each_value() {
+        let out = rendered(ExportFormat::Shell, &[("A", "x y"), ("B", "a'b")]);
+        assert_eq!(out, "export A='x y'\nexport B='a'\\''b'\n");
+    }
+
+    #[test]
+    fn json_format_is_compact() {
+        let out = rendered(ExportFormat::Json, &[("A", "1"), ("B", "2")]);
+        assert_eq!(out, "{\"A\":\"1\",\"B\":\"2\"}\n");
+    }
+
+    #[test]
+    fn dotenv_format_double_quotes_and_escapes() {
+        let out = rendered(ExportFormat::Dotenv, &[("A", "pa$$"), ("B", "x")]);
+        assert_eq!(out, "A=\"pa\\$\\$\"\nB=\"x\"\n");
+    }
+
+    /// The runner unescapes add-mask data before registering it, so the data we
+    /// emit must be percent-encoded or the true value is left unmasked.
+    #[test]
+    fn gha_escape_data_encodes_percent_cr_and_lf() {
+        assert_eq!(gha_escape_data("plain"), "plain");
+        assert_eq!(gha_escape_data("a%b"), "a%25b");
+        assert_eq!(gha_escape_data("a\rb"), "a%0Db");
+        assert_eq!(gha_escape_data("a\nb"), "a%0Ab");
+        // `%` is escaped first, so a literal `%0A` is not decoded back to a newline.
+        assert_eq!(gha_escape_data("a%0Ab"), "a%250Ab");
+    }
 }
 
 #[cfg(test)]
@@ -3430,6 +3533,19 @@ mod policy_tests {
         assert_eq!(normalize_reason(""), None);
         assert_eq!(normalize_reason("   "), None);
         assert_eq!(normalize_reason("\t\n"), None);
+    }
+
+    #[test]
+    fn non_blank_trims_and_blanks_to_none() {
+        // A padded-but-nonblank override (e.g. a `$(cat file)` trailing newline)
+        // is trimmed, not used verbatim, so it cannot select a nonexistent
+        // profile/provider.
+        assert_eq!(non_blank("production\n"), Some("production".to_string()));
+        assert_eq!(non_blank("  keyring  "), Some("keyring".to_string()));
+        // Blank input (empty or whitespace-only) is dropped.
+        assert_eq!(non_blank(""), None);
+        assert_eq!(non_blank("   "), None);
+        assert_eq!(non_blank("\t\n"), None);
     }
 
     /// A non-UTF-8 environment variable must not crash detection: the offending

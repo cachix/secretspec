@@ -19,7 +19,20 @@ name: "Node addon"
 # is built with vendored-dbus and stays independent of it.
 
 on:
+  workflow_call:
+    inputs:
+      publish:
+        description: Publish the built packages to npm
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the built packages to npm
+        required: false
+        type: boolean
+        default: false
   push:
     tags:
       - v**
@@ -123,9 +136,9 @@ jobs:
 
   publish:
     name: publish to npm
-    # Publishes on a version tag, or via a manual dispatch so a single SDK can be
-    # re-published without re-tagging (which would re-run every other ecosystem).
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    # Version tags publish automatically. A standalone manual run can opt in to
+    # re-publishing one SDK, while reusable pre-release runs always leave this off.
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish
     needs: [addon]
     runs-on: ubuntu-latest
     permissions:

@@ -1,0 +1,102 @@
+name: "Pre-release"
+
+# Runs every test and distributable-build workflow against the selected ref.
+# It starts automatically for version bump PRs titled "Release ..." and remains
+# available manually for any branch or tag. Publishing stays in tag workflows.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize, edited]
+    paths:
+      - "CHANGELOG.md"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "secretspec/Cargo.toml"
+      - "secretspec-derive/Cargo.toml"
+      - "secretspec-hs/secretspec.cabal"
+      - "secretspec-node/package.json"
+      - "secretspec-py/pyproject.toml"
+      - "secretspec-rb/secretspec.gemspec"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pre-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  authorize:
+    name: Release PR
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        startsWith(github.event.pull_request.title, 'Release ') &&
+        (
+          github.event.action != 'edited' ||
+          github.event.changes.title.from != null
+        )
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Running the full pre-release suite for $GITHUB_SHA"
+
+  test:
+    name: Rust tests
+    needs: authorize
+    uses: ./.github/workflows/test.yml
+
+  sdks:
+    name: SDK test suites
+    needs: authorize
+    uses: ./.github/workflows/sdks.yml
+
+  ffi:
+    name: FFI libraries
+    needs: authorize
+    uses: ./.github/workflows/ffi-build.yml
+
+  node:
+    name: Node packages
+    needs: authorize
+    uses: ./.github/workflows/node-addon.yml
+    with:
+      publish: false
+
+  python:
+    name: Python wheels
+    needs: authorize
+    uses: ./.github/workflows/python-wheels.yml
+
+  ruby:
+    name: Ruby gems
+    needs: authorize
+    uses: ./.github/workflows/ruby-gems.yml
+
+  php:
+    name: PHP extensions
+    needs: authorize
+    uses: ./.github/workflows/php-ext.yml
+
+  go-static:
+    name: Go static library
+    needs: authorize
+    uses: ./.github/workflows/go-static.yml
+
+  go-embed:
+    name: Go embedded libraries
+    needs: authorize
+    uses: ./.github/workflows/go-embed.yml
+
+  haskell:
+    name: Haskell static-link build
+    needs: authorize
+    uses: ./.github/workflows/haskell-build.yml
+
+  release-artifacts:
+    name: CLI release artifacts
+    needs: authorize
+    uses: ./.github/workflows/release.yml
+    with:
+      build_artifacts: true

@@ -17,6 +17,7 @@ name: "PHP extension"
 # distributable extension binaries.
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     tags:
@@ -100,7 +101,7 @@ jobs:
           path: ${{ steps.stage.outputs.asset }}
 
       - name: Publish extension to the release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

@@ -19,6 +19,7 @@ name: "Ruby gems"
 # builds the distributable gems.
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     tags:
@@ -85,7 +86,7 @@ jobs:
 
   publish:
     name: publish to RubyGems
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [gems]
     runs-on: ubuntu-latest
     # Must match the "Environment" configured on rubygems.org's pending

@@ -11,6 +11,7 @@ name: "FFI cdylib"
 # distribution effort.
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     tags:
@@ -84,7 +85,7 @@ jobs:
       # sidecar) to the GitHub Release so the PHP SDK's `secretspec-install-lib`
       # command can fetch the right one for a plain `composer require` install.
       - name: Publish cdylib to the release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

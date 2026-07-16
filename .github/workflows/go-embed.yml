@@ -8,6 +8,7 @@ name: "Go embedded lib"
 # assets — see RELEASE.md).
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     tags:

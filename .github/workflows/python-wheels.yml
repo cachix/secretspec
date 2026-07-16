@@ -21,6 +21,7 @@ name: "Python wheels"
 # before the first version tag.
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     tags:
@@ -92,7 +93,7 @@ jobs:
 
   publish:
     name: publish to PyPI
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [linux, native]
     runs-on: ubuntu-latest
     environment: pypi

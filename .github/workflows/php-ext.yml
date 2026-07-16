@@ -18,7 +18,19 @@ name: "PHP extension"
 
 on:
   workflow_call:
+    inputs:
+      release_tag:
+        description: Existing GitHub Release tag to upload artifacts to
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub Release tag to upload artifacts to
+        required: false
+        type: string
+        default: ""
   push:
     tags:
       - v**
@@ -101,8 +113,8 @@ jobs:
           path: ${{ steps.stage.outputs.asset }}
 
       - name: Publish extension to the release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.release_tag != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash scripts/upload-release-asset.sh "${GITHUB_REF_NAME}" "${{ steps.stage.outputs.asset }}"
+        run: bash scripts/upload-release-asset.sh "${{ inputs.release_tag || github.ref_name }}" "${{ steps.stage.outputs.asset }}"

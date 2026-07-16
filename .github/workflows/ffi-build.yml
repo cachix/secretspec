@@ -12,7 +12,19 @@ name: "FFI cdylib"
 
 on:
   workflow_call:
+    inputs:
+      release_tag:
+        description: Existing GitHub Release tag to upload artifacts to
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub Release tag to upload artifacts to
+        required: false
+        type: string
+        default: ""
   push:
     tags:
       - v**
@@ -85,7 +97,7 @@ jobs:
       # sidecar) to the GitHub Release so the PHP SDK's `secretspec-install-lib`
       # command can fetch the right one for a plain `composer require` install.
       - name: Publish cdylib to the release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.release_tag != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -94,4 +106,4 @@ jobs:
           ext="${{ matrix.artifact }}"; ext="${ext##*.}"
           asset="secretspec-ffi-${{ matrix.target }}.${ext}"
           cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "$asset"
-          bash scripts/upload-release-asset.sh "${GITHUB_REF_NAME}" "$asset"
+          bash scripts/upload-release-asset.sh "${{ inputs.release_tag || github.ref_name }}" "$asset"

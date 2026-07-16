@@ -5,7 +5,7 @@
 #
 #     upload-release-asset.sh <tag> <asset> [asset...]
 #
-# cargo-dist's release.yml creates the release for the same tag concurrently,
+# cargo-dist's v-release.yml creates the release for the same tag concurrently,
 # so wait for it to exist, then upload with --clobber (either workflow may
 # retry). Needs GH_TOKEN with contents: write.
 set -euo pipefail
@@ -21,8 +21,14 @@ for asset in "$@"; do
   files+=("$asset" "$asset.sha256")
 done
 
-# Wait for cargo-dist to create the release (concurrent workflow).
-for _ in $(seq 1 30); do
+# Wait for cargo-dist to create the release (concurrent workflow). Building the
+# full five-platform CLI matrix can take well over ten minutes on uncached
+# runners, so allow an hour before treating the release as missing.
+for _ in $(seq 1 180); do
   gh release view "$tag" >/dev/null 2>&1 && break || sleep 20
 done
+if ! gh release view "$tag" >/dev/null 2>&1; then
+  echo "GitHub Release $tag was not created within one hour" >&2
+  exit 1
+fi
 gh release upload "$tag" "${files[@]}" --clobber

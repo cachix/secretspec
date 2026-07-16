@@ -1,7 +1,8 @@
 name: "CLI release artifacts"
 
-# Builds the same cargo-dist archives and installers as release.yml, but never
-# hosts a GitHub Release or publishes anything. Keep release.yml generated.
+# Builds the same cargo-dist archives and installers as v-release.yml, but
+# never hosts a GitHub Release or publishes anything. Keep v-release.yml
+# generated.
 
 on:
   workflow_call:

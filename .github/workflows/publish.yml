@@ -9,7 +9,7 @@ on:
         type: string
   push:
     tags:
-      - "*[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+*"
 
 jobs:
   publish:
@@ -42,12 +42,38 @@ jobs:
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
 
-      - name: Publish secretspec crate
-        run: devenv shell cargo publish -p secretspec
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      - name: Publish Rust crates
+        # The derive crate is a registry dependency of the main crate, so it
+        # must be published first. Registry checks make retries idempotent when
+        # a previous run published successfully but failed during cleanup.
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
+          user_agent="secretspec-release/${version} (https://github.com/cachix/secretspec)"
 
-      - name: Publish secretspec-derive crate
-        run: devenv shell cargo publish -p secretspec-derive
+          for crate in secretspec-derive secretspec; do
+            if curl -fsS -A "$user_agent" \
+              "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null; then
+              echo "${crate} ${version} is already published"
+              continue
+            fi
+
+            devenv shell cargo publish -p "$crate"
+
+            published=false
+            for _ in $(seq 1 30); do
+              if curl -fsS -A "$user_agent" \
+                "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null; then
+                published=true
+                break
+              fi
+              sleep 10
+            done
+            if [[ "$published" != true ]]; then
+              echo "${crate} ${version} was not visible on crates.io after five minutes" >&2
+              exit 1
+            fi
+          done
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

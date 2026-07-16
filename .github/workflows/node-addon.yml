@@ -178,7 +178,7 @@ jobs:
           done
       - name: Publish platform packages
         # --tag-style npm: our tags are `vX.Y.Z`, not lerna's `pkg@X.Y.Z`.
-        # --no-gh-release: release.yml (cargo-dist) already creates the
+        # --no-gh-release: v-release.yml (cargo-dist) already creates the
         # GitHub Release for this tag; a second one here would conflict.
         working-directory: secretspec-node
         run: node_modules/.bin/napi pre-publish --tag-style npm --no-gh-release

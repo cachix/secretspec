@@ -168,12 +168,12 @@ impl ProviderUrl {
             .into_owned()
     }
 
-    #[cfg(any(feature = "vault", test))]
+    #[cfg(any(feature = "infisical", feature = "vault", test))]
     pub fn port(&self) -> Option<u16> {
         self.0.port()
     }
 
-    #[cfg(any(feature = "awssm", feature = "vault", test))]
+    #[cfg(any(feature = "awssm", feature = "infisical", feature = "vault", test))]
     pub fn query_pairs(&self) -> url::form_urlencoded::Parse<'_> {
         self.0.query_pairs()
     }

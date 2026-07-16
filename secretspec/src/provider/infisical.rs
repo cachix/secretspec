@@ -31,8 +31,8 @@
 //! - `tls` -- enable TLS: `true` (default) or `false`, for self-hosted
 //!   instances served over plain HTTP.
 //!
-//! When no host is given, falls back to `INFISICAL_DOMAIN`, then to
-//! `app.infisical.com`.
+//! When no host is given, falls back to `INFISICAL_DOMAIN`, then to Infisical's
+//! legacy `INFISICAL_API_URL`, then to `app.infisical.com`.
 //!
 //! # Examples
 //!
@@ -61,6 +61,10 @@
 //! rewriting is needed and distinct keys cannot collide. Folder names are
 //! narrower, so a project or profile Infisical cannot spell is refused rather
 //! than rewritten.
+//!
+//! A folder that imports another resolves the imported keys too, with
+//! Infisical's own precedence: a secret defined directly in the folder wins
+//! over an imported one, and a later import wins over an earlier one.
 
 use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
 use crate::config::NativeAddress;
@@ -83,7 +87,12 @@ const TOKEN: &str = "token";
 const INFISICAL_CLIENT_ID_ENV: &str = "INFISICAL_CLIENT_ID";
 const INFISICAL_CLIENT_SECRET_ENV: &str = "INFISICAL_CLIENT_SECRET";
 const INFISICAL_TOKEN_ENV: &str = "INFISICAL_TOKEN";
-const INFISICAL_DOMAIN_ENV: &str = "INFISICAL_DOMAIN";
+/// The environment variables naming the instance, in the Infisical CLI's own
+/// precedence order: `INFISICAL_DOMAIN` first, then the legacy
+/// `INFISICAL_API_URL` it superseded but still honours (`util.GetEnvDomain`).
+/// Reading only the current name would silently send an existing EU or
+/// self-hosted setup, configured with the legacy one, to US Cloud.
+const INFISICAL_DOMAIN_ENVS: [&str; 2] = ["INFISICAL_DOMAIN", "INFISICAL_API_URL"];
 
 /// Configuration for the Infisical provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,7 +129,7 @@ impl InfisicalConfig {
     /// Infisical's own CLI appends `/api` to the domain unless it is already
     /// there, so the suffix is common in a working configuration -- one that
     /// SecretSpec should read the same way, since it appends `/api` too.
-    fn endpoint_from_domain(domain: &str, http_scheme: &str) -> Result<String> {
+    fn endpoint_from_domain(var: &str, domain: &str, http_scheme: &str) -> Result<String> {
         let domain = domain.trim_end_matches('/');
         let domain = domain.strip_suffix("/api").unwrap_or(domain);
         let absolute = if domain.starts_with("http://") || domain.starts_with("https://") {
@@ -130,17 +139,35 @@ impl InfisicalConfig {
         };
 
         let parsed = url::Url::parse(&absolute).map_err(|e| {
-            SecretSpecError::ProviderOperationFailed(format!(
-                "Invalid {INFISICAL_DOMAIN_ENV} '{domain}': {e}"
-            ))
+            SecretSpecError::ProviderOperationFailed(format!("Invalid {var} '{domain}': {e}"))
         })?;
         if !parsed.path().trim_matches('/').is_empty() {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
-                "Invalid {INFISICAL_DOMAIN_ENV} '{domain}': it names a path. Infisical's \
+                "Invalid {var} '{domain}': it names a path. Infisical's \
                  API is addressed at the host, e.g. https://vault.example.com."
             )));
         }
         Ok(absolute)
+    }
+
+    /// The instance named by the environment, with the variable that named it
+    /// so an error can report the one the user actually set.
+    fn env_domain() -> Option<(&'static str, String)> {
+        Self::pick_domain(|var| std::env::var(var).ok())
+    }
+
+    /// The first variable in [`INFISICAL_DOMAIN_ENVS`] that names an instance.
+    ///
+    /// Trimmed and empty-filtered to match the CLI's `GetEnvDomain`, so a blank
+    /// variable falls through to the next rather than being taken as a domain.
+    /// Split from [`env_domain`](Self::env_domain) so the precedence is
+    /// testable without mutating the process environment.
+    fn pick_domain(lookup: impl Fn(&str) -> Option<String>) -> Option<(&'static str, String)> {
+        INFISICAL_DOMAIN_ENVS.iter().find_map(|var| {
+            let value = lookup(var)?;
+            let value = value.trim().to_string();
+            (!value.is_empty()).then_some((*var, value))
+        })
     }
 }
 
@@ -171,18 +198,15 @@ impl TryFrom<&ProviderUrl> for InfisicalConfig {
             .unwrap_or(true);
         let http_scheme = if use_tls { "https" } else { "http" };
 
-        // Host from the URI, else INFISICAL_DOMAIN, else Infisical Cloud.
+        // Host from the URI, else the environment, else Infisical Cloud.
         let endpoint = match url.host().filter(|s| !s.is_empty()) {
             Some(host) => match url.port() {
                 Some(port) => format!("{http_scheme}://{host}:{port}"),
                 None => format!("{http_scheme}://{host}"),
             },
-            None => match std::env::var(INFISICAL_DOMAIN_ENV)
-                .ok()
-                .filter(|s| !s.is_empty())
-            {
-                // INFISICAL_DOMAIN is a full URL in Infisical's own CLI.
-                Some(domain) => Self::endpoint_from_domain(&domain, http_scheme)?,
+            // The domain is a full URL in Infisical's own CLI.
+            None => match Self::env_domain() {
+                Some((var, domain)) => Self::endpoint_from_domain(var, &domain, http_scheme)?,
                 None => format!("{http_scheme}://{DEFAULT_HOST}"),
             },
         };
@@ -242,7 +266,14 @@ pub struct InfisicalProvider {
     /// The Universal Auth access token, fetched once per process. Infisical's
     /// tokens are short-lived (7200s by default), which outlives any single
     /// SecretSpec invocation.
-    token: OnceLock<SecretString>,
+    ///
+    /// Async, because the exchange itself must be serialized rather than merely
+    /// its result: a batch read fetches distinct addresses concurrently, and a
+    /// cell that only guards the completed token lets every caller log in and
+    /// then discard all but one. Infisical supports client secrets with a
+    /// one-use limit, for which the surplus exchanges are not just waste but a
+    /// hard failure.
+    token: tokio::sync::OnceCell<SecretString>,
     /// One HTTP client for every request, so a run of secrets reuses the
     /// connection rather than building a pool per call.
     http: OnceLock<reqwest::Client>,
@@ -264,7 +295,7 @@ impl InfisicalProvider {
         Self {
             config,
             credentials: ProviderCredentials::new(),
-            token: OnceLock::new(),
+            token: tokio::sync::OnceCell::new(),
             http: OnceLock::new(),
         }
     }
@@ -342,17 +373,20 @@ impl InfisicalProvider {
     /// runtime that [`block_on`](super::block_on) already entered for the
     /// request, and blocking there would panic.
     async fn resolve_token(&self) -> Result<&SecretString> {
-        if let Some(token) = self.token.get() {
-            return Ok(token);
-        }
-        // `credential_or_env` never yields an empty value, so a blank
-        // INFISICAL_TOKEN reads as absent rather than as a broken token.
-        let token = match credential_or_env(&self.credentials, TOKEN, INFISICAL_TOKEN_ENV) {
-            Some(token) => SecretString::new(token.into()),
-            None => self.login().await?,
-        };
-        // A concurrent login would have produced an equivalent token.
-        Ok(self.token.get_or_init(|| token))
+        // `get_or_try_init` runs one initializer at a time: a concurrent caller
+        // waits for the in-flight exchange and takes its token rather than
+        // starting a second one. On failure the cell stays empty, so a later
+        // call retries instead of caching the error.
+        self.token
+            .get_or_try_init(|| async {
+                // `credential_or_env` never yields an empty value, so a blank
+                // INFISICAL_TOKEN reads as absent rather than as a broken token.
+                match credential_or_env(&self.credentials, TOKEN, INFISICAL_TOKEN_ENV) {
+                    Some(token) => Ok(SecretString::new(token.into())),
+                    None => self.login().await,
+                }
+            })
+            .await
     }
 
     /// Exchanges the machine identity's credentials for an access token.
@@ -544,6 +578,55 @@ impl InfisicalProvider {
         }
     }
 
+    /// Folds a list response's imported secrets into the keys read directly
+    /// from the folder.
+    ///
+    /// A folder can import others, and the list endpoint answers with those in
+    /// a separate `imports` array rather than merged into `secrets` (it sets
+    /// `includeImports` by default, so they arrive whether or not they are
+    /// asked for). Ignoring them would make a batch read disagree with a
+    /// single read of the same key, which does resolve imports: `check` and
+    /// `run` would call an imported secret missing while `get` returned it.
+    ///
+    /// The precedence mirrors the Infisical CLI's `InjectRawImportedSecret`, so
+    /// a value resolves the same way here as it does through their own tool: a
+    /// secret defined directly in the folder wins over any import, and among
+    /// imports a later entry wins over an earlier one (the CLI walks the array
+    /// in reverse, taking the first value it finds for a key).
+    fn merge_imports(
+        parsed: &serde_json::Value,
+        listed: &mut HashMap<String, SecretString>,
+    ) -> Result<()> {
+        // Absent rather than empty on an instance that predates imports, or on
+        // a folder that imports nothing.
+        let Some(imports) = parsed["imports"].as_array() else {
+            return Ok(());
+        };
+
+        for import in imports.iter().rev() {
+            let Some(secrets) = import["secrets"].as_array() else {
+                continue;
+            };
+            for secret in secrets {
+                let Some(key) = secret["secretKey"].as_str() else {
+                    continue;
+                };
+                // A direct secret, or a higher-precedence import, already
+                // claimed this key.
+                if listed.contains_key(key) {
+                    continue;
+                }
+                // Withheld values are refused here exactly as for a direct
+                // secret: an imported key the identity may not read must not
+                // arrive as the literal placeholder.
+                if let Some(value) = Self::secret_value(secret, key)? {
+                    listed.insert(key.to_string(), value);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Lists every secret in one folder, indexed by key. Infisical has no
     /// fetch-these-N-names endpoint, so a batch read lists the folder once.
     async fn list_async(
@@ -581,6 +664,7 @@ impl InfisicalProvider {
                         listed.insert(key.to_string(), value);
                     }
                 }
+                Self::merge_imports(&parsed, &mut listed)?;
                 Ok(listed)
             }
             // An absent folder holds no secrets, exactly like an empty one.
@@ -1154,6 +1238,109 @@ mod tests {
         assert_eq!(value.expose_secret(), "s3cret");
     }
 
+    /// Builds a list-response import entry holding one key.
+    fn import(path: &str, key: &str, value: &str) -> serde_json::Value {
+        serde_json::json!({
+            "secretPath": path,
+            "environment": "prod",
+            "secrets": [{
+                "secretKey": key,
+                "secretValue": value,
+                "secretValueHidden": false,
+            }],
+        })
+    }
+
+    fn merged(parsed: &serde_json::Value, direct: &[(&str, &str)]) -> HashMap<String, String> {
+        let mut listed: HashMap<String, SecretString> = direct
+            .iter()
+            .map(|(k, v)| (k.to_string(), SecretString::new((*v).into())))
+            .collect();
+        InfisicalProvider::merge_imports(parsed, &mut listed).expect("merge");
+        listed
+            .into_iter()
+            .map(|(k, v)| (k, v.expose_secret().to_string()))
+            .collect()
+    }
+
+    /// An imported secret is readable in a batch read.
+    ///
+    /// Infisical answers a folder's imports separately from its own secrets. A
+    /// batch read that ignored them would call an imported secret missing while
+    /// a single read of the same key returned it.
+    #[test]
+    fn imported_secrets_are_merged_into_a_listing() {
+        let parsed = serde_json::json!({
+            "secrets": [],
+            "imports": [import("/shared", "DB_HOST", "db.internal")],
+        });
+        let merged = merged(&parsed, &[]);
+        assert_eq!(
+            merged.get("DB_HOST").map(String::as_str),
+            Some("db.internal")
+        );
+    }
+
+    /// A folder's own secret wins over an imported one, as in Infisical's CLI.
+    #[test]
+    fn a_direct_secret_beats_an_import() {
+        let parsed = serde_json::json!({
+            "secrets": [],
+            "imports": [import("/shared", "DB_HOST", "imported")],
+        });
+        let merged = merged(&parsed, &[("DB_HOST", "direct")]);
+        assert_eq!(merged.get("DB_HOST").map(String::as_str), Some("direct"));
+    }
+
+    /// Among imports the later entry wins: the CLI walks `imports` in reverse
+    /// and keeps the first value it finds for a key.
+    #[test]
+    fn a_later_import_beats_an_earlier_one() {
+        let parsed = serde_json::json!({
+            "secrets": [],
+            "imports": [
+                import("/base", "DB_HOST", "from-base"),
+                import("/override", "DB_HOST", "from-override"),
+            ],
+        });
+        let merged = merged(&parsed, &[]);
+        assert_eq!(
+            merged.get("DB_HOST").map(String::as_str),
+            Some("from-override"),
+        );
+    }
+
+    /// A withheld imported value is refused, exactly as a direct one is.
+    #[test]
+    fn a_withheld_imported_value_is_refused() {
+        let parsed = serde_json::json!({
+            "secrets": [],
+            "imports": [serde_json::json!({
+                "secretPath": "/shared",
+                "environment": "prod",
+                "secrets": [{
+                    "secretKey": "DB_HOST",
+                    "secretValue": "<hidden-by-infisical>",
+                    "secretValueHidden": true,
+                }],
+            })],
+        });
+        let mut listed = HashMap::new();
+        let err = InfisicalProvider::merge_imports(&parsed, &mut listed)
+            .expect_err("a withheld import must not pass through");
+        assert!(err.to_string().contains("DB_HOST"), "{err}");
+    }
+
+    /// A response without `imports` is not an error: an instance predating
+    /// imports, or a folder importing nothing, simply has none.
+    #[test]
+    fn a_listing_without_imports_is_unchanged() {
+        let parsed = serde_json::json!({ "secrets": [] });
+        let merged = merged(&parsed, &[("API_KEY", "kept")]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged.get("API_KEY").map(String::as_str), Some("kept"));
+    }
+
     /// A write held for approval does not report success.
     ///
     /// A project under an approval policy answers a write with 200 and an
@@ -1280,17 +1467,95 @@ mod tests {
     /// mistake. A domain naming any other path still is one.
     #[test]
     fn a_domain_may_carry_the_api_suffix() {
+        let var = INFISICAL_DOMAIN_ENVS[0];
         assert_eq!(
-            InfisicalConfig::endpoint_from_domain("https://vault.example.com/api", "https")
+            InfisicalConfig::endpoint_from_domain(var, "https://vault.example.com/api", "https")
                 .unwrap(),
             "https://vault.example.com"
         );
         assert_eq!(
-            InfisicalConfig::endpoint_from_domain("vault.example.com:8080", "https").unwrap(),
+            InfisicalConfig::endpoint_from_domain(var, "vault.example.com:8080", "https").unwrap(),
             "https://vault.example.com:8080"
         );
-        let err = InfisicalConfig::endpoint_from_domain("https://example.com/infisical", "https")
-            .unwrap_err();
+        let err =
+            InfisicalConfig::endpoint_from_domain(var, "https://example.com/infisical", "https")
+                .unwrap_err();
         assert!(err.to_string().contains("names a path"), "{err}");
+    }
+
+    /// An invalid domain is reported against the variable that actually set it,
+    /// not against whichever name the provider happens to prefer.
+    #[test]
+    fn an_invalid_domain_names_the_variable_that_set_it() {
+        let err =
+            InfisicalConfig::endpoint_from_domain("INFISICAL_API_URL", "https://e.com/x", "https")
+                .unwrap_err();
+        assert!(err.to_string().contains("INFISICAL_API_URL"), "{err}");
+    }
+
+    /// The legacy variable still names an instance.
+    ///
+    /// Infisical superseded `INFISICAL_API_URL` with `INFISICAL_DOMAIN` but
+    /// still honours it, so an existing EU or self-hosted setup configured with
+    /// the old name must not be silently redirected to US Cloud.
+    #[test]
+    fn the_legacy_domain_variable_is_honoured() {
+        let picked = InfisicalConfig::pick_domain(|var| {
+            (var == "INFISICAL_API_URL").then(|| "https://eu.infisical.com".to_string())
+        });
+        assert_eq!(
+            picked,
+            Some(("INFISICAL_API_URL", "https://eu.infisical.com".to_string()))
+        );
+    }
+
+    /// `INFISICAL_DOMAIN` wins when both are set, matching the CLI's
+    /// `GetEnvDomain` precedence.
+    #[test]
+    fn the_current_domain_variable_supersedes_the_legacy_one() {
+        let picked = InfisicalConfig::pick_domain(|var| {
+            Some(
+                match var {
+                    "INFISICAL_DOMAIN" => "https://current.example.com",
+                    _ => "https://legacy.example.com",
+                }
+                .to_string(),
+            )
+        });
+        assert_eq!(
+            picked,
+            Some((
+                "INFISICAL_DOMAIN",
+                "https://current.example.com".to_string()
+            ))
+        );
+    }
+
+    /// A blank variable falls through rather than being taken as a domain, so
+    /// `INFISICAL_DOMAIN=""` still lets the legacy name apply.
+    #[test]
+    fn a_blank_domain_variable_falls_through() {
+        let picked = InfisicalConfig::pick_domain(|var| {
+            Some(
+                match var {
+                    "INFISICAL_DOMAIN" => "   ",
+                    _ => "https://legacy.example.com",
+                }
+                .to_string(),
+            )
+        });
+        assert_eq!(
+            picked,
+            Some((
+                "INFISICAL_API_URL",
+                "https://legacy.example.com".to_string()
+            ))
+        );
+    }
+
+    /// Neither set means Infisical Cloud, not an error.
+    #[test]
+    fn no_domain_variable_is_not_an_error() {
+        assert_eq!(InfisicalConfig::pick_domain(|_| None), None);
     }
 }

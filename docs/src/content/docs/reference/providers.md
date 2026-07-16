@@ -203,8 +203,8 @@ infisical://localhost:8080/7e2f1a4c-...?tls=false     # Self-hosted over plain H
 ```
 
 The project is Infisical's project **UUID** (Project Settings → Project ID); its API does not
-accept the project slug. Without a host, the provider reads `INFISICAL_DOMAIN`, then defaults to
-Infisical Cloud.
+accept the project slug. Without a host, the provider reads `INFISICAL_DOMAIN`, then Infisical's
+legacy `INFISICAL_API_URL`, then defaults to Infisical Cloud.
 
 **Features**: Read/write, cloud sync, profiles, machine-identity (Universal Auth) or token auth, secret references, version-pinned refs
 **Prerequisites**: An Infisical project, a machine identity with access to it, build with `--features infisical`

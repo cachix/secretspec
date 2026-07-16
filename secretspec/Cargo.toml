@@ -62,6 +62,9 @@ vendored-dbus = ["keyring?/vendored"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]
 awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
 vault = ["dep:reqwest"]
-infisical = ["dep:reqwest"]
+# `tokio/sync` for the async `OnceCell` that serializes the Universal Auth
+# exchange. It is already on transitively via reqwest, but a provider should
+# name the features it uses rather than inherit them from a sibling.
+infisical = ["dep:reqwest", "tokio/sync"]
 bws = ["dep:bitwarden", "dep:rustls"]
 akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secrets"]

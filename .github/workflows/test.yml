@@ -42,6 +42,27 @@ jobs:
     - name: Run tests
       run: devenv shell -- cargo test --all
 
+  # Each optional provider must compile on its own, not just in the default
+  # feature set. `cargo test` above cannot catch a missing feature gate: it
+  # builds with every provider enabled and with `cfg(test)` on, and shared
+  # helpers gated on `any(feature = "...", test)` are reachable under either.
+  # A provider that forgets to add itself to such a gate only breaks for the
+  # user who builds it standalone, which is precisely who `--features` is for.
+  features:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - name: Install Rust
+      run: rustup toolchain install stable --profile minimal
+    - name: Check each provider feature standalone
+      run: |
+        set -euo pipefail
+        for feature in cli keyring gcsm awssm vault infisical bws akv; do
+          echo "::group::$feature"
+          cargo check --package secretspec --no-default-features --features "$feature"
+          echo "::endgroup::"
+        done
+
   # Windows runners can't run Nix/devenv, so the suite runs here natively via
   # rustup + cargo. This exists specifically to catch Windows-only path handling
   # regressions (e.g. config discovery and relative `-f` paths, issue #59), which

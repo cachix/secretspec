@@ -25,7 +25,8 @@ in SecretSpec 0.15.
 infisical://[host]/{project-id}[?env=slug&path=/prefix&tls=false]
 ```
 
-- `host`: the Infisical instance (falls back to `INFISICAL_DOMAIN`, then `app.infisical.com`)
+- `host`: the Infisical instance (falls back to `INFISICAL_DOMAIN`, then the legacy
+  `INFISICAL_API_URL`, then `app.infisical.com`)
 - `{project-id}`: the project's **UUID**, from Project Settings → Project ID
 - `?env=`: environment slug. Without it, the SecretSpec profile names the environment
 - `?path=`: folder prefix holding SecretSpec's secrets (default: `/secretspec`)
@@ -115,6 +116,12 @@ A ref has no profile to name an environment with, so the provider URI must pin o
 Infisical secrets are single values with no sub-components, so `field`, `section` and `vault` are
 rejected.
 
+## Imported folders
+
+A folder that imports another resolves the imported keys too, with Infisical's own precedence: a
+secret defined directly in the folder wins over an imported one, and a later import wins over an
+earlier one. This matches their CLI, so a value reads the same way through either tool.
+
 ## Secret references inside values
 
 Values are read with Infisical's own `${...}` references expanded, matching its CLI, so a value of
@@ -188,6 +195,9 @@ export INFISICAL_DOMAIN=https://vault.example.com
 secretspec run --provider "infisical:///7e2f1a4c-..." -- npm start
 ```
 
+Infisical's legacy `INFISICAL_API_URL` is honoured too, so an instance already configured for
+their CLI works unchanged. `INFISICAL_DOMAIN` wins when both are set, matching the CLI.
+
 ## Approval policies
 
 A project under an approval policy turns a write into a change request: Infisical stores nothing
@@ -202,7 +212,7 @@ so the value is written once the request is approved.
 - Refs need `?env=`, having no profile to name an environment with
 - `secretspec import infisical://…` is not supported: the provider does not enumerate existing
   secrets, so import has nothing to discover
-- `INFISICAL_DOMAIN` names a host, not a path: an instance served under a sub-path
+- The domain variables name a host, not a path: an instance served under a sub-path
   (`https://example.com/infisical`) is not addressable. A trailing `/api` is the exception and is
   accepted, since Infisical's own CLI takes the domain in that form
 - An environment or project that does not exist reads as an unset secret rather than an error:

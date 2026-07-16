@@ -211,6 +211,58 @@ mod tests {
         assert!(report.all_required_present());
     }
 
+    #[test]
+    fn explain_string_renders_resolution_details() {
+        assert_eq!(
+            sample().to_explain_string(),
+            concat!(
+                "profile:  production\n",
+                "provider: keyring://\n",
+                "  DATABASE_URL  ok        source keyring://\n",
+                "  JWT_SECRET    ok        generated\n",
+                "  LOG_LEVEL     ok        default value\n",
+                "  SENTRY_DSN    missing   optional\n",
+                "  STRIPE_KEY    MISSING   required\n",
+            )
+        );
+    }
+
+    #[test]
+    fn explain_string_marks_plain_resolved_secrets_exposed_as_paths() {
+        let report = ResolutionReport::new(
+            "env://".to_string(),
+            "development".to_string(),
+            vec![SecretResolution {
+                name: "FILE".to_string(),
+                status: ResolutionStatus::Resolved,
+                required: true,
+                source_provider: None,
+                default_applied: false,
+                generated: false,
+                as_path: true,
+            }],
+        );
+
+        assert_eq!(
+            report.to_explain_string(),
+            "profile:  development\nprovider: env://\n  FILE  ok  (as path)\n"
+        );
+    }
+
+    #[test]
+    fn explain_string_handles_a_report_without_secrets() {
+        let report = ResolutionReport::new(
+            "dotenv://.env".to_string(),
+            "default".to_string(),
+            Vec::new(),
+        );
+
+        assert_eq!(
+            report.to_explain_string(),
+            "profile:  default\nprovider: dotenv://.env\n"
+        );
+    }
+
     /// Locks the wire format. The golden file is the contract other-language
     /// SDKs and CI consumers parse; any change here is a deliberate contract
     /// change that must bump `RESOLUTION_REPORT_SCHEMA_VERSION` and the schema.

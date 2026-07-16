@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Infisical provider (`infisical://`), for Infisical Cloud and self-hosted
+  instances. Authenticates as a machine identity via Universal Auth, whose
+  `client_id` and `client_secret` can be sourced as provider credentials (with
+  `INFISICAL_CLIENT_ID`/`INFISICAL_CLIENT_SECRET` fallbacks), or with a
+  ready-made `token`/`INFISICAL_TOKEN`. A profile names the Infisical
+  environment, so a `production` profile reads the `production` environment;
+  projects whose environments do not correspond to profiles pin one with
+  `?env=`, and profiles stay separate either way. Secrets live at
+  `/secretspec/{project}/{profile}` (`?path=` overrides the prefix), with keys
+  stored verbatim, and secrets sharing a folder are fetched in one request. A
+  secret's `ref` can name an Infisical secret by folder, key and `version`.
+
 ## [0.15.0] - 2026-07-16
 
 ### Added

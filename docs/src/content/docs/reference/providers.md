@@ -191,6 +191,33 @@ akv://myvault?suffix=vault.azure.cn      # Sovereign cloud (explicit suffix, bar
 **Prerequisites**: An Azure Key Vault instance, authenticated via one of the methods above, build with `--features akv`
 **Storage**: Secret name `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}` (lowercase, unpadded Base32 preserves case and punctuation distinctions within Azure's case-insensitive secret-name namespace)
 
+## Infisical Provider (0.16+)
+
+**URI**: `infisical://[HOST]/PROJECT_ID[?env=SLUG][&path=/PREFIX][&tls=false]` - Stores secrets in Infisical
+
+```bash
+infisical://app.infisical.com/7e2f1a4c-...            # Infisical Cloud (US)
+infisical://eu.infisical.com/7e2f1a4c-...             # Infisical Cloud (EU)
+infisical://vault.example.com/7e2f1a4c-...?env=prod   # Read every profile from one environment
+infisical://localhost:8080/7e2f1a4c-...?tls=false     # Self-hosted over plain HTTP
+```
+
+The project is Infisical's project **UUID** (Project Settings → Project ID); its API does not
+accept the project slug. Without a host, the provider reads `INFISICAL_DOMAIN`, then defaults to
+Infisical Cloud.
+
+**Features**: Read/write, cloud sync, profiles, machine-identity (Universal Auth) or token auth, secret references, version-pinned refs
+**Prerequisites**: An Infisical project, a machine identity with access to it, build with `--features infisical`
+**Authentication**: `INFISICAL_CLIENT_ID` + `INFISICAL_CLIENT_SECRET` (Universal Auth), or a ready-made `INFISICAL_TOKEN`. Service tokens are not supported; Infisical deprecated them in favour of machine identities.
+**Storage**: Secret `{key}` in folder `/secretspec/{project}/{profile}`, in the environment named by the profile (or by `?env=`). Keys are stored verbatim.
+
+By default the SecretSpec profile names the Infisical environment, so a `production` profile reads
+the `production` environment. Projects whose environments do not correspond to profiles pin one with
+`?env=`; the profile still names the folder, so profiles never share a secret.
+
+Values are read with Infisical's secret references expanded, matching its own CLI, so a value of
+`postgres://${DB_USER}@host` arrives resolved.
+
 ## Provider Selection
 
 ### Command Line
@@ -230,3 +257,4 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Vault/OpenBao | ✅ Vault encryption | Vault/OpenBao server | ✅ Yes |
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
+| Infisical (0.16+) | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |

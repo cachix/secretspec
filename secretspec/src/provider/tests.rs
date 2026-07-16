@@ -557,6 +557,36 @@ mod integration_tests {
                     .expect("Should create vault provider");
                 (provider, None)
             }
+            #[cfg(feature = "infisical")]
+            // Bare "infisical" names no project, so route it through a real
+            // one instead of failing to parse in the generic `_` branch below.
+            // Set INFISICAL_TEST_PROJECT to a project UUID, INFISICAL_TEST_HOST
+            // to reach a self-hosted instance (default: Infisical Cloud), and
+            // authenticate with INFISICAL_CLIENT_ID/INFISICAL_CLIENT_SECRET or
+            // INFISICAL_TOKEN. Prefer the former, and exercise both: only the
+            // client_id/client_secret path logs in, so a token alone leaves
+            // that request untested. The environment is pinned (INFISICAL_TEST_ENV,
+            // default `dev`, which every new project has) because these tests
+            // run under profiles no Infisical environment is named after;
+            // profiles still separate, by folder.
+            "infisical" => {
+                let project = std::env::var("INFISICAL_TEST_PROJECT").expect(
+                    "Testing the infisical provider requires a real project: set INFISICAL_TEST_PROJECT to a project UUID (and authenticate via INFISICAL_CLIENT_ID/INFISICAL_CLIENT_SECRET or INFISICAL_TOKEN).",
+                );
+                let host = std::env::var("INFISICAL_TEST_HOST")
+                    .unwrap_or_else(|_| "app.infisical.com".to_string());
+                let env = std::env::var("INFISICAL_TEST_ENV").unwrap_or_else(|_| "dev".to_string());
+                // A self-hosted instance is commonly served over plain HTTP.
+                let tls = if host.starts_with("localhost") || host.starts_with("127.0.0.1") {
+                    "&tls=false"
+                } else {
+                    ""
+                };
+                let provider_spec = format!("infisical://{host}/{project}?env={env}{tls}");
+                let provider = Box::<dyn Provider>::try_from(provider_spec.as_str())
+                    .expect("Should create infisical provider");
+                (provider, None)
+            }
             #[cfg(feature = "akv")]
             // Bare "akv" has no vault name, so route it through a real
             // AKV_TEST_VAULT instead of falling into the generic `_` branch
@@ -686,6 +716,147 @@ mod integration_tests {
             println!("Testing provider: {}", provider_name);
             let (provider, _temp_dir) = create_provider_with_temp_path(&provider_name);
             test_provider_basic_workflow(provider.as_ref(), &provider_name);
+        }
+    }
+
+    /// A value Infisical withholds surfaces as a refusal, never as a secret.
+    ///
+    /// An identity permitted to see that a secret exists, but not to read it,
+    /// still gets HTTP 200: the value is replaced with a placeholder and
+    /// `secretValueHidden` is set. Handing that on would export a literal
+    /// `<hidden-by-infisical>` to the process SecretSpec runs, and reporting it
+    /// absent would read as an unset secret.
+    ///
+    /// Telling those identities apart needs a custom role, which Infisical
+    /// gates behind a paid tier, so this runs only where one exists: set
+    /// `INFISICAL_TEST_NOREAD_CLIENT_ID` and `INFISICAL_TEST_NOREAD_CLIENT_SECRET`
+    /// to an identity holding that role, alongside the usual
+    /// `INFISICAL_TEST_PROJECT` and a writable identity to plant the secret
+    /// with. The refusal itself is covered without any of that by
+    /// `provider::infisical::tests::a_withheld_value_is_refused`; this test is
+    /// what proves the placeholder still looks like Infisical says it does.
+    #[cfg(feature = "infisical")]
+    #[test]
+    fn test_infisical_refuses_a_withheld_value() {
+        let (Ok(client_id), Ok(client_secret)) = (
+            std::env::var("INFISICAL_TEST_NOREAD_CLIENT_ID"),
+            std::env::var("INFISICAL_TEST_NOREAD_CLIENT_SECRET"),
+        ) else {
+            eprintln!(
+                "skipping: set INFISICAL_TEST_NOREAD_CLIENT_ID/SECRET to an identity that may \
+                 see a secret exists but not read it (needs an Infisical custom role)"
+            );
+            return;
+        };
+        if !get_test_providers().iter().any(|p| p == "infisical") {
+            eprintln!("skipping: SECRETSPEC_TEST_PROVIDERS does not name infisical");
+            return;
+        }
+        // A ready-made token outranks the credentials below, so the reader
+        // would authenticate as whoever minted it -- read the value, and fail
+        // for the wrong reason. The restricted identity has to be the only way
+        // in.
+        if std::env::var("INFISICAL_TOKEN").is_ok() {
+            eprintln!(
+                "skipping: INFISICAL_TOKEN outranks the restricted identity's credentials. \
+                 Unset it and authenticate with INFISICAL_CLIENT_ID/INFISICAL_CLIENT_SECRET \
+                 to exercise a withheld value."
+            );
+            return;
+        }
+
+        // Plant a secret the restricted identity is allowed to know about.
+        let project_name = generate_test_project_name();
+        let (writer, _t) = create_provider_with_temp_path("infisical");
+        writer
+            .set(
+                Address::convention(&project_name, "default", "HIDDEN_KEY"),
+                &SecretString::new("plaintext".into()),
+            )
+            .expect("the writing identity should store a secret");
+
+        // The same store, read by an identity that may not see values.
+        let (mut restricted, _t) = create_provider_with_temp_path("infisical");
+        let mut credentials = crate::provider::ProviderCredentials::new();
+        credentials.insert("client_id".to_string(), SecretString::new(client_id.into()));
+        credentials.insert(
+            "client_secret".to_string(),
+            SecretString::new(client_secret.into()),
+        );
+        restricted.with_credentials(credentials);
+
+        let err = restricted
+            .get(Address::convention(&project_name, "default", "HIDDEN_KEY"))
+            .expect_err("a withheld value must not read as a secret");
+        assert!(
+            err.to_string().contains("withheld"),
+            "the refusal should say the value was withheld, got: {err}"
+        );
+        // The placeholder must never reach the caller.
+        assert!(
+            !err.to_string().contains("plaintext"),
+            "the error must not carry the value"
+        );
+    }
+
+    /// One key, many profiles: each profile keeps its own value.
+    ///
+    /// A store that folds the profile into its naming can map two profiles
+    /// onto one secret, where a write under one profile silently overwrites
+    /// another's. That is invisible to a single-profile test, so every store
+    /// is asked to keep the profiles apart.
+    #[test]
+    fn test_all_providers_isolate_profiles() {
+        let mock = MockProvider::new();
+        test_provider_profile_isolation(&mock, "mock");
+
+        for provider_name in get_test_providers() {
+            println!("Testing provider: {}", provider_name);
+            let (provider, _temp_dir) = create_provider_with_temp_path(&provider_name);
+            test_provider_profile_isolation(provider.as_ref(), &provider_name);
+        }
+    }
+
+    /// Stores that hold one flat namespace, where every profile reads the same
+    /// value by design. Named rather than detected: a store that has collapsed
+    /// its profiles by accident looks exactly like one that never had them,
+    /// which is the bug this test exists to catch.
+    const FLAT_PROVIDERS: &[&str] = &["dotenv", "env"];
+
+    fn test_provider_profile_isolation(provider: &dyn Provider, provider_name: &str) {
+        if FLAT_PROVIDERS.contains(&provider_name)
+            || provider
+                .check_writable(Address::convention("proj", "default", "KEY"))
+                .is_err()
+        {
+            return;
+        }
+
+        let project_name = generate_test_project_name();
+        let profiles = ["dev", "staging", "prod"];
+
+        for profile in profiles {
+            let value = SecretString::new(format!("value_for_{profile}").into());
+            provider
+                .set(
+                    Address::convention(&project_name, profile, "API_KEY"),
+                    &value,
+                )
+                .unwrap_or_else(|e| panic!("[{provider_name}] set under '{profile}': {e}"));
+        }
+
+        // Written last, so a store that collapses the profiles hands "prod"
+        // back for every one of them.
+        for profile in profiles {
+            let found = provider
+                .get(Address::convention(&project_name, profile, "API_KEY"))
+                .unwrap_or_else(|e| panic!("[{provider_name}] get under '{profile}': {e}"))
+                .unwrap_or_else(|| panic!("[{provider_name}] '{profile}' lost its secret"));
+            assert_eq!(
+                found.expose_secret(),
+                format!("value_for_{profile}"),
+                "[{provider_name}] profile '{profile}' reads another profile's value"
+            );
         }
     }
 

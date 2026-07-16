@@ -232,6 +232,8 @@ pub mod env;
 #[cfg(feature = "gcsm")]
 pub mod gcsm;
 pub mod gopass;
+#[cfg(feature = "infisical")]
+pub mod infisical;
 #[cfg(feature = "keyring")]
 pub mod keyring;
 pub mod lastpass;

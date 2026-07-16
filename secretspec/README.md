@@ -30,6 +30,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [Vault/OpenBao](https://secretspec.dev/providers/vault)
   - [Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)
   - [Azure Key Vault](https://secretspec.dev/providers/akv)
+  - [Infisical](https://secretspec.dev/providers/infisical) (0.16+)
 - **[Type-Safe Rust SDK](https://secretspec.dev/sdk/rust/)**: Generate strongly-typed structs from your `secretspec.toml` for compile-time safety
 - **[Profile Support](https://secretspec.dev/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
 - **[Secret Generation](https://secretspec.dev/concepts/generation/)**: Auto-generate passwords, tokens, UUIDs, and more when secrets are missing — declarative "generate if absent"
@@ -65,6 +66,7 @@ $ secretspec config init
   vault: HashiCorp Vault / OpenBao secret management
   bws: Bitwarden Secrets Manager
   akv: Azure Key Vault
+  infisical: Infisical secret management (0.16+)
 ? Select your default profile:
 > development
   default
@@ -149,6 +151,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Vault / OpenBao](https://secretspec.dev/providers/vault)** - HashiCorp Vault and OpenBao KV engine
 - **[Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)** - Bitwarden Secrets Manager integration
 - **[Azure Key Vault](https://secretspec.dev/providers/akv)** - Azure secret management
+- **[Infisical](https://secretspec.dev/providers/infisical)** (0.16+) - Infisical secret management
 
 ```bash
 $ secretspec run --provider keyring -- npm start

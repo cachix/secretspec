@@ -313,6 +313,9 @@ fn test_create_from_string_with_plain_names() {
     let provider = Box::<dyn Provider>::try_from("lastpass").unwrap();
     assert_eq!(provider.name(), "lastpass");
 
+    let provider = Box::<dyn Provider>::try_from("gopass").unwrap();
+    assert_eq!(provider.name(), "gopass");
+
     let provider = Box::<dyn Provider>::try_from("pass").unwrap();
     assert_eq!(provider.name(), "pass");
 

@@ -229,6 +229,7 @@ pub mod dotenv;
 pub mod env;
 #[cfg(feature = "gcsm")]
 pub mod gcsm;
+pub mod gopass;
 #[cfg(feature = "keyring")]
 pub mod keyring;
 pub mod lastpass;

@@ -47,7 +47,7 @@
 //! secretspec check --provider vault://team-a@vault.example.com:8200/secret
 //! ```
 
-use super::{Address, Provider, ProviderUrl};
+use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
 use crate::{Result, SecretSpecError};
 use reqwest::header::{HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
@@ -222,7 +222,16 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
 /// KV secrets engine (v1 or v2) with token-based authentication.
 pub struct VaultProvider {
     config: VaultConfig,
+    /// Credentials supplied by the provider alias.
+    credentials: ProviderCredentials,
 }
+
+const ROLE_ID: &str = "role_id";
+const SECRET_ID: &str = "secret_id";
+const TOKEN: &str = "token";
+const VAULT_ROLE_ID_ENV: &str = "VAULT_ROLE_ID";
+const VAULT_SECRET_ID_ENV: &str = "VAULT_SECRET_ID";
+const VAULT_TOKEN_ENV: &str = "VAULT_TOKEN";
 
 crate::register_provider! {
     struct: VaultProvider,
@@ -231,12 +240,16 @@ crate::register_provider! {
     description: "HashiCorp Vault / OpenBao secret management",
     schemes: ["vault", "openbao"],
     examples: ["vault://vault.example.com:8200/secret", "openbao://bao.internal:8200/secret"],
+    credential_names: [ROLE_ID, SECRET_ID, TOKEN],
 }
 
 impl VaultProvider {
     /// Creates a new VaultProvider with the given configuration.
     pub fn new(config: VaultConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            credentials: ProviderCredentials::new(),
+        }
     }
 
     /// Formats the secret path within the KV engine.
@@ -265,17 +278,16 @@ impl VaultProvider {
     /// Resolves the Vault token using the configured authentication method.
     fn resolve_token(&self) -> Result<SecretString> {
         match self.config.auth {
-            AuthMethod::Token => Self::resolve_token_auth(),
+            AuthMethod::Token => self.resolve_token_auth(),
             AuthMethod::AppRole => super::block_on(self.resolve_approle_auth()),
         }
     }
 
     /// Resolves a token via static token sources.
-    fn resolve_token_auth() -> Result<SecretString> {
-        if let Ok(token) = std::env::var("VAULT_TOKEN") {
-            if !token.is_empty() {
-                return Ok(SecretString::new(token.into()));
-            }
+    fn resolve_token_auth(&self) -> Result<SecretString> {
+        // `credential_or_env` never yields an empty value.
+        if let Some(token) = credential_or_env(&self.credentials, TOKEN, VAULT_TOKEN_ENV) {
+            return Ok(SecretString::new(token.into()));
         }
 
         let token_path = std::env::var_os("HOME")
@@ -292,27 +304,31 @@ impl VaultProvider {
         }
 
         Err(SecretSpecError::ProviderOperationFailed(
-            "No Vault token found. Set the VAULT_TOKEN environment variable \
-             or create a ~/.vault-token file."
+            "No Vault token found. Configure the token provider credential, set the \
+             VAULT_TOKEN environment variable, or create a ~/.vault-token file."
                 .to_string(),
         ))
     }
 
     /// Authenticates via AppRole and returns a client token.
     async fn resolve_approle_auth(&self) -> Result<SecretString> {
-        let role_id = std::env::var("VAULT_ROLE_ID").map_err(|_| {
-            SecretSpecError::ProviderOperationFailed(
-                "VAULT_ROLE_ID environment variable is required for AppRole authentication."
-                    .to_string(),
-            )
-        })?;
+        let role_id =
+            credential_or_env(&self.credentials, ROLE_ID, VAULT_ROLE_ID_ENV).ok_or_else(|| {
+                SecretSpecError::ProviderOperationFailed(
+                    "Vault role_id credential is required for AppRole authentication; configure \
+                     credentials.role_id or set VAULT_ROLE_ID."
+                        .to_string(),
+                )
+            })?;
 
-        let secret_id = std::env::var("VAULT_SECRET_ID").map_err(|_| {
-            SecretSpecError::ProviderOperationFailed(
-                "VAULT_SECRET_ID environment variable is required for AppRole authentication."
-                    .to_string(),
-            )
-        })?;
+        let secret_id = credential_or_env(&self.credentials, SECRET_ID, VAULT_SECRET_ID_ENV)
+            .ok_or_else(|| {
+                SecretSpecError::ProviderOperationFailed(
+                    "Vault secret_id credential is required for AppRole authentication; configure \
+                     credentials.secret_id or set VAULT_SECRET_ID."
+                        .to_string(),
+                )
+            })?;
 
         let url = format!("{}/v1/auth/approle/login", self.config.endpoint);
         let body = serde_json::json!({
@@ -512,6 +528,10 @@ impl Provider for VaultProvider {
             field: Some("value".to_string()),
             ..Default::default()
         })
+    }
+
+    fn with_credentials(&mut self, credentials: ProviderCredentials) {
+        self.credentials = credentials;
     }
 
     fn name(&self) -> &'static str {

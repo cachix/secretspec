@@ -22,6 +22,23 @@ use crate::provider::Address;
 use crate::secrets::Secrets;
 use std::collections::HashMap;
 
+/// The resolved primary store: the raw spec used to build it, plus its resolved
+/// URI for display.
+///
+/// Construction and grouping key on [`spec`](Self::spec) rather than the URI so
+/// that an alias's `credentials` map is still reachable when the provider is
+/// built (a resolved URI is not an alias and has lost it), and so two aliases
+/// that happen to share a URI but declare different credentials never merge into
+/// one group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedPrimary {
+    /// The raw primary chain entry: an alias name, a bare provider name, or a
+    /// URI. The build key.
+    pub spec: String,
+    /// The resolved, credential-free URI, for display and the resolution report.
+    pub uri: String,
+}
+
 /// Where a planned secret reads and writes.
 ///
 /// A `providers` chain is a fallback list tried in order. Only the primary
@@ -37,18 +54,27 @@ use std::collections::HashMap;
 pub(crate) struct Route {
     /// The store consulted first — the resolved chain head or the explicit
     /// override — or `None` for the default provider.
-    pub primary: Option<String>,
+    pub primary: Option<ResolvedPrimary>,
     /// The chain's remaining specs (aliases or URIs), raw, tried in order —
     /// and resolved — only after the primary misses.
     pub fallback: Vec<String>,
 }
 
 impl Route {
-    /// The store consulted first, `None` meaning the default provider. This is
-    /// the grouping key and the write target: secrets sharing a primary store
-    /// are fetched together, and a write goes to the primary.
+    /// The resolved, credential-free URI of the store consulted first, `None`
+    /// meaning the default provider. Used for display and the resolution report,
+    /// never as the grouping/build key — see [`Route::group_key`].
     pub(crate) fn primary(&self) -> Option<&str> {
-        self.primary.as_deref()
+        self.primary.as_ref().map(|primary| primary.uri.as_str())
+    }
+
+    /// The raw primary spec that groups secrets and builds the store, `None`
+    /// meaning the default provider. Distinct from [`Route::primary`] (the
+    /// resolved URI): secrets sharing a primary store are fetched together and a
+    /// write goes to the primary, and keying on the spec keeps an alias's
+    /// `credentials` reachable at build time.
+    pub(crate) fn group_key(&self) -> Option<&str> {
+        self.primary.as_ref().map(|primary| primary.spec.as_str())
     }
 
     /// The raw fallback specs a read walks after the primary misses, when
@@ -59,13 +85,14 @@ impl Route {
         (!self.fallback.is_empty()).then_some(self.fallback.as_slice())
     }
 
-    /// The ordered provider specs a read walks — the primary followed by the raw
-    /// fallback — or `None` for the default provider. Each entry is resolved only
-    /// when the read reaches it, so the chain is genuinely tried in order.
+    /// The ordered provider specs a read walks — the primary spec followed by
+    /// the raw fallback — or `None` for the default provider. Each entry is
+    /// resolved (and credential-backed) only when the read reaches it, so the chain
+    /// is genuinely tried in order.
     pub(crate) fn specs(&self) -> Option<Vec<String>> {
         self.primary.as_ref().map(|primary| {
             let mut specs = Vec::with_capacity(1 + self.fallback.len());
-            specs.push(primary.clone());
+            specs.push(primary.spec.clone());
             specs.extend(self.fallback.iter().cloned());
             specs
         })
@@ -124,15 +151,17 @@ pub(crate) struct ResolutionPlan {
 }
 
 impl ResolutionPlan {
-    /// Primary-store groups in first-seen order: each pairs a store URI
+    /// Primary-store groups in first-seen order: each pairs a primary spec
     /// (`None` = default provider) with the planned secrets fetched together.
-    /// Derived from each secret's [`Route::primary`] on demand, so grouping
-    /// can never drift from the routes.
+    /// Derived from each secret's [`Route::group_key`] on demand, so grouping
+    /// can never drift from the routes. Keying on the spec (not the resolved
+    /// URI) keeps an alias's `credentials` reachable at build time and keeps
+    /// two aliases that share a URI but differ in credentials in separate groups.
     pub(crate) fn groups(&self) -> Vec<(Option<&str>, Vec<&PlannedSecret>)> {
         let mut groups: Vec<(Option<&str>, Vec<&PlannedSecret>)> = Vec::new();
         let mut group_index: HashMap<Option<&str>, usize> = HashMap::new();
         for secret in &self.secrets {
-            let primary = secret.route.primary();
+            let primary = secret.route.group_key();
             match group_index.get(&primary) {
                 Some(&idx) => groups[idx].1.push(secret),
                 None => {
@@ -151,7 +180,7 @@ impl Secrets {
     /// derive its resolved route.
     ///
     /// The explicit provider override (builder or `SECRETSPEC_PROVIDER`) is
-    /// picked up via [`Secrets::resolve_provider_override`]. Production code
+    /// picked up via [`Secrets::explicit_provider_spec`]. Production code
     /// resolves the profile itself and calls [`Secrets::build_plan_from_names`]
     /// directly (it needs the sorted names for audit attribution too, and
     /// shouldn't merge and sort twice); this one-call form is for tests that
@@ -176,17 +205,20 @@ impl Secrets {
         profile_name: String,
         names: Vec<String>,
     ) -> Result<ResolutionPlan> {
-        let override_uri = self.resolve_provider_override(None);
+        // Routes carry the raw override spec (it may be an alias whose provider
+        // `env` must stay reachable at build time); the plan's `override_uri`
+        // field is the resolved form, for display and the resolution report.
+        let override_spec = self.explicit_provider_spec(None);
 
         let mut secrets = Vec::with_capacity(names.len());
         for name in names {
             let config = self.effective_secret_config(&name, &profile_name);
-            secrets.push(self.plan_one_secret(name, config, &override_uri)?);
+            secrets.push(self.plan_one_secret(name, config, &override_spec)?);
         }
 
         Ok(ResolutionPlan {
             profile: profile_name,
-            override_uri,
+            override_uri: override_spec.map(|spec| self.resolve_provider_spec(spec)),
             secrets,
         })
     }
@@ -200,7 +232,7 @@ impl Secrets {
     /// `profile_name` is the already-resolved profile. `override_arg` is the
     /// caller's explicit provider (the `--provider` flag); like
     /// [`Secrets::build_plan`] it also picks up the builder and
-    /// `SECRETSPEC_PROVIDER` via [`Secrets::resolve_provider_override`].
+    /// `SECRETSPEC_PROVIDER` via [`Secrets::explicit_provider_spec`].
     pub(crate) fn plan_secret(
         &self,
         name: &str,
@@ -210,26 +242,26 @@ impl Secrets {
         let Some(config) = self.resolve_secret_config(name, Some(profile_name)) else {
             return Ok(None);
         };
-        let override_uri = self.resolve_provider_override(override_arg);
+        let override_spec = self.explicit_provider_spec(override_arg);
         Ok(Some(self.plan_one_secret(
             name.to_string(),
             config,
-            &override_uri,
+            &override_spec,
         )?))
     }
 
-    /// Derive one [`PlannedSecret`] from its effective config and the resolved
-    /// override. The single place per-secret decisions are made, shared by the
-    /// whole-profile [`Secrets::build_plan_from_names`] and the single-secret
-    /// [`Secrets::plan_secret`], so `get`, `set`, and batch validation cannot
-    /// drift.
+    /// Derive one [`PlannedSecret`] from its effective config and the raw
+    /// override spec. The single place per-secret decisions are made, shared by
+    /// the whole-profile [`Secrets::build_plan_from_names`] and the
+    /// single-secret [`Secrets::plan_secret`], so `get`, `set`, and batch
+    /// validation cannot drift.
     fn plan_one_secret(
         &self,
         name: String,
         config: Secret,
-        override_uri: &Option<String>,
+        override_spec: &Option<String>,
     ) -> Result<PlannedSecret> {
-        let route = self.route_for(&config, override_uri)?;
+        let route = self.route_for(&config, override_spec)?;
         Ok(PlannedSecret {
             name,
             config,
@@ -249,19 +281,37 @@ impl Secrets {
     pub(crate) fn route_for(
         &self,
         config: &Secret,
-        override_uri: &Option<String>,
+        override_spec: &Option<String>,
     ) -> Result<Route> {
-        if let Some(uri) = override_uri {
+        // Either arm keeps the raw spec as the build key (the spec may be an
+        // alias whose `credentials` must stay reachable when the store is
+        // constructed — a resolved URI has lost it), resolves the URI for
+        // display, and validates any `credentials` (unknown source, one-hop)
+        // up front — all pure map lookups.
+        if let Some(spec) = override_spec {
+            self.validate_credential_sources(spec)?;
             return Ok(Route {
-                primary: Some(uri.clone()),
+                primary: Some(ResolvedPrimary {
+                    spec: spec.clone(),
+                    uri: self.resolve_provider_spec(spec.clone()),
+                }),
                 fallback: Vec::new(),
             });
         }
         match config.providers.as_deref() {
-            Some([first, fallback @ ..]) => Ok(Route {
-                primary: Some(self.resolve_one_provider(first)?),
-                fallback: fallback.to_vec(),
-            }),
+            Some([first, fallback @ ..]) => {
+                // Unlike an override, an undefined alias as chain primary is a
+                // hard error here (`resolve_one_provider` fails fast).
+                let uri = self.resolve_one_provider(first)?;
+                self.validate_credential_sources(first)?;
+                Ok(Route {
+                    primary: Some(ResolvedPrimary {
+                        spec: first.clone(),
+                        uri,
+                    }),
+                    fallback: fallback.to_vec(),
+                })
+            }
             _ => Ok(Route {
                 primary: None,
                 fallback: Vec::new(),
@@ -347,6 +397,22 @@ mod tests {
             planned.route.fallback.is_empty(),
             "the override must collapse the chain: no fallback survives"
         );
+        assert_eq!(plan.override_uri, Some("dotenv://.env.mock".to_string()));
+    }
+
+    #[test]
+    fn override_alias_keeps_the_raw_spec_as_build_key() {
+        let _env = scrub_resolution_env();
+        let secrets = HashMap::from([("API_KEY".to_string(), secret(None))]);
+        // `--provider mock` names an alias: the route keeps the raw spec so the
+        // alias's `credentials` stays reachable at build time, and resolves
+        // the URI for display and the report.
+        let spec = spec(secrets, Some("mock"), &[("mock", "dotenv://.env.mock")]);
+        let plan = plan(&spec);
+
+        let planned = find(&plan, "API_KEY");
+        assert_eq!(planned.route.group_key(), Some("mock"));
+        assert_eq!(planned.route.primary(), Some("dotenv://.env.mock"));
         assert_eq!(plan.override_uri, Some("dotenv://.env.mock".to_string()));
     }
 
@@ -461,6 +527,27 @@ mod tests {
         assert_eq!(
             group_names(&plan),
             vec![(None, vec!["A"]), (Some("keyring://"), vec!["B", "C"])]
+        );
+    }
+
+    #[test]
+    fn distinct_aliases_sharing_a_uri_do_not_merge() {
+        let _env = scrub_resolution_env();
+        let secrets = HashMap::from([
+            ("A".to_string(), secret(Some(vec!["one"]))),
+            ("B".to_string(), secret(Some(vec!["two"]))),
+        ]);
+        // Two aliases, same URI, different names: grouping keys on the spec, so
+        // they stay in separate groups (they could carry different provider
+        // credentials, which the resolved URI has lost).
+        let plan = plan(&spec(
+            secrets,
+            None,
+            &[("one", "keyring://"), ("two", "keyring://")],
+        ));
+        assert_eq!(
+            group_names(&plan),
+            vec![(Some("one"), vec!["A"]), (Some("two"), vec!["B"])]
         );
     }
 

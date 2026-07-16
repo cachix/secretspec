@@ -8,13 +8,14 @@
 //! "try everything" default credential, so the authentication method is chosen
 //! explicitly via the `auth` query parameter:
 //!
-//! - `auth=env` (default) -- reads a service principal from the `AZURE_TENANT_ID`,
-//!   `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` environment variables. All
-//!   three must be set (and non-empty) together; if none are set, this falls
-//!   back to the signed-in Azure CLI / Azure Developer CLI session (equivalent
-//!   to `auth=cli`), so local development works out of the box after
-//!   `az login`. If only some are set, this is an error rather than a silent
-//!   fallback to a different identity.
+//! - `auth=env` (default) -- reads a service principal from the `tenant_id`,
+//!   `client_id`, and `client_secret` provider credentials, falling back to
+//!   the matching `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and
+//!   `AZURE_CLIENT_SECRET` environment variables. All three must be supplied
+//!   together; if none are available, this falls back to the signed-in Azure
+//!   CLI / Azure Developer CLI session (equivalent to `auth=cli`), so local
+//!   development works out of the box after `az login`. A partial set is an
+//!   error rather than a silent fallback to a different identity.
 //! - `auth=cli` -- only the Azure CLI / Azure Developer CLI session.
 //! - `auth=managed_identity` -- the VM/App Service/AKS system-assigned managed
 //!   identity.
@@ -61,7 +62,7 @@
 //! secretspec check --provider akv://myvault?auth=managed_identity
 //! ```
 
-use super::{Address, Provider, ProviderUrl};
+use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
 use crate::{Result, SecretSpecError};
 use azure_core::credentials::{Secret, TokenCredential};
 use azure_core::http::StatusCode;
@@ -203,7 +204,16 @@ impl TryFrom<&ProviderUrl> for AkvConfig {
 /// Stores and retrieves secrets from an Azure Key Vault instance.
 pub struct AkvProvider {
     config: AkvConfig,
+    /// Service-principal credentials supplied by the provider alias.
+    credentials: ProviderCredentials,
 }
+
+const TENANT_ID: &str = "tenant_id";
+const CLIENT_ID: &str = "client_id";
+const CLIENT_SECRET: &str = "client_secret";
+const AZURE_TENANT_ID_ENV: &str = "AZURE_TENANT_ID";
+const AZURE_CLIENT_ID_ENV: &str = "AZURE_CLIENT_ID";
+const AZURE_CLIENT_SECRET_ENV: &str = "AZURE_CLIENT_SECRET";
 
 crate::register_provider! {
     struct: AkvProvider,
@@ -212,12 +222,16 @@ crate::register_provider! {
     description: "Azure Key Vault",
     schemes: ["akv"],
     examples: ["akv://myvault", "akv://myvault?auth=managed_identity", "akv://myvault?suffix=vault.azure.cn"],
+    credential_names: [TENANT_ID, CLIENT_ID, CLIENT_SECRET],
 }
 
 impl AkvProvider {
     /// Creates a new AkvProvider with the given configuration.
     pub fn new(config: AkvConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            credentials: ProviderCredentials::new(),
+        }
     }
 
     /// Validates a convention-name component before encoding it.
@@ -303,12 +317,18 @@ impl AkvProvider {
         Ok(item)
     }
 
-    /// Reads an environment variable, treating an unset or blank value as absent.
-    fn non_empty_env(name: &str) -> Option<String> {
-        std::env::var(name).ok().filter(|v| !v.is_empty())
+    /// Resolves each service-principal input from its semantic provider
+    /// credential, retaining the conventional Azure environment variable as a
+    /// fallback when that credential was not supplied.
+    fn service_principal_inputs(&self) -> (Option<String>, Option<String>, Option<String>) {
+        (
+            credential_or_env(&self.credentials, TENANT_ID, AZURE_TENANT_ID_ENV),
+            credential_or_env(&self.credentials, CLIENT_ID, AZURE_CLIENT_ID_ENV),
+            credential_or_env(&self.credentials, CLIENT_SECRET, AZURE_CLIENT_SECRET_ENV),
+        )
     }
 
-    /// Classifies a service-principal env-var triple: all three present
+    /// Classifies a service-principal credential triple: all three present
     /// resolves to `Some`, none present resolves to `None` (fall back to the
     /// CLI session), and a partial set is an error -- silently falling back
     /// to a different identity when e.g. only `AZURE_CLIENT_SECRET` is
@@ -368,9 +388,7 @@ impl AkvProvider {
                 })? as Arc<dyn TokenCredential>)
             }
             AuthMethod::Env => {
-                let tenant_id = Self::non_empty_env("AZURE_TENANT_ID");
-                let client_id = Self::non_empty_env("AZURE_CLIENT_ID");
-                let client_secret = Self::non_empty_env("AZURE_CLIENT_SECRET");
+                let (tenant_id, client_id, client_secret) = self.service_principal_inputs();
 
                 match Self::classify_env_credentials(tenant_id, client_id, client_secret)? {
                     Some((tenant_id, client_id, client_secret)) => Ok(ClientSecretCredential::new(
@@ -498,6 +516,10 @@ impl Provider for AkvProvider {
         })
     }
 
+    fn with_credentials(&mut self, credentials: ProviderCredentials) {
+        self.credentials = credentials;
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
@@ -544,11 +566,24 @@ impl Provider for AkvProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::EnvVarGuard;
     use azure_core::error::ErrorKind;
     use url::Url;
 
     fn config(s: &str) -> AkvConfig {
         AkvConfig::try_from(&ProviderUrl::new(Url::parse(s).unwrap())).unwrap()
+    }
+
+    fn credentials(entries: &[(&str, &str)]) -> ProviderCredentials {
+        entries
+            .iter()
+            .map(|(name, value)| {
+                (
+                    (*name).to_string(),
+                    SecretString::new((*value).to_string().into()),
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -618,6 +653,36 @@ mod tests {
             AkvProvider::classify_env_credentials(Some("t".to_string()), None, None).unwrap_err();
         assert!(err.to_string().contains("AZURE_CLIENT_ID"), "{err}");
         assert!(err.to_string().contains("AZURE_CLIENT_SECRET"), "{err}");
+    }
+
+    #[test]
+    fn service_principal_credentials_override_environment_individually() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _tenant = EnvVarGuard::set(AZURE_TENANT_ID_ENV, "tenant-from-env");
+        let _client = EnvVarGuard::set(AZURE_CLIENT_ID_ENV, "client-from-env");
+        let _secret = EnvVarGuard::set(AZURE_CLIENT_SECRET_ENV, "secret-from-env");
+        let mut provider = AkvProvider::new(config("akv://myvault"));
+        provider.with_credentials(credentials(&[
+            (TENANT_ID, "tenant-from-provider"),
+            (CLIENT_SECRET, "secret-from-provider"),
+        ]));
+
+        assert_eq!(
+            provider.service_principal_inputs(),
+            (
+                Some("tenant-from-provider".to_string()),
+                Some("client-from-env".to_string()),
+                Some("secret-from-provider".to_string()),
+            )
+        );
+    }
+
+    #[test]
+    fn registration_advertises_service_principal_credentials() {
+        assert_eq!(
+            crate::provider::credential_names_for_spec("akv://myvault"),
+            &[TENANT_ID, CLIENT_ID, CLIENT_SECRET]
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use crate::config::{
-    Config, GlobalConfig, GlobalDefaults, ParseError, Profile, Project, RequireReason, Resolved,
-    Secret,
+    Config, CredentialSource, GlobalConfig, GlobalDefaults, NativeAddress, ParseError, Profile,
+    Project, ProviderAlias, RequireReason, Resolved, Secret,
 };
 use crate::error::{Result, SecretSpecError};
 use crate::secrets::Secrets;
@@ -499,6 +499,42 @@ impl Drop for ResolutionEnvGuard {
     }
 }
 
+/// Sets or removes one environment variable and restores its previous value on
+/// drop, so a failing assertion cannot leak the mutation. The caller must hold
+/// the crate-wide env lock (via [`scrub_resolution_env`]) for the guard's
+/// lifetime: `set_var`/`remove_var` mutate the shared process environment and
+/// are only sound while no other thread touches it.
+pub(crate) struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    pub(crate) fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(key);
+        // SAFETY: serialized by the env lock the caller holds.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, previous }
+    }
+
+    pub(crate) fn remove(key: &'static str) -> Self {
+        let previous = std::env::var_os(key);
+        // SAFETY: serialized by the env lock the caller holds.
+        unsafe { std::env::remove_var(key) };
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            // SAFETY: serialized by the env lock the caller holds.
+            Some(value) => unsafe { std::env::set_var(self.key, value) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
+
 #[test]
 fn test_resolve_carries_values_and_provenance() {
     use crate::resolve::ResolvedSource;
@@ -822,10 +858,13 @@ fn test_chain_primary_error_surfaces_instead_of_missing() {
     // Primary alias resolves to an unbuildable provider (the "outage"); fallback
     // is a healthy dotenv that simply lacks the key.
     let mut provider_aliases = HashMap::new();
-    provider_aliases.insert("primary".to_string(), "bogus://unreachable".to_string());
+    provider_aliases.insert(
+        "primary".to_string(),
+        ProviderAlias::from("bogus://unreachable"),
+    );
     provider_aliases.insert(
         "fallback".to_string(),
-        format!("dotenv://{}", env_path.display()),
+        ProviderAlias::from(format!("dotenv://{}", env_path.display())),
     );
 
     let mut config = resolve_test_config(secrets);
@@ -1032,7 +1071,7 @@ fn test_get_provider_error_cases() {
     );
 
     // Test with no provider configured
-    let result = spec.get_provider(None);
+    let result = spec.get_provider(None, None);
     assert!(matches!(result, Err(SecretSpecError::NoProviderConfigured)));
 }
 
@@ -1062,7 +1101,7 @@ fn test_get_provider_with_global_config() {
     );
 
     // Should not error with global config
-    let result = spec.get_provider(None);
+    let result = spec.get_provider(None, None);
     assert!(result.is_ok());
 }
 
@@ -3079,8 +3118,7 @@ fn test_per_secret_provider_configuration() {
     };
 
     // Create global config with provider aliases
-    let mut providers_map = HashMap::new();
-    providers_map.insert("shared".to_string(), "keyring://".to_string());
+    let providers_map = aliases_map(&[("shared", "keyring://")]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
@@ -3108,9 +3146,10 @@ fn test_per_secret_provider_configuration() {
 
 #[test]
 fn test_provider_alias_resolution() {
-    let mut providers_map = HashMap::new();
-    providers_map.insert("dev".to_string(), "dotenv://.env.development".to_string());
-    providers_map.insert("prod".to_string(), "onepassword://Production".to_string());
+    let providers_map = aliases_map(&[
+        ("dev", "dotenv://.env.development"),
+        ("prod", "onepassword://Production"),
+    ]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
@@ -3150,8 +3189,7 @@ fn test_provider_alias_resolution() {
 
 #[test]
 fn test_provider_alias_not_found() {
-    let mut providers_map = HashMap::new();
-    providers_map.insert("existing".to_string(), "dotenv://.env".to_string());
+    let providers_map = aliases_map(&[("existing", "dotenv://.env")]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
@@ -3245,15 +3283,10 @@ fn test_per_secret_provider_with_fallback_chain() {
         providers: None,
     };
 
-    let mut providers_map = HashMap::new();
-    providers_map.insert(
-        "primary".to_string(),
-        format!("dotenv://{}", env_file.display()),
-    );
-    providers_map.insert(
-        "fallback".to_string(),
-        format!("dotenv://{}", keyring_file.display()),
-    );
+    let providers_map = aliases_map(&[
+        ("primary", &format!("dotenv://{}", env_file.display())),
+        ("fallback", &format!("dotenv://{}", keyring_file.display())),
+    ]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
@@ -3343,15 +3376,10 @@ fn test_get_secret_with_fallback_chain() {
         providers: None,
     };
 
-    let mut providers_map = HashMap::new();
-    providers_map.insert(
-        "primary".to_string(),
-        format!("dotenv://{}", primary_file.display()),
-    );
-    providers_map.insert(
-        "fallback".to_string(),
-        format!("dotenv://{}", fallback_file.display()),
-    );
+    let providers_map = aliases_map(&[
+        ("primary", &format!("dotenv://{}", primary_file.display())),
+        ("fallback", &format!("dotenv://{}", fallback_file.display())),
+    ]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
@@ -3426,15 +3454,10 @@ fn test_validate_falls_back_on_primary_provider_error() {
         providers: None,
     };
 
-    let mut providers_map = HashMap::new();
-    providers_map.insert(
-        "primary".to_string(),
-        format!("dotenv://{}", primary_dir.display()),
-    );
-    providers_map.insert(
-        "fallback".to_string(),
-        format!("dotenv://{}", fallback_file.display()),
-    );
+    let providers_map = aliases_map(&[
+        ("primary", &format!("dotenv://{}", primary_dir.display())),
+        ("fallback", &format!("dotenv://{}", fallback_file.display())),
+    ]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
@@ -3500,9 +3523,10 @@ fn test_validate_surfaces_error_when_all_providers_fail() {
         providers: None,
     };
 
-    let mut providers_map = HashMap::new();
-    providers_map.insert("a".to_string(), format!("dotenv://{}", broken_a.display()));
-    providers_map.insert("b".to_string(), format!("dotenv://{}", broken_b.display()));
+    let providers_map = aliases_map(&[
+        ("a", &format!("dotenv://{}", broken_a.display())),
+        ("b", &format!("dotenv://{}", broken_b.display())),
+    ]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
@@ -3593,15 +3617,13 @@ fn test_validate_with_per_secret_providers() {
         providers: None,
     };
 
-    let mut providers_map = HashMap::new();
-    providers_map.insert(
-        "env_provider".to_string(),
-        format!("dotenv://{}", env_file.display()),
-    );
-    providers_map.insert(
-        "keyring_provider".to_string(),
-        format!("dotenv://{}", keyring_file.display()),
-    );
+    let providers_map = aliases_map(&[
+        ("env_provider", &format!("dotenv://{}", env_file.display())),
+        (
+            "keyring_provider",
+            &format!("dotenv://{}", keyring_file.display()),
+        ),
+    ]);
 
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
@@ -3868,15 +3890,21 @@ provider = "keyring"
         config.defaults.providers = Some(HashMap::new());
     }
     if let Some(providers) = &mut config.defaults.providers {
-        providers.insert("shared".to_string(), "onepassword://Shared".to_string());
-        providers.insert("prod".to_string(), "onepassword://Production".to_string());
+        providers.insert(
+            "shared".to_string(),
+            ProviderAlias::from("onepassword://Shared"),
+        );
+        providers.insert(
+            "prod".to_string(),
+            ProviderAlias::from("onepassword://Production"),
+        );
     }
 
     // Verify providers were added
     assert_eq!(config.defaults.providers.as_ref().unwrap().len(), 2);
     assert_eq!(
         config.defaults.providers.as_ref().unwrap().get("shared"),
-        Some(&"onepassword://Shared".to_string())
+        Some(&ProviderAlias::from("onepassword://Shared"))
     );
 
     // Simulate removing a provider alias
@@ -4723,15 +4751,10 @@ fn build_chain_scenario(
         providers: None,
     };
 
-    let mut providers_map = HashMap::new();
-    providers_map.insert(
-        "personal".to_string(),
-        format!("dotenv://{}", personal_path.display()),
-    );
-    providers_map.insert(
-        "team".to_string(),
-        format!("dotenv://{}", team_path.display()),
-    );
+    let providers_map = aliases_map(&[
+        ("personal", &format!("dotenv://{}", personal_path.display())),
+        ("team", &format!("dotenv://{}", team_path.display())),
+    ]);
     let global_config = GlobalConfig {
         defaults: GlobalDefaults {
             provider: Some("keyring".to_string()),
@@ -5028,19 +5051,23 @@ fn test_override_skips_read_chain() {
 
     let spec = Secrets::new(config, Some(global_config), Some("team".to_string()), None);
     let secret_config = spec.resolve_secret_config("MY_SECRET", None).unwrap();
-    let override_uri = spec.resolve_provider_override(None);
-    let uris = spec
-        .route_for(&secret_config, &override_uri)
-        .expect("override resolution should succeed")
-        .specs()
-        .expect("override should produce a URI list");
+    let override_spec = spec.explicit_provider_spec(None);
+    let route = spec
+        .route_for(&secret_config, &override_spec)
+        .expect("override resolution should succeed");
 
+    // The read walks the raw override spec only (the alias is expanded at build
+    // time, where its `credentials` is still reachable); the resolved URI is
+    // carried for display.
     assert_eq!(
-        uris.len(),
-        1,
-        "override must collapse the chain to a single URI"
+        route.specs(),
+        Some(vec!["team".to_string()]),
+        "override must collapse the chain to the single override spec"
     );
-    assert_eq!(uris[0], format!("dotenv://{}", team_path.display()));
+    assert_eq!(
+        route.primary(),
+        Some(format!("dotenv://{}", team_path.display()).as_str())
+    );
 }
 
 /// `get` must accept the same provider specs `--provider` accepts everywhere
@@ -5190,10 +5217,10 @@ OPTIONAL_MISSING = { description = "optional, not set", required = false }
     );
 }
 
-pub(crate) fn aliases_map(aliases: &[(&str, &str)]) -> HashMap<String, String> {
+pub(crate) fn aliases_map(aliases: &[(&str, &str)]) -> HashMap<String, ProviderAlias> {
     aliases
         .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .map(|(k, v)| (k.to_string(), ProviderAlias::from(*v)))
         .collect()
 }
 
@@ -5348,12 +5375,14 @@ APP_SECRET = { description = "App", required = true }
         .expect("merged config should carry [providers]");
 
     assert_eq!(
-        providers.get("op_infra").map(String::as_str),
+        providers.get("op_infra").map(|alias| alias.uri.as_str()),
         Some("onepassword://Shared"),
         "alias defined only in extended config should be inherited"
     );
     assert_eq!(
-        providers.get("op_overridden").map(String::as_str),
+        providers
+            .get("op_overridden")
+            .map(|alias| alias.uri.as_str()),
         Some("onepassword://NewVault"),
         "alias defined in both should resolve to the current (extending) config's value"
     );
@@ -5368,7 +5397,8 @@ fn test_provider_override_expands_project_alias() {
     spec.set_provider("op_infra");
 
     let resolved = spec
-        .resolve_provider_override(None)
+        .explicit_provider_spec(None)
+        .map(|spec_str| spec.resolve_provider_spec(spec_str))
         .expect("override should resolve to a URI");
 
     assert_eq!(resolved, "onepassword://Infra");
@@ -5438,7 +5468,8 @@ fn test_provider_override_resolves_global_alias_when_project_providers_present()
     spec.set_provider("team");
 
     let resolved = spec
-        .resolve_provider_override(None)
+        .explicit_provider_spec(None)
+        .map(|spec_str| spec.resolve_provider_spec(spec_str))
         .expect("override should resolve to a URI");
 
     assert_eq!(resolved, "onepassword://Team");
@@ -6044,4 +6075,427 @@ fn test_resolve_profile_unknown_returns_invalid_profile() {
         }
         other => panic!("expected InvalidProfile, got {other:?}"),
     }
+}
+
+// --- Provider credential resolution and validation ---
+
+/// Builds a `Secrets` whose only project provider alias is `target`, carrying
+/// the given semantic credential-source map.
+fn secrets_with_credential_alias(
+    target_uri: &str,
+    credentials: HashMap<String, CredentialSource>,
+) -> Secrets {
+    let mut config = resolve_test_config(HashMap::new());
+    config.providers = Some(HashMap::from([(
+        "target".to_string(),
+        ProviderAlias {
+            uri: target_uri.to_string(),
+            credentials,
+        },
+    )]));
+    Secrets::new(config, None, None, None)
+}
+
+#[test]
+fn provider_credentials_read_convention_credential_from_source() {
+    let _guard = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    // dotenv addresses a convention secret by the flat key name.
+    std::fs::write(&source, "access_token=secret-abc\n").unwrap();
+
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
+        HashMap::from([(
+            "access_token".to_string(),
+            CredentialSource::from(format!("dotenv://{}", source.display())),
+        )]),
+    );
+
+    let credentials = secrets
+        .resolve_provider_credentials("target", "default")
+        .unwrap();
+    assert_eq!(
+        credentials
+            .get("access_token")
+            .map(|value| value.expose_secret().to_string()),
+        Some("secret-abc".to_string()),
+    );
+}
+
+#[test]
+fn sourced_credential_reaches_target_provider_end_to_end() {
+    let _guard = scrub_resolution_env();
+    let _token = EnvVarGuard::remove("OP_SERVICE_ACCOUNT_TOKEN");
+    let temp = TempDir::new().unwrap();
+
+    let target_scope = |filename: &str, token: &str| {
+        let source = temp.path().join(filename);
+        std::fs::write(&source, format!("service_account_token={token}\n")).unwrap();
+        let secrets = secrets_with_credential_alias(
+            "onepassword://Private",
+            HashMap::from([(
+                "service_account_token".to_string(),
+                CredentialSource::from(format!("dotenv://{}", source.display())),
+            )]),
+        );
+
+        secrets
+            .get_provider(Some("target"), Some("default"))
+            .expect("the source credential should build the target provider")
+            .auth_scope_key()
+            .expect("onepassword should identify its effective authentication scope")
+    };
+
+    let first = target_scope("first.env", "source-token-a");
+    let same = target_scope("same.env", "source-token-a");
+    let different = target_scope("different.env", "source-token-b");
+
+    assert_eq!(
+        first, same,
+        "the same fetched credential yields the same scope"
+    );
+    assert_ne!(
+        first, different,
+        "changing the source credential must change the target's effective auth scope"
+    );
+    assert!(!first.contains("source-token-a"));
+    assert!(!different.contains("source-token-b"));
+}
+
+#[test]
+fn provider_credentials_read_ref_addressed_credential() {
+    let _guard = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    std::fs::write(&source, "SOURCE_KEY=secret-xyz\n").unwrap();
+
+    // The semantic credential name and the source key differ;
+    // `ref` pins the exact location.
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
+        HashMap::from([(
+            "access_token".to_string(),
+            CredentialSource {
+                provider: format!("dotenv://{}", source.display()),
+                reference: Some(NativeAddress {
+                    item: "SOURCE_KEY".to_string(),
+                    ..Default::default()
+                }),
+            },
+        )]),
+    );
+
+    let credentials = secrets
+        .resolve_provider_credentials("target", "default")
+        .unwrap();
+    assert_eq!(
+        credentials
+            .get("access_token")
+            .map(|value| value.expose_secret().to_string()),
+        Some("secret-xyz".to_string()),
+    );
+}
+
+#[test]
+fn configured_credential_is_resolved_even_when_provider_env_is_set() {
+    let _guard = scrub_resolution_env();
+    let _var = EnvVarGuard::set("BWS_ACCESS_TOKEN", "from-env");
+
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    std::fs::write(&source, "access_token=from-source\n").unwrap();
+
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
+        HashMap::from([(
+            "access_token".to_string(),
+            CredentialSource::from(format!("dotenv://{}", source.display())),
+        )]),
+    );
+
+    let credentials = secrets
+        .resolve_provider_credentials("target", "default")
+        .unwrap();
+    assert_eq!(
+        credentials
+            .get("access_token")
+            .map(|value| value.expose_secret()),
+        Some("from-source")
+    );
+}
+
+#[test]
+fn missing_provider_credential_is_an_actionable_error() {
+    let _guard = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    std::fs::write(&source, "").unwrap();
+
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
+        HashMap::from([(
+            "access_token".to_string(),
+            CredentialSource::from(format!("dotenv://{}", source.display())),
+        )]),
+    );
+
+    let error = secrets
+        .resolve_provider_credentials("target", "default")
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("access_token") && message.contains("not found"),
+        "error should name the credential and say it was not found: {message}"
+    );
+}
+
+#[test]
+fn credential_source_must_name_a_known_provider() {
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
+        HashMap::from([(
+            "access_token".to_string(),
+            CredentialSource::from("not_a_real_provider"),
+        )]),
+    );
+    let error = secrets.validate_credential_sources("target").unwrap_err();
+    assert!(
+        error.to_string().contains("not_a_real_provider"),
+        "error should name the unknown source: {error}"
+    );
+}
+
+#[test]
+fn credential_name_must_be_supported_by_target_provider() {
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
+        HashMap::from([(
+            "BWS_ACCESS_TOKEN".to_string(),
+            CredentialSource::from("keyring"),
+        )]),
+    );
+
+    let error = secrets.validate_credential_sources("target").unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("BWS_ACCESS_TOKEN"), "{message}");
+    assert!(message.contains("access_token"), "{message}");
+}
+
+#[test]
+fn declared_provider_credentials_validates_every_source_before_login() {
+    let secrets = secrets_with_credential_alias(
+        "vault://secret/app?auth=approle",
+        HashMap::from([
+            (
+                "role_id".to_string(),
+                CredentialSource::from("dotenv://source.env"),
+            ),
+            (
+                "secret_id".to_string(),
+                CredentialSource::from("not_a_real_provider"),
+            ),
+        ]),
+    );
+
+    let error = secrets.declared_provider_credentials("target").unwrap_err();
+    assert!(error.to_string().contains("secret_id"));
+}
+
+#[test]
+fn credential_source_display_redacts_inline_credentials() {
+    let source = CredentialSource::from("onepassword+token://ops_secret@Vault");
+    let displayed = source.display_provider();
+
+    assert_eq!(displayed, "onepassword+token://Vault");
+    assert!(!displayed.contains("ops_secret"));
+}
+
+#[test]
+fn credential_chain_is_limited_to_one_hop() {
+    let mut config = resolve_test_config(HashMap::new());
+    config.providers = Some(HashMap::from([
+        // `chained` itself declares credentials, so it may not be a source.
+        (
+            "chained".to_string(),
+            ProviderAlias {
+                uri: "keyring://".to_string(),
+                credentials: HashMap::from([(
+                    "access_token".to_string(),
+                    CredentialSource::from("keyring"),
+                )]),
+            },
+        ),
+        (
+            "target".to_string(),
+            ProviderAlias {
+                uri: "bws://00000000-0000-0000-0000-000000000000".to_string(),
+                credentials: HashMap::from([(
+                    "access_token".to_string(),
+                    CredentialSource::from("chained"),
+                )]),
+            },
+        ),
+    ]));
+    let secrets = Secrets::new(config, None, None, None);
+    let error = secrets.validate_credential_sources("target").unwrap_err();
+    assert!(
+        error.to_string().contains("one hop"),
+        "error should explain the one-hop limit: {error}"
+    );
+}
+
+#[test]
+fn provider_credential_round_trips_through_its_source() {
+    let _guard = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    std::fs::write(&source, "").unwrap();
+
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
+        HashMap::from([(
+            "access_token".to_string(),
+            CredentialSource::from(format!("dotenv://{}", source.display())),
+        )]),
+    );
+
+    let credentials = secrets.declared_provider_credentials("target").unwrap();
+    assert_eq!(credentials.len(), 1);
+    let (var, source_spec) = &credentials[0];
+
+    secrets
+        .store_provider_credential(
+            source_spec,
+            var,
+            &secrecy::SecretString::new("stored-value".into()),
+        )
+        .unwrap();
+
+    // Stored and read back through the same address the resolver uses.
+    let resolved = secrets
+        .resolve_provider_credentials("target", "default")
+        .unwrap();
+    assert_eq!(
+        resolved
+            .get("access_token")
+            .map(|value| value.expose_secret().to_string()),
+        Some("stored-value".to_string()),
+    );
+}
+
+/// The credential memo is keyed by profile: building the target for one profile
+/// memoizes only that profile's credentials, and another profile re-fetches
+/// from the source instead of reusing them.
+#[test]
+fn provider_credentials_memoize_per_profile() {
+    let _guard = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    std::fs::write(&source, "access_token=v1\n").unwrap();
+
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
+        HashMap::from([(
+            "access_token".to_string(),
+            CredentialSource::from(format!("dotenv://{}", source.display())),
+        )]),
+    );
+
+    // First build fetches the credential and memoizes it for this profile.
+    secrets
+        .get_provider(Some("target"), Some("default"))
+        .expect("the source supplies the credential");
+
+    // Empty the source: a fresh fetch can no longer succeed.
+    std::fs::write(&source, "").unwrap();
+
+    // Same profile: served from the memo, so the emptied source is not read.
+    secrets
+        .get_provider(Some("target"), Some("default"))
+        .expect("the memoized credential must be reused for the same profile");
+
+    // Another profile must not reuse the memo: it re-fetches and hard-misses.
+    assert!(
+        secrets.get_provider(Some("target"), Some("other")).is_err(),
+        "another profile must re-fetch rather than reuse the memoized credential"
+    );
+}
+
+/// Storing a credential through its source (the `login` flow) clears the
+/// credential memo, so the next build re-reads the store instead of resolving to
+/// the stale cached value.
+#[test]
+fn storing_a_provider_credential_invalidates_the_memo() {
+    let _guard = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    std::fs::write(&source, "access_token=old\n").unwrap();
+
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
+        HashMap::from([(
+            "access_token".to_string(),
+            CredentialSource::from(format!("dotenv://{}", source.display())),
+        )]),
+    );
+
+    // Memoize the old credential.
+    secrets
+        .get_provider(Some("target"), Some("default"))
+        .expect("the source supplies the credential");
+
+    let credentials = secrets.declared_provider_credentials("target").unwrap();
+    let (var, source_spec) = &credentials[0];
+    secrets
+        .store_provider_credential(source_spec, var, &secrecy::SecretString::new("new".into()))
+        .unwrap();
+
+    // Empty the source: only a memo hit could satisfy the next build, so a
+    // success here would prove the store had NOT invalidated it.
+    std::fs::write(&source, "").unwrap();
+    assert!(
+        secrets
+            .get_provider(Some("target"), Some("default"))
+            .is_err(),
+        "the store must clear the memo so the credential is re-read"
+    );
+}
+
+#[test]
+fn declared_provider_credentials_errors_for_an_unknown_alias() {
+    let secrets = Secrets::new(resolve_test_config(HashMap::new()), None, None, None);
+    assert!(secrets.declared_provider_credentials("nope").is_err());
+}
+
+#[test]
+fn declared_provider_credentials_is_empty_for_an_alias_without_credentials() {
+    let mut config = resolve_test_config(HashMap::new());
+    config.providers = Some(HashMap::from([(
+        "plain".to_string(),
+        ProviderAlias::from("keyring://"),
+    )]));
+    let secrets = Secrets::new(config, None, None, None);
+    assert!(
+        secrets
+            .declared_provider_credentials("plain")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn store_provider_credential_rejects_a_read_only_source() {
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
+        HashMap::from([("access_token".to_string(), CredentialSource::from("env://"))]),
+    );
+    let credentials = secrets.declared_provider_credentials("target").unwrap();
+    let (var, source_spec) = &credentials[0];
+    let result = secrets.store_provider_credential(
+        source_spec,
+        var,
+        &secrecy::SecretString::new("x".into()),
+    );
+    assert!(result.is_err(), "the env provider is read-only");
 }

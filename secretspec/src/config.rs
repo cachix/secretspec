@@ -40,6 +40,232 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+/// Where one credential required by a provider comes from.
+///
+/// Written in an alias's `credentials` map either as a bare provider spec,
+/// which reads the credential from that provider at the convention path for
+/// the active project and profile:
+///
+/// ```toml
+/// credentials = { access_token = "keyring" }
+/// ```
+///
+/// or as a table that pins the exact location with the same `ref` coordinates a
+/// secret uses:
+///
+/// ```toml
+/// credentials = { role_id = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "role_id" } } }
+/// ```
+///
+/// Reusing `ref` means provider credentials are addressed exactly like every
+/// other secret — no separate storage convention. A bare spec round-trips back
+/// to a bare string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CredentialSource {
+    /// Provider spec (alias, bare provider name, or URI) supplying the credential.
+    pub provider: String,
+    /// Native coordinates within that provider. When absent, the credential is
+    /// read at the convention path (the credential name as key) for the active
+    /// project and profile.
+    pub reference: Option<NativeAddress>,
+}
+
+impl CredentialSource {
+    /// A source that reads from `provider` using convention naming.
+    pub fn from_provider(provider: impl Into<String>) -> Self {
+        Self {
+            provider: provider.into(),
+            reference: None,
+        }
+    }
+}
+
+impl From<String> for CredentialSource {
+    fn from(provider: String) -> Self {
+        Self::from_provider(provider)
+    }
+}
+
+impl From<&str> for CredentialSource {
+    fn from(provider: &str) -> Self {
+        Self::from_provider(provider)
+    }
+}
+
+impl Serialize for CredentialSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match &self.reference {
+            // A ref-less source round-trips back to the bare-string form.
+            None => serializer.serialize_str(&self.provider),
+            Some(reference) => {
+                use serde::ser::SerializeStruct;
+                let mut table = serializer.serialize_struct("CredentialSource", 2)?;
+                table.serialize_field("provider", &self.provider)?;
+                table.serialize_field("ref", reference)?;
+                table.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CredentialSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct SourceVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for SourceVisitor {
+            type Value = CredentialSource;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a provider spec string or a { provider, ref } table")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, provider: &str) -> Result<CredentialSource, E> {
+                Ok(CredentialSource::from_provider(provider))
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<CredentialSource, M::Error> {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Table {
+                    provider: String,
+                    #[serde(default, rename = "ref")]
+                    reference: Option<NativeAddress>,
+                }
+                let table = Table::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(CredentialSource {
+                    provider: table.provider,
+                    reference: table.reference,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(SourceVisitor)
+    }
+}
+
+/// A provider alias: a provider URI plus an optional credential-source map.
+///
+/// In TOML an alias is written either as a bare string, which is just the URI:
+///
+/// ```toml
+/// [providers]
+/// keyring = "keyring://"
+/// ```
+///
+/// or as a table carrying a `credentials` map, whose entries name semantic
+/// credentials the provider needs and the provider spec to source them from:
+///
+/// ```toml
+/// [providers]
+/// bws = { uri = "bws://project-uuid", credentials = { access_token = "keyring" } }
+/// ```
+///
+/// The two forms round-trip losslessly: an alias with no credentials serializes
+/// back to a bare string, so existing configs are untouched.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProviderAlias {
+    /// The provider URI (e.g. `keyring://`, `bws://project-uuid`).
+    pub uri: String,
+    /// Semantic credential name to the [`CredentialSource`] that supplies it.
+    /// Empty for a bare string alias, so "declares no credentials" has exactly
+    /// one representation.
+    pub credentials: HashMap<String, CredentialSource>,
+}
+
+impl ProviderAlias {
+    /// A bare alias carrying only a URI and no credentials.
+    pub fn from_uri(uri: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            credentials: HashMap::new(),
+        }
+    }
+}
+
+impl From<String> for ProviderAlias {
+    fn from(uri: String) -> Self {
+        Self::from_uri(uri)
+    }
+}
+
+impl From<&str> for ProviderAlias {
+    fn from(uri: &str) -> Self {
+        Self::from_uri(uri)
+    }
+}
+
+impl std::fmt::Display for ProviderAlias {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.uri)?;
+        if !self.credentials.is_empty() {
+            let mut names: Vec<&str> = self.credentials.keys().map(String::as_str).collect();
+            names.sort();
+            write!(f, " (credentials: {})", names.join(", "))?;
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for ProviderAlias {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if self.credentials.is_empty() {
+            // A bare alias serializes back to the plain-string form, so an alias
+            // that was written as a string round-trips unchanged.
+            serializer.serialize_str(&self.uri)
+        } else {
+            use serde::ser::SerializeStruct;
+            let mut table = serializer.serialize_struct("ProviderAlias", 2)?;
+            table.serialize_field("uri", &self.uri)?;
+            table.serialize_field("credentials", &self.credentials)?;
+            table.end()
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ProviderAlias {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct AliasVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for AliasVisitor {
+            type Value = ProviderAlias;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a provider URI string or a { uri, credentials } table")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, uri: &str) -> Result<ProviderAlias, E> {
+                Ok(ProviderAlias::from_uri(uri))
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<ProviderAlias, M::Error> {
+                // A dedicated struct gives precise field-level errors (unknown
+                // key, missing `uri`) rather than the opaque message an
+                // `#[serde(untagged)]` enum would produce on any typo.
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Table {
+                    uri: String,
+                    #[serde(default)]
+                    credentials: Option<HashMap<String, CredentialSource>>,
+                }
+                let table = Table::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(ProviderAlias {
+                    uri: table.uri,
+                    credentials: table.credentials.unwrap_or_default(),
+                })
+            }
+        }
+
+        deserializer.deserialize_any(AliasVisitor)
+    }
+}
+
 /// The root configuration structure for a SecretSpec project.
 ///
 /// This is the top-level type that represents the entire `secretspec.toml` file.
@@ -56,7 +282,7 @@ pub struct Config {
     /// (`~/.config/secretspec/config.toml`), so teams can check vault mappings
     /// into version control instead of replicating them on every machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub providers: Option<HashMap<String, String>>,
+    pub providers: Option<HashMap<String, ProviderAlias>>,
 }
 
 impl Config {
@@ -152,11 +378,12 @@ impl Config {
             }
         }
 
-        // Merge provider aliases - current entries win.
+        // Merge provider aliases - current entries win. Whole entries merge
+        // (URI and any credentials together); there is no per-field merge.
         if let Some(other_providers) = other.providers {
             let merged = self.providers.get_or_insert_with(HashMap::new);
-            for (alias, uri) in other_providers {
-                merged.entry(alias).or_insert(uri);
+            for (alias, alias_value) in other_providers {
+                merged.entry(alias).or_insert(alias_value);
             }
         }
     }
@@ -1167,7 +1394,7 @@ pub struct GlobalDefaults {
     /// local = "dotenv://.env.local"
     /// ```
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub providers: Option<HashMap<String, String>>,
+    pub providers: Option<HashMap<String, ProviderAlias>>,
 }
 
 impl GlobalConfig {
@@ -2156,5 +2383,151 @@ ref = 3"#,
         assert!(!GenerateConfig::Bool(false).is_enabled());
         assert!(GenerateConfig::Bool(true).is_enabled());
         assert!(GenerateConfig::Options(GenerateOptions::default()).is_enabled());
+    }
+}
+
+#[cfg(test)]
+mod provider_alias_tests {
+    use super::*;
+
+    fn parse(providers_toml: &str) -> HashMap<String, ProviderAlias> {
+        toml::from_str(providers_toml).expect("valid [providers] table")
+    }
+
+    #[test]
+    fn bare_string_parses_as_uri_without_credentials() {
+        let map = parse(r#"keyring = "keyring://""#);
+        assert_eq!(map["keyring"], ProviderAlias::from("keyring://"));
+        assert!(map["keyring"].credentials.is_empty());
+    }
+
+    #[test]
+    fn table_with_credentials_parses_uri_and_credentials() {
+        let map =
+            parse(r#"bws = { uri = "bws://proj", credentials = { access_token = "keyring" } }"#);
+        let alias = &map["bws"];
+        assert_eq!(alias.uri, "bws://proj");
+        let source = alias
+            .credentials
+            .get("access_token")
+            .expect("credentials carries the semantic name");
+        assert_eq!(source, &CredentialSource::from("keyring"));
+    }
+
+    #[test]
+    fn credential_source_with_ref_parses_provider_and_coordinates() {
+        let map = parse(
+            r#"vault = { uri = "vault://kv", credentials = { role_id = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "role_id" } } } }"#,
+        );
+        let source = map["vault"].credentials["role_id"].clone();
+        assert_eq!(source.provider, "onepassword");
+        let reference = source.reference.expect("ref present");
+        assert_eq!(reference.vault.as_deref(), Some("Infra"));
+        assert_eq!(reference.item, "approle");
+        assert_eq!(reference.field.as_deref(), Some("role_id"));
+    }
+
+    #[test]
+    fn credential_source_round_trips() {
+        let bare = CredentialSource::from("keyring");
+        let with_ref = CredentialSource {
+            provider: "onepassword".to_string(),
+            reference: Some(NativeAddress {
+                item: "approle".to_string(),
+                field: Some("role_id".to_string()),
+                ..Default::default()
+            }),
+        };
+        for source in [bare, with_ref] {
+            let alias = ProviderAlias {
+                uri: "vault://kv".to_string(),
+                credentials: HashMap::from([("role_id".to_string(), source.clone())]),
+            };
+            let map = HashMap::from([("vault".to_string(), alias.clone())]);
+            let serialized = toml::to_string(&map).unwrap();
+            assert_eq!(parse(&serialized)["vault"], alias);
+        }
+    }
+
+    #[test]
+    fn table_without_credentials_is_equivalent_to_bare_string() {
+        let map = parse(r#"bws = { uri = "bws://proj" }"#);
+        assert_eq!(map["bws"], ProviderAlias::from("bws://proj"));
+    }
+
+    #[test]
+    fn empty_credentials_table_is_equivalent_to_no_credentials() {
+        // `credentials = {}` declares nothing: the alias equals its bare-string form
+        // and serializes back to it.
+        let map = parse(r#"keyring = { uri = "keyring://", credentials = {} }"#);
+        assert_eq!(map["keyring"], ProviderAlias::from("keyring://"));
+    }
+
+    #[test]
+    fn unknown_table_field_is_rejected() {
+        let err = toml::from_str::<HashMap<String, ProviderAlias>>(
+            r#"bws = { uri = "bws://proj", oops = "x" }"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("oops") || err.to_string().contains("unknown"),
+            "error should point at the unknown field, got: {err}"
+        );
+    }
+
+    #[test]
+    fn environment_shaped_credential_field_is_rejected() {
+        let error = toml::from_str::<HashMap<String, ProviderAlias>>(
+            r#"bws = { uri = "bws://proj", env = { BWS_ACCESS_TOKEN = "keyring" } }"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("env"), "{error}");
+    }
+
+    #[test]
+    fn credential_less_alias_round_trips_as_a_bare_string() {
+        let alias = ProviderAlias::from("keyring://");
+        let map = HashMap::from([("keyring".to_string(), alias.clone())]);
+        let serialized = toml::to_string(&map).unwrap();
+        // The bare-string form is preserved so existing configs are untouched.
+        assert_eq!(serialized.trim(), r#"keyring = "keyring://""#);
+        assert_eq!(parse(&serialized)["keyring"], alias);
+    }
+
+    #[test]
+    fn alias_with_credentials_round_trips_through_toml() {
+        let alias = ProviderAlias {
+            uri: "bws://proj".to_string(),
+            credentials: HashMap::from([(
+                "access_token".to_string(),
+                CredentialSource::from("keyring"),
+            )]),
+        };
+        let map = HashMap::from([("bws".to_string(), alias.clone())]);
+        let serialized = toml::to_string(&map).unwrap();
+        assert_eq!(parse(&serialized)["bws"], alias);
+    }
+
+    #[test]
+    fn config_providers_accepts_both_forms_end_to_end() {
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[providers]
+keyring = "keyring://"
+bws = { uri = "bws://proj", credentials = { access_token = "keyring" } }
+
+[profiles.default]
+API_KEY = { description = "key", required = true }
+"#,
+        )
+        .unwrap();
+        let providers = config.providers.expect("[providers] present");
+        assert_eq!(providers["keyring"], ProviderAlias::from("keyring://"));
+        assert_eq!(providers["bws"].uri, "bws://proj");
+        assert!(providers["bws"].credentials.contains_key("access_token"));
     }
 }

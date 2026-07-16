@@ -68,11 +68,18 @@ DATABASE_URL = { description = "DB", ref = { item = "prod-db-connection" }, prov
 
 ### Authentication
 
-Set the `BWS_ACCESS_TOKEN` environment variable with your machine account access token. Generate access tokens from the Bitwarden Secrets Manager web interface.
+Supply the machine account access token as a provider credential. For example,
+store it in your system keyring so it never lives in a shell profile. Generate
+access tokens from the Bitwarden Secrets Manager web interface. See
+[Provider Credentials](/concepts/providers/#provider-credentials):
 
-```bash
-export BWS_ACCESS_TOKEN="0.your-access-token..."
+```toml title="secretspec.toml"
+[providers]
+bws = { uri = "bws://a9230ec4-5507-4870-b8b5-b3f500587e4c", credentials = { access_token = "keyring" } }
 ```
+
+For compatibility with standalone BWS tooling, the provider falls back to
+`BWS_ACCESS_TOKEN` when no explicit `access_token` credential is supplied.
 
 ### Basic Commands
 

@@ -8,7 +8,7 @@ The Azure Key Vault provider integrates with Azure for centralized secret manage
 ## Prerequisites
 
 - An Azure Key Vault instance
-- Authenticated via a service principal (`AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`), the Azure CLI (`az login`), a managed identity, or AKS workload identity
+- Authenticated via a service principal, the Azure CLI (`az login`), a managed identity, or AKS workload identity
 - Build with `--features akv`
 
 ## Configuration
@@ -21,7 +21,7 @@ akv://VAULT_NAME[?auth=env|cli|managed_identity|workload_identity][&suffix=DNS_S
 
 - `VAULT_NAME`: Your Key Vault name (e.g. `myvault`), or a full DNS name for sovereign clouds (e.g. `myvault.vault.azure.cn`)
 - `auth`: Authentication method (default: `env`)
-  - `env` — a service principal from `AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET` (all three must be set together); falls back to the signed-in Azure CLI / Azure Developer CLI session if none are set. Setting only some of the three is an error rather than a silent fallback to a different identity.
+  - `env` — a service principal from the `tenant_id`, `client_id`, and `client_secret` provider credentials, with `AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET` as fallbacks (all three must be available together); falls back to the signed-in Azure CLI / Azure Developer CLI session if none are available. A partial set is an error rather than a silent fallback to a different identity.
   - `cli` — the Azure CLI / Azure Developer CLI session only
   - `managed_identity` — the VM / App Service / AKS system-assigned managed identity
   - `workload_identity` — AKS workload identity federation (`AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_FEDERATED_TOKEN_FILE`, injected automatically by AKS)
@@ -94,6 +94,30 @@ be confused with component data.
 
 ### CI/CD with a Service Principal
 
+The `auth=env` mode accepts `tenant_id`, `client_id`, and `client_secret` as
+[provider credentials](/concepts/providers/#provider-credentials). For example,
+the credentials can be stored in the system keyring instead of a shell profile:
+
+```toml title="secretspec.toml"
+[providers.azure]
+uri = "akv://myvault"
+
+[providers.azure.credentials]
+tenant_id = "keyring"
+client_id = "keyring"
+client_secret = "keyring"
+```
+
+Store all three declared credentials, then use the alias:
+
+```bash
+$ secretspec config provider login azure
+$ secretspec run --provider azure -- deploy
+```
+
+When a semantic credential is not explicitly configured, SecretSpec falls back
+to its matching conventional environment variable:
+
 ```bash
 # Set credentials
 $ export AZURE_TENANT_ID="..."
@@ -104,9 +128,9 @@ $ export AZURE_CLIENT_SECRET="..."
 $ secretspec run --provider akv://myvault -- deploy
 ```
 
-All three environment variables must be set together; setting only some of
-them is treated as a configuration error rather than a silent fallback to the
-Azure CLI session.
+Across provider credentials and environment fallbacks, all three values must be
+available together. A partial service principal is treated as a configuration
+error rather than a silent fallback to the Azure CLI session.
 
 ### AKS with Workload Identity
 

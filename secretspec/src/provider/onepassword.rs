@@ -1,4 +1,4 @@
-use crate::provider::{Address, Provider, ProviderUrl};
+use crate::provider::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -311,7 +311,12 @@ pub struct OnePasswordProvider {
     config: OnePasswordConfig,
     /// The OnePassword CLI command to use (either "op" or a custom path).
     op_command: String,
+    /// Credentials supplied by the provider alias.
+    credentials: ProviderCredentials,
 }
+
+const SERVICE_ACCOUNT_TOKEN: &str = "service_account_token";
+const OP_SERVICE_ACCOUNT_TOKEN_ENV: &str = "OP_SERVICE_ACCOUNT_TOKEN";
 
 crate::register_provider! {
     struct: OnePasswordProvider,
@@ -320,6 +325,7 @@ crate::register_provider! {
     description: "OnePassword password manager",
     schemes: ["onepassword", "onepassword+token", "op"],
     examples: ["onepassword://vault", "onepassword://work@Production", "onepassword+token://vault"],
+    credential_names: [SERVICE_ACCOUNT_TOKEN],
     preflight: check_auth,
 }
 
@@ -337,7 +343,25 @@ impl OnePasswordProvider {
                 "op".to_string()
             }
         });
-        Self { config, op_command }
+        Self {
+            config,
+            op_command,
+            credentials: ProviderCredentials::new(),
+        }
+    }
+
+    /// The service account token in effect: the URI-supplied one
+    /// (`onepassword+token://`), else an explicitly supplied credential, then
+    /// the conventional environment variable. When all are absent, `op` falls
+    /// back to its own authentication (desktop app or manual signin) exactly as before.
+    fn effective_service_account_token(&self) -> Option<String> {
+        self.config.service_account_token.clone().or_else(|| {
+            credential_or_env(
+                &self.credentials,
+                SERVICE_ACCOUNT_TOKEN,
+                OP_SERVICE_ACCOUNT_TOKEN_ENV,
+            )
+        })
     }
 
     /// Executes a OnePassword CLI command with proper error handling.
@@ -371,9 +395,10 @@ impl OnePasswordProvider {
         let mut cmd = Command::new(&self.op_command);
         strip_op_session_env(&mut cmd);
 
-        // Set service account token if provided
-        if let Some(token) = &self.config.service_account_token {
-            cmd.env("OP_SERVICE_ACCOUNT_TOKEN", token);
+        // Set service account token if provided. Passing an environment-supplied
+        // token explicitly is equivalent to `op` inheriting it.
+        if let Some(token) = self.effective_service_account_token() {
+            cmd.env(OP_SERVICE_ACCOUNT_TOKEN_ENV, token);
         }
 
         // Add account if specified
@@ -803,6 +828,14 @@ impl Provider for OnePasswordProvider {
         &["field", "vault", "section"]
     }
 
+    fn with_credentials(&mut self, credentials: ProviderCredentials) {
+        // Stored, not folded into the config: the token is resolved where it is
+        // consumed (`execute_op_command`, `auth_scope_key`), and `uri()` keeps
+        // reporting the scheme the user actually configured rather than
+        // flipping to `onepassword+token://`.
+        self.credentials = credentials;
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
@@ -813,13 +846,18 @@ impl Provider for OnePasswordProvider {
     /// referenced secret; without this, N references would run N identical
     /// `op vault list` round-trips.
     fn auth_scope_key(&self) -> Option<String> {
+        // The token actually in effect, so two instances supplied with
+        // different tokens never share a preflight probe. Hashed rather than
+        // embedded: the scope key lives in a process-lifetime cache, and a
+        // sourced token is kept as a `SecretString` precisely so its
+        // plaintext never sits in long-lived memory.
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.effective_service_account_token().hash(&mut hasher);
+        let token_scope = hasher.finish();
         Some(format!(
             "{:?}",
-            (
-                &self.config.account,
-                &self.config.service_account_token,
-                &self.op_command
-            )
+            (&self.config.account, token_scope, &self.op_command)
         ))
     }
 

@@ -1065,4 +1065,54 @@ mod integration_tests {
         let provider = Box::<dyn Provider>::try_from("gcsm://project123").unwrap();
         assert_eq!(provider.name(), "gcsm");
     }
+
+    /// Provider credentials must reach a preflight-wrapped provider. onepassword
+    /// is built as `Box<Arc<OnePasswordProvider>>` behind a `PreflightGuard`, so a
+    /// `&mut self` hook applied post-construction would be swallowed by the `Arc`
+    /// layer (which cannot forward `&mut self`); this passes only because the
+    /// credentials are injected inside the factory, before wrapping. The delivered
+    /// token folds into `auth_scope_key` as a hash, so injection shows up as a
+    /// scope-key difference while the plaintext never reaches the
+    /// process-lifetime preflight cache.
+    #[test]
+    fn credentials_reach_preflight_wrapped_provider() {
+        use crate::provider::{ProviderCredentials, ProviderUrl, provider_from_url};
+        use url::Url;
+
+        // Clear any ambient token under the env lock: with one exported, every
+        // instance would resolve the same effective token and the scope keys
+        // below could not tell injection from a silent no-op.
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = crate::tests::EnvVarGuard::remove("OP_SERVICE_ACCOUNT_TOKEN");
+
+        let scope_with = |token: Option<&str>| {
+            let mut credentials = ProviderCredentials::new();
+            if let Some(token) = token {
+                credentials.insert(
+                    "service_account_token".to_string(),
+                    SecretString::new(token.into()),
+                );
+            }
+            let url = ProviderUrl::new(Url::parse("onepassword://Private").unwrap());
+            provider_from_url(&url, credentials)
+                .unwrap()
+                .auth_scope_key()
+                .expect("onepassword advertises an auth scope")
+        };
+
+        let without_token = scope_with(None);
+        let with_token = scope_with(Some("tok-xyz"));
+        assert_ne!(
+            with_token, without_token,
+            "provider credential should be injected before Arc-wrapping"
+        );
+        // Same token, same scope; different tokens probe auth separately.
+        assert_eq!(with_token, scope_with(Some("tok-xyz")));
+        assert_ne!(with_token, scope_with(Some("tok-other")));
+        // The scope key carries a hash of the token, never its plaintext.
+        assert!(
+            !with_token.contains("tok-xyz"),
+            "auth scope key must not embed the plaintext token: {with_token}"
+        );
+    }
 }

@@ -140,3 +140,14 @@ export VAULT_ROLE_ID=your-role-id
 export VAULT_SECRET_ID=your-secret-id
 secretspec run --provider "vault://vault.example.com:8200/secret?auth=approle" -- deploy
 ```
+
+#### Sourcing credentials from another provider
+
+These credentials can be read from another provider instead of the environment, so a Vault token or AppRole credentials never live in a shell profile — see [Provider Credentials](/concepts/providers/#provider-credentials):
+
+```toml title="secretspec.toml"
+[providers.vault_prod]
+uri = "vault://vault.example.com:8200/secret?auth=approle"
+credentials = { role_id   = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "role_id" } },
+                secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "secret_id" } } }
+```

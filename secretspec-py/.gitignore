@@ -7,3 +7,5 @@ dist/
 # Compiled pyo3 extension (secretspec/_native.abi3.so), built by maturin.
 *.so
 *.o
+# C source emitted by cffi's builder.
+*_cffi.c

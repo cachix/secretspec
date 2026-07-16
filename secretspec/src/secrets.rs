@@ -481,8 +481,10 @@ impl Secrets {
         let project_config = Config::try_from(path)?;
         // Semantic validation (required vs default, ref coordinate rules,
         // generate consistency) runs here so every CLI and SDK entry point
-        // enforces the same rules the config documents.
-        project_config.validate()?;
+        // enforces the same rules the config documents. The compiled manifest it
+        // produces is the one stored below, so the effective view is compiled
+        // exactly once per load.
+        let manifest = project_config.validate_and_compile()?;
         let global_config = GlobalConfig::load()?;
         // Auditing is a per-machine concern configured in the user-global config
         // (`[audit]` in ~/.config/secretspec/config.toml), not the project. It is
@@ -502,7 +504,6 @@ impl Secrets {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
-        let manifest = CompiledManifest::compile(&project_config);
 
         Ok(Self {
             require_reason: project_config.project.require_reason.unwrap_or_default(),
@@ -1100,16 +1101,21 @@ impl Secrets {
         })
     }
 
-    /// Resolves the full profile configuration, merging with default profile if needed
+    /// Validates that the profile exists and returns its effective secret names
+    /// in sorted order — the union of the profile's own and the `default`
+    /// profile's secrets, as the compiled manifest records them.
     ///
     /// # Arguments
     ///
     /// * `profile` - Optional profile name to resolve (if None, uses resolved profile name)
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// The resolved profile configuration
-    pub(crate) fn resolve_profile(&self, profile: Option<&str>) -> Result<Profile> {
+    /// Returns `InvalidProfile` when the named profile is not defined.
+    pub(crate) fn resolve_profile_secret_names(
+        &self,
+        profile: Option<&str>,
+    ) -> Result<Vec<String>> {
         let profile_name = profile
             .map(str::to_string)
             .unwrap_or_else(|| self.resolve_profile_name(None));
@@ -1118,14 +1124,9 @@ impl Secrets {
             .manifest
             .profile(&profile_name)
             .expect("raw and compiled profile sets stay identical");
-        Ok(Profile {
-            defaults: None,
-            secrets: compiled
-                .secrets
-                .iter()
-                .map(|(name, secret)| (name.clone(), secret.config.clone()))
-                .collect(),
-        })
+        // `CompiledProfile.secrets` is a `BTreeMap`, so its keys are already
+        // sorted — no clone of the secret configs, which every caller discarded.
+        Ok(compiled.secrets.keys().cloned().collect())
     }
 
     /// Resolves the configuration for a specific secret
@@ -1546,8 +1547,7 @@ impl Secrets {
                 return Err(err);
             }
             Ok(None) => {
-                let profile = self.resolve_profile(Some(&profile_name))?;
-                let available_secrets = profile.sorted_secret_names();
+                let available_secrets = self.resolve_profile_secret_names(Some(&profile_name))?;
 
                 let err = SecretSpecError::SecretNotFound(format!(
                     "Secret '{}' is not defined in profile '{}'. Available secrets: {}",
@@ -2176,12 +2176,12 @@ impl Secrets {
 
             // Collect all secrets to import - from current profile and default profile
             // This ensures we can import secrets defined in default profile when using other profiles
-            let profile = self.resolve_profile(Some(&profile_display))?;
+            let import_names = self.resolve_profile_secret_names(Some(&profile_display))?;
 
             // Process each secret using proper profile resolution: the plan
             // supplies the same write route and address `set` executes. Sorted
             // names keep the per-secret summary lines in a stable order.
-            for name in profile.sorted_secret_names() {
+            for name in import_names {
                 read_names.push(name.clone());
                 let planned = self
                     .plan_secret(&name, &profile_display, None)?
@@ -2666,15 +2666,12 @@ impl Secrets {
         // The profile is resolved once; its sorted names serve both as the
         // audit keys and as the plan's input, so nothing is merged or sorted
         // twice.
-        let profile_result = self.resolve_profile(Some(&profile_name));
+        let names_result = self.resolve_profile_secret_names(Some(&profile_name));
         // Keys for the single read-audit event, computed before any planning
         // can fail (e.g. on an undefined alias) so a failed read is still
         // attributed to every secret it attempted; they stay empty only if the
         // profile itself fails to resolve.
-        let audit_keys: Vec<String> = profile_result
-            .as_ref()
-            .map(|profile| profile.sorted_secret_names())
-            .unwrap_or_default();
+        let audit_keys: Vec<String> = names_result.as_ref().ok().cloned().unwrap_or_default();
 
         // Decide the whole profile up front (pure, no I/O), then execute the
         // plan. Each step returns `Result`, so *any* error — an undefined
@@ -2682,10 +2679,9 @@ impl Secrets {
         // report-URI failure — is captured in `result` and recorded as the
         // single `Check` event below rather than escaping unaudited. `record`
         // is a no-op when auditing is off.
-        let result: Result<std::result::Result<ValidatedSecrets, ValidationErrors>> =
-            profile_result
-                .and_then(|_| self.build_plan_from_names(profile_name.clone(), audit_keys.clone()))
-                .and_then(|plan| self.execute_plan(&plan, materialize));
+        let result: Result<std::result::Result<ValidatedSecrets, ValidationErrors>> = names_result
+            .and_then(|_| self.build_plan_from_names(profile_name.clone(), audit_keys.clone()))
+            .and_then(|plan| self.execute_plan(&plan, materialize));
 
         // Record exactly one `Check` event for the whole batch when this is a
         // top-level read, regardless of how the resolution exited — so a failed

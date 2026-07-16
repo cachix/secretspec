@@ -94,6 +94,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "no provider credentials", rather than an `Option`, so the two ways of spelling
   an alias without credentials cannot diverge.
 
+### Removed
+- The unused public `Config::merge_with` and `Profile::merge_with` methods.
+  Configuration inheritance (`extends`) is now applied entirely through the
+  internal overlay used by the loader, so these self-wins merge helpers no
+  longer had any callers.
+
 ### Fixed
 - Configuration inheritance now loads an `extends` hierarchy as a DAG. Shared
   ancestors in diamond-shaped graphs are applied once instead of being reported

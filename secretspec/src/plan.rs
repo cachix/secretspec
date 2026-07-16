@@ -193,9 +193,7 @@ impl Secrets {
     #[cfg(test)]
     pub(crate) fn build_plan(&self, profile: Option<&str>) -> Result<ResolutionPlan> {
         let profile_name = self.resolve_profile_name(profile);
-        let names = self
-            .resolve_profile(Some(&profile_name))?
-            .sorted_secret_names();
+        let names = self.resolve_profile_secret_names(Some(&profile_name))?;
         self.build_plan_from_names(profile_name, names)
     }
 

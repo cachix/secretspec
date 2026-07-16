@@ -299,6 +299,13 @@ impl Config {
     ///
     /// Returns a `ParseError` if validation fails.
     pub fn validate(&self) -> Result<(), ParseError> {
+        self.validate_and_compile().map(|_| ())
+    }
+
+    /// Validate and return the compiled manifest, so callers that also need the
+    /// effective view (e.g. [`crate::Secrets::load_from`]) reuse the single
+    /// compile validation already performed instead of recompiling.
+    pub(crate) fn validate_and_compile(&self) -> Result<CompiledManifest, ParseError> {
         if self.project.name.is_empty() {
             return Err(ParseError::Validation(
                 "Project name cannot be empty".into(),
@@ -340,7 +347,7 @@ impl Config {
             validate_compiled_profile(&compiled, profile_name)?;
         }
 
-        Ok(())
+        Ok(compiled)
     }
 
     /// Get a profile by name.
@@ -353,48 +360,11 @@ impl Config {
         self.profiles.get_mut(name)
     }
 
-    /// Merge another configuration into this one.
-    ///
-    /// The current configuration takes precedence - values from `other`
-    /// are only used if not already present.
-    pub fn merge_with(&mut self, other: Config) {
-        // Inherit the reason policy from the parent when this config leaves it
-        // unspecified. `name`/`revision`/`extends` stay per-project and are not
-        // merged, but `require_reason` is a security policy meant to apply
-        // uniformly, so a shared base config can set it for everything that
-        // extends it.
-        if self.project.require_reason.is_none() {
-            self.project.require_reason = other.project.require_reason;
-        }
-
-        // Merge profiles
-        for (profile_name, profile_config) in other.profiles {
-            match self.profiles.get_mut(&profile_name) {
-                Some(existing_profile) => {
-                    existing_profile.merge_with(profile_config);
-                }
-                None => {
-                    self.profiles.insert(profile_name, profile_config);
-                }
-            }
-        }
-
-        // Merge provider aliases - current entries win. Whole entries merge
-        // (URI and any credentials together); there is no per-field merge.
-        if let Some(other_providers) = other.providers {
-            let merged = self.providers.get_or_insert_with(HashMap::new);
-            for (alias, alias_value) in other_providers {
-                merged.entry(alias).or_insert(alias_value);
-            }
-        }
-    }
-
     /// Overlay a later manifest document onto an earlier one.
     ///
-    /// This is deliberately separate from [`Self::merge_with`], whose public
-    /// contract is "self wins". A source graph is linearized from least to most
-    /// specific, so folding it needs the inverse operation: every later source
-    /// wins while absent fields continue to inherit.
+    /// A source graph is linearized from least to most specific, so folding it
+    /// means every later source wins while fields the later source leaves absent
+    /// continue to inherit from the earlier one.
     fn overlay_with(&mut self, later: Config) {
         let inherited_require_reason = self.project.require_reason;
         self.project = later.project;
@@ -620,7 +590,7 @@ pub struct Project {
     /// Policy controlling when secret access must supply a reason. Accepts a boolean
     /// or `"agents"`; enforced by [`crate::Secrets`]. `None` means "unspecified": it
     /// resolves to [`RequireReason::default`] unless a parent config supplies a value
-    /// via `extends` (see [`Config::merge_with`]).
+    /// via `extends`, in which case the overlay from that parent fills it in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub require_reason: Option<RequireReason>,
 }
@@ -822,19 +792,6 @@ impl Profile {
         }
 
         Ok(())
-    }
-
-    /// Merge another profile configuration into this one.
-    ///
-    /// The current profile takes precedence - secrets from `other`
-    /// are only added if they don't already exist.
-    pub fn merge_with(&mut self, other: Profile) {
-        if self.defaults.is_none() {
-            self.defaults = other.defaults;
-        }
-        for (secret_name, secret_config) in other.secrets {
-            self.secrets.entry(secret_name).or_insert(secret_config);
-        }
     }
 
     /// Overlay a later profile document while inheriting individual default
@@ -1722,15 +1679,18 @@ mod require_reason_tests {
             providers: None,
         };
 
+        // `extends` folds least-specific (parent) into most-specific (child) via
+        // `overlay_with`: the later document wins, absent fields inherit.
+
         // Child leaves the policy unspecified -> it inherits the parent's value.
-        let mut child = cfg(None);
-        child.merge_with(cfg(Some(RequireReason::Always)));
-        assert_eq!(child.project.require_reason, Some(RequireReason::Always));
+        let mut merged = cfg(Some(RequireReason::Always));
+        merged.overlay_with(cfg(None));
+        assert_eq!(merged.project.require_reason, Some(RequireReason::Always));
 
         // Child sets the policy explicitly -> its own value wins over the parent's.
-        let mut child = cfg(Some(RequireReason::Never));
-        child.merge_with(cfg(Some(RequireReason::Always)));
-        assert_eq!(child.project.require_reason, Some(RequireReason::Never));
+        let mut merged = cfg(Some(RequireReason::Always));
+        merged.overlay_with(cfg(Some(RequireReason::Never)));
+        assert_eq!(merged.project.require_reason, Some(RequireReason::Never));
     }
 
     #[test]

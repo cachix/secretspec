@@ -6228,7 +6228,7 @@ fn test_resolve_profile_unknown_returns_invalid_profile() {
     let temp_dir = TempDir::new().unwrap();
     let spec = dotenv_spec("", required_secret_profile("REQUIRED"), &temp_dir);
 
-    let result = spec.resolve_profile(Some("nonexistent"));
+    let result = spec.resolve_profile_secret_names(Some("nonexistent"));
     match result {
         Err(SecretSpecError::InvalidProfile(msg)) => {
             assert!(msg.contains("nonexistent"));

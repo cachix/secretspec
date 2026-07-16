@@ -27,6 +27,21 @@ env://                       # Current process environment
 
 **Features**: Read-only, no setup required, no persistence
 
+## GoPass Provider
+
+**URI**: `gopass://[host][path]` - Uses `gopass`, a multi-user and multi-store abstraction layer over `pass`, with GPG encryption
+
+```bash
+gopass://                                    # Default folder prefix
+gopass://secretspec/shared/{profile}/{key}   # Custom folder prefix with placeholders
+```
+
+**Features**: Read/write, GPG encryption, git-backed sync, profiles, local storage
+**Prerequisites**: `gopass` CLI, initialized password store
+**Storage**: Path `secretspec/{project}/{profile}/{key}` by default; the URI host and path override the folder prefix and support `{project}`, `{profile}`, and `{key}` placeholders
+
+Gopass entries store a single line; multiline secrets are truncated to their first line when read.
+
 ## Keyring Provider
 
 **URI**: `keyring://` - Uses system keychain/keyring for secure storage
@@ -204,6 +219,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Environment | ❌ Plain text | Process memory | ❌ No |
 | Keyring | ✅ System encryption | System keychain | ❌ No |
 | Pass | ✅ GPG encryption | Local filesystem | ❌ No |
+| GoPass | ✅ GPG encryption | Local filesystem | ❌ No |
 | Proton Pass | ✅ End-to-end | Cloud (Proton) | ✅ Yes |
 | LastPass | ✅ End-to-end | Cloud (LastPass) | ✅ Yes |
 | OnePassword | ✅ End-to-end | Cloud (OnePassword) | ✅ Yes |

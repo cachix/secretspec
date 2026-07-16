@@ -43,6 +43,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [dotenv](/providers/dotenv/) | A `.env` file | ✓ | ✓ | ✗ |
 | [env](/providers/env/) | Current process environment | ✓ | ✗ | ✗ |
 | [pass](/providers/pass/) | Unix `pass` password store | ✓ | ✓ | ✓ |
+| [gopass](/providers/gopass/) | `gopass` password store (git-synced, GPG-encrypted) | ✓ | ✓ | ✓ |
 | [protonpass](/providers/protonpass/) | Proton Pass | ✓ | ✓ | ✓ |
 | [onepassword](/providers/onepassword/) | 1Password | ✓ | ✓ | ✓ |
 | [lastpass](/providers/lastpass/) | LastPass | ✓ | ✓ | ✓ |

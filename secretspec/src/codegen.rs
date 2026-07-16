@@ -12,20 +12,17 @@
 //! - a **union** field set (`SecretSpec`) safe to use without knowing the
 //!   profile: a field is optional if it is optional in, or missing from, *any*
 //!   profile, and a path if it is a path in *any* profile;
-//! - **per-profile** field sets (`SecretSpecProfile`) with exact, raw types: a
-//!   field is optional iff that profile does not mark it `required = true`, and a
-//!   path iff that profile sets `as_path = true`. Per-profile sets are NOT
-//!   inheritance-merged with the `default` profile, matching the derive macro.
+//! - **per-profile** field sets (`SecretSpecProfile`) matching the effective
+//!   runtime profile, including fields inherited from `default`.
 //!
-//! Note: the union/per-profile "optional iff not `required = true`" rule means a
-//! secret with `required` unspecified is treated as optional here, which is the
-//! derive crate's long-standing behavior (and differs from the runtime
-//! resolver, where unspecified means required). The IR reproduces the derive
-//! behavior so generated code stays stable.
+//! Optionality describes successful output presence, not raw TOML spelling: an
+//! optional secret is nullable, while required, defaulted, and generated secrets
+//! are guaranteed to have a value when resolution succeeds.
 
-use crate::config::{Config, Secret};
+use crate::config::Config;
+use crate::manifest::{CompiledManifest, CompiledSecret};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 /// One field in a generated type. `name` is the canonical `UPPER_SNAKE` env key
 /// and the source of truth; each emitter applies its own casing.
@@ -42,7 +39,7 @@ pub struct IrField {
     pub description: Option<String>,
 }
 
-/// A profile and its exact (raw, non-merged) field set.
+/// A profile and its effective field set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IrProfile {
     /// The profile name as written in the manifest (e.g. `production`).
@@ -65,51 +62,40 @@ pub struct CodegenIr {
     pub profile_fields: Vec<IrProfile>,
 }
 
-/// A secret is optional unless the profile explicitly marks it `required = true`.
-/// Matches the derive crate (and differs from the runtime resolver default).
-fn is_secret_optional(secret: &Secret) -> bool {
-    secret.required != Some(true)
-}
-
 /// Build the union field set: every unique secret across all profiles, sorted.
 ///
 /// Computed in a single pass over every `(profile, secret)` rather than
 /// re-scanning all profiles per field. A union field is:
-/// - optional if it is optional in, or absent from, *any* profile (equivalently,
-///   required only when present and `required = true` in **every** profile);
+/// - optional if successful resolution may omit it in any profile (because it
+///   is absent there or has the compiled `Omit` policy);
 /// - a path if *any* profile declares it `as_path`;
 /// - described by the first profile, in sorted name order, that declares a
 ///   description.
-fn build_union(config: &Config) -> Vec<IrField> {
-    let total_profiles = config.profiles.len();
-
-    // Sorted once so "first description wins" is deterministic.
-    let mut sorted_profiles: Vec<&String> = config.profiles.keys().collect();
-    sorted_profiles.sort();
-
+fn build_union(manifest: &CompiledManifest) -> Vec<IrField> {
+    let total_profiles = manifest.profiles.len();
     struct Acc {
-        /// Profiles where the secret is present and `required = true`.
-        required_count: usize,
+        /// Profiles where successful resolution guarantees the secret.
+        guaranteed_count: usize,
         as_path: bool,
         description: Option<String>,
     }
     let mut acc: BTreeMap<String, Acc> = BTreeMap::new();
 
-    for profile_name in sorted_profiles {
-        for (name, secret) in &config.profiles[profile_name].secrets {
+    for profile in manifest.profiles.values() {
+        for (name, secret) in &profile.secrets {
             let entry = acc.entry(name.clone()).or_insert(Acc {
-                required_count: 0,
+                guaranteed_count: 0,
                 as_path: false,
                 description: None,
             });
-            if !is_secret_optional(secret) {
-                entry.required_count += 1;
+            if secret.missing.guaranteed_on_success() {
+                entry.guaranteed_count += 1;
             }
-            if secret.as_path == Some(true) {
+            if secret.config.as_path == Some(true) {
                 entry.as_path = true;
             }
             if entry.description.is_none() {
-                entry.description = secret.description.clone();
+                entry.description = secret.config.description.clone();
             }
         }
     }
@@ -117,9 +103,7 @@ fn build_union(config: &Config) -> Vec<IrField> {
     acc.into_iter()
         .map(|(name, a)| IrField {
             name,
-            // Required only if present and `required = true` in every profile;
-            // optional if optional in, or missing from, any profile.
-            optional: a.required_count != total_profiles,
+            optional: a.guaranteed_count != total_profiles,
             as_path: a.as_path,
             description: a.description,
         })
@@ -137,27 +121,26 @@ pub fn capitalize(s: &str) -> String {
     }
 }
 
-/// Build the exact field set for one profile's raw secrets, sorted by name.
-fn build_profile_fields(secrets: &HashMap<String, Secret>) -> Vec<IrField> {
-    let mut fields: Vec<IrField> = secrets
+/// Build one effective profile's field set, sorted by name.
+fn build_profile_fields(secrets: &BTreeMap<String, CompiledSecret>) -> Vec<IrField> {
+    secrets
         .iter()
         .map(|(name, secret)| IrField {
             name: name.clone(),
-            optional: is_secret_optional(secret),
-            as_path: secret.as_path.unwrap_or(false),
-            description: secret.description.clone(),
+            optional: !secret.missing.guaranteed_on_success(),
+            as_path: secret.config.as_path.unwrap_or(false),
+            description: secret.config.description.clone(),
         })
-        .collect();
-    fields.sort_by(|a, b| a.name.cmp(&b.name));
-    fields
+        .collect()
 }
 
 /// Reduce a manifest to the language-neutral [`CodegenIr`] every emitter
 /// consumes. This is the only place manifest typing decisions are made.
 pub fn build_ir(config: &Config) -> CodegenIr {
-    let union = build_union(config);
+    let manifest = CompiledManifest::compile(config);
+    let union = build_union(&manifest);
 
-    let profile_fields = if config.profiles.is_empty() {
+    let profile_fields = if manifest.profiles.is_empty() {
         // No declared profiles: a single `default` profile carrying every field,
         // matching the derive macro's empty-profile case.
         vec![IrProfile {
@@ -165,13 +148,12 @@ pub fn build_ir(config: &Config) -> CodegenIr {
             fields: union.clone(),
         }]
     } else {
-        let mut names: Vec<&String> = config.profiles.keys().collect();
-        names.sort();
-        names
-            .into_iter()
-            .map(|name| IrProfile {
+        manifest
+            .profiles
+            .iter()
+            .map(|(name, profile)| IrProfile {
                 name: name.clone(),
-                fields: build_profile_fields(&config.profiles[name].secrets),
+                fields: build_profile_fields(&profile.secrets),
             })
             .collect()
     };
@@ -179,7 +161,7 @@ pub fn build_ir(config: &Config) -> CodegenIr {
     let profiles = profile_fields.iter().map(|p| p.name.clone()).collect();
 
     CodegenIr {
-        project: config.project.name.clone(),
+        project: manifest.project,
         profiles,
         union,
         profile_fields,
@@ -236,15 +218,8 @@ pub mod schema {
     /// union (`profile = None`) or one profile's fields. Returns an error if the
     /// named profile does not exist.
     ///
-    /// The union lists every secret across every profile, so it is **exhaustive**
-    /// (`additionalProperties: false`): a runtime `fields()` map can never carry a
-    /// key the union does not declare. A per-profile schema lists only the
-    /// secrets that profile declares, but resolving with that profile
-    /// returns those **plus** secrets inherited from the `default` profile (the
-    /// runtime resolver merges them; the per-profile type intentionally does not,
-    /// matching the derive macro). So per-profile schemas allow additional
-    /// properties — otherwise a strict quicktype deserializer would reject a valid
-    /// resolve result over the inherited keys.
+    /// Both union and per-profile schemas are exhaustive. Per-profile IR already
+    /// includes every effective field inherited from `default`.
     pub fn emit(ir: &CodegenIr, profile: Option<&str>) -> Result<String, String> {
         let schema = match profile {
             None => object_schema("SecretSpec", &ir.union, false),
@@ -259,7 +234,11 @@ pub mod schema {
                             ir.profiles.join(", ")
                         )
                     })?;
-                object_schema(&format!("{}Secrets", capitalize(name)), &found.fields, true)
+                object_schema(
+                    &format!("{}Secrets", capitalize(name)),
+                    &found.fields,
+                    false,
+                )
             }
         };
         Ok(format!(
@@ -272,7 +251,8 @@ pub mod schema {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Profile, Project};
+    use crate::config::{Profile, Project, Secret};
+    use std::collections::HashMap;
 
     fn secret(required: Option<bool>, as_path: Option<bool>, desc: Option<&str>) -> Secret {
         Secret {
@@ -360,7 +340,7 @@ mod tests {
     }
 
     #[test]
-    fn per_profile_fields_are_raw_and_exact() {
+    fn per_profile_fields_are_sorted_and_exact() {
         let ir = build_ir(&config_with(vec![
             (
                 "development",
@@ -399,12 +379,53 @@ mod tests {
     }
 
     #[test]
-    fn unspecified_required_is_optional_matching_derive() {
+    fn unspecified_required_is_non_optional_matching_runtime() {
         let ir = build_ir(&config_with(vec![(
             "default",
             vec![("TOKEN", secret(None, None, None))],
         )]));
-        assert!(union_field(&ir, "TOKEN").optional);
+        assert!(!union_field(&ir, "TOKEN").optional);
+    }
+
+    #[test]
+    fn defaulted_secret_is_non_optional_because_resolution_guarantees_a_value() {
+        let mut token = secret(None, None, None);
+        token.default = Some("fallback".to_string());
+
+        let ir = build_ir(&config_with(vec![("default", vec![("TOKEN", token)])]));
+
+        assert!(!union_field(&ir, "TOKEN").optional);
+    }
+
+    #[test]
+    fn profile_fields_include_secrets_inherited_from_default() {
+        let ir = build_ir(&config_with(vec![
+            (
+                "default",
+                vec![("SHARED_TOKEN", secret(Some(true), None, None))],
+            ),
+            (
+                "production",
+                vec![("PRODUCTION_TOKEN", secret(Some(true), None, None))],
+            ),
+        ]));
+
+        let production = ir
+            .profile_fields
+            .iter()
+            .find(|profile| profile.name == "production")
+            .unwrap();
+        let names: Vec<&str> = production
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["PRODUCTION_TOKEN", "SHARED_TOKEN"]);
+
+        let schema: serde_json::Value =
+            serde_json::from_str(&schema::emit(&ir, Some("production")).unwrap()).unwrap();
+        assert!(schema["properties"]["SHARED_TOKEN"].is_object());
+        assert_eq!(schema["additionalProperties"], false);
     }
 
     #[test]
@@ -453,9 +474,8 @@ mod tests {
         assert_eq!(prod["title"], "ProductionSecrets");
         assert!(prod["properties"]["DATABASE_URL"].is_object());
         assert!(prod["properties"]["API_KEY"].is_null()); // not in production
-        // A per-profile schema must tolerate the default-inherited secrets that
-        // `resolve --profile production` adds beyond production's own fields.
-        assert_eq!(prod["additionalProperties"], true);
+        // Effective per-profile schemas are exhaustive too.
+        assert_eq!(prod["additionalProperties"], false);
 
         // An unknown profile is an error.
         assert!(schema::emit(&ir, Some("nope")).is_err());

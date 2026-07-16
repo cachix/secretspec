@@ -6,6 +6,7 @@ use crate::config::{
     Resolved,
 };
 use crate::error::{Result, SecretSpecError};
+use crate::manifest::{CompiledManifest, MissingPolicy};
 use crate::plan::{PlannedSecret, ResolutionPlan, Route};
 use crate::provider::{Address, Provider as ProviderTrait, ProviderCredentials};
 use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
@@ -62,6 +63,15 @@ fn sorted_credential_entries(
     entries
 }
 
+/// Convention-path profile segment for provider credentials. A provider's
+/// authentication (an access token, an AppRole id) is a property of the alias,
+/// not of any one profile, so a convention-path credential is stored under one
+/// fixed segment rather than the active profile. Scoping it by profile would
+/// make a credential stored via `config provider login` (which runs under the
+/// session profile) invisible when the provider is later used under a different
+/// profile, hard-erroring with "credential not found".
+const PROVIDER_CREDENTIAL_SCOPE: &str = "_provider";
+
 impl CredentialSource {
     /// Credential-free provider text for prompts and diagnostics.
     pub(crate) fn display_provider(&self) -> String {
@@ -69,14 +79,15 @@ impl CredentialSource {
     }
 
     /// The store location this source reads and writes: the pinned `ref`, or
-    /// the convention path for the active project and profile. The single
-    /// derivation both [`Secrets::resolve_provider_credentials`] (read) and
-    /// [`Secrets::store_provider_credential`] (write) use, so login-then-resolve
-    /// round-trips by construction.
-    fn address<'a>(&'a self, project: &'a str, profile: &'a str, name: &'a str) -> Address<'a> {
+    /// the profile-independent convention path for the active project. The
+    /// single derivation both [`Secrets::resolve_provider_credentials`] (read)
+    /// and [`Secrets::store_provider_credential`] (write) use, so
+    /// login-then-resolve round-trips regardless of the profile either runs
+    /// under.
+    fn address<'a>(&'a self, project: &'a str, name: &'a str) -> Address<'a> {
         match &self.reference {
             Some(reference) => Address::Native(reference),
-            None => Address::convention(project, profile, name),
+            None => Address::convention(project, PROVIDER_CREDENTIAL_SCOPE, name),
         }
     }
 
@@ -85,11 +96,11 @@ impl CredentialSource {
     /// is redacted: a URI-form source may embed an inline credential
     /// (`onepassword+token://tok@Vault`), and this string reaches stderr and
     /// the `config provider login` output.
-    fn location(&self, project: &str, profile: &str, name: &str) -> String {
+    fn location(&self, project: &str, name: &str) -> String {
         let provider = self.display_provider();
         match &self.reference {
             Some(reference) => format!("{provider} at {}", reference.render()),
-            None => format!("{provider} at {project}/{profile}/{name}"),
+            None => format!("{provider} at {project}/{PROVIDER_CREDENTIAL_SCOPE}/{name}"),
         }
     }
 }
@@ -232,6 +243,9 @@ fn find_config_file_from(start: PathBuf) -> Result<PathBuf> {
 pub struct Secrets {
     /// The project-specific configuration
     config: Config,
+    /// Effective profile semantics compiled once from `config` and shared by
+    /// planning, runtime resolution, and inventory surfaces.
+    pub(crate) manifest: CompiledManifest,
     /// Directory containing the loaded `secretspec.toml`. Relative filesystem
     /// paths held by file-backed providers (e.g. `dotenv`) are resolved against
     /// this rather than the process's current working directory, so running
@@ -254,13 +268,12 @@ pub struct Secrets {
     /// disables auditing. Built once per `Secrets` so all events share a session id.
     audit: Option<AuditLogger>,
     /// Provider credentials memoized per (profile, raw provider spec), so N
-    /// secrets routed at one alias fetch its credentials from the
-    /// source provider once per session, not once per provider build. Keyed by
-    /// profile because a convention-path credential lives at
-    /// `{project}/{profile}/{credential}`: switching profiles on one instance must
-    /// not reuse the other profile's credential. Cleared by
-    /// [`Secrets::store_provider_credential`] so a freshly stored credential
-    /// is re-read.
+    /// secrets routed at one alias fetch its credentials from the source provider
+    /// once per session, not once per provider build. The stored *values* are
+    /// profile-independent (see `PROVIDER_CREDENTIAL_SCOPE`); the profile is kept
+    /// in the key only so each profile's operations audit their own credential
+    /// read. Cleared by [`Secrets::store_provider_credential`] so a freshly
+    /// stored credential is re-read.
     provider_credentials_cache: ProviderCredentialsCache,
 }
 
@@ -421,8 +434,10 @@ impl Secrets {
         provider: Option<String>,
         profile: Option<String>,
     ) -> Self {
+        let manifest = CompiledManifest::compile(&config);
         Self {
             config,
+            manifest,
             config_dir: PathBuf::from("."),
             global_config,
             provider,
@@ -475,8 +490,10 @@ impl Secrets {
         let project_config = Config::try_from(path)?;
         // Semantic validation (required vs default, ref coordinate rules,
         // generate consistency) runs here so every CLI and SDK entry point
-        // enforces the same rules the config documents.
-        project_config.validate()?;
+        // enforces the same rules the config documents. The compiled manifest it
+        // produces is the one stored below, so the effective view is compiled
+        // exactly once per load.
+        let manifest = project_config.validate_and_compile()?;
         let global_config = GlobalConfig::load()?;
         // Auditing is a per-machine concern configured in the user-global config
         // (`[audit]` in ~/.config/secretspec/config.toml), not the project. It is
@@ -500,6 +517,7 @@ impl Secrets {
         Ok(Self {
             require_reason: project_config.project.require_reason.unwrap_or_default(),
             config: project_config,
+            manifest,
             config_dir,
             global_config,
             provider: None,
@@ -699,7 +717,7 @@ impl Secrets {
                     entry.insert(self.build_source_provider(&source.provider)?)
                 }
             };
-            let fetched = source_provider.get(source.address(&project, profile, name));
+            let fetched = source_provider.get(source.address(&project, name));
             // Audit the source read (design: every secret access is recorded).
             // The key is the semantic credential name and the event carries a
             // `credential` marker plus the source provider's credential-free
@@ -730,7 +748,7 @@ impl Secrets {
                     return Err(credential_missing_error(
                         name,
                         spec,
-                        &source.location(&project, profile, name),
+                        &source.location(&project, name),
                     ));
                 }
             }
@@ -762,9 +780,9 @@ impl Secrets {
 
     /// Stores one provider credential at its source provider — the exact
     /// location [`Self::resolve_provider_credentials`] later reads it from (a `ref`
-    /// or the convention path for the active project and profile). Errors if the
-    /// source provider is read-only. Returns a human-readable description of
-    /// where it was stored.
+    /// or the profile-independent convention path for the active project). Errors
+    /// if the source provider is read-only. Returns a human-readable description
+    /// of where it was stored.
     ///
     /// Like every other write path, the write is gated by the `require_reason`
     /// policy and audited (with a `credential` marker). A successful store also
@@ -778,9 +796,11 @@ impl Secrets {
     ) -> Result<String> {
         self.ensure_reason_for(AuditAction::Set, Some(name))?;
         let provider = self.build_source_provider(&source.provider)?;
+        // The store location is profile-independent (see `PROVIDER_CREDENTIAL_SCOPE`);
+        // the session profile is used only to attribute the audit event.
         let profile = self.resolve_profile_name(None);
         let project = self.config.project.name.clone();
-        let address = source.address(&project, &profile, name);
+        let address = source.address(&project, name);
         let result = provider
             .check_writable(address)
             .and_then(|()| provider.set(address, value));
@@ -796,7 +816,7 @@ impl Secrets {
         // The stored credential replaces whatever an earlier resolution
         // memoized; drop the memo so the next build re-reads it.
         self.provider_credentials_cache.clear();
-        Ok(source.location(&project, &profile, name))
+        Ok(source.location(&project, name))
     }
 
     /// Validates a spec's `credentials` (pure map lookups, no I/O): every name
@@ -1092,112 +1112,64 @@ impl Secrets {
         })
     }
 
-    /// Resolves the full profile configuration, merging with default profile if needed
+    /// Validates that the profile exists and returns its effective secret names
+    /// in sorted order — the union of the profile's own and the `default`
+    /// profile's secrets, as the compiled manifest records them.
     ///
     /// # Arguments
     ///
     /// * `profile` - Optional profile name to resolve (if None, uses resolved profile name)
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// The resolved profile configuration
-    pub(crate) fn resolve_profile(&self, profile: Option<&str>) -> Result<Profile> {
+    /// Returns `InvalidProfile` when the named profile is not defined.
+    pub(crate) fn resolve_profile_secret_names(
+        &self,
+        profile: Option<&str>,
+    ) -> Result<Vec<String>> {
         let profile_name = profile
             .map(str::to_string)
             .unwrap_or_else(|| self.resolve_profile_name(None));
-        let mut profile_config = self.require_profile(&profile_name)?.clone();
-
-        // If not the default profile, also add secrets from default profile
-        if profile_name != "default"
-            && let Some(default_profile) = self.config.profiles.get("default").cloned()
-        {
-            profile_config.merge_with(default_profile);
-        }
-
-        Ok(profile_config)
+        self.require_profile(&profile_name)?;
+        let compiled = self
+            .manifest
+            .profile(&profile_name)
+            .expect("raw and compiled profile sets stay identical");
+        // `CompiledProfile.secrets` is a `BTreeMap`, so its keys are already
+        // sorted — no clone of the secret configs, which every caller discarded.
+        Ok(compiled.secrets.keys().cloned().collect())
     }
 
-    /// Resolves the configuration for a specific secret
-    ///
-    /// This method looks for the secret in the specified profile, falling back
-    /// to the default profile if not found. If the secret exists in both profiles,
-    /// fields are merged with the current profile taking precedence.
-    /// Profile defaults are also applied with lower precedence than explicit secret config.
-    ///
-    /// Precedence order (highest to lowest):
-    /// 1. Secret config in current profile
-    /// 2. Secret config in default profile
-    /// 3. Profile defaults from current profile
+    /// Returns the effective configuration for a specific secret, or `None` if
+    /// the profile does not carry it. The field-level merge with the `default`
+    /// profile and `[defaults]` already happened once during manifest
+    /// compilation ([`crate::config::Secret::resolved`]); this only reads it.
     ///
     /// # Arguments
     ///
     /// * `name` - The name of the secret
     /// * `profile` - Optional profile to search in (if None, uses resolved profile)
-    ///
-    /// # Returns
-    ///
-    /// The secret configuration if found (may be merged from multiple profiles)
     pub(crate) fn resolve_secret_config(
         &self,
         name: &str,
         profile: Option<&str>,
     ) -> Option<crate::config::Secret> {
         let profile_name = self.resolve_profile_name(profile);
-
-        let current_profile = self.config.profiles.get(&profile_name);
-        let current_secret =
-            current_profile.and_then(|profile_config| profile_config.secrets.get(name));
-        let current_defaults =
-            current_profile.and_then(|profile_config| profile_config.defaults.as_ref());
-
-        let default_secret = if profile_name != "default" {
-            self.config
-                .profiles
-                .get("default")
-                .and_then(|default_profile| default_profile.secrets.get(name))
-        } else {
-            None
-        };
-
-        // The field-level merge lives on `Secret` so `Config::validate`
-        // checks exactly the effective config this method produces.
-        crate::config::Secret::resolved(current_secret, default_secret, current_defaults)
-    }
-
-    /// Resolve the effective (merged) config for a secret that is known to
-    /// belong to `profile`. Any secret yielded by iterating that profile is
-    /// guaranteed to have an effective config, so a missing one is a bug.
-    pub(crate) fn effective_secret_config(
-        &self,
-        name: &str,
-        profile: &str,
-    ) -> crate::config::Secret {
-        self.resolve_secret_config(name, Some(profile))
-            .expect("secret from the resolved profile must have an effective config")
+        self.manifest
+            .profile(&profile_name)
+            .and_then(|profile| profile.secrets.get(name))
+            .map(|secret| secret.config.clone())
     }
 
     /// The effective (field-level merged) secrets of `profile_name` in
-    /// name-sorted order: the union of the profile's and the default
-    /// profile's names, each resolved via [`Secrets::resolve_secret_config`].
-    /// This is the view `check`/`run` list, matching what resolution acts on.
+    /// name-sorted order, read directly off the compiled manifest. This is the
+    /// view `check`/`run` list, matching what resolution acts on.
     fn effective_secrets(&self, profile_name: &str) -> Vec<(String, crate::config::Secret)> {
-        let Some(current) = self.config.profiles.get(profile_name) else {
-            return Vec::new();
-        };
-        let default_profile = if profile_name != "default" {
-            self.config.profiles.get("default")
-        } else {
-            None
-        };
-        current
-            .sorted_secret_names_with(default_profile)
+        self.manifest
+            .profile(profile_name)
             .into_iter()
-            .map(|name| {
-                (
-                    name.clone(),
-                    self.effective_secret_config(name, profile_name),
-                )
-            })
+            .flat_map(|profile| &profile.secrets)
+            .map(|(name, secret)| (name.clone(), secret.config.clone()))
             .collect()
     }
 
@@ -1574,8 +1546,7 @@ impl Secrets {
                 return Err(err);
             }
             Ok(None) => {
-                let profile = self.resolve_profile(Some(&profile_name))?;
-                let available_secrets = profile.sorted_secret_names();
+                let available_secrets = self.resolve_profile_secret_names(Some(&profile_name))?;
 
                 let err = SecretSpecError::SecretNotFound(format!(
                     "Secret '{}' is not defined in profile '{}'. Available secrets: {}",
@@ -1710,7 +1681,7 @@ impl Secrets {
                 return Err(err);
             }
         };
-        let default = planned.config.default.clone();
+        let default = planned.config().default.clone();
         let as_path = planned.as_path();
 
         // Walk the route's chain in order; each entry is resolved lazily and a
@@ -2204,17 +2175,17 @@ impl Secrets {
 
             // Collect all secrets to import - from current profile and default profile
             // This ensures we can import secrets defined in default profile when using other profiles
-            let profile = self.resolve_profile(Some(&profile_display))?;
+            let import_names = self.resolve_profile_secret_names(Some(&profile_display))?;
 
             // Process each secret using proper profile resolution: the plan
             // supplies the same write route and address `set` executes. Sorted
             // names keep the per-secret summary lines in a stable order.
-            for name in profile.sorted_secret_names() {
+            for name in import_names {
                 read_names.push(name.clone());
                 let planned = self
                     .plan_secret(&name, &profile_display, None)?
                     .expect("Secret should exist since we're iterating over it");
-                let description = planned.config.description.as_deref();
+                let description = planned.config().description.as_deref();
 
                 let to_provider =
                     self.write_provider_for_route(&planned.route, Some(&profile_display))?;
@@ -2360,17 +2331,6 @@ impl Secrets {
         Ok(())
     }
 
-    /// Whether an absent secret would be auto-generated on a full resolve: it
-    /// declares an enabled `generate` config. Lets the value-free pass report
-    /// that a missing secret *would* resolve via generation without minting and
-    /// storing it (the side effect [`Self::try_generate_secret`] performs). A
-    /// `generate`-enabled secret with no declared type still counts here; the
-    /// resulting "no type" error is raised only on the full pass that actually
-    /// generates, keeping the value-free preflight failure-free.
-    fn would_generate(secret_config: &crate::config::Secret) -> bool {
-        matches!(&secret_config.generate, Some(g) if g.is_enabled())
-    }
-
     /// Attempts to generate a secret if it has generation config.
     ///
     /// Returns `Ok(Some(value))` if generation succeeded,
@@ -2382,12 +2342,12 @@ impl Secrets {
         profile_name: &str,
     ) -> Result<Option<SecretString>> {
         let name = planned.name.as_str();
-        let gen_config = match &planned.config.generate {
+        let gen_config = match &planned.config().generate {
             Some(config) if config.is_enabled() => config,
             _ => return Ok(None),
         };
 
-        let secret_type = match &planned.config.secret_type {
+        let secret_type = match &planned.config().secret_type {
             Some(t) => t.as_str(),
             None => {
                 return Err(SecretSpecError::GenerationFailed(format!(
@@ -2705,15 +2665,12 @@ impl Secrets {
         // The profile is resolved once; its sorted names serve both as the
         // audit keys and as the plan's input, so nothing is merged or sorted
         // twice.
-        let profile_result = self.resolve_profile(Some(&profile_name));
+        let names_result = self.resolve_profile_secret_names(Some(&profile_name));
         // Keys for the single read-audit event, computed before any planning
         // can fail (e.g. on an undefined alias) so a failed read is still
         // attributed to every secret it attempted; they stay empty only if the
         // profile itself fails to resolve.
-        let audit_keys: Vec<String> = profile_result
-            .as_ref()
-            .map(|profile| profile.sorted_secret_names())
-            .unwrap_or_default();
+        let audit_keys: Vec<String> = names_result.as_ref().ok().cloned().unwrap_or_default();
 
         // Decide the whole profile up front (pure, no I/O), then execute the
         // plan. Each step returns `Result`, so *any* error — an undefined
@@ -2721,10 +2678,9 @@ impl Secrets {
         // report-URI failure — is captured in `result` and recorded as the
         // single `Check` event below rather than escaping unaudited. `record`
         // is a no-op when auditing is off.
-        let result: Result<std::result::Result<ValidatedSecrets, ValidationErrors>> =
-            profile_result
-                .and_then(|_| self.build_plan_from_names(profile_name.clone(), audit_keys.clone()))
-                .and_then(|plan| self.execute_plan(&plan, materialize));
+        let result: Result<std::result::Result<ValidatedSecrets, ValidationErrors>> = names_result
+            .and_then(|_| self.build_plan_from_names(profile_name.clone(), audit_keys.clone()))
+            .and_then(|plan| self.execute_plan(&plan, materialize));
 
         // Record exactly one `Check` event for the whole batch when this is a
         // top-level read, regardless of how the resolution exited — so a failed
@@ -2981,44 +2937,55 @@ impl Secrets {
                             )?;
                         }
                         status = ResolutionStatus::Resolved;
-                    } else if Self::would_generate(&planned.config) {
-                        // The secret would be auto-generated. A full pass mints and
-                        // stores it (writing a temp file when `as_path`); a
-                        // value-free pass reports that it would resolve without
-                        // minting or storing anything.
-                        generated = true;
-                        if materialize == Materialize::Values {
-                            let generated_value = self
-                                .try_generate_secret(planned, profile)?
-                                .expect("would_generate implies a generated value");
-                            self.insert_resolved(
-                                &mut secrets,
-                                &mut temp_files,
-                                name.clone(),
-                                generated_value,
-                                as_path,
-                            )?;
-                        }
-                        status = ResolutionStatus::Resolved;
-                    } else if let Some(default_value) = &planned.config.default {
-                        default_applied = true;
-                        if materialize == Materialize::Values {
-                            self.insert_resolved(
-                                &mut secrets,
-                                &mut temp_files,
-                                name.clone(),
-                                SecretString::new(default_value.clone().into()),
-                                as_path,
-                            )?;
-                            with_defaults.push((name.clone(), default_value.clone()));
-                        }
-                        status = ResolutionStatus::Resolved;
-                    } else if required {
-                        missing_required.push(name.clone());
-                        status = ResolutionStatus::MissingRequired;
                     } else {
-                        missing_optional.push(name.clone());
-                        status = ResolutionStatus::MissingOptional;
+                        match planned.secret.missing {
+                            MissingPolicy::Generate => {
+                                // A full pass mints and stores; a value-free pass
+                                // reports that generation would resolve without
+                                // performing that side effect.
+                                generated = true;
+                                if materialize == Materialize::Values {
+                                    let generated_value = self
+                                        .try_generate_secret(planned, profile)?
+                                        .expect("compiled Generate policy has a generator");
+                                    self.insert_resolved(
+                                        &mut secrets,
+                                        &mut temp_files,
+                                        name.clone(),
+                                        generated_value,
+                                        as_path,
+                                    )?;
+                                }
+                                status = ResolutionStatus::Resolved;
+                            }
+                            MissingPolicy::UseDefault => {
+                                let default_value = planned
+                                    .config()
+                                    .default
+                                    .as_ref()
+                                    .expect("compiled UseDefault policy has a default");
+                                default_applied = true;
+                                if materialize == Materialize::Values {
+                                    self.insert_resolved(
+                                        &mut secrets,
+                                        &mut temp_files,
+                                        name.clone(),
+                                        SecretString::new(default_value.clone().into()),
+                                        as_path,
+                                    )?;
+                                    with_defaults.push((name.clone(), default_value.clone()));
+                                }
+                                status = ResolutionStatus::Resolved;
+                            }
+                            MissingPolicy::Error => {
+                                missing_required.push(name.clone());
+                                status = ResolutionStatus::MissingRequired;
+                            }
+                            MissingPolicy::Omit => {
+                                missing_optional.push(name.clone());
+                                status = ResolutionStatus::MissingOptional;
+                            }
+                        }
                     }
                 }
             }
@@ -3332,6 +3299,79 @@ mod provider_credentials_cache_tests {
             );
         }
         assert_eq!(fetches.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[cfg(test)]
+mod provider_credential_scope_tests {
+    use super::*;
+    use crate::config::{CredentialSource, Profile, ProviderAlias, Secret};
+    use crate::tests::{resolve_test_config, scrub_resolution_env};
+    use tempfile::TempDir;
+
+    /// A provider's authentication credential belongs to the alias, not to any
+    /// one profile: `config provider login` stores under the session profile,
+    /// but the same credential must resolve when the provider is used under a
+    /// different profile. Before the fix the convention path embedded the active
+    /// profile, so a credential stored under `default` was invisible to
+    /// `production` and resolution hard-errored "credential not found".
+    #[test]
+    fn provider_credentials_resolve_under_any_profile() {
+        let _env = scrub_resolution_env();
+        let _cwd = crate::secrets::lock_cwd();
+        let _store = TempDir::new().unwrap();
+
+        // `access_token` is sourced from a writable, profile-namespacing store.
+        let providers = HashMap::from([(
+            "bws".to_string(),
+            ProviderAlias {
+                uri: "bws://proj".to_string(),
+                credentials: HashMap::from([(
+                    "access_token".to_string(),
+                    CredentialSource::from("memtest://"),
+                )]),
+            },
+        )]);
+
+        let mut config =
+            resolve_test_config(HashMap::from([("API_KEY".to_string(), Secret::default())]));
+        config.profiles.insert(
+            "production".to_string(),
+            Profile {
+                defaults: None,
+                secrets: HashMap::new(),
+            },
+        );
+        config.providers = Some(providers);
+
+        // `login` runs under the session/default profile.
+        let logged_in = Secrets::new(config.clone(), None, None, None);
+        let source = logged_in
+            .declared_provider_credentials("bws")
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("alias declares one credential")
+            .1;
+        logged_in
+            .store_provider_credential(
+                &source,
+                "access_token",
+                &SecretString::new("tok-123".into()),
+            )
+            .unwrap();
+
+        // Resolving the same alias under `production` must still find it.
+        let resolver = Secrets::new(config, None, None, Some("production".to_string()));
+        let resolved = resolver
+            .resolve_provider_credentials("bws", "production")
+            .expect("a stored provider credential must resolve under any profile");
+        assert_eq!(
+            resolved
+                .get("access_token")
+                .map(|value| value.expose_secret()),
+            Some("tok-123"),
+        );
     }
 }
 

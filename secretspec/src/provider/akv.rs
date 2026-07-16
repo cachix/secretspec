@@ -343,18 +343,28 @@ impl AkvProvider {
             (Some(t), Some(c), Some(s)) => Ok(Some((t, c, s))),
             (None, None, None) => Ok(None),
             (tenant_id, client_id, client_secret) => {
-                let missing: Vec<&str> = [
-                    ("AZURE_TENANT_ID", tenant_id.is_none()),
-                    ("AZURE_CLIENT_ID", client_id.is_none()),
-                    ("AZURE_CLIENT_SECRET", client_secret.is_none()),
+                // Name both the semantic provider credential and its
+                // conventional environment variable, so a user who configured
+                // either form knows which input is missing.
+                let missing: Vec<String> = [
+                    (TENANT_ID, AZURE_TENANT_ID_ENV, tenant_id.is_none()),
+                    (CLIENT_ID, AZURE_CLIENT_ID_ENV, client_id.is_none()),
+                    (
+                        CLIENT_SECRET,
+                        AZURE_CLIENT_SECRET_ENV,
+                        client_secret.is_none(),
+                    ),
                 ]
                 .into_iter()
-                .filter_map(|(name, is_missing)| is_missing.then_some(name))
+                .filter_map(|(credential, env, is_missing)| {
+                    is_missing.then(|| format!("{credential} / {env}"))
+                })
                 .collect();
                 Err(SecretSpecError::ProviderOperationFailed(format!(
-                    "Partial service principal configuration: AZURE_TENANT_ID, \
-                     AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET must all be set together, or \
-                     none of them (to fall back to `az login`). Missing: {}.",
+                    "Partial service principal configuration: the tenant_id, client_id, and \
+                     client_secret provider credentials (or the AZURE_TENANT_ID, AZURE_CLIENT_ID, \
+                     and AZURE_CLIENT_SECRET environment variables) must all be supplied together, \
+                     or none of them (to fall back to `az login`). Missing: {}.",
                     missing.join(", ")
                 )))
             }
@@ -653,6 +663,11 @@ mod tests {
             AkvProvider::classify_env_credentials(Some("t".to_string()), None, None).unwrap_err();
         assert!(err.to_string().contains("AZURE_CLIENT_ID"), "{err}");
         assert!(err.to_string().contains("AZURE_CLIENT_SECRET"), "{err}");
+        // The message must also name the semantic provider credentials, so a user
+        // who configured the alias `credentials` map (not env vars) knows which
+        // input to supply.
+        assert!(err.to_string().contains("client_id"), "{err}");
+        assert!(err.to_string().contains("client_secret"), "{err}");
     }
 
     #[test]

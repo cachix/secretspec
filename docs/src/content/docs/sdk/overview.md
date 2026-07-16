@@ -67,6 +67,10 @@ secretspec schema | quicktype -s schema --top-level SecretSpec --lang <language>
 This keeps the per-language surface tiny: the SDK only provides `fields()`, and
 quicktype owns the type generation.
 
+The schema models successful resolution: required, defaulted, and generated
+secrets are non-nullable. A profile schema includes fields inherited from the
+`default` profile and is exhaustive.
+
 ## Distribution
 
 The resolver ships inside each package, so there is nothing extra to install and

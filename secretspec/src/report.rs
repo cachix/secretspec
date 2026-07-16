@@ -39,7 +39,12 @@ pub struct SecretResolution {
     pub name: String,
     /// Whether the secret resolved, and if not, whether that is an error.
     pub status: ResolutionStatus,
-    /// Whether the active profile marks this secret as required.
+    /// Whether the secret is *declared* required in the active profile: `true`
+    /// when it is marked `required = true` or has neither a `default` nor a
+    /// `generate`. A secret carrying a committed `default`/`generate` is not
+    /// required (it always resolves), even when written as `required = true` in
+    /// one profile and overridden with a default in another. Orthogonal to
+    /// [`status`](Self::status), which reports whether it actually resolved.
     pub required: bool,
     /// Credential-free URI of the provider that actually answered, when the
     /// value came from a provider. `None` when generated, defaulted, or missing.

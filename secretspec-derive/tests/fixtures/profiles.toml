@@ -9,7 +9,7 @@ REDIS_URL = { description = "Redis URL", required = false }
 
 [profiles.development]
 API_KEY = { description = "API key", required = false, default = "dev-api-key" }
-DATABASE_URL = { description = "Database URL", required = true, default = "postgres://localhost/dev" }
+DATABASE_URL = { description = "Database URL", required = false, default = "postgres://localhost/dev" }
 REDIS_URL = { description = "Redis URL", required = false }
 
 [profiles.staging]

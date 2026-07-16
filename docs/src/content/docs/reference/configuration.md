@@ -86,7 +86,7 @@ Each secret variable is defined as a table with the following fields:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `description` | string | Yes (see notes) | Human-readable description of the secret |
-| `required` | boolean | No | Whether the value must be provided (default: true) |
+| `required` | boolean | No | Whether absence is an error (default: true, or false when `default` is present) |
 | `default` | string | No | Default value if not provided |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `ref` | table | No | Coordinates naming an externally managed secret in the provider's store (e.g. `ref = { item = "db", field = "password" }`) |
@@ -100,7 +100,9 @@ Field notes:
   that the default profile already declares inherits its `description` (and
   other omitted fields) and may leave it out.
 - `required` defaults to false when `default` is provided.
-- `default` is only valid when `required = false`.
+- `default` is invalid with an explicit `required = true`. A defaulted secret is
+  guaranteed to be present in successful resolution and generated types, even
+  though the provider does not have to supply it.
 - `type` is required when `generate` is enabled.
 - `generate` and `default` cannot both be set.
 

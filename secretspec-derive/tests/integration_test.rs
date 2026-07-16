@@ -13,7 +13,7 @@ mod basic_generation {
         fn _test_field_types(s: SecretSpec) {
             let _: String = s.api_key;
             let _: String = s.database_url;
-            let _: Option<String> = s.optional_secret;
+            let _: String = s.optional_secret; // Supplied by its manifest default
         }
     }
 }
@@ -41,7 +41,7 @@ mod profile_generation {
                     database_url,
                     redis_url,
                 } => {
-                    let _: Option<String> = api_key; // Optional in dev
+                    let _: String = api_key; // Supplied by its manifest default
                     let _: String = database_url; // Required but has default
                     let _: Option<String> = redis_url; // Optional
                 }
@@ -69,7 +69,7 @@ mod profile_generation {
     fn test_union_type_fields() {
         // Verify the union struct has Option for fields that are optional in any profile
         fn _test_field_types(s: SecretSpec) {
-            let _: Option<String> = s.api_key; // Optional in development
+            let _: String = s.api_key; // Defaulted in development, required elsewhere
             let _: String = s.database_url; // Has default in dev but still required
             let _: Option<String> = s.redis_url; // Optional by default
         }
@@ -85,7 +85,7 @@ mod complex_generation {
     fn test_complex_field_types() {
         fn _test_field_types(s: SecretSpec) {
             let _: String = s.always_required;
-            let _: String = s.required_with_default; // Has default but still required
+            let _: String = s.required_with_default; // Its default guarantees a value
             let _: Option<String> = s.always_optional;
             let _: Option<String> = s.complex_secret; // Optional in dev and test
             let _: Option<String> = s.multi_profile; // Optional in base
@@ -133,7 +133,7 @@ mod json_serialization {
         let spec = SecretSpec {
             api_key: "test_key".to_string(),
             database_url: "postgres://localhost/db".to_string(),
-            optional_secret: Some("optional".to_string()),
+            optional_secret: "optional".to_string(),
         };
 
         let secrets_wrapper = Resolved::new(spec, "dotenv".to_string(), "production".to_string());
@@ -177,10 +177,10 @@ mod profile_inheritance {
     fn test_union_type_with_inheritance() {
         // Verify the union struct has all secrets from all profiles
         fn _test_field_types(s: SecretSpec) {
-            let _: Option<String> = s.database_url;
-            let _: Option<String> = s.api_key;
-            let _: Option<String> = s.log_level;
-            let _: Option<String> = s.cache_ttl;
+            let _: String = s.database_url;
+            let _: String = s.api_key;
+            let _: String = s.log_level;
+            let _: String = s.cache_ttl;
             let _: Option<String> = s.debug_mode;
             let _: Option<String> = s.enable_profiling;
         }
@@ -199,8 +199,8 @@ mod profile_inheritance {
                 } => {
                     let _: String = database_url; // Required
                     let _: String = api_key; // Required
-                    let _: Option<String> = log_level; // Optional (required=false) with default
-                    let _: Option<String> = cache_ttl; // Optional (required=false) with default
+                    let _: String = log_level; // Guaranteed by default
+                    let _: String = cache_ttl; // Guaranteed by default
                 }
                 _ => panic!("Expected Default variant"),
             }
@@ -211,9 +211,15 @@ mod profile_inheritance {
                 SecretSpecProfile::Development {
                     database_url,
                     debug_mode,
+                    api_key,
+                    log_level,
+                    cache_ttl,
                 } => {
-                    let _: Option<String> = database_url; // Override: required=false with default
-                    let _: Option<String> = debug_mode; // New field in development (required=false)
+                    let _: String = database_url; // Guaranteed by override default
+                    let _: String = debug_mode; // Guaranteed by its default
+                    let _: String = api_key; // Inherited from default
+                    let _: String = log_level; // Inherited from default
+                    let _: String = cache_ttl; // Inherited from default
                 }
                 _ => panic!("Expected Development variant"),
             }
@@ -225,10 +231,12 @@ mod profile_inheritance {
                     database_url,
                     api_key,
                     log_level,
+                    cache_ttl,
                 } => {
                     let _: String = database_url; // Override: required
                     let _: String = api_key; // Override: required
-                    let _: Option<String> = log_level; // Override: required=false with different default
+                    let _: String = log_level; // Guaranteed by override default
+                    let _: String = cache_ttl; // Inherited from default
                 }
                 _ => panic!("Expected Production variant"),
             }
@@ -240,10 +248,14 @@ mod profile_inheritance {
                     database_url,
                     log_level,
                     enable_profiling,
+                    api_key,
+                    cache_ttl,
                 } => {
                     let _: String = database_url; // Override: required
-                    let _: Option<String> = log_level; // Override: required=false with different default
-                    let _: Option<String> = enable_profiling; // New field in staging (required=false)
+                    let _: String = log_level; // Guaranteed by override default
+                    let _: String = enable_profiling; // Guaranteed by its default
+                    let _: String = api_key; // Inherited from default
+                    let _: String = cache_ttl; // Inherited from default
                 }
                 _ => panic!("Expected Staging variant"),
             }

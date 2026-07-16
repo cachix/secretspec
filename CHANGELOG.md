@@ -68,6 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sources from the command line.
 
 ### Changed
+- Generated types now describe the values resolution can actually return:
+  omitted `required` still means required, secrets supplied by a manifest
+  default or generator are non-nullable, and profile-specific types include
+  secrets inherited from the `default` profile. Profile JSON Schemas are now
+  exhaustive (`additionalProperties: false`) for the same reason.
 - A `ref` routed at a single store (an explicit `--provider`, a single-provider
   chain, or the default provider) is now checked up front, before any store is
   contacted, for coordinates that store cannot honor (e.g. a `field` ref pointed
@@ -89,7 +94,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "no provider credentials", rather than an `Option`, so the two ways of spelling
   an alias without credentials cannot diverge.
 
+### Removed
+- The unused public `Config::merge_with` and `Profile::merge_with` methods.
+  Configuration inheritance (`extends`) is now applied entirely through the
+  internal overlay used by the loader, so these self-wins merge helpers no
+  longer had any callers.
+
 ### Fixed
+- Configuration inheritance now loads an `extends` hierarchy as a DAG. Shared
+  ancestors in diamond-shaped graphs are applied once instead of being reported
+  as cycles, later entries in `extends` correctly override earlier entries, and
+  profile `[defaults]` are inherited across source files.
+- Runtime planning, semantic validation, Rust derive output, and JSON Schema
+  generation now share one compiled effective-manifest model and one
+  missing-value policy, preventing raw `required`/`default` interpretation from
+  drifting between surfaces.
 - Profile overrides no longer need to repeat the secret's `description`:
   validation now checks each secret's effective, merged configuration, so a
   partial override like `[profiles.development] DATABASE_URL = { default =

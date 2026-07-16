@@ -1512,6 +1512,221 @@ SECRET_A = { description = "Secret A for staging", required = false, default = "
 }
 
 #[test]
+fn test_extends_later_parent_wins_conflicts() {
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path();
+    fs::create_dir_all(base_path.join("parent-a")).unwrap();
+    fs::create_dir_all(base_path.join("parent-b")).unwrap();
+    fs::create_dir_all(base_path.join("root")).unwrap();
+
+    for (directory, description) in [("parent-a", "from A"), ("parent-b", "from B")] {
+        fs::write(
+            base_path.join(directory).join("secretspec.toml"),
+            format!(
+                r#"
+[project]
+name = "{directory}"
+revision = "1.0"
+
+[profiles.default]
+SHARED = {{ description = "{description}", required = true }}
+"#
+            ),
+        )
+        .unwrap();
+    }
+
+    fs::write(
+        base_path.join("root/secretspec.toml"),
+        r#"
+[project]
+name = "root"
+revision = "1.0"
+extends = ["../parent-a", "../parent-b"]
+
+[profiles.default]
+ROOT_ONLY = { description = "root", required = true }
+"#,
+    )
+    .unwrap();
+
+    let config = Config::try_from(base_path.join("root/secretspec.toml").as_path()).unwrap();
+    let shared = &config.profiles["default"].secrets["SHARED"];
+    assert_eq!(shared.description.as_deref(), Some("from B"));
+}
+
+#[test]
+fn test_extends_allows_diamond_and_preserves_branch_override() {
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path();
+    for directory in ["base", "left", "right", "root"] {
+        fs::create_dir_all(base_path.join(directory)).unwrap();
+    }
+
+    fs::write(
+        base_path.join("base/secretspec.toml"),
+        r#"
+[project]
+name = "base"
+revision = "1.0"
+
+[profiles.default]
+SHARED = { description = "from base", required = true }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        base_path.join("left/secretspec.toml"),
+        r#"
+[project]
+name = "left"
+revision = "1.0"
+extends = ["../base"]
+
+[profiles.default]
+SHARED = { description = "from left", required = true }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        base_path.join("right/secretspec.toml"),
+        r#"
+[project]
+name = "right"
+revision = "1.0"
+extends = ["../base"]
+
+[profiles.default]
+RIGHT_ONLY = { description = "right", required = true }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        base_path.join("root/secretspec.toml"),
+        r#"
+[project]
+name = "root"
+revision = "1.0"
+extends = ["../left", "../right"]
+
+[profiles.default]
+ROOT_ONLY = { description = "root", required = true }
+"#,
+    )
+    .unwrap();
+
+    let config = Config::try_from(base_path.join("root/secretspec.toml").as_path())
+        .expect("a shared ancestor is not a dependency cycle");
+    let default = &config.profiles["default"].secrets;
+    assert_eq!(default["SHARED"].description.as_deref(), Some("from left"));
+    assert!(default.contains_key("RIGHT_ONLY"));
+    assert!(default.contains_key("ROOT_ONLY"));
+}
+
+#[test]
+fn test_extends_inherits_profile_defaults() {
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path();
+    fs::create_dir_all(base_path.join("parent")).unwrap();
+    fs::create_dir_all(base_path.join("child")).unwrap();
+
+    fs::write(
+        base_path.join("parent/secretspec.toml"),
+        r#"
+[project]
+name = "parent"
+revision = "1.0"
+
+[profiles.production]
+PARENT_ONLY = { description = "parent", required = true }
+
+[profiles.production.defaults]
+required = false
+providers = ["shared"]
+"#,
+    )
+    .unwrap();
+    fs::write(
+        base_path.join("child/secretspec.toml"),
+        r#"
+[project]
+name = "child"
+revision = "1.0"
+extends = ["../parent"]
+
+[profiles.production]
+CHILD_ONLY = { description = "child", required = true }
+"#,
+    )
+    .unwrap();
+
+    let config = Config::try_from(base_path.join("child/secretspec.toml").as_path()).unwrap();
+    let defaults = config.profiles["production"]
+        .defaults
+        .as_ref()
+        .expect("profile defaults should be inherited");
+    assert_eq!(defaults.required, Some(false));
+    assert_eq!(
+        defaults.providers.as_deref(),
+        Some(["shared".to_string()].as_slice())
+    );
+}
+
+/// A symlinked manifest resolves its relative `extends` against the symlink's
+/// own directory, not the canonicalized target directory. Here the `base`
+/// dependency lives next to the symlink; resolving against the real file's
+/// directory (which has no `base`) would raise `ExtendedConfigNotFound`.
+#[test]
+#[cfg(unix)]
+fn test_extends_resolves_relative_to_symlink_location() {
+    use std::os::unix::fs::symlink;
+
+    let temp_dir = TempDir::new().unwrap();
+    let link_dir = temp_dir.path().join("linkdir");
+    let real_dir = temp_dir.path().join("realdir");
+    fs::create_dir_all(link_dir.join("base")).unwrap();
+    fs::create_dir_all(&real_dir).unwrap();
+
+    // The `extends` target sits beside the SYMLINK, not the real file.
+    fs::write(
+        link_dir.join("base/secretspec.toml"),
+        r#"
+[project]
+name = "base"
+revision = "1.0"
+
+[profiles.default]
+SHARED = { description = "from base", required = true }
+"#,
+    )
+    .unwrap();
+
+    // The real manifest extends "base" with a path relative to itself.
+    fs::write(
+        real_dir.join("app.toml"),
+        r#"
+[project]
+name = "app"
+revision = "1.0"
+extends = ["base"]
+
+[profiles.default]
+APP_ONLY = { description = "app", required = true }
+"#,
+    )
+    .unwrap();
+
+    let manifest = link_dir.join("secretspec.toml");
+    symlink(real_dir.join("app.toml"), &manifest).unwrap();
+
+    let config = Config::try_from(manifest.as_path())
+        .expect("extends should resolve relative to the symlink's directory");
+    let secrets = &config.profiles["default"].secrets;
+    assert!(secrets.contains_key("SHARED"), "inherited from ../base");
+    assert!(secrets.contains_key("APP_ONLY"));
+}
+
+#[test]
 fn test_extends_with_path_resolution_edge_cases() {
     let temp_dir = TempDir::new().unwrap();
     let base_path = temp_dir.path();
@@ -6067,7 +6282,7 @@ fn test_resolve_profile_unknown_returns_invalid_profile() {
     let temp_dir = TempDir::new().unwrap();
     let spec = dotenv_spec("", required_secret_profile("REQUIRED"), &temp_dir);
 
-    let result = spec.resolve_profile(Some("nonexistent"));
+    let result = spec.resolve_profile_secret_names(Some("nonexistent"));
     match result {
         Err(SecretSpecError::InvalidProfile(msg)) => {
             assert!(msg.contains("nonexistent"));

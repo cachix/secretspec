@@ -29,6 +29,8 @@ env://                       # Current process environment
 
 ## GoPass Provider
 
+Available starting with SecretSpec 0.15.
+
 **URI**: `gopass://[host][path]` - Uses `gopass`, a multi-user and multi-store abstraction layer over `pass`, with GPG encryption
 
 ```bash

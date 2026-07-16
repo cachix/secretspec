@@ -22,7 +22,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [OnePassword](https://secretspec.dev/providers/onepassword)
   - [LastPass](https://secretspec.dev/providers/lastpass)
   - [Pass](https://secretspec.dev/providers/pass)
-  - [Gopass](https://secretspec.dev/providers/gopass)
+  - [Gopass](https://secretspec.dev/providers/gopass) (0.15+)
   - [Proton Pass](https://secretspec.dev/providers/protonpass)
   - [environment variables](https://secretspec.dev/providers/env)
   - [Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)
@@ -57,7 +57,7 @@ $ secretspec config init
   dotenv: Traditional .env files
   env: Read-only environment variables
   pass: Unix password manager with GPG encryption
-  gopass: Gopass CLI password manager with GPG encryption
+  gopass: Gopass CLI password manager with GPG encryption (0.15+)
   protonpass: Proton Pass via official pass-cli
   lastpass: LastPass password manager
   gcsm: Google Cloud Secret Manager
@@ -140,7 +140,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[.env files](https://secretspec.dev/providers/dotenv)** - Traditional dotenv files
 - **[Environment variables](https://secretspec.dev/providers/env)** - Read-only for CI/CD
 - **[Pass](https://secretspec.dev/providers/pass)** - Unix password manager with GPG encryption
-- **[Gopass](https://secretspec.dev/providers/gopass)** - GPG-based password manager with git-synced password store
+- **[Gopass](https://secretspec.dev/providers/gopass)** (0.15+) - GPG-based password manager with git-synced password store
 - **[Proton Pass](https://secretspec.dev/providers/protonpass)** - End-to-end encrypted via Proton's official pass-cli
 - **[OnePassword](https://secretspec.dev/providers/onepassword)** - Team secret management
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager

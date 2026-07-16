@@ -2,6 +2,26 @@
 
 When commiting changes related to Rust, make sure to update /CHANGELOG.md with one entry (can be multi-line). Don't create new release subsections; add the entry under the existing unreleased section. Keep entries user facing: leave out development and testing notes.
 
+The documentation site is published from `main`, which may be ahead of the
+latest SecretSpec release. Any unreleased provider, CLI command, configuration
+field, or syntax must be labeled with its target version at each point of use.
+Do not rely on an `Unreleased` changelog entry or a notice on one concept page:
+users often land directly on provider and reference pages.
+
+For an upcoming provider or feature:
+
+- Add a version compatibility note near the first relevant explanation or
+  example, stating both the target release and that it is unavailable in the
+  current release.
+- Mark entries in provider lists, tables, sidebars, selector examples, landing
+  pages, README files, and generated documentation summaries with the minimum
+  version, for example `(0.15+)`.
+- When behavior differs, document the latest released version's working form
+  first and provide its practical fallback (for example an authentication
+  environment variable), then show the upcoming syntax.
+- After publishing the release, replace temporary “upcoming” wording with
+  durable “Available since SecretSpec X.Y” wording.
+
 
 ## Project Overview
 
@@ -62,13 +82,18 @@ Providers support URI-based configuration (e.g., `keyring://`, `onepassword://va
 
 When adding a new provider, update **every** location below — provider names appear in several listings that drift out of sync if any are missed:
 
-1. `docs/src/content/docs/providers/<provider>.md` - Create the provider's doc page
+1. `docs/src/content/docs/providers/<provider>.md` - Create the provider's doc page and add a version compatibility notice if it is unreleased
 2. `docs/astro.config.ts` - Add to sidebar navigation under "Providers" **and** to the providers sentence in the `starlightLlmsTxt` description block
 3. `docs/src/content/docs/concepts/providers.md` - Add a row to the "Available Providers" table
 4. `docs/src/content/docs/reference/providers.md` - Add a provider section **and** a row in the "Security Considerations" table
 5. `docs/src/pages/index.astro` - Add to the `providerMetadata` array (top of file) **and** to the `secretspec config init` mini-terminal in the hero
 6. `docs/src/content/docs/quick-start.mdx` - Update the `secretspec config init` example output to include the new provider
 7. `README.md` (symlink to `secretspec/README.md`) - Add to the "Providers" bullet list **and** to the `secretspec config init` example output
+
+If the provider is unreleased, add its target version (for example `(0.15+)`)
+in every listing above. See
+`docs/src/content/docs/reference/adding-providers.md` for the full release
+visibility checklist.
 
 ## Configuration System
 
@@ -194,6 +219,10 @@ The docs site is an Astro Starlight site deployed to https://secretspec.dev/.
 - **New config option**: Update `docs/src/content/docs/reference/configuration.md`
 - **New provider**: See [Adding Provider Documentation](#adding-provider-documentation) above
 - **New concept**: Create `docs/src/content/docs/concepts/<name>.md` and add to sidebar
+
+For every unreleased item above, put the target-version notice on the specific
+page or section where the item is documented. A notice elsewhere is not
+sufficient.
 
 ## Key Files
 

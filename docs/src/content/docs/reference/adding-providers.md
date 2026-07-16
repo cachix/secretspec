@@ -56,6 +56,53 @@ one refusal message.
 4. **Implement Provider trait** for your provider struct
 5. **Export from mod.rs**: Add `pub mod mybackend;`
 
+## Documentation and Release Visibility
+
+The documentation site is built from `main`, so it can describe code that has
+not reached the latest SecretSpec release yet. A new provider must not appear
+to be available in the currently released binary before it is published.
+
+When adding a provider for an upcoming release:
+
+1. Add a version notice near the top of the provider page:
+
+   ```md
+   :::note[Version compatibility]
+   The MyBackend provider is an upcoming SecretSpec 0.15 feature and is not
+   available in SecretSpec 0.14.
+   :::
+   ```
+
+2. Mark the provider as `(0.15+)` anywhere it appears in a provider list,
+   table, selector example, sidebar, landing page, README, or generated
+   documentation description.
+3. If the provider changes authentication or configuration syntax, show the
+   latest released version's working form first, then label the upcoming form
+   explicitly. Include a practical fallback such as the environment variable
+   used by the released version.
+4. Add the provider under the existing `Unreleased` section in `CHANGELOG.md`.
+
+Update every provider location; names otherwise drift out of sync:
+
+1. `docs/src/content/docs/providers/<provider>.md`
+2. `docs/astro.config.ts` — sidebar and `starlightLlmsTxt` provider summary
+3. `docs/src/content/docs/concepts/providers.md` — available providers table
+4. `docs/src/content/docs/reference/providers.md` — provider details and
+   security considerations
+5. `docs/src/pages/index.astro` — `providerMetadata` and any provider selector
+   examples
+6. `docs/src/content/docs/quick-start.mdx` — provider selector example
+7. `README.md` — provider lists and provider selector example
+
+When the release is published, replace temporary wording such as “upcoming”
+and “not available in 0.14” with durable wording such as “Available since
+SecretSpec 0.15.” The `(0.15+)` labels may remain where knowing the minimum
+version is useful.
+
+Apply the same rule to unreleased CLI commands and configuration fields:
+place a version notice beside the command or field, not only on a separate
+concept page. Readers often arrive directly from search results.
+
 ## Example Implementation
 
 ```rust

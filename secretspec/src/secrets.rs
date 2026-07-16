@@ -361,6 +361,10 @@ impl Secrets {
     /// Sets the provider to use for secret operations
     ///
     /// This overrides the provider from global configuration.
+    /// Blank input (empty or whitespace-only) is ignored, so a blank
+    /// `--provider` or `SECRETSPEC_PROVIDER` cannot shadow the configured
+    /// fallback chain. CI templates and workflow `env:` maps routinely
+    /// materialize unset values as empty strings.
     ///
     /// # Arguments
     ///
@@ -376,12 +380,16 @@ impl Secrets {
     /// spec.check(false).unwrap();
     /// ```
     pub fn set_provider(&mut self, provider: impl Into<String>) {
-        self.provider = Some(provider.into());
+        let provider = provider.into();
+        if !provider.trim().is_empty() {
+            self.provider = Some(provider);
+        }
     }
 
     /// Sets the profile to use for secret operations
     ///
     /// This overrides the profile from global configuration.
+    /// Blank input is ignored, matching [`Secrets::set_provider`].
     ///
     /// # Arguments
     ///
@@ -397,7 +405,10 @@ impl Secrets {
     /// spec.check(false).unwrap();
     /// ```
     pub fn set_profile(&mut self, profile: impl Into<String>) {
-        self.profile = Some(profile.into());
+        let profile = profile.into();
+        if !profile.trim().is_empty() {
+            self.profile = Some(profile);
+        }
     }
 
     /// Sets a human-readable reason for this session's secret access.
@@ -670,7 +681,11 @@ impl Secrets {
         profile
             .map(|p| p.to_string())
             .or_else(|| self.profile.clone())
-            .or_else(|| env::var("SECRETSPEC_PROFILE").ok())
+            .or_else(|| {
+                env::var("SECRETSPEC_PROFILE")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            })
             .or_else(|| {
                 self.global_config
                     .as_ref()
@@ -911,7 +926,11 @@ impl Secrets {
         override_arg
             .map(|spec| spec.to_string())
             .or_else(|| self.provider.clone())
-            .or_else(|| env::var("SECRETSPEC_PROVIDER").ok())
+            .or_else(|| {
+                env::var("SECRETSPEC_PROVIDER")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            })
     }
 
     /// Returns the explicit provider override resolved to a URI, if one is set.

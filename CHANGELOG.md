@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.15.0] - 2026-07-16
 
 ### Added
 - Gopass provider (`gopass://`) for GPG-based password manager with git-synced password store.
@@ -141,6 +141,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A provider chain entry that misspells `onepassword` as `1password` now gets
   the same "use `onepassword` instead" correction that `--provider 1password`
   gives, instead of a generic undefined-alias error.
+- Blank or whitespace-only profile and provider overrides (`--profile`,
+  `SECRETSPEC_PROFILE`, `--provider`, `SECRETSPEC_PROVIDER`, and the Rust SDK
+  builder) are now trimmed and treated as unset, so a padded value such as a
+  trailing newline from `$(cat file)` can no longer select a nonexistent
+  profile or provider.
 - `import` prints its per-secret summary in a stable, name-sorted order.
 - `run` no longer aborts when the environment contains a non-UTF-8 variable.
   Such variables are now passed through to the child process untouched, with

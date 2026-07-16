@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |spec|
   spec.name        = "secretspec"
-  spec.version     = "0.14.0"
+  spec.version     = "0.15.0"
   spec.summary     = "Declarative secrets, every environment, any provider (Ruby SDK)"
   spec.description = "Ruby bindings for SecretSpec: a native extension that " \
                      "statically links the secretspec-ffi C ABI."

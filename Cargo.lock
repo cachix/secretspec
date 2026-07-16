@@ -4526,7 +4526,7 @@ dependencies = [
 
 [[package]]
 name = "secretspec"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "aws-config",
  "aws-sdk-secretsmanager",
@@ -4566,7 +4566,7 @@ dependencies = [
 
 [[package]]
 name = "secretspec-derive"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "http 1.4.0",
  "insta",
@@ -4594,7 +4594,7 @@ dependencies = [
 
 [[package]]
 name = "secretspec-ffi"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "secretspec",
  "serde_json",
@@ -4603,7 +4603,7 @@ dependencies = [
 
 [[package]]
 name = "secretspec-node-native"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -4613,7 +4613,7 @@ dependencies = [
 
 [[package]]
 name = "secretspec-php-native"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "ext-php-rs",
  "secretspec",
@@ -4621,7 +4621,7 @@ dependencies = [
 
 [[package]]
 name = "secretspec-py-native"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "pyo3",
  "secretspec",

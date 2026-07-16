@@ -356,9 +356,8 @@ impl AkvProvider {
                     ),
                 ]
                 .into_iter()
-                .filter_map(|(credential, env, is_missing)| {
-                    is_missing.then(|| format!("{credential} / {env}"))
-                })
+                .filter(|(_, _, is_missing)| *is_missing)
+                .map(|(credential, env, _)| format!("{credential} / {env}"))
                 .collect();
                 Err(SecretSpecError::ProviderOperationFailed(format!(
                     "Partial service principal configuration: the tenant_id, client_id, and \

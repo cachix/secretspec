@@ -576,7 +576,7 @@ mod integration_tests {
             }
             _ => {
                 let provider = Box::<dyn Provider>::try_from(provider_name)
-                    .expect(&format!("{} provider should exist", provider_name));
+                    .unwrap_or_else(|_| panic!("{} provider should exist", provider_name));
                 (provider, None)
             }
         }
@@ -617,10 +617,12 @@ mod integration_tests {
                     Address::convention(&project_name, "default", "TEST_PASSWORD"),
                     &test_value,
                 )
-                .expect(&format!(
-                    "[{}] Provider claims to support set but failed",
-                    provider_name
-                ));
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "[{}] Provider claims to support set but failed",
+                        provider_name
+                    )
+                });
 
             // Verify we can retrieve it
             let retrieved = provider
@@ -629,10 +631,12 @@ mod integration_tests {
                     "default",
                     "TEST_PASSWORD",
                 ))
-                .expect(&format!(
-                    "[{}] Should not error when getting after set",
-                    provider_name
-                ));
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "[{}] Should not error when getting after set",
+                        provider_name
+                    )
+                });
 
             match retrieved {
                 Some(value) => {
@@ -747,23 +751,16 @@ mod integration_tests {
         }
 
         // Verify isolation between profiles
-        for i in 0..profiles.len() {
-            for j in 0..profiles.len() {
-                let result = provider
-                    .get(Address::convention(&project_name, profiles[j], test_key))
-                    .expect("Should not error");
-
-                if i == j {
-                    assert!(result.is_some(), "Should find value in same profile");
-                } else {
-                    let expected_value = format!("key_for_{}", profiles[j]);
-                    assert_eq!(
-                        result.map(|s| s.expose_secret().to_string()),
-                        Some(expected_value),
-                        "Should find profile-specific value"
-                    );
-                }
-            }
+        for profile in profiles {
+            let result = provider
+                .get(Address::convention(&project_name, profile, test_key))
+                .expect("Should not error");
+            let expected_value = format!("key_for_{}", profile);
+            assert_eq!(
+                result.map(|s| s.expose_secret().to_string()),
+                Some(expected_value),
+                "Should find profile-specific value"
+            );
         }
     }
 
@@ -899,7 +896,7 @@ mod integration_tests {
         }
 
         // Batch get including a key that doesn't exist
-        let keys = vec![
+        let keys = [
             "BATCH_TEST_1",
             "BATCH_TEST_2",
             "BATCH_TEST_3",

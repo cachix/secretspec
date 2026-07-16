@@ -35,6 +35,6 @@ mod test_valid {
     #[test]
     fn test_basic_compiles() {
         // If we get here, the macro validated successfully
-        assert!(true);
+        let _ = std::mem::size_of::<SecretSpec>();
     }
 }

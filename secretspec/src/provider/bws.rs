@@ -147,10 +147,10 @@ impl BwsProvider {
 
     /// Strips the BWS access token from error messages to avoid leaking credentials.
     fn sanitize_error(&self, message: &str) -> String {
-        if let Some(token) = self.access_token() {
-            if !token.is_empty() {
-                return message.replace(&token, "[REDACTED]");
-            }
+        if let Some(token) = self.access_token()
+            && !token.is_empty()
+        {
+            return message.replace(&token, "[REDACTED]");
         }
         message.to_string()
     }

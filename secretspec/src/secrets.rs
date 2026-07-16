@@ -107,6 +107,11 @@ impl CredentialSource {
 
 type ProviderCredentialsKey = (String, String);
 type ProviderCredentialsSlot = Arc<Mutex<Option<ProviderCredentials>>>;
+type GroupFetch<'a> = (
+    Option<&'a str>,
+    Vec<&'a PlannedSecret>,
+    Box<dyn ProviderTrait>,
+);
 
 /// Memoized provider credentials with single-flight population per key.
 ///
@@ -162,6 +167,7 @@ impl ProviderCredentialsCache {
         }
     }
 
+    #[cfg(any(feature = "cli", test))]
     fn clear(&self) {
         self.entries.lock().unwrap().clear();
     }
@@ -782,6 +788,7 @@ impl Secrets {
     /// name, for the `config provider login` flow. Validates every source before
     /// returning any credentials. Errors if the alias is not defined; returns
     /// an empty list for an alias with no `credentials`.
+    #[cfg(any(feature = "cli", test))]
     pub(crate) fn declared_provider_credentials(
         &self,
         alias: &str,
@@ -809,6 +816,7 @@ impl Secrets {
     /// policy and audited (with a `credential` marker). A successful store also
     /// clears the credential memo, so a credential rotated through this instance
     /// is re-read instead of resolving to the stale cached value.
+    #[cfg(any(feature = "cli", test))]
     pub(crate) fn store_provider_credential(
         &self,
         source: &CredentialSource,
@@ -1065,6 +1073,7 @@ impl Secrets {
 
     /// Get a reference to the project configuration. Used by `secretspec
     /// codegen` (which needs the manifest, not a provider) and by tests.
+    #[cfg(any(feature = "cli", test))]
     pub(crate) fn config(&self) -> &Config {
         &self.config
     }
@@ -2818,8 +2827,7 @@ impl Secrets {
         // contacted. Building a credential-backed alias's provider already fetches
         // its provider credentials here (memoized per spec); only the group
         // fetches run concurrently below.
-        let mut group_fetches: Vec<(Option<&str>, Vec<&PlannedSecret>, Box<dyn ProviderTrait>)> =
-            Vec::new();
+        let mut group_fetches: Vec<GroupFetch<'_>> = Vec::new();
         for (provider_uri, group) in plan.groups() {
             match self.get_provider(provider_uri, Some(&plan.profile)) {
                 Ok(provider) => {
@@ -2851,18 +2859,25 @@ impl Secrets {
         // round-trip. One thread per group mirrors the per-item threading
         // providers already do inside `get_many`. A single group (the common
         // case) stays on this thread.
-        let fetch_group =
-            |(provider_uri, group, provider): (_, Vec<&PlannedSecret>, Box<dyn ProviderTrait>)| {
-                let result = Self::fetch_group(&*provider, &group, project, profile);
-                (provider_uri, result)
-            };
+        fn fetch_group<'a>(
+            (provider_uri, group, provider): GroupFetch<'a>,
+            project: &str,
+            profile: &str,
+        ) -> (Option<&'a str>, Result<HashMap<String, SecretString>>) {
+            let result = Secrets::fetch_group(&*provider, &group, project, profile);
+            (provider_uri, result)
+        }
+
         let fetch_results: Vec<(Option<&str>, Result<_>)> = if group_fetches.len() <= 1 {
-            group_fetches.into_iter().map(fetch_group).collect()
+            group_fetches
+                .into_iter()
+                .map(|group| fetch_group(group, project, profile))
+                .collect()
         } else {
             std::thread::scope(|scope| {
                 let handles: Vec<_> = group_fetches
                     .into_iter()
-                    .map(|group| scope.spawn(|| fetch_group(group)))
+                    .map(|group| scope.spawn(|| fetch_group(group, project, profile)))
                     .collect();
                 handles
                     .into_iter()

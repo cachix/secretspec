@@ -101,7 +101,7 @@ impl TryFrom<&ProviderUrl> for DotEnvConfig {
         }
 
         let path_str = url.path();
-        let path = if path_str != "" && path_str != "/" {
+        let path = if !path_str.is_empty() && path_str != "/" {
             if let Some(host) = url.host() {
                 format!("{}{}", host, path_str)
             } else {

@@ -24,7 +24,7 @@ fn parse_spec_from_str(content: &str, _base_path: Option<&Path>) -> Result<Confi
         ));
     }
 
-    config.validate().map_err(|e| SecretSpecError::from(e))?;
+    config.validate().map_err(SecretSpecError::from)?;
 
     Ok(config)
 }
@@ -2527,11 +2527,11 @@ fn test_import_between_dotenv_files() {
 
     // SECRET_THREE and SECRET_FOUR should not be in the file
     assert!(
-        vars.get("SECRET_THREE").is_none(),
+        !vars.contains_key("SECRET_THREE"),
         "SECRET_THREE should not be imported (not in source)"
     );
     assert!(
-        vars.get("SECRET_FOUR").is_none(),
+        !vars.contains_key("SECRET_FOUR"),
         "SECRET_FOUR should not be imported (not in source)"
     );
 }
@@ -2915,7 +2915,7 @@ fn test_import_with_profiles() {
         "Shared secret should be imported for development profile"
     );
     assert!(
-        vars.get("PROD_SECRET").is_none(),
+        !vars.contains_key("PROD_SECRET"),
         "Production secret should not be imported when using development profile"
     );
 }

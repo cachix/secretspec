@@ -54,7 +54,7 @@ pub enum SecretSpecError {
     #[error("Invalid profile: {0}")]
     InvalidProfile(String),
     #[error("Validation failed: {0}")]
-    ValidationFailed(ValidationErrors),
+    ValidationFailed(Box<ValidationErrors>),
     #[error("Secret generation failed: {0}")]
     GenerationFailed(String),
     #[error(
@@ -95,6 +95,37 @@ impl SecretSpecError {
             SecretSpecError::ValidationFailed(_) => "validation_failed",
             SecretSpecError::GenerationFailed(_) => "generation_failed",
             SecretSpecError::ReasonRequired => "reason_required",
+        }
+    }
+}
+
+/// A type alias for `Result<T, SecretSpecError>`
+///
+/// This provides a convenient shorthand for functions that return
+/// a result with a `SecretSpecError` as the error type.
+pub type Result<T> = std::result::Result<T, SecretSpecError>;
+
+impl From<ParseError> for SecretSpecError {
+    fn from(err: ParseError) -> Self {
+        match err {
+            ParseError::Io(io_err) => {
+                if io_err.kind() == io::ErrorKind::NotFound {
+                    SecretSpecError::NoManifest
+                } else {
+                    SecretSpecError::Io(io_err)
+                }
+            }
+            ParseError::Toml(toml_err) => SecretSpecError::Toml(toml_err),
+            ParseError::UnsupportedRevision(rev) => SecretSpecError::UnsupportedRevision(rev),
+            ParseError::CircularDependency(msg) => {
+                SecretSpecError::Io(io::Error::new(io::ErrorKind::InvalidData, msg))
+            }
+            ParseError::Validation(msg) => {
+                SecretSpecError::Io(io::Error::new(io::ErrorKind::InvalidData, msg))
+            }
+            ParseError::ExtendedConfigNotFound(path) => {
+                SecretSpecError::ExtendedConfigNotFound(path)
+            }
         }
     }
 }
@@ -164,36 +195,5 @@ mod tests {
 
         let toml: SecretSpecError = "= bad".parse::<toml::Table>().unwrap_err().into();
         assert_eq!(toml.kind(), "toml");
-    }
-}
-
-/// A type alias for `Result<T, SecretSpecError>`
-///
-/// This provides a convenient shorthand for functions that return
-/// a result with a `SecretSpecError` as the error type.
-pub type Result<T> = std::result::Result<T, SecretSpecError>;
-
-impl From<ParseError> for SecretSpecError {
-    fn from(err: ParseError) -> Self {
-        match err {
-            ParseError::Io(io_err) => {
-                if io_err.kind() == io::ErrorKind::NotFound {
-                    SecretSpecError::NoManifest
-                } else {
-                    SecretSpecError::Io(io_err)
-                }
-            }
-            ParseError::Toml(toml_err) => SecretSpecError::Toml(toml_err),
-            ParseError::UnsupportedRevision(rev) => SecretSpecError::UnsupportedRevision(rev),
-            ParseError::CircularDependency(msg) => {
-                SecretSpecError::Io(io::Error::new(io::ErrorKind::InvalidData, msg))
-            }
-            ParseError::Validation(msg) => {
-                SecretSpecError::Io(io::Error::new(io::ErrorKind::InvalidData, msg))
-            }
-            ParseError::ExtendedConfigNotFound(path) => {
-                SecretSpecError::ExtendedConfigNotFound(path)
-            }
-        }
     }
 }

@@ -75,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sources from the command line.
 
 ### Changed
+- Rust SDK validation errors now store their detailed report out of line,
+  reducing the size of `SecretSpecError` values while preserving diagnostics.
 - Generated types now describe the values resolution can actually return:
   omitted `required` still means required, secrets supplied by a manifest
   default or generator are non-nullable, and profile-specific types include

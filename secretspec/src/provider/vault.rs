@@ -54,18 +54,13 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 /// KV secrets engine version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum KvVersion {
     /// KV version 1 (no versioning).
     V1,
     /// KV version 2 (versioned, default).
+    #[default]
     V2,
-}
-
-impl Default for KvVersion {
-    fn default() -> Self {
-        KvVersion::V2
-    }
 }
 
 /// Authentication method for the Vault / OpenBao provider.
@@ -294,12 +289,12 @@ impl VaultProvider {
             .or_else(|| std::env::var_os("USERPROFILE"))
             .map(|home| std::path::PathBuf::from(home).join(".vault-token"));
 
-        if let Some(path) = token_path {
-            if let Ok(token) = std::fs::read_to_string(&path) {
-                let token = token.trim();
-                if !token.is_empty() {
-                    return Ok(SecretString::new(token.to_string().into()));
-                }
+        if let Some(path) = token_path
+            && let Ok(token) = std::fs::read_to_string(&path)
+        {
+            let token = token.trim();
+            if !token.is_empty() {
+                return Ok(SecretString::new(token.to_string().into()));
             }
         }
 

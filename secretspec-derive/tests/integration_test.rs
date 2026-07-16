@@ -121,7 +121,6 @@ mod empty_generation {
 
 mod json_serialization {
     use super::*;
-    use serde_json;
 
     declare_secrets!("tests/fixtures/basic.toml");
 

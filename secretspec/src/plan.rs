@@ -378,7 +378,7 @@ mod tests {
     }
 
     /// The plan's groups as (primary store, secret names) for easy assertion.
-    fn group_names<'a>(plan: &'a ResolutionPlan) -> Vec<(Option<&'a str>, Vec<&'a str>)> {
+    fn group_names(plan: &ResolutionPlan) -> Vec<(Option<&str>, Vec<&str>)> {
         plan.groups()
             .into_iter()
             .map(|(uri, group)| (uri, group.iter().map(|s| s.name.as_str()).collect()))

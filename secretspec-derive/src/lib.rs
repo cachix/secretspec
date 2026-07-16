@@ -1434,4 +1434,4 @@ fn generate_secret_spec_code(config: Config) -> proc_macro2::TokenStream {
 
 #[cfg(test)]
 #[path = "tests.rs"]
-mod tests;
+mod derive_tests;

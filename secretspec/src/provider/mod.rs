@@ -168,10 +168,12 @@ impl ProviderUrl {
             .into_owned()
     }
 
+    #[cfg(any(feature = "vault", test))]
     pub fn port(&self) -> Option<u16> {
         self.0.port()
     }
 
+    #[cfg(any(feature = "awssm", feature = "vault", test))]
     pub fn query_pairs(&self) -> url::form_urlencoded::Parse<'_> {
         self.0.query_pairs()
     }
@@ -253,8 +255,10 @@ pub struct ProviderInfo {
     /// The canonical name of the provider (e.g., "keyring", "1password").
     pub name: &'static str,
     /// A human-readable description of what the provider does.
+    #[cfg_attr(not(any(feature = "cli", test)), allow(dead_code))]
     pub description: &'static str,
     /// Example URIs showing how to configure this provider.
+    #[cfg_attr(not(any(feature = "cli", test)), allow(dead_code))]
     pub examples: &'static [&'static str],
 }
 
@@ -280,6 +284,7 @@ impl ProviderInfo {
     ///     "onepassword: OnePassword password manager (e.g., onepassword://vault, onepassword://work@Production)"
     /// );
     /// ```
+    #[cfg(any(feature = "cli", test))]
     pub fn display_with_examples(&self) -> String {
         if self.examples.is_empty() {
             format!("{}: {}", self.name, self.description)
@@ -388,6 +393,7 @@ pub use macros::{PROVIDER_REGISTRY, ProviderRegistration};
 /// # Returns
 ///
 /// A vector of `ProviderInfo` structs containing metadata for each provider.
+#[cfg(feature = "cli")]
 pub fn providers() -> Vec<ProviderInfo> {
     PROVIDER_REGISTRY
         .iter()
@@ -818,8 +824,11 @@ pub(crate) struct ProviderWithPreflight {
 /// Failures are returned to every caller waiting on the in-flight probe but
 /// are not cached beyond that: the user may fix auth mid-process (e.g. unlock
 /// the desktop app in a long-lived SDK process), so the next check re-probes.
+type AuthCheckResult = std::result::Result<(), String>;
+type AuthCheckCell = Arc<OnceLock<AuthCheckResult>>;
+
 pub(crate) struct AuthCheckCache<K> {
-    cells: Mutex<HashMap<K, Arc<OnceLock<std::result::Result<(), String>>>>>,
+    cells: Mutex<HashMap<K, AuthCheckCell>>,
 }
 
 impl<K> Default for AuthCheckCache<K> {

@@ -55,11 +55,16 @@ jobs:
   ffi:
     name: FFI libraries
     needs: authorize
+    permissions:
+      contents: write
     uses: ./.github/workflows/ffi-build.yml
 
   node:
     name: Node packages
     needs: authorize
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/node-addon.yml
     with:
       publish: false
@@ -67,16 +72,24 @@ jobs:
   python:
     name: Python wheels
     needs: authorize
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/python-wheels.yml
 
   ruby:
     name: Ruby gems
     needs: authorize
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/ruby-gems.yml
 
   php:
     name: PHP extensions
     needs: authorize
+    permissions:
+      contents: write
     uses: ./.github/workflows/php-ext.yml
 
   go-static:
@@ -97,6 +110,8 @@ jobs:
   release-artifacts:
     name: CLI release artifacts
     needs: authorize
+    permissions:
+      contents: write
     uses: ./.github/workflows/release.yml
     with:
       build_artifacts: true

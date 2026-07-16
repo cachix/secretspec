@@ -18,7 +18,7 @@
 
 use crate::config::{NativeAddress, Secret};
 use crate::error::Result;
-use crate::manifest::{CompiledSecret, MissingPolicy};
+use crate::manifest::CompiledSecret;
 use crate::provider::Address;
 use crate::secrets::Secrets;
 use std::collections::HashMap;
@@ -105,23 +105,25 @@ impl Route {
 pub(crate) struct PlannedSecret {
     /// The declared secret name (the manifest's `UPPER_SNAKE` key).
     pub name: String,
-    /// The secret's effective config after the profile field-level merge.
-    pub config: Secret,
-    /// Compiled behavior when every provider misses.
-    pub missing: MissingPolicy,
-    /// Effective required marker retained for the resolution report.
-    pub declared_required: bool,
+    /// The compiled effective secret: its merged config, missing-value policy,
+    /// and required marker travel together so they cannot fall out of sync.
+    pub secret: CompiledSecret,
     /// The resolved read/write route.
     pub route: Route,
 }
 
 impl PlannedSecret {
+    /// The secret's effective config after the profile field-level merge.
+    pub(crate) fn config(&self) -> &Secret {
+        &self.secret.config
+    }
+
     /// The provider [`Address`] this secret's operations resolve: its native
     /// `ref` coordinates when it has them, otherwise SecretSpec's own
     /// `{project}/{profile}/{key}` naming convention. Naming is orthogonal to
     /// routing: the same address is asked of whichever store [`Route`] selects.
     pub(crate) fn as_address<'a>(&'a self, project: &'a str, profile: &'a str) -> Address<'a> {
-        match &self.config.reference {
+        match &self.secret.config.reference {
             Some(native) => Address::Native(native),
             None => Address::convention(project, profile, &self.name),
         }
@@ -129,17 +131,19 @@ impl PlannedSecret {
 
     /// The native `ref` coordinates this secret addresses, if any.
     pub(crate) fn reference(&self) -> Option<&NativeAddress> {
-        self.config.reference.as_ref()
+        self.secret.config.reference.as_ref()
     }
 
-    /// Whether the active profile requires this secret (required by default).
+    /// Whether the active profile treats this secret as required: its compiled
+    /// `required` marker (an omitted `required` counts as required unless the
+    /// secret carries a default).
     pub(crate) fn required(&self) -> bool {
-        self.declared_required
+        self.secret.declared_required
     }
 
     /// Whether the value is materialized to a temp file and exposed as a path.
     pub(crate) fn as_path(&self) -> bool {
-        self.config.as_path.unwrap_or(false)
+        self.secret.config.as_path.unwrap_or(false)
     }
 }
 
@@ -278,9 +282,7 @@ impl Secrets {
         let route = self.route_for(&secret.config, override_spec)?;
         Ok(PlannedSecret {
             name,
-            config: secret.config.clone(),
-            missing: secret.missing,
-            declared_required: secret.declared_required,
+            secret: secret.clone(),
             route,
         })
     }

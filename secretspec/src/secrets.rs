@@ -1129,26 +1129,15 @@ impl Secrets {
         Ok(compiled.secrets.keys().cloned().collect())
     }
 
-    /// Resolves the configuration for a specific secret
-    ///
-    /// This method looks for the secret in the specified profile, falling back
-    /// to the default profile if not found. If the secret exists in both profiles,
-    /// fields are merged with the current profile taking precedence.
-    /// Profile defaults are also applied with lower precedence than explicit secret config.
-    ///
-    /// Precedence order (highest to lowest):
-    /// 1. Secret config in current profile
-    /// 2. Secret config in default profile
-    /// 3. Profile defaults from current profile
+    /// Returns the effective configuration for a specific secret, or `None` if
+    /// the profile does not carry it. The field-level merge with the `default`
+    /// profile and `[defaults]` already happened once during manifest
+    /// compilation ([`crate::config::Secret::resolved`]); this only reads it.
     ///
     /// # Arguments
     ///
     /// * `name` - The name of the secret
     /// * `profile` - Optional profile to search in (if None, uses resolved profile)
-    ///
-    /// # Returns
-    ///
-    /// The secret configuration if found (may be merged from multiple profiles)
     pub(crate) fn resolve_secret_config(
         &self,
         name: &str,
@@ -1162,9 +1151,8 @@ impl Secrets {
     }
 
     /// The effective (field-level merged) secrets of `profile_name` in
-    /// name-sorted order: the union of the profile's and the default
-    /// profile's names, each resolved via [`Secrets::resolve_secret_config`].
-    /// This is the view `check`/`run` list, matching what resolution acts on.
+    /// name-sorted order, read directly off the compiled manifest. This is the
+    /// view `check`/`run` list, matching what resolution acts on.
     fn effective_secrets(&self, profile_name: &str) -> Vec<(String, crate::config::Secret)> {
         self.manifest
             .profile(profile_name)
@@ -1682,7 +1670,7 @@ impl Secrets {
                 return Err(err);
             }
         };
-        let default = planned.config.default.clone();
+        let default = planned.config().default.clone();
         let as_path = planned.as_path();
 
         // Walk the route's chain in order; each entry is resolved lazily and a
@@ -2186,7 +2174,7 @@ impl Secrets {
                 let planned = self
                     .plan_secret(&name, &profile_display, None)?
                     .expect("Secret should exist since we're iterating over it");
-                let description = planned.config.description.as_deref();
+                let description = planned.config().description.as_deref();
 
                 let to_provider =
                     self.write_provider_for_route(&planned.route, Some(&profile_display))?;
@@ -2343,12 +2331,12 @@ impl Secrets {
         profile_name: &str,
     ) -> Result<Option<SecretString>> {
         let name = planned.name.as_str();
-        let gen_config = match &planned.config.generate {
+        let gen_config = match &planned.config().generate {
             Some(config) if config.is_enabled() => config,
             _ => return Ok(None),
         };
 
-        let secret_type = match &planned.config.secret_type {
+        let secret_type = match &planned.config().secret_type {
             Some(t) => t.as_str(),
             None => {
                 return Err(SecretSpecError::GenerationFailed(format!(
@@ -2939,7 +2927,7 @@ impl Secrets {
                         }
                         status = ResolutionStatus::Resolved;
                     } else {
-                        match planned.missing {
+                        match planned.secret.missing {
                             MissingPolicy::Generate => {
                                 // A full pass mints and stores; a value-free pass
                                 // reports that generation would resolve without
@@ -2961,7 +2949,7 @@ impl Secrets {
                             }
                             MissingPolicy::UseDefault => {
                                 let default_value = planned
-                                    .config
+                                    .config()
                                     .default
                                     .as_ref()
                                     .expect("compiled UseDefault policy has a default");

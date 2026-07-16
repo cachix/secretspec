@@ -760,6 +760,21 @@ pub struct ProfileDefaults {
     pub providers: Option<Vec<String>>,
 }
 
+impl ProfileDefaults {
+    /// Fill fields this table leaves unset from an earlier, less specific
+    /// defaults table. Lets `extends` inherit `[profiles.*.defaults]` field by
+    /// field, with the later (more specific) document winning.
+    fn inherit_missing_from(&mut self, earlier: &ProfileDefaults) {
+        self.required = self.required.or(earlier.required);
+        if self.default.is_none() {
+            self.default = earlier.default.clone();
+        }
+        if self.providers.is_none() {
+            self.providers = earlier.providers.clone();
+        }
+    }
+}
+
 impl Profile {
     /// Create a new empty profile configuration.
     pub fn new() -> Self {
@@ -799,13 +814,7 @@ impl Profile {
     fn overlay_with(&mut self, later: Profile) {
         if let Some(mut later_defaults) = later.defaults {
             if let Some(earlier_defaults) = &self.defaults {
-                later_defaults.required = later_defaults.required.or(earlier_defaults.required);
-                later_defaults.default = later_defaults
-                    .default
-                    .or_else(|| earlier_defaults.default.clone());
-                later_defaults.providers = later_defaults
-                    .providers
-                    .or_else(|| earlier_defaults.providers.clone());
+                later_defaults.inherit_missing_from(earlier_defaults);
             }
             self.defaults = Some(later_defaults);
         }
@@ -1190,12 +1199,20 @@ impl Secret {
 
     /// If required is explicitly true and default is set, that's an error.
     /// Checked on raw entries only, not on merged views (see
-    /// `Profile::validate_with_default`).
+    /// [`Profile::validate_raw`]).
     fn validate_required_default(&self) -> Result<(), String> {
         if self.required == Some(true) && self.default.is_some() {
             return Err("Required secrets cannot have default values".into());
         }
         Ok(())
+    }
+
+    /// Whether this secret mints its own value: it declares an enabled
+    /// `generate` config. The single source of truth for "resolution can supply
+    /// this without a provider", shared by manifest compilation and semantic
+    /// validation.
+    pub(crate) fn would_generate(&self) -> bool {
+        self.generate.as_ref().is_some_and(|g| g.is_enabled())
     }
 
     fn validate_semantics(&self) -> Result<(), String> {
@@ -1262,7 +1279,7 @@ impl Secret {
 
         // Validate type even without generate
         if let Some(ref t) = self.secret_type
-            && (self.generate.is_none() || self.generate.as_ref().is_some_and(|g| !g.is_enabled()))
+            && !self.would_generate()
         {
             // Type is informational when not generating, but still validate known values
             match t.as_str() {

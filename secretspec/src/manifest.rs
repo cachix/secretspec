@@ -6,7 +6,7 @@
 //! inheritance and missing-value behavior have already been decided once.
 
 use crate::config::{Config, Secret};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// What resolution does when no provider returns a value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,11 +44,7 @@ impl CompiledSecret {
         // preserves the manifest shorthand while keeping an explicit inherited
         // `required = true` visible in reports.
         let declared_required = config.required.unwrap_or(config.default.is_none());
-        let missing = if config
-            .generate
-            .as_ref()
-            .is_some_and(|generate| generate.is_enabled())
-        {
+        let missing = if config.would_generate() {
             MissingPolicy::Generate
         } else if config.default.is_some() {
             MissingPolicy::UseDefault
@@ -115,12 +111,13 @@ impl CompiledManifest {
             let inherited = (profile_name != "default")
                 .then_some(default_profile)
                 .flatten();
-            let mut names: Vec<&String> = profile.secrets.keys().collect();
+            // A `BTreeSet` unions the profile's own names with the inherited
+            // ones already deduplicated and sorted, which is the deterministic
+            // order every surface consuming the manifest expects.
+            let mut names: BTreeSet<&String> = profile.secrets.keys().collect();
             if let Some(default) = inherited {
                 names.extend(default.secrets.keys());
             }
-            names.sort();
-            names.dedup();
 
             let secrets = names
                 .into_iter()

@@ -110,8 +110,4 @@ jobs:
   release-artifacts:
     name: CLI release artifacts
     needs: authorize
-    permissions:
-      contents: write
-    uses: ./.github/workflows/release.yml
-    with:
-      build_artifacts: true
+    uses: ./.github/workflows/cli-artifacts.yml

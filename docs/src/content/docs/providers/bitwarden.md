@@ -25,8 +25,6 @@ bitwarden://?server=https://vault.company.com
 bitwarden://?type=login&field=password
 ```
 
-```
-
 - `collection-id`: Target collection ID
 - `org@collection`: Organization and collection specification
 - `type`: Item type (login, card, identity, sshkey, securenote)
@@ -46,7 +44,6 @@ $ secretspec set TOKEN --provider "bitwarden://?server=https://vault.company.com
 
 # Password Manager - Specific item type and field
 $ secretspec get 'MyApp Database' --provider 'bitwarden://?type=login&field=username'
-
 ```
 
 ## Usage
@@ -133,8 +130,6 @@ provider = "bitwarden://prod-secrets"
 ```bash
 # Password Manager session
 $ export BW_SESSION="your-session-key"
-
-# Secrets Manager access token
 ```
 
 #### Configuration Defaults
@@ -194,7 +189,7 @@ To install it:
 - Clear distinction between "not logged in" vs "vault locked"
 - Step-by-step guidance for `bw login` and `bw unlock`
 - Session key setup instructions
-- 
+
 ### Item Access
 - Graceful handling of missing items
 - Field validation and suggestions

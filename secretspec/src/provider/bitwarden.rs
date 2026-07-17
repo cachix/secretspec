@@ -1,9 +1,8 @@
-use crate::provider::Provider;
+use crate::provider::{Address, Provider, ProviderCredentials, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
-use url::Url;
 
 /// Bitwarden item type enum for different vault item types
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -499,10 +498,10 @@ impl Default for BitwardenConfig {
     }
 }
 
-impl TryFrom<&Url> for BitwardenConfig {
+impl TryFrom<&ProviderUrl> for BitwardenConfig {
     type Error = SecretSpecError;
 
-    fn try_from(url: &Url) -> std::result::Result<Self, Self::Error> {
+    fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
         let scheme = url.scheme();
 
         if scheme != "bitwarden" {
@@ -515,16 +514,16 @@ impl TryFrom<&Url> for BitwardenConfig {
         let mut config = BitwardenConfig::default();
 
         // Parse Password Manager configuration
-        if let Some(host) = url.host_str() {
+        if let Some(host) = url.host() {
             if host != "localhost" {
                 // Check if we have username (organization) information
                 if !url.username().is_empty() {
                     // Handle org@collection format
-                    config.organization_id = Some(url.username().to_string());
-                    config.collection_id = Some(host.to_string());
+                    config.organization_id = Some(url.username());
+                    config.collection_id = Some(host);
                 } else {
                     // Just collection ID
-                    config.collection_id = Some(host.to_string());
+                    config.collection_id = Some(host);
                 }
             }
         }
@@ -549,8 +548,6 @@ impl TryFrom<&Url> for BitwardenConfig {
         Ok(config)
     }
 }
-
-impl BitwardenConfig {}
 
 /// Provider implementation for Bitwarden password manager.
 ///
@@ -588,6 +585,8 @@ impl BitwardenConfig {}
 pub struct BitwardenProvider {
     /// Configuration for the provider including org/collection settings.
     config: BitwardenConfig,
+    /// Credentials supplied by the provider alias.
+    credentials: ProviderCredentials,
 }
 
 crate::register_provider! {
@@ -610,7 +609,10 @@ impl BitwardenProvider {
     ///
     /// * `config` - The configuration for the provider
     pub fn new(config: BitwardenConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            credentials: ProviderCredentials::new(),
+        }
     }
 
     /// Executes a Bitwarden Password Manager CLI command with proper error handling.
@@ -801,16 +803,15 @@ impl BitwardenProvider {
         template
     }
 
-    /// Gets a secret from Bitwarden Password Manager.
+    /// Retrieves a secret from Bitwarden Password Manager.
     ///
     /// This method searches the entire vault for items matching the key name,
     /// supporting all item types (Login, Secure Note, Card, Identity) and
     /// extracting values using smart field detection.
     fn get_from_password_manager(
         &self,
-        project: &str,
-        key: &str,
-        profile: &str,
+        item_name: &str,
+        field_hint: Option<&str>,
     ) -> Result<Option<SecretString>> {
         // Check authentication status first
         if !self.is_authenticated()? {
@@ -819,10 +820,10 @@ impl BitwardenProvider {
             ));
         }
 
-        eprintln!("DEBUG: get_from_password_manager called for key='{}'", key);
+        eprintln!("DEBUG: get_from_password_manager called for item='{}'", item_name);
 
         // Use Bitwarden's built-in search to find items matching the key
-        let mut list_args = vec!["list", "items", "--search", key];
+        let mut list_args = vec!["list", "items", "--search", item_name];
 
         // Add organization filter if configured (from config or environment variable)
         let org_id = std::env::var("BITWARDEN_ORGANIZATION")
@@ -835,9 +836,9 @@ impl BitwardenProvider {
         let output = self.execute_bw_command(&list_args)?;
         let items: Vec<BitwardenItem> = serde_json::from_str(&output)?;
 
-        // If we found items, use the first one (Bitwarden's search is already good)
+        // If we found items, use the first one
         if let Some(item) = items.first() {
-            return self.extract_value_from_item(item, key);
+            return self.extract_value_from_item(item, field_hint);
         }
 
         // No matching item found
@@ -851,28 +852,29 @@ impl BitwardenProvider {
     fn extract_value_from_item(
         &self,
         item: &BitwardenItem,
-        field_hint: &str,
+        field_hint: Option<&str>,
     ) -> Result<Option<SecretString>> {
-        // Check if a specific field is requested via environment variable, config, or default
-        let requested_field = std::env::var("BITWARDEN_DEFAULT_FIELD")
-            .ok()
+        // Resolve field: explicit field_hint > env > config > smart default
+        let resolved_field = field_hint
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("BITWARDEN_DEFAULT_FIELD").ok())
             .or_else(|| self.config.default_field.clone());
 
         match item.item_type {
             BitwardenItemType::Login => {
-                self.extract_from_login_item(item, field_hint, requested_field.as_deref())
+                self.extract_from_login_item(item, resolved_field.as_deref())
             }
             BitwardenItemType::SecureNote => {
-                self.extract_from_secure_note_item(item, field_hint, requested_field.as_deref())
+                self.extract_from_secure_note_item(item, resolved_field.as_deref())
             }
             BitwardenItemType::Card => {
-                self.extract_from_card_item(item, field_hint, requested_field.as_deref())
+                self.extract_from_card_item(item, resolved_field.as_deref())
             }
             BitwardenItemType::Identity => {
-                self.extract_from_identity_item(item, field_hint, requested_field.as_deref())
+                self.extract_from_identity_item(item, resolved_field.as_deref())
             }
             BitwardenItemType::SshKey => {
-                self.extract_from_ssh_key_item(item, field_hint, requested_field.as_deref())
+                self.extract_from_ssh_key_item(item, resolved_field.as_deref())
             }
         }
     }
@@ -881,12 +883,11 @@ impl BitwardenProvider {
     fn extract_from_login_item(
         &self,
         item: &BitwardenItem,
-        field_hint: &str,
-        requested_field: Option<&str>,
+        resolved_field: Option<&str>,
     ) -> Result<Option<SecretString>> {
         if let Some(login) = &item.login {
             // If specific field requested, try to find it
-            if let Some(field_name) = requested_field {
+            if let Some(field_name) = resolved_field {
                 match field_name.to_lowercase().as_str() {
                     "password" => return Ok(login.password.as_ref().map(|p| SecretString::new(p.clone().into()))),
                     "username" => return Ok(login.username.as_ref().map(|u| SecretString::new(u.clone().into()))),
@@ -902,33 +903,6 @@ impl BitwardenProvider {
                 }
             }
 
-            // Smart defaults based on field hint
-            let hint_lower = field_hint.to_lowercase();
-            if hint_lower.contains("password")
-                || hint_lower.contains("pass")
-                || hint_lower.contains("secret")
-                || hint_lower.contains("token")
-            {
-                if let Some(password) = &login.password {
-                    return Ok(Some(SecretString::new(password.clone().into())));
-                }
-            }
-
-            if hint_lower.contains("user") || hint_lower.contains("login") {
-                if let Some(username) = &login.username {
-                    return Ok(Some(SecretString::new(username.clone().into())));
-                }
-            }
-
-            if hint_lower.contains("totp")
-                || hint_lower.contains("2fa")
-                || hint_lower.contains("mfa")
-            {
-                if let Some(totp) = &login.totp {
-                    return Ok(Some(SecretString::new(totp.clone().into())));
-                }
-            }
-
             // Default: prefer password, then username
             if let Some(password) = &login.password {
                 return Ok(Some(SecretString::new(password.clone().into())));
@@ -939,7 +913,7 @@ impl BitwardenProvider {
         }
 
         // Fallback to custom fields
-        if let Some(value) = self.extract_from_custom_fields(item, field_hint)? {
+        if let Some(value) = self.extract_from_custom_fields(item, "value")? {
             Ok(Some(SecretString::new(value.into())))
         } else {
             Ok(None)
@@ -950,11 +924,10 @@ impl BitwardenProvider {
     fn extract_from_secure_note_item(
         &self,
         item: &BitwardenItem,
-        field_hint: &str,
-        requested_field: Option<&str>,
+        resolved_field: Option<&str>,
     ) -> Result<Option<SecretString>> {
         // If specific field requested, check custom fields first
-        if let Some(field_name) = requested_field {
+        if let Some(field_name) = resolved_field {
             if let Some(value) = self.extract_from_custom_fields(item, field_name)? {
                 return Ok(Some(SecretString::new(value.into())));
             }
@@ -962,11 +935,6 @@ impl BitwardenProvider {
 
         // Look for legacy "value" field (backward compatibility)
         if let Some(value) = self.extract_from_custom_fields(item, "value")? {
-            return Ok(Some(SecretString::new(value.into())));
-        }
-
-        // Look for field matching the hint
-        if let Some(value) = self.extract_from_custom_fields(item, field_hint)? {
             return Ok(Some(SecretString::new(value.into())));
         }
 
@@ -978,12 +946,11 @@ impl BitwardenProvider {
     fn extract_from_card_item(
         &self,
         item: &BitwardenItem,
-        field_hint: &str,
-        requested_field: Option<&str>,
+        resolved_field: Option<&str>,
     ) -> Result<Option<SecretString>> {
         if let Some(card) = &item.card {
             // If specific field requested
-            if let Some(field_name) = requested_field {
+            if let Some(field_name) = resolved_field {
                 match field_name.to_lowercase().as_str() {
                     "number" => return Ok(card.number.as_ref().map(|n| SecretString::new(n.clone().into()))),
                     "code" | "cvv" | "cvc" => return Ok(card.code.as_ref().map(|c| SecretString::new(c.clone().into()))),
@@ -1001,23 +968,6 @@ impl BitwardenProvider {
                 }
             }
 
-            // Smart defaults based on field hint
-            let hint_lower = field_hint.to_lowercase();
-            if hint_lower.contains("number") || hint_lower.contains("card") {
-                if let Some(number) = &card.number {
-                    return Ok(Some(SecretString::new(number.clone().into())));
-                }
-            }
-
-            if hint_lower.contains("code")
-                || hint_lower.contains("cvv")
-                || hint_lower.contains("cvc")
-            {
-                if let Some(code) = &card.code {
-                    return Ok(Some(SecretString::new(code.clone().into())));
-                }
-            }
-
             // Default: return card number
             if let Some(number) = &card.number {
                 return Ok(Some(SecretString::new(number.clone().into())));
@@ -1025,7 +975,7 @@ impl BitwardenProvider {
         }
 
         // Fallback to custom fields
-        if let Some(value) = self.extract_from_custom_fields(item, field_hint)? {
+        if let Some(value) = self.extract_from_custom_fields(item, "value")? {
             Ok(Some(SecretString::new(value.into())))
         } else {
             Ok(None)
@@ -1036,12 +986,11 @@ impl BitwardenProvider {
     fn extract_from_identity_item(
         &self,
         item: &BitwardenItem,
-        field_hint: &str,
-        requested_field: Option<&str>,
+        resolved_field: Option<&str>,
     ) -> Result<Option<SecretString>> {
         if let Some(identity) = &item.identity {
             // If specific field requested
-            if let Some(field_name) = requested_field {
+            if let Some(field_name) = resolved_field {
                 match field_name.to_lowercase().as_str() {
                     "email" => return Ok(identity.email.as_ref().map(|e| SecretString::new(e.clone().into()))),
                     "username" => return Ok(identity.username.as_ref().map(|u| SecretString::new(u.clone().into()))),
@@ -1059,26 +1008,6 @@ impl BitwardenProvider {
                 }
             }
 
-            // Smart defaults based on field hint
-            let hint_lower = field_hint.to_lowercase();
-            if hint_lower.contains("email") || hint_lower.contains("mail") {
-                if let Some(email) = &identity.email {
-                    return Ok(Some(SecretString::new(email.clone().into())));
-                }
-            }
-
-            if hint_lower.contains("phone") || hint_lower.contains("tel") {
-                if let Some(phone) = &identity.phone {
-                    return Ok(Some(SecretString::new(phone.clone().into())));
-                }
-            }
-
-            if hint_lower.contains("user") || hint_lower.contains("login") {
-                if let Some(username) = &identity.username {
-                    return Ok(Some(SecretString::new(username.clone().into())));
-                }
-            }
-
             // Default: prefer email, then username
             if let Some(email) = &identity.email {
                 return Ok(Some(SecretString::new(email.clone().into())));
@@ -1089,7 +1018,7 @@ impl BitwardenProvider {
         }
 
         // Fallback to custom fields
-        if let Some(value) = self.extract_from_custom_fields(item, field_hint)? {
+        if let Some(value) = self.extract_from_custom_fields(item, "value")? {
             Ok(Some(SecretString::new(value.into())))
         } else {
             Ok(None)
@@ -1100,12 +1029,11 @@ impl BitwardenProvider {
     fn extract_from_ssh_key_item(
         &self,
         item: &BitwardenItem,
-        field_hint: &str,
-        requested_field: Option<&str>,
+        resolved_field: Option<&str>,
     ) -> Result<Option<SecretString>> {
         if let Some(ssh_key) = &item.ssh_key {
             // If specific field requested
-            if let Some(field_name) = requested_field {
+            if let Some(field_name) = resolved_field {
                 match field_name.to_lowercase().as_str() {
                     "private_key" | "privatekey" | "private" => {
                         return Ok(ssh_key.private_key.as_ref().map(|k| SecretString::new(k.clone().into())));
@@ -1124,20 +1052,6 @@ impl BitwardenProvider {
                 }
             }
 
-            // Smart defaults based on field hint
-            let hint_lower = field_hint.to_lowercase();
-            if hint_lower.contains("public") || hint_lower.contains("pub") {
-                if let Some(public_key) = &ssh_key.public_key {
-                    return Ok(Some(SecretString::new(public_key.clone().into())));
-                }
-            }
-
-            if hint_lower.contains("fingerprint") || hint_lower.contains("finger") {
-                if let Some(fingerprint) = &ssh_key.key_fingerprint {
-                    return Ok(Some(SecretString::new(fingerprint.clone().into())));
-                }
-            }
-
             // Default: return private key (most common use case for SSH keys)
             if let Some(private_key) = &ssh_key.private_key {
                 return Ok(Some(SecretString::new(private_key.clone().into())));
@@ -1145,7 +1059,7 @@ impl BitwardenProvider {
         }
 
         // Fallback to custom fields
-        if let Some(value) = self.extract_from_custom_fields(item, field_hint)? {
+        if let Some(value) = self.extract_from_custom_fields(item, "value")? {
             Ok(Some(SecretString::new(value.into())))
         } else {
             Ok(None)
@@ -1188,10 +1102,9 @@ impl BitwardenProvider {
     /// or creates new items with flexible type support based on configuration.
     fn set_to_password_manager(
         &self,
-        project: &str,
-        key: &str,
+        item_name: &str,
+        target_field: Option<&str>,
         value: &SecretString,
-        profile: &str,
     ) -> Result<()> {
         // Check authentication status first
         if !self.is_authenticated()? {
@@ -1214,64 +1127,57 @@ impl BitwardenProvider {
         let output = self.execute_bw_command(&list_args)?;
         let items: Vec<BitwardenItem> = serde_json::from_str(&output)?;
 
-        // Search strategies (same as get method):
-        // 1. Exact name match with secretspec format (for compatibility)
-        // 2. Exact name match with key
-        // 3. Items containing the key in their name
+        // Search strategies:
+        // 1. Exact name match with item_name
+        // 2. Items containing the item name in their name
 
-        let legacy_item_name = self.format_item_name(project, key, profile);
-
-        // Strategy 1: Legacy secretspec format
-        if let Some(item) = items.iter().find(|item| item.name == legacy_item_name) {
-            return self.update_existing_item(item, key, value.expose_secret());
+        // Strategy 1: Exact key match
+        if let Some(item) = items.iter().find(|item| item.name == item_name) {
+            return self.update_existing_item(item, target_field, value.expose_secret());
         }
 
-        // Strategy 2: Exact key match
-        if let Some(item) = items.iter().find(|item| item.name == key) {
-            return self.update_existing_item(item, key, value.expose_secret());
-        }
-
-        // Strategy 3: Contains key in name (case-insensitive)
+        // Strategy 2: Contains item_name in name (case-insensitive)
         if let Some(item) = items
             .iter()
-            .find(|item| item.name.to_lowercase().contains(&key.to_lowercase()))
+            .find(|item| item.name.to_lowercase().contains(&item_name.to_lowercase()))
         {
-            return self.update_existing_item(item, key, value.expose_secret());
+            return self.update_existing_item(item, target_field, value.expose_secret());
         }
 
         // No existing item found, create a new one
-        self.create_new_item(key, value.expose_secret())
+        self.create_new_item(item_name, target_field, value.expose_secret())
     }
 
     /// Updates an existing Bitwarden item with a new value.
     ///
     /// This method preserves the item type and structure while updating
     /// the appropriate field based on the item type and configuration.
-    fn update_existing_item(&self, item: &BitwardenItem, key: &str, value: &str) -> Result<()> {
-        // Determine which field to update based on config and environment variables
-        let target_field = std::env::var("BITWARDEN_DEFAULT_FIELD")
-            .ok()
+    fn update_existing_item(&self, item: &BitwardenItem, target_field: Option<&str>, value: &str) -> Result<()> {
+        // Determine which field to update: explicit > env > config > smart default
+        let field = target_field
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("BITWARDEN_DEFAULT_FIELD").ok())
             .or_else(|| self.config.default_field.clone())
-            .unwrap_or_else(|| item.item_type.default_field_for_hint(key));
+            .unwrap_or_else(|| "password".to_string());
 
         // Get the current item as JSON template
         let mut item_json = self.get_item_as_template(&item.id)?;
 
         match item.item_type {
             BitwardenItemType::Login => {
-                self.update_login_item_json(&mut item_json, &target_field, value)
+                self.update_login_item_json(&mut item_json, &field, value)
             }
             BitwardenItemType::SecureNote => {
-                self.update_secure_note_item_json(&mut item_json, &target_field, value)
+                self.update_secure_note_item_json(&mut item_json, &field, value)
             }
             BitwardenItemType::Card => {
-                self.update_card_item_json(&mut item_json, &target_field, value)
+                self.update_card_item_json(&mut item_json, &field, value)
             }
             BitwardenItemType::Identity => {
-                self.update_identity_item_json(&mut item_json, &target_field, value)
+                self.update_identity_item_json(&mut item_json, &field, value)
             }
             BitwardenItemType::SshKey => {
-                self.update_ssh_key_item_json(&mut item_json, &target_field, value)
+                self.update_ssh_key_item_json(&mut item_json, &field, value)
             }
         }?;
 
@@ -1529,7 +1435,7 @@ impl BitwardenProvider {
     }
 
     /// Creates a new Bitwarden item with flexible type support.
-    fn create_new_item(&self, key: &str, value: &str) -> Result<()> {
+    fn create_new_item(&self, item_name: &str, target_field: Option<&str>, value: &str) -> Result<()> {
         // Determine item type from config, environment variable, or use default (Login)
         let item_type = std::env::var("BITWARDEN_DEFAULT_TYPE")
             .ok()
@@ -1537,25 +1443,26 @@ impl BitwardenProvider {
             .or(self.config.default_item_type)
             .unwrap_or(BitwardenItemType::Login);
 
-        // Determine target field
-        let target_field = std::env::var("BITWARDEN_DEFAULT_FIELD")
-            .ok()
+        // Determine target field: explicit > env > config > smart default
+        let field = target_field
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("BITWARDEN_DEFAULT_FIELD").ok())
             .or_else(|| self.config.default_field.clone())
-            .unwrap_or_else(|| item_type.default_field_for_hint(key));
+            .unwrap_or_else(|| item_type.default_field_for_hint(item_name));
 
         match item_type {
-            BitwardenItemType::Login => self.create_login_item(key, value, &target_field),
-            BitwardenItemType::Card => self.create_card_item(key, value, &target_field),
-            BitwardenItemType::Identity => self.create_identity_item(key, value, &target_field),
+            BitwardenItemType::Login => self.create_login_item(item_name, value, &field),
+            BitwardenItemType::Card => self.create_card_item(item_name, value, &field),
+            BitwardenItemType::Identity => self.create_identity_item(item_name, value, &field),
             BitwardenItemType::SecureNote => {
-                self.create_secure_note_item(key, value, &target_field)
+                self.create_secure_note_item(item_name, value, &field)
             }
-            BitwardenItemType::SshKey => self.create_ssh_key_item(key, value, &target_field),
+            BitwardenItemType::SshKey => self.create_ssh_key_item(item_name, value, &field),
         }
     }
 
     /// Creates a new Login item.
-    fn create_login_item(&self, key: &str, value: &str, target_field: &str) -> Result<()> {
+    fn create_login_item(&self, item_name: &str, value: &str, field: &str) -> Result<()> {
         let mut login_data = serde_json::json!({
             "username": null,
             "password": null,
@@ -1571,8 +1478,8 @@ impl BitwardenProvider {
 
         let template = serde_json::json!({
             "type": BitwardenItemType::Login.to_u8(),
-            "name": key,
-            "notes": format!("SecretSpec managed secret: {}", key),
+            "name": item_name,
+            "notes": format!("SecretSpec managed secret: {}", item_name),
             "login": login_data,
             "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
                 .or_else(|| self.config.organization_id.clone()),
@@ -1585,7 +1492,7 @@ impl BitwardenProvider {
     }
 
     /// Creates a new Card item.
-    fn create_card_item(&self, key: &str, value: &str, target_field: &str) -> Result<()> {
+    fn create_card_item(&self, item_name: &str, value: &str, field: &str) -> Result<()> {
         let mut card_data = serde_json::json!({
             "number": null,
             "code": null,
@@ -1608,8 +1515,8 @@ impl BitwardenProvider {
 
         let template = serde_json::json!({
             "type": BitwardenItemType::Card.to_u8(),
-            "name": key,
-            "notes": format!("SecretSpec managed secret: {}", key),
+            "name": item_name,
+            "notes": format!("SecretSpec managed secret: {}", item_name),
             "card": card_data,
             "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
                 .or_else(|| self.config.organization_id.clone()),
@@ -1622,7 +1529,7 @@ impl BitwardenProvider {
     }
 
     /// Creates a new Identity item.
-    fn create_identity_item(&self, key: &str, value: &str, target_field: &str) -> Result<()> {
+    fn create_identity_item(&self, item_name: &str, value: &str, field: &str) -> Result<()> {
         let mut identity_data = serde_json::json!({
             "title": null,
             "firstName": null,
@@ -1643,8 +1550,8 @@ impl BitwardenProvider {
 
         let template = serde_json::json!({
             "type": BitwardenItemType::Identity.to_u8(),
-            "name": key,
-            "notes": format!("SecretSpec managed secret: {}", key),
+            "name": item_name,
+            "notes": format!("SecretSpec managed secret: {}", item_name),
             "identity": identity_data,
             "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
                 .or_else(|| self.config.organization_id.clone()),
@@ -1657,7 +1564,7 @@ impl BitwardenProvider {
     }
 
     /// Creates a new Secure Note item.
-    fn create_secure_note_item(&self, key: &str, value: &str, target_field: &str) -> Result<()> {
+    fn create_secure_note_item(&self, item_name: &str, value: &str, field: &str) -> Result<()> {
         let mut fields = vec![];
 
         if target_field != "notes" {
@@ -1672,7 +1579,7 @@ impl BitwardenProvider {
 
         let template = serde_json::json!({
             "type": BitwardenItemType::SecureNote.to_u8(),
-            "name": key,
+            "name": item_name,
             "notes": if target_field == "notes" { value.to_string() } else { format!("SecretSpec managed secret: {}", key) },
             "secureNote": {
                 "type": 0
@@ -1689,7 +1596,7 @@ impl BitwardenProvider {
     }
 
     /// Creates a new SSH Key item.
-    fn create_ssh_key_item(&self, key: &str, value: &str, target_field: &str) -> Result<()> {
+    fn create_ssh_key_item(&self, item_name: &str, value: &str, field: &str) -> Result<()> {
         let mut ssh_key_data = serde_json::json!({
             "privateKey": null,
             "publicKey": null,
@@ -1718,8 +1625,8 @@ impl BitwardenProvider {
 
                 let template = serde_json::json!({
                     "type": BitwardenItemType::SshKey.to_u8(),
-                    "name": key,
-                    "notes": format!("SecretSpec managed secret: {}", key),
+                    "name": item_name,
+                    "notes": format!("SecretSpec managed secret: {}", item_name),
                     "sshKey": ssh_key_data,
                     "fields": fields,
                     "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
@@ -1735,8 +1642,8 @@ impl BitwardenProvider {
 
         let template = serde_json::json!({
             "type": BitwardenItemType::SshKey.to_u8(),
-            "name": key,
-            "notes": format!("SecretSpec managed secret: {}", key),
+            "name": item_name,
+            "notes": format!("SecretSpec managed secret: {}", item_name),
             "sshKey": ssh_key_data,
             "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
                 .or_else(|| self.config.organization_id.clone()),
@@ -1819,61 +1726,91 @@ impl BitwardenProvider {
 }
 
 impl Provider for BitwardenProvider {
+    /// Convention items are addressed by the secret key name directly,
+    /// leveraging Bitwarden's vault-wide search.
+    fn convention_address(
+        &self,
+        _project: &str,
+        _profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: key.to_string(),
+            ..Default::default()
+        })
+    }
+
+    /// Bitwarden items support `field` coordinates for specifying which field
+    /// to extract from the item. Items are not versioned.
+    fn supported_coords(&self) -> &'static [&'static str] {
+        &["field"]
+    }
+
+    fn with_credentials(&mut self, credentials: ProviderCredentials) {
+        self.credentials = credentials;
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
 
+    fn uri(&self) -> String {
+        let mut uri = String::from("bitwarden://");
+        if let Some(ref org_id) = self.config.organization_id {
+            uri.push_str(&ProviderUrl::encode(org_id));
+            uri.push('@');
+        }
+        if let Some(ref coll_id) = self.config.collection_id {
+            uri.push_str(&ProviderUrl::encode(coll_id));
+        }
+        if let Some(ref server) = self.config.server {
+            uri.push('?');
+            uri.push_str(&format!("server={}", server));
+        }
+        uri
+    }
+
     /// Retrieves a secret from Bitwarden.
     ///
-    /// Searches for an item with the name formatted according to the folder_prefix
-    /// configuration. The method looks for a field named "value" first,
-    /// then falls back to examining other fields or notes.
+    /// Searches the entire vault for items matching the resolved item name,
+    /// extracting the value from the resolved field (or config default).
     ///
     /// # Arguments
     ///
-    /// * `project` - The project name
-    /// * `key` - The secret key to retrieve
-    /// * `profile` - The profile name
+    /// * `addr` - The address to retrieve, resolved via `resolve_coords`
     ///
     /// # Returns
     ///
     /// * `Ok(Some(value))` - The secret value if found
-    /// * `Ok(None)` - No secret found with the given key
+    /// * `Ok(None)` - No secret found at the address
     /// * `Err(_)` - Authentication or retrieval error
-    ///
-    /// # Errors
-    ///
-    /// - Authentication required if not logged in or unlocked
-    /// - Item retrieval failures
-    /// - JSON parsing errors
-    fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        self.get_from_password_manager(project, key, profile)
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let coords = self.resolve_coords(addr)?;
+        let item_name = &coords.item;
+        let target_field = coords.field.as_deref();
+        self.get_from_password_manager(item_name, target_field)
     }
 
     /// Stores or updates a secret in Bitwarden.
     ///
-    /// If an item with the same name exists, it updates the "value" field.
-    /// Otherwise, it creates a new Secure Note item with the secret data.
+    /// Searches for an existing item matching the resolved item name.
+    /// If found, updates the resolved field. Otherwise creates a new
+    /// item with the appropriate type and field.
     ///
     /// # Arguments
     ///
-    /// * `project` - The project name
-    /// * `key` - The secret key
+    /// * `addr` - The address to write, resolved via `resolve_coords`
     /// * `value` - The secret value to store
-    /// * `profile` - The profile name
     ///
     /// # Returns
     ///
     /// * `Ok(())` - Secret stored successfully
     /// * `Err(_)` - Storage or authentication error
-    ///
-    /// # Errors
-    ///
-    /// - Authentication required if not logged in or unlocked
-    /// - Item creation/update failures
-    /// - Temporary file creation errors
-    fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        self.set_to_password_manager(project, key, value, profile)
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        let coords = self.resolve_coords(addr)?;
+        let item_name = &coords.item;
+        let target_field = coords.field.as_deref();
+        self.set_to_password_manager(item_name, target_field, value)
     }
 }
 

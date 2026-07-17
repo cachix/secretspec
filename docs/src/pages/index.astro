@@ -131,6 +131,9 @@ $ secretspec init --from dotenv
 
 <span class="tok-com"># 2. Pick a storage backend (one-time)</span>
 $ secretspec config init
+? Select your preferred provider backend:
+<span class="tok-pun">›</span> keyring: Uses system keychain (Recommended)
+  infisical: Infisical secret management (0.16+)
 <span class="tok-str">✓</span> Saved to ~/.config/secretspec/config.toml
 
 <span class="tok-com"># 3. Run your app with secrets injected</span>
@@ -191,7 +194,9 @@ $ secretspec run --profile production -- npm start
         <p class="landing-step-title">Configure</p>
         <p class="landing-step-desc">Pick from 13 providers: system keyring, password managers, cloud secret stores, Gopass, dotenv, or environment variables.</p>
         <pre is:raw class="landing-step-code"><code>$ secretspec config init
-? Default provider: keyring</code></pre>
+? Select your preferred provider backend:
+> keyring: Uses system keychain (Recommended)
+  infisical: Infisical secret management (0.16+)</code></pre>
       </div>
 
       <div class="landing-step">

@@ -15,12 +15,20 @@
 //!
 //! ## Available Providers
 //!
-//! - [`KeyringProvider`]: System keyring integration (default)
-//! - [`DotEnvProvider`]: `.env` file support
-//! - [`EnvProvider`]: Environment variables (read-only)
-//! - [`OnePasswordProvider`]: OnePassword integration
-//! - [`LastPassProvider`]: LastPass integration
-//! - [`AkvProvider`]: Azure Key Vault integration
+//! - [`keyring::KeyringProvider`]: System keyring integration (default)
+//! - [`dotenv::DotEnvProvider`]: `.env` file support
+//! - [`env::EnvProvider`]: Environment variables (read-only)
+//! - [`pass::PassProvider`]: Pass integration
+//! - [`gopass::GoPassProvider`]: Gopass integration
+//! - [`protonpass::ProtonPassProvider`]: Proton Pass integration
+//! - [`onepassword::OnePasswordProvider`]: 1Password integration
+//! - [`lastpass::LastPassProvider`]: LastPass integration
+//! - [`gcsm::GcsmProvider`]: Google Cloud Secret Manager integration
+//! - [`awssm::AwssmProvider`]: AWS Secrets Manager integration
+//! - [`vault::VaultProvider`]: HashiCorp Vault and OpenBao integration
+//! - [`bws::BwsProvider`]: Bitwarden Secrets Manager integration
+//! - [`akv::AkvProvider`]: Azure Key Vault integration
+//! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
 //!
 //! ## URI-Based Configuration
 //!

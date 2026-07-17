@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   folder's imported secrets resolve too, with Infisical's own precedence. A
   secret's `ref` can name an Infisical secret by folder, key and `version`.
   Self-hosted and EU instances are named by the URI host, `INFISICAL_DOMAIN`, or
-  Infisical's legacy `INFISICAL_API_URL`.
+  Infisical's legacy `INFISICAL_API_URL`. Provider selection and Rust API
+  documentation identify Infisical as available from SecretSpec 0.16.
 
 ## [0.15.0] - 2026-07-16
 

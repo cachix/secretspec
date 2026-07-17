@@ -39,6 +39,10 @@ pub enum SecretSpecError {
     SecretNotFound(String),
     #[error("Secret '{0}' is required but not set")]
     RequiredSecretMissing(String),
+    #[error("Composed secret '{0}' is derived from other secrets and cannot be written")]
+    ComposedSecretReadOnly(String),
+    #[error("Failed to compose secret: {0}")]
+    CompositionFailed(String),
     #[error("No secretspec.toml found in current or any parent directory")]
     NoManifest,
     #[error("Extended config file not found: {0}")]
@@ -85,6 +89,8 @@ impl SecretSpecError {
             SecretSpecError::ProviderNotFound(_) => "provider_not_found",
             SecretSpecError::SecretNotFound(_) => "secret_not_found",
             SecretSpecError::RequiredSecretMissing(_) => "required_secret_missing",
+            SecretSpecError::ComposedSecretReadOnly(_) => "composed_secret_read_only",
+            SecretSpecError::CompositionFailed(_) => "composition_failed",
             SecretSpecError::NoManifest => "no_manifest",
             SecretSpecError::ExtendedConfigNotFound(_) => "extended_config_not_found",
             SecretSpecError::NoProjectName => "no_project_name",
@@ -159,6 +165,14 @@ mod tests {
             (
                 SecretSpecError::RequiredSecretMissing("X".into()),
                 "required_secret_missing",
+            ),
+            (
+                SecretSpecError::ComposedSecretReadOnly("X".into()),
+                "composed_secret_read_only",
+            ),
+            (
+                SecretSpecError::CompositionFailed("too large".into()),
+                "composition_failed",
             ),
             (SecretSpecError::NoManifest, "no_manifest"),
             (

@@ -559,7 +559,7 @@ fn test_resolve_carries_values_and_provenance() {
     let spec = Secrets::new(resolve_test_config(secrets), None, Some(provider), None);
 
     let response = spec.resolve().unwrap();
-    assert_eq!(response.schema_version, 1);
+    assert_eq!(response.schema_version, 2);
     assert_eq!(response.profile, "default");
     assert!(response.is_ok());
     assert_eq!(response.missing_optional, vec!["SENTRY_DSN".to_string()]);
@@ -587,6 +587,174 @@ fn test_resolve_carries_values_and_provenance() {
     assert_eq!(
         stripped.secrets["DATABASE_URL"].source,
         ResolvedSource::Provider
+    );
+}
+
+#[test]
+fn composed_secrets_resolve_in_dependency_order_without_reparsing_values() {
+    use crate::resolve::ResolvedSource;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    // The reference-looking password is intentional: composition must insert
+    // it as opaque text rather than recursively interpreting `{DB_HOST}`.
+    fs::write(
+        &env_path,
+        "DB_USER=alice\nDB_PASSWORD={DB_HOST}\nDB_HOST=db.example\n",
+    )
+    .unwrap();
+
+    let stored = |description: &str| Secret {
+        description: Some(description.to_string()),
+        ..Default::default()
+    };
+    let mut secrets = HashMap::from([
+        ("DB_USER".to_string(), stored("user")),
+        ("DB_PASSWORD".to_string(), stored("password")),
+        ("DB_HOST".to_string(), stored("host")),
+    ]);
+    // Nested compositions and hash-map declaration order must not affect the
+    // dependency graph's evaluation order.
+    secrets.insert(
+        "AUTH".to_string(),
+        Secret {
+            description: Some("credentials".to_string()),
+            composed: Some("{DB_USER}:{DB_PASSWORD}".to_string()),
+            ..Default::default()
+        },
+    );
+    secrets.insert(
+        "DATABASE_URL".to_string(),
+        Secret {
+            description: Some("dsn".to_string()),
+            composed: Some("postgres://{AUTH}@{DB_HOST}/app".to_string()),
+            ..Default::default()
+        },
+    );
+
+    let config = resolve_test_config(secrets);
+    config.validate().unwrap();
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(config, None, Some(provider), None);
+
+    let response = spec.resolve().unwrap();
+    let auth = &response.secrets["AUTH"];
+    assert_eq!(auth.value.as_deref(), Some("alice:{DB_HOST}"));
+    assert_eq!(auth.source, ResolvedSource::Composed);
+    let dsn = &response.secrets["DATABASE_URL"];
+    assert_eq!(
+        dsn.value.as_deref(),
+        Some("postgres://alice:{DB_HOST}@db.example/app")
+    );
+    assert_eq!(dsn.source, ResolvedSource::Composed);
+    assert!(dsn.source_provider.is_none());
+
+    let report = spec.report().unwrap();
+    assert!(
+        report
+            .to_explain_string()
+            .contains("DATABASE_URL  ok        composed")
+    );
+}
+
+#[test]
+fn composed_secrets_propagate_missingness_and_are_read_only() {
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "").unwrap();
+    let secrets = HashMap::from([
+        (
+            "OPTIONAL_PART".to_string(),
+            Secret {
+                description: Some("optional".to_string()),
+                required: Some(false),
+                ..Default::default()
+            },
+        ),
+        (
+            "OPTIONAL_RESULT".to_string(),
+            Secret {
+                description: Some("optional result".to_string()),
+                required: Some(false),
+                composed: Some("prefix-{OPTIONAL_PART}".to_string()),
+                ..Default::default()
+            },
+        ),
+        (
+            "REQUIRED_RESULT".to_string(),
+            Secret {
+                description: Some("required result".to_string()),
+                composed: Some("prefix-{OPTIONAL_PART}".to_string()),
+                ..Default::default()
+            },
+        ),
+    ]);
+    let config = resolve_test_config(secrets);
+    config.validate().unwrap();
+    let spec = Secrets::new(
+        config,
+        None,
+        Some(format!("dotenv://{}", env_path.display())),
+        None,
+    );
+
+    let response = spec.resolve().unwrap();
+    assert_eq!(
+        response.missing_required,
+        vec!["REQUIRED_RESULT".to_string()]
+    );
+    assert!(
+        response
+            .missing_optional
+            .contains(&"OPTIONAL_RESULT".to_string())
+    );
+
+    let error = spec
+        .set("REQUIRED_RESULT", Some("override".to_string()))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SecretSpecError::ComposedSecretReadOnly(ref name) if name == "REQUIRED_RESULT"
+    ));
+}
+
+#[test]
+fn composed_secrets_use_the_exported_path_of_as_path_dependencies() {
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "CERT=certificate-bytes\n").unwrap();
+    let secrets = HashMap::from([
+        (
+            "CERT".to_string(),
+            Secret {
+                description: Some("certificate".to_string()),
+                as_path: Some(true),
+                ..Default::default()
+            },
+        ),
+        (
+            "CERT_ARG".to_string(),
+            Secret {
+                description: Some("certificate argument".to_string()),
+                composed: Some("--cert={CERT}".to_string()),
+                ..Default::default()
+            },
+        ),
+    ]);
+    let config = resolve_test_config(secrets);
+    config.validate().unwrap();
+    let spec = Secrets::new(
+        config,
+        None,
+        Some(format!("dotenv://{}", env_path.display())),
+        None,
+    );
+
+    let response = spec.resolve().unwrap();
+    let cert_path = response.secrets["CERT"].path.as_deref().unwrap();
+    assert_eq!(
+        response.secrets["CERT_ARG"].value.as_deref(),
+        Some(format!("--cert={cert_path}").as_str())
     );
 }
 
@@ -4866,6 +5034,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
             description: Some("Database password".to_string()),
             required: None,
             default: None,
+            composed: None,
             providers: None,
             reference: None,
             as_path: None,

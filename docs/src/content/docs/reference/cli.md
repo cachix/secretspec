@@ -236,6 +236,9 @@ $ secretspec get DATABASE_URL --profile production
 postgresql://prod.example.com/mydb
 ```
 
+For a composed secret, `get` resolves its transitive dependencies and prints
+the derived value. Available since SecretSpec 0.16.
+
 ### schema
 Emit a single-root JSON Schema for the manifest's typed shape: by default the
 union `SecretSpec` (safe for any profile); with `--profile`, that profile's exact
@@ -287,6 +290,9 @@ secretspec set [OPTIONS] <NAME> [VALUE]
 $ secretspec set API_KEY sk-1234567890
 ✓ Secret 'API_KEY' saved to keyring (profile: development)
 ```
+
+`set` rejects composed secrets because their values are derived and read-only.
+Available since SecretSpec 0.16.
 
 ### run
 Run a command with secrets injected as environment variables.
@@ -397,6 +403,9 @@ $ secretspec import dotenv:/home/user/old-project/.env
 - Migrate from .env files to a secure provider like keyring or OnePassword
 - Copy secrets between different profiles or projects
 - Import existing environment variables into SecretSpec management
+
+`import` skips composed secrets because they have no stored value to copy; their
+component secrets are imported normally. Available since SecretSpec 0.16.
 
 ### audit
 

@@ -16,6 +16,7 @@
 //! ([`SecretSpecError::ProviderNotFound`]) and the corrected `1password`
 //! misspelling; a plan never opens a store.
 
+use crate::composition::Template;
 use crate::config::{NativeAddress, Secret};
 use crate::error::Result;
 use crate::manifest::CompiledSecret;
@@ -106,10 +107,13 @@ pub(crate) struct PlannedSecret {
     /// The declared secret name (the manifest's `UPPER_SNAKE` key).
     pub name: String,
     /// The compiled effective secret: its merged config, missing-value policy,
-    /// and required marker travel together so they cannot fall out of sync.
+    /// required marker, and parsed composition travel together so they cannot
+    /// fall out of sync.
     pub secret: CompiledSecret,
-    /// The resolved read/write route.
-    pub route: Route,
+    /// The resolved read/write route, or `None` for a composed secret: its
+    /// value is derived from other secrets, so there is no store to consult
+    /// and consumers must decide what a routeless secret means for them.
+    pub route: Option<Route>,
 }
 
 impl PlannedSecret {
@@ -145,6 +149,15 @@ impl PlannedSecret {
     pub(crate) fn as_path(&self) -> bool {
         self.secret.config.as_path.unwrap_or(false)
     }
+
+    pub(crate) fn is_composed(&self) -> bool {
+        self.secret.composition.is_some()
+    }
+
+    /// The parsed derived-value template, for composed secrets.
+    pub(crate) fn composition(&self) -> Option<&Template> {
+        self.secret.composition.as_ref()
+    }
 }
 
 /// An immutable, fully-decided plan for resolving one profile.
@@ -170,7 +183,11 @@ impl ResolutionPlan {
         let mut groups: Vec<(Option<&str>, Vec<&PlannedSecret>)> = Vec::new();
         let mut group_index: HashMap<Option<&str>, usize> = HashMap::new();
         for secret in &self.secrets {
-            let primary = secret.route.group_key();
+            // Composed secrets have no route, so nothing fetches them.
+            let Some(route) = &secret.route else {
+                continue;
+            };
+            let primary = route.group_key();
             match group_index.get(&primary) {
                 Some(&idx) => groups[idx].1.push(secret),
                 None => {
@@ -279,7 +296,13 @@ impl Secrets {
         secret: &CompiledSecret,
         override_spec: &Option<String>,
     ) -> Result<PlannedSecret> {
-        let route = self.route_for(&secret.config, override_spec)?;
+        // A composed secret's value is derived by the executor, so it routes
+        // to no store, including an explicit `--provider` override.
+        let route = if secret.composition.is_some() {
+            None
+        } else {
+            Some(self.route_for(&secret.config, override_spec)?)
+        };
         Ok(PlannedSecret {
             name,
             secret: secret.clone(),
@@ -377,6 +400,11 @@ mod tests {
             .expect("secret in plan")
     }
 
+    /// The provider route a non-composed planned secret must carry.
+    fn route(planned: &PlannedSecret) -> &Route {
+        planned.route.as_ref().expect("a provider route")
+    }
+
     /// The plan's groups as (primary store, secret names) for easy assertion.
     fn group_names(plan: &ResolutionPlan) -> Vec<(Option<&str>, Vec<&str>)> {
         plan.groups()
@@ -392,9 +420,33 @@ mod tests {
         let plan = plan(&spec(secrets, None, &[]));
 
         let planned = find(&plan, "DATABASE_URL");
-        assert_eq!(planned.route.primary(), None);
-        assert!(planned.route.fallback.is_empty());
+        assert_eq!(route(planned).primary(), None);
+        assert!(route(planned).fallback.is_empty());
         assert_eq!(group_names(&plan), vec![(None, vec!["DATABASE_URL"])]);
+    }
+
+    #[test]
+    fn composed_secrets_have_no_provider_route_or_fetch_group() {
+        let _env = scrub_resolution_env();
+        let secrets = HashMap::from([
+            ("PART".to_string(), secret(None)),
+            (
+                "RESULT".to_string(),
+                Secret {
+                    description: Some("derived".to_string()),
+                    composed: Some("prefix-{PART}".to_string()),
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let plan = plan(&spec(secrets, Some("dotenv://.env.mock"), &[]));
+
+        assert!(find(&plan, "RESULT").is_composed());
+        assert!(find(&plan, "RESULT").route.is_none());
+        assert_eq!(
+            group_names(&plan),
+            vec![(Some("dotenv://.env.mock"), vec!["PART"])]
+        );
     }
 
     #[test]
@@ -410,9 +462,9 @@ mod tests {
         let plan = plan(&spec);
 
         let planned = find(&plan, "API_KEY");
-        assert_eq!(planned.route.primary(), Some("dotenv://.env.mock"));
+        assert_eq!(route(planned).primary(), Some("dotenv://.env.mock"));
         assert!(
-            planned.route.fallback.is_empty(),
+            route(planned).fallback.is_empty(),
             "the override must collapse the chain: no fallback survives"
         );
         assert_eq!(plan.override_uri, Some("dotenv://.env.mock".to_string()));
@@ -429,8 +481,8 @@ mod tests {
         let plan = plan(&spec);
 
         let planned = find(&plan, "API_KEY");
-        assert_eq!(planned.route.group_key(), Some("mock"));
-        assert_eq!(planned.route.primary(), Some("dotenv://.env.mock"));
+        assert_eq!(route(planned).group_key(), Some("mock"));
+        assert_eq!(route(planned).primary(), Some("dotenv://.env.mock"));
         assert_eq!(plan.override_uri, Some("dotenv://.env.mock".to_string()));
     }
 
@@ -447,8 +499,8 @@ mod tests {
         // The primary is resolved to its URI; the fallback stays as the raw
         // alias, resolved only if the primary misses at read time.
         let planned = find(&plan, "API_KEY");
-        assert_eq!(planned.route.primary(), Some("onepassword://Shared"));
-        assert_eq!(planned.route.fallback, vec!["kr".to_string()]);
+        assert_eq!(route(planned).primary(), Some("onepassword://Shared"));
+        assert_eq!(route(planned).fallback, vec!["kr".to_string()]);
     }
 
     #[test]
@@ -460,9 +512,9 @@ mod tests {
         let plan = plan(&spec(secrets, None, &[("kr", "keyring://")]));
 
         let planned = find(&plan, "API_KEY");
-        assert_eq!(planned.route.primary(), Some("keyring://"));
+        assert_eq!(route(planned).primary(), Some("keyring://"));
         // The undefined alias is carried raw, not resolved (which would error).
-        assert_eq!(planned.route.fallback, vec!["ghost".to_string()]);
+        assert_eq!(route(planned).fallback, vec!["ghost".to_string()]);
     }
 
     #[test]
@@ -475,7 +527,7 @@ mod tests {
         let plan = plan(&spec(secrets, None, &[]));
 
         let planned = find(&plan, "API_KEY");
-        assert_eq!(planned.route.primary(), Some("onepassword://Production"));
+        assert_eq!(route(planned).primary(), Some("onepassword://Production"));
     }
 
     #[test]
@@ -496,7 +548,7 @@ mod tests {
         let secrets = HashMap::from([("API_KEY".to_string(), secret(Some(vec!["keyring"])))]);
         let plan = plan(&spec(secrets, None, &[]));
 
-        assert_eq!(find(&plan, "API_KEY").route.primary(), Some("keyring"));
+        assert_eq!(route(find(&plan, "API_KEY")).primary(), Some("keyring"));
     }
 
     #[test]
@@ -594,11 +646,14 @@ mod tests {
             .plan_secret("API_KEY", "default", None)
             .unwrap()
             .unwrap();
-        assert_eq!(one.route.primary(), Some("onepassword://Production"));
-        assert_eq!(one.route.fallback, vec!["keyring://".to_string()]);
+        assert_eq!(route(&one).primary(), Some("onepassword://Production"));
+        assert_eq!(route(&one).fallback, vec!["keyring://".to_string()]);
 
         // Same route the whole-profile plan derives.
         let batch = plan(&spec);
-        assert_eq!(one.route.primary(), find(&batch, "API_KEY").route.primary());
+        assert_eq!(
+            route(&one).primary(),
+            route(find(&batch, "API_KEY")).primary()
+        );
     }
 }

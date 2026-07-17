@@ -74,7 +74,7 @@ fn resolve_returns_values_and_provenance() {
     let env = resolve(&request);
     assert_eq!(env["ok"], true, "envelope: {env}");
     let response = &env["response"];
-    assert_eq!(response["schema_version"], 1);
+    assert_eq!(response["schema_version"], 2);
     assert_eq!(response["profile"], "default");
     assert_eq!(
         response["secrets"]["DATABASE_URL"]["value"],

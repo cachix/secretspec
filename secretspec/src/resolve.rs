@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Version of the [`ResolveResponse`] wire format.
-pub const RESOLVE_SCHEMA_VERSION: u32 = 1;
+pub const RESOLVE_SCHEMA_VERSION: u32 = 2;
 
 /// Where a resolved value came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +37,10 @@ pub enum ResolvedSource {
     Generated,
     /// The manifest's committed `default` value.
     Default,
+    /// Derived from other declared secrets using a strict template.
+    ///
+    /// Available since SecretSpec 0.16.
+    Composed,
 }
 
 /// One resolved secret. Exactly one of `value` or `path` is set: `path` when

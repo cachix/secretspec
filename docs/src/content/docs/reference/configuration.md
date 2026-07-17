@@ -88,6 +88,7 @@ Each secret variable is defined as a table with the following fields:
 | `description` | string | Yes (see notes) | Human-readable description of the secret |
 | `required` | boolean | No | Whether absence is an error (default: true, or false when `default` is present) |
 | `default` | string | No | Default value if not provided |
+| `composed` (0.16+) | string | No | Derive a read-only value from other declared secrets using `{SECRET_NAME}` references |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `ref` | table | No | Coordinates naming an externally managed secret in the provider's store (e.g. `ref = { item = "db", field = "password" }`) |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
@@ -105,6 +106,51 @@ Field notes:
   though the provider does not have to supply it.
 - `type` is required when `generate` is enabled.
 - `generate` and `default` cannot both be set.
+
+#### Composed secrets
+
+:::caution[Version compatibility]
+Available since SecretSpec 0.16.
+:::
+
+A composed secret derives a value from other secrets in the effective profile.
+See [Composed Secrets](/concepts/composed-secrets/) for the dependency model,
+CLI behavior, profile inheritance, and the differences from dotenv expansion:
+
+```toml
+[profiles.default]
+DB_USER = { description = "Database user" }
+DB_PASSWORD = { description = "Database password" }
+DB_HOST = { description = "Database host" }
+DATABASE_URL = { description = "PostgreSQL DSN", composed = "postgres://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/app" }
+```
+
+References form a static dependency graph. Declaration order does not matter,
+and composed secrets may reference other composed secrets. SecretSpec rejects
+unknown references, cycles, malformed braces, and source conflicts while
+loading the manifest. A composed secret is read-only and cannot also set
+`default`, `providers`, `ref`, `type`, or enabled `generate`.
+
+Composition intentionally does **not** implement dotenv or shell expansion:
+
+- only `{DECLARED_SECRET}` is a reference; ambient environment variables are
+  never consulted;
+- `${NAME}`, fallback operators such as `${NAME:-fallback}`, commands, and
+  recursive expansion are unsupported;
+- inserted values are opaque and are never scanned again;
+- `{{` and `}}` produce literal braces;
+- a missing dependency makes a required composition missing, while a
+  `required = false` composition is omitted;
+- empty values remain empty and are distinct from missing values.
+
+If a dependency uses `as_path = true`, its exported temporary-file path is the
+text inserted into the composed value. Applying `as_path = true` to the
+composed secret materializes the final combined value.
+
+Composition is raw string concatenation. SecretSpec cannot know whether a
+component occupies a URL username, password, host, path, or query position, so
+it does not URL-encode components. Store components in the form required by the
+target format.
 
 ## Complete Example
 

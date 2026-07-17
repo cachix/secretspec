@@ -293,6 +293,9 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
             if let Some(default) = &secret_config.default {
                 inline.insert("default", Value::from(default.as_str()));
             }
+            if let Some(composed) = &secret_config.composed {
+                inline.insert("composed", Value::from(composed.as_str()));
+            }
             profile_table.insert(&secret_name, toml_edit::value(inline));
         }
 
@@ -1258,6 +1261,20 @@ mod tests {
         let out = generate_toml_with_comments(&config_with_secret(secret)).unwrap();
         assert!(out.contains(", required = false"), "got: {out}");
         assert!(out.contains(", default = \"v\""), "got: {out}");
+    }
+
+    #[test]
+    fn generate_toml_preserves_composed_templates() {
+        let out = generate_toml_with_comments(&config_with_secret(Secret {
+            description: Some("dsn".to_string()),
+            composed: Some("postgres://{USER}@{HOST}/db".to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        assert!(
+            out.contains(", composed = \"postgres://{USER}@{HOST}/db\""),
+            "got: {out}"
+        );
     }
 
     #[test]

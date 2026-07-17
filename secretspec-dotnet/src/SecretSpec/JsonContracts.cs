@@ -5,7 +5,7 @@ namespace Cachix.SecretSpec;
 
 internal static class JsonContracts
 {
-    internal const int ResolveSchemaVersion = 1;
+    internal const int ResolveSchemaVersion = 2;
     internal const int ReportSchemaVersion = 1;
 
     internal static readonly JsonSerializerOptions Options = new()

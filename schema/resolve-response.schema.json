@@ -10,7 +10,7 @@
     "schema_version": {
       "description": "Wire-format version. Consumers should refuse versions they do not understand.",
       "type": "integer",
-      "const": 1
+      "const": 2
     },
     "provider": {
       "description": "Credential-free URI of the provider the resolution is reported against.",
@@ -57,7 +57,7 @@
         "source": {
           "description": "Where the value came from.",
           "type": "string",
-          "enum": ["provider", "generated", "default"]
+          "enum": ["provider", "generated", "default", "composed"]
         },
         "source_provider": {
           "description": "Credential-free URI of the provider that answered, present when `source` is `provider`.",

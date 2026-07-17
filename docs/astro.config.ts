@@ -86,6 +86,12 @@ DB_PASSWORD  = { description = "DB password", type = "password", generate = true
 DATABASE_URL = { default = "postgresql://localhost/dev" }
 \`\`\`
 
+## Composed Secrets (0.16+)
+
+\`composed\` derives a read-only value from other declared secrets with strict,
+order-independent \`{SECRET_NAME}\` references. It does not perform dotenv,
+shell, ambient-environment, or recursive expansion.
+
 ## Type-safe Rust SDK
 
 \`\`\`rust
@@ -159,6 +165,10 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
               slug: "concepts/inheritance",
             },
             { label: "Secret Generation (0.7+)", slug: "concepts/generation" },
+            {
+              label: "Composed Secrets (0.16+)",
+              slug: "concepts/composed-secrets",
+            },
             { label: "Secret References (0.14+)", slug: "concepts/references" },
             { label: "Audit Logging (0.12+)", slug: "concepts/audit" },
           ],

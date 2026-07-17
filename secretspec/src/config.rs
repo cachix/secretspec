@@ -33,9 +33,10 @@
 //! DATABASE_URL = { description = "Production database", required = true }
 //! ```
 
+use crate::composition::Template;
 use crate::manifest::CompiledManifest;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, hash_map};
+use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -413,6 +414,72 @@ fn validate_compiled_profile(
                 profile_name, name, e
             ))
         })?;
+    }
+    validate_composition_graph(profile_name, profile)?;
+    Ok(())
+}
+
+fn validate_composition_graph(
+    profile_name: &str,
+    profile: &crate::manifest::CompiledProfile,
+) -> Result<(), ParseError> {
+    // Templates were parsed during manifest compilation; a malformed one was
+    // already rejected by `validate_semantics` before this runs.
+    let mut graph: BTreeMap<&str, &[String]> = BTreeMap::new();
+    for (name, secret) in &profile.secrets {
+        let Some(template) = &secret.composition else {
+            continue;
+        };
+        for dependency in template.dependencies() {
+            if !profile.secrets.contains_key(dependency) {
+                return Err(ParseError::Validation(format!(
+                    "Profile '{}': Secret '{}': composed reference `{{{}}}` does not name a declared secret",
+                    profile_name, name, dependency
+                )));
+            }
+        }
+        graph.insert(name.as_str(), template.dependencies());
+    }
+
+    fn visit<'a>(
+        name: &'a str,
+        graph: &BTreeMap<&'a str, &'a [String]>,
+        state: &mut HashMap<&'a str, u8>,
+        stack: &mut Vec<&'a str>,
+    ) -> Result<(), Vec<String>> {
+        match state.get(name).copied() {
+            Some(2) => return Ok(()),
+            Some(1) => {
+                let start = stack.iter().position(|item| *item == name).unwrap_or(0);
+                let mut cycle: Vec<String> = stack[start..].iter().map(|s| s.to_string()).collect();
+                cycle.push(name.to_string());
+                return Err(cycle);
+            }
+            _ => {}
+        }
+        state.insert(name, 1);
+        stack.push(name);
+        if let Some(dependencies) = graph.get(name) {
+            for dependency in *dependencies {
+                if graph.contains_key(dependency.as_str()) {
+                    visit(dependency, graph, state, stack)?;
+                }
+            }
+        }
+        stack.pop();
+        state.insert(name, 2);
+        Ok(())
+    }
+
+    let mut state = HashMap::new();
+    for name in graph.keys() {
+        if let Err(cycle) = visit(name, &graph, &mut state, &mut Vec::new()) {
+            return Err(ParseError::Validation(format!(
+                "Profile '{}': composed secret cycle: {}",
+                profile_name,
+                cycle.join(" -> ")
+            )));
+        }
     }
     Ok(())
 }
@@ -1139,6 +1206,12 @@ pub struct Secret {
     /// Optional default value if the secret is not provided
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+    /// A strict template derived from other declared secrets. References use
+    /// `{SECRET_NAME}`; `{{` and `}}` produce literal braces.
+    ///
+    /// Available since SecretSpec 0.16.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub composed: Option<String>,
     /// Optional list of provider aliases for retrieving this secret.
     /// Providers are tried in order until one has the secret.
     /// If not specified, uses the profile defaults.providers or global provider.
@@ -1220,6 +1293,21 @@ impl Secret {
     }
 
     fn validate_semantics(&self) -> Result<(), String> {
+        if let Some(composed) = &self.composed {
+            Template::parse(composed)?;
+            if self.default.is_some()
+                || self.providers.is_some()
+                || self.reference.is_some()
+                || self.secret_type.is_some()
+                || self.would_generate()
+            {
+                return Err(
+                    "`composed` secrets cannot also set `default`, `providers`, `ref`, `type`, or enabled `generate`"
+                        .into(),
+                );
+            }
+        }
+
         // A `ref` supplies naming only: it composes with `providers` routing
         // and with `generate` (a missing referenced secret is minted and
         // written to its coordinates, like any other generated value).
@@ -1328,14 +1416,19 @@ impl Secret {
                 .or_else(|| default.and_then(&field))
         }
 
+        let composed = inherit(current, default, |s| s.composed.clone());
+        // A composed secret's source is its dependency graph, so the
+        // `[defaults]` storage fields (`default`, `providers`) do not apply.
+        let storage_defaults = if composed.is_some() { None } else { defaults };
         Some(Secret {
             description: inherit(current, default, |s| s.description.clone()),
             required: inherit(current, default, |s| s.required)
                 .or(defaults.and_then(|d| d.required)),
             default: inherit(current, default, |s| s.default.clone())
-                .or_else(|| defaults.and_then(|d| d.default.clone())),
+                .or_else(|| storage_defaults.and_then(|d| d.default.clone())),
+            composed,
             providers: inherit(current, default, |s| s.providers.clone())
-                .or_else(|| defaults.and_then(|d| d.providers.clone())),
+                .or_else(|| storage_defaults.and_then(|d| d.providers.clone())),
             reference: inherit(current, default, |s| s.reference.clone()),
             as_path: inherit(current, default, |s| s.as_path),
             secret_type: inherit(current, default, |s| s.secret_type.clone()),
@@ -1344,8 +1437,10 @@ impl Secret {
     }
 }
 
-/// Check if a string is a valid identifier.
-fn is_valid_identifier(s: &str) -> bool {
+/// Check if a string is a valid identifier. Shared with composed-template
+/// references, so a declarable secret name and a referenceable one can never
+/// drift apart.
+pub(crate) fn is_valid_identifier(s: &str) -> bool {
     if s.is_empty() {
         return false;
     }
@@ -1975,6 +2070,118 @@ ADMIN_PASSWORD = { description = "Password securing the admin page", required = 
             .validate()
             .unwrap_err();
         assert!(err.to_string().contains("Invalid secret name"));
+    }
+
+    #[test]
+    fn composed_references_are_validated_as_a_static_graph() {
+        let parse = |body: &str| {
+            toml::from_str::<Config>(&format!(
+                r#"
+[project]
+name = "composed"
+revision = "1.0"
+
+[profiles.default]
+{body}
+"#
+            ))
+            .unwrap()
+        };
+
+        parse(
+            r#"
+USER = { description = "user" }
+HOST = { description = "host" }
+DSN = { description = "dsn", composed = "db://{USER}@{HOST}" }
+"#,
+        )
+        .validate()
+        .unwrap();
+
+        let unknown = parse(
+            r#"
+DSN = { description = "dsn", composed = "db://{AMBIENT_ENV}" }
+"#,
+        )
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(
+            unknown.contains("does not name a declared secret"),
+            "{unknown}"
+        );
+
+        let cycle = parse(
+            r#"
+A = { description = "a", composed = "{B}" }
+B = { description = "b", composed = "{C}" }
+C = { description = "c", composed = "{A}" }
+"#,
+        )
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(cycle.contains("A -> B -> C -> A"), "{cycle}");
+    }
+
+    #[test]
+    fn composed_rejects_dotenv_syntax_and_storage_sources() {
+        let invalid: Config = toml::from_str(
+            r#"
+[project]
+name = "composed"
+revision = "1.0"
+
+[profiles.default]
+A = { description = "a" }
+BAD = { description = "bad", composed = "${A:-fallback}" }
+"#,
+        )
+        .unwrap();
+        let error = invalid.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("dotenv-style `${...}` expansion is not supported"),
+            "{error}"
+        );
+
+        let conflicting: Config = toml::from_str(
+            r#"
+[project]
+name = "composed"
+revision = "1.0"
+
+[profiles.default]
+A = { description = "a" }
+BAD = { description = "bad", composed = "{A}", providers = ["keyring"] }
+"#,
+        )
+        .unwrap();
+        let error = conflicting.validate().unwrap_err().to_string();
+        assert!(error.contains("cannot also set"), "{error}");
+    }
+
+    #[test]
+    fn composed_secrets_do_not_inherit_storage_profile_defaults() {
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "composed"
+revision = "1.0"
+
+[profiles.default]
+PART = { description = "part" }
+RESULT = { description = "result", composed = "{PART}" }
+
+[profiles.default.defaults]
+default = "fallback"
+providers = ["keyring"]
+"#,
+        )
+        .unwrap();
+        let compiled = config.validate_and_compile().unwrap();
+        let result = &compiled.profile("default").unwrap().secrets["RESULT"].config;
+        assert!(result.default.is_none());
+        assert!(result.providers.is_none());
     }
 
     #[test]

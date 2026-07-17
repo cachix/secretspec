@@ -336,7 +336,7 @@ jobs:
         shell: bash
         env:
           # Git Bash otherwise rewrites https:// NuGet sources as local paths.
-          MSYS_NO_PATHCONV: "1"
+          MSYS2_ARG_CONV_EXCL: "*"
         run: |
           set -euo pipefail
           version="$(sed -n \

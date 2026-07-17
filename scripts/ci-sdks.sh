@@ -85,6 +85,9 @@ echo "==> Haskell"
     --write-ghc-environment-files=always
 )
 
+echo "==> C# / .NET"
+( cd secretspec-dotnet && dotnet run --project tests/SecretSpec.Tests --configuration Release )
+
 echo "==> PHP"
 # The PHP SDK has two native backends over the same resolver; exercise both.
 # The Composer manifest is at the repo root (so Packagist can read it from the

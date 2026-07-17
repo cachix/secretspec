@@ -1,0 +1,195 @@
+name: ".NET SDK"
+
+# Builds the C# client and the runtime-specific secretspec-ffi libraries packed
+# into Cachix.SecretSpec. Linux uses a manylinux_2_28 baseline and vendors dbus,
+# so the NuGet asset works on older supported glibc distributions without a
+# system libdbus dependency.
+
+on:
+  workflow_call:
+    inputs:
+      publish:
+        description: Publish the built package to NuGet
+        required: false
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the built package to NuGet
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - v**
+  pull_request:
+    paths:
+      - "secretspec-dotnet/**"
+      - "secretspec-ffi/**"
+      - ".github/workflows/dotnet-package.yml"
+      - "scripts/sync-sdk-versions.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.rid }}
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container || null }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            library: libsecretspec_ffi.so
+            cargo_features: --features vendored-dbus
+          - rid: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
+            library: libsecretspec_ffi.so
+            cargo_features: --features vendored-dbus
+          - rid: osx-arm64
+            target: aarch64-apple-darwin
+            runner: macos-latest
+            library: libsecretspec_ffi.dylib
+          - rid: win-x64
+            target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            library: secretspec_ffi.dll
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        shell: bash
+        run: bash scripts/sync-sdk-versions.sh
+
+      - name: Install ICU in manylinux (the .NET runtime needs it)
+        if: matrix.container
+        shell: bash
+        run: yum install -y libicu
+
+      - name: Install rustup in manylinux
+        if: matrix.container
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+            sh -s -- -y --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build native resolver
+        shell: bash
+        run: >-
+          cargo build -p secretspec-ffi --release
+          --target ${{ matrix.target }} ${{ matrix.cargo_features }}
+
+      - name: Verify library portability (glibc <= 2.28, libdbus linked in)
+        if: matrix.container
+        shell: bash
+        run: >-
+          bash scripts/check-linux-portability.sh
+          "target/${{ matrix.target }}/release/${{ matrix.library }}"
+
+      - name: Run C# SDK tests against native resolver
+        shell: bash
+        env:
+          SECRETSPEC_FFI_LIB: ${{ github.workspace }}/target/${{ matrix.target }}/release/${{ matrix.library }}
+        run: >-
+          dotnet run
+          --project secretspec-dotnet/tests/SecretSpec.Tests
+          --configuration Release
+
+      - name: Stage native NuGet asset
+        shell: bash
+        run: |
+          mkdir -p "staged/${{ matrix.rid }}/native"
+          cp "target/${{ matrix.target }}/release/${{ matrix.library }}" \
+             "staged/${{ matrix.rid }}/native/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-native-${{ matrix.rid }}
+          path: staged/${{ matrix.rid }}
+
+  package:
+    name: NuGet package
+    needs: [native]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dotnet-native-*
+          path: staged
+      - name: Place runtime assets
+        shell: bash
+        run: |
+          for artifact in staged/dotnet-native-*; do
+            rid="${artifact##*/dotnet-native-}"
+            mkdir -p "secretspec-dotnet/src/SecretSpec/runtimes/$rid"
+            cp -R "$artifact/"* "secretspec-dotnet/src/SecretSpec/runtimes/$rid/"
+          done
+      - name: Pack
+        run: >-
+          dotnet pack secretspec-dotnet/src/SecretSpec/SecretSpec.csproj
+          --configuration Release --output artifacts
+      - name: Verify runtime assets are present
+        shell: bash
+        run: |
+          # The staged directories come from the same matrix that builds the
+          # native libraries, so this check cannot drift from the matrix.
+          package="$(find artifacts -name '*.nupkg' ! -name '*.symbols.nupkg' -print -quit)"
+          shopt -s nullglob
+          staged=(staged/dotnet-native-*)
+          if [ "${#staged[@]}" -eq 0 ]; then
+            echo "no staged native artifacts were downloaded" >&2
+            exit 1
+          fi
+          for artifact in "${staged[@]}"; do
+            rid="${artifact##*/dotnet-native-}"
+            unzip -l "$package" | grep -q "runtimes/$rid/native/"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-nuget
+          path: artifacts/*.nupkg
+
+  publish:
+    name: publish to NuGet
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish
+    needs: [package]
+    runs-on: ubuntu-latest
+    environment: nuget
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dotnet-nuget
+          path: artifacts
+      - name: Publish package
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: >-
+          dotnet nuget push "artifacts/*.nupkg"
+          --api-key "$NUGET_API_KEY"
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate

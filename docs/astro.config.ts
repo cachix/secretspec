@@ -208,6 +208,7 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
             { label: "Node.js SDK", slug: "sdk/nodejs" },
             { label: "Haskell SDK", slug: "sdk/haskell" },
             { label: "PHP SDK", slug: "sdk/php" },
+            { label: "C# SDK (0.16+)", slug: "sdk/csharp" },
           ],
         },
         {

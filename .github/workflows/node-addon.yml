@@ -103,27 +103,7 @@ jobs:
       - name: Verify addon portability (glibc <= 2.28, libdbus linked in)
         if: matrix.container
         shell: bash
-        run: |
-          # Read the version-reference table (objdump -p), not per-symbol
-          # version tags (objdump -T): file-level ABI markers such as
-          # GLIBC_ABI_DT_RELR (needs glibc >= 2.36) are attached to no symbol,
-          # so a symbol scan stays green on a binary older loaders reject.
-          # Numeric needs above GLIBC_2.28 fail, and so does any GLIBC_*
-          # version need that is not plain numeric.
-          headers=$(objdump -p secretspec-node/secretspec.node)
-          too_new=$(grep -oE 'GLIBC_[A-Za-z0-9_.]+' <<<"$headers" \
-            | sort -u \
-            | awk -F. '/^GLIBC_2\.[0-9]+(\.[0-9]+)?$/ { if ($2 + 0 > 28) print; next } { print }')
-          if [ -n "$too_new" ]; then
-            echo "addon requires glibc version needs newer than the 2.28 baseline:" >&2
-            echo "$too_new" >&2
-            exit 1
-          fi
-          if grep NEEDED <<<"$headers" | grep -q dbus; then
-            echo "addon links libdbus dynamically; vendored-dbus regressed:" >&2
-            grep NEEDED <<<"$headers" >&2
-            exit 1
-          fi
+        run: bash scripts/check-linux-portability.sh secretspec-node/secretspec.node
 
       - name: Copy the addon to its platform-specific filename for publishing
         shell: bash

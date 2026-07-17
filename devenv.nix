@@ -39,6 +39,10 @@
   languages.ruby.enable = true;
   # Haskell SDK (secretspec-hs) links the C ABI at build time via the FFI.
   languages.haskell.enable = true;
+  # C# SDK (secretspec-dotnet) loads the C ABI through P/Invoke. The NuGet
+  # package carries runtime-specific cdylibs; local tests use
+  # SECRETSPEC_FFI_LIB from scripts/ci-sdks.sh.
+  languages.dotnet.enable = true;
   # PHP SDK (secretspec-php) has two native backends over the same resolver:
   #   * secretspec-php-native, an ext-php-rs extension that embeds the resolver
   #     (the production path: no ffi.enable, works in FPM like ext-redis); and

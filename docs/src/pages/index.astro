@@ -626,7 +626,7 @@ $ secretspec export --format json
       <span class="landing-showcase-eyebrow">Language SDKs</span>
       <h2 class="landing-section-title">Use it from any language.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, and PHP all resolve from the same <code class="inline-code">secretspec.toml</code> through one Rust core — every provider, chain, and profile behaves identically, with no per-language logic. <a href="/sdk/overview/" class="landing-link">How the SDKs work →</a>
+        Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, and C# (0.16+) all resolve from the same <code class="inline-code">secretspec.toml</code> through one Rust core — every provider, chain, and profile behaves identically, with no per-language logic. <a href="/sdk/overview/" class="landing-link">How the SDKs work →</a>
       </p>
     </div>
 
@@ -711,6 +711,22 @@ print (S.get <span class="tok-pun">=&lt;&lt;</span> Map.lookup <span class="tok-
     <span class="tok-pun">-&gt;</span>withProvider<span class="tok-pun">(</span><span class="tok-str">'keyring://'</span><span class="tok-pun">)</span>
     <span class="tok-pun">-&gt;</span>withReason<span class="tok-pun">(</span><span class="tok-str">'boot web app'</span><span class="tok-pun">)-&gt;</span>load<span class="tok-pun">();</span>
 <span class="tok-key">$s</span><span class="tok-pun">-&gt;</span>setAsEnv<span class="tok-pun">();</span></code></pre>
+      </div>
+    </div>
+
+    <div class="landing-fallback" style="margin-top: 1.5rem;">
+      <!-- C# -->
+      <div class="landing-terminal">
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">C# / .NET (0.16+)</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code><span class="tok-key">using</span> Cachix.SecretSpec<span class="tok-pun">;</span>
+
+<span class="tok-key">using var</span> s <span class="tok-pun">=</span> SecretSpec.Builder()
+    .WithProvider(<span class="tok-str">"keyring://"</span>)
+    .WithReason(<span class="tok-str">"boot"</span>).Load();
+Console.WriteLine(s.Secrets[<span class="tok-str">"DATABASE_URL"</span>].Get());</code></pre>
       </div>
     </div>
 

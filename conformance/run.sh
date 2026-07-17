@@ -4,7 +4,7 @@
 #
 # Builds the secretspec-ffi cdylib once, then runs every SDK's conformance suite
 # against the shared fixtures and reports a combined result. Run inside the
-# project devenv shell (which provides cargo, python, go, ruby, node):
+# project devenv shell (which provides cargo, python, go, ruby, node, dotnet):
 #
 #     devenv shell -- bash conformance/run.sh
 #
@@ -80,12 +80,17 @@ run_php() { (
   [ -d secretspec-php/vendor ] || composer install --no-interaction --no-progress >/dev/null
   cd secretspec-php && ./vendor/bin/phpunit tests/ConformanceTest.php
 ); }
+run_dotnet() { (
+  cd secretspec-dotnet
+  dotnet run --project tests/SecretSpec.Tests --configuration Release
+); }
 
 run "Python"  python run_python
 run "Go"      go     run_go
 run "Ruby"    ruby   run_ruby
 run "Node"    node   run_node
 run "Haskell" cabal  run_haskell
+run "C#"      dotnet run_dotnet
 run "PHP"     php    run_php
 
 echo

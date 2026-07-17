@@ -7,4 +7,9 @@ target
 
 # PHP (Composer) — manifest at repo root, vendor-dir points into secretspec-php/
 /composer.lock
+
+# .NET
+/secretspec-dotnet/**/bin/
+/secretspec-dotnet/**/obj/
+
 .idea/

@@ -93,6 +93,14 @@ the monorepo — the manifest lives at the repository root (`/composer.json`, wi
 
 No CI workflow or token is involved — Packagist pulls from the tag on push.
 
+### NuGet (.NET) — not yet set up
+
+The `Cachix.SecretSpec` package is built by `dotnet-package.yml`. Before its
+first release, reserve the package ID on nuget.org and add an
+`NUGET_API_KEY` secret to the repository's `nuget` environment, scoped to push
+only `Cachix.SecretSpec`. Version tags then build all native runtime assets,
+pack them into one `.nupkg`, and publish it automatically.
+
 ## Python (PyPI) — `python-wheels.yml`
 
 - **Build:** the Rust resolver is statically linked into a pyo3 extension
@@ -234,3 +242,17 @@ In order:
    `vendor/bin/secretspec-install-lib` for the ext-ffi path, and a downloaded
    `secretspec-php-native` `.so` (`extension=…`) for the extension path — and
    confirm a resolve works under each.
+
+## .NET (NuGet) — `dotnet-package.yml`
+
+- **Client:** a .NET 8 assembly with no managed package dependencies. It invokes
+  the stable JSON C ABI through P/Invoke and exposes the same builder, resolved
+  value, report, and typed-error vocabulary as the other SDKs.
+- **Native assets:** one NuGet package carries `secretspec-ffi` under the
+  standard `runtimes/<rid>/native/` layout for `linux-x64`, `linux-arm64`,
+  `osx-arm64`, and `win-x64`. Linux builds use a manylinux 2.28 baseline and
+  the resolver's vendored-dbus feature.
+- **Publish:** `dotnet-package.yml` tests every native asset on its target,
+  assembles `Cachix.SecretSpec.<version>.nupkg`, and pushes it with the
+  `NUGET_API_KEY` stored in the `nuget` GitHub environment. One-time setup is
+  described above.

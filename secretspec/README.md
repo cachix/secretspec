@@ -200,6 +200,7 @@ works identically with no per-language resolution logic:
 - [Node.js / TypeScript](https://secretspec.dev/sdk/nodejs) (napi-rs addon)
 - [Haskell](https://secretspec.dev/sdk/haskell) (build-time FFI link)
 - [PHP](https://secretspec.dev/sdk/php) (ext-php-rs extension, with an `ext-ffi` fallback)
+- [C# (0.16+)](https://secretspec.dev/sdk/csharp) (P/Invoke with native assets in the NuGet package; unavailable in 0.15)
 
 ```python
 from secretspec import SecretSpec

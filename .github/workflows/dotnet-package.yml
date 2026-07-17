@@ -167,37 +167,34 @@ jobs:
           - rid: linux-musl-x64
             target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
+            image: quay.io/pypa/musllinux_1_2_x86_64
           - rid: linux-musl-arm64
             target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
+            image: quay.io/pypa/musllinux_1_2_aarch64
 
     steps:
       - uses: actions/checkout@v5
       - name: Sync SDK package versions
         run: bash scripts/sync-sdk-versions.sh
-      - name: Install Rust and the native musl toolchain
-        run: |
-          rustup toolchain install
-          rustup target add "${{ matrix.target }}"
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
       - name: Build dynamically loadable musl resolver
         shell: bash
-        env:
-          RUSTFLAGS: -C target-feature=-crt-static -C strip=symbols
         run: |
-          case "${{ matrix.target }}" in
-            x86_64-unknown-linux-musl)
-              export CC_x86_64_unknown_linux_musl=musl-gcc
-              export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
-              ;;
-            aarch64-unknown-linux-musl)
-              export CC_aarch64_unknown_linux_musl=musl-gcc
-              export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
-              ;;
-          esac
-          cargo build -p secretspec-ffi --release \
-            --target "${{ matrix.target }}" --features vendored-dbus
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            --env CARGO_TARGET_DIR=/workspace/target \
+            --env "RUSTFLAGS=-C target-feature=-crt-static -C strip=symbols" \
+            "${{ matrix.image }}" \
+            bash -c '
+              set -euo pipefail
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs |
+                sh -s -- -y --default-toolchain none
+              export PATH="$HOME/.cargo/bin:$PATH"
+              rustup toolchain install
+              cargo build -p secretspec-ffi --release \
+                --target "${{ matrix.target }}" --features vendored-dbus
+            '
           test -f \
             "target/${{ matrix.target }}/release/libsecretspec_ffi.so"
       - name: Verify musl portability

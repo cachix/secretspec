@@ -118,7 +118,7 @@ cleanup_test_data() {
     done
     # Also clean up any items we created during set tests
     local set_items
-    set_items=$(BW_SESSION="$BW_SESSION" bw list items --search "NEW_LOGIN_SECRET NEW_CARD_TOKEN DATABASE_PASSWORD" 2>/dev/null | \
+    set_items=$(BW_SESSION="$BW_SESSION" bw list items --search "bw_integration_test_" 2>/dev/null | \
         python3 -c "import sys,json; [print(i['id']) for i in json.load(sys.stdin)]" 2>/dev/null || true)
     for id in $set_items; do
         BW_SESSION="$BW_SESSION" bw delete item "$id" 2>/dev/null && echo "   Deleted $id (set test)" || true
@@ -210,23 +210,22 @@ name = "bitwarden-test"
 revision = "1.0"
 
 [profiles.default]
-# Keys that match EXACT Bitwarden item names for search
-"Test Database" = { required = true, description = "Password from Test Database login item" }
-"GitHub API" = { required = true, description = "Token from GitHub API item" }
-"Stripe Test Card" = { required = true, description = "API key from Stripe Test Card item" }
-"Deploy SSH Key" = { required = true, description = "SSH key from Deploy SSH Key item" }
-"Employee Record" = { required = true, description = "Employee data from Employee Record identity item" }
-"Note to Self" = { required = true, description = "Note contents from Note to Self secure note" }
-"Payment Gateway" = { required = true, description = "Payment Gateway card item" }
-"test" = { required = true, description = "Test item for fallback behavior" }
+# Keys use valid identifiers with ref mapping to Bitwarden item names
+bw_integration_test_database = { required = true, description = "Login item password", ref = { item = "Test Database" } }
+bw_integration_test_database_api_key = { required = true, description = "Login item custom field", ref = { item = "Test Database", field = "api_key" } }
+bw_integration_test_database_username = { required = true, description = "Login item username", ref = { item = "Test Database", field = "username" } }
+bw_integration_test_github_api = { required = true, description = "GitHub token", ref = { item = "GitHub API" } }
+bw_integration_test_stripe_card_api_key = { required = true, description = "Card custom field", ref = { item = "Stripe Test Card", field = "api_key" } }
+bw_integration_test_stripe_card_number = { required = true, description = "Card number field", ref = { item = "Stripe Test Card", field = "number" } }
+bw_integration_test_payment_gateway = { required = true, description = "Card default field", ref = { item = "Payment Gateway" } }
+bw_integration_test_employee_id = { required = true, description = "Identity custom field", ref = { item = "Employee Record", field = "employee_id" } }
+bw_integration_test_employee_email = { required = true, description = "Identity email field", ref = { item = "Employee Record", field = "email" } }
+bw_integration_test_deploy_ssh_key = { required = true, description = "SSH private key", ref = { item = "Deploy SSH Key" } }
+bw_integration_test_ssh_passphrase = { required = true, description = "SSH passphrase", ref = { item = "Deploy SSH Key", field = "passphrase" } }
+bw_integration_test_note_to_self = { required = true, description = "Secure note value", ref = { item = "Note to Self" } }
 
 # Additional test secrets (optional)
-NONEXISTENT_KEY = { required = false, description = "Key that should not exist" }
-DEFINITELY_NONEXISTENT_ITEM = { required = false, description = "Item that definitely should not exist" }
-CARD_NUMBER = { required = false, description = "Card number field" }
-NEW_LOGIN_SECRET = { required = false, description = "New login secret for creation test" }
-NEW_CARD_TOKEN = { required = false, description = "New card token for creation test" }
-DATABASE_PASSWORD = { required = false, description = "Database password for update test" }
+bw_integration_test_nonexistent = { required = false, description = "Key that should not exist" }
 
 EOF
 
@@ -240,87 +239,87 @@ echo -e "${GREEN}✓ Binary built successfully${NC}"
 echo -e "\n${YELLOW}=== PASSWORD MANAGER TESTS ===${NC}"
 
 # Test 1: Login Items - Default password field (Test Database)
-run_test "Get password from Login item (default field)" \
-    "./target/debug/secretspec get 'Test Database' --provider 'bitwarden://?type=login'" \
+run_test "Get password from Login item" \
+    "./target/debug/secretspec get bw_integration_test_database --provider bitwarden://" \
     "tets-db-password"
 
 # Test 2: Login Items - Custom field (Test Database api_key)
-run_test "Get custom field from Login item" \
-    "./target/debug/secretspec get 'Test Database' --provider 'bitwarden://?type=login&field=api_key'" \
+run_test "Get api_key custom field from Login item" \
+    "./target/debug/secretspec get bw_integration_test_database_api_key --provider bitwarden://" \
     "sk_test_db_12345"
 
 # Test 3: Login Items - Username field (Test Database)
-run_test "Get username from Login item" \
-    "./target/debug/secretspec get 'Test Database' --provider 'bitwarden://?type=login&field=username'" \
+run_test "Get username field from Login item" \
+    "./target/debug/secretspec get bw_integration_test_database_username --provider bitwarden://" \
     "testuser"
 
 # Test 4: Credit Card Items - Custom field (Stripe Test Card)
-run_test "Get API key from Credit Card item" \
-    "./target/debug/secretspec get 'Stripe Test Card' --provider 'bitwarden://?type=card&field=api_key'" \
+run_test "Get api_key custom field from Credit Card item" \
+    "./target/debug/secretspec get bw_integration_test_stripe_card_api_key --provider bitwarden://" \
     "sk_test_stripe_12345"
 
 # Test 5: Credit Card Items - Standard field
-run_test "Get card number from Credit Card item" \
-    "./target/debug/secretspec get 'Stripe Test Card' --provider 'bitwarden://?type=card&field=number'" \
+run_test "Get card number field from Credit Card item" \
+    "./target/debug/secretspec get bw_integration_test_stripe_card_number --provider bitwarden://" \
     "4242424242424242"
 
 # Test 6: Identity Items - Custom field (field required)
-run_test "Get employee ID from Identity item" \
-    "./target/debug/secretspec get 'Employee Record' --provider 'bitwarden://?type=identity&field=employee_id'" \
+run_test "Get employee_id field from Identity item" \
+    "./target/debug/secretspec get bw_integration_test_employee_id --provider bitwarden://" \
     "EMP001"
 
 # Test 7: Identity Items - Standard field
-run_test "Get email from Identity item" \
-    "./target/debug/secretspec get 'Employee Record' --provider 'bitwarden://?type=identity&field=email'" \
+run_test "Get email field from Identity item" \
+    "./target/debug/secretspec get bw_integration_test_employee_email --provider bitwarden://" \
     "test.employee@example.com"
 
 # Test 8: SSH Key Items - Default field (private key)
-run_test "Get private key from SSH Key item (default field)" \
-    "./target/debug/secretspec get 'Deploy SSH Key' --provider 'bitwarden://?type=sshkey'" \
+run_test "Get private key from SSH Key item" \
+    "./target/debug/secretspec get bw_integration_test_deploy_ssh_key --provider bitwarden://" \
     "BEGIN OPENSSH PRIVATE KEY"
 
 # Test 9: SSH Key Items - Custom field
-run_test "Get passphrase from SSH Key item" \
-    "./target/debug/secretspec get 'Deploy SSH Key' --provider 'bitwarden://?type=sshkey&field=passphrase'" \
+run_test "Get passphrase field from SSH Key item" \
+    "./target/debug/secretspec get bw_integration_test_ssh_passphrase --provider bitwarden://" \
     "ssh_passphrase_123"
 
 # Test 10: Secure Note Items - Get note contents
 run_test "Get value from Secure Note item" \
-    "./target/debug/secretspec get 'Note to Self' --provider 'bitwarden://?type=securenote'" \
+    "./target/debug/secretspec get bw_integration_test_note_to_self --provider bitwarden://" \
     "this is a note."
 
 echo -e "\n${YELLOW}=== ENVIRONMENT VARIABLE TESTS ===${NC}"
 
 # Test 11: Environment variable for type
 run_test "Get API key using environment variable type" \
-    "BITWARDEN_DEFAULT_TYPE=card BITWARDEN_DEFAULT_FIELD=api_key ./target/debug/secretspec get 'Stripe Test Card' --provider bitwarden://" \
+    "BITWARDEN_DEFAULT_TYPE=card BITWARDEN_DEFAULT_FIELD=api_key ./target/debug/secretspec get bw_integration_test_stripe_card_api_key --provider bitwarden://" \
     "sk_test_stripe_12345"
 
 # Test 12: Environment variable for field
 run_test "Get username using environment variable field" \
-    "BITWARDEN_DEFAULT_TYPE=login BITWARDEN_DEFAULT_FIELD=username ./target/debug/secretspec get 'Test Database' --provider bitwarden://" \
+    "BITWARDEN_DEFAULT_TYPE=login BITWARDEN_DEFAULT_FIELD=username ./target/debug/secretspec get bw_integration_test_database_username --provider bitwarden://" \
     "testuser"
 
 # Test 13: One-liner with multiple environment variables
 run_test "Get employee ID with environment variables" \
-    "BITWARDEN_DEFAULT_TYPE=identity BITWARDEN_DEFAULT_FIELD=employee_id ./target/debug/secretspec get 'Employee Record' --provider bitwarden://" \
+    "BITWARDEN_DEFAULT_TYPE=identity BITWARDEN_DEFAULT_FIELD=employee_id ./target/debug/secretspec get bw_integration_test_employee_id --provider bitwarden://" \
     "EMP001"
 
 echo -e "\n${YELLOW}=== ERROR HANDLING TESTS ===${NC}"
 
 # Test 14: Missing field specification for Card items
 run_test "Card item without field specification returns default field" \
-    "./target/debug/secretspec get 'Payment Gateway' --provider 'bitwarden://?type=card'" \
+    "./target/debug/secretspec get bw_integration_test_payment_gateway --provider bitwarden://" \
     "5555555555554444"
 
 # Test 15: Invalid item type should fail
 run_test_expect_fail "Invalid item type should fail" \
-    "./target/debug/secretspec get 'DEFINITELY_NONEXISTENT_ITEM' --provider 'bitwarden://?type=invalid'" \
+    "./target/debug/secretspec get bw_test_nonexistent_item --provider 'bitwarden://?type=invalid'" \
     "not found"
 
 # Test 16: Non-existent item
 run_test_expect_fail "Non-existent item should return error or empty" \
-    "./target/debug/secretspec get NONEXISTENT_KEY --provider 'bitwarden://?type=login'" \
+    "./target/debug/secretspec get bw_integration_test_nonexistent --provider bitwarden://" \
     ""
 
 echo -e "\n${YELLOW}=== ITEM CREATION TESTS ===${NC}"
@@ -333,17 +332,17 @@ fi
 
 # Test 20: Create new Login item
 run_test "Create new Login item" \
-    "./target/debug/secretspec set NEW_LOGIN_SECRET 'test-new-secret' --provider 'bitwarden://?type=login'" \
+    "./target/debug/secretspec set bw_integration_test_new_login 'test-new-secret' --provider 'bitwarden://?type=login'" \
     "Secret.*saved"
 
 # Test 21: Create new Card item with custom field
 run_test "Create new Card item with custom field" \
-    "./target/debug/secretspec set NEW_CARD_TOKEN 'test-card-token' --provider 'bitwarden://?type=card&field=api_token'" \
+    "./target/debug/secretspec set bw_integration_test_new_card 'test-card-token' --provider 'bitwarden://?type=card&field=api_token'" \
     "Secret.*saved"
 
 # Test 22: Update existing item
 run_test "Update existing Login item" \
-    "./target/debug/secretspec set DATABASE_PASSWORD 'updated-password' --provider 'bitwarden://?type=login'" \
+    "./target/debug/secretspec set bw_integration_test_database 'updated-password' --provider bitwarden://" \
     "Secret.*saved"
 
 if [ $TESTS_FAILED -eq 0 ]; then

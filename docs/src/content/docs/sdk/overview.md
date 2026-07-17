@@ -4,8 +4,14 @@ description: How the SecretSpec language SDKs work
 ---
 
 SecretSpec ships SDKs for Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell,
-and PHP. They all resolve secrets from the same declarative `secretspec.toml`,
-and they all behave identically, because they share one resolver.
+PHP, and C# (0.16+). They all resolve secrets from the same declarative
+`secretspec.toml`, and they all behave identically, because they share one
+resolver.
+
+> **C# compatibility:** The C# SDK targets SecretSpec 0.16 and is unavailable
+> in the current 0.15 release. With 0.15, run a .NET application through
+> `secretspec run -- dotnet run`; the `Cachix.SecretSpec` NuGet API shown in the
+> C# guide becomes available in 0.16.
 
 ## One resolver, thin clients
 
@@ -19,6 +25,8 @@ that core rather than a reimplementation:
   at build time; **Go** (purego) loads it at runtime with no cgo. Both exchange
   a small JSON request/response with the core.
 - **Haskell** links the same C ABI at build time via the GHC FFI.
+- **C# (0.16+)** loads the same C ABI with P/Invoke from a runtime-specific
+  native asset in the NuGet package.
 - **Python** uses a [pyo3](https://pyo3.rs/) native extension, and
   **Node.js/TypeScript** uses a [napi-rs](https://napi.rs/) native addon; both
   embed the same resolver directly and exchange the same JSON request/response
@@ -50,7 +58,8 @@ print(resolved.secrets["DATABASE_URL"].get)
 
 See each language's page for the idiomatic spelling: [Rust](/sdk/rust),
 [Python](/sdk/python), [Go](/sdk/go), [Ruby](/sdk/ruby),
-[Node.js](/sdk/nodejs), [Haskell](/sdk/haskell), and [PHP](/sdk/php).
+[Node.js](/sdk/nodejs), [Haskell](/sdk/haskell), [PHP](/sdk/php), and
+[C# (0.16+)](/sdk/csharp).
 
 ## Typed access
 
@@ -80,6 +89,8 @@ no runtime library path to set:
   wheel, and **Ruby** statically links the `secretspec-ffi` archive into a
   native C extension in the gem.
 - **Haskell** statically links the same archive at build time via the GHC FFI.
+- **C# (0.16+)** ships the `cdylib` as runtime-specific native assets in one
+  NuGet package and loads the matching asset through P/Invoke.
 - **Go** embeds the `cdylib` in the module and loads it at runtime via purego
   (no cgo); an opt-in `-tags static` build links it statically instead.
 - **Node.js** builds the resolver into a napi-rs addon.

@@ -18,6 +18,7 @@ on:
       - "secretspec-node/package.json"
       - "secretspec-py/pyproject.toml"
       - "secretspec-rb/secretspec.gemspec"
+      - "secretspec-dotnet/src/SecretSpec/SecretSpec.csproj"
 
 permissions:
   contents: read
@@ -106,6 +107,14 @@ jobs:
     name: Haskell static-link build
     needs: authorize
     uses: ./.github/workflows/haskell-build.yml
+
+  dotnet:
+    name: .NET package
+    needs: authorize
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/dotnet-package.yml
 
   release-artifacts:
     name: CLI release artifacts

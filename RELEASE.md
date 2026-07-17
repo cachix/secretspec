@@ -93,6 +93,23 @@ the monorepo — the manifest lives at the repository root (`/composer.json`, wi
 
 No CI workflow or token is involved — Packagist pulls from the tag on push.
 
+### NuGet (.NET) — not yet set up
+
+The `Cachix.SecretSpec` package is built by `dotnet-package.yml` and published
+with NuGet Trusted Publishing (OIDC), so no long-lived API key is stored.
+Before the first release:
+
+1. On nuget.org, create a trusted publishing policy: repository owner
+   `cachix`, repository `secretspec`, workflow file `dotnet-package.yml`
+   (file name only), environment `nuget`.
+2. Set a `NUGET_USER` secret in the repository's `nuget` GitHub environment
+   to the nuget.org profile name (not email) that owns the policy.
+
+Version tags then build all native runtime assets, pack them into one
+`.nupkg`, and publish it automatically with a short-lived OIDC-issued API
+key. The first successful publish claims the `Cachix.SecretSpec` package ID
+and permanently activates the policy.
+
 ## Python (PyPI) — `python-wheels.yml`
 
 - **Build:** the Rust resolver is statically linked into a pyo3 extension
@@ -234,3 +251,17 @@ In order:
    `vendor/bin/secretspec-install-lib` for the ext-ffi path, and a downloaded
    `secretspec-php-native` `.so` (`extension=…`) for the extension path — and
    confirm a resolve works under each.
+
+## .NET (NuGet) — `dotnet-package.yml`
+
+- **Client:** a .NET 8 assembly with no managed package dependencies. It invokes
+  the stable JSON C ABI through P/Invoke and exposes the same builder, resolved
+  value, report, and typed-error vocabulary as the other SDKs.
+- **Native assets:** one NuGet package carries `secretspec-ffi` under the
+  standard `runtimes/<rid>/native/` layout for `linux-x64`, `linux-arm64`,
+  `osx-arm64`, and `win-x64`. Linux builds use a manylinux 2.28 baseline and
+  the resolver's vendored-dbus feature.
+- **Publish:** `dotnet-package.yml` tests every native asset on its target,
+  assembles `Cachix.SecretSpec.<version>.nupkg`, and pushes it with a
+  short-lived API key from NuGet Trusted Publishing (OIDC), running in the
+  `nuget` GitHub environment. One-time setup is described above.

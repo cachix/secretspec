@@ -144,20 +144,20 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
         {
           label: "Concepts",
           items: [
-            { label: "Overview", slug: "concepts/overview" },
+            { label: "Overview (0.1+)", slug: "concepts/overview" },
             {
-              label: "Declarative Configuration",
+              label: "Declarative Configuration (0.1+)",
               slug: "concepts/declarative",
             },
-            { label: "Profiles", slug: "concepts/profiles" },
-            { label: "Providers", slug: "concepts/providers" },
+            { label: "Profiles (0.1+)", slug: "concepts/profiles" },
+            { label: "Providers (0.1+)", slug: "concepts/providers" },
             {
-              label: "Configuration Inheritance",
+              label: "Configuration Inheritance (0.1+)",
               slug: "concepts/inheritance",
             },
-            { label: "Secret Generation", slug: "concepts/generation" },
-            { label: "Secret References", slug: "concepts/references" },
-            { label: "Audit Logging", slug: "concepts/audit" },
+            { label: "Secret Generation (0.7+)", slug: "concepts/generation" },
+            { label: "Secret References (0.14+)", slug: "concepts/references" },
+            { label: "Audit Logging (0.12+)", slug: "concepts/audit" },
           ],
         },
         {
@@ -200,15 +200,15 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
         {
           label: "SDK",
           items: [
-            { label: "Overview", slug: "sdk/overview" },
-            { label: "Rust SDK", slug: "sdk/rust" },
-            { label: "Python SDK", slug: "sdk/python" },
-            { label: "Go SDK", slug: "sdk/go" },
-            { label: "Ruby SDK", slug: "sdk/ruby" },
-            { label: "Node.js SDK", slug: "sdk/nodejs" },
-            { label: "Haskell SDK", slug: "sdk/haskell" },
-            { label: "PHP SDK", slug: "sdk/php" },
-            { label: "C# SDK (0.16+)", slug: "sdk/csharp" },
+            { label: "Overview (0.13+)", slug: "sdk/overview" },
+            { label: "Rust (0.1+)", slug: "sdk/rust" },
+            { label: "Python (0.13+)", slug: "sdk/python" },
+            { label: "Go (0.13+)", slug: "sdk/go" },
+            { label: "Ruby (0.13+)", slug: "sdk/ruby" },
+            { label: "Node.js (0.13+)", slug: "sdk/nodejs" },
+            { label: "Haskell (0.13+)", slug: "sdk/haskell" },
+            { label: "PHP (0.15+)", slug: "sdk/php" },
+            { label: "C# (0.16+)", slug: "sdk/csharp" },
           ],
         },
         {

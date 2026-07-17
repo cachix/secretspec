@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   global defaults without interactive prompts, including `--profile none` to
   clear the default profile.
   ([#171](https://github.com/cachix/secretspec/issues/171))
+- Secret **scopes**: a `[scopes]` table names membership-only subsets of a
+  profile's secrets, so a single service or task resolves only what it declares
+  instead of the whole profile. `check`, `run`, and `export` take `--scope`
+  (`SECRETSPEC_SCOPE`); the consumer-visible set is the intersection of the
+  selected profile and the scope's secret list. Scopes are orthogonal to
+  profiles and never change a secret's `required`/`default`/providers or its
+  storage address. A visible composed secret still resolves its out-of-scope
+  inputs to build its value, but those inputs are never exposed to the consumer.
+  `run --scope` also removes every manifest-declared secret outside the visible
+  set from the child environment even when the parent already exported it, so an
+  excluded value cannot leak into the launched process.
 - age provider (`age://`) for storing dotenv-style secret sets in an
   age-encrypted file, with ASCII armor by default, team recipient rosters,
   direct X25519 and SSH key support, native tagged recipients, and

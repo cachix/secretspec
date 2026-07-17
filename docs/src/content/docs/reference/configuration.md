@@ -180,6 +180,62 @@ components in the form required by the target format; use
 `secretspec export --format json` when exporting the resolved secret map as
 JSON.
 
+### [scopes] Section
+
+:::note[Version compatibility]
+Scopes are available from **SecretSpec 0.16**. They are not available in
+0.15 or earlier.
+:::
+
+Scopes name membership-only subsets of a profile's secrets, so a single service
+or task resolves only what it declares instead of the entire profile. They are
+**orthogonal to profiles**: a profile decides how each secret resolves
+(`required`, `default`, providers, references, generation, `as_path`, and the
+storage namespace); a scope only decides *which* secrets take part in a given
+resolution.
+
+```toml
+[profiles.default]
+DATABASE_URL = { description = "Database", required = true }
+API_KEY      = { description = "API key", required = true }
+QUEUE_TOKEN  = { description = "Queue token", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "API_KEY"]
+
+[scopes.worker]
+secrets = ["DATABASE_URL", "QUEUE_TOKEN"]
+```
+
+```bash
+secretspec run --scope api    -- ./api      # sees DATABASE_URL, API_KEY
+secretspec run --scope worker -- ./worker   # sees DATABASE_URL, QUEUE_TOKEN
+secretspec check  --scope api
+secretspec export --scope worker --format dotenv
+```
+
+Behavior:
+
+- **No scope** resolves the complete profile, exactly as before scopes existed.
+- Selecting a scope resolves the **intersection** of the merged profile and the
+  scope's `secrets` list. A secret the profile does not declare is simply absent
+  from that resolution rather than an error, so a scope can be reused across
+  profiles that declare different subsets.
+- A required secret **excluded** by the active scope does not block resolution —
+  it is not part of the scoped set.
+- A scope does not change a secret's storage address
+  (`{project}/{profile}/{key}`); it only narrows the set.
+- `run --scope` removes scope-excluded secrets from the launched command's
+  environment **even if the parent shell already exported them**, so an excluded
+  value cannot leak into the child. This is secret minimization, not an
+  authorization boundary: a process that still holds provider credentials could
+  resolve another scope itself.
+- Selecting an undefined scope, or a scope that lists a secret no profile
+  declares, is a configuration error.
+
+The `--scope` flag (and the `SECRETSPEC_SCOPE` environment variable) apply to
+`check`, `run`, and `export`.
+
 ## Complete Example
 
 ```toml

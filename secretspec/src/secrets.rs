@@ -291,6 +291,10 @@ pub struct Secrets {
     provider: Option<String>,
     /// The profile to use (if set via builder)
     profile: Option<String>,
+    /// The active secret scope (if set via builder/`--scope`/`SECRETSPEC_SCOPE`).
+    /// `None` resolves the complete profile; a scope narrows resolution to the
+    /// intersection of the merged profile and the scope's secret list.
+    scope: Option<String>,
     /// Reason for this session's secret access, forwarded to providers that
     /// support audit logging (set via [`Secrets::with_reason`]).
     reason: Option<String>,
@@ -485,6 +489,7 @@ impl Secrets {
             global_config,
             provider,
             profile,
+            scope: None,
             reason: None,
             require_reason: RequireReason::Never,
             audit: None,
@@ -565,6 +570,7 @@ impl Secrets {
             global_config,
             provider: None,
             profile: None,
+            scope: None,
             reason: env_reason(),
             audit,
             provider_credentials_cache: ProviderCredentialsCache::default(),
@@ -621,6 +627,26 @@ impl Secrets {
     pub fn set_profile(&mut self, profile: impl Into<String>) {
         if let Some(profile) = non_blank(&profile.into()) {
             self.profile = Some(profile);
+        }
+    }
+
+    /// Sets the active secret scope for resolution.
+    ///
+    /// A scope narrows every subsequent resolution (`check`, `run`, `export`, and
+    /// the SDK resolve paths) to the intersection of the selected profile and the
+    /// scope's declared secrets, so a single service loads only what it needs.
+    /// Leaving the scope unset resolves the complete profile, exactly as before
+    /// scopes existed.
+    ///
+    /// Blank input is ignored, matching [`Secrets::set_provider`]/[`Secrets::set_profile`],
+    /// so a blank `--scope` or `SECRETSPEC_SCOPE` cannot silently drop secrets.
+    ///
+    /// # Arguments
+    ///
+    /// * `scope` - The scope name as declared under `[scopes]` in `secretspec.toml`
+    pub fn set_scope(&mut self, scope: impl Into<String>) {
+        if let Some(scope) = non_blank(&scope.into()) {
+            self.scope = Some(scope);
         }
     }
 
@@ -1159,6 +1185,94 @@ impl Secrets {
             .unwrap_or_else(|| "default".to_string())
     }
 
+    /// Resolves the active scope name, or `None` when resolution should cover the
+    /// complete profile.
+    ///
+    /// Precedence mirrors [`Self::resolve_profile_name`] minus the global default:
+    /// an explicit argument, then the builder value ([`Self::set_scope`]), then
+    /// `SECRETSPEC_SCOPE`. There is deliberately **no** user-global default — an
+    /// unset scope always means "the whole profile", so a machine-level default
+    /// can never silently drop secrets a project expects to resolve.
+    pub(crate) fn resolve_scope_name(&self, scope: Option<&str>) -> Option<String> {
+        scope
+            .map(str::to_string)
+            .or_else(|| self.scope.clone())
+            .or_else(|| {
+                env::var("SECRETSPEC_SCOPE")
+                    .ok()
+                    .as_deref()
+                    .and_then(non_blank)
+            })
+    }
+
+    /// The set of secret names the active scope admits, or `None` when no scope
+    /// is active (meaning "no filtering — the whole profile participates").
+    ///
+    /// A scope's membership is profile-independent; the *effective* set is the
+    /// intersection of this membership with the selected profile, which callers
+    /// obtain by filtering the profile's names through the returned set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecretSpecError::InvalidScope`] when a scope is selected but not
+    /// declared under `[scopes]` in `secretspec.toml`, listing the available
+    /// scopes.
+    fn active_scope_members(&self) -> Result<Option<HashSet<&str>>> {
+        let Some(scope_name) = self.resolve_scope_name(None) else {
+            return Ok(None);
+        };
+        let scope = self
+            .config
+            .scopes
+            .as_ref()
+            .and_then(|scopes| scopes.get(&scope_name))
+            .ok_or_else(|| {
+                let mut available: Vec<&str> = self
+                    .config
+                    .scopes
+                    .iter()
+                    .flat_map(|scopes| scopes.keys())
+                    .map(String::as_str)
+                    .collect();
+                available.sort();
+                let available = if available.is_empty() {
+                    "none defined".to_string()
+                } else {
+                    available.join(", ")
+                };
+                SecretSpecError::InvalidScope(format!(
+                    "'{}' is not defined in secretspec.toml. Available scopes: {}",
+                    scope_name, available
+                ))
+            })?;
+        Ok(Some(scope.secrets.iter().map(String::as_str).collect()))
+    }
+
+    /// The names an active scope *excludes* from `profile_name`: secrets the
+    /// profile declares but the scope leaves out. Empty when no scope is active.
+    ///
+    /// `run --scope` must actively remove these from the child's inherited
+    /// environment. Injecting only the scoped subset is not enough on its own: a
+    /// shell that already loaded the full profile (a devenv `secretspec run`, a
+    /// prior `eval "$(secretspec export)"`) would otherwise pass the excluded
+    /// values straight through to the child. This is secret minimization, not an
+    /// authorization boundary — a child still holding provider credentials could
+    /// resolve another scope itself.
+    fn scope_excluded_names(&self, profile_name: &str) -> Result<Vec<String>> {
+        let Some(members) = self.active_scope_members()? else {
+            return Ok(Vec::new());
+        };
+        let Some(profile) = self.manifest.profile(profile_name) else {
+            return Ok(Vec::new());
+        };
+        Ok(profile
+            .secrets
+            .keys()
+            .filter(|name| !members.contains(name.as_str()))
+            .cloned()
+            .collect())
+    }
+
     /// Returns the named profile or an `InvalidProfile` error listing the profiles
     /// defined in `secretspec.toml`.
     fn require_profile(&self, profile_name: &str) -> Result<&Profile> {
@@ -1199,7 +1313,19 @@ impl Secrets {
             .expect("raw and compiled profile sets stay identical");
         // `CompiledProfile.secrets` is a `BTreeMap`, so its keys are already
         // sorted — no clone of the secret configs, which every caller discarded.
-        Ok(compiled.secrets.keys().cloned().collect())
+        //
+        // An active scope narrows the profile to the intersection with its
+        // membership. This is the single upstream worklist for validation,
+        // resolution, planning, prompting, generation, and audit attribution, so
+        // filtering here scopes every one of them at once — and an unknown scope
+        // fails before any provider is touched.
+        let members = self.active_scope_members()?;
+        Ok(compiled
+            .secrets
+            .keys()
+            .filter(|name| members.as_ref().is_none_or(|m| m.contains(name.as_str())))
+            .cloned()
+            .collect())
     }
 
     /// Returns the effective configuration for a specific secret, or `None` if
@@ -1226,11 +1352,19 @@ impl Secrets {
     /// The effective (field-level merged) secrets of `profile_name` in
     /// name-sorted order, read directly off the compiled manifest. This is the
     /// view `check`/`run` list, matching what resolution acts on.
+    ///
+    /// Backs the `check` display, which runs only after resolution has already
+    /// validated the active scope; an unknown scope therefore cannot reach here,
+    /// so scope membership is applied without re-surfacing the error (a scope
+    /// that fails to resolve simply yields no members and filters nothing). The
+    /// displayed set stays identical to the resolved set.
     fn effective_secrets(&self, profile_name: &str) -> Vec<(String, crate::config::Secret)> {
+        let members = self.active_scope_members().ok().flatten();
         self.manifest
             .profile(profile_name)
             .into_iter()
             .flat_map(|profile| &profile.secrets)
+            .filter(|(name, _)| members.as_ref().is_none_or(|m| m.contains(name.as_str())))
             .map(|(name, secret)| (name.clone(), secret.config.clone()))
             .collect()
     }
@@ -3437,6 +3571,14 @@ impl Secrets {
             }
         };
 
+        // When a scope is active, the profile's excluded secrets must not reach
+        // the child even if the parent already holds them (a devenv shell, a
+        // prior `eval "$(secretspec export)"`). Computed here and stripped at the
+        // `Command` level below — filtering the overlay map is not enough, since
+        // the child inherits the real parent environment by default. Resolution
+        // already validated the scope (`ensure_secrets` above), so this cannot
+        // fail on an unknown scope here.
+        let excluded = self.scope_excluded_names(&validation_result.resolved.profile)?;
         let env_vars = child_env_from(
             env::vars_os(),
             validation_result
@@ -3462,6 +3604,12 @@ impl Secrets {
         let mut cmd = Command::new(&command[0]);
         cmd.args(&command[1..]);
         cmd.envs(&env_vars);
+        // `env_remove` overrides inheritance, so a scope-excluded secret the
+        // parent exported is unset in the child rather than merely left out of
+        // the overlay. No-ops when no scope is active (`excluded` is empty).
+        for key in &excluded {
+            cmd.env_remove(key);
+        }
 
         // Spawn (rather than `status`) so the Run event is recorded the moment the
         // child starts, before the potentially long-running wait. A long-lived
@@ -4189,6 +4337,7 @@ mod report_provider_tests {
                 },
                 profiles: HashMap::new(),
                 providers: None,
+                scopes: None,
             },
             None,
             None,
@@ -4233,6 +4382,7 @@ mod reference_routing_tests {
                 },
                 profiles: HashMap::new(),
                 providers: None,
+                scopes: None,
             },
             None,
             provider.map(String::from),

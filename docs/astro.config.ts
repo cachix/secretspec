@@ -35,6 +35,9 @@ const devStarsApi: PluginOption = {
 // https://astro.build/config
 export default defineConfig({
   site: "https://secretspec.dev/",
+  redirects: {
+    "/reference/adding-providers": "/development/adding-providers",
+  },
   vite: {
     plugins: [devStarsApi],
   },
@@ -217,7 +220,15 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
             { label: "Configuration", slug: "reference/configuration" },
             { label: "CLI Commands", slug: "reference/cli" },
             { label: "Providers", slug: "reference/providers" },
-            { label: "Adding Providers", slug: "reference/adding-providers" },
+          ],
+        },
+        {
+          label: "Development",
+          items: [
+            {
+              label: "Adding Providers",
+              slug: "development/adding-providers",
+            },
           ],
         },
       ],

@@ -92,7 +92,7 @@ When adding a new provider, update **every** location below — provider names a
 
 If the provider is unreleased, add its target version (for example `(0.15+)`)
 in every listing above. See
-`docs/src/content/docs/reference/adding-providers.md` for the full release
+`docs/src/content/docs/development/adding-providers.md` for the full release
 visibility checklist.
 
 ## Configuration System

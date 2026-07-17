@@ -241,7 +241,7 @@ See the [full CLI reference](https://secretspec.dev/reference/cli) for all comma
 
 We welcome contributions! Areas where you can help:
 
-- **New provider backends** - See the [provider implementation guide](https://secretspec.dev/reference/adding-providers)
+- **New provider backends** - See the [provider implementation guide](https://secretspec.dev/development/adding-providers)
 - **Language SDKs** - Help us support more languages beyond Rust
 - **Package managers** - Get SecretSpec into your favorite package manager
 - **Documentation** - Improve guides and examples

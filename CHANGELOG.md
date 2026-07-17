@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Bitwarden Password Manager provider. `bitwarden://` uses the `bw` CLI for
+  vault-wide secret storage across all Bitwarden item types.
 - Composed secrets derive read-only values such as connection strings from
   other declared secrets using strict `{SECRET_NAME}` templates. Dependencies
   are order-independent, may include other compositions, and are validated for
@@ -40,7 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Password Manager provider. `bitwarden://` uses the `bw` CLI for vault-wide secret storage across all Bitwarden item types.
 - Gopass provider (`gopass://`) for GPG-based password manager with git-synced password store.
 - `secretspec export` command that resolves every secret for the active profile
   and writes them to stdout without running a command, in a chosen `--format`:

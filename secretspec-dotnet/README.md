@@ -1,7 +1,8 @@
 # SecretSpec for .NET
 
-> Requires SecretSpec 0.16 or newer. The C# SDK is targeted for SecretSpec 0.16
-> and is not available in the current 0.15 release.
+> Supported starting with SecretSpec 0.16. A 0.15.0 package was published only
+> to reserve the NuGet package ID; it is an unsupported bootstrap artifact and
+> is not the C# SDK release.
 
 `Cachix.SecretSpec` is the C# SDK for
 [SecretSpec](https://secretspec.dev/), the declarative secrets manager. It is a
@@ -67,7 +68,17 @@ returns its path. `Resolved` implements `IDisposable`; keep the result in a
 
 ## Native resolver
 
-The NuGet package carries the resolver for Linux x64/Arm64, macOS Arm64, and
-Windows x64. During local SDK development, `SECRETSPEC_FFI_LIB` can point to an
-explicit `libsecretspec_ffi` build; the SDK also discovers a Cargo `target`
-directory when used from a SecretSpec source checkout.
+The NuGet package carries the resolver for glibc and musl Linux x64/Arm64,
+macOS x64/Arm64, and Windows x64/Arm64. Windows builds include the C runtime,
+so users do not need to install the Visual C++ Redistributable. The managed
+client is trimming-safe and supports NativeAOT; the matching native resolver
+remains beside the published application as a runtime asset.
+
+```bash
+dotnet publish -c Release -r linux-x64 --self-contained \
+  -p:PublishAot=true
+```
+
+During local SDK development, `SECRETSPEC_FFI_LIB` can point to an explicit
+`libsecretspec_ffi` build; the SDK also discovers a Cargo `target` directory
+when used from a SecretSpec source checkout.

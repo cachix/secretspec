@@ -7,12 +7,23 @@ internal static class JsonContracts
 {
     internal const int ResolveSchemaVersion = 2;
     internal const int ReportSchemaVersion = 1;
-
-    internal static readonly JsonSerializerOptions Options = new()
-    {
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
 }
+
+[JsonSourceGenerationOptions(
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+[JsonSerializable(
+    typeof(ResolveRequest),
+    TypeInfoPropertyName = "ResolveRequest")]
+[JsonSerializable(
+    typeof(Envelope<ResolveResponseContract>),
+    TypeInfoPropertyName = "ResolveEnvelope")]
+[JsonSerializable(
+    typeof(Envelope<ReportResponseContract>),
+    TypeInfoPropertyName = "ReportEnvelope")]
+[JsonSerializable(
+    typeof(IReadOnlyDictionary<string, string?>),
+    TypeInfoPropertyName = "SecretFields")]
+internal sealed partial class SecretSpecJsonContext : JsonSerializerContext;
 
 internal sealed record ResolveRequest
 {

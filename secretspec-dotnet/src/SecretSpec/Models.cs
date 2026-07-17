@@ -76,7 +76,11 @@ public sealed class Resolved : IDisposable
                 StringComparer.Ordinal));
 
     /// <summary>Serializes <see cref="Fields"/> for a generated deserializer.</summary>
-    public string FieldsJson() => JsonSerializer.Serialize(Fields(), JsonContracts.Options);
+    public string FieldsJson() =>
+        JsonSerializer.Serialize(
+            Fields(),
+            typeof(IReadOnlyDictionary<string, string?>),
+            SecretSpecJsonContext.Default);
 
     /// <summary>Removes temporary files backing <c>as_path</c> secrets.</summary>
     public void Close()

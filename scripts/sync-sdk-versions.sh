@@ -129,5 +129,6 @@ update_file secretspec-rb/secretspec.gemspec gemspec
 update_file secretspec-hs/secretspec.cabal cabal
 update_file secretspec-node/package.json package-json
 update_file secretspec-dotnet/src/SecretSpec/SecretSpec.csproj csproj
+update_file secretspec-dotnet/tests/SecretSpec.PackageSmoke/SecretSpec.PackageSmoke.csproj csproj
 
 echo "synced SDK package versions to $workspace_version"

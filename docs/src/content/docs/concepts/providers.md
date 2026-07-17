@@ -52,6 +52,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [vault](/providers/vault/) | HashiCorp Vault or OpenBao (requires the `vault` build feature) | ✓ | ✓ | ✓ |
 | [bws](/providers/bws/) | Bitwarden Secrets Manager (requires the `bws` build feature) | ✓ | ✓ | ✓ |
 | [akv](/providers/akv/) | Azure Key Vault (requires the `akv` build feature) | ✓ | ✓ | ✓ |
+| [infisical](/providers/infisical/) (0.16+) | Infisical (requires the `infisical` build feature) | ✓ | ✓ | ✓ |
 
 See each provider's page for its URI format, authentication requirements, and
 storage conventions.

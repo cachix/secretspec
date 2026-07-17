@@ -52,7 +52,7 @@ data-encoding.workspace = true
 detect-coding-agent.workspace = true
 
 [features]
-default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws", "akv"]
+default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws", "akv", "infisical"]
 cli = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
 # Compile libdbus from source into the binary instead of linking the system
@@ -62,5 +62,9 @@ vendored-dbus = ["keyring?/vendored"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]
 awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
 vault = ["dep:reqwest"]
+# `tokio/sync` for the async `OnceCell` that serializes the Universal Auth
+# exchange. It is already on transitively via reqwest, but a provider should
+# name the features it uses rather than inherit them from a sibling.
+infisical = ["dep:reqwest", "tokio/sync"]
 bws = ["dep:bitwarden", "dep:rustls"]
 akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secrets"]

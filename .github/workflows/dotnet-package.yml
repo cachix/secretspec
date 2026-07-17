@@ -334,6 +334,9 @@ jobs:
       - name: Restore, run, and NativeAOT-publish a clean NuGet consumer
         if: matrix.musl == false
         shell: bash
+        env:
+          # Git Bash otherwise rewrites https:// NuGet sources as local paths.
+          MSYS_NO_PATHCONV: "1"
         run: |
           set -euo pipefail
           version="$(sed -n \

@@ -93,22 +93,18 @@ the monorepo — the manifest lives at the repository root (`/composer.json`, wi
 
 No CI workflow or token is involved — Packagist pulls from the tag on push.
 
-### NuGet (.NET) — not yet set up
+### NuGet (.NET) — trusted publishing set up, done
 
-The `Cachix.SecretSpec` package is built by `dotnet-package.yml` and published
-with NuGet Trusted Publishing (OIDC), so no long-lived API key is stored.
-Before the first release:
-
-1. On nuget.org, create a trusted publishing policy: repository owner
-   `cachix`, repository `secretspec`, workflow file `dotnet-package.yml`
-   (file name only), environment `nuget`.
-2. Set a `NUGET_USER` secret in the repository's `nuget` GitHub environment
-   to the nuget.org profile name (not email) that owns the policy.
-
-Version tags then build all native runtime assets, pack them into one
-`.nupkg`, and publish it automatically with a short-lived OIDC-issued API
-key. The first successful publish claims the `Cachix.SecretSpec` package ID
-and permanently activates the policy.
+`Cachix.SecretSpec` publishes via NuGet Trusted Publishing (OIDC), so no
+long-lived API key is stored. The nuget.org policy is configured (repository
+owner `cachix`, repository `secretspec`, workflow file `dotnet-package.yml`,
+environment `nuget`), and the repository's `nuget` GitHub environment holds
+`NUGET_USER` — the nuget.org profile name that owns the policy. The first
+publish (0.15.0, a manual `dotnet-package.yml` run with `publish: true`)
+claimed the package ID and permanently activated the policy. Nothing left to
+do — version tags build all native runtime assets, pack them into one
+`.nupkg`, and publish it with a short-lived OIDC-issued API key
+(`--skip-duplicate` makes re-runs of an already-published version harmless).
 
 ## Python (PyPI) — `python-wheels.yml`
 

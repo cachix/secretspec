@@ -664,7 +664,7 @@ impl BitwardenProvider {
         }
 
         eprintln!(
-            "DEBUG: get_from_password_manager called for item='{}'",
+            "get_from_password_manager called for item='{}'",
             item_name
         );
 

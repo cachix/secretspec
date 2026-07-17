@@ -83,7 +83,7 @@ setup_test_data() {
     echo -e "\n${YELLOW}Setting up test data...${NC}"
 
     # 1. Login Item: "Test Database"
-    ensure_item "Test Database" '{"type":1,"name":"Test Database","login":{"username":"testuser","password":"tets-db-password","totp":null,"uris":[]},"fields":[{"name":"api_key","value":"sk_test_db_12345","type":1}],"notes":"SecretSpec test item"}' > /dev/null
+    ensure_item "Test Database" '{"type":1,"name":"Test Database","login":{"username":"testuser","password":"test-db-password","totp":null,"uris":[]},"fields":[{"name":"api_key","value":"sk_test_db_12345","type":1}],"notes":"SecretSpec test item"}' > /dev/null
 
     # 2. Login Item: "GitHub API"
     ensure_item "GitHub API" '{"type":1,"name":"GitHub API","login":{"username":"testuser","password":"ghp_fake_token_for_testing","totp":null,"uris":[]},"notes":"SecretSpec test item"}' > /dev/null
@@ -226,6 +226,9 @@ bw_integration_test_note_to_self = { required = true, description = "Secure note
 
 # Additional test secrets (optional)
 bw_integration_test_nonexistent = { required = false, description = "Key that should not exist" }
+bw_test_nonexistent_item = { required = false, description = "Item that definitely should not exist" }
+bw_integration_test_new_login = { required = false, description = "Login item for creation test" }
+bw_integration_test_new_card = { required = false, description = "Card item for creation test" }
 
 EOF
 
@@ -241,7 +244,7 @@ echo -e "\n${YELLOW}=== PASSWORD MANAGER TESTS ===${NC}"
 # Test 1: Login Items - Default password field (Test Database)
 run_test "Get password from Login item" \
     "./target/debug/secretspec get bw_integration_test_database --provider bitwarden://" \
-    "tets-db-password"
+    "test-db-password"
 
 # Test 2: Login Items - Custom field (Test Database api_key)
 run_test "Get api_key custom field from Login item" \

@@ -18,11 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`SECRETSPEC_SCOPE`); the consumer-visible set is the intersection of the
   selected profile and the scope's secret list. Scopes are orthogonal to
   profiles and never change a secret's `required`/`default`/providers or its
-  storage address. A visible composed secret still resolves its out-of-scope
-  inputs to build its value, but those inputs are never exposed to the consumer.
-  `run --scope` also removes every manifest-declared secret outside the visible
-  set from the child environment even when the parent already exported it, so an
-  excluded value cannot leak into the launched process.
+  storage address. A composed secret in a scope still resolves its dependencies
+  — even ones the scope leaves out — to build its value, but those dependencies
+  are never exposed to the scope; a secret that is neither in the scope nor a
+  dependency of one is never fetched, and an empty scope contacts no provider at
+  all. `run --scope` removes every manifest-declared secret outside the scoped
+  set from the child environment — across all profiles, even one the parent
+  already exported — so no value can leak into the launched process. Under
+  project `extends`, a child scope replaces the parent scope of the same name
+  outright rather than unioning their secret lists. Typed SDK loaders ignore an
+  ambient `SECRETSPEC_SCOPE`, since a generated struct always expects the full
+  profile.
 - age provider (`age://`) for storing dotenv-style secret sets in an
   age-encrypted file, with ASCII armor by default, team recipient rosters,
   direct X25519 and SSH key support, native tagged recipients, and

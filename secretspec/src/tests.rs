@@ -473,6 +473,7 @@ fn profile_presence_constraints_validate_resolved_values() {
                 },
             )]),
             providers: None,
+            scopes: None,
         };
         let provider = format!("dotenv://{}", env_path.display());
         let app = Secrets::new(config, None, Some(provider), None);
@@ -7252,6 +7253,215 @@ secrets = ["DATABASE_URL", "SENTRY_DSN"]
             fs::read_to_string(&included_file).unwrap(),
             "postgres://localhost/db",
             "the scoped DATABASE_URL is still injected"
+        );
+    }
+
+    /// A composed secret in the scope resolves its out-of-scope inputs to build
+    /// its value, but those inputs are never exposed: the scope sees the derived
+    /// value alone (`visible = {DATABASE_URL}`; `accessed` also fetched the
+    /// `DB_*` leaves, which are then dropped from the output).
+    #[test]
+    fn composed_scope_resolves_dependencies_without_exposing_them() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DB_USER=alice\nDB_PASSWORD=s3cret\nDB_HOST=db.example\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let manifest = r#"
+[project]
+name = "composed-scope"
+revision = "1.0"
+
+[profiles.default]
+DB_USER = { description = "DB user" }
+DB_PASSWORD = { description = "DB password" }
+DB_HOST = { description = "DB host" }
+DATABASE_URL = { description = "DSN", composed = "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}/app" }
+
+[scopes.api]
+secrets = ["DATABASE_URL"]
+"#;
+        let mut spec = Secrets::new(config(manifest), None, Some(provider), None);
+        spec.set_scope("api");
+        let response = spec.resolve().unwrap();
+        assert!(response.is_ok());
+        // The composed value is built from its (out-of-scope) inputs...
+        assert_eq!(
+            response
+                .secrets
+                .get("DATABASE_URL")
+                .and_then(|s| s.value.as_deref()),
+            Some("postgres://alice:s3cret@db.example/app")
+        );
+        // ...but the inputs themselves never reach the scope.
+        assert!(!response.secrets.contains_key("DB_USER"));
+        assert!(!response.secrets.contains_key("DB_PASSWORD"));
+        assert!(!response.secrets.contains_key("DB_HOST"));
+    }
+
+    /// The dependency closure recurses: a composed secret whose only dependency
+    /// is itself composed still resolves under a scope naming just the outermost
+    /// secret, and neither the intermediate composition nor the leaves leak.
+    #[test]
+    fn nested_composition_resolves_under_scope_without_exposing_intermediates() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DB_USER=alice\nDB_PASSWORD=s3cret\nDB_HOST=db.example\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let manifest = r#"
+[project]
+name = "nested-composed-scope"
+revision = "1.0"
+
+[profiles.default]
+DB_USER = { description = "DB user" }
+DB_PASSWORD = { description = "DB password" }
+DB_HOST = { description = "DB host" }
+DATABASE_URL = { description = "DSN", composed = "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}/app" }
+CONN = { description = "Connection string", composed = "url=${DATABASE_URL}" }
+
+[scopes.api]
+secrets = ["CONN"]
+"#;
+        let mut spec = Secrets::new(config(manifest), None, Some(provider), None);
+        spec.set_scope("api");
+        let response = spec.resolve().unwrap();
+        assert!(response.is_ok());
+        assert_eq!(
+            response
+                .secrets
+                .get("CONN")
+                .and_then(|s| s.value.as_deref()),
+            Some("url=postgres://alice:s3cret@db.example/app")
+        );
+        // Neither the intermediate composed secret nor the leaves are exposed.
+        assert!(!response.secrets.contains_key("DATABASE_URL"));
+        assert!(!response.secrets.contains_key("DB_USER"));
+        assert!(!response.secrets.contains_key("DB_PASSWORD"));
+        assert!(!response.secrets.contains_key("DB_HOST"));
+    }
+
+    /// `run --scope` scrubs a secret declared only under *another* profile: it is
+    /// manifest-declared and not visible, so an inherited parent value must not
+    /// reach the scoped child even though the selected profile never declares it.
+    #[test]
+    fn run_scope_scrubs_a_secret_declared_only_under_another_profile() {
+        let _env = scrub_resolution_env();
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "DATABASE_URL=postgres://localhost/db\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        // PROD_ONLY is declared only under `production`; the active profile is
+        // `default`. A parent shell exported it (e.g. a prior production run).
+        let manifest = r#"
+[project]
+name = "cross-profile-scrub"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[profiles.production]
+PROD_ONLY = { description = "prod secret", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL"]
+"#;
+        let _leaked = EnvVarGuard::set("PROD_ONLY", "leaked-from-parent");
+
+        let mut spec = Secrets::new(config(manifest), None, Some(provider), None);
+        spec.set_scope("api");
+
+        let leaked_file = temp.path().join("prod_only");
+        let included_file = temp.path().join("db");
+        let exit = spec
+            .run_command(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "printf '%s' \"$PROD_ONLY\" > {}; printf '%s' \"$DATABASE_URL\" > {}",
+                    leaked_file.display(),
+                    included_file.display()
+                ),
+            ])
+            .unwrap();
+        assert_eq!(exit, 0);
+        assert_eq!(
+            fs::read_to_string(&leaked_file).unwrap(),
+            "",
+            "a secret from another profile must be scrubbed from the scoped child"
+        );
+        assert_eq!(
+            fs::read_to_string(&included_file).unwrap(),
+            "postgres://localhost/db",
+            "the scoped DATABASE_URL is still injected"
+        );
+    }
+
+    /// An empty scope (or an empty intersection) resolves to nothing and must not
+    /// initialize or contact any provider. Proven with a deliberately broken
+    /// provider: an unscoped resolve fails building it, while the empty scope
+    /// short-circuits before any provider is built and so succeeds.
+    #[test]
+    fn empty_scope_contacts_no_provider() {
+        let _env = scrub_resolution_env();
+        let manifest = r#"
+[project]
+name = "empty-scope"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.none]
+secrets = []
+"#;
+        let mut spec = Secrets::new(config(manifest), None, Some("bogus://x".to_string()), None);
+        spec.set_scope("none");
+        let response = spec
+            .resolve()
+            .expect("an empty scope resolves without contacting a provider");
+        assert!(response.is_ok());
+        assert!(
+            response.secrets.is_empty(),
+            "an empty scope resolves to nothing"
+        );
+        assert!(response.missing_required.is_empty());
+
+        // Control: the same broken provider under no scope *does* fail, proving
+        // the provider is skipped only because the scope is empty.
+        let unscoped = Secrets::new(config(manifest), None, Some("bogus://x".to_string()), None);
+        assert!(
+            unscoped.resolve().is_err(),
+            "a broken provider must fail an unscoped resolve"
+        );
+    }
+
+    /// The `ignore_ambient_scope` flag gates *only* the ambient `SECRETSPEC_SCOPE`
+    /// fallback, never an explicitly set scope. (End-to-end coverage that a typed
+    /// load actually ignores the environment variable — which requires mutating
+    /// the process environment — lives in the isolated subprocess integration
+    /// test `tests/typed_scope_env.rs`, so it cannot race the parallel unit
+    /// suite, every member of which reads the scope env fallback.)
+    #[test]
+    fn ignore_ambient_scope_still_honors_an_explicit_scope() {
+        let mut spec = Secrets::new(config(MANIFEST), None, None, None);
+        spec.set_ignore_ambient_scope(true);
+        spec.set_scope("api");
+        assert_eq!(
+            spec.resolve_profile_secret_names(None).unwrap(),
+            vec!["API_KEY".to_string(), "DATABASE_URL".to_string()],
+            "an explicit scope is honored even when the ambient fallback is suppressed"
         );
     }
 }

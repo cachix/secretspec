@@ -7,6 +7,29 @@
 # The script auto-creates test items if they don't exist,
 # and removes them on clean exit (unless --keep-test-data is passed).
 #
+# FUTURE WORK: full automation via vaultwarden
+# ---------------------------------------------
+# This script currently requires a real, unlocked vault (BW_SESSION), so a
+# human with a Bitwarden account is always in the loop. The ultimate way to
+# automate it is to run against a local vaultwarden server (a
+# Bitwarden-compatible reimplementation) instead of the real cloud:
+#
+#   docker run --rm -p 8087:80 -e SIGNUPS_ALLOWED=true vaultwarden/server
+#   bw config server http://localhost:8087
+#   # bootstrap a throwaway fixture account, login, unlock, export BW_SESSION
+#
+# With a local, disposable server the account credentials become committable
+# test fixtures rather than secrets: any dev can run the test with zero
+# setup, and CI (including fork PRs) needs no repository secrets. Fidelity
+# stays high because the genuine `bw` CLI is still the client under test.
+# vaultwarden is also packaged in nixpkgs (pkgs.vaultwarden), so the devenv
+# shell could provide it as a plain binary, no Docker required.
+#
+# Caveats: `bw` has no `register` command, so account bootstrap needs either
+# a call to the registration API or a pre-seeded SQLite db fixture; and since
+# vaultwarden is not the official server, an occasional manual run against
+# real Bitwarden cloud would still be worth keeping.
+#
 set -e  # Exit on any error
 
 # Get BW_SESSION from command line or environment

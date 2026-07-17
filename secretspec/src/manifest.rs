@@ -5,6 +5,7 @@
 //! generated types instead consume this module's effective view, where profile
 //! inheritance and missing-value behavior have already been decided once.
 
+use crate::composition::Template;
 use crate::config::{Config, Secret};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -36,6 +37,11 @@ pub(crate) struct CompiledSecret {
     /// The effective `required` flag for reporting. Kept distinct from
     /// `missing`: a required generated/defaulted field is still guaranteed.
     pub(crate) declared_required: bool,
+    /// The parsed `composed` template, decided once here so graph validation,
+    /// planning, and the executor's render pass all read one parse. A
+    /// malformed template compiles to `None`; `Secret::validate_semantics`
+    /// rejects it before any of those consumers run.
+    pub(crate) composition: Option<Template>,
 }
 
 impl CompiledSecret {
@@ -53,10 +59,15 @@ impl CompiledSecret {
         } else {
             MissingPolicy::Omit
         };
+        let composition = config
+            .composed
+            .as_deref()
+            .and_then(|source| Template::parse(source).ok());
         Self {
             config,
             missing,
             declared_required,
+            composition,
         }
     }
 }

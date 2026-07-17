@@ -34,6 +34,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
 - **[Type-Safe Rust SDK](https://secretspec.dev/sdk/rust/)**: Generate strongly-typed structs from your `secretspec.toml` for compile-time safety
 - **[Profile Support](https://secretspec.dev/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
 - **[Secret Generation](https://secretspec.dev/concepts/generation/)**: Auto-generate passwords, tokens, UUIDs, and more when secrets are missing — declarative "generate if absent"
+- **Composed Secrets (0.16+)**: Derive read-only values such as DSNs from declared secrets with strict, order-independent `{SECRET_NAME}` references
 - **[Configuration Inheritance](https://secretspec.dev/concepts/inheritance/)**: Extend and override shared configurations using the `extends` feature
 - **[Audit Logging](https://secretspec.dev/concepts/audit/)**: Every secret access recorded locally (who, when, why, outcome) — on by default, secret values never logged
 - **[Discovery](https://secretspec.dev/reference/cli#init)**: `secretspec init` to discover secrets from existing `.env` files

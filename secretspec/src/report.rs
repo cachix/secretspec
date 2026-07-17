@@ -54,6 +54,11 @@ pub struct SecretResolution {
     pub default_applied: bool,
     /// Whether the value was freshly minted by the secret's `generate` config.
     pub generated: bool,
+    /// Whether the value was derived from other declared secrets.
+    /// Internal provenance used by human-readable output and the value-carrying
+    /// resolve response; omitted from the report v1 wire format.
+    #[serde(skip)]
+    pub composed: bool,
     /// Whether the value is materialized to a temp file and exposed as a path.
     pub as_path: bool,
 }
@@ -105,10 +110,14 @@ impl ResolutionReport {
         for s in &self.secrets {
             let detail = match s.status {
                 ResolutionStatus::Resolved => {
+                    // Same provenance order as `resolve_impl`'s `ResolvedSource`
+                    // mapping; the flags are mutually exclusive.
                     if s.generated {
                         "ok        generated".to_string()
                     } else if s.default_applied {
                         "ok        default value".to_string()
+                    } else if s.composed {
+                        "ok        composed".to_string()
                     } else if let Some(uri) = &s.source_provider {
                         format!("ok        source {}", uri)
                     } else {
@@ -148,6 +157,7 @@ mod tests {
                     source_provider: None,
                     default_applied: false,
                     generated: false,
+                    composed: false,
                     as_path: false,
                 },
                 SecretResolution {
@@ -157,6 +167,7 @@ mod tests {
                     source_provider: Some("keyring://".to_string()),
                     default_applied: false,
                     generated: false,
+                    composed: false,
                     as_path: false,
                 },
                 SecretResolution {
@@ -166,6 +177,7 @@ mod tests {
                     source_provider: None,
                     default_applied: false,
                     generated: true,
+                    composed: false,
                     as_path: false,
                 },
                 SecretResolution {
@@ -175,6 +187,7 @@ mod tests {
                     source_provider: None,
                     default_applied: true,
                     generated: false,
+                    composed: false,
                     as_path: false,
                 },
                 SecretResolution {
@@ -184,6 +197,7 @@ mod tests {
                     source_provider: None,
                     default_applied: false,
                     generated: false,
+                    composed: false,
                     as_path: false,
                 },
             ],
@@ -244,6 +258,7 @@ mod tests {
                 source_provider: None,
                 default_applied: false,
                 generated: false,
+                composed: false,
                 as_path: true,
             }],
         );

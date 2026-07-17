@@ -27,7 +27,7 @@ import (
 // It tracks secretspec-ffi's RESOLVE_SCHEMA_VERSION; a mismatch means the loaded
 // library is incompatible with this SDK, so Load reports it rather than silently
 // misparsing.
-const resolveSchemaVersion = 1
+const resolveSchemaVersion = 2
 
 // Error is a resolution failure (bad manifest, provider error, reason policy).
 type Error struct {

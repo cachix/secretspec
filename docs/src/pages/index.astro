@@ -240,6 +240,12 @@ DATABASE_URL = { required = true }</code></pre>
         <pre is:raw class="landing-bento-mini-code"><code>DB_PASSWORD = { type = "password", generate = true }</code></pre>
       </a>
 
+      <a href="/concepts/composed-secrets/" class="landing-bento-card is-link landing-bento-2">
+        <p class="landing-bento-title">Composed secrets</p>
+        <p class="landing-bento-desc">Build read-only DSNs and arguments from independently stored secrets with strict, order-independent references.</p>
+        <pre is:raw class="landing-bento-mini-code"><code>DATABASE_URL = { composed = "postgres://{USER}:{PASSWORD}@{HOST}/app" }</code></pre>
+      </a>
+
       <a href="/concepts/providers/" class="landing-bento-card is-link landing-bento-3">
         <p class="landing-bento-title">Per-secret fallback chains</p>
         <p class="landing-bento-desc">Each secret can specify its own ordered provider list. Tries Vault first, falls back to keyring, then env — until the value is found.</p>

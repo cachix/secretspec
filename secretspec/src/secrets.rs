@@ -1600,7 +1600,15 @@ impl Secrets {
             }
         };
 
-        let backend = match self.write_provider_for_route(&planned.route, Some(&profile_name)) {
+        // A composed secret plans no route: its value is derived, so a write
+        // has nowhere to go.
+        let Some(route) = &planned.route else {
+            let err = SecretSpecError::ComposedSecretReadOnly(name.to_string());
+            self.record_key_error(AuditAction::Set, &profile_name, name, None, None, &err);
+            return Err(err);
+        };
+
+        let backend = match self.write_provider_for_route(route, Some(&profile_name)) {
             Ok(backend) => backend,
             Err(err) => {
                 self.record_key_error(AuditAction::Set, &profile_name, name, None, None, &err);
@@ -1721,13 +1729,54 @@ impl Secrets {
                 return Err(err);
             }
         };
+        // A composed secret plans no route: resolve its dependency closure
+        // through the batch executor and print the rendered value.
+        let Some(route) = &planned.route else {
+            let names = self.composed_dependency_names(name, &profile_name);
+            let plan = self.build_plan_from_names(profile_name.clone(), names)?;
+            return match self.execute_plan(&plan, Materialize::Values)? {
+                Ok(mut validated) => {
+                    if !validated.resolved.secrets.contains_key(name) {
+                        let err = SecretSpecError::SecretNotFound(name.to_string());
+                        self.record_key_error(
+                            AuditAction::Get,
+                            &profile_name,
+                            name,
+                            None,
+                            None,
+                            &err,
+                        );
+                        return Err(err);
+                    }
+                    validated.keep_temp_files()?;
+                    let value = &validated.resolved.secrets[name];
+                    self.record(
+                        AuditAction::Get,
+                        &profile_name,
+                        AuditOutcome::Found,
+                        AuditFields {
+                            key: Some(name),
+                            ..Default::default()
+                        },
+                    );
+                    println!("{}", value.expose_secret());
+                    Ok(())
+                }
+                Err(errors) => {
+                    let err =
+                        SecretSpecError::RequiredSecretMissing(errors.missing_required.join(", "));
+                    self.record_key_error(AuditAction::Get, &profile_name, name, None, None, &err);
+                    Err(err)
+                }
+            };
+        };
         let default = planned.config().default.clone();
         let as_path = planned.as_path();
 
         // Walk the route's chain in order; each entry is resolved lazily and a
         // broken link is skipped with a warning, so an undefined alias never
         // blocks a provider elsewhere in the chain from answering.
-        let read_specs = planned.route.specs();
+        let read_specs = route.specs();
         let result = self.get_secret_from_providers(
             name,
             planned.as_address(&self.config.project.name, &profile_name),
@@ -1869,7 +1918,13 @@ impl Secrets {
                         ));
                     }
 
-                    let missing = &validation_errors.missing_required;
+                    let missing =
+                        self.promptable_missing_names(&validation_errors, &profile_display);
+                    if missing.is_empty() {
+                        return Err(SecretSpecError::RequiredSecretMissing(
+                            validation_errors.missing_required.join(", "),
+                        ));
+                    }
                     let total = missing.len();
                     // Name the provider without constructing it: this value is
                     // display-only (each prompted write builds its own route's
@@ -1894,7 +1949,7 @@ impl Secrets {
                         profile_display.bold(),
                         default_backend_name.bold(),
                     );
-                    for secret_name in missing {
+                    for secret_name in &missing {
                         let description = self
                             .resolve_secret_config(secret_name, Some(&profile_display))
                             .and_then(|c| c.description)
@@ -1926,8 +1981,13 @@ impl Secrets {
 
                             let value = prompt.prompt()?;
 
-                            let backend = self
-                                .write_provider_for_route(&planned.route, Some(&profile_display))?;
+                            let backend = self.write_provider_for_route(
+                                planned
+                                    .route
+                                    .as_ref()
+                                    .expect("prompted names are provider-backed leaves"),
+                                Some(&profile_display),
+                            )?;
                             let set_result = backend.set(
                                 planned.as_address(&self.config.project.name, &profile_display),
                                 &SecretString::new(value.into()),
@@ -2221,14 +2281,17 @@ impl Secrets {
             // supplies the same write route and address `set` executes. Sorted
             // names keep the per-secret summary lines in a stable order.
             for name in import_names {
-                read_names.push(name.clone());
                 let planned = self
                     .plan_secret(&name, &profile_display, None)?
                     .expect("Secret should exist since we're iterating over it");
+                // A composed secret has no stored value to copy.
+                let Some(route) = &planned.route else {
+                    continue;
+                };
+                read_names.push(name.clone());
                 let description = planned.config().description.as_deref();
 
-                let to_provider =
-                    self.write_provider_for_route(&planned.route, Some(&profile_display))?;
+                let to_provider = self.write_provider_for_route(route, Some(&profile_display))?;
 
                 // The secret's address (native `ref` coordinates or convention
                 // naming) applies to both stores: naming is orthogonal to
@@ -2402,7 +2465,13 @@ impl Secrets {
         // Store the generated value at the plan's address, through the plan's
         // write route: the same decisions every other write path executes.
         let addr = planned.as_address(&self.config.project.name, profile_name);
-        let backend = self.write_provider_for_route(&planned.route, Some(profile_name))?;
+        let backend = self.write_provider_for_route(
+            planned
+                .route
+                .as_ref()
+                .expect("a generating secret is provider-backed"),
+            Some(profile_name),
+        )?;
         // The provider states why a write is refused; wrapping it here would
         // only nest a second "Provider operation failed" prefix.
         backend.check_writable(addr)?;
@@ -2588,6 +2657,8 @@ impl Secrets {
                         ResolvedSource::Generated
                     } else if entry.default_applied {
                         ResolvedSource::Default
+                    } else if entry.composed {
+                        ResolvedSource::Composed
                     } else {
                         ResolvedSource::Provider
                     };
@@ -2747,6 +2818,79 @@ impl Secrets {
         result
     }
 
+    /// The target plus its transitive declared dependencies, sorted for a
+    /// deterministic, least-access `get` plan.
+    fn composed_dependency_names(&self, target: &str, profile_name: &str) -> Vec<String> {
+        fn visit(
+            name: &str,
+            profile: &crate::manifest::CompiledProfile,
+            names: &mut HashSet<String>,
+        ) {
+            if !names.insert(name.to_string()) {
+                return;
+            }
+            if let Some(template) = &profile.secrets[name].composition {
+                for dependency in template.dependencies() {
+                    visit(dependency, profile, names);
+                }
+            }
+        }
+
+        let profile = self
+            .manifest
+            .profile(profile_name)
+            .expect("profile is validated before dependency planning");
+        let mut names = HashSet::new();
+        visit(target, profile, &mut names);
+        let mut names: Vec<String> = names.into_iter().collect();
+        names.sort();
+        names
+    }
+
+    /// Replace missing derived nodes with the unresolved provider-backed leaves
+    /// a user can actually set. This also permits an optional leaf to be
+    /// prompted when a required composition depends on it.
+    fn promptable_missing_names(
+        &self,
+        errors: &ValidationErrors,
+        profile_name: &str,
+    ) -> Vec<String> {
+        let statuses: HashMap<&str, &ResolutionStatus> = errors
+            .resolution
+            .iter()
+            .map(|entry| (entry.name.as_str(), &entry.status))
+            .collect();
+        let profile = self
+            .manifest
+            .profile(profile_name)
+            .expect("profile is validated before prompting");
+
+        fn visit(
+            name: &str,
+            profile: &crate::manifest::CompiledProfile,
+            statuses: &HashMap<&str, &ResolutionStatus>,
+            promptable: &mut HashSet<String>,
+        ) {
+            let Some(template) = &profile.secrets[name].composition else {
+                promptable.insert(name.to_string());
+                return;
+            };
+            for dependency in template.dependencies() {
+                if statuses.get(dependency.as_str()).copied() != Some(&ResolutionStatus::Resolved) {
+                    visit(dependency, profile, statuses, promptable);
+                }
+            }
+        }
+
+        let mut promptable = HashSet::new();
+        for name in &errors.missing_required {
+            visit(name, profile, &statuses, &mut promptable);
+        }
+        let mut promptable: Vec<String> = promptable.into_iter().collect();
+        promptable.sort();
+        promptable
+    }
+
     /// Rejects a `ref` routed at exactly one store that cannot honor its
     /// coordinates. Run per primary-store group right after the provider is
     /// built and before any fetch is spawned, so the definite error surfaces up
@@ -2769,7 +2913,11 @@ impl Secrets {
         for planned in group {
             // Only the routes that consult exactly one store; a chain with a
             // fallback defers coordinate checking to per-store read time.
-            if planned.route.fallback_specs().is_some() {
+            // (Groups never contain a routeless composed secret.)
+            let Some(route) = &planned.route else {
+                continue;
+            };
+            if route.fallback_specs().is_some() {
                 continue;
             }
             if let Some(native) = planned.reference() {
@@ -2903,12 +3051,17 @@ impl Secrets {
         // chain, generation, or default, and record a value-free provenance entry
         // for the resolution report.
         for planned in &plan.secrets {
+            // Composed secrets have no route; they render after this loop,
+            // once their dependencies are decided.
+            let Some(route) = &planned.route else {
+                continue;
+            };
             let name = &planned.name;
             let required = planned.required();
             let as_path = planned.as_path();
             // The group key (primary spec), matching how `group_uris` and
             // `failed_primary_uris` were keyed from `plan.groups()` above.
-            let primary_uri = planned.route.group_key();
+            let primary_uri = route.group_key();
 
             let status;
             let mut source_provider = None;
@@ -2940,7 +3093,7 @@ impl Secrets {
                     // undefined alias is skipped with a warning so a working
                     // provider after it still answers. An override or the
                     // default store has no fallback.
-                    let (fallback_value, fallback_uri) = match planned.route.fallback_specs() {
+                    let (fallback_value, fallback_uri) = match route.fallback_specs() {
                         Some(fallback) => {
                             let resolved = self.get_secret_from_providers(
                                 name,
@@ -3043,13 +3196,116 @@ impl Secrets {
                 source_provider,
                 default_applied,
                 generated,
+                composed: false,
                 as_path,
             });
         }
 
+        // Render composed secrets after every provider-backed secret has been
+        // decided, dependencies before dependents. Load-time graph validation
+        // guarantees acyclicity, so a depth-first post-order over the composed
+        // nodes is a topological order; rooting the walk at the plan's
+        // name-sorted secrets keeps the report order deterministic.
+        fn composition_order<'a>(
+            planned: &'a PlannedSecret,
+            composed: &HashMap<&str, &'a PlannedSecret>,
+            visited: &mut HashSet<&'a str>,
+            ordered: &mut Vec<&'a PlannedSecret>,
+        ) {
+            if !visited.insert(planned.name.as_str()) {
+                return;
+            }
+            let template = planned
+                .composition()
+                .expect("only composed nodes are ordered");
+            for dependency in template.dependencies() {
+                if let Some(dependency) = composed.get(dependency.as_str()) {
+                    composition_order(dependency, composed, visited, ordered);
+                }
+            }
+            ordered.push(planned);
+        }
+        let composed: HashMap<&str, &PlannedSecret> = plan
+            .secrets
+            .iter()
+            .filter(|secret| secret.is_composed())
+            .map(|secret| (secret.name.as_str(), secret))
+            .collect();
+        let mut ordered = Vec::with_capacity(composed.len());
+        let mut visited = HashSet::new();
+        for planned in plan.secrets.iter().filter(|secret| secret.is_composed()) {
+            composition_order(planned, &composed, &mut visited, &mut ordered);
+        }
+
+        if !ordered.is_empty() {
+            // Statuses of the already-decided secrets, extended as each
+            // composition renders so nested compositions see derived
+            // dependencies. Built only when the plan has composed secrets.
+            let mut statuses: HashMap<String, ResolutionStatus> = resolution
+                .iter()
+                .map(|entry| (entry.name.clone(), entry.status.clone()))
+                .collect();
+            for planned in ordered {
+                let template = planned
+                    .composition()
+                    .expect("only composed nodes are ordered");
+                let dependencies_resolved = template.dependencies().iter().all(|dependency| {
+                    statuses.get(dependency) == Some(&ResolutionStatus::Resolved)
+                });
+                let status = if dependencies_resolved {
+                    if materialize == Materialize::Values {
+                        let rendered = template
+                            .render(|dependency| {
+                                secrets.get(dependency).map(|value| value.expose_secret())
+                            })
+                            .map_err(SecretSpecError::CompositionFailed)?;
+                        self.insert_resolved(
+                            &mut secrets,
+                            &mut temp_files,
+                            planned.name.clone(),
+                            SecretString::new(rendered.into()),
+                            planned.as_path(),
+                        )?;
+                    }
+                    ResolutionStatus::Resolved
+                } else {
+                    match planned.secret.missing {
+                        MissingPolicy::Error => {
+                            missing_required.push(planned.name.clone());
+                            ResolutionStatus::MissingRequired
+                        }
+                        MissingPolicy::Omit => {
+                            missing_optional.push(planned.name.clone());
+                            ResolutionStatus::MissingOptional
+                        }
+                        MissingPolicy::Generate | MissingPolicy::UseDefault => {
+                            unreachable!("composed source conflicts are rejected at load time")
+                        }
+                    }
+                };
+
+                statuses.insert(planned.name.clone(), status.clone());
+                resolution.push(SecretResolution {
+                    name: planned.name.clone(),
+                    status,
+                    required: planned.required(),
+                    source_provider: None,
+                    default_applied: false,
+                    generated: false,
+                    composed: true,
+                    as_path: planned.as_path(),
+                });
+            }
+        }
+
+        // Composed secrets carry no route; the stores their leaves route to
+        // name the report, exactly as for ordinary secrets.
         let report_provider_uri = self.validation_report_provider_uri(
             plan.override_uri.as_deref(),
-            plan.secrets.iter().map(|s| s.route.primary()),
+            plan.secrets
+                .iter()
+                .filter_map(|secret| secret.route.as_ref())
+                .map(|route| route.primary()),
             Some(&plan.profile),
         )?;
 

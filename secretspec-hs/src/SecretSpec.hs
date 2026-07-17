@@ -78,7 +78,7 @@ foreign import ccall safe "secretspec_abi_version"
 -- | Wire-format version of the value-carrying resolve response this SDK
 -- understands. Tracks @secretspec@'s @RESOLVE_SCHEMA_VERSION@.
 resolveSchemaVersion :: Int
-resolveSchemaVersion = 1
+resolveSchemaVersion = 2
 
 -- | Wire-format version of the value-free report. Tracks @secretspec@'s
 -- @RESOLUTION_REPORT_SCHEMA_VERSION@.

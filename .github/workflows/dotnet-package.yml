@@ -332,11 +332,8 @@ jobs:
           sudo apt-get install -y clang zlib1g-dev
 
       - name: Restore, run, and NativeAOT-publish a clean NuGet consumer
-        if: matrix.musl == false
+        if: matrix.musl == false && runner.os != 'Windows'
         shell: bash
-        env:
-          # Git Bash otherwise rewrites https:// NuGet sources as local paths.
-          MSYS2_ARG_CONV_EXCL: "*"
         run: |
           set -euo pipefail
           version="$(sed -n \
@@ -378,6 +375,64 @@ jobs:
             unset SECRETSPEC_FFI_LIB
             "$app"
           )
+
+      - name: Restore, run, and NativeAOT-publish a clean NuGet consumer on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $versionMatch = Select-String -Path Cargo.toml `
+            -Pattern '^version = "([^"]+)"' | Select-Object -First 1
+          if (-not $versionMatch) {
+            throw "workspace package version not found"
+          }
+          $version = $versionMatch.Matches[0].Groups[1].Value
+          $testRoot = Join-Path $env:RUNNER_TEMP "SecretSpec.PackageSmoke"
+          $packageSource = Join-Path $env:GITHUB_WORKSPACE "artifacts"
+          $env:NUGET_PACKAGES = Join-Path $env:RUNNER_TEMP "nuget-packages"
+          New-Item -ItemType Directory -Path $testRoot | Out-Null
+          Copy-Item -Recurse `
+            "secretspec-dotnet/tests/SecretSpec.PackageSmoke/*" $testRoot
+          $project = Join-Path $testRoot "SecretSpec.PackageSmoke.csproj"
+
+          # Prime an isolated package cache from the artifact-only source. The
+          # RID restore then adds NuGet.org for Microsoft runtime/AOT packs.
+          dotnet restore $project --source $packageSource "-p:Version=$version"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet restore $project --runtime "${{ matrix.rid }}" `
+            --source $packageSource `
+            --source "https://api.nuget.org/v3/index.json" `
+            "-p:Version=$version"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Remove-Item Env:SECRETSPEC_FFI_LIB -ErrorAction SilentlyContinue
+          Push-Location $env:RUNNER_TEMP
+          try {
+            dotnet run --project $project --configuration Release `
+              --runtime "${{ matrix.rid }}" --no-restore `
+              "-p:Version=$version"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+
+          $publishDir = Join-Path `
+            $env:RUNNER_TEMP "publish-${{ matrix.rid }}"
+          dotnet publish $project --configuration Release `
+            --runtime "${{ matrix.rid }}" --self-contained true `
+            "-p:PublishAot=true" "-p:Version=$version" `
+            --source $packageSource `
+            --source "https://api.nuget.org/v3/index.json" `
+            --output $publishDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $app = Join-Path $publishDir "SecretSpec.PackageSmoke.exe"
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & $app
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
 
       - name: Restore, run, and NativeAOT-publish on Alpine
         if: matrix.musl

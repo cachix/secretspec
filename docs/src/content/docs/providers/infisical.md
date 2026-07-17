@@ -11,15 +11,87 @@ The Infisical provider is an upcoming SecretSpec 0.16 feature and is not availab
 in SecretSpec 0.15.
 :::
 
-## Prerequisites
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `infisical` |
+| URI | `infisical://[host]/PROJECT_ID[?options]` |
+| Access | Read and write; version-pinned references are read-only |
+| Best for | Infisical Cloud or self-hosted Infisical deployments |
+| Authentication | Universal Auth machine identity or access token |
+| Availability | Upcoming in SecretSpec 0.16; requires the `infisical` build feature |
+| Default storage | Key `{key}` in `{path}/{project}/{profile}` |
+
+## Quick start
+
+```bash
+# Store a secret
+$ secretspec set DATABASE_URL --provider "infisical://app.infisical.com/7e2f1a4c-...?env=dev"
+
+# Verify every secret is set
+$ secretspec check --provider "infisical://app.infisical.com/7e2f1a4c-...?env=dev"
+
+# Run with secrets injected
+$ secretspec run --provider "infisical://app.infisical.com/7e2f1a4c-...?env=dev" -- npm start
+```
+
+Secrets sharing a folder are fetched in one request, so a run costs one call
+per folder rather than one per secret.
+
+## Setup
+
+### Prerequisites
 
 - An Infisical project
-- A machine identity with access to it (see [Authentication](#authentication))
+- A machine identity with access to it
 - Build with `--features infisical`
+
+### Universal Auth machine identity
+
+Create a machine identity in Infisical, grant it access to the project, and set:
+
+```bash
+$ export INFISICAL_CLIENT_ID=...
+$ export INFISICAL_CLIENT_SECRET=...
+```
+
+The provider exchanges these for a short-lived access token once per run.
+
+### Access token
+
+A token minted elsewhere can be used directly:
+
+```bash
+$ export INFISICAL_TOKEN=...
+```
+
+Service tokens are not supported: Infisical deprecated them in favour of
+machine identities.
+
+### Credentials from another provider
+
+A machine identity's credentials can live in another store rather than in the
+environment, declared as
+[provider credentials](/concepts/providers/#provider-credentials):
+
+```toml title="secretspec.toml"
+[providers.infisical]
+uri = "infisical://app.infisical.com/7e2f1a4c-..."
+
+[providers.infisical.credentials]
+client_id = "keyring"
+client_secret = "keyring"
+```
+
+The provider declares `client_id` and `client_secret` for Universal Auth, and
+`token` for a ready-made access token. Each falls back to its corresponding
+environment variable when it is not declared. Use
+`secretspec config provider login infisical` to store declared credentials.
 
 ## Configuration
 
-### URI Format
+### URI format
 
 ```
 infisical://[host]/{project-id}[?env=slug&path=/prefix&tls=false]
@@ -34,23 +106,28 @@ infisical://[host]/{project-id}[?env=slug&path=/prefix&tls=false]
 
 Infisical's API addresses a project by UUID, not by the slug shown in its UI.
 
-### Examples
+### URI examples
 
-```bash
-# Infisical Cloud (US, and the default host)
-secretspec set DATABASE_URL --provider infisical://app.infisical.com/7e2f1a4c-...
-
-# Infisical Cloud (EU)
-secretspec check --provider infisical://eu.infisical.com/7e2f1a4c-...
-
-# Self-hosted
-secretspec run --provider infisical://vault.example.com/7e2f1a4c-... -- npm start
-
-# Self-hosted over plain HTTP
-secretspec run --provider "infisical://localhost:8080/7e2f1a4c-...?tls=false" -- npm start
+```text
+infisical://app.infisical.com/7e2f1a4c-...
+infisical://eu.infisical.com/7e2f1a4c-...
+infisical://vault.example.com/7e2f1a4c-...
+infisical://localhost:8080/7e2f1a4c-...?tls=false
 ```
 
-## Profiles and environments
+### Project configuration
+
+```toml title="secretspec.toml"
+[providers]
+infisical = "infisical://app.infisical.com/7e2f1a4c-...?env=prod"
+
+[profiles.production]
+DATABASE_URL = { description = "Database URL", providers = ["infisical"] }
+```
+
+## Storage model
+
+### Profiles and environments
 
 By default a SecretSpec profile names the Infisical environment: a `production` profile reads the
 `production` environment, and `dev` reads `dev`. New Infisical projects come with `dev`, `staging`
@@ -77,7 +154,7 @@ infisical_prod = "infisical://app.infisical.com/7e2f1a4c-...?env=prod"
 DATABASE_URL = { description = "Production database", providers = ["infisical_prod"] }
 ```
 
-### Secret Naming
+### Secret naming
 
 Secrets are stored under the folder `{path}/{project}/{profile}`, in the environment named by the
 profile (or by `?env=`):
@@ -96,14 +173,17 @@ renamed.
 
 Folders are created as needed when writing a secret.
 
-## Secret References
+## Use existing secrets
 
 A secret can name one Infisical secret by its own coordinates, instead of SecretSpec's layout:
 
 ```toml
+[providers]
+infisical_prod = "infisical://app.infisical.com/7e2f1a4c-...?env=prod"
+
 [profiles.production]
-DATABASE_URL = { description = "Postgres DSN", ref = { item = "/infra/shared/DB_PASSWORD" } }
-API_KEY = { description = "Pinned key", ref = { item = "/infra/API_KEY", version = "3" } }
+DATABASE_URL = { description = "Postgres DSN", ref = { item = "/infra/shared/DB_PASSWORD" }, providers = ["infisical_prod"] }
+API_KEY = { description = "Pinned key", ref = { item = "/infra/API_KEY", version = "3" }, providers = ["infisical_prod"] }
 ```
 
 - `item`: the folder and key. A leading slash names the environment's root — `/infra/shared/DB_PASSWORD`
@@ -116,77 +196,31 @@ A ref has no profile to name an environment with, so the provider URI must pin o
 Infisical secrets are single values with no sub-components, so `field`, `section` and `vault` are
 rejected.
 
-## Imported folders
+## CI/CD
+
+Use Universal Auth credentials stored in the CI platform, or provide an access
+token minted by your deployment environment:
+
+```bash
+$ export INFISICAL_CLIENT_ID="$CI_INFISICAL_CLIENT_ID"
+$ export INFISICAL_CLIENT_SECRET="$CI_INFISICAL_CLIENT_SECRET"
+$ secretspec run --provider "infisical://app.infisical.com/7e2f1a4c-...?env=prod" -- deploy
+```
+
+## Advanced configuration
+
+### Imported folders
 
 A folder that imports another resolves the imported keys too, with Infisical's own precedence: a
 secret defined directly in the folder wins over an imported one, and a later import wins over an
 earlier one. This matches their CLI, so a value reads the same way through either tool.
 
-## Secret references inside values
+### Secret references inside values
 
 Values are read with Infisical's own `${...}` references expanded, matching its CLI, so a value of
 `postgres://${DB_USER}@host` arrives resolved.
 
-## Authentication
-
-### Universal Auth (machine identity)
-
-Create a machine identity in Infisical, grant it access to the project, and set:
-
-```bash
-export INFISICAL_CLIENT_ID=...
-export INFISICAL_CLIENT_SECRET=...
-```
-
-The provider exchanges these for a short-lived access token once per run.
-
-### Token
-
-A token minted elsewhere is used as it stands, which is what CI often has to hand:
-
-```bash
-export INFISICAL_TOKEN=...
-```
-
-Service tokens are not supported: Infisical deprecated them in favour of machine identities.
-
-### Sourcing credentials from another provider
-
-A machine identity's credentials can live in another store rather than in the environment, declared
-as [provider credentials](/concepts/providers/#provider-credentials):
-
-```toml title="secretspec.toml"
-[providers]
-infisical = { uri = "infisical://app.infisical.com/7e2f1a4c-...", credentials = {
-  client_id = "keyring",
-  client_secret = "keyring",
-} }
-```
-
-The provider declares three credentials: `client_id` and `client_secret` for Universal Auth, and
-`token` for a ready-made access token. Each falls back to its environment variable
-(`INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_TOKEN`) when not declared here.
-
-`secretspec config provider login infisical` prompts for each and stores it where resolution later
-reads it from.
-
-## Usage
-
-```bash
-# Store a secret
-secretspec set DATABASE_URL --provider infisical://app.infisical.com/7e2f1a4c-...
-
-# Verify every secret is set
-secretspec check --provider infisical://app.infisical.com/7e2f1a4c-...
-
-# Run with secrets injected
-secretspec run --provider infisical://app.infisical.com/7e2f1a4c-... -- npm start
-```
-
-Secrets sharing a folder are fetched in one request, so a run costs one call per folder rather than
-one per secret.
-
-## Self-hosting
+### Self-hosting
 
 Point the URI at the instance, or set `INFISICAL_DOMAIN`:
 
@@ -198,13 +232,13 @@ secretspec run --provider "infisical:///7e2f1a4c-..." -- npm start
 Infisical's legacy `INFISICAL_API_URL` is honoured too, so an instance already configured for
 their CLI works unchanged. `INFISICAL_DOMAIN` wins when both are set, matching the CLI.
 
-## Approval policies
+### Approval policies
 
 A project under an approval policy turns a write into a change request: Infisical stores nothing
 until a human merges it. `secretspec set` reports that rather than claiming the secret was stored,
 so the value is written once the request is approved.
 
-## Limitations
+## Troubleshooting and limitations
 
 - The project is addressed by UUID; Infisical's API does not accept a project slug
 - A project or profile whose name is not spellable as an Infisical folder (letters, digits, dashes,

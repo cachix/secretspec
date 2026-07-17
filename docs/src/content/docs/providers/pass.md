@@ -5,7 +5,31 @@ description: Unix password manager integration with GPG encryption
 
 The Pass provider stores secrets using the Unix password manager `pass` (password-store). Secrets are GPG-encrypted for secure local development.
 
-## Installation
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `pass` |
+| URI | `pass://[folder_prefix][?store_dir=/path/to/store]` |
+| Access | Read and write |
+| Best for | Local, GPG-encrypted secret storage |
+| Authentication | The GPG key configured for the password store |
+| Default storage | `secretspec/{project}/{profile}/{key}` |
+
+## Quick start
+
+```bash
+# Set a secret
+$ secretspec set DATABASE_URL --provider pass
+Enter value for DATABASE_URL: postgresql://localhost/mydb
+
+# Run with secrets
+$ secretspec run --provider pass -- npm start
+```
+
+## Setup
+
+### Prerequisites
 
 ```bash
 # Debian/Ubuntu
@@ -21,9 +45,18 @@ $ sudo pacman -S pass
 $ brew install pass
 ```
 
+### Authentication
+
+SecretSpec uses the GPG identity configured for the password store. Initialize
+the store once if needed:
+
+```bash
+$ pass init <gpg-key-id>
+```
+
 ## Configuration
 
-### URI Format
+### URI format
 
 ```
 pass://[folder_prefix][?store_dir=/path/to/store]
@@ -32,47 +65,25 @@ pass://[folder_prefix][?store_dir=/path/to/store]
 - `folder_prefix`: Optional path prefix supporting `{project}`, `{profile}`, and `{key}` placeholders. Defaults to `secretspec/{project}/{profile}/{key}`.
 - `store_dir`: Optional password store directory. When set, it is exported as `PASSWORD_STORE_DIR` for every `pass` invocation, overriding the default `~/.password-store`. The variable is scoped to the spawned `pass` process and does not affect secretspec's own environment.
 
-### Examples
+### URI examples
 
-```bash
-# Use default pass storage
-$ secretspec set DATABASE_URL --provider pass
-
-# Custom folder prefix (e.g., to share secrets across projects — see below)
-$ secretspec set DATABASE_URL --provider "pass://shared/{profile}/{key}"
-
-# Custom password store directory
-$ secretspec set DATABASE_URL --provider "pass://?store_dir=/path/to/store"
+```text
+pass
+pass://shared/{profile}/{key}
+pass://?store_dir=/path/to/store
 ```
 
-## Secret References
+### Project configuration
 
-By default each secret is stored at `secretspec/{project}/{profile}/{key}`. A
-secret's [`ref`](/reference/configuration/#secret-references) field names an
-existing store entry instead, letting you read credentials you already keep in
-`pass`: `item` is the entry path (`field` is not supported). Reads and writes
-target that entry in place.
+```toml title="secretspec.toml"
+[providers]
+local = "pass://"
 
-```toml
 [profiles.default]
-GITHUB_TOKEN = { description = "GH token", ref = { item = "github/token" }, providers = ["pass"] }
+DATABASE_URL = { description = "Database URL", providers = ["local"] }
 ```
 
-## Usage
-
-```bash
-# Initialize password store (first time only)
-$ pass init <gpg-key-id>
-
-# Set a secret
-$ secretspec set DATABASE_URL
-Enter value for DATABASE_URL: postgresql://localhost/mydb
-
-# Run with secrets
-$ secretspec run -- npm start
-```
-
-## Storage Format
+## Storage model
 
 Secrets are stored with a hierarchical path structure:
 `secretspec/{project}/{profile}/{key}`
@@ -83,7 +94,21 @@ $ pass show secretspec/myapp/default/DATABASE_URL
 postgresql://localhost/mydb
 ```
 
-## Shared Secrets
+## Use existing secrets
+
+A secret's [`ref`](/reference/configuration/#secret-references) field names an
+existing store entry instead, letting you read credentials you already keep in
+`pass`: `item` is the entry path (`field` is not supported). Reads and writes
+target that entry in place.
+
+```toml
+[profiles.default]
+GITHUB_TOKEN = { description = "GH token", ref = { item = "github/token" }, providers = ["pass"] }
+```
+
+## Advanced configuration
+
+### Shared secrets
 
 By default, secrets are stored under `secretspec/{project}/{profile}/{key}`, which isolates them per project. To share secrets across projects, use a custom folder prefix via the URI:
 

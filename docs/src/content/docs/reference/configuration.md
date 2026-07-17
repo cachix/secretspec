@@ -152,10 +152,10 @@ Provider aliases may be declared in two places:
 On conflict the project-level alias wins, so a stale local config cannot silently shadow the team's mapping.
 
 :::note[Version compatibility]
-SecretSpec 0.14 accepts provider alias values only as bare URI strings.
-The table form with `uri` and `credentials` is an upcoming SecretSpec 0.15
-feature. If you use 0.14, configure provider credentials through the
-provider's existing environment variables, such as `BWS_ACCESS_TOKEN`.
+Provider alias tables with `uri` and `credentials` are available since
+SecretSpec 0.15. SecretSpec 0.14 accepts only bare URI strings; when using
+0.14, configure provider credentials through the provider's existing
+environment variables, such as `BWS_ACCESS_TOKEN`.
 :::
 
 ```toml title="secretspec.toml"
@@ -195,26 +195,9 @@ $ secretspec config provider remove prod_vault
 
 The CLI commands operate on the user-global config only — edit `secretspec.toml` by hand to change project-level aliases.
 
-#### SecretSpec 0.14 alias values
-
-In SecretSpec 0.14, every alias value must be a provider URI string:
-
-```toml title="secretspec.toml"
-[providers]
-bws = "bws://project-uuid"
-```
-
-For example, authenticate the 0.14 BWS provider by setting its environment
-variable before running SecretSpec:
-
-```bash
-export BWS_ACCESS_TOKEN="0.your-access-token..."
-secretspec check
-```
-
 #### SecretSpec 0.15 alias values
 
-Starting with SecretSpec 0.15, an alias value is either a bare provider URI
+In SecretSpec 0.15 and later, an alias value is either a bare provider URI
 string or a table that also declares the credentials the provider needs. Both
 forms are accepted in the project `[providers]` and user
 `[defaults.providers]` tables.
@@ -239,6 +222,23 @@ credentials = { role_id   = { provider = "onepassword", ref = { vault = "Infra",
 ```
 
 Configured credentials take precedence over provider environment fallbacks, credential chains are limited to one hop, and a fetched credential is never written to the environment. Store the credentials with [`secretspec config provider login`](/reference/cli/#config-provider-login). See [Provider Credentials](/concepts/providers/#provider-credentials) for the full behavior.
+
+#### SecretSpec 0.14 alias values
+
+In SecretSpec 0.14, every alias value must be a provider URI string:
+
+```toml title="secretspec.toml"
+[providers]
+bws = "bws://project-uuid"
+```
+
+For example, authenticate the 0.14 BWS provider by setting its environment
+variable before running SecretSpec:
+
+```bash
+export BWS_ACCESS_TOKEN="0.your-access-token..."
+secretspec check
+```
 
 ### Audit Logging
 
@@ -337,17 +337,20 @@ chain, and each provider is asked for the same coordinates.
 
 | Provider | `item` | `field` | Without `field` | Writes via ref |
 |----------|--------|---------|-----------------|----------------|
-| [OnePassword](/providers/onepassword/#secret-references) | Item title or UUID | Field label; `vault` and `section` also apply | Reads the item like a convention secret (its value or password field); writes edit the `value` field | ✅ via `op item edit` (adds a missing field, never creates items) |
-| [keyring](/providers/keyring/#secret-references) | Service | Account (defaults to the current system username) | Current user's entry | ✅ |
-| [dotenv](/providers/dotenv/#secret-references) | `.env` key | Rejected | Reads the key | ✅ |
-| [env](/providers/env/#secret-references) | Variable name | Rejected | Reads the variable | — (read-only) |
-| [pass](/providers/pass/#secret-references) | Entry path | Rejected | Reads the entry | ✅ |
-| [LastPass](/providers/lastpass/#secret-references) | Item name | Rejected | Reads the item | ✅ |
-| [Proton Pass](/providers/protonpass/#secret-references) | Item title | Rejected | Reads the note | ✅ |
-| [Vault / OpenBao](/providers/vault/#secret-references) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
-| [AWS Secrets Manager](/providers/awssm/#secret-references) | Secret name or ARN | JSON key | Whole secret string | — (read-only) |
-| [GCSM](/providers/gcsm/#secret-references) | Secret id; `version` also applies | Rejected | Reads latest or the pinned version | — (read-only) |
-| [Bitwarden (bws)](/providers/bws/#secret-references) | BWS key name | Rejected | Reads the key | ✅ |
+| [OnePassword](/providers/onepassword/#use-existing-secrets) | Item title or UUID | Field label; `vault` and `section` also apply | Reads the item like a convention secret (its value or password field); writes edit the `value` field | ✅ via `op item edit` (adds a missing field, never creates items) |
+| [keyring](/providers/keyring/#use-existing-secrets) | Service | Account (defaults to the current system username) | Current user's entry | ✅ |
+| [dotenv](/providers/dotenv/#use-existing-secrets) | `.env` key | Rejected | Reads the key | ✅ |
+| [env](/providers/env/#use-existing-secrets) | Variable name | Rejected | Reads the variable | — (read-only) |
+| [pass](/providers/pass/#use-existing-secrets) | Entry path | Rejected | Reads the entry | ✅ |
+| [Gopass (0.15+)](/providers/gopass/#use-existing-secrets) | Entry path, including any mount-point prefix | Rejected | Reads the entry | ✅ |
+| [LastPass](/providers/lastpass/#use-existing-secrets) | Item name | Rejected | Reads the item | ✅ |
+| [Proton Pass](/providers/protonpass/#use-existing-secrets) | Item title | Rejected | Reads the note | ✅ |
+| [Vault / OpenBao](/providers/vault/#use-existing-secrets) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
+| [AWS Secrets Manager](/providers/awssm/#use-existing-secrets) | Secret name or ARN | JSON key | Whole secret string | — (read-only) |
+| [GCSM](/providers/gcsm/#use-existing-secrets) | Secret id; `version` also applies | Rejected | Reads latest or the pinned version | — (read-only) |
+| [Bitwarden (bws)](/providers/bws/#use-existing-secrets) | BWS key name | Rejected | Reads the key | ✅ |
+| [Azure Key Vault (0.15+)](/providers/akv/#use-existing-secrets) | Secret name | Rejected | Reads the secret | — (read-only) |
+| [Infisical (0.16+)](/providers/infisical/#use-existing-secrets) | Folder and key; `version` also applies | Rejected | Reads the latest version | ✅ unless a version is pinned |
 
 A provider rejects coordinates it has no equivalent for, with an error naming
 the coordinate (for example, `field` on the env provider).

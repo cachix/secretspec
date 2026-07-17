@@ -5,6 +5,10 @@ description: Complete reference for SecretSpec storage providers and their URI c
 
 SecretSpec supports multiple storage backends for secrets. Each provider has its own URI format and configuration options.
 
+This page is a compact URI reference. For installation, authentication,
+copyable project configuration, storage behavior, and CI/CD guidance, follow
+the link for the individual provider.
+
 ## DotEnv Provider
 
 **URI**: `dotenv://[path]` - Stores secrets in `.env` files
@@ -53,21 +57,23 @@ keyring://                   # System default keychain
 ```
 
 **Features**: Read/write, secure encryption, profiles, cross-platform
-**Storage**: Service `secretspec/{project}`, username `{profile}:{key}`
+**Storage**: Service `secretspec/{project}/{profile}/{key}`, with the current
+operating-system username as the account
 
 ## LastPass Provider
 
-**URI**: `lastpass://[folder]` - Integrates with LastPass via `lpass` CLI
+**URI**: `lastpass://[item_template]` - Integrates with LastPass via `lpass` CLI
 
 ```bash
-lastpass://work              # Store in work folder
-lastpass:///personal/projects # Nested folder
-lastpass://localhost         # Root (no folder)
+lastpass://                                      # Default layout
+lastpass://Work/SecretSpec/{project}/{profile}/{key} # Custom item template
 ```
 
 **Features**: Read/write, cloud sync, profiles via folders, auto-sync
 **Prerequisites**: `lpass` CLI, authenticated with `lpass login`
-**Storage**: Item name `{folder}/{profile}/{project}/{key}`
+**Storage**: Item name `secretspec/{project}/{profile}/{key}` by default. A URI
+item template replaces the default and supports `{project}`, `{profile}`, and
+`{key}` placeholders.
 
 ## OnePassword Provider
 
@@ -80,8 +86,10 @@ onepassword+token://user:op_token@SecureVault   # Service account
 ```
 
 **Features**: Read/write, cloud sync, profiles via vaults, service accounts
-**Prerequisites**: `op` CLI, authenticated with `op signin`
-**Storage**: Item name `{project}/{key}`, tags `automated`, `{project}`
+**Prerequisites**: `op` CLI, authenticated through desktop app integration, a
+service account token, or a legacy `op signin` shell session
+**Storage**: Secure Note named `secretspec/{project}/{profile}/{key}`, with tags
+`automated` and `{project}`
 
 The URI names a vault only; item paths on the URI are rejected. To read and
 write an existing item's field in place, name it with the `ref` field

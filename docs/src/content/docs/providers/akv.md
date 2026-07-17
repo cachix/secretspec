@@ -6,19 +6,55 @@ description: Azure Key Vault integration
 The Azure Key Vault provider integrates with Azure for centralized secret management.
 
 :::note[Version compatibility]
-The Azure Key Vault provider is an upcoming SecretSpec 0.15 feature and is not
-available in SecretSpec 0.14.
+Available since SecretSpec 0.15.
 :::
 
-## Prerequisites
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `akv` |
+| URI | `akv://VAULT_NAME[?auth=METHOD][&suffix=DNS_SUFFIX]` |
+| Access | Read and write; secret references are read-only |
+| Best for | Workloads and teams on Azure |
+| Authentication | Service principal, Azure CLI, managed identity, or workload identity |
+| Availability | SecretSpec 0.15+; requires the `akv` build feature |
+| Default storage | `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}` |
+
+## Quick start
+
+```bash
+# Set a secret
+$ secretspec set DATABASE_URL --provider akv://myvault
+Enter value for DATABASE_URL: postgresql://localhost/mydb
+✓ Secret 'DATABASE_URL' saved to akv (profile: default)
+
+# Get it back
+$ secretspec get DATABASE_URL --provider akv://myvault
+postgresql://localhost/mydb
+```
+
+## Setup
+
+### Prerequisites
 
 - An Azure Key Vault instance
 - Authenticated via a service principal, the Azure CLI (`az login`), a managed identity, or AKS workload identity
 - Build with `--features akv`
 
+### Authentication
+
+Select an authentication mode with the URI's `auth` option:
+
+- `env` (default): service-principal provider credentials or environment
+  variables, falling back to an Azure CLI session when none are set.
+- `cli`: Azure CLI or Azure Developer CLI only.
+- `managed_identity`: system-assigned managed identity.
+- `workload_identity`: AKS workload identity federation.
+
 ## Configuration
 
-### URI Format
+### URI format
 
 ```
 akv://VAULT_NAME[?auth=env|cli|managed_identity|workload_identity][&suffix=DNS_SUFFIX]
@@ -32,58 +68,26 @@ akv://VAULT_NAME[?auth=env|cli|managed_identity|workload_identity][&suffix=DNS_S
   - `workload_identity` — AKS workload identity federation (`AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_FEDERATED_TOKEN_FILE`, injected automatically by AKS)
 - `suffix`: an explicit Key Vault DNS suffix for a bare `VAULT_NAME`, e.g. `akv://myvault?suffix=vault.azure.cn` for a sovereign cloud, instead of relying on a dotted `VAULT_NAME`
 
-### Examples
+### URI examples
 
-```bash
-# Set a secret (reads env vars, or falls back to `az login`)
-$ secretspec set DATABASE_URL --provider akv://myvault
-
-# Get a secret
-$ secretspec get DATABASE_URL --provider akv://myvault
-
-# Check secrets using a managed identity
-$ secretspec check --provider akv://myvault?auth=managed_identity
-
-# Run with secrets
-$ secretspec run --provider akv://myvault -- npm start
-
-# Sovereign cloud, via an explicit suffix instead of a dotted vault name
-$ secretspec check --provider akv://myvault?suffix=vault.azure.cn
+```text
+akv://myvault
+akv://myvault?auth=managed_identity
+akv://myvault?auth=workload_identity
+akv://myvault?suffix=vault.azure.cn
 ```
 
-## Secret References
+### Project configuration
 
-By default each secret is stored as
-`secretspec--{base32(project)}--{base32(profile)}--{base32(key)}`. A secret's
-[`ref`](/reference/configuration/#secret-references) field names an
-existing secret instead: `item` is the secret name (`field` and `version` are
-not yet supported). References are **read-only** in this provider, and `item`
-must already be a valid Azure Key Vault secret name (letters, digits, and
-hyphens only) — unlike convention secrets, it is validated but never rewritten,
-since silently rewriting a `ref` could point at a different secret than the
-one you named.
+```toml title="secretspec.toml"
+[providers]
+azure = "akv://myvault"
 
-```toml
 [profiles.production]
-DATABASE_URL = { description = "DB", ref = { item = "database-url" }, providers = ["akv://myvault"] }
+DATABASE_URL = { description = "Database URL", providers = ["azure"] }
 ```
 
-## Usage
-
-### Basic Commands
-
-```bash
-# Set a secret
-$ secretspec set DATABASE_URL --provider akv://myvault
-Enter value for DATABASE_URL: postgresql://localhost/mydb
-✓ Secret 'DATABASE_URL' saved to akv (profile: default)
-
-# Get it back
-$ secretspec get DATABASE_URL --provider akv://myvault
-postgresql://localhost/mydb
-```
-
-### Secret Naming
+## Storage model
 
 Azure Key Vault secret names may only contain ASCII letters, digits and
 hyphens, and Azure compares object identifiers case-insensitively. SecretSpec
@@ -97,7 +101,25 @@ though Key Vault's identifiers do not preserve all of those distinctions. The
 encoded components contain no hyphens, so the `--` component separators cannot
 be confused with component data.
 
-### CI/CD with a Service Principal
+## Use existing secrets
+
+A secret's
+[`ref`](/reference/configuration/#secret-references) field names an
+existing secret instead: `item` is the secret name (`field` and `version` are
+not yet supported). References are **read-only** in this provider, and `item`
+must already be a valid Azure Key Vault secret name (letters, digits, and
+hyphens only) — unlike convention secrets, it is validated but never rewritten,
+since silently rewriting a `ref` could point at a different secret than the
+one you named.
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "DB", ref = { item = "database-url" }, providers = ["akv://myvault"] }
+```
+
+## CI/CD
+
+### Service principal
 
 The `auth=env` mode accepts `tenant_id`, `client_id`, and `client_secret` as
 [provider credentials](/concepts/providers/#provider-credentials). For example,
@@ -137,7 +159,7 @@ Across provider credentials and environment fallbacks, all three values must be
 available together. A partial service principal is treated as a configuration
 error rather than a silent fallback to the Azure CLI session.
 
-### AKS with Workload Identity
+### AKS workload identity
 
 ```bash
 # AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_FEDERATED_TOKEN_FILE are

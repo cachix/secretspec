@@ -111,6 +111,9 @@ jobs:
   dotnet:
     name: .NET package
     needs: authorize
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/dotnet-package.yml
 
   release-artifacts:

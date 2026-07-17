@@ -95,11 +95,20 @@ No CI workflow or token is involved — Packagist pulls from the tag on push.
 
 ### NuGet (.NET) — not yet set up
 
-The `Cachix.SecretSpec` package is built by `dotnet-package.yml`. Before its
-first release, reserve the package ID on nuget.org and add an
-`NUGET_API_KEY` secret to the repository's `nuget` environment, scoped to push
-only `Cachix.SecretSpec`. Version tags then build all native runtime assets,
-pack them into one `.nupkg`, and publish it automatically.
+The `Cachix.SecretSpec` package is built by `dotnet-package.yml` and published
+with NuGet Trusted Publishing (OIDC), so no long-lived API key is stored.
+Before the first release:
+
+1. On nuget.org, create a trusted publishing policy: repository owner
+   `cachix`, repository `secretspec`, workflow file `dotnet-package.yml`
+   (file name only), environment `nuget`.
+2. Set a `NUGET_USER` secret in the repository's `nuget` GitHub environment
+   to the nuget.org profile name (not email) that owns the policy.
+
+Version tags then build all native runtime assets, pack them into one
+`.nupkg`, and publish it automatically with a short-lived OIDC-issued API
+key. The first successful publish claims the `Cachix.SecretSpec` package ID
+and permanently activates the policy.
 
 ## Python (PyPI) — `python-wheels.yml`
 
@@ -253,6 +262,6 @@ In order:
   `osx-arm64`, and `win-x64`. Linux builds use a manylinux 2.28 baseline and
   the resolver's vendored-dbus feature.
 - **Publish:** `dotnet-package.yml` tests every native asset on its target,
-  assembles `Cachix.SecretSpec.<version>.nupkg`, and pushes it with the
-  `NUGET_API_KEY` stored in the `nuget` GitHub environment. One-time setup is
-  described above.
+  assembles `Cachix.SecretSpec.<version>.nupkg`, and pushes it with a
+  short-lived API key from NuGet Trusted Publishing (OIDC), running in the
+  `nuget` GitHub environment. One-time setup is described above.

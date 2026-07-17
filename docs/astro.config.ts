@@ -144,15 +144,15 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
         {
           label: "Concepts",
           items: [
-            { label: "Overview (0.1+)", slug: "concepts/overview" },
+            { label: "Overview", slug: "concepts/overview" },
             {
-              label: "Declarative Configuration (0.1+)",
+              label: "Declarative Configuration",
               slug: "concepts/declarative",
             },
-            { label: "Profiles (0.1+)", slug: "concepts/profiles" },
-            { label: "Providers (0.1+)", slug: "concepts/providers" },
+            { label: "Profiles", slug: "concepts/profiles" },
+            { label: "Providers", slug: "concepts/providers" },
             {
-              label: "Configuration Inheritance (0.1+)",
+              label: "Configuration Inheritance",
               slug: "concepts/inheritance",
             },
             { label: "Secret Generation (0.7+)", slug: "concepts/generation" },
@@ -201,7 +201,7 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
           label: "SDK",
           items: [
             { label: "Overview (0.13+)", slug: "sdk/overview" },
-            { label: "Rust (0.1+)", slug: "sdk/rust" },
+            { label: "Rust", slug: "sdk/rust" },
             { label: "Python (0.13+)", slug: "sdk/python" },
             { label: "Go (0.13+)", slug: "sdk/go" },
             { label: "Ruby (0.13+)", slug: "sdk/ruby" },

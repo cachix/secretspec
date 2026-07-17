@@ -39,22 +39,6 @@
 # 7. Secure Note Item: "Note to Self"
 #    - Note contents: this is a note.
 #
-# BWS (BITWARDEN SECRETS MANAGER) SETUP:
-# ---------------------------------------
-# If testing BWS functionality, create these secrets in your BWS project:
-# - TEST_BWS_SECRET with value: bws_secret_value_123
-# - API_TOKEN with value: bws_api_token_456
-# - DATABASE_URL with value: (any database URL)
-#
-# Set BWS_ACCESS_TOKEN environment variable with your BWS access token.
-#
-# AUTHENTICATION:
-# ---------------
-# 1. Install Bitwarden CLI: npm install -g @bitwarden/cli
-# 2. Login: bw login
-# 3. Unlock vault: bw unlock
-# 4. Pass the session key to this script or set BW_SESSION environment variable
-
 set -e  # Exit on any error
 
 # Get BW_SESSION from command line or environment
@@ -157,14 +141,6 @@ fi
 
 echo -e "${GREEN}✓ Bitwarden CLI is authenticated and unlocked${NC}"
 
-# Check if BWS is available and authenticated
-if command -v bws &> /dev/null && [ -n "$BWS_ACCESS_TOKEN" ]; then
-    echo -e "${GREEN}✓ BWS CLI is available with access token${NC}"
-    BWS_AVAILABLE=true
-else
-    echo -e "${YELLOW}⚠ BWS CLI or BWS_ACCESS_TOKEN not available - skipping BWS tests${NC}"
-    BWS_AVAILABLE=false
-fi
 
 # Create a test secretspec.toml
 echo -e "\n${YELLOW}Setting up test configuration${NC}"
@@ -192,10 +168,6 @@ NEW_LOGIN_SECRET = { required = false, description = "New login secret for creat
 NEW_CARD_TOKEN = { required = false, description = "New card token for creation test" }
 DATABASE_PASSWORD = { required = false, description = "Database password for update test" }
 
-# BWS secrets (optional) - using actual BWS key names
-TEST_BWS_SECRET = { required = false, description = "Test secret from BWS" }
-API_TOKEN = { required = false, description = "API token from BWS" }
-DATABASE_URL = { required = false, description = "Database URL from BWS" }
 EOF
 
 echo -e "${GREEN}✓ Created test secretspec.toml${NC}"
@@ -313,27 +285,6 @@ run_test "Create new Card item with custom field" \
 run_test "Update existing Login item" \
     "./target/debug/secretspec set DATABASE_PASSWORD 'updated-password' --provider 'bitwarden://?type=login'" \
     "Secret.*saved"
-
-# BWS Tests (if available)
-if [ "$BWS_AVAILABLE" = true ]; then
-    echo -e "\n${YELLOW}=== BWS (SECRETS MANAGER) TESTS ===${NC}"
-
-    # Test 23: Get secret from BWS
-    run_test "Get secret from BWS" \
-        "./target/debug/secretspec get TEST_BWS_SECRET --provider bws://" \
-        "bws_secret_value_123"
-
-    # Test 24: Get API token from BWS
-    run_test "Get API token from BWS" \
-        "./target/debug/secretspec get API_TOKEN --provider bws://" \
-        "bws_api_token_456"
-fi
-
-echo -e "\n${YELLOW}=== TEST SUMMARY ===${NC}"
-echo "=========================================="
-echo "Tests Run:    $TESTS_RUN"
-echo -e "Tests Passed: ${GREEN}$TESTS_PASSED${NC}"
-echo -e "Tests Failed: ${RED}$TESTS_FAILED${NC}"
 
 if [ $TESTS_FAILED -eq 0 ]; then
     echo -e "\n${GREEN}🎉 ALL TESTS PASSED!${NC}"

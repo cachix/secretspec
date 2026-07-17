@@ -5,15 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::process::Command;
 use url::Url;
 
-/// Bitwarden service type enum for distinguishing between Password Manager and Secrets Manager
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum BitwardenService {
-    /// Password Manager service (uses `bw` CLI)
-    PasswordManager,
-    /// Secrets Manager service (uses `bws` CLI)
-    SecretsManager,
-}
-
 /// Bitwarden item type enum for different vault item types
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum BitwardenItemType {
@@ -448,121 +439,43 @@ where
     serializer.serialize_u8(field_type.to_u8())
 }
 
-/// Represents a Bitwarden Secrets Manager secret retrieved from the `bws` CLI.
-///
-/// This struct deserializes the JSON output from `bws secret get` and `bws secret list` commands.
-/// Unlike Password Manager items, Secrets Manager secrets are native key-value pairs.
-#[derive(Debug, Deserialize, Serialize)]
-struct BitwardenSecret {
-    /// Type of object (may not always be present in responses).
-    #[serde(default)]
-    pub object: Option<String>,
-    /// Unique identifier for the secret.
-    pub id: String,
-    /// Organization ID that owns this secret.
-    #[serde(rename = "organizationId")]
-    pub organization_id: String,
-    /// Project ID that contains this secret.
-    #[serde(rename = "projectId")]
-    pub project_id: String,
-    /// The secret key name.
-    pub key: String,
-    /// The secret value.
-    pub value: String,
-    /// Optional note/description for the secret.
-    pub note: String,
-    /// When the secret was created.
-    #[serde(rename = "creationDate")]
-    pub creation_date: String,
-    /// When the secret was last modified.
-    #[serde(rename = "revisionDate")]
-    pub revision_date: String,
-}
-
-/// Represents a Bitwarden Secrets Manager project.
-///
-/// Projects are used to organize secrets in Secrets Manager.
-#[derive(Debug, Deserialize, Serialize)]
-struct BitwardenProject {
-    /// Type of object (always "project").
-    pub object: String,
-    /// Unique identifier for the project.
-    pub id: String,
-    /// Organization ID that owns this project.
-    #[serde(rename = "organizationId")]
-    pub organization_id: String,
-    /// The project name.
-    pub name: String,
-    /// When the project was created.
-    #[serde(rename = "creationDate")]
-    pub creation_date: String,
-    /// When the project was last modified.
-    #[serde(rename = "revisionDate")]
-    pub revision_date: String,
-}
-
-/// Configuration for the Bitwarden provider.
+/// Configuration for the Bitwarden Password Manager provider.
 ///
 /// This struct contains all the necessary configuration options for
-/// interacting with both Bitwarden Password Manager and Secrets Manager.
+/// interacting with Bitwarden Password Manager.
 /// It supports various authentication methods and organizational contexts.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// # use secretspec::provider::bitwarden::{BitwardenConfig, BitwardenService};
-/// // Password Manager configuration (personal vault)
-/// let config = BitwardenConfig {
-///     service: BitwardenService::PasswordManager,
-///     ..Default::default()
-/// };
-///
-/// // Secrets Manager configuration with specific project
-/// let config = BitwardenConfig {
-///     service: BitwardenService::SecretsManager,
-///     project_id: Some("be8e0ad8-d545-4017-a55a-b02f014d4158".to_string()),
-///     ..Default::default()
-/// };
+/// # use secretspec::provider::bitwarden::BitwardenConfig;
+/// // Personal vault
+/// let config = BitwardenConfig::default();
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BitwardenConfig {
-    /// Which Bitwarden service to use
-    pub service: BitwardenService,
-
-    // Password Manager specific fields
-    /// Optional organization ID for organization vaults (Password Manager only).
+    /// Optional organization ID for organization vaults.
     ///
     /// When set, secrets are stored in the specified organization
     /// rather than the personal vault. Used with the `--organizationid`
     /// flag in CLI commands. Can be overridden by BITWARDEN_ORGANIZATION environment variable.
     pub organization_id: Option<String>,
-    /// Optional collection ID for organizing secrets within an organization (Password Manager only).
+    /// Optional collection ID for organizing secrets within an organization.
     ///
     /// When set along with organization_id, secrets are stored in
     /// the specified collection. Used for team-based secret organization.
     /// Can be overridden by BITWARDEN_COLLECTION environment variable.
     pub collection_id: Option<String>,
-    /// Server URL for self-hosted Bitwarden instances (Password Manager only).
+    /// Server URL for self-hosted Bitwarden instances.
     ///
     /// When set, the CLI will be configured to use the specified server
     /// instead of the default bitwarden.com. Should include the full URL.
     pub server: Option<String>,
-    /// Optional folder name prefix for organizing secrets in Bitwarden (Password Manager only).
+    /// Optional folder name prefix for organizing secrets in Bitwarden.
     ///
     /// Supports placeholders: {project} and {profile}.
     /// Defaults to "secretspec/{project}/{profile}" if not specified.
     pub folder_prefix: Option<String>,
-
-    // Secrets Manager specific fields
-    /// Optional project ID for Secrets Manager projects.
-    ///
-    /// When set, secrets are stored in/retrieved from the specified project.
-    /// If not set, operations may work across all accessible projects.
-    pub project_id: Option<String>,
-    /// Optional access token for Secrets Manager authentication.
-    ///
-    /// If not provided, will use BWS_ACCESS_TOKEN environment variable.
-    pub access_token: Option<String>,
 
     // Flexible item creation fields
     /// Default item type for creating new items.
@@ -576,13 +489,10 @@ pub struct BitwardenConfig {
 impl Default for BitwardenConfig {
     fn default() -> Self {
         Self {
-            service: BitwardenService::PasswordManager,
             organization_id: None,
             collection_id: None,
             server: None,
             folder_prefix: None,
-            project_id: None,
-            access_token: None,
             default_item_type: Some(BitwardenItemType::Login), // Login by default
             default_field: None,
         }
@@ -595,92 +505,48 @@ impl TryFrom<&Url> for BitwardenConfig {
     fn try_from(url: &Url) -> std::result::Result<Self, Self::Error> {
         let scheme = url.scheme();
 
-        // Determine service based on scheme
-        let service = match scheme {
-            "bitwarden" => BitwardenService::PasswordManager,
-            "bws" => BitwardenService::SecretsManager,
-            _ => {
-                return Err(SecretSpecError::ProviderOperationFailed(format!(
-                    "Invalid scheme '{}' for Bitwarden provider. Use 'bitwarden://' for Password Manager or 'bws://' for Secrets Manager",
-                    scheme
-                )));
-            }
-        };
+        if scheme != "bitwarden" {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Invalid scheme '{}' for Bitwarden provider. Use 'bitwarden://' for Password Manager",
+                scheme
+            )));
+        }
 
-        let mut config = BitwardenConfig {
-            service: service.clone(),
-            ..Default::default()
-        };
+        let mut config = BitwardenConfig::default();
 
-        match service {
-            BitwardenService::PasswordManager => {
-                // Parse Password Manager specific configuration
-                if let Some(host) = url.host_str() {
-                    if host != "localhost" {
-                        // Check if we have username (organization) information
-                        if !url.username().is_empty() {
-                            // Handle org@collection format
-                            config.organization_id = Some(url.username().to_string());
-                            config.collection_id = Some(host.to_string());
-                        } else {
-                            // Just collection ID
-                            config.collection_id = Some(host.to_string());
-                        }
-                    }
-                }
-
-                // Parse query parameters for Password Manager
-                for (key, value) in url.query_pairs() {
-                    match key.as_ref() {
-                        "org" | "organization" => config.organization_id = Some(value.into_owned()),
-                        "collection" => config.collection_id = Some(value.into_owned()),
-                        "server" => config.server = Some(value.into_owned()),
-                        "folder" => config.folder_prefix = Some(value.into_owned()),
-                        "type" => {
-                            if let Some(item_type) = BitwardenItemType::from_str(&value) {
-                                config.default_item_type = Some(item_type);
-                            }
-                        }
-                        "field" => config.default_field = Some(value.into_owned()),
-                        _ => {} // Ignore unknown parameters
-                    }
-                }
-            }
-            BitwardenService::SecretsManager => {
-                // Parse Secrets Manager specific configuration
-                if let Some(host) = url.host_str() {
-                    if host != "localhost" {
-                        // Host is the project ID for Secrets Manager
-                        config.project_id = Some(host.to_string());
-                    }
-                }
-
-                // Parse query parameters for Secrets Manager
-                for (key, value) in url.query_pairs() {
-                    match key.as_ref() {
-                        "project" => config.project_id = Some(value.into_owned()),
-                        "token" => config.access_token = Some(value.into_owned()),
-                        "type" => {
-                            if let Some(item_type) = BitwardenItemType::from_str(&value) {
-                                config.default_item_type = Some(item_type);
-                            }
-                        }
-                        "field" => config.default_field = Some(value.into_owned()),
-                        _ => {} // Ignore unknown parameters
-                    }
+        // Parse Password Manager configuration
+        if let Some(host) = url.host_str() {
+            if host != "localhost" {
+                // Check if we have username (organization) information
+                if !url.username().is_empty() {
+                    // Handle org@collection format
+                    config.organization_id = Some(url.username().to_string());
+                    config.collection_id = Some(host.to_string());
+                } else {
+                    // Just collection ID
+                    config.collection_id = Some(host.to_string());
                 }
             }
         }
 
+        // Parse query parameters
+        for (key, value) in url.query_pairs() {
+            match key.as_ref() {
+                "org" | "organization" => config.organization_id = Some(value.into_owned()),
+                "collection" => config.collection_id = Some(value.into_owned()),
+                "server" => config.server = Some(value.into_owned()),
+                "folder" => config.folder_prefix = Some(value.into_owned()),
+                "type" => {
+                    if let Some(item_type) = BitwardenItemType::from_str(&value) {
+                        config.default_item_type = Some(item_type);
+                    }
+                }
+                "field" => config.default_field = Some(value.into_owned()),
+                _ => {} // Ignore unknown parameters
+            }
+        }
+
         Ok(config)
-    }
-}
-
-impl TryFrom<Url> for BitwardenConfig {
-    type Error = SecretSpecError;
-
-    fn try_from(url: Url) -> std::result::Result<Self, Self::Error> {
-        (&url).try_into()
     }
 }
 
@@ -728,14 +594,12 @@ crate::register_provider! {
     struct: BitwardenProvider,
     config: BitwardenConfig,
     name: "bitwarden",
-    description: "Bitwarden Password Manager and Secrets Manager",
-    schemes: ["bitwarden", "bws"],
+    description: "Bitwarden Password Manager",
+    schemes: ["bitwarden"],
     examples: [
         "bitwarden://",
         "bitwarden://collection-id",
-        "bitwarden://org@collection",
-        "bws://",
-        "bws://project-id"
+        "bitwarden://org@collection"
     ],
 }
 
@@ -815,85 +679,6 @@ impl BitwardenProvider {
             .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))
     }
 
-    /// Executes a Bitwarden Secrets Manager CLI command with proper error handling.
-    ///
-    /// This method handles:
-    /// - Setting up access token authentication
-    /// - Executing the command
-    /// - Parsing error messages for common issues
-    /// - Providing helpful error messages for missing CLI
-    /// - Rate limiting detection and guidance
-    ///
-    /// # Arguments
-    ///
-    /// * `args` - The command arguments to pass to `bws`
-    ///
-    /// # Returns
-    ///
-    /// * `Result<String>` - The command output or an error
-    ///
-    /// # Errors
-    ///
-    /// Returns specific errors for:
-    /// - Missing Bitwarden Secrets Manager CLI installation
-    /// - Authentication required (missing access token)
-    /// - Rate limiting issues
-    /// - Command execution failures
-    fn execute_bws_command(&self, args: &[&str]) -> Result<String> {
-        let mut cmd = Command::new("bws");
-
-        // Configure access token - check config first, then environment variable
-        if let Some(token) = &self.config.access_token {
-            cmd.env("BWS_ACCESS_TOKEN", token);
-        } else if let Ok(token) = std::env::var("BWS_ACCESS_TOKEN") {
-            cmd.env("BWS_ACCESS_TOKEN", token);
-        }
-
-        cmd.args(args);
-
-        let output = match cmd.output() {
-            Ok(output) => output,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(SecretSpecError::ProviderOperationFailed(
-                    "Bitwarden Secrets Manager CLI (bws) is not installed.\n\nTo install it:\n  - Cargo: cargo install bws\n  - Script: curl -sSL https://bitwarden.com/secrets/install | sh\n  - Download: https://github.com/bitwarden/sdk-sm/releases\n\nAfter installation, set BWS_ACCESS_TOKEN environment variable with your access token.".to_string(),
-                ));
-            }
-            Err(e) => return Err(e.into()),
-        };
-
-        if !output.status.success() {
-            let error_msg = String::from_utf8_lossy(&output.stderr);
-
-            // Handle common Secrets Manager errors
-            if error_msg.contains("Access token is required") || error_msg.contains("Unauthorized")
-            {
-                return Err(SecretSpecError::ProviderOperationFailed(
-                    "Bitwarden Secrets Manager authentication required. Please set the BWS_ACCESS_TOKEN environment variable with your machine account access token.".to_string(),
-                ));
-            }
-
-            if error_msg.contains("Internal error: Failed to parse IdentityTokenResponse") {
-                return Err(SecretSpecError::ProviderOperationFailed(
-                    "Bitwarden Secrets Manager rate limit exceeded. Please wait ~20 seconds and try again. Consider using state files to reduce API calls.".to_string(),
-                ));
-            }
-
-            if error_msg.contains("Resource not found") || error_msg.contains("Not found") {
-                // This often indicates permission issues rather than missing resources
-                return Err(SecretSpecError::ProviderOperationFailed(
-                    "Bitwarden Secrets Manager access denied. Please verify:\n1. Machine account has read/write access to the specified project\n2. Project ID is correct\n3. Organization permissions are properly configured\n\nResource not found errors often indicate permission issues rather than missing resources.".to_string()
-                ));
-            }
-
-            return Err(SecretSpecError::ProviderOperationFailed(format!(
-                "Bitwarden Secrets Manager CLI error: {}",
-                error_msg
-            )));
-        }
-
-        String::from_utf8(output.stdout)
-            .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))
-    }
 
     /// Checks if the user is authenticated with Bitwarden.
     ///
@@ -1396,45 +1181,6 @@ impl BitwardenProvider {
         Ok(None)
     }
 
-    /// Gets a secret from Bitwarden Secrets Manager.
-    fn get_from_secrets_manager(
-        &self,
-        project: &str,
-        key: &str,
-        _profile: &str,
-    ) -> Result<Option<SecretString>> {
-        // For Secrets Manager, we create a secret name based on project and key
-        // Profile is encoded in the secret name since SM doesn't have built-in profile support
-        let secret_name = format!("{}_{}", project, key);
-
-        // First, try to list all secrets to find the one we want
-        let mut args = vec!["secret", "list"];
-
-        // If project_id is specified, add it to narrow the search
-        if let Some(project_id) = &self.config.project_id {
-            args.push(project_id);
-        }
-
-        match self.execute_bws_command(&args) {
-            Ok(output) => {
-                let secrets: Vec<BitwardenSecret> = serde_json::from_str(&output)?;
-
-                // Look for a secret with matching key name
-                for secret in secrets {
-                    if secret.key == secret_name || secret.key == key {
-                        return Ok(Some(SecretString::new(secret.value.into())));
-                    }
-                }
-
-                // No matching secret found
-                Ok(None)
-            }
-            Err(SecretSpecError::ProviderOperationFailed(msg)) if msg.contains("Not found") => {
-                Ok(None)
-            }
-            Err(e) => Err(e),
-        }
-    }
 
     /// Sets a secret in Bitwarden Password Manager.
     ///
@@ -2070,81 +1816,6 @@ impl BitwardenProvider {
         Ok(())
     }
 
-    /// Sets a secret in Bitwarden Secrets Manager.
-    fn set_to_secrets_manager(
-        &self,
-        project: &str,
-        key: &str,
-        value: &SecretString,
-        _profile: &str,
-    ) -> Result<()> {
-        // For Secrets Manager, we create a secret name based on project and key
-        let secret_name = format!("{}_{}", project, key);
-
-        // Check if we have a required project_id
-        let project_id = self.config.project_id.as_ref().ok_or_else(|| {
-            SecretSpecError::ProviderOperationFailed(
-                "Project ID is required for Bitwarden Secrets Manager. Use bws://project-id or bws://?project=project-id".to_string()
-            )
-        })?;
-
-        // Try to create the secret first (it will fail if it exists)
-        let note = format!("SecretSpec managed secret: {}/{}", project, key);
-        let create_args = vec![
-            "secret",
-            "create",
-            &secret_name,
-            value.expose_secret(),
-            project_id,
-            "--note",
-            &note,
-        ];
-
-        match self.execute_bws_command(&create_args) {
-            Ok(_) => {
-                // Secret created successfully
-                Ok(())
-            }
-            Err(SecretSpecError::ProviderOperationFailed(msg))
-                if msg.contains("already exists") =>
-            {
-                // Secret exists, now we need to update it
-                // First list secrets to find the ID
-                let list_args = vec!["secret", "list", project_id];
-                match self.execute_bws_command(&list_args) {
-                    Ok(output) => {
-                        let secrets: Vec<BitwardenSecret> = serde_json::from_str(&output)?;
-
-                        // Look for existing secret
-                        for secret in secrets {
-                            if secret.key == secret_name || secret.key == key {
-                                // Secret exists, update it
-                                let update_args = vec![
-                                    "secret",
-                                    "edit",
-                                    &secret.id,
-                                    "--key",
-                                    &secret_name,
-                                    "--value",
-                                    value.expose_secret(),
-                                ];
-
-                                self.execute_bws_command(&update_args)?;
-                                return Ok(());
-                            }
-                        }
-
-                        // If we get here, the secret wasn't found in the list
-                        Err(SecretSpecError::ProviderOperationFailed(
-                            "Secret creation failed with 'already exists' but could not find it in the list".to_string()
-                        ))
-                    }
-                    Err(e) => Err(e),
-                }
-            }
-            Err(e) => Err(e),
-        }
-    }
 }
 
 impl Provider for BitwardenProvider {
@@ -2176,20 +1847,7 @@ impl Provider for BitwardenProvider {
     /// - Item retrieval failures
     /// - JSON parsing errors
     fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-        eprintln!(
-            "DEBUG: BitwardenProvider.get() called with key='{}', service={:?}",
-            key, self.config.service
-        );
-        match self.config.service {
-            BitwardenService::PasswordManager => {
-                eprintln!("DEBUG: Calling get_from_password_manager");
-                self.get_from_password_manager(project, key, profile)
-            }
-            BitwardenService::SecretsManager => {
-                eprintln!("DEBUG: Calling get_from_secrets_manager");
-                self.get_from_secrets_manager(project, key, profile)
-            }
-        }
+        self.get_from_password_manager(project, key, profile)
     }
 
     /// Stores or updates a secret in Bitwarden.
@@ -2215,14 +1873,7 @@ impl Provider for BitwardenProvider {
     /// - Item creation/update failures
     /// - Temporary file creation errors
     fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-        match self.config.service {
-            BitwardenService::PasswordManager => {
-                self.set_to_password_manager(project, key, value, profile)
-            }
-            BitwardenService::SecretsManager => {
-                self.set_to_secrets_manager(project, key, value, profile)
-            }
-        }
+        self.set_to_password_manager(project, key, value, profile)
     }
 }
 

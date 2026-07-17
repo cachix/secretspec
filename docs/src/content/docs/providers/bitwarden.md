@@ -1,9 +1,9 @@
 ---
 title: Bitwarden Provider
-description: Bitwarden & BWS secrets management integration
+description: Bitwarden Password Manager secrets management integration
 ---
 
-The Bitwarden provider integrates with both Bitwarden Password Manager and Bitwarden Secrets Manager (BWS) for comprehensive secret management with vault-wide access to all item types.
+The Bitwarden provider integrates with Bitwarden Password Manager for secret management with vault-wide access to all item types.
 
 ## Prerequisites
 
@@ -12,11 +12,6 @@ The Bitwarden provider integrates with both Bitwarden Password Manager and Bitwa
 - Bitwarden account
 - Signed in via `bw login` and unlocked with `bw unlock`
 - `BW_SESSION` environment variable set
-
-### Secrets Manager  
-- Bitwarden Secrets Manager CLI (`bws`)
-- BWS machine account access token
-- `BWS_ACCESS_TOKEN` environment variable set
 
 ## Configuration
 
@@ -30,15 +25,10 @@ bitwarden://?server=https://vault.company.com
 bitwarden://?type=login&field=password
 ```
 
-#### Secrets Manager URIs
-```
-bws://[project-id]
-bws://?project=project-id
 ```
 
 - `collection-id`: Target collection ID
 - `org@collection`: Organization and collection specification
-- `project-id`: BWS project ID
 - `type`: Item type (login, card, identity, sshkey, securenote)
 - `field`: Specific field to extract
 
@@ -57,11 +47,6 @@ $ secretspec set TOKEN --provider "bitwarden://?server=https://vault.company.com
 # Password Manager - Specific item type and field
 $ secretspec get 'MyApp Database' --provider 'bitwarden://?type=login&field=username'
 
-# Secrets Manager - Default project
-$ secretspec set API_KEY --provider bws://
-
-# Secrets Manager - Specific project  
-$ secretspec set DATABASE_URL --provider bws://be8e0ad8-d545-4017-a55a-b02f014d4158
 ```
 
 ## Usage
@@ -140,9 +125,6 @@ provider = "bitwarden://dev-secrets"
 [production]  
 provider = "bitwarden://prod-secrets"
 
-# BWS Configuration
-[staging]
-provider = "bws://staging-project-id"
 ```
 
 ### Environment Variables
@@ -153,7 +135,6 @@ provider = "bws://staging-project-id"
 $ export BW_SESSION="your-session-key"
 
 # Secrets Manager access token
-$ export BWS_ACCESS_TOKEN="your-access-token"
 ```
 
 #### Configuration Defaults
@@ -185,16 +166,7 @@ $ export BW_SESSION="session-key-from-unlock"
 $ secretspec run --provider bitwarden://Production -- deploy
 ```
 
-#### Secrets Manager with Access Token
-```bash
-# Set access token
-$ export BWS_ACCESS_TOKEN="your-machine-account-token"
-
-# Use in automation
-$ secretspec run --provider bws://prod-project-id -- deploy
-```
-
-## Field Requirements by Item Type
+### Field Requirements by Item Type
 
 | Item Type    | Default Field  | Field Required? | Notes                    |
 |--------------|----------------|-----------------|--------------------------|
@@ -222,8 +194,7 @@ To install it:
 - Clear distinction between "not logged in" vs "vault locked"
 - Step-by-step guidance for `bw login` and `bw unlock`
 - Session key setup instructions
-- BWS access token configuration help
-
+- 
 ### Item Access
 - Graceful handling of missing items
 - Field validation and suggestions

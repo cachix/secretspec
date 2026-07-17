@@ -9,11 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Composed secrets derive read-only values such as connection strings from
-  other declared secrets using strict `{SECRET_NAME}` templates. Dependencies
-  are order-independent, may include other compositions, and are validated for
-  unknown references and cycles before provider access; unlike dotenv
-  expansion, values are substituted once without ambient environment lookup,
-  fallback operators, recursive expansion, or silent empty replacements.
+  other declared secrets using strict `${UPPERCASE_NAME}` templates; names must
+  match `[A-Z][A-Z0-9_]*`, `$$` produces a literal dollar sign, and ordinary
+  braces remain literal. Dependencies are order-independent, may include other
+  compositions, and are validated for unknown references and cycles before
+  provider access; unlike dotenv expansion, values are substituted once
+  without ambient environment lookup, fallback operators, recursive expansion,
+  or silent empty replacements.
 - C# SDK (`Cachix.SecretSpec`, available in 0.16): resolve secrets from .NET
   through the shared native resolver, with fluent builder and one-shot APIs,
   typed failure exceptions, value-free preflight reports, provenance,

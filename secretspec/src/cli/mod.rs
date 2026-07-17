@@ -1267,12 +1267,12 @@ mod tests {
     fn generate_toml_preserves_composed_templates() {
         let out = generate_toml_with_comments(&config_with_secret(Secret {
             description: Some("dsn".to_string()),
-            composed: Some("postgres://{USER}@{HOST}/db".to_string()),
+            composed: Some("postgres://${USER}@${HOST}/db".to_string()),
             ..Default::default()
         }))
         .unwrap();
         assert!(
-            out.contains(", composed = \"postgres://{USER}@{HOST}/db\""),
+            out.contains(", composed = \"postgres://${USER}@${HOST}/db\""),
             "got: {out}"
         );
     }

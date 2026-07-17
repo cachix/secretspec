@@ -597,10 +597,10 @@ fn composed_secrets_resolve_in_dependency_order_without_reparsing_values() {
     let temp_dir = TempDir::new().unwrap();
     let env_path = temp_dir.path().join(".env");
     // The reference-looking password is intentional: composition must insert
-    // it as opaque text rather than recursively interpreting `{DB_HOST}`.
+    // it as opaque text rather than recursively interpreting `${DB_HOST}`.
     fs::write(
         &env_path,
-        "DB_USER=alice\nDB_PASSWORD={DB_HOST}\nDB_HOST=db.example\n",
+        "DB_USER=alice\nDB_PASSWORD='${DB_HOST}'\nDB_HOST=db.example\n",
     )
     .unwrap();
 
@@ -619,7 +619,7 @@ fn composed_secrets_resolve_in_dependency_order_without_reparsing_values() {
         "AUTH".to_string(),
         Secret {
             description: Some("credentials".to_string()),
-            composed: Some("{DB_USER}:{DB_PASSWORD}".to_string()),
+            composed: Some("${DB_USER}:${DB_PASSWORD}".to_string()),
             ..Default::default()
         },
     );
@@ -627,7 +627,7 @@ fn composed_secrets_resolve_in_dependency_order_without_reparsing_values() {
         "DATABASE_URL".to_string(),
         Secret {
             description: Some("dsn".to_string()),
-            composed: Some("postgres://{AUTH}@{DB_HOST}/app".to_string()),
+            composed: Some("postgres://${AUTH}@${DB_HOST}/app".to_string()),
             ..Default::default()
         },
     );
@@ -639,12 +639,12 @@ fn composed_secrets_resolve_in_dependency_order_without_reparsing_values() {
 
     let response = spec.resolve().unwrap();
     let auth = &response.secrets["AUTH"];
-    assert_eq!(auth.value.as_deref(), Some("alice:{DB_HOST}"));
+    assert_eq!(auth.value.as_deref(), Some("alice:${DB_HOST}"));
     assert_eq!(auth.source, ResolvedSource::Composed);
     let dsn = &response.secrets["DATABASE_URL"];
     assert_eq!(
         dsn.value.as_deref(),
-        Some("postgres://alice:{DB_HOST}@db.example/app")
+        Some("postgres://alice:${DB_HOST}@db.example/app")
     );
     assert_eq!(dsn.source, ResolvedSource::Composed);
     assert!(dsn.source_provider.is_none());
@@ -676,7 +676,7 @@ fn composed_secrets_propagate_missingness_and_are_read_only() {
             Secret {
                 description: Some("optional result".to_string()),
                 required: Some(false),
-                composed: Some("prefix-{OPTIONAL_PART}".to_string()),
+                composed: Some("prefix-${OPTIONAL_PART}".to_string()),
                 ..Default::default()
             },
         ),
@@ -684,7 +684,7 @@ fn composed_secrets_propagate_missingness_and_are_read_only() {
             "REQUIRED_RESULT".to_string(),
             Secret {
                 description: Some("required result".to_string()),
-                composed: Some("prefix-{OPTIONAL_PART}".to_string()),
+                composed: Some("prefix-${OPTIONAL_PART}".to_string()),
                 ..Default::default()
             },
         ),
@@ -736,7 +736,7 @@ fn composed_secrets_use_the_exported_path_of_as_path_dependencies() {
             "CERT_ARG".to_string(),
             Secret {
                 description: Some("certificate argument".to_string()),
-                composed: Some("--cert={CERT}".to_string()),
+                composed: Some("--cert=${CERT}".to_string()),
                 ..Default::default()
             },
         ),

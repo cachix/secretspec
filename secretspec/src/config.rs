@@ -433,7 +433,7 @@ fn validate_composition_graph(
         for dependency in template.dependencies() {
             if !profile.secrets.contains_key(dependency) {
                 return Err(ParseError::Validation(format!(
-                    "Profile '{}': Secret '{}': composed reference `{{{}}}` does not name a declared secret",
+                    "Profile '{}': Secret '{}': composed reference `${{{}}}` does not name a declared secret",
                     profile_name, name, dependency
                 )));
             }
@@ -1207,7 +1207,7 @@ pub struct Secret {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
     /// A strict template derived from other declared secrets. References use
-    /// `{SECRET_NAME}`; `{{` and `}}` produce literal braces.
+    /// `${UPPERCASE_NAME}`; `$$` produces a literal dollar sign.
     ///
     /// Available since SecretSpec 0.16.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1437,9 +1437,7 @@ impl Secret {
     }
 }
 
-/// Check if a string is a valid identifier. Shared with composed-template
-/// references, so a declarable secret name and a referenceable one can never
-/// drift apart.
+/// Check if a string is a valid declared secret identifier.
 pub(crate) fn is_valid_identifier(s: &str) -> bool {
     if s.is_empty() {
         return false;
@@ -2092,7 +2090,7 @@ revision = "1.0"
             r#"
 USER = { description = "user" }
 HOST = { description = "host" }
-DSN = { description = "dsn", composed = "db://{USER}@{HOST}" }
+DSN = { description = "dsn", composed = "db://${USER}@${HOST}" }
 "#,
         )
         .validate()
@@ -2100,7 +2098,7 @@ DSN = { description = "dsn", composed = "db://{USER}@{HOST}" }
 
         let unknown = parse(
             r#"
-DSN = { description = "dsn", composed = "db://{AMBIENT_ENV}" }
+DSN = { description = "dsn", composed = "db://${AMBIENT_ENV}" }
 "#,
         )
         .validate()
@@ -2113,9 +2111,9 @@ DSN = { description = "dsn", composed = "db://{AMBIENT_ENV}" }
 
         let cycle = parse(
             r#"
-A = { description = "a", composed = "{B}" }
-B = { description = "b", composed = "{C}" }
-C = { description = "c", composed = "{A}" }
+A = { description = "a", composed = "${B}" }
+B = { description = "b", composed = "${C}" }
+C = { description = "c", composed = "${A}" }
 "#,
         )
         .validate()
@@ -2125,7 +2123,7 @@ C = { description = "c", composed = "{A}" }
     }
 
     #[test]
-    fn composed_rejects_dotenv_syntax_and_storage_sources() {
+    fn composed_rejects_operators_and_storage_sources() {
         let invalid: Config = toml::from_str(
             r#"
 [project]
@@ -2140,7 +2138,7 @@ BAD = { description = "bad", composed = "${A:-fallback}" }
         .unwrap();
         let error = invalid.validate().unwrap_err().to_string();
         assert!(
-            error.contains("dotenv-style `${...}` expansion is not supported"),
+            error.contains("names must match `[A-Z][A-Z0-9_]*`"),
             "{error}"
         );
 
@@ -2152,7 +2150,7 @@ revision = "1.0"
 
 [profiles.default]
 A = { description = "a" }
-BAD = { description = "bad", composed = "{A}", providers = ["keyring"] }
+BAD = { description = "bad", composed = "${A}", providers = ["keyring"] }
 "#,
         )
         .unwrap();
@@ -2170,7 +2168,7 @@ revision = "1.0"
 
 [profiles.default]
 PART = { description = "part" }
-RESULT = { description = "result", composed = "{PART}" }
+RESULT = { description = "result", composed = "${PART}" }
 
 [profiles.default.defaults]
 default = "fallback"

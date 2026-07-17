@@ -19,7 +19,7 @@ DB_HOST = { description = "Database host" }
 
 DATABASE_URL = {
   description = "PostgreSQL connection string",
-  composed = "postgres://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/app"
+  composed = "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}/app"
 }
 ```
 
@@ -29,7 +29,8 @@ them. The composed result is never read from or written to a provider.
 
 ## Static dependency graph
 
-Every `{NAME}` must name a secret declared in the effective profile.
+Every `${UPPERCASE_NAME}` must name a secret declared in the effective profile.
+Reference names must match `[A-Z][A-Z0-9_]*`.
 SecretSpec validates the complete graph while loading `secretspec.toml`, before
 accessing a provider:
 
@@ -44,8 +45,8 @@ USER = { description = "Database user" }
 PASSWORD = { description = "Database password" }
 HOST = { description = "Database host" }
 
-AUTHORITY = { description = "Database authority", composed = "{USER}:{PASSWORD}" }
-DATABASE_URL = { description = "Database URL", composed = "postgres://{AUTHORITY}@{HOST}/app" }
+AUTHORITY = { description = "Database authority", composed = "${USER}:${PASSWORD}" }
+DATABASE_URL = { description = "Database URL", composed = "postgres://${AUTHORITY}@${HOST}/app" }
 ```
 
 This differs deliberately from dotenv expansion, where behavior can depend on
@@ -58,21 +59,25 @@ Composition is a small, strict language:
 
 | Syntax | Meaning |
 |---|---|
-| `{SECRET_NAME}` | Insert one declared secret's exported value |
-| `{{` | Insert a literal `{` |
-| `}}` | Insert a literal `}` |
+| `${UPPERCASE_NAME}` | Insert one declared secret's exported value |
+| `$$` | Insert a literal `$` |
+
+For example, `$${EXTERNAL_NAME}` renders the literal text
+`${EXTERNAL_NAME}` without treating it as a SecretSpec reference.
 
 The following are intentionally unsupported:
 
-- `${NAME}` and shell-style expressions such as `${NAME:-fallback}`;
+- lowercase or mixed-case references such as `${password}` or `${Password}`;
+- shell-style expressions such as `${NAME:-fallback}`;
 - ambient environment-variable lookup;
 - command substitution;
 - recursive expansion.
 
-Substitution is one pass. If `PASSWORD` contains the literal text `{HOST}`,
-inserting `{PASSWORD}` produces `{HOST}`; it is not scanned again. This keeps
-secret bytes opaque and prevents values from unexpectedly becoming executable
-template syntax.
+Plain `{` and `}` are literal, so JSON objects, CSS blocks, and regular-expression
+quantifiers do not require brace escaping. Substitution is one pass. If
+`PASSWORD` contains the literal text `${HOST}`, inserting `${PASSWORD}`
+produces `${HOST}`; it is not scanned again. This keeps secret bytes opaque and
+prevents values from unexpectedly becoming executable template syntax.
 
 ## Missing, empty, and optional values
 
@@ -110,10 +115,10 @@ declarations:
 DB_USER = { description = "Database user" }
 DB_PASSWORD = { description = "Database password" }
 DB_HOST = { description = "Database host" }
-DATABASE_URL = { description = "Database URL", composed = "postgres://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/app" }
+DATABASE_URL = { description = "Database URL", composed = "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}/app" }
 
 [profiles.development]
-DATABASE_URL = { composed = "postgres://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/app_dev" }
+DATABASE_URL = { composed = "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}/app_dev" }
 ```
 
 Profile-level storage defaults do not apply to composed secrets, because their
@@ -126,10 +131,12 @@ When a dependency uses `as_path = true`, its exported temporary-file path is
 inserted. Setting `as_path = true` on the composed secret instead writes the
 final rendered value to a temporary file.
 
-Composition performs raw string concatenation. It does not URL-encode values:
-SecretSpec cannot infer whether a component is a username, password, host,
-path, or query parameter. Store each component in the representation required
-by the destination format.
+Composition performs raw string concatenation. It does not URL-encode or
+JSON-encode values: SecretSpec cannot infer whether a component is a username,
+password, host, path, query parameter, or structured value. Store each
+component in the representation required by the destination format. To export
+the resolved secret map as safely encoded JSON, use
+`secretspec export --format json`.
 
 See the [`composed` configuration reference](/reference/configuration/#composed-secrets)
 for the field-level constraints.

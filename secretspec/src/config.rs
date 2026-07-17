@@ -1612,16 +1612,16 @@ impl GlobalConfig {
         }
 
         // Create parent directories for the new path
-        if let Some(parent) = new_path.parent() {
-            if let Err(err) = std::fs::create_dir_all(parent) {
-                eprintln!(
-                    "Warning: failed to create config directory {} while migrating from {}: {}. Continuing to use legacy config path.",
-                    parent.display(),
-                    old_path.display(),
-                    err
-                );
-                return Ok(old_path);
-            }
+        if let Some(parent) = new_path.parent()
+            && let Err(err) = std::fs::create_dir_all(parent)
+        {
+            eprintln!(
+                "Warning: failed to create config directory {} while migrating from {}: {}. Continuing to use legacy config path.",
+                parent.display(),
+                old_path.display(),
+                err
+            );
+            return Ok(old_path);
         }
 
         // Copy old config to new location

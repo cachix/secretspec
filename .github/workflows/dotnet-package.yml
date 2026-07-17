@@ -396,13 +396,12 @@ jobs:
           $project = Join-Path $testRoot "SecretSpec.PackageSmoke.csproj"
 
           # Prime an isolated package cache from the artifact-only source. The
-          # RID restore then adds NuGet.org for Microsoft runtime/AOT packs.
+          # RID/AOT restore then uses the runner's standard NuGet configuration
+          # for Microsoft runtime packs without selecting a published SDK copy.
           dotnet restore $project --source $packageSource "-p:Version=$version"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet restore $project --runtime "${{ matrix.rid }}" `
-            --source $packageSource `
-            --source "https://api.nuget.org/v3/index.json" `
-            "-p:Version=$version"
+            "-p:PublishAot=true" "-p:Version=$version"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           Remove-Item Env:SECRETSPEC_FFI_LIB -ErrorAction SilentlyContinue
@@ -421,9 +420,7 @@ jobs:
           dotnet publish $project --configuration Release `
             --runtime "${{ matrix.rid }}" --self-contained true `
             "-p:PublishAot=true" "-p:Version=$version" `
-            --source $packageSource `
-            --source "https://api.nuget.org/v3/index.json" `
-            --output $publishDir
+            --no-restore --output $publishDir
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $app = Join-Path $publishDir "SecretSpec.PackageSmoke.exe"
           Push-Location $env:RUNNER_TEMP

@@ -54,6 +54,10 @@ jobs:
     - uses: actions/checkout@v5
     - name: Install Rust
       run: rustup toolchain install stable --profile minimal
+    # `keyring` links libdbus for its secret-service transport on Linux. The
+    # devenv job above gets it from the shell; a bare runner does not.
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
     - name: Check each provider feature standalone
       run: |
         set -euo pipefail

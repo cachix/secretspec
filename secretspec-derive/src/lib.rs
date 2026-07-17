@@ -943,6 +943,11 @@ mod secret_spec_generation {
                 reason: Option<String>,
             ) -> Result<secretspec::ValidatedSecrets, secretspec::SecretSpecError> {
                 let mut spec = secretspec::Secrets::load()?;
+                // A typed loader expects the full generated struct shape, so an
+                // ambient `SECRETSPEC_SCOPE` must not silently narrow it below that
+                // shape (which would surface as a spurious `RequiredSecretMissing`).
+                // The untyped CLI/SDK paths keep honoring the env scope.
+                spec.set_ignore_ambient_scope(true);
                 if let Some(provider) = provider_str {
                     spec.set_provider(provider);
                 }

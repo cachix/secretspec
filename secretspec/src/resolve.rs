@@ -72,6 +72,11 @@ pub struct ResolveResponse {
     pub provider: String,
     /// The profile that was resolved.
     pub profile: String,
+    /// The active secret scope, when resolution was scoped (`--scope`,
+    /// `SECRETSPEC_SCOPE`, or the SDK builder). `None` — the whole profile
+    /// resolved — is omitted from JSON, so unscoped output is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
     /// Resolved secrets by name. Empty when a required secret is missing.
     /// `BTreeMap` keeps the JSON object key order deterministic.
     pub secrets: BTreeMap<String, ResolvedSecret>,

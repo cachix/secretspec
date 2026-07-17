@@ -51,6 +51,9 @@ uuid.workspace = true
 data-encoding.workspace = true
 detect-coding-agent.workspace = true
 
+[dev-dependencies]
+proptest.workspace = true
+
 [features]
 default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws", "akv"]
 cli = ["dep:toml_edit"]

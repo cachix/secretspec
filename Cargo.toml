@@ -31,6 +31,7 @@ dotenvy = "0.15"
 inquire = { version = "0.9.4", features = ["experimental-multiline-input"] }
 miette = { version = "7.6", features = ["fancy"] }
 serde_json = "1.0"
+proptest = "1"
 tempfile = "3.0"
 http = "1.0"
 url = "2.5.4"

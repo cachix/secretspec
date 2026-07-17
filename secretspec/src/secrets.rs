@@ -2157,7 +2157,7 @@ impl Secrets {
                     }
 
                     let missing =
-                        self.promptable_missing_names(&validation_errors, &profile_display);
+                        self.scoped_promptable_missing(&validation_errors, &profile_display)?;
                     if missing.is_empty() {
                         return Err(validation_failure(validation_errors));
                     }
@@ -3109,6 +3109,33 @@ impl Secrets {
         let mut promptable: Vec<String> = promptable.into_iter().collect();
         promptable.sort();
         promptable
+    }
+
+    /// The secrets an interactive resolution may prompt the operator for: the
+    /// promptable missing leaves ([`Self::promptable_missing_names`]), restricted
+    /// to the visible set when a scope is active.
+    ///
+    /// The restriction is load-bearing. A missing out-of-scope composition
+    /// dependency reaches `promptable_missing_names` because the visible-only
+    /// resolution list makes its status look unresolved, so the raw set descends
+    /// into hidden leaves. Prompting for those would disclose a hidden secret's
+    /// name (and overwrite an already-present value on entry), breaking the scope
+    /// guarantee. When a scope is active the operator may therefore be prompted
+    /// only for secrets the scope itself exposes; unscoped, nothing is filtered.
+    pub(crate) fn scoped_promptable_missing(
+        &self,
+        errors: &ValidationErrors,
+        profile_name: &str,
+    ) -> Result<Vec<String>> {
+        let mut missing = self.promptable_missing_names(errors, profile_name);
+        if self.resolve_scope_name(None).is_some() {
+            let visible: HashSet<String> = self
+                .resolve_profile_secret_names(Some(profile_name))?
+                .into_iter()
+                .collect();
+            missing.retain(|name| visible.contains(name));
+        }
+        Ok(missing)
     }
 
     /// Rejects a `ref` routed at exactly one store that cannot honor its

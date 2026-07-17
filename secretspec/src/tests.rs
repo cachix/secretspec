@@ -7464,4 +7464,170 @@ secrets = []
             "an explicit scope is honored even when the ambient fallback is suppressed"
         );
     }
+
+    const COMPOSED_MANIFEST: &str = r#"
+[project]
+name = "composed-scope"
+revision = "1.0"
+
+[profiles.default]
+DB_USER = { description = "DB user" }
+DB_PASSWORD = { description = "DB password" }
+DB_HOST = { description = "DB host" }
+DATABASE_URL = { description = "DSN", composed = "postgres://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/app" }
+
+[scopes.api]
+secrets = ["DATABASE_URL"]
+"#;
+
+    /// A scoped interactive resolution must never offer to prompt for — or name —
+    /// a secret the scope hides. An out-of-scope composition dependency reaches
+    /// the raw promptable set (the visible-only resolution list makes its status
+    /// look unresolved); scoping must filter it back out, or `check --scope`
+    /// would disclose the hidden name and overwrite an already-present value.
+    #[test]
+    fn scoped_prompting_never_offers_out_of_scope_dependencies() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        // DB_PASSWORD is absent, so the composed DATABASE_URL cannot render.
+        fs::write(&env_path, "DB_USER=alice\nDB_HOST=db.example\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        // Unscoped: prompting offers the genuinely-missing leaf.
+        let unscoped = Secrets::new(
+            config(COMPOSED_MANIFEST),
+            None,
+            Some(provider.clone()),
+            None,
+        );
+        let uerr = match unscoped.validate().unwrap() {
+            Ok(_) => panic!("DB_PASSWORD missing must fail resolution"),
+            Err(e) => e,
+        };
+        let uprompt = unscoped
+            .scoped_promptable_missing(&uerr, "default")
+            .unwrap();
+        assert!(
+            uprompt.contains(&"DB_PASSWORD".to_string()),
+            "unscoped prompting offers the missing leaf: {uprompt:?}"
+        );
+
+        // Scoped to {DATABASE_URL}: no hidden dependency is ever offered, and the
+        // only missing_required surfaced is the visible composed secret itself.
+        let mut scoped = Secrets::new(config(COMPOSED_MANIFEST), None, Some(provider), None);
+        scoped.set_scope("api");
+        let serr = match scoped.validate().unwrap() {
+            Ok(_) => panic!("the visible composed secret must be unrenderable"),
+            Err(e) => e,
+        };
+        assert_eq!(serr.missing_required, vec!["DATABASE_URL".to_string()]);
+        let sprompt = scoped.scoped_promptable_missing(&serr, "default").unwrap();
+        assert!(
+            sprompt.is_empty(),
+            "a scope must not offer hidden dependencies for prompting: {sprompt:?}"
+        );
+    }
+
+    /// `run --scope` scrubs the raw dependencies of an in-scope composed secret
+    /// from the child — via the separate `scope_excluded_names` path, not the
+    /// resolution output filter — even when the parent shell exported them.
+    #[test]
+    fn run_scope_scrubs_composed_dependencies_from_the_child() {
+        let _env = scrub_resolution_env();
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DB_USER=alice\nDB_PASSWORD=s3cret\nDB_HOST=db.example\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        // A parent shell that already holds the raw dependency values.
+        let _u = EnvVarGuard::set("DB_USER", "leaked-user");
+        let _p = EnvVarGuard::set("DB_PASSWORD", "leaked-pass");
+
+        let mut spec = Secrets::new(config(COMPOSED_MANIFEST), None, Some(provider), None);
+        spec.set_scope("api");
+
+        let url_file = temp.path().join("url");
+        let user_file = temp.path().join("user");
+        let pass_file = temp.path().join("pass");
+        let exit = spec
+            .run_command(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "printf '%s' \"$DATABASE_URL\" > {}; printf '%s' \"$DB_USER\" > {}; printf '%s' \"$DB_PASSWORD\" > {}",
+                    url_file.display(),
+                    user_file.display(),
+                    pass_file.display()
+                ),
+            ])
+            .unwrap();
+        assert_eq!(exit, 0);
+        // The composed value is injected...
+        assert_eq!(
+            fs::read_to_string(&url_file).unwrap(),
+            "postgres://alice:s3cret@db.example/app"
+        );
+        // ...but its raw dependencies are scrubbed, even the parent-exported ones.
+        assert_eq!(
+            fs::read_to_string(&user_file).unwrap(),
+            "",
+            "DB_USER must not reach the scoped child"
+        );
+        assert_eq!(
+            fs::read_to_string(&pass_file).unwrap(),
+            "",
+            "DB_PASSWORD must not reach the scoped child"
+        );
+    }
+
+    /// `export --scope` emits only the visible set.
+    #[test]
+    fn export_scope_emits_only_visible_secrets() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "DATABASE_URL=db\nAPI_KEY=key\nQUEUE_TOKEN=tok\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut spec = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        spec.set_scope("api");
+        let mut out = Vec::new();
+        spec.export(crate::ExportFormat::Dotenv, &mut out).unwrap();
+        let rendered = String::from_utf8(out).unwrap();
+        assert!(rendered.contains("DATABASE_URL"));
+        assert!(rendered.contains("API_KEY"));
+        assert!(
+            !rendered.contains("QUEUE_TOKEN"),
+            "export --scope must not emit an out-of-scope secret: {rendered}"
+        );
+    }
+
+    /// The active scope is surfaced in the untyped resolver and report output,
+    /// and omitted when no scope is active.
+    #[test]
+    fn active_scope_is_surfaced_in_resolve_and_report_output() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "DATABASE_URL=db\nAPI_KEY=key\nQUEUE_TOKEN=tok\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut scoped = Secrets::new(config(MANIFEST), None, Some(provider.clone()), None);
+        scoped.set_scope("api");
+        assert_eq!(scoped.resolve().unwrap().scope.as_deref(), Some("api"));
+        let report = scoped.report().unwrap();
+        assert_eq!(report.scope.as_deref(), Some("api"));
+        let explained = report.to_explain_string();
+        assert!(
+            explained.contains("scope:") && explained.contains("api"),
+            "the explain output names the active scope: {explained}"
+        );
+
+        // Unscoped resolution omits the scope entirely.
+        let unscoped = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        assert_eq!(unscoped.resolve().unwrap().scope, None);
+        assert_eq!(unscoped.report().unwrap().scope, None);
+    }
 }

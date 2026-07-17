@@ -1276,6 +1276,40 @@ mod integration_tests {
         assert!(result.is_err());
     }
 
+    #[cfg(feature = "bw")]
+    #[test]
+    fn test_bw_provider_creation() {
+        let provider = Box::<dyn Provider>::try_from("bitwarden://").unwrap();
+        assert_eq!(provider.name(), "bitwarden");
+        assert_eq!(provider.uri(), "bitwarden://");
+    }
+
+    #[cfg(feature = "bw")]
+    #[test]
+    fn test_bw_provider_with_collection() {
+        let provider = Box::<dyn Provider>::try_from("bitwarden://my-collection").unwrap();
+        assert_eq!(provider.name(), "bitwarden");
+        assert_eq!(provider.uri(), "bitwarden://my-collection");
+    }
+
+    #[cfg(feature = "bw")]
+    #[test]
+    fn test_bw_provider_with_org_collection() {
+        let provider = Box::<dyn Provider>::try_from("bitwarden://myorg@dev-secrets").unwrap();
+        assert_eq!(provider.name(), "bitwarden");
+        assert_eq!(provider.uri(), "bitwarden://myorg@dev-secrets");
+    }
+
+    #[cfg(feature = "bw")]
+    #[test]
+    fn test_bw_provider_rejects_bws_scheme() {
+        use crate::provider::bitwarden::BitwardenConfig;
+        let url = crate::provider::ProviderUrl::new(url::Url::parse("bws://project-id").unwrap());
+        let result = BitwardenConfig::try_from(&url);
+        assert!(result.is_err());
+        assert!(result.err().unwrap().to_string().contains("Invalid scheme"));
+    }
+
     #[cfg(feature = "gcsm")]
     #[test]
     fn test_gcsm_provider_validates_project_id_format() {

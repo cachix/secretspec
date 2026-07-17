@@ -45,6 +45,7 @@ linkme = "0.3"
 jiff = "0.2"
 secrecy = { version = "0.10.3", features = ["serde"] }
 bitwarden = { version = "2.0.0", features = ["secrets"] }
+base64 = "0.22"
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 google-cloud-secretmanager-v1 = "1.2"
 aws-config = "1"

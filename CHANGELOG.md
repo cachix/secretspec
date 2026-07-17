@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.15.0] - 2026-07-16
 
 ### Added
+
+- Password Manager provider. `bitwarden://` uses the `bw` CLI for vault-wide secret storage across all Bitwarden item types.
 - Gopass provider (`gopass://`) for GPG-based password manager with git-synced password store.
 - `secretspec export` command that resolves every secret for the active profile
   and writes them to stdout without running a command, in a chosen `--format`:

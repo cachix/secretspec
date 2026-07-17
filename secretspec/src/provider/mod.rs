@@ -29,6 +29,7 @@
 //! - [`bws::BwsProvider`]: Bitwarden Secrets Manager integration
 //! - [`akv::AkvProvider`]: Azure Key Vault integration
 //! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
+//! - [`bitwarden::BitwardenProvider`]: Bitwarden Password Manager
 //!
 //! ## URI-Based Configuration
 //!
@@ -233,6 +234,8 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
 pub mod akv;
 #[cfg(feature = "awssm")]
 pub mod awssm;
+#[cfg(feature = "bw")]
+pub mod bitwarden;
 #[cfg(feature = "bws")]
 pub mod bws;
 pub mod dotenv;

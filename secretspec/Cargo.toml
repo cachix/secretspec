@@ -35,6 +35,7 @@ whoami = { workspace = true, optional = true }
 linkme.workspace = true
 jiff.workspace = true
 secrecy.workspace = true
+base64 = { workspace = true, optional = true }
 bitwarden = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 google-cloud-secretmanager-v1 = { workspace = true, optional = true }
@@ -52,7 +53,7 @@ data-encoding.workspace = true
 detect-coding-agent.workspace = true
 
 [features]
-default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws", "akv", "infisical"]
+default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws", "akv", "infisical", "bw"]
 cli = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
 # Compile libdbus from source into the binary instead of linking the system
@@ -67,4 +68,5 @@ vault = ["dep:reqwest"]
 # name the features it uses rather than inherit them from a sibling.
 infisical = ["dep:reqwest", "tokio/sync"]
 bws = ["dep:bitwarden", "dep:rustls"]
+bw = ["dep:base64"]
 akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secrets"]

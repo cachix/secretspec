@@ -52,8 +52,8 @@ keyring at the normal `{project}/{profile}/access_token` address. The active
 development can authenticate as different machines without changing the alias.
 
 When a credential already has a provider-native address, use a `ref`. Here a
-[Vault AppRole](/providers/vault/#approle) is kept as two fields of one
-[1Password item](/providers/onepassword/#secret-references):
+[Vault AppRole](/providers/vault/#approle-authentication) is kept as two fields of one
+[1Password item](/providers/onepassword/#use-existing-secrets):
 
 ```toml title="secretspec.toml"
 [providers.vault_prod]

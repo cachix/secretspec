@@ -54,8 +54,9 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [akv](/providers/akv/) | Azure Key Vault (requires the `akv` build feature) | ✓ | ✓ | ✓ |
 | [infisical](/providers/infisical/) (0.16+) | Infisical (requires the `infisical` build feature) | ✓ | ✓ | ✓ |
 
-See each provider's page for its URI format, authentication requirements, and
-storage conventions.
+Each provider page starts with a minimal working example, then covers setup,
+project configuration, storage conventions, existing provider-native secrets,
+and CI/CD where applicable.
 
 ## How SecretSpec selects a provider
 

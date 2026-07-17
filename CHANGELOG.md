@@ -12,8 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the shared native resolver, with fluent builder and one-shot APIs,
   typed failure exceptions, value-free preflight reports, provenance,
   environment export, typed-codegen input, and deterministic cleanup of
-  `as_path` files. The NuGet package includes native resolver builds for Linux
-  x64/Arm64, macOS Arm64, and Windows x64.
+  `as_path` files. The trimming-safe, NativeAOT-compatible NuGet package
+  includes native resolver builds for glibc and musl Linux x64/Arm64, macOS
+  x64/Arm64, and Windows x64/Arm64; Windows applications do not need a separate
+  Visual C++ Redistributable.
 - Infisical provider (`infisical://`), for Infisical Cloud and self-hosted
   instances. Authenticates as a machine identity via Universal Auth, whose
   `client_id` and `client_secret` can be sourced as provider credentials (with

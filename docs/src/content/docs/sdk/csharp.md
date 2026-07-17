@@ -3,10 +3,11 @@ title: C# SDK
 description: Resolve SecretSpec secrets from C# and .NET
 ---
 
-> **Version compatibility:** The C# SDK targets SecretSpec 0.16 and is
-> unavailable in the current 0.15 release. With 0.15, use the CLI integration:
-> `secretspec run -- dotnet run`. The `Cachix.SecretSpec` package and API below
-> become available with 0.16.
+> **Version compatibility:** The supported C# SDK targets SecretSpec 0.16 and
+> is unavailable in the current 0.15 release. The 0.15.0 NuGet package is an
+> unsupported bootstrap artifact used to reserve the package ID. With 0.15,
+> use `secretspec run -- dotnet run`; the API below becomes available with
+> 0.16.
 
 The C# SDK (`Cachix.SecretSpec`) is a thin client over the same Rust resolver as
 the CLI. Every provider, fallback chain, profile, generator, reference, and
@@ -18,9 +19,20 @@ the CLI. Every provider, fallback chain, profile, generator, reference, and
 dotnet add package Cachix.SecretSpec
 ```
 
-The package targets .NET 8 and includes the native resolver for Linux x64 and
-Arm64, macOS Arm64, and Windows x64. No separate SecretSpec CLI or native
-library installation is needed at runtime.
+The package targets .NET 8 and includes native resolvers for glibc and musl
+Linux x64/Arm64, macOS x64/Arm64, and Windows x64/Arm64. Windows assets
+statically include the C runtime. No separate SecretSpec CLI, native library,
+Visual C++ Redistributable, or system `libdbus` installation is needed.
+
+The managed client is safe to trim and supports NativeAOT publishing. A
+NativeAOT application still carries the matching SecretSpec native resolver
+beside its executable; `dotnet publish` selects and copies that runtime asset
+automatically.
+
+```bash
+dotnet publish -c Release -r linux-x64 --self-contained \
+  -p:PublishAot=true
+```
 
 ## Quick start
 

@@ -8,10 +8,11 @@ PHP, and C# (0.16+). They all resolve secrets from the same declarative
 `secretspec.toml`, and they all behave identically, because they share one
 resolver.
 
-> **C# compatibility:** The C# SDK targets SecretSpec 0.16 and is unavailable
-> in the current 0.15 release. With 0.15, run a .NET application through
-> `secretspec run -- dotnet run`; the `Cachix.SecretSpec` NuGet API shown in the
-> C# guide becomes available in 0.16.
+> **C# compatibility:** The supported C# SDK targets SecretSpec 0.16 and is
+> unavailable in the current 0.15 release. The 0.15.0 NuGet package is an
+> unsupported package-ID bootstrap. With 0.15, run a .NET application through
+> `secretspec run -- dotnet run`; the API shown in the C# guide becomes
+> available in 0.16.
 
 ## One resolver, thin clients
 
@@ -90,7 +91,9 @@ no runtime library path to set:
   native C extension in the gem.
 - **Haskell** statically links the same archive at build time via the GHC FFI.
 - **C# (0.16+)** ships the `cdylib` as runtime-specific native assets in one
-  NuGet package and loads the matching asset through P/Invoke.
+  NuGet package and loads the matching asset through P/Invoke. The managed
+  client supports trimming and NativeAOT; glibc/musl Linux, Intel/Arm macOS,
+  and x64/Arm64 Windows assets are included.
 - **Go** embeds the `cdylib` in the module and loads it at runtime via purego
   (no cgo); an opt-in `-tags static` build links it statically instead.
 - **Node.js** builds the resolver into a napi-rs addon.

@@ -37,7 +37,7 @@ const providerMetadata: ProviderMetadata[] = [
   { slug: 'awssm', label: 'AWS Secrets Manager' },
   { icon: 'googlecloud', slug: 'gcsm', label: 'Google Cloud Secret Manager' },
   { icon: 'microsoftazure', slug: 'akv', label: 'Azure Key Vault' },
-  { slug: 'infisical', label: 'Infisical (0.16+)' },
+  { slug: 'infisical', label: 'Infisical' },
   { slug: 'gopass', label: 'Gopass' },
   { slug: 'protonpass', label: 'Proton Pass' },
   { icon: 'gnuprivacyguard', slug: 'pass', label: 'Pass (GPG)' },
@@ -134,7 +134,7 @@ $ secretspec init --from dotenv
 $ secretspec config init
 ? Select your preferred provider backend:
 <span class="tok-pun">›</span> keyring: Uses system keychain (Recommended)
-  infisical: Infisical secret management (0.16+)
+  infisical: Infisical secret management
 <span class="tok-str">✓</span> Saved to ~/.config/secretspec/config.toml
 
 <span class="tok-com"># 3. Run your app with secrets injected</span>
@@ -197,7 +197,7 @@ $ secretspec run --profile production -- npm start
         <pre is:raw class="landing-step-code"><code>$ secretspec config init
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
-  infisical: Infisical secret management (0.16+)</code></pre>
+  infisical: Infisical secret management</code></pre>
       </div>
 
       <div class="landing-step">
@@ -222,9 +222,9 @@ $ secretspec run --profile production -- npm start
 
     <div class="landing-bento">
       <a href="/concepts/providers/" class="landing-bento-card is-link landing-bento-2">
-        <div class="landing-bento-big-num">13</div>
+        <div class="landing-bento-big-num">14</div>
         <p class="landing-bento-title">Providers</p>
-        <p class="landing-bento-desc">Keyring · 1Password · LastPass · Bitwarden · Vault · AWS · GCP · Azure · Gopass · Pass · Proton Pass · dotenv · env.</p>
+        <p class="landing-bento-desc">Keyring · 1Password · LastPass · Bitwarden · Vault · AWS · GCP · Azure · Infisical · Gopass · Pass · Proton Pass · dotenv · env.</p>
       </a>
 
       <a href="/concepts/profiles/" class="landing-bento-card is-link landing-bento-2">
@@ -433,7 +433,7 @@ println!("{}", s.secrets.database_url);</code></pre>
 <section class="landing-showcase">
   <div class="landing-container">
     <div class="landing-showcase-head">
-      <span class="landing-showcase-eyebrow">SecretSpec 0.15 · Provider credentials</span>
+      <span class="landing-showcase-eyebrow">Provider credentials</span>
       <h2 class="landing-section-title">Keep the key to your vault in another vault.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
         Authenticate a provider with credentials stored in another provider. SecretSpec fetches them in memory, hands them directly to the destination store, and never exposes them to your application environment. <a href="/concepts/providers/#provider-credentials" class="landing-link">How provider credentials work →</a>
@@ -576,7 +576,7 @@ $ secretspec audit -n 1
 <section class="landing-showcase">
   <div class="landing-container">
     <div class="landing-showcase-head">
-      <span class="landing-showcase-eyebrow">SecretSpec 0.15 · Export</span>
+      <span class="landing-showcase-eyebrow">Export</span>
       <h2 class="landing-section-title">Resolve once. Hand secrets to anything.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
         <code class="inline-code">secretspec export</code> resolves the complete active profile without launching a command. It never prompts and exits non-zero when a required secret is missing, making it a clean boundary for shells, scripts, and CI. <a href="/reference/cli/#export" class="landing-link">Export command reference →</a>
@@ -627,7 +627,7 @@ $ secretspec export --format json
       <span class="landing-showcase-eyebrow">Language SDKs</span>
       <h2 class="landing-section-title">Use it from any language.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, and C# (0.16+) all resolve from the same <code class="inline-code">secretspec.toml</code> through one Rust core — every provider, chain, and profile behaves identically, with no per-language logic. <a href="/sdk/overview/" class="landing-link">How the SDKs work →</a>
+        Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, and C# all resolve from the same <code class="inline-code">secretspec.toml</code> through one Rust core — every provider, chain, and profile behaves identically, with no per-language logic. <a href="/sdk/overview/" class="landing-link">How the SDKs work →</a>
       </p>
     </div>
 
@@ -720,7 +720,7 @@ print (S.get <span class="tok-pun">=&lt;&lt;</span> Map.lookup <span class="tok-
       <div class="landing-terminal">
         <div class="landing-terminal-header">
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">C# / .NET (0.16+)</span>
+          <span class="landing-terminal-title">C# / .NET</span>
         </div>
         <pre is:raw class="landing-terminal-body"><code><span class="tok-key">using</span> Cachix.SecretSpec<span class="tok-pun">;</span>
 

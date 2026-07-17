@@ -57,6 +57,8 @@ pub enum SecretSpecError {
     Json(#[from] serde_json::Error),
     #[error("Invalid profile: {0}")]
     InvalidProfile(String),
+    #[error("Invalid scope: {0}")]
+    InvalidScope(String),
     #[error("Validation failed: {0}")]
     ValidationFailed(Box<ValidationErrors>),
     #[error("Secret generation failed: {0}")]
@@ -98,6 +100,7 @@ impl SecretSpecError {
             SecretSpecError::InquireError(_) => "inquire",
             SecretSpecError::Json(_) => "json",
             SecretSpecError::InvalidProfile(_) => "invalid_profile",
+            SecretSpecError::InvalidScope(_) => "invalid_scope",
             SecretSpecError::ValidationFailed(_) => "validation_failed",
             SecretSpecError::GenerationFailed(_) => "generation_failed",
             SecretSpecError::ReasonRequired => "reason_required",

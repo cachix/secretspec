@@ -202,14 +202,26 @@ jobs:
         run: |
           library="target/${{ matrix.target }}/release/libsecretspec_ffi.so"
           dynamic="$(readelf -d "$library")"
-          versions="$(readelf --version-info "$library")"
-          if grep -q 'GLIBC_' <<<"$versions"; then
-            echo "$library unexpectedly references glibc" >&2
+          needed="$(grep NEEDED <<<"$dynamic")"
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-musl)
+              expected_libc=libc.musl-x86_64.so.1
+              ;;
+            aarch64-unknown-linux-musl)
+              expected_libc=libc.musl-aarch64.so.1
+              ;;
+          esac
+          # ARM musl's libgcc_s exports a compatibility symbol version named
+          # GLIBC_2.0, so inspect the actual dynamic dependencies instead.
+          if grep -q '\[libc\.so\.6\]' <<<"$needed" ||
+             ! grep -Fq "[$expected_libc]" <<<"$needed"; then
+            echo "$library does not use the expected musl libc" >&2
+            echo "$needed" >&2
             exit 1
           fi
-          if grep NEEDED <<<"$dynamic" | grep -q dbus; then
+          if grep -q dbus <<<"$needed"; then
             echo "$library links libdbus dynamically" >&2
-            grep NEEDED <<<"$dynamic" >&2
+            echo "$needed" >&2
             exit 1
           fi
       - name: Stage native NuGet asset

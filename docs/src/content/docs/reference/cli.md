@@ -167,6 +167,7 @@ secretspec check [OPTIONS]
 **Options:**
 - `-p, --provider <PROVIDER>` - Provider backend to use
 - `-P, --profile <PROFILE>` - Profile to use
+- `-S, --scope <SCOPE>` - Resolve only a `[scopes]` subset of the profile (SecretSpec 0.16+)
 - `-n, --no-prompt` - Don't prompt for missing secrets (exit with error if any are missing)
 - `--json` - Print a value-free resolution report as JSON instead of prompting
 - `--explain` - Print a value-free, human-readable resolution trace instead of prompting
@@ -304,6 +305,7 @@ secretspec run [OPTIONS] -- <COMMAND>
 **Options:**
 - `-p, --provider <PROVIDER>` - Provider backend to use
 - `-P, --profile <PROFILE>` - Profile to use
+- `-S, --scope <SCOPE>` - Inject only a `[scopes]` subset of the profile (SecretSpec 0.16+)
 
 **Examples:**
 ```bash
@@ -313,6 +315,10 @@ $ secretspec run --profile production -- npm run deploy
 # Verify secrets are injected
 $ secretspec run -- env | grep DATABASE_URL
 DATABASE_URL=postgresql://localhost/mydb
+
+# Inject only the `api` scope's secrets (SecretSpec 0.16+); secrets the
+# scope excludes are removed from the child even if the parent exported them
+$ secretspec run --scope api -- ./api-server
 ```
 
 The `--provider` override applies to every secret, including those with a
@@ -351,7 +357,7 @@ Resolve every secret for the active profile and write it to stdout in a chosen f
 secretspec export [OPTIONS]
 ```
 
-Options are `-p, --provider <PROVIDER>`, `-P, --profile <PROFILE>`, and `--format <FORMAT>` (default `shell`).
+Options are `-p, --provider <PROVIDER>`, `-P, --profile <PROFILE>`, `-S, --scope <SCOPE>` (a `[scopes]` subset of the profile, SecretSpec 0.16+), and `--format <FORMAT>` (default `shell`).
 
 | Format | Output |
 |--------|--------|

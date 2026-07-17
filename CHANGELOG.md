@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Secret **scopes**: a `[scopes]` table names membership-only subsets of a
+  profile's secrets, so a single service or task resolves only what it declares
+  instead of the whole profile. `check`, `run`, and `export` take `--scope`
+  (`SECRETSPEC_SCOPE`); the consumer-visible set is the intersection of the
+  selected profile and the scope's secret list. Scopes are orthogonal to
+  profiles and never change a secret's `required`/`default`/providers or its
+  storage address. A visible composed secret still resolves its out-of-scope
+  inputs to build its value, but those inputs are never exposed to the consumer.
+  `run --scope` also removes every manifest-declared secret outside the visible
+  set from the child environment even when the parent already exported it, so an
+  excluded value cannot leak into the launched process.
 - The `required` field accepts `at_least_one` and `exactly_one` group tables,
   supporting overlapping alternative and mutually exclusive credentials
   across `check`, `run`, and SDK resolution.

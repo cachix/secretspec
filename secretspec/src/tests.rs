@@ -40,6 +40,7 @@ fn test_new_with_project_config() {
         },
         profiles: HashMap::new(),
         providers: None,
+        scopes: None,
     };
 
     let spec = Secrets::new(config, None, None, None);
@@ -202,6 +203,7 @@ fn test_new_with_default_overrides() {
         },
         profiles: HashMap::new(),
         providers: None,
+        scopes: None,
     };
 
     // Create a global config with specific defaults
@@ -385,6 +387,7 @@ fn test_resolution_report_provenance() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let provider = format!("dotenv://{}", env_path.display());
@@ -561,6 +564,7 @@ pub(crate) fn resolve_test_config(secrets: HashMap<String, Secret>) -> Config {
         },
         profiles,
         providers: None,
+        scopes: None,
     }
 }
 
@@ -583,16 +587,20 @@ pub(crate) fn scrub_resolution_env() -> ResolutionEnvGuard {
     let lock = RESOLUTION_ENV_GUARD
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let saved = ["SECRETSPEC_PROVIDER", "SECRETSPEC_PROFILE"]
-        .into_iter()
-        .map(|key| {
-            let previous = std::env::var_os(key);
-            // SAFETY: `RESOLUTION_ENV_GUARD` is held for the guard's whole
-            // lifetime, so no two guards mutate the environment concurrently.
-            unsafe { std::env::remove_var(key) };
-            (key, previous)
-        })
-        .collect();
+    let saved = [
+        "SECRETSPEC_PROVIDER",
+        "SECRETSPEC_PROFILE",
+        "SECRETSPEC_SCOPE",
+    ]
+    .into_iter()
+    .map(|key| {
+        let previous = std::env::var_os(key);
+        // SAFETY: `RESOLUTION_ENV_GUARD` is held for the guard's whole
+        // lifetime, so no two guards mutate the environment concurrently.
+        unsafe { std::env::remove_var(key) };
+        (key, previous)
+    })
+    .collect();
     ResolutionEnvGuard { _lock: lock, saved }
 }
 
@@ -1166,6 +1174,7 @@ fn test_secretspec_new() {
         },
         profiles: HashMap::new(),
         providers: None,
+        scopes: None,
     };
 
     let global_config = GlobalConfig {
@@ -1208,6 +1217,7 @@ fn test_resolve_profile() {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         },
         Some(global_config),
         None,
@@ -1229,6 +1239,7 @@ fn test_resolve_profile() {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         },
         None,
         None,
@@ -1300,6 +1311,7 @@ fn test_resolve_secret_config() {
             },
             profiles,
             providers: None,
+            scopes: None,
         },
         None,
         None,
@@ -1340,6 +1352,7 @@ fn test_get_provider_error_cases() {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         },
         None,
         None,
@@ -1370,6 +1383,7 @@ fn test_get_provider_with_global_config() {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         },
         Some(global_config),
         None,
@@ -2522,6 +2536,7 @@ fn test_set_with_undefined_secret() {
             profiles
         },
         providers: None,
+        scopes: None,
     };
 
     let global_config = GlobalConfig {
@@ -2593,6 +2608,7 @@ fn test_set_with_defined_secret() {
             profiles
         },
         providers: None,
+        scopes: None,
     };
 
     let global_config = GlobalConfig {
@@ -2647,6 +2663,7 @@ fn test_set_with_readonly_provider() {
             profiles
         },
         providers: None,
+        scopes: None,
     };
 
     let global_config = GlobalConfig {
@@ -2744,6 +2761,7 @@ fn test_import_between_dotenv_files() {
             profiles
         },
         providers: None,
+        scopes: None,
     };
 
     // Create source .env file
@@ -2871,6 +2889,7 @@ fn test_import_edge_cases() {
             profiles
         },
         providers: None,
+        scopes: None,
     };
 
     // Create source .env file with edge case values
@@ -3137,6 +3156,7 @@ fn test_import_with_profiles() {
             profiles
         },
         providers: None,
+        scopes: None,
     };
 
     // Create source .env file with all secrets
@@ -3210,6 +3230,7 @@ fn test_run_with_empty_command() {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -3272,6 +3293,7 @@ fn test_run_with_missing_required_secrets() {
             },
             profiles,
             providers: None,
+            scopes: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -3332,6 +3354,7 @@ fn test_get_existing_secret() {
             },
             profiles,
             providers: None,
+            scopes: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -3386,6 +3409,7 @@ fn test_get_secret_with_default() {
             },
             profiles,
             providers: None,
+            scopes: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -3439,6 +3463,7 @@ fn test_get_nonexistent_secret() {
             },
             profiles,
             providers: None,
+            scopes: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -3606,6 +3631,7 @@ fn test_per_secret_provider_configuration() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     // Create global config with provider aliases
@@ -3659,6 +3685,7 @@ fn test_provider_alias_resolution() {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         },
         Some(global_config),
         None,
@@ -3699,6 +3726,7 @@ fn test_provider_alias_not_found() {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         },
         Some(global_config),
         None,
@@ -3772,6 +3800,7 @@ fn test_per_secret_provider_with_fallback_chain() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let providers_map = aliases_map(&[
@@ -3865,6 +3894,7 @@ fn test_get_secret_with_fallback_chain() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let providers_map = aliases_map(&[
@@ -3943,6 +3973,7 @@ fn test_validate_falls_back_on_primary_provider_error() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let providers_map = aliases_map(&[
@@ -4012,6 +4043,7 @@ fn test_validate_surfaces_error_when_all_providers_fail() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let providers_map = aliases_map(&[
@@ -4106,6 +4138,7 @@ fn test_validate_with_per_secret_providers() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let providers_map = aliases_map(&[
@@ -4234,6 +4267,7 @@ fn test_secret_config_merges_providers_from_default() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let spec = Secrets::new(config, None, None, None);
@@ -5187,6 +5221,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let spec = Secrets::new(config, None, Some("production".to_string()), None);
@@ -5243,6 +5278,7 @@ fn build_chain_scenario(
             profiles
         },
         providers: None,
+        scopes: None,
     };
 
     let providers_map = aliases_map(&[
@@ -5726,6 +5762,7 @@ fn config_with_project_aliases(aliases: &[(&str, &str)]) -> Config {
         },
         profiles: HashMap::new(),
         providers: Some(aliases_map(aliases)),
+        scopes: None,
     }
 }
 
@@ -5772,6 +5809,7 @@ fn config_with_project_alias_secret(
         },
         profiles,
         providers: Some(aliases_map(&[(alias, uri)])),
+        scopes: None,
     }
 }
 
@@ -6133,6 +6171,7 @@ fn dotenv_spec(
             },
             profiles,
             providers: None,
+            scopes: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -6464,6 +6503,7 @@ fn audit_set_readonly_provider_records_error() {
         },
         profiles: required_secret_profile("REQUIRED"),
         providers: None,
+        scopes: None,
     };
     // `env` is read-only, so a `set` is rejected and recorded as an error.
     let global_config = GlobalConfig {
@@ -6992,4 +7032,195 @@ fn store_provider_credential_rejects_a_read_only_source() {
         &secrecy::SecretString::new("x".into()),
     );
     assert!(result.is_err(), "the env provider is read-only");
+}
+
+// ========== Secret scope tests (#137) ==========
+
+#[cfg(test)]
+mod scopes {
+    use super::*;
+
+    /// Three required secrets in `default`, with two scopes carving out subsets.
+    const MANIFEST: &str = r#"
+[project]
+name = "scope-test"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+API_KEY = { description = "API key", required = true }
+QUEUE_TOKEN = { description = "Queue token", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "API_KEY"]
+
+[scopes.worker]
+secrets = ["DATABASE_URL", "QUEUE_TOKEN"]
+"#;
+
+    fn config(toml: &str) -> Config {
+        toml::from_str(toml).expect("valid manifest")
+    }
+
+    #[test]
+    fn scope_narrows_resolution_to_the_intersection() {
+        let mut spec = Secrets::new(config(MANIFEST), None, None, None);
+        spec.set_scope("api");
+        // Sorted, and only the scope's members — QUEUE_TOKEN is excluded.
+        assert_eq!(
+            spec.resolve_profile_secret_names(None).unwrap(),
+            vec!["API_KEY".to_string(), "DATABASE_URL".to_string()]
+        );
+    }
+
+    #[test]
+    fn no_scope_resolves_every_secret() {
+        let spec = Secrets::new(config(MANIFEST), None, None, None);
+        assert_eq!(
+            spec.resolve_profile_secret_names(None).unwrap(),
+            vec![
+                "API_KEY".to_string(),
+                "DATABASE_URL".to_string(),
+                "QUEUE_TOKEN".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_scope_errors_and_lists_the_defined_ones() {
+        let mut spec = Secrets::new(config(MANIFEST), None, None, None);
+        spec.set_scope("nope");
+        let err = spec
+            .resolve_profile_secret_names(None)
+            .expect_err("an undefined scope must fail resolution");
+        let SecretSpecError::InvalidScope(msg) = err else {
+            panic!("expected InvalidScope, got {err:?}");
+        };
+        assert!(msg.contains("nope"), "names the bad scope: {msg}");
+        assert!(
+            msg.contains("api") && msg.contains("worker"),
+            "lists the available scopes: {msg}"
+        );
+    }
+
+    #[test]
+    fn scope_membership_is_intersected_with_the_selected_profile() {
+        // `api` lists a secret that only `production` declares; resolving it under
+        // `default` yields just the intersection, with no error.
+        let manifest = r#"
+[project]
+name = "scope-intersect"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[profiles.production]
+SENTRY_DSN = { description = "Sentry", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "SENTRY_DSN"]
+"#;
+        let mut spec = Secrets::new(config(manifest), None, None, None);
+        spec.set_scope("api");
+        // `default` does not declare SENTRY_DSN, so the scoped set is just DATABASE_URL.
+        assert_eq!(
+            spec.resolve_profile_secret_names(Some("default")).unwrap(),
+            vec!["DATABASE_URL".to_string()]
+        );
+        // `production` inherits DATABASE_URL from `default` and adds SENTRY_DSN,
+        // so the same scope admits both.
+        assert_eq!(
+            spec.resolve_profile_secret_names(Some("production"))
+                .unwrap(),
+            vec!["DATABASE_URL".to_string(), "SENTRY_DSN".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolving_values_skips_required_secrets_outside_the_scope() {
+        // The `api` scope's own secrets (DATABASE_URL, API_KEY) are available;
+        // QUEUE_TOKEN is required but excluded by the scope, so resolution still
+        // succeeds even though the provider never supplies it.
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DATABASE_URL=postgres://localhost/db\nAPI_KEY=secret\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut scoped = Secrets::new(config(MANIFEST), None, Some(provider.clone()), None);
+        scoped.set_scope("api");
+        let response = scoped.resolve().unwrap();
+        assert!(
+            response.is_ok(),
+            "excluded required secret must not fail resolution"
+        );
+        assert!(response.secrets.contains_key("DATABASE_URL"));
+        assert!(response.secrets.contains_key("API_KEY"));
+        assert!(!response.secrets.contains_key("QUEUE_TOKEN"));
+
+        // Without a scope the same manifest fails: QUEUE_TOKEN is required and
+        // the provider does not supply it.
+        let unscoped = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        let response = unscoped.resolve().unwrap();
+        assert!(!response.is_ok());
+        assert!(
+            response
+                .missing_required
+                .contains(&"QUEUE_TOKEN".to_string())
+        );
+    }
+
+    /// The scope's core isolation guarantee: `run --scope` removes a
+    /// declared-but-excluded secret the parent already exported, so it cannot
+    /// leak into the child even though the child would otherwise inherit it.
+    #[test]
+    fn run_scope_scrubs_an_excluded_inherited_secret_from_the_child() {
+        let _env = scrub_resolution_env();
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DATABASE_URL=postgres://localhost/db\nAPI_KEY=secret\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        // Simulate a parent shell that already holds the full profile: QUEUE_TOKEN
+        // is exported into this process's environment, and the child would inherit
+        // it unless `run --scope api` actively removes it.
+        let _leaked = EnvVarGuard::set("QUEUE_TOKEN", "leaked-from-parent");
+
+        let mut spec = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        spec.set_scope("api");
+
+        let excluded_file = temp.path().join("excluded");
+        let included_file = temp.path().join("included");
+        let exit = spec
+            .run_command(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "printf '%s' \"$QUEUE_TOKEN\" > {}; printf '%s' \"$DATABASE_URL\" > {}",
+                    excluded_file.display(),
+                    included_file.display()
+                ),
+            ])
+            .unwrap();
+        assert_eq!(exit, 0);
+
+        assert_eq!(
+            fs::read_to_string(&excluded_file).unwrap(),
+            "",
+            "excluded QUEUE_TOKEN must not reach the child, even inherited from the parent"
+        );
+        assert_eq!(
+            fs::read_to_string(&included_file).unwrap(),
+            "postgres://localhost/db",
+            "the scoped DATABASE_URL is still injected"
+        );
+    }
 }

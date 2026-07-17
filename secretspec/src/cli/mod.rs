@@ -79,6 +79,10 @@ enum Commands {
         /// Profile to use
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
         profile: Option<String>,
+        /// Scope to resolve (a `[scopes]` subset of the profile). Excluded
+        /// secrets are removed from the child environment even if inherited.
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE")]
+        scope: Option<String>,
         /// Command and arguments to run
         #[arg(trailing_var_arg = true)]
         command: Vec<String>,
@@ -91,6 +95,9 @@ enum Commands {
         /// Profile to use
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
         profile: Option<String>,
+        /// Scope to resolve (a `[scopes]` subset of the profile)
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE")]
+        scope: Option<String>,
         /// Output format
         #[arg(long, value_enum, default_value = "shell")]
         format: ExportFormat,
@@ -103,6 +110,9 @@ enum Commands {
         /// Profile to use
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
         profile: Option<String>,
+        /// Scope to check (a `[scopes]` subset of the profile)
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE")]
+        scope: Option<String>,
         /// Don't prompt for missing secrets (exit with error if any are missing)
         #[arg(short = 'n', long)]
         no_prompt: bool,
@@ -419,6 +429,7 @@ pub fn main() -> Result<()> {
                 },
                 profiles,
                 providers: None,
+                scopes: None,
             };
             let mut content = generate_toml_with_comments(&project_config).into_diagnostic()?;
 
@@ -734,6 +745,7 @@ pub fn main() -> Result<()> {
             command,
             provider,
             profile,
+            scope,
         } => {
             let mut app = load_secrets(&cli.file, &cli.reason)?;
             if let Some(p) = provider {
@@ -741,6 +753,9 @@ pub fn main() -> Result<()> {
             }
             if let Some(p) = profile {
                 app.set_profile(p);
+            }
+            if let Some(s) = scope {
+                app.set_scope(s);
             }
             app.run(command)
                 .into_diagnostic()
@@ -751,6 +766,7 @@ pub fn main() -> Result<()> {
         Commands::Export {
             provider,
             profile,
+            scope,
             format,
         } => {
             let mut app = load_secrets(&cli.file, &cli.reason)?;
@@ -759,6 +775,9 @@ pub fn main() -> Result<()> {
             }
             if let Some(p) = profile {
                 app.set_profile(p);
+            }
+            if let Some(s) = scope {
+                app.set_scope(s);
             }
             let mut out = std::io::stdout().lock();
             app.export(format, &mut out)
@@ -770,6 +789,7 @@ pub fn main() -> Result<()> {
         Commands::Check {
             provider,
             profile,
+            scope,
             no_prompt,
             json,
             explain,
@@ -780,6 +800,9 @@ pub fn main() -> Result<()> {
             }
             if let Some(p) = profile {
                 app.set_profile(p);
+            }
+            if let Some(s) = scope {
+                app.set_scope(s);
             }
 
             // `--json`/`--explain` surface the value-free resolution report
@@ -1040,6 +1063,7 @@ mod tests {
                 },
             )]),
             providers: None,
+            scopes: None,
         }
     }
 
@@ -1249,6 +1273,7 @@ mod tests {
                 },
             )]),
             providers: None,
+            scopes: None,
         };
 
         let generated = generate_toml_with_comments(&config).unwrap();

@@ -4,52 +4,25 @@
 # Tests the Bitwarden provider against actual vault data
 # Usage: ./bitwarden_integration.sh [BW_SESSION]
 #
-# SETUP REQUIREMENTS:
-# ===================
-# This script requires specific test data to be set up in your Bitwarden vault.
-# Create a folder named 'secretspec-test' and add the following items:
-#
-# BITWARDEN PASSWORD MANAGER ITEMS (in 'secretspec-test' folder):
-# ----------------------------------------------------------------
-# 1. Login Item: "Test Database"
-#    - Username: testuser
-#    - Password: tets-db-password
-#    - Custom field: api_key = sk_test_db_12345
-#
-# 2. Login Item: "GitHub API"
-#    - Username: (any)
-#    - Password: (any fake GitHub token value)
-#
-# 3. Credit Card Item: "Stripe Test Card"
-#    - Card Number: 4242424242424242
-#    - Custom field: api_key = sk_test_stripe_12345
-#
-# 4. Credit Card Item: "Payment Gateway"
-#    - Card Number: 5555555555554444
-#    - (Used for default field testing)
-#
-# 5. SSH Key Item: "Deploy SSH Key"
-#    - Private Key: (any SSH private key starting with "BEGIN OPENSSH PRIVATE KEY")
-#    - Custom field: passphrase = ssh_passphrase_123
-#
-# 6. Identity Item: "Employee Record"
-#    - Email: test.employee@example.com
-#    - Custom field: employee_id = EMP001
-#
-# 7. Secure Note Item: "Note to Self"
-#    - Note contents: this is a note.
+# The script auto-creates test items if they don't exist,
+# and removes them on clean exit (unless --keep-test-data is passed).
 #
 set -e  # Exit on any error
 
 # Get BW_SESSION from command line or environment
+KEEP_TEST_DATA=false
 if [ $# -gt 0 ]; then
-    BW_SESSION="$1"
-    echo "Using BW_SESSION from command line argument"
-elif [ -n "$BW_SESSION" ]; then
-    echo "Using BW_SESSION from environment variable"
-else
+    if [ "$1" = "--keep-test-data" ]; then
+        KEEP_TEST_DATA=true
+        shift
+    fi
+    if [ $# -gt 0 ]; then
+        BW_SESSION="$1"
+    fi
+fi
+if [ -z "$BW_SESSION" ]; then
     echo "ERROR: BW_SESSION is required either as argument or environment variable"
-    echo "Usage: $0 [BW_SESSION]"
+    echo "Usage: $0 [--keep-test-data] [BW_SESSION]"
     echo "Or: BW_SESSION=your_session $0"
     exit 1
 fi
@@ -68,6 +41,90 @@ NC='\033[0m' # No Color
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
+
+# Items created by this script (for cleanup)
+CREATED_ITEM_IDS=()
+
+# Ensure a BW item exists with the given JSON template. If it already
+# exists, returns its ID. Otherwise creates it and records the ID.
+ensure_item() {
+    local name="$1"
+    local template_json="$2"
+
+    # Check if item already exists
+    local existing_id
+    existing_id=$(BW_SESSION="$BW_SESSION" bw list items --search "$name" 2>/dev/null | \
+        python3 -c "import sys,json; items=[i for i in json.load(sys.stdin) if i.get('name','')=='$name']; print(items[0]['id'] if items else '')" 2>/dev/null || true)
+
+    if [ -n "$existing_id" ]; then
+        echo "   Using existing item: $name ($existing_id)"
+        echo "$existing_id"
+        return
+    fi
+
+    # Create the item via base64-encoded JSON
+    local encoded
+    encoded=$(echo -n "$template_json" | python3 -c "import sys,base64; sys.stdout.write(base64.b64encode(sys.stdin.buffer.read()).decode())")
+    local new_id
+    new_id=$(echo "$encoded" | BW_SESSION="$BW_SESSION" bw create item 2>/dev/null | \
+        python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null || true)
+
+    if [ -n "$new_id" ]; then
+        echo "   Created item: $name ($new_id)"
+        CREATED_ITEM_IDS+=("$new_id")
+        echo "$new_id"
+    else
+        echo "   WARNING: Failed to create item: $name" >&2
+    fi
+}
+
+# Set up test data automatically
+setup_test_data() {
+    echo -e "\n${YELLOW}Setting up test data...${NC}"
+
+    # 1. Login Item: "Test Database"
+    ensure_item "Test Database" '{"type":1,"name":"Test Database","login":{"username":"testuser","password":"tets-db-password","totp":null,"uris":[]},"fields":[{"name":"api_key","value":"sk_test_db_12345","type":1}],"notes":"SecretSpec test item"}' > /dev/null
+
+    # 2. Login Item: "GitHub API"
+    ensure_item "GitHub API" '{"type":1,"name":"GitHub API","login":{"username":"testuser","password":"ghp_fake_token_for_testing","totp":null,"uris":[]},"notes":"SecretSpec test item"}' > /dev/null
+
+    # 3. Card Item: "Stripe Test Card"
+    ensure_item "Stripe Test Card" '{"type":3,"name":"Stripe Test Card","card":{"cardholderName":"Test User","number":"4242424242424242","brand":"Visa","expMonth":"12","expYear":"2030","code":"123"},"fields":[{"name":"api_key","value":"sk_test_stripe_12345","type":1}],"notes":"SecretSpec test item"}' > /dev/null
+
+    # 4. Card Item: "Payment Gateway"
+    ensure_item "Payment Gateway" '{"type":3,"name":"Payment Gateway","card":{"cardholderName":"Test User","number":"5555555555554444","brand":"Mastercard","expMonth":"12","expYear":"2030","code":"456"},"notes":"SecretSpec test item"}' > /dev/null
+
+    # 5. SSH Key Item: "Deploy SSH Key"
+    ensure_item "Deploy SSH Key" '{"type":5,"name":"Deploy SSH Key","sshKey":{"privateKey":"-----BEGIN OPENSSH PRIVATE KEY-----\nfake_key_for_testing\n-----END OPENSSH PRIVATE KEY-----","publicKey":"ssh-rsa AAAAfake","keyFingerprint":"SHA256:fak3f1ng3rpr1nt"},"fields":[{"name":"passphrase","value":"ssh_passphrase_123","type":1}],"notes":"SecretSpec test item"}' > /dev/null
+
+    # 6. Identity Item: "Employee Record"
+    ensure_item "Employee Record" '{"type":4,"name":"Employee Record","identity":{"title":null,"firstName":"Test","middleName":null,"lastName":"Employee","username":null,"company":null,"email":"test.employee@example.com","phone":null},"fields":[{"name":"employee_id","value":"EMP001","type":1}],"notes":"SecretSpec test item"}' > /dev/null
+
+    # 7. Secure Note Item: "Note to Self"
+    ensure_item "Note to Self" '{"type":2,"name":"Note to Self","notes":"this is a note.","secureNote":{"type":0},"fields":[{"name":"value","value":"this is a note.","type":1}]}' > /dev/null
+
+    echo -e "${GREEN}✓ Test data ready (${#CREATED_ITEM_IDS[@]} items created)${NC}"
+}
+
+# Clean up test data
+cleanup_test_data() {
+    if [ "$KEEP_TEST_DATA" = true ]; then
+        echo -e "\n${YELLOW}--keep-test-data set, skipping cleanup${NC}"
+        return
+    fi
+    echo -e "\n${YELLOW}Cleaning up test data...${NC}"
+    for id in "${CREATED_ITEM_IDS[@]}"; do
+        BW_SESSION="$BW_SESSION" bw delete item "$id" 2>/dev/null && echo "   Deleted $id" || true
+    done
+    # Also clean up any items we created during set tests
+    local set_items
+    set_items=$(BW_SESSION="$BW_SESSION" bw list items --search "NEW_LOGIN_SECRET NEW_CARD_TOKEN DATABASE_PASSWORD" 2>/dev/null | \
+        python3 -c "import sys,json; [print(i['id']) for i in json.load(sys.stdin)]" 2>/dev/null || true)
+    for id in $set_items; do
+        BW_SESSION="$BW_SESSION" bw delete item "$id" 2>/dev/null && echo "   Deleted $id (set test)" || true
+    done
+    echo -e "${GREEN}✓ Cleanup complete${NC}"
+}
 
 # Function to run a test
 run_test() {
@@ -141,6 +198,9 @@ fi
 
 echo -e "${GREEN}✓ Bitwarden CLI is authenticated and unlocked${NC}"
 
+# Auto-create test items if they don't exist
+setup_test_data
+trap cleanup_test_data EXIT
 
 # Create a test secretspec.toml
 echo -e "\n${YELLOW}Setting up test configuration${NC}"
@@ -294,8 +354,7 @@ else
     echo "Please review the failed tests above."
 fi
 
-# Cleanup
-echo -e "\n${YELLOW}Cleaning up test files...${NC}"
+# Cleanup test config file (items cleaned up by EXIT trap)
 rm -f secretspec.toml
 
 echo -e "\n${BLUE}Testing complete!${NC}"

@@ -663,11 +663,6 @@ impl BitwardenProvider {
             ));
         }
 
-        eprintln!(
-            "get_from_password_manager called for item='{}'",
-            item_name
-        );
-
         // Use Bitwarden's built-in search to find items matching the key
         let mut list_args = vec!["list", "items", "--search", item_name];
 

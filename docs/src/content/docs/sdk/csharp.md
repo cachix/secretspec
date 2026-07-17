@@ -3,11 +3,9 @@ title: C# SDK
 description: Resolve SecretSpec secrets from C# and .NET
 ---
 
-> **Version compatibility:** The supported C# SDK targets SecretSpec 0.16 and
-> is unavailable in the current 0.15 release. The 0.15.0 NuGet package is an
-> unsupported bootstrap artifact used to reserve the package ID. With 0.15,
-> use `secretspec run -- dotnet run`; the API below becomes available with
-> 0.16.
+> **Version compatibility:** Available since SecretSpec 0.16. The 0.15.0
+> NuGet package is an unsupported bootstrap artifact used to reserve the
+> package ID; use version 0.16 or later for the API below.
 
 The C# SDK (`Cachix.SecretSpec`) is a thin client over the same Rust resolver as
 the CLI. Every provider, fallback chain, profile, generator, reference, and

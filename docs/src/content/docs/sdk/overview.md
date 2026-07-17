@@ -8,11 +8,9 @@ PHP, and C# (0.16+). They all resolve secrets from the same declarative
 `secretspec.toml`, and they all behave identically, because they share one
 resolver.
 
-> **C# compatibility:** The supported C# SDK targets SecretSpec 0.16 and is
-> unavailable in the current 0.15 release. The 0.15.0 NuGet package is an
-> unsupported package-ID bootstrap. With 0.15, run a .NET application through
-> `secretspec run -- dotnet run`; the API shown in the C# guide becomes
-> available in 0.16.
+> **C# compatibility:** Available since SecretSpec 0.16. The 0.15.0 NuGet
+> package is an unsupported package-ID bootstrap; use version 0.16 or later
+> for the API shown in the C# guide.
 
 ## One resolver, thin clients
 

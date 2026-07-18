@@ -89,8 +89,9 @@ DATABASE_URL = { default = "postgresql://localhost/dev" }
 ## Composed Secrets (0.16+)
 
 \`composed\` derives a read-only value from other declared secrets with strict,
-order-independent \`{SECRET_NAME}\` references. It does not perform dotenv,
-shell, ambient-environment, or recursive expansion.
+order-independent \`\${UPPERCASE_NAME}\` references. Names must match
+\`[A-Z][A-Z0-9_]*\`; it does not perform dotenv, shell, ambient-environment, or
+recursive expansion.
 
 ## Type-safe Rust SDK
 

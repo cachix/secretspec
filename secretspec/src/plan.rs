@@ -434,7 +434,7 @@ mod tests {
                 "RESULT".to_string(),
                 Secret {
                     description: Some("derived".to_string()),
-                    composed: Some("prefix-{PART}".to_string()),
+                    composed: Some("prefix-${PART}".to_string()),
                     ..Default::default()
                 },
             ),

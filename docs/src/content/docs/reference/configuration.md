@@ -88,7 +88,7 @@ Each secret variable is defined as a table with the following fields:
 | `description` | string | Yes (see notes) | Human-readable description of the secret |
 | `required` | boolean | No | Whether absence is an error (default: true, or false when `default` is present) |
 | `default` | string | No | Default value if not provided |
-| `composed` (0.16+) | string | No | Derive a read-only value from other declared secrets using `{SECRET_NAME}` references |
+| `composed` (0.16+) | string | No | Derive a read-only value from other declared secrets using `${UPPERCASE_NAME}` references |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `ref` | table | No | Coordinates naming an externally managed secret in the provider's store (e.g. `ref = { item = "db", field = "password" }`) |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
@@ -122,23 +122,25 @@ CLI behavior, profile inheritance, and the differences from dotenv expansion:
 DB_USER = { description = "Database user" }
 DB_PASSWORD = { description = "Database password" }
 DB_HOST = { description = "Database host" }
-DATABASE_URL = { description = "PostgreSQL DSN", composed = "postgres://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/app" }
+DATABASE_URL = { description = "PostgreSQL DSN", composed = "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}/app" }
 ```
 
 References form a static dependency graph. Declaration order does not matter,
 and composed secrets may reference other composed secrets. SecretSpec rejects
-unknown references, cycles, malformed braces, and source conflicts while
+unknown references, cycles, malformed references, and source conflicts while
 loading the manifest. A composed secret is read-only and cannot also set
 `default`, `providers`, `ref`, `type`, or enabled `generate`.
 
 Composition intentionally does **not** implement dotenv or shell expansion:
 
-- only `{DECLARED_SECRET}` is a reference; ambient environment variables are
-  never consulted;
-- `${NAME}`, fallback operators such as `${NAME:-fallback}`, commands, and
-  recursive expansion are unsupported;
+- only `${UPPERCASE_NAME}` is a reference, and the name must match
+  `[A-Z][A-Z0-9_]*` and identify a declared secret;
+- ambient environment variables are never consulted;
+- fallback operators such as `${NAME:-fallback}`, commands, and recursive
+  expansion are unsupported;
 - inserted values are opaque and are never scanned again;
-- `{{` and `}}` produce literal braces;
+- `$$` produces a literal `$` (`$${NAME}` renders `${NAME}`), while ordinary
+  braces are literal;
 - a missing dependency makes a required composition missing, while a
   `required = false` composition is omitted;
 - empty values remain empty and are distinct from missing values.
@@ -148,9 +150,11 @@ text inserted into the composed value. Applying `as_path = true` to the
 composed secret materializes the final combined value.
 
 Composition is raw string concatenation. SecretSpec cannot know whether a
-component occupies a URL username, password, host, path, or query position, so
-it does not URL-encode components. Store components in the form required by the
-target format.
+component occupies a URL username, password, host, path, query, or structured
+document position, so it does not URL-encode or JSON-encode components. Store
+components in the form required by the target format; use
+`secretspec export --format json` when exporting the resolved secret map as
+JSON.
 
 ## Complete Example
 

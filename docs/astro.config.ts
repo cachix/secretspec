@@ -118,7 +118,7 @@ $ secretspec import dotenv://.env.production
 
 ## Providers
 
-Secrets can be stored in: keyring (default), dotenv files, environment variables, 1Password, Gopass (0.15+), LastPass, Pass, Proton Pass, Google Cloud Secret Manager, AWS Secrets Manager, HashiCorp Vault / OpenBao, Bitwarden Secrets Manager, Azure Key Vault, or Infisical (0.16+).`,
+Secrets can be stored in: keyring (default), dotenv files, environment variables, 1Password, Gopass (0.15+), LastPass, Pass, Proton Pass, Google Cloud Secret Manager, AWS Secrets Manager, HashiCorp Vault / OpenBao, Bitwarden Password Manager (0.16+), Bitwarden Secrets Manager, Azure Key Vault, or Infisical (0.16+).`,
         }),
       ],
       title: "SecretSpec",
@@ -195,6 +195,10 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
             {
               label: "Vault / OpenBao",
               slug: "providers/vault",
+            },
+            {
+              label: "Bitwarden Password Manager (0.16+)",
+              slug: "providers/bw",
             },
             {
               label: "Bitwarden Secrets Manager",

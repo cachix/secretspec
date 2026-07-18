@@ -165,6 +165,22 @@ vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
 **Prerequisites**: Vault/OpenBao server, `VAULT_TOKEN` env var or `~/.vault-token`, build with `--features vault`
 **Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
 
+## Bitwarden Password Manager Provider (0.16+)
+
+**URI**: `bw://[COLLECTION_ID]` - Stores secrets in a Bitwarden Password Manager vault via the `bw` CLI
+
+```bash
+bw://                                   # Personal vault
+bw://collection-id                      # Specific collection
+bw://myorg@dev-secrets                  # Organization collection
+bw://?server=https://vault.company.com  # Self-hosted server
+bw://?type=login&field=username         # Default item type and field
+```
+
+**Features**: Read/write, all vault item types (logins, cards, identities, SSH keys, secure notes), field selection, `ref = { item, field }` mapping in `secretspec.toml`
+**Prerequisites**: Bitwarden CLI (`bw`), signed in and unlocked (`BW_SESSION` env var), build with `--features bw`
+**Storage**: One vault item per secret; reads use per-type default fields unless `?field=` or a `ref` mapping selects one
+
 ## Bitwarden Secrets Manager Provider
 
 **URI**: `bws://[SERVER_BASE@]PROJECT_UUID` - Stores secrets in Bitwarden Secrets Manager
@@ -263,6 +279,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |
 | Vault/OpenBao | ✅ Vault encryption | Vault/OpenBao server | ✅ Yes |
+| BW (0.16+) | ✅ End-to-end | Cloud (Bitwarden) or self-hosted | ✅ Yes |
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
 | Infisical (0.16+) | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |

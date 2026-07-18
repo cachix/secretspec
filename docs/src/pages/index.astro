@@ -32,7 +32,8 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'apple', slug: 'keyring', label: 'macOS Keychain' },
   { icon: '1password', slug: 'onepassword', label: '1Password' },
   { icon: 'lastpass', slug: 'lastpass', label: 'LastPass' },
-  { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden' },
+  { icon: 'bitwarden', slug: 'bw', label: 'Bitwarden Password Manager' },
+  { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden Secrets Manager' },
   { icon: 'vault', slug: 'vault', label: 'Vault / OpenBao' },
   { slug: 'awssm', label: 'AWS Secrets Manager' },
   { icon: 'googlecloud', slug: 'gcsm', label: 'Google Cloud Secret Manager' },
@@ -54,7 +55,7 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
 <StarlightPage
   frontmatter={{
     title: 'Declare secrets once. Store them anywhere.',
-    description: 'Declare what your application needs in secretspec.toml — resolve the values through any of 14 providers. No secrets in git. Same code, every environment.',
+    description: 'Declare what your application needs in secretspec.toml — resolve the values through any of 15 providers. No secrets in git. Same code, every environment.',
     template: 'splash',
     hero: { tagline: '' },
   }}
@@ -86,7 +87,7 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
       <p class="landing-badge">Declarative secrets manager</p>
       <h1 id="_top" class="landing-hero-title">Declare secrets once.<br>Store them anywhere.</h1>
       <p class="landing-hero-subtitle">
-        Stop leaking <code class="inline-code">.env</code> files. Define what your application needs in <code class="inline-code">secretspec.toml</code>, then plug in keyring, 1Password, Vault, AWS, Azure, Gopass, or any of 14 providers — same code, every environment.
+        Stop leaking <code class="inline-code">.env</code> files. Define what your application needs in <code class="inline-code">secretspec.toml</code>, then plug in keyring, 1Password, Vault, AWS, Azure, Gopass, or any of 15 providers — same code, every environment.
       </p>
       <div class="landing-hero-actions">
         <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
@@ -134,6 +135,7 @@ $ secretspec init --from dotenv
 $ secretspec config init
 ? Select your preferred provider backend:
 <span class="tok-pun">›</span> keyring: Uses system keychain (Recommended)
+  bw: Bitwarden Password Manager
   infisical: Infisical secret management
 <span class="tok-str">✓</span> Saved to ~/.config/secretspec/config.toml
 
@@ -193,10 +195,11 @@ $ secretspec run --profile production -- npm start
       <div class="landing-step">
         <span class="landing-step-num">2</span>
         <p class="landing-step-title">Configure</p>
-        <p class="landing-step-desc">Pick from 14 providers: system keyring, password managers, cloud secret stores, Gopass, dotenv, or environment variables.</p>
+        <p class="landing-step-desc">Pick from 15 providers: system keyring, password managers, cloud secret stores, Gopass, dotenv, or environment variables.</p>
         <pre is:raw class="landing-step-code"><code>$ secretspec config init
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
+  bw: Bitwarden Password Manager
   infisical: Infisical secret management</code></pre>
       </div>
 
@@ -222,9 +225,9 @@ $ secretspec run --profile production -- npm start
 
     <div class="landing-bento">
       <a href="/concepts/providers/" class="landing-bento-card is-link landing-bento-2">
-        <div class="landing-bento-big-num">14</div>
+        <div class="landing-bento-big-num">15</div>
         <p class="landing-bento-title">Providers</p>
-        <p class="landing-bento-desc">Keyring · 1Password · LastPass · Bitwarden · Vault · AWS · GCP · Azure · Infisical · Gopass · Pass · Proton Pass · dotenv · env.</p>
+        <p class="landing-bento-desc">Keyring · 1Password · LastPass · Bitwarden PM · Bitwarden SM · Vault · AWS · GCP · Azure · Infisical · Gopass · Pass · Proton Pass · dotenv · env.</p>
       </a>
 
       <a href="/concepts/profiles/" class="landing-bento-card is-link landing-bento-2">
@@ -291,7 +294,7 @@ println!("{}", s.secrets.database_url);</code></pre>
       <span class="landing-showcase-eyebrow">Declaration vs storage</span>
       <h2 class="landing-section-title">Declare a secret. Swap the source.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Your <code class="inline-code">secretspec.toml</code> never changes. The same code reads from Keychain, 1Password, Vault, AWS, Azure, or any of 14 providers.
+        Your <code class="inline-code">secretspec.toml</code> never changes. The same code reads from Keychain, 1Password, Vault, AWS, Azure, or any of 15 providers.
       </p>
     </div>
 

@@ -28,6 +28,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)
   - [AWS Secrets Manager](https://secretspec.dev/providers/awssm)
   - [Vault/OpenBao](https://secretspec.dev/providers/vault)
+  - [Bitwarden Password Manager](https://secretspec.dev/providers/bw) (0.16+)
   - [Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)
   - [Azure Key Vault](https://secretspec.dev/providers/akv)
   - [Infisical](https://secretspec.dev/providers/infisical) (0.16+)
@@ -65,6 +66,7 @@ $ secretspec config init
   gcsm: Google Cloud Secret Manager
   awssm: AWS Secrets Manager
   vault: HashiCorp Vault / OpenBao secret management
+  bw: Bitwarden Password Manager (0.16+)
   bws: Bitwarden Secrets Manager
   akv: Azure Key Vault
   infisical: Infisical secret management (0.16+)
@@ -150,6 +152,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)** - GCP secret management
 - **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
 - **[Vault / OpenBao](https://secretspec.dev/providers/vault)** - HashiCorp Vault and OpenBao KV engine
+- **[Bitwarden Password Manager](https://secretspec.dev/providers/bw)** (0.16+) - Bitwarden Password Manager vault via the `bw` CLI
 - **[Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)** - Bitwarden Secrets Manager integration
 - **[Azure Key Vault](https://secretspec.dev/providers/akv)** - Azure secret management
 - **[Infisical](https://secretspec.dev/providers/infisical)** (0.16+) - Infisical secret management

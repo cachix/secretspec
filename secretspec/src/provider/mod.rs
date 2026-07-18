@@ -29,7 +29,7 @@
 //! - [`bws::BwsProvider`]: Bitwarden Secrets Manager integration
 //! - [`akv::AkvProvider`]: Azure Key Vault integration
 //! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
-//! - [`bw::BitwardenProvider`]: Bitwarden Password Manager
+//! - [`bw::BitwardenProvider`]: Bitwarden Password Manager (0.16+)
 //!
 //! ## URI-Based Configuration
 //!

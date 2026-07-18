@@ -1,13 +1,17 @@
 ---
-title: Bitwarden Provider
+title: Bitwarden Password Manager Provider
 description: Bitwarden Password Manager secrets management integration
 ---
 
-The Bitwarden provider integrates with Bitwarden Password Manager for secret management with vault-wide access to all item types.
+The `bw` provider integrates with Bitwarden Password Manager for secret management with vault-wide access to all item types.
+
+:::note[Version compatibility]
+The Bitwarden Password Manager provider is an upcoming SecretSpec 0.16 feature and is not
+available in SecretSpec 0.15.
+:::
 
 ## Prerequisites
 
-### Password Manager
 - Bitwarden CLI (`bw`)
 - Bitwarden account
 - Signed in via `bw login` and unlocked with `bw unlock`

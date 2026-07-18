@@ -1279,31 +1279,31 @@ mod integration_tests {
     #[cfg(feature = "bw")]
     #[test]
     fn test_bw_provider_creation() {
-        let provider = Box::<dyn Provider>::try_from("bitwarden://").unwrap();
-        assert_eq!(provider.name(), "bitwarden");
-        assert_eq!(provider.uri(), "bitwarden://");
+        let provider = Box::<dyn Provider>::try_from("bw://").unwrap();
+        assert_eq!(provider.name(), "bw");
+        assert_eq!(provider.uri(), "bw://");
     }
 
     #[cfg(feature = "bw")]
     #[test]
     fn test_bw_provider_with_collection() {
-        let provider = Box::<dyn Provider>::try_from("bitwarden://my-collection").unwrap();
-        assert_eq!(provider.name(), "bitwarden");
-        assert_eq!(provider.uri(), "bitwarden://my-collection");
+        let provider = Box::<dyn Provider>::try_from("bw://my-collection").unwrap();
+        assert_eq!(provider.name(), "bw");
+        assert_eq!(provider.uri(), "bw://my-collection");
     }
 
     #[cfg(feature = "bw")]
     #[test]
     fn test_bw_provider_with_org_collection() {
-        let provider = Box::<dyn Provider>::try_from("bitwarden://myorg@dev-secrets").unwrap();
-        assert_eq!(provider.name(), "bitwarden");
-        assert_eq!(provider.uri(), "bitwarden://myorg@dev-secrets");
+        let provider = Box::<dyn Provider>::try_from("bw://myorg@dev-secrets").unwrap();
+        assert_eq!(provider.name(), "bw");
+        assert_eq!(provider.uri(), "bw://myorg@dev-secrets");
     }
 
     #[cfg(feature = "bw")]
     #[test]
     fn test_bw_provider_rejects_bws_scheme() {
-        use crate::provider::bitwarden::BitwardenConfig;
+        use crate::provider::bw::BitwardenConfig;
         let url = crate::provider::ProviderUrl::new(url::Url::parse("bws://project-id").unwrap());
         let result = BitwardenConfig::try_from(&url);
         assert!(result.is_err());

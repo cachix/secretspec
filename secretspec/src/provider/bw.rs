@@ -370,7 +370,7 @@ where
 /// # Examples
 ///
 /// ```ignore
-/// # use secretspec::provider::bitwarden::BitwardenConfig;
+/// # use secretspec::provider::bw::BitwardenConfig;
 /// // Personal vault
 /// let config = BitwardenConfig::default();
 /// ```
@@ -427,9 +427,9 @@ impl TryFrom<&ProviderUrl> for BitwardenConfig {
     fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
         let scheme = url.scheme();
 
-        if scheme != "bitwarden" {
+        if scheme != "bw" {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
-                "Invalid scheme '{}' for Bitwarden provider. Use 'bitwarden://' for Password Manager",
+                "Invalid scheme '{}' for Bitwarden provider. Use 'bw://' for Password Manager",
                 scheme
             )));
         }
@@ -497,13 +497,13 @@ impl TryFrom<&ProviderUrl> for BitwardenConfig {
 ///
 /// ```ignore
 /// # Personal vault
-/// secretspec set MY_SECRET --provider bitwarden://
+/// secretspec set MY_SECRET --provider bw://
 ///
 /// # Organization collection
-/// secretspec get MY_SECRET --provider bitwarden://myorg@collection-id
+/// secretspec get MY_SECRET --provider bw://myorg@collection-id
 ///
 /// # Self-hosted with custom server
-/// secretspec set API_KEY --provider bitwarden://?server=https://vault.company.com
+/// secretspec set API_KEY --provider bw://?server=https://vault.company.com
 /// ```
 pub struct BitwardenProvider {
     /// Configuration for the provider including org/collection settings.
@@ -515,13 +515,13 @@ pub struct BitwardenProvider {
 crate::register_provider! {
     struct: BitwardenProvider,
     config: BitwardenConfig,
-    name: "bitwarden",
+    name: "bw",
     description: "Bitwarden Password Manager",
-    schemes: ["bitwarden"],
+    schemes: ["bw"],
     examples: [
-        "bitwarden://",
-        "bitwarden://collection-id",
-        "bitwarden://org@collection"
+        "bw://",
+        "bw://collection-id",
+        "bw://org@collection"
     ],
 }
 
@@ -1685,7 +1685,7 @@ impl Provider for BitwardenProvider {
     }
 
     fn uri(&self) -> String {
-        let mut uri = String::from("bitwarden://");
+        let mut uri = String::from("bw://");
         if let Some(ref org_id) = self.config.organization_id {
             uri.push_str(&ProviderUrl::encode(org_id));
             uri.push('@');

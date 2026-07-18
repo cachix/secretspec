@@ -19,10 +19,10 @@ The Bitwarden provider integrates with Bitwarden Password Manager for secret man
 
 #### Password Manager URIs
 ```
-bitwarden://[collection-id]
-bitwarden://[org@collection]
-bitwarden://?server=https://vault.company.com
-bitwarden://?type=login&field=password
+bw://[collection-id]
+bw://[org@collection]
+bw://?server=https://vault.company.com
+bw://?type=login&field=password
 ```
 
 - `collection-id`: Target collection ID
@@ -34,16 +34,16 @@ bitwarden://?type=login&field=password
 
 ```bash
 # Password Manager - Personal vault
-$ secretspec set API_KEY --provider bitwarden://
+$ secretspec set API_KEY --provider bw://
 
 # Password Manager - Organization collection
-$ secretspec set DATABASE_URL --provider "bitwarden://myorg@dev-secrets"
+$ secretspec set DATABASE_URL --provider "bw://myorg@dev-secrets"
 
 # Password Manager - Self-hosted instance
-$ secretspec set TOKEN --provider "bitwarden://?server=https://vault.company.com"
+$ secretspec set TOKEN --provider "bw://?server=https://vault.company.com"
 
 # Password Manager - Specific item type and field
-$ secretspec get 'MyApp Database' --provider 'bitwarden://?type=login&field=username'
+$ secretspec get 'MyApp Database' --provider 'bw://?type=login&field=username'
 ```
 
 ## Usage
@@ -57,7 +57,7 @@ Enter value for DATABASE_URL: postgresql://localhost/mydb
 ✓ Secret DATABASE_URL saved to Bitwarden
 
 # Get a secret from existing vault item
-$ secretspec get 'MyApp Database' --provider 'bitwarden://?type=login'
+$ secretspec get 'MyApp Database' --provider 'bw://?type=login'
 
 # Run with secrets
 $ secretspec run -- npm start
@@ -70,46 +70,46 @@ The Bitwarden provider supports all Bitwarden item types with smart field detect
 #### Login Items (Default)
 ```bash
 # Get password field (default)
-$ secretspec get 'Database Login' --provider 'bitwarden://?type=login'
+$ secretspec get 'Database Login' --provider 'bw://?type=login'
 
 # Get username field
-$ secretspec get 'Database Login' --provider 'bitwarden://?type=login&field=username'
+$ secretspec get 'Database Login' --provider 'bw://?type=login&field=username'
 
 # Get custom field
-$ secretspec get 'API Service' --provider 'bitwarden://?type=login&field=api_key'
+$ secretspec get 'API Service' --provider 'bw://?type=login&field=api_key'
 ```
 
 #### Credit Card Items
 ```bash
 # Get API key from custom field (field required)
-$ secretspec get 'Stripe Payment' --provider 'bitwarden://?type=card&field=api_key'
+$ secretspec get 'Stripe Payment' --provider 'bw://?type=card&field=api_key'
 
 # Get card number
-$ secretspec get 'Company Card' --provider 'bitwarden://?type=card&field=number'
+$ secretspec get 'Company Card' --provider 'bw://?type=card&field=number'
 ```
 
 #### SSH Key Items
 ```bash
 # Get private key (default)
-$ secretspec get 'Deploy Key' --provider 'bitwarden://?type=sshkey'
+$ secretspec get 'Deploy Key' --provider 'bw://?type=sshkey'
 
 # Get passphrase
-$ secretspec get 'Deploy Key' --provider 'bitwarden://?type=sshkey&field=passphrase'
+$ secretspec get 'Deploy Key' --provider 'bw://?type=sshkey&field=passphrase'
 ```
 
 #### Identity Items
 ```bash
 # Get custom field (field required)
-$ secretspec get 'Employee Record' --provider 'bitwarden://?type=identity&field=employee_id'
+$ secretspec get 'Employee Record' --provider 'bw://?type=identity&field=employee_id'
 
 # Get email field
-$ secretspec get 'Personal Identity' --provider 'bitwarden://?type=identity&field=email'
+$ secretspec get 'Personal Identity' --provider 'bw://?type=identity&field=email'
 ```
 
 #### Secure Note Items
 ```bash
 # Get value from secure note
-$ secretspec get 'Legacy Config' --provider 'bitwarden://?type=securenote&field=config_value'
+$ secretspec get 'Legacy Config' --provider 'bw://?type=securenote&field=config_value'
 ```
 
 ### Profile Configuration
@@ -117,10 +117,10 @@ $ secretspec get 'Legacy Config' --provider 'bitwarden://?type=securenote&field=
 ```toml
 # secretspec.toml
 [development]
-provider = "bitwarden://dev-secrets"
+provider = "bw://dev-secrets"
 
 [production]  
-provider = "bitwarden://prod-secrets"
+provider = "bw://prod-secrets"
 
 ```
 
@@ -143,7 +143,7 @@ $ export BITWARDEN_ORGANIZATION=myorg
 $ export BITWARDEN_COLLECTION=dev-secrets
 
 # Use defaults
-$ secretspec get DATABASE_PASSWORD --provider bitwarden://
+$ secretspec get DATABASE_PASSWORD --provider bw://
 ```
 
 ### CI/CD Integration
@@ -158,7 +158,7 @@ $ bw unlock
 $ export BW_SESSION="session-key-from-unlock"
 
 # Use in CI/CD
-$ secretspec run --provider bitwarden://Production -- deploy
+$ secretspec run --provider bw://Production -- deploy
 ```
 
 ### Field Requirements by Item Type

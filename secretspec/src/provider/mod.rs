@@ -29,7 +29,7 @@
 //! - [`bws::BwsProvider`]: Bitwarden Secrets Manager integration
 //! - [`akv::AkvProvider`]: Azure Key Vault integration
 //! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
-//! - [`bitwarden::BitwardenProvider`]: Bitwarden Password Manager
+//! - [`bw::BitwardenProvider`]: Bitwarden Password Manager
 //!
 //! ## URI-Based Configuration
 //!
@@ -235,7 +235,7 @@ pub mod akv;
 #[cfg(feature = "awssm")]
 pub mod awssm;
 #[cfg(feature = "bw")]
-pub mod bitwarden;
+pub mod bw;
 #[cfg(feature = "bws")]
 pub mod bws;
 pub mod dotenv;

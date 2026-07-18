@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Bitwarden Password Manager provider. `bitwarden://` uses the `bw` CLI for
+- Bitwarden Password Manager provider. `bw://` uses the `bw` CLI for
   vault-wide secret storage across all Bitwarden item types.
 - Composed secrets derive read-only values such as connection strings from
   other declared secrets using strict `{SECRET_NAME}` templates. Dependencies

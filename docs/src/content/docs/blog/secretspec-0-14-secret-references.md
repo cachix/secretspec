@@ -1,5 +1,5 @@
 ---
-title: "SecretSpec 0.14: Secret References"
+title: "SecretSpec 0.14: Secret references"
 description: A secret can now point at one that already exists in a provider's store, by the store's own coordinates, instead of a name SecretSpec picks.
 date: 2026-07-09
 authors:

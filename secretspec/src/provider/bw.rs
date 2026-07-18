@@ -568,6 +568,9 @@ impl BitwardenProvider {
             cmd.env("BW_SERVER", server);
         }
 
+        // Never allow bw to prompt on stdin; fail fast with a clear error
+        // instead (e.g. when the session is missing or expired in CI).
+        cmd.arg("--nointeraction");
         cmd.args(args);
 
         let output = match cmd.output() {
@@ -1317,7 +1320,7 @@ impl BitwardenProvider {
             cmd.env("BW_SERVER", server);
         }
 
-        let mut args = vec!["edit", "item", item_id];
+        let mut args = vec!["--nointeraction", "edit", "item", item_id];
         let org_id = std::env::var("BITWARDEN_ORGANIZATION")
             .ok()
             .or_else(|| self.config.organization_id.clone());
@@ -1609,7 +1612,7 @@ impl BitwardenProvider {
             cmd.env("BW_SERVER", server);
         }
 
-        let mut args = vec!["create", "item"];
+        let mut args = vec!["--nointeraction", "create", "item"];
         let org_id = std::env::var("BITWARDEN_ORGANIZATION")
             .ok()
             .or_else(|| self.config.organization_id.clone());

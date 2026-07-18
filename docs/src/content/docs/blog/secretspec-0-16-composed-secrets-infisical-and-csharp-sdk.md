@@ -18,11 +18,12 @@ ships:
 - **[C# SDK](/sdk/csharp/)** — resolve the same manifests from .NET through the
   shared native resolver, distributed as the `Cachix.SecretSpec` NuGet package.
 
-## Build one value from several secrets
+## Composed secrets
 
 Applications often need a connection string while secret stores work better
 with its independently rotated parts. SecretSpec can now keep those parts
-separate and assemble the application-facing value only during resolution:
+separate and assemble the application-facing value when it resolves the
+manifest:
 
 ```toml title="secretspec.toml"
 [profiles.default]
@@ -37,57 +38,19 @@ DATABASE_URL = {
 ```
 
 `DB_USER`, `DB_PASSWORD`, and `DB_HOST` still come from their configured
-providers. `DATABASE_URL` is rendered in memory and included in `check`, `run`,
-`export`, `get`, and SDK resolution like any other secret. It is never read
-from or written to a provider.
+providers. `DATABASE_URL` is assembled in memory and behaves like any other
+resolved secret in the CLI and SDKs. Compositions are read-only, may build on
+other compositions, and are checked for missing references and cycles before
+resolution.
 
-Composition uses a deliberately small template language. `${UPPERCASE_NAME}`
-inserts one declared secret; names must match `[A-Z][A-Z0-9_]*`, and `$$`
-produces a literal dollar sign. Ordinary braces remain literal, so JSON, CSS,
-and regular-expression syntax does not need brace escaping. There is no ambient
-environment lookup, shell fallback syntax, command substitution, or recursive
-expansion. Substitution happens once, so reference-looking text inside a secret
-value remains ordinary secret bytes rather than becoming new template syntax.
-Composition is still raw string concatenation: literal JSON braces are fine,
-but use `secretspec export --format json` when values need JSON encoding.
+See [Composed Secrets](/concepts/composed-secrets/) for optional values,
+escaping, profile inheritance, and validation rules.
 
-SecretSpec builds and validates the dependency graph before contacting a
-provider. Declaration order does not matter, compositions may depend on other
-compositions, and unknown names or cycles fail while loading the manifest:
-
-```toml title="secretspec.toml"
-[profiles.default]
-USER = { description = "Database user" }
-PASSWORD = { description = "Database password" }
-HOST = { description = "Database host" }
-
-AUTHORITY = {
-  description = "Database authority",
-  composed = "${USER}:${PASSWORD}"
-}
-DATABASE_URL = {
-  description = "Database URL",
-  composed = "postgres://${AUTHORITY}@${HOST}/app"
-}
-```
-
-Missing and empty values also stay distinct. An empty dependency inserts an
-empty string; a missing dependency makes a required composition missing. Set
-`required = false` on the composed secret to omit the result when a dependency
-is unavailable. SecretSpec never silently turns a missing dependency into
-empty text.
-
-Composed secrets are read-only. `set` rejects them and `import` skips them,
-because the stored values are their dependencies. A composition also cannot
-declare a competing source such as `default`, `providers`, `ref`, or
-`generate`. See [Composed Secrets](/concepts/composed-secrets/) for profile
-inheritance, `as_path`, escaping, and the full validation rules.
-
-## Infisical joins the provider list
+## Infisical
 
 The new `infisical://` provider works with Infisical Cloud, its EU service, and
-self-hosted instances. It uses an Infisical project UUID and authenticates as a
-machine identity through Universal Auth:
+self-hosted instances. Point SecretSpec at an Infisical project and authenticate
+with Universal Auth:
 
 ```bash
 export INFISICAL_CLIENT_ID=...
@@ -98,10 +61,10 @@ secretspec run \
   -- npm start
 ```
 
-A ready-made access token can instead be supplied through `INFISICAL_TOKEN`.
-Both authentication forms also integrate with
-[provider credentials](/concepts/providers/#provider-credentials), so the
-machine identity does not have to pass through the application's environment:
+Access tokens are also supported. Credentials can come from environment
+variables or SecretSpec's
+[provider credentials](/concepts/providers/#provider-credentials), allowing,
+for example, an Infisical machine identity to be kept in the system keyring:
 
 ```toml title="secretspec.toml"
 [providers.infisical]
@@ -112,55 +75,16 @@ client_id = "keyring"
 client_secret = "keyring"
 ```
 
-Run `secretspec config provider login infisical` to write those credentials to
-their declared source provider. A pre-minted `token` can be sourced the same
-way.
-
 By default, the active SecretSpec profile also names the Infisical environment.
-A `production` profile reads the `production` environment, while a `dev`
-profile reads `dev`. If the two naming schemes do not line up, `?env=` pins the
-Infisical environment. Profiles remain isolated because they still occupy
-separate folders:
+A `production` profile therefore reads from the `production` environment,
+while `?env=` can select a different one. The provider supports normal
+SecretSpec reads and writes, as well as references to existing Infisical
+secrets and versions.
 
-```text
-project "myapp", profile "production", key "DATABASE_URL"
-  -> environment production
-     folder      /secretspec/myapp/production
-     key         DATABASE_URL
-```
+See the [Infisical provider guide](/providers/infisical/) for self-hosting,
+authentication, paths, references, and permissions.
 
-The `?path=` option replaces the `/secretspec` prefix. Secret keys are stored
-verbatim, folders are created as needed, and secrets in the same folder are
-fetched together in one request. Infisical folder imports and its own secret
-references are resolved with Infisical's precedence, matching its CLI.
-
-Existing secrets can be addressed with SecretSpec's provider-independent
-[`ref`](/concepts/references/) coordinates. For Infisical, `item` contains the
-folder and key, and `version` can pin a revision:
-
-```toml title="secretspec.toml"
-[providers]
-infisical_prod = "infisical://app.infisical.com/7e2f1a4c-...?env=prod"
-
-[profiles.production]
-DATABASE_URL = {
-  description = "Postgres DSN",
-  ref = { item = "/infra/shared/DB_PASSWORD" },
-  providers = ["infisical_prod"]
-}
-API_KEY = {
-  description = "Pinned API key",
-  ref = { item = "/infra/API_KEY", version = "3" },
-  providers = ["infisical_prod"]
-}
-```
-
-Version-pinned references are read-only. For self-hosting, put the instance
-host in the URI or set `INFISICAL_DOMAIN`; the legacy `INFISICAL_API_URL`
-variable remains supported. See the [Infisical provider guide](/providers/infisical/)
-for permissions, URI options, approval policies, and limitations.
-
-## Resolve secrets from C# and .NET
+## C# SDK
 
 The `Cachix.SecretSpec` NuGet package brings the shared SecretSpec resolver to
 .NET 8:
@@ -182,38 +106,13 @@ Console.WriteLine(resolved.Secrets["DATABASE_URL"].Get());
 resolved.SetAsEnv();
 ```
 
-The SDK is a thin P/Invoke client over the same Rust core as the CLI and the
-other language SDKs. Providers, profiles, fallback chains, references,
-generators, audit reasons, and composed secrets therefore behave the same way
-without C#-specific resolution logic.
+It uses the same resolver as the CLI and other language SDKs, so profiles,
+providers, fallback chains, references, generators, audit reasons, and composed
+secrets work consistently in .NET. Native resolver builds are included in the
+NuGet package, with no separate SecretSpec CLI installation required.
 
-The NuGet package includes native resolver builds for Linux x64 and Arm64,
-macOS Arm64, and Windows x64. No separate SecretSpec CLI or native-library
-installation is required at runtime.
-
-A missing required secret throws `MissingRequiredException`, with the missing
-names available on the exception. Other failures use `SecretSpecException` and
-a stable error kind. For deployment checks, `Report()` returns the same
-value-free inventory as `secretspec check --json`; missing values appear as
-statuses instead of exceptions.
-
-`Resolved` implements `IDisposable`. Keeping it in a `using` declaration makes
-the lifetime of any `as_path` temporary files explicit and removes them
-deterministically:
-
-```csharp
-using var resolved = SecretSpec.Builder()
-    .WithReason("TLS service boot")
-    .Load();
-
-var certificatePath = resolved.Secrets["TLS_CERT"].Get();
-// Use the file before resolved is disposed.
-```
-
-The SDK can also expose a flat JSON field map for deserializing into a C# model
-generated from `secretspec schema`. See the [C# SDK guide](/sdk/csharp/) for
-ASP.NET Core integration, one-shot resolution, preflight reports, and typed
-access.
+See the [C# SDK guide](/sdk/csharp/) for supported platforms, ASP.NET Core
+integration, preflight reports, error handling, and typed access.
 
 ## Upgrading
 

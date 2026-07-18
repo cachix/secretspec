@@ -43,16 +43,17 @@ jobs:
         id: auth
 
       - name: Publish Rust crates
-        # The derive crate is a registry dependency of the main crate, so it
-        # must be published first. Registry checks make retries idempotent when
-        # a previous run published successfully but failed during cleanup.
+        # The derive crate has a registry dependency on the main crate, so the
+        # main crate must be published first. Registry checks make retries
+        # idempotent when a previous run published successfully but failed
+        # during cleanup.
         shell: bash
         run: |
           set -euo pipefail
           version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
           user_agent="secretspec-release/${version} (https://github.com/cachix/secretspec)"
 
-          for crate in secretspec-derive secretspec; do
+          for crate in secretspec secretspec-derive; do
             if curl -fsS -A "$user_agent" \
               "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null; then
               echo "${crate} ${version} is already published"

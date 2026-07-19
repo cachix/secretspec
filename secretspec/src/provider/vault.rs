@@ -10,8 +10,10 @@
 //! - Token (default) -- uses `VAULT_TOKEN` environment variable or `~/.vault-token` file
 //! - AppRole (`?auth=approle`) -- uses `VAULT_ROLE_ID` and `VAULT_SECRET_ID` environment
 //!   variables to perform an AppRole login
-//! - JWT/OIDC (`?auth=jwt`) -- performs a JWT login with a `role`, sourcing the token
-//!   from `VAULT_JWT` or a CI OIDC request (GitHub Actions / Forgejo)
+//! - JWT/OIDC (SecretSpec 0.17+, `?auth=jwt`) -- performs a JWT login with a `role`,
+//!   sourcing the token from `VAULT_JWT` or a CI OIDC request (GitHub Actions / Forgejo)
+//!
+//! Added in SecretSpec 0.17.
 //!
 //! # URI Format
 //!
@@ -20,16 +22,19 @@
 //!
 //! Query parameters:
 //! - `auth` -- authentication method: `token` (default), `approle`, or `jwt`
+//!   (SecretSpec 0.17+)
 //! - `kv` -- KV engine version: `1` or `2` (default)
 //! - `tls` -- enable TLS: `true` (default) or `false`
-//! - `role` -- Vault role for JWT auth (or `VAULT_JWT_ROLE`)
-//! - `audience` -- OIDC token audience for JWT auth (or `VAULT_JWT_AUDIENCE`)
+//! - `role` (SecretSpec 0.17+) -- Vault role for JWT auth (or `VAULT_JWT_ROLE`)
+//! - `audience` (SecretSpec 0.17+) -- OIDC token audience for JWT auth (or
+//!   `VAULT_JWT_AUDIENCE`)
 //!
 //! # Examples
 //!
 //! - `vault://vault.example.com:8200/secret` -- KV v2, token auth
 //! - `vault://vault.example.com:8200/secret?auth=approle` -- AppRole auth
 //! - `vault://vault.example.com:8200/secret?auth=jwt&role=ci` -- JWT/OIDC auth
+//!   (SecretSpec 0.17+)
 //! - `vault://ns1@vault.example.com:8200/secret` -- with Vault namespace
 //! - `openbao://bao.internal:8200/secret` -- OpenBao server
 //! - `vault://127.0.0.1:8200/secret?kv=1` -- KV v1 engine
@@ -76,7 +81,7 @@ pub enum AuthMethod {
     Token,
     /// AppRole authentication via `VAULT_ROLE_ID` and `VAULT_SECRET_ID`.
     AppRole,
-    /// JWT/OIDC authentication using a role and a minted OIDC token
+    /// JWT/OIDC authentication using a role and a minted OIDC token (SecretSpec 0.17+).
     Jwt,
 }
 
@@ -93,9 +98,9 @@ pub struct VaultConfig {
     pub namespace: Option<String>,
     /// Authentication method (default: Token).
     pub auth: AuthMethod,
-    /// Vault role name for JWT authentication
+    /// Vault role name for JWT authentication (SecretSpec 0.17+).
     pub role: Option<String>,
-    /// Audience for the OIDC token minted for JWT authentication
+    /// Audience for the OIDC token minted for JWT authentication (SecretSpec 0.17+).
     pub audience: Option<String>,
 }
 

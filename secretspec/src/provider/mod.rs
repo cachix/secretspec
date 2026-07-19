@@ -229,6 +229,8 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
     }
 }
 
+#[cfg(feature = "age")]
+pub mod age;
 #[cfg(feature = "akv")]
 pub mod akv;
 #[cfg(feature = "awssm")]

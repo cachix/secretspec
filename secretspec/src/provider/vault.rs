@@ -5,11 +5,13 @@
 //!
 //! # Authentication
 //!
-//! Supports two authentication methods, selected via the `auth` query parameter:
+//! Supports three authentication methods, selected via the `auth` query parameter:
 //!
 //! - Token (default) -- uses `VAULT_TOKEN` environment variable or `~/.vault-token` file
 //! - AppRole (`?auth=approle`) -- uses `VAULT_ROLE_ID` and `VAULT_SECRET_ID` environment
 //!   variables to perform an AppRole login
+//! - JWT/OIDC (`?auth=jwt`) -- performs a JWT login with a `role`, sourcing the token
+//!   from `VAULT_JWT` or a CI OIDC request (GitHub Actions / Forgejo)
 //!
 //! # URI Format
 //!
@@ -17,14 +19,17 @@
 //! `openbao://[namespace@]host[:port][/mount][?key=value&...]`
 //!
 //! Query parameters:
-//! - `auth` -- authentication method: `token` (default) or `approle`
+//! - `auth` -- authentication method: `token` (default), `approle`, or `jwt`
 //! - `kv` -- KV engine version: `1` or `2` (default)
 //! - `tls` -- enable TLS: `true` (default) or `false`
+//! - `role` -- Vault role for JWT auth (or `VAULT_JWT_ROLE`)
+//! - `audience` -- OIDC token audience for JWT auth (or `VAULT_JWT_AUDIENCE`)
 //!
 //! # Examples
 //!
 //! - `vault://vault.example.com:8200/secret` -- KV v2, token auth
 //! - `vault://vault.example.com:8200/secret?auth=approle` -- AppRole auth
+//! - `vault://vault.example.com:8200/secret?auth=jwt&role=ci` -- JWT/OIDC auth
 //! - `vault://ns1@vault.example.com:8200/secret` -- with Vault namespace
 //! - `openbao://bao.internal:8200/secret` -- OpenBao server
 //! - `vault://127.0.0.1:8200/secret?kv=1` -- KV v1 engine
@@ -71,6 +76,8 @@ pub enum AuthMethod {
     Token,
     /// AppRole authentication via `VAULT_ROLE_ID` and `VAULT_SECRET_ID`.
     AppRole,
+    /// JWT/OIDC authentication using a role and a minted OIDC token
+    Jwt,
 }
 
 /// Configuration for the Vault / OpenBao provider.
@@ -86,6 +93,10 @@ pub struct VaultConfig {
     pub namespace: Option<String>,
     /// Authentication method (default: Token).
     pub auth: AuthMethod,
+    /// Vault role name for JWT authentication
+    pub role: Option<String>,
+    /// Audience for the OIDC token minted for JWT authentication
+    pub audience: Option<String>,
 }
 
 impl Default for VaultConfig {
@@ -96,6 +107,8 @@ impl Default for VaultConfig {
             kv_version: KvVersion::default(),
             namespace: None,
             auth: AuthMethod::default(),
+            role: None,
+            audience: None,
         }
     }
 }
@@ -181,14 +194,29 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
             .find(|(k, _)| k == "auth")
             .map(|(_, v)| match v.as_ref() {
                 "approle" => Ok(AuthMethod::AppRole),
+                "jwt" => Ok(AuthMethod::Jwt),
                 "token" => Ok(AuthMethod::Token),
                 other => Err(SecretSpecError::ProviderOperationFailed(format!(
-                    "Unknown auth method '{}'. Expected 'token' or 'approle'.",
+                    "Unknown auth method '{}'. Expected 'token', 'approle', or 'jwt'.",
                     other
                 ))),
             })
             .transpose()?
             .unwrap_or_default();
+
+        let role = url
+            .query_pairs()
+            .find(|(k, _)| k == "role")
+            .map(|(_, v)| v.to_string())
+            .or_else(|| std::env::var("VAULT_JWT_ROLE").ok())
+            .filter(|s| !s.is_empty());
+
+        let audience = url
+            .query_pairs()
+            .find(|(k, _)| k == "audience")
+            .map(|(_, v)| v.to_string())
+            .or_else(|| std::env::var("VAULT_JWT_AUDIENCE").ok())
+            .filter(|s| !s.is_empty());
 
         // The `?field=` reference form from earlier iterations is rejected
         // with a pointer at the `ref` table, instead of being silently ignored
@@ -207,6 +235,8 @@ impl TryFrom<&ProviderUrl> for VaultConfig {
             kv_version,
             namespace,
             auth,
+            role,
+            audience,
         })
     }
 }
@@ -271,10 +301,11 @@ impl VaultProvider {
     }
 
     /// Resolves the Vault token using the configured authentication method.
-    fn resolve_token(&self) -> Result<SecretString> {
+    async fn resolve_token(&self) -> Result<SecretString> {
         match self.config.auth {
             AuthMethod::Token => self.resolve_token_auth(),
-            AuthMethod::AppRole => super::block_on(self.resolve_approle_auth()),
+            AuthMethod::AppRole => self.resolve_approle_auth().await,
+            AuthMethod::Jwt => self.resolve_jwt_auth().await,
         }
     }
 
@@ -361,6 +392,118 @@ impl VaultProvider {
         Ok(SecretString::new(token.to_string().into()))
     }
 
+    /// Authenticates via the JWT/OIDC method and returns a client token
+    async fn resolve_jwt_auth(&self) -> Result<SecretString> {
+        let role = self.config.role.clone().ok_or_else(|| {
+            SecretSpecError::ProviderOperationFailed(
+                "JWT authentication requires a role. Set `?role=` in the provider URI \
+                 or the VAULT_JWT_ROLE environment variable."
+                    .to_string(),
+            )
+        })?;
+
+        let jwt = self.resolve_jwt().await?;
+
+        let url = format!("{}/v1/auth/jwt/login", self.config.endpoint);
+        let body = serde_json::json!({
+            "role": role,
+            "jwt": jwt.expose_secret(),
+        });
+
+        let client = reqwest::Client::new();
+        let response = client.post(&url).json(&body).send().await.map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!("JWT login failed: {}", e))
+        })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "JWT login returned HTTP {}: {}",
+                status, body
+            )));
+        }
+
+        let resp: serde_json::Value = response.json().await.map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to parse JWT login response: {}",
+                e
+            ))
+        })?;
+
+        let token = resp["auth"]["client_token"].as_str().ok_or_else(|| {
+            SecretSpecError::ProviderOperationFailed(
+                "JWT login response missing auth.client_token".to_string(),
+            )
+        })?;
+
+        Ok(SecretString::new(token.to_string().into()))
+    }
+
+    /// Sources the OIDC token for JWT auth, either an explicit `VAULT_JWT` or a
+    /// CI OIDC request (GitHub Actions / Forgejo) via `ACTIONS_ID_TOKEN_REQUEST_*`.
+    async fn resolve_jwt(&self) -> Result<SecretString> {
+        if let Ok(jwt) = std::env::var("VAULT_JWT")
+            && !jwt.is_empty()
+        {
+            return Ok(SecretString::new(jwt.into()));
+        }
+
+        let request_url = std::env::var("ACTIONS_ID_TOKEN_REQUEST_URL")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let request_token = std::env::var("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty());
+
+        let (request_url, request_token) = match (request_url, request_token) {
+            (Some(u), Some(t)) => (u, t),
+            _ => {
+                return Err(SecretSpecError::ProviderOperationFailed(
+                    "No JWT available for Vault JWT auth. Set VAULT_JWT, or run under a \
+                     GitHub Actions / Forgejo job with `id-token` write permission."
+                        .to_string(),
+                ));
+            }
+        };
+
+        let client = reqwest::Client::new();
+        let mut request = client.get(&request_url).bearer_auth(&request_token);
+        if let Some(audience) = &self.config.audience {
+            request = request.query(&[("audience", audience.as_str())]);
+        }
+
+        let response = request.send().await.map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to request CI OIDC token: {}",
+                e
+            ))
+        })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "CI OIDC token request returned HTTP {}",
+                status
+            )));
+        }
+
+        let resp: serde_json::Value = response.json().await.map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to parse CI OIDC token response: {}",
+                e
+            ))
+        })?;
+
+        let jwt = resp["value"].as_str().ok_or_else(|| {
+            SecretSpecError::ProviderOperationFailed(
+                "CI OIDC token response missing `value`".to_string(),
+            )
+        })?;
+
+        Ok(SecretString::new(jwt.to_string().into()))
+    }
+
     /// Builds the common HTTP headers for Vault API requests.
     fn build_headers(token: &SecretString, namespace: &Option<String>) -> Result<HeaderMap> {
         let mut headers = HeaderMap::new();
@@ -407,7 +550,7 @@ impl VaultProvider {
         field: &str,
     ) -> Result<Option<SecretString>> {
         let url = self.build_url(secret_path);
-        let token = self.resolve_token()?;
+        let token = self.resolve_token().await?;
         let headers = Self::build_headers(&token, &self.config.namespace)?;
 
         let client = reqwest::Client::new();
@@ -465,7 +608,7 @@ impl VaultProvider {
     /// Writes a secret's `value` field at a KV path asynchronously.
     async fn set_secret_async(&self, secret_path: &str, value: &SecretString) -> Result<()> {
         let url = self.build_url(secret_path);
-        let token = self.resolve_token()?;
+        let token = self.resolve_token().await?;
         let headers = Self::build_headers(&token, &self.config.namespace)?;
 
         let body = match self.config.kv_version {

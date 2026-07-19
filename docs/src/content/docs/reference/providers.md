@@ -226,6 +226,21 @@ the `production` environment. Projects whose environments do not correspond to p
 Values are read with Infisical's secret references expanded, matching its own CLI, so a value of
 `postgres://${DB_USER}@host` arrives resolved.
 
+## age Provider (0.17+)
+
+**URI**: `age://PATH[?identity=FILE][&recipients-file=FILE][&armor=false]` - Stores secrets in a single age-encrypted file committed alongside code
+
+```bash
+age://secrets.age                                        # Encrypt to your own identity
+age://secrets.age?identity=~/.config/age/keys.txt        # Name the identity file
+age://secrets.age?recipients-file=secrets.age.recipients # Share with a roster
+```
+
+**Features**: Read/write, committed-file storage, `age-plugin-*` recipients and identities
+**Prerequisites**: An age identity from `age-keygen`, build with `--features age`
+**Authentication**: The `identity` credential, `AGE_IDENTITY`, or `?identity=`; recipients from `?recipients-file=` or derived from the identity
+**Storage**: One `KEY=value` entry per secret inside the encrypted blob at PATH
+
 ## Provider Selection
 
 ### Command Line
@@ -266,3 +281,4 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
 | Infisical (0.16+) | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |
+| age (0.17+) | ✅ age encryption | Local filesystem | ❌ No |

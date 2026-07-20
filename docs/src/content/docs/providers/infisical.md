@@ -7,8 +7,7 @@ The Infisical provider integrates with [Infisical](https://infisical.com) over i
 both Infisical Cloud and self-hosted instances.
 
 :::note[Version compatibility]
-The Infisical provider is an upcoming SecretSpec 0.16 feature and is not available
-in SecretSpec 0.15.
+Available since SecretSpec 0.16.
 :::
 
 ## At a glance
@@ -20,7 +19,7 @@ in SecretSpec 0.15.
 | Access | Read and write; version-pinned references are read-only |
 | Best for | Infisical Cloud or self-hosted Infisical deployments |
 | Authentication | Universal Auth machine identity or access token |
-| Availability | Upcoming in SecretSpec 0.16; requires the `infisical` build feature |
+| Availability | SecretSpec 0.16+; requires the `infisical` build feature |
 | Default storage | Key `{key}` in `{path}/{project}/{profile}` |
 
 ## Quick start

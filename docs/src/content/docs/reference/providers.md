@@ -206,7 +206,9 @@ akv://myvault?suffix=vault.azure.cn      # Sovereign cloud (explicit suffix, bar
 **Prerequisites**: An Azure Key Vault instance, authenticated via one of the methods above, build with `--features akv`
 **Storage**: Secret name `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}` (lowercase, unpadded Base32 preserves case and punctuation distinctions within Azure's case-insensitive secret-name namespace)
 
-## Infisical Provider (0.16+)
+## Infisical Provider
+
+Available since SecretSpec 0.16.
 
 **URI**: `infisical://[HOST]/PROJECT_ID[?env=SLUG][&path=/PREFIX][&tls=false]` - Stores secrets in Infisical
 
@@ -272,4 +274,4 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Vault/OpenBao | ✅ Vault encryption | Vault/OpenBao server | ✅ Yes |
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
-| Infisical (0.16+) | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |
+| Infisical | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |

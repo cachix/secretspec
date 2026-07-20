@@ -23,12 +23,21 @@ The age provider keeps secrets in a single [age](https://age-encryption.org)-enc
 
 ## Quick start
 
+Use an age v1.3 hybrid post-quantum key for new setups. SecretSpec's Rust age
+library currently accesses this key type through the non-interactive
+`age-plugin-pq` compatibility plugin:
+
 ```bash
-$ secretspec set DATABASE_URL --provider "age://secrets.age?identity=~/.config/age/keys.txt"
+$ mkdir -p "$HOME/.config/age"
+$ age-keygen -pq -o "$HOME/.config/age/keys.txt"
+Public key: age1pq1...
+$ age-plugin-pq -identity -o "$HOME/.config/age/plugin-identity.txt" "$HOME/.config/age/keys.txt"
+
+$ secretspec set DATABASE_URL --provider "age://secrets.age?identity=$HOME/.config/age/plugin-identity.txt"
 Enter value for DATABASE_URL: postgresql://localhost/mydb
 ✓ Secret 'DATABASE_URL' saved to age (profile: default)
 
-$ secretspec get DATABASE_URL --provider "age://secrets.age?identity=~/.config/age/keys.txt"
+$ secretspec get DATABASE_URL --provider "age://secrets.age?identity=$HOME/.config/age/plugin-identity.txt"
 ```
 
 With no recipients configured the blob is encrypted to your own identity, so the same key that reads it also writes it.
@@ -37,7 +46,10 @@ With no recipients configured the blob is encrypted to your own identity, so the
 
 ### Prerequisites
 
-- An age identity, created with `age-keygen`
+- An age identity. For new keys, age's hybrid ML-KEM-768 + X25519 key generated
+  by `age-keygen -pq` is recommended for post-quantum protection.
+- `age-plugin-pq` on `PATH` when using the recommended hybrid key with
+  SecretSpec's current Rust age library
 - Build with `--features age`
 
 ### Identity
@@ -48,7 +60,7 @@ The private key is resolved from the first of these sources: the `identity` prov
 
 Recipients are age public keys and are never secret, so they are configured rather than supplied as credentials. With no `?recipients-file=`, the blob is encrypted to the public key derived from your own identity. To share the file, point `?recipients-file=` at a roster file listing every recipient.
 
-A roster is a plain text file in age's recipients format: one recipient per line, `#` for comments, blank lines ignored. Recipients may be `age1...` keys or `ssh-ed25519`/`ssh-rsa` keys.
+A roster is a plain text file in age's recipients format: one recipient per line, `#` for comments, blank lines ignored. Recipients may be classic `age1...` keys, hybrid `age1pq1...` keys, native tagged `age1tag...`/`age1tagpq...` recipients, or `ssh-ed25519`/`ssh-rsa` keys. Hybrid `age1pq1...` encryption requires `age-plugin-pq`; tagged recipients are parsed natively before the generic plugin fallback.
 
 ```text title="secrets.age.recipients"
 # alice
@@ -61,14 +73,18 @@ Because an age file does not record its recipients, every write re-encrypts to w
 
 ### Plugins and post-quantum keys
 
-Identity and recipient parsing both go through age's plugin protocol, so keys handled by an `age-plugin-*` binary work when that binary is on `PATH`.
+Native X25519 and SSH identities are supported directly. Plugin identities and recipients work when their `age-plugin-*` binary is on `PATH` **and the plugin operation is non-interactive**. SecretSpec currently supplies no age callback UI, so plugins that issue `confirm`, `request-public`, or `request-secret` requests can fail. A plugin that handles interaction entirely through its own OS UI may still work.
 
-Post-quantum keys need one extra step. SecretSpec is built on the Rust age library, which does not read the native `AGE-SECRET-KEY-PQ-1` identity form that `age-keygen -pq` writes. Convert it to the plugin form once with `age-plugin-pq`:
+Post-quantum keys need one conversion step. SecretSpec is built on the Rust age library, which does not yet read the native `AGE-SECRET-KEY-PQ-1` identity form that `age-keygen -pq` writes. Convert it to the plugin form once; `-o` creates the new secret identity file with mode `0600` and refuses to overwrite it:
 
 ```bash
-$ age-plugin-pq -identity < keys.txt > plugin-identity.txt
-$ secretspec get DATABASE_URL --provider "age://secrets.age?identity=plugin-identity.txt"
+$ age-plugin-pq -identity -o "$HOME/.config/age/plugin-identity.txt" "$HOME/.config/age/keys.txt"
 ```
+
+Use only post-quantum recipients (`age1pq1...` or `age1tagpq1...`) together in
+a roster. Age intentionally rejects a mixture of post-quantum and classic
+recipients, because the classic recipient would remove the file's
+post-quantum protection.
 
 ## Configuration
 
@@ -87,7 +103,7 @@ age://<path>[?key=value&...]
 
 ```text
 age://secrets.age
-age://secrets.age?identity=~/.config/age/keys.txt
+age://secrets.age?identity=/home/alice/.config/age/plugin-identity.txt
 age://secrets.age?recipients-file=secrets.age.recipients
 age://secrets.age?armor=false
 ```
@@ -129,3 +145,10 @@ $ secretspec run --provider "age://secrets.age" -- deploy
 ## Security considerations
 
 A recipient can decrypt every secret in a blob, not individual entries within it. Put secrets that should reach different audiences in separate files, each with its own roster.
+
+Hybrid post-quantum recipients protect stored ciphertext against
+harvest-now/decrypt-later attacks, but static file encryption does not provide
+forward secrecy. Anyone who later obtains a long-term identity can decrypt
+historical ciphertext that still exists in Git history or backups. Rotate and
+erase identities, re-encrypt the blob, and manage repository history according
+to your retention policy when that risk matters.

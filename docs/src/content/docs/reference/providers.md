@@ -235,16 +235,19 @@ Values are read with Infisical's secret references expanded, matching its own CL
 
 ## age Provider (0.17+)
 
+> **Version compatibility:** The age provider is upcoming in SecretSpec 0.17
+> and is unavailable in the current SecretSpec 0.16 release.
+
 **URI**: `age://PATH[?identity=FILE][&recipients-file=FILE][&armor=false]` - Stores secrets in a single age-encrypted file committed alongside code
 
 ```bash
 age://secrets.age                                        # Encrypt to your own identity
-age://secrets.age?identity=~/.config/age/keys.txt        # Name the identity file
+age://secrets.age?identity=/home/alice/.config/age/plugin-identity.txt
 age://secrets.age?recipients-file=secrets.age.recipients # Share with a roster
 ```
 
-**Features**: Read/write, committed-file storage, `age-plugin-*` recipients and identities
-**Prerequisites**: An age identity from `age-keygen`, build with `--features age`
+**Features**: Read/write, committed-file storage, X25519 and SSH keys, native tagged recipients, and non-interactive `age-plugin-*` recipients and identities
+**Prerequisites**: An age identity; hybrid ML-KEM-768 + X25519 keys from `age-keygen -pq` are recommended for new setups and currently require the non-interactive `age-plugin-pq` compatibility plugin. Build with `--features age`.
 **Authentication**: The `identity` credential, `AGE_IDENTITY`, or `?identity=`; recipients from `?recipients-file=` or derived from the identity
 **Storage**: One `KEY=value` entry per secret inside the encrypted blob at PATH
 

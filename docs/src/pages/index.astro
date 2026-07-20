@@ -44,7 +44,7 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'googlecloud', slug: 'gcsm', label: 'Google Cloud Secret Manager' },
   { icon: 'microsoftazure', slug: 'akv', label: 'Azure Key Vault' },
   { slug: 'infisical', label: 'Infisical' },
-  { slug: 'age', label: 'age' },
+  { slug: 'age', label: 'age (0.17+)' },
   { slug: 'gopass', label: 'Gopass' },
   { slug: 'protonpass', label: 'Proton Pass' },
   { icon: 'gnuprivacyguard', slug: 'pass', label: 'Pass (GPG)' },
@@ -142,6 +142,7 @@ $ secretspec config init
 ? Select your preferred provider backend:
 <span class="tok-pun">›</span> keyring: Uses system keychain (Recommended)
   infisical: Infisical secret management
+  age: age-encrypted file (0.17+)
 <span class="tok-str">✓</span> Saved to ~/.config/secretspec/config.toml
 
 <span class="tok-com"># 3. Run your app with secrets injected</span>
@@ -208,7 +209,8 @@ $ secretspec run --profile production -- npm start
         <pre is:raw class="landing-step-code"><code>$ secretspec config init
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
-  infisical: Infisical secret management</code></pre>
+  infisical: Infisical secret management
+  age: age-encrypted file (0.17+)</code></pre>
       </div>
 
       <div class="landing-step">

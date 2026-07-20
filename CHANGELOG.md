@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- age provider (`age://`) for storing dotenv-style secret sets in an
+  age-encrypted file, with ASCII armor by default, team recipient rosters,
+  direct X25519 and SSH key support, native tagged recipients, and
+  non-interactive age plugins. Hybrid ML-KEM-768 + X25519 keys are recommended
+  for new setups to protect stored ciphertext against future quantum attacks.
 - Vault / OpenBao JWT/OIDC authentication (`?auth=jwt`) logs in through a
   configured Vault role using `VAULT_JWT`, or requests a short-lived OIDC token
   automatically in GitHub Actions and Forgejo Actions jobs with `id-token:

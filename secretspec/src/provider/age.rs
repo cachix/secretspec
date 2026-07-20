@@ -18,9 +18,9 @@
 //!
 //! The private key is resolved from the `identity` provider credential, then
 //! the `AGE_IDENTITY` environment variable, then `?identity=`.
-//! Recipient parsing and identity resolution both go through age's plugin
-//! system, so plugin keys such as the ML-KEM/X25519 (X-Wing) `age1pq1...`
-//! recipients work when their `age-plugin-*` binary is on `PATH`.
+//! X25519 and SSH identities are supported directly. Non-interactive plugin
+//! keys also work when their `age-plugin-*` binary is on `PATH`, including the
+//! ML-KEM-768 + X25519 `age1pq1...` recipient via `age-plugin-pq`.
 
 use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env, flat_item};
 use crate::config::{NativeAddress, Secret};
@@ -30,7 +30,7 @@ use age::{Decryptor, Encryptor, Identity, IdentityFile, NoCallbacks, Recipient};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 /// Semantic credential name for the age identity
@@ -40,6 +40,51 @@ const AGE_IDENTITY_ENV: &str = "AGE_IDENTITY";
 
 fn provider_err(msg: impl Into<String>) -> SecretSpecError {
     SecretSpecError::ProviderOperationFailed(msg.into())
+}
+
+/// An identity source after distinguishing multi-line SSH private keys from
+/// age's one-identity-per-line file format.
+enum ParsedIdentity {
+    Age(IdentityFile<NoCallbacks>),
+    Ssh(age::ssh::Identity),
+}
+
+impl ParsedIdentity {
+    fn to_recipients(&self) -> Result<Vec<Box<dyn Recipient + Send>>> {
+        match self {
+            Self::Age(identity_file) => identity_file.to_recipients().map_err(|e| {
+                provider_err(format!("Failed to derive recipient from identity: {}", e))
+            }),
+            Self::Ssh(identity) => age::ssh::Recipient::try_from(identity.clone())
+                .map(|recipient| vec![Box::new(recipient) as Box<dyn Recipient + Send>])
+                .map_err(|e| {
+                    provider_err(format!(
+                        "Failed to derive age recipient from SSH identity: {:?}",
+                        e
+                    ))
+                }),
+        }
+    }
+
+    fn into_identities(self) -> Result<Vec<Box<dyn Identity + Send + Sync>>> {
+        match self {
+            Self::Age(identity_file) => identity_file
+                .into_identities()
+                .map_err(|e| provider_err(format!("Failed to load age identities: {}", e))),
+            Self::Ssh(identity) => Ok(vec![Box::new(identity.with_callbacks(NoCallbacks))]),
+        }
+    }
+}
+
+/// SSH private keys are multi-line files, while native and plugin age
+/// identities are one-per-line. Try the SSH format first because
+/// `IdentityFile` intentionally does not parse it.
+fn parse_identity(data: &[u8], filename: Option<String>) -> std::io::Result<ParsedIdentity> {
+    if let Ok(identity) = age::ssh::Identity::from_buffer(Cursor::new(data), filename) {
+        return Ok(ParsedIdentity::Ssh(identity));
+    }
+
+    IdentityFile::from_buffer(Cursor::new(data)).map(ParsedIdentity::Age)
 }
 
 /// Configuration for the age provider.
@@ -128,23 +173,27 @@ impl AgeProvider {
         }
     }
 
-    /// Parses the configured identity file from credential, env, or path
-    fn identity_file(&self) -> Result<IdentityFile<NoCallbacks>> {
+    /// Parses the configured identity from credential, env, or path.
+    fn identity(&self) -> Result<ParsedIdentity> {
         if let Some(material) = credential_or_env(&self.credentials, IDENTITY, AGE_IDENTITY_ENV) {
-            return IdentityFile::from_buffer(std::io::Cursor::new(material.into_bytes()))
-                .map(|f| f.with_callbacks(NoCallbacks))
+            return parse_identity(material.as_bytes(), None)
                 .map_err(|e| provider_err(format!("Failed to parse age identity: {}", e)));
         }
         if let Some(path) = &self.config.identity_path {
-            return IdentityFile::from_file(path.display().to_string())
-                .map(|f| f.with_callbacks(NoCallbacks))
-                .map_err(|e| {
-                    provider_err(format!(
-                        "Failed to read age identity file {}: {}",
-                        path.display(),
-                        e
-                    ))
-                });
+            let data = std::fs::read(path).map_err(|e| {
+                provider_err(format!(
+                    "Failed to read age identity file {}: {}",
+                    path.display(),
+                    e
+                ))
+            })?;
+            return parse_identity(&data, Some(path.display().to_string())).map_err(|e| {
+                provider_err(format!(
+                    "Failed to parse age identity file {}: {}",
+                    path.display(),
+                    e
+                ))
+            });
         }
         Err(provider_err(
             "No age identity configured. Set the `identity` credential, the \
@@ -156,9 +205,7 @@ impl AgeProvider {
     fn recipients(&self) -> Result<Vec<Box<dyn Recipient + Send>>> {
         match &self.config.recipients_file {
             Some(path) => parse_recipients_file(path),
-            None => self.identity_file()?.to_recipients().map_err(|e| {
-                provider_err(format!("Failed to derive recipient from identity: {}", e))
-            }),
+            None => self.identity()?.to_recipients(),
         }
     }
 
@@ -168,10 +215,7 @@ impl AgeProvider {
             return Ok(HashMap::new());
         }
         let ciphertext = std::fs::read(&self.config.path)?;
-        let identities = self
-            .identity_file()?
-            .into_identities()
-            .map_err(|e| provider_err(format!("Failed to load age identities: {}", e)))?;
+        let identities = self.identity()?.into_identities()?;
 
         let reader = ArmoredReader::new(&ciphertext[..]);
         let decryptor = Decryptor::new(reader)
@@ -253,9 +297,17 @@ fn parse_recipients_file(path: &Path) -> Result<Vec<Box<dyn Recipient + Send>>> 
     Ok(recipients)
 }
 
-/// Parses one recipient string as x25519, ssh, or a plugin recipient
+/// Parses one recipient string in the same order as age's recipients-file
+/// parser. Native tagged recipients must precede the generic plugin syntax
+/// because `age1tag...` would otherwise be treated as `age-plugin-tag`.
 fn parse_recipient(s: &str) -> Result<Box<dyn Recipient + Send>> {
     if let Ok(r) = s.parse::<age::x25519::Recipient>() {
+        return Ok(Box::new(r));
+    }
+    if let Ok(r) = s.parse::<age::tag::Recipient>() {
+        return Ok(Box::new(r));
+    }
+    if let Ok(r) = s.parse::<age::tagpq::Recipient>() {
         return Ok(Box::new(r));
     }
     if let Ok(r) = s.parse::<age::ssh::Recipient>() {
@@ -291,7 +343,27 @@ impl Provider for AgeProvider {
     }
 
     fn uri(&self) -> String {
-        format!("age:{}", self.config.path.display())
+        let mut uri = format!("age:{}", self.config.path.display());
+        let mut query = Vec::new();
+
+        // Identity sources are deliberately omitted because they are private
+        // configuration. Recipient rosters and output format are non-secret
+        // and must survive audit/report URI reconstruction.
+        if let Some(path) = &self.config.recipients_file {
+            query.push(format!(
+                "recipients-file={}",
+                ProviderUrl::encode_query(&path.display().to_string())
+            ));
+        }
+        if !self.config.armor {
+            query.push("armor=false".to_string());
+        }
+        if !query.is_empty() {
+            uri.push('?');
+            uri.push_str(&query.join("&"));
+        }
+
+        uri
     }
 
     fn with_credentials(&mut self, credentials: ProviderCredentials) {
@@ -370,6 +442,41 @@ mod tests {
         "AGE-SECRET-KEY-15SFU79V44S2N3G4HKMG578KN5VXWM4GNLZUWVLY2Z8ENUPUCNWXQPQ5X33\n",
     );
     const TEST_RECIPIENT: &str = "age1rcq2v5ckqn2r538m8qxz0xhx2am83zhxr60yfvmlsugkt6tygpcss829at";
+    const TEST_SSH_IDENTITY: &str = "\
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACB7Ci6nqZYaVvrjm8+XbzII89TsXzP111AflR7WeorBjQAAAJCfEwtqnxML
+agAAAAtzc2gtZWQyNTUxOQAAACB7Ci6nqZYaVvrjm8+XbzII89TsXzP111AflR7WeorBjQ
+AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
+1OxfM/XXUB+VHtZ6isGNAAAADHN0cjRkQGNhcmJvbgE=
+-----END OPENSSH PRIVATE KEY-----";
+    const TEST_SSH_RECIPIENT: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHsKLqeplhpW+uObz5dvMgjz1OxfM/XXUB+VHtZ6isGN";
+    const TEST_TAG_RECIPIENT: &str =
+        "age1tag1qt8lw0ual6avlwmwatk888yqnmdamm7xfd0wak53ut6elz5c4swx2yqdj4e";
+    const TEST_TAGPQ_RECIPIENT: &str = concat!(
+        "age1tagpq1m3e4wvp6hzcrn9exhy0ae3xfx2sjymp594k3tg7j4dpmj922we65vtnmrt2pyallax8669zqkr2pmfchp",
+        "tr4n38kug2xmcmp3adk2lnjqu00x5kxz5pvhmrltvfh9wuq973pcx35cnq8syn9qd3tzpehgztl4xpzr3tpd67g8af9trnjpc05g",
+        "h7wu536aq4qt2y8zhsm4tvrfpsfl36qs5fpzysnk3sp9w77qzeg49357xex40v4s2lvt620swyys7u8yxdcnu4rkkwxdmt55gsuc",
+        "3h5c5swahnegjgqwc60hn085ec3sjztwm45l44y3j2at9t6v9zra4ek3kek6waecqm98yaxl37w0d2zra626nz63jdm5sg59w7ly",
+        "ptw83zm6fntd8d0x03a9z6h9prfgpygzar6zrxjcrt4cdctk2mhf95s4a6v4zklfd49xhpsaeujm57thx2x3e3hwzc86ftfhmq5m",
+        "kxxz3d6r8ws24xj4qfn73eyezg2wy094e3why592pghz27ruq3vkyegrv80eftnw9wqzwgvnwyseaus0yt84fylzrpzp6x2fguxu",
+        "qjmgudr8xd33qm30evdpxd3jvjg8qh4q60kyq80jgff369k7nrepdc38grd2dava520excqp0ey0x39khx8ry03yffcatgv84fsx",
+        "5j49djpapedsy693zute5xv5g2ewzrlj5se7akvkc4g4vmzhputpq8eyj9wz5dz6qtn7g3cfpd95nahw4ytspan0feyye04dcylv",
+        "24ege7zkaj004gjwcxqxfqu2quawa83sx452jqjn8t48czp0xspwgnmvjyhttzzy6nhq8xzkdwnvsfefkwva6asrqc93zjn4rly5",
+        "gnlv93xy3uzmr39szvjnf63426qzyeyvguc4vdcquwgsxgq236afcpqz866ny4tn7ckc0umefj242rt5vtvwqzzrvfev2mpvqcuf",
+        "p9pqvefyv4ftyuhgausfzuaadsczeykmft5wv3frzgrcp9ztr93h478ke4t86spp2uhyjkj73mp9g92ddk2fpv7v3njzsqgwhq37",
+        "89sqrgkskehn0zjscckhwftyq4vet7vrlx2hs5kd9cwnq6t0djffhh3zquh4j3p0yaj9z2rc9wykg0usqw7983rrgur9jg8rnnqy",
+        "pwcz2lyclnnc705fc5g3an93ps60q6mxqp85u0ewtxdjlqcks84yduft0a0g6e7naew3v9u2d08knarvajn8q3gq9pgxde3s7nx9",
+        "4lus48wwvw2xjm7k82tvylec2393jdsuvch2xpe77w8hpv9nvsxfsrs270njpmfvpmgyk2cffl9tjp3qqcc4dfkf5rme2dg0x7ew",
+        "8g39www5smm705q5da4eqvnqwrkavtq6xje9ss38hnkglz4eddz8f5qruvqmq2ff9l22gwkv8h432rdkysy0grkul8e2fedvkyya",
+        "pfxt760udcgu92m54wl9yavmj4ga3ph9r5n99cjrq6wj5v33x33fe5vkjvfwnnt40wuv2hyexc9f4ylyqv9ldqq9epd4yuv8vrsf",
+        "x2qy2kqz08kqhnzspy6s0x8fa5c2xkg5y2q0rvz4vnk7rp0acg6eksc3t7cxnn8y7glkjsqja3p56uz6vvhcw55d3ysad0hvsqxp",
+        "jnc7svenf2gc5xn5kyr0et2vvyruxlnpqcdpqh9pzplumy5yzjxftyzh9ujfw0jq7ee60zx2x23p0jzyh9dvmly8p9h9ysptlqu7",
+        "kwnejd65dnr75a0np2fvke8xen38r57w6z3wz3mycjmmn267wwxndfh9jdps7uxtct2wwfgamkpa5ap8s96lhfjztpwcm6fguhph",
+        "u38yunu2v4vz3syzrvgwtqpemkewzp766nyu6texxvjlaemnhyyqutkcy6a42vqfsz49rw5wr4gt70r4vdaasehqjg46fnyts4st",
+        "hrxadfllha3avu49wsj2c4jx",
+    );
 
     fn config_from(uri: &str) -> AgeConfig {
         let url = ProviderUrl::new(Url::parse(uri).unwrap());
@@ -416,6 +523,45 @@ mod tests {
     #[test]
     fn parse_recipient_rejects_garbage() {
         assert!(parse_recipient("not-an-age-recipient").is_err());
+    }
+
+    #[test]
+    fn parses_native_tagged_recipients_without_plugins() {
+        for encoded in [TEST_TAG_RECIPIENT, TEST_TAGPQ_RECIPIENT] {
+            let recipient = parse_recipient(encoded).unwrap();
+            let encryptor =
+                Encryptor::with_recipients(std::iter::once(recipient.as_ref() as &dyn Recipient))
+                    .unwrap();
+            let mut ciphertext = Vec::new();
+            let mut writer = encryptor.wrap_output(&mut ciphertext).unwrap();
+            writer.write_all(b"tagged recipient").unwrap();
+            writer.finish().unwrap();
+            assert!(!ciphertext.is_empty());
+        }
+    }
+
+    #[test]
+    fn reported_uri_preserves_non_secret_options() {
+        let provider = AgeProvider::new(AgeConfig {
+            path: PathBuf::from("secrets.age"),
+            identity_path: Some(PathBuf::from("/private/identity.txt")),
+            recipients_file: Some(PathBuf::from("team &+ roster.txt")),
+            armor: false,
+        });
+
+        let uri = provider.uri();
+        assert_eq!(
+            uri,
+            "age:secrets.age?recipients-file=team%20%26%2B%20roster.txt&armor=false"
+        );
+        assert!(!uri.contains("identity"));
+
+        let reparsed = config_from(&uri);
+        assert_eq!(
+            reparsed.recipients_file,
+            Some(PathBuf::from("team &+ roster.txt"))
+        );
+        assert!(!reparsed.armor);
     }
 
     fn write_identity(dir: &Path) -> PathBuf {
@@ -509,6 +655,36 @@ mod tests {
         assert_eq!(
             provider.get(addr).unwrap().unwrap().expose_secret(),
             "teamsecret"
+        );
+    }
+
+    #[test]
+    fn ssh_identity_and_recipient_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let roster = dir.path().join("roster.recipients");
+        std::fs::write(&roster, format!("{}\n", TEST_SSH_RECIPIENT)).unwrap();
+
+        let mut provider = AgeProvider::new(AgeConfig {
+            path: dir.path().join("ssh.age"),
+            identity_path: None,
+            recipients_file: Some(roster),
+            armor: true,
+        });
+        let mut credentials = ProviderCredentials::new();
+        credentials.insert(
+            IDENTITY.to_string(),
+            SecretString::new(TEST_SSH_IDENTITY.to_string().into()),
+        );
+        provider.with_credentials(credentials);
+
+        let addr = Address::convention("proj", "default", "API_KEY");
+        provider
+            .set(addr, &SecretString::new("ssh-secret".to_string().into()))
+            .unwrap();
+
+        assert_eq!(
+            provider.get(addr).unwrap().unwrap().expose_secret(),
+            "ssh-secret"
         );
     }
 }

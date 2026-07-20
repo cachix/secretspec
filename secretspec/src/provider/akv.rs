@@ -62,7 +62,7 @@
 //! secretspec check --provider akv://myvault?auth=managed_identity
 //! ```
 
-use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
+use super::{Address, Layout, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
 use crate::{Result, SecretSpecError};
 use azure_core::credentials::{Secret, TokenCredential};
 use azure_core::http::StatusCode;
@@ -136,6 +136,9 @@ pub struct AkvConfig {
     /// (contains a dot) or the default public suffix was used, so `uri()`
     /// only emits `suffix` when it was actually given.
     pub suffix: Option<String>,
+    /// How convention secrets map onto secret names (SecretSpec 0.17+).
+    #[serde(default)]
+    pub layout: Layout,
 }
 
 /// The public-cloud Key Vault DNS suffix. Sovereign clouds (China, US Gov,
@@ -190,11 +193,16 @@ impl TryFrom<&ProviderUrl> for AkvConfig {
             )));
         }
 
+        // `layout` is the shared, cross-provider setting, parsed the same way
+        // everywhere; an unreadable value is refused rather than guessed.
+        let layout = url.layout()?;
+
         Ok(Self {
             vault_host,
             vault_url,
             auth,
             suffix,
+            layout,
         })
     }
 }
@@ -267,11 +275,50 @@ impl AkvProvider {
 
     /// Formats and validates the secret name for Azure Key Vault.
     ///
-    /// Converts the SecretSpec path format to an Azure-compatible name:
+    /// Under the nested [`Layout`] the SecretSpec path becomes the
+    /// Azure-compatible name
     /// `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}`.
     /// Lowercase, unpadded Base32 avoids both Key Vault's case-insensitive
     /// identifier comparisons and ambiguity with the `--` component delimiter.
-    fn format_secret_name(project: &str, profile: &str, key: &str) -> Result<String> {
+    ///
+    /// Under the flat layout the `{project}/{profile}` scaffolding is dropped
+    /// and the `key` is used as the Azure secret name **verbatim** -- the shape
+    /// a store migrated from elsewhere already has. There is no Base32 rewrite
+    /// to fall back on, so the key must itself be Azure-legal (letters, digits
+    /// and hyphens only): an underscore, which the nested layout would have
+    /// encoded away, is refused rather than silently pointing at a name Azure
+    /// cannot store.
+    fn format_secret_name(
+        layout: Layout,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<String> {
+        if layout == Layout::Flat {
+            if key.is_empty() {
+                return Err(SecretSpecError::ProviderOperationFailed(
+                    "key cannot be empty".to_string(),
+                ));
+            }
+            for c in key.chars() {
+                if !c.is_ascii_alphanumeric() && c != '-' {
+                    return Err(SecretSpecError::ProviderOperationFailed(format!(
+                        "key '{key}' cannot be an Azure Key Vault secret name under the flat \
+                         layout: only letters, digits and hyphens are allowed, and the key is \
+                         used verbatim. Rename it, or address the secret by its own coordinates \
+                         with ref = {{ item = \"NAME\" }}."
+                    )));
+                }
+            }
+            if key.len() > 127 {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "Secret name too long: {} characters (max 127)",
+                    key.len()
+                )));
+            }
+            return Ok(key.to_string());
+        }
+
         Self::validate_name_component("project", project)?;
         Self::validate_name_component("profile", profile)?;
         Self::validate_name_component("key", key)?;
@@ -512,7 +559,8 @@ impl AkvProvider {
 
 impl Provider for AkvProvider {
     /// Convention names use lowercase Base32 components so they remain
-    /// injective despite Azure Key Vault's restricted, case-insensitive names.
+    /// injective despite Azure Key Vault's restricted, case-insensitive names;
+    /// under `?layout=flat` the `key` is the Azure secret name verbatim.
     fn convention_address(
         &self,
         project: &str,
@@ -520,7 +568,7 @@ impl Provider for AkvProvider {
         key: &str,
     ) -> Result<crate::config::NativeAddress> {
         Ok(crate::config::NativeAddress {
-            item: Self::format_secret_name(project, profile, key)?,
+            item: Self::format_secret_name(self.config.layout, project, profile, key)?,
             ..Default::default()
         })
     }
@@ -541,6 +589,9 @@ impl Provider for AkvProvider {
         }
         if let Some(suffix) = &self.config.suffix {
             params.push(format!("suffix={suffix}"));
+        }
+        if self.config.layout == Layout::Flat {
+            params.push("layout=flat".to_string());
         }
         if !params.is_empty() {
             uri.push('?');
@@ -597,27 +648,34 @@ mod tests {
 
     #[test]
     fn test_format_secret_name() {
-        let name = AkvProvider::format_secret_name("myapp", "prod", "DB_URL").unwrap();
+        let name =
+            AkvProvider::format_secret_name(Layout::Nested, "myapp", "prod", "DB_URL").unwrap();
         assert_eq!(name, "secretspec--nv4wc4dq--obzg6za--irbf6vksjq");
     }
 
     #[test]
     fn test_format_secret_name_rejects_invalid_chars() {
-        assert!(AkvProvider::format_secret_name("my/app", "prod", "DB_URL").is_err());
-        assert!(AkvProvider::format_secret_name("myapp", "prod", "DB URL").is_err());
+        assert!(
+            AkvProvider::format_secret_name(Layout::Nested, "my/app", "prod", "DB_URL").is_err()
+        );
+        assert!(
+            AkvProvider::format_secret_name(Layout::Nested, "myapp", "prod", "DB URL").is_err()
+        );
     }
 
     #[test]
     fn test_format_secret_name_too_long() {
         let long_key = "A".repeat(127);
-        let result = AkvProvider::format_secret_name("myapp", "prod", &long_key);
+        let result = AkvProvider::format_secret_name(Layout::Nested, "myapp", "prod", &long_key);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_format_secret_name_preserves_case_distinctions() {
-        let upper = AkvProvider::format_secret_name("app", "prod", "API_KEY").unwrap();
-        let lower = AkvProvider::format_secret_name("app", "prod", "api_key").unwrap();
+        let upper =
+            AkvProvider::format_secret_name(Layout::Nested, "app", "prod", "API_KEY").unwrap();
+        let lower =
+            AkvProvider::format_secret_name(Layout::Nested, "app", "prod", "api_key").unwrap();
         assert_ne!(upper, lower);
         assert_eq!(upper, upper.to_ascii_lowercase());
         assert_eq!(lower, lower.to_ascii_lowercase());
@@ -625,16 +683,60 @@ mod tests {
 
     #[test]
     fn test_format_secret_name_prevents_boundary_delimiter_collision() {
-        let trailing = AkvProvider::format_secret_name("a", "b-", "C").unwrap();
-        let leading = AkvProvider::format_secret_name("a", "b", "_C").unwrap();
+        let trailing = AkvProvider::format_secret_name(Layout::Nested, "a", "b-", "C").unwrap();
+        let leading = AkvProvider::format_secret_name(Layout::Nested, "a", "b", "_C").unwrap();
         assert_ne!(trailing, leading);
     }
 
     #[test]
     fn test_format_secret_name_encodes_internal_delimiters() {
-        let left = AkvProvider::format_secret_name("a", "b__c", "d").unwrap();
-        let right = AkvProvider::format_secret_name("a", "b", "c__d").unwrap();
+        let left = AkvProvider::format_secret_name(Layout::Nested, "a", "b__c", "d").unwrap();
+        let right = AkvProvider::format_secret_name(Layout::Nested, "a", "b", "c__d").unwrap();
         assert_ne!(left, right);
+    }
+
+    /// Flat uses the key as the Azure secret name verbatim, dropping the
+    /// Base32-encoded `{project}/{profile}` scaffolding -- the shape a store
+    /// migrated from elsewhere already has.
+    #[test]
+    fn flat_layout_uses_the_key_verbatim() {
+        let c = config("akv://myvault?layout=flat");
+        assert_eq!(c.layout, Layout::Flat);
+        // project and profile name no part of the id, so they are not required.
+        let name = AkvProvider::format_secret_name(Layout::Flat, "", "", "DATABASE-URL").unwrap();
+        assert_eq!(name, "DATABASE-URL");
+    }
+
+    /// Because the flat name is used verbatim, a key Azure cannot store -- an
+    /// underscore, which the nested layout would have Base32-encoded away -- is
+    /// refused rather than pointing at a name the API will reject.
+    #[test]
+    fn flat_layout_rejects_a_key_azure_cannot_store() {
+        let err = AkvProvider::format_secret_name(Layout::Flat, "myapp", "prod", "DATABASE_URL")
+            .unwrap_err();
+        assert!(err.to_string().contains("used verbatim"), "{err}");
+    }
+
+    /// `?layout=flat` round-trips through `uri()`; nested stays unspelled.
+    #[test]
+    fn flat_layout_round_trips_through_uri() {
+        let p = AkvProvider::new(config("akv://myvault?layout=flat"));
+        assert_eq!(p.uri(), "akv://myvault?layout=flat");
+        assert_eq!(config(&p.uri()).layout, Layout::Flat);
+        assert_eq!(
+            AkvProvider::new(config("akv://myvault")).uri(),
+            "akv://myvault"
+        );
+    }
+
+    /// An unreadable layout is refused rather than guessed.
+    #[test]
+    fn unreadable_layout_is_rejected() {
+        let err = AkvConfig::try_from(&ProviderUrl::new(
+            Url::parse("akv://myvault?layout=banana").unwrap(),
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("layout value 'banana'"), "{err}");
     }
 
     #[test]

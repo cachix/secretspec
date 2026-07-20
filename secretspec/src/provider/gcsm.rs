@@ -30,7 +30,7 @@
 //! secretspec check --provider gcsm://my-gcp-project
 //! ```
 
-use super::{Address, Provider, ProviderUrl};
+use super::{Address, Layout, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use google_cloud_secretmanager_v1::client::SecretManagerService;
 use google_cloud_secretmanager_v1::model::{Replication, Secret, SecretPayload, replication};
@@ -44,6 +44,9 @@ use serde::{Deserialize, Serialize};
 pub struct GcsmConfig {
     /// The GCP project ID (e.g., "my-gcp-project")
     pub project_id: String,
+    /// How convention secrets map onto secret IDs (SecretSpec 0.17+).
+    #[serde(default)]
+    pub layout: Layout,
 }
 
 /// Validates a GCP project ID format.
@@ -136,7 +139,11 @@ impl TryFrom<&ProviderUrl> for GcsmConfig {
             )));
         }
 
-        Ok(Self { project_id })
+        // `layout` is the shared, cross-provider setting, parsed the same way
+        // everywhere; an unreadable value is refused rather than guessed.
+        let layout = url.layout()?;
+
+        Ok(Self { project_id, layout })
     }
 }
 
@@ -189,13 +196,22 @@ impl GcsmProvider {
 
     /// Formats and validates the secret name for GCP Secret Manager.
     ///
-    /// Converts the SecretSpec path format to GCP-compatible name:
-    /// `secretspec-{project}-{profile}-{key}`
+    /// Under the nested [`Layout`] the SecretSpec path becomes the
+    /// GCP-compatible name `secretspec-{project}-{profile}-{key}`. Under the
+    /// flat layout the scaffolding is dropped and the secret ID is the `key`
+    /// itself -- the shape a store migrated from elsewhere already has.
     ///
     /// GCP Secret Manager secret IDs must:
     /// - Be 1-255 characters long
     /// - Contain only alphanumeric characters, hyphens, and underscores
     fn format_secret_name(&self, project: &str, profile: &str, key: &str) -> Result<String> {
+        // Flat addresses by key alone, so the project and profile that name no
+        // part of the secret ID are not required and are not validated.
+        if self.config.layout == Layout::Flat {
+            Self::validate_name_component("key", key)?;
+            return Ok(key.to_string());
+        }
+
         // Validate each component
         Self::validate_name_component("project", project)?;
         Self::validate_name_component("profile", profile)?;
@@ -342,7 +358,8 @@ impl GcsmProvider {
 impl Provider for GcsmProvider {
     /// Convention secrets are ids of the form
     /// `secretspec-{project}-{profile}-{key}` (GCP secret ids cannot contain
-    /// slashes), read at their latest version.
+    /// slashes), or the `key` alone under `?layout=flat`, read at their latest
+    /// version.
     fn convention_address(
         &self,
         project: &str,
@@ -360,7 +377,11 @@ impl Provider for GcsmProvider {
     }
 
     fn uri(&self) -> String {
-        format!("gcsm://{}", self.config.project_id)
+        let mut uri = format!("gcsm://{}", self.config.project_id);
+        if self.config.layout == Layout::Flat {
+            uri.push_str("?layout=flat");
+        }
+        uri
     }
 
     /// An optional `version` pins the secret version to read.
@@ -396,6 +417,57 @@ impl Provider for GcsmProvider {
 mod reference_tests {
     use super::*;
     use url::Url;
+
+    fn config(s: &str) -> GcsmConfig {
+        GcsmConfig::try_from(&ProviderUrl::new(Url::parse(s).unwrap())).unwrap()
+    }
+
+    /// The flat layout drops the `secretspec-{project}-{profile}-` prefix, so a
+    /// convention secret's id is the key itself -- the shape a store migrated
+    /// from elsewhere already has.
+    #[test]
+    fn flat_layout_uses_the_key_as_the_secret_id() {
+        let c = config("gcsm://my-project?layout=flat");
+        assert_eq!(c.layout, Layout::Flat);
+        let p = GcsmProvider::new(c);
+        assert_eq!(
+            p.convention_address("myapp", "prod", "db-url")
+                .unwrap()
+                .item,
+            "db-url"
+        );
+    }
+
+    /// The key still has to be a legal GCP secret id under flat -- there is no
+    /// `secretspec-` prefix rewriting the rest of the name.
+    #[test]
+    fn flat_layout_still_validates_the_key() {
+        let p = GcsmProvider::new(config("gcsm://my-project?layout=flat"));
+        let err = p.convention_address("myapp", "prod", "db/url").unwrap_err();
+        assert!(err.to_string().contains("invalid character"), "{err}");
+    }
+
+    /// `?layout=flat` round-trips through `uri()`; nested stays unspelled.
+    #[test]
+    fn flat_layout_round_trips_through_uri() {
+        let p = GcsmProvider::new(config("gcsm://my-project?layout=flat"));
+        assert_eq!(p.uri(), "gcsm://my-project?layout=flat");
+        assert_eq!(config(&p.uri()).layout, Layout::Flat);
+        assert_eq!(
+            GcsmProvider::new(config("gcsm://my-project")).uri(),
+            "gcsm://my-project"
+        );
+    }
+
+    /// An unreadable layout is refused rather than guessed.
+    #[test]
+    fn unreadable_layout_is_rejected() {
+        let err = GcsmConfig::try_from(&ProviderUrl::new(
+            Url::parse("gcsm://my-project?layout=banana").unwrap(),
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("layout value 'banana'"), "{err}");
+    }
 
     /// A path that is not a `secrets/...` resource is rejected.
     #[test]

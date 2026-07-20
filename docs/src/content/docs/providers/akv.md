@@ -67,6 +67,7 @@ akv://VAULT_NAME[?auth=env|cli|managed_identity|workload_identity][&suffix=DNS_S
   - `managed_identity` — the VM / App Service / AKS system-assigned managed identity
   - `workload_identity` — AKS workload identity federation (`AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_FEDERATED_TOKEN_FILE`, injected automatically by AKS)
 - `suffix`: an explicit Key Vault DNS suffix for a bare `VAULT_NAME`, e.g. `akv://myvault?suffix=vault.azure.cn` for a sovereign cloud, instead of relying on a dotted `VAULT_NAME`
+- `?layout=flat` (0.17+): use the key as the Azure secret name verbatim, with no Base32-encoded `{project}/{profile}` scaffolding — see [Layout](#layout-017)
 
 ### URI examples
 
@@ -100,6 +101,26 @@ underscores versus hyphens, or leading/trailing hyphens remain distinct even
 though Key Vault's identifiers do not preserve all of those distinctions. The
 encoded components contain no hyphens, so the `--` component separators cannot
 be confused with component data.
+
+### Layout (0.17+)
+
+Added in SecretSpec 0.17; `?layout=flat` is not available in SecretSpec 0.16 or earlier.
+
+`?layout=` is a [general provider setting](/reference/providers/#layout-flat-017), spelled the same
+way across every hierarchical backend. The default **nested** layout Base32-encodes the components
+into `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}`, as above.
+
+The **flat** layout (`?layout=flat`) drops the `{project}/{profile}` scaffolding and uses the
+`{key}` as the Azure secret name **verbatim** — the shape a store migrated from another manager
+already has. Because there is no Base32 rewrite to fall back on, the key must itself be a legal
+Azure Key Vault secret name (`^[0-9a-zA-Z-]+$`): an underscore, which the nested layout would have
+encoded away, is refused rather than pointing at a name Azure cannot store. The project and profile
+name no part of the secret name under flat, so they are not required.
+
+```toml title="secretspec.toml"
+[providers]
+akv = "akv://myvault?layout=flat"
+```
 
 ## Use existing secrets
 

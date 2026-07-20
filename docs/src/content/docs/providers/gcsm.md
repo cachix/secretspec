@@ -54,10 +54,11 @@ service account automatically.
 ### URI format
 
 ```
-gcsm://PROJECT_ID
+gcsm://PROJECT_ID[?layout=flat]
 ```
 
 - `PROJECT_ID`: Your GCP project ID
+- `?layout=flat` (0.17+): use the key alone as the secret id, with no `secretspec-{project}-{profile}-` prefix — see [Layout](#layout-017)
 
 ### URI examples
 
@@ -80,6 +81,26 @@ DATABASE_URL = { description = "Database URL", providers = ["google"] }
 Secrets are stored as `secretspec-{project}-{profile}-{key}`. For example,
 project `myapp`, profile `production`, and key `DATABASE_URL` map to
 `secretspec-myapp-production-DATABASE_URL`.
+
+### Layout (0.17+)
+
+Added in SecretSpec 0.17; `?layout=flat` is not available in SecretSpec 0.16 or earlier.
+
+`?layout=` is a [general provider setting](/reference/providers/#layout-flat-017), spelled the same
+way across every hierarchical backend. The default **nested** layout builds the secret id
+`secretspec-{project}-{profile}-{key}`, as above.
+
+The **flat** layout (`?layout=flat`) drops that prefix, so a convention secret's id is the `{key}`
+itself — `DATABASE_URL` maps straight to a `DATABASE_URL` secret. This is the natural shape for a
+single-project store, e.g. one migrated from another manager. The project and profile name no part
+of the id under flat, so they are not required; the key must still be a legal GCP secret id
+(letters, digits, hyphens and underscores), since there is no `secretspec-` prefix rewriting the
+rest of the name.
+
+```toml title="secretspec.toml"
+[providers]
+gcsm = "gcsm://my-gcp-project?layout=flat"
+```
 
 ## Use existing secrets
 

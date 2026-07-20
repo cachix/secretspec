@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   automatically in GitHub Actions and Forgejo Actions jobs with `id-token:
   write`. The role and optional audience can be set in the provider URI or with
   `VAULT_JWT_ROLE` and `VAULT_JWT_AUDIENCE`.
+- The Python SDK now publishes a Windows x64 wheel to PyPI, so
+  `pip install secretspec` and `uv add secretspec` work on Windows.
+  ([#177](https://github.com/cachix/secretspec/issues/177))
+- The Ruby SDK now publishes a Windows gem (`x64-mingw-ucrt`) to RubyGems, so
+  `gem install secretspec` works with RubyInstaller on Windows.
+- The PHP SDK now publishes prebuilt Windows x64 extension binaries
+  (`secretspec-php-native-<php>-nts-x86_64-pc-windows-msvc.dll`) alongside the
+  Linux and macOS builds on each release.
 
 ### Changed
 - Secret status output now emphasizes secret names, de-emphasizes descriptions,

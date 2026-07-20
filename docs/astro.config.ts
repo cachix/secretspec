@@ -291,6 +291,10 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
               label: "Adding Providers",
               slug: "development/adding-providers",
             },
+            {
+              label: "SDK Development",
+              slug: "development/sdks",
+            },
           ],
         },
       ],

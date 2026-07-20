@@ -11,12 +11,15 @@ name: "Ruby gems"
 # the remaining follow-up; the build + bundling mechanism below is what is
 # validated. Install requires a C compiler + Ruby headers (+ libdbus-1-dev).
 #
-# A Windows (x64-mingw) gem is a follow-up: the staging script and the gem's
-# mkmf extension assume the Unix `lib<name>.a` archive, but the MinGW Ruby
-# devkit needs an archive from the `x86_64-pc-windows-gnu` Rust target (the
-# default Windows toolchain is MSVC, which emits `<name>.lib`). The SDK itself
-# is exercised on every PR by the devenv-based sdks.yml; this workflow only
-# builds the distributable gems.
+# The Windows gem (x64-mingw-ucrt) bundles a staticlib from the
+# `x86_64-pc-windows-gnu` Rust target (declared in rust-toolchain.toml):
+# RubyInstaller's devkit is MinGW, whose linker cannot consume MSVC `.lib`
+# archives, while the GNU target emits the same `lib<name>.a` naming the
+# staging script and mkmf extension already assume. setup-ruby's MSYS2 devkit
+# supplies the mingw gcc that aws-lc-sys and the other C deps compile with;
+# NASM assembles aws-lc's x86_64 assembly. The SDK itself is exercised on
+# every PR by the devenv-based sdks.yml; this workflow only builds the
+# distributable gems.
 
 on:
   workflow_call:
@@ -33,6 +36,7 @@ on:
       - "secretspec-rb/**"
       - ".github/workflows/ruby-gems.yml"
       - "scripts/sync-sdk-versions.sh"
+      - "scripts/copy-mingw-import-libs.sh"
 
 jobs:
   gems:
@@ -45,6 +49,7 @@ jobs:
           - { target: x86_64-linux, runner: ubuntu-latest }
           - { target: aarch64-linux, runner: ubuntu-24.04-arm }
           - { target: arm64-darwin, runner: macos-latest }
+          - { target: x64-mingw-ucrt, runner: windows-latest }
 
     steps:
       - uses: actions/checkout@v5
@@ -57,6 +62,27 @@ jobs:
 
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
+
+      # See the header: the Windows gem links with RubyInstaller's MinGW
+      # devkit, so the staticlib must come from the GNU target, not the
+      # runner's default MSVC one. stage-staticlib.sh reads CARGO_BUILD_TARGET
+      # to locate the per-target artifact.
+      - name: Target the GNU toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "CARGO_BUILD_TARGET=x86_64-pc-windows-gnu" >> "$GITHUB_ENV"
+      - name: Install NASM (aws-lc-sys assembly, Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      # Placed after the CARGO_BUILD_TARGET/toolchain setup so the cache key
+      # reflects them; keyed per matrix target (the automatic key covers only
+      # the job id, toolchain, and lockfile).
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"

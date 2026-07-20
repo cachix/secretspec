@@ -22,6 +22,23 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
+/// Format the human-facing name and optional description used by status output.
+///
+/// The name carries the visual emphasis while the description is secondary.
+/// When no description is available, omit it entirely instead of printing a
+/// repetitive placeholder (and avoid leaving a dangling separator).
+fn format_secret_label(name: &str, description: Option<&str>) -> String {
+    match description {
+        Some(description) => format!(
+            "{} {} {}",
+            name.cyan().bold(),
+            "-".dimmed(),
+            description.dimmed()
+        ),
+        None => name.cyan().bold().to_string(),
+    }
+}
+
 /// Emits a warning when a provider in a fallback chain fails so the user
 /// can see why a particular link was skipped, without aborting the chain.
 ///
@@ -2099,32 +2116,16 @@ impl Secrets {
         let missing_optional: HashSet<&String> = valid.missing_optional.iter().collect();
 
         for (name, config) in &self.effective_secrets(&valid.resolved.profile) {
+            let label = format_secret_label(name, config.description.as_deref());
             if missing_optional.contains(&name) {
                 optional_count += 1;
-                eprintln!(
-                    "{} {} - {} {}",
-                    "○".blue(),
-                    name,
-                    config.description.as_deref().unwrap_or("No description"),
-                    "(optional)".blue()
-                );
+                eprintln!("{} {} {}", "○".blue(), label, "(optional)".blue());
             } else if config.default.is_some() && default_names.contains(&name) {
                 found_count += 1;
-                eprintln!(
-                    "{} {} - {} {}",
-                    "○".yellow(),
-                    name,
-                    config.description.as_deref().unwrap_or("No description"),
-                    "(has default)".yellow()
-                );
+                eprintln!("{} {} {}", "○".yellow(), label, "(has default)".yellow());
             } else {
                 found_count += 1;
-                eprintln!(
-                    "{} {} - {}",
-                    "✓".green(),
-                    name,
-                    config.description.as_deref().unwrap_or("No description")
-                );
+                eprintln!("{} {}", "✓".green(), label);
             }
         }
 
@@ -2145,41 +2146,19 @@ impl Secrets {
             .collect::<HashSet<_>>();
 
         for (name, config) in &self.effective_secrets(&errors.profile) {
+            let label = format_secret_label(name, config.description.as_deref());
             if errors.missing_required.contains(name) {
                 missing_count += 1;
-                eprintln!(
-                    "{} {} - {} {}",
-                    "✗".red(),
-                    name,
-                    config.description.as_deref().unwrap_or("No description"),
-                    "(required)".red()
-                );
+                eprintln!("{} {} {}", "✗".red(), label, "(required)".red());
             } else if errors.missing_optional.contains(name) {
                 optional_count += 1;
-                eprintln!(
-                    "{} {} - {} {}",
-                    "○".blue(),
-                    name,
-                    config.description.as_deref().unwrap_or("No description"),
-                    "(optional)".blue()
-                );
+                eprintln!("{} {} {}", "○".blue(), label, "(optional)".blue());
             } else {
                 found_count += 1;
                 if default_names.contains(name) {
-                    eprintln!(
-                        "{} {} - {} {}",
-                        "○".yellow(),
-                        name,
-                        config.description.as_deref().unwrap_or("No description"),
-                        "(has default)".yellow()
-                    );
+                    eprintln!("{} {} {}", "○".yellow(), label, "(has default)".yellow());
                 } else {
-                    eprintln!(
-                        "{} {} - {}",
-                        "✓".green(),
-                        name,
-                        config.description.as_deref().unwrap_or("No description")
-                    );
+                    eprintln!("{} {}", "✓".green(), label);
                 }
             }
         }
@@ -2290,6 +2269,7 @@ impl Secrets {
                 };
                 read_names.push(name.clone());
                 let description = planned.config().description.as_deref();
+                let label = format_secret_label(&name, description);
 
                 let to_provider = self.write_provider_for_route(route, Some(&profile_display))?;
 
@@ -2304,10 +2284,9 @@ impl Secrets {
                         match to_provider.get(addr)? {
                             Some(_) => {
                                 eprintln!(
-                                    "{} {} - {} {} (→ {})",
+                                    "{} {} {} (→ {})",
                                     "○".yellow(),
-                                    name,
-                                    description.unwrap_or("No description"),
+                                    label,
                                     "(already exists in target)".yellow(),
                                     to_provider.name().blue()
                                 );
@@ -2330,10 +2309,9 @@ impl Secrets {
                                 );
                                 set_result?;
                                 eprintln!(
-                                    "{} {} - {} (→ {})",
+                                    "{} {} (→ {})",
                                     "✓".green(),
-                                    name,
-                                    description.unwrap_or("No description"),
+                                    label,
                                     to_provider.name().blue()
                                 );
                                 imported += 1;
@@ -2346,10 +2324,9 @@ impl Secrets {
                         match to_provider.get(addr)? {
                             Some(_) => {
                                 eprintln!(
-                                    "{} {} - {} {} (→ {})",
+                                    "{} {} {} (→ {})",
                                     "○".blue(),
-                                    name,
-                                    description.unwrap_or("No description"),
+                                    label,
                                     "(already in target, not in source)".blue(),
                                     to_provider.name().blue()
                                 );
@@ -2357,10 +2334,9 @@ impl Secrets {
                             }
                             None => {
                                 eprintln!(
-                                    "{} {} - {} {}",
+                                    "{} {} {}",
                                     "✗".red(),
-                                    name,
-                                    description.unwrap_or("No description"),
+                                    label,
                                     "(not found in source)".red()
                                 );
                                 not_found += 1;
@@ -3707,6 +3683,33 @@ fn gha_heredoc_delimiter(value: &str) -> String {
         if !value.lines().any(|line| line == delimiter) {
             return delimiter;
         }
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+
+    #[test]
+    fn secret_label_emphasizes_the_name_and_deemphasizes_the_description() {
+        assert_eq!(
+            format_secret_label("DATABASE_URL", Some("PostgreSQL connection string")),
+            format!(
+                "{} {} {}",
+                "DATABASE_URL".cyan().bold(),
+                "-".dimmed(),
+                "PostgreSQL connection string".dimmed()
+            )
+        );
+    }
+
+    #[test]
+    fn secret_label_omits_a_missing_description_without_a_placeholder() {
+        let label = format_secret_label("DATABASE_URL", None);
+
+        assert_eq!(label, "DATABASE_URL".cyan().bold().to_string());
+        assert!(!label.contains("No description"));
+        assert!(!label.contains('-'));
     }
 }
 

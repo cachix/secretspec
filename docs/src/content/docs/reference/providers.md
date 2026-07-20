@@ -150,19 +150,26 @@ awssm://                      # SDK default region and credentials
 
 ## Vault / OpenBao Provider
 
-**URI**: `vault://[namespace@]host[:port][/mount]` or `openbao://[namespace@]host[:port][/mount]` - Stores secrets in HashiCorp Vault or OpenBao KV engine
+**URI**: `vault://[namespace@]host[:port][/mount][?options]` or `openbao://[namespace@]host[:port][/mount][?options]` - Stores secrets in HashiCorp Vault or OpenBao KV engine
+
+:::note[Version compatibility]
+Added in SecretSpec 0.17.
+:::
 
 ```bash
 vault://vault.example.com:8200/secret       # KV v2 at "secret" mount
 vault://vault.example.com:8200              # Default "secret" mount
 vault://ns1@vault.example.com:8200/secret   # With namespace
 openbao://bao.internal:8200/secret          # OpenBao server
+vault://vault.example.com:8200/secret?auth=approle
+# SecretSpec 0.17+
+vault://vault.example.com:8200/secret?auth=jwt&role=ci
 vault://127.0.0.1:8200/secret?kv=1         # KV v1 engine
 vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
 ```
 
-**Features**: Read/write, KV v1 and v2, namespaces, OpenBao compatible
-**Prerequisites**: Vault/OpenBao server, `VAULT_TOKEN` env var or `~/.vault-token`, build with `--features vault`
+**Features**: Read/write, KV v1 and v2, namespaces, OpenBao compatible; token and AppRole authentication; JWT/OIDC authentication (0.17+)
+**Prerequisites**: Vault/OpenBao server, authentication credentials, build with `--features vault`
 **Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
 
 ## Bitwarden Secrets Manager Provider

@@ -95,6 +95,7 @@ awssm://[AWS_PROFILE@]REGION[?prefix=PREFIX][&kms_key_id=KEY][&tag.NAME=VALUE...
 - `PREFIX`: Optional root prefix prepended to all secret names. Useful when IAM policies scope access by prefix (e.g., only allow `myteam/*`).
 - `kms_key_id`: Optional KMS key (id, ARN, or `alias/...`) used to encrypt secrets that secretspec creates.
 - `tag.NAME=VALUE`: Optional tags applied to secrets that secretspec creates. Repeat for multiple tags.
+- `?layout=flat` (0.17+): name secrets `[prefix/]{key}` with no `secretspec/{project}/{profile}` scaffolding — see [Layout](#layout-017)
 
 `kms_key_id` and `tag.NAME=VALUE` are applied **only when secretspec creates a
 secret** (`CreateSecret`); updating a value (`PutSecretValue`) accepts neither,
@@ -138,6 +139,26 @@ Secrets are stored as `[prefix/]secretspec/{project}/{profile}/{key}`.
 For example, `DATABASE_URL` in project `myapp` and profile `production` is
 stored as `secretspec/myapp/production/DATABASE_URL`. With `?prefix=myteam`,
 it becomes `myteam/secretspec/myapp/production/DATABASE_URL`.
+
+### Layout (0.17+)
+
+Added in SecretSpec 0.17; `?layout=flat` is not available in SecretSpec 0.16 or earlier.
+
+`?layout=` is a [general provider setting](/reference/providers/#layout-flat-017), spelled the same
+way across every hierarchical backend. The default **nested** layout names each secret
+`[prefix/]secretspec/{project}/{profile}/{key}`, as above.
+
+The **flat** layout (`?layout=flat`) drops the `secretspec/{project}/{profile}` scaffolding, so a
+convention secret is named `[prefix/]{key}` — `DATABASE_URL`, or `myteam/DATABASE_URL` with
+`?prefix=myteam`. Any `?prefix=` still applies, so IAM policies that scope access by prefix keep
+working. This is the natural shape for a single-project store, e.g. one migrated from another
+manager. Because the project and profile name no part of the secret name under flat, they are not
+required.
+
+```toml title="secretspec.toml"
+[providers]
+awssm = "awssm://us-east-1?layout=flat"
+```
 
 ## Use existing secrets
 

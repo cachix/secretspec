@@ -66,6 +66,7 @@ use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, percent_encode};
 use secrecy::{ExposeSecret, SecretString};
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -238,6 +239,56 @@ impl ProviderUrl {
     pub fn encode_query(value: &str) -> String {
         percent_encode(value.as_bytes(), QUERY_ENCODE_SET).to_string()
     }
+
+    /// Parses the general [`?layout=`](Layout) setting: `nested` (the default)
+    /// or `flat`. Absent or empty, it is [`Layout::Nested`].
+    ///
+    /// An unreadable value is refused rather than guessed, exactly like `?tls=`:
+    /// the knob is explicit, so a typo in it should be too. Every provider that
+    /// honors a layout parses it through this one method, so the spelling and
+    /// the error message are identical across the whole provider set.
+    pub fn layout(&self) -> Result<Layout> {
+        match self.query_value("layout").as_deref() {
+            None => Ok(Layout::default()),
+            Some("nested") => Ok(Layout::Nested),
+            Some("flat") => Ok(Layout::Flat),
+            Some(other) => Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Unknown layout value '{other}'. Expected 'nested' or 'flat'."
+            ))),
+        }
+    }
+}
+
+/// How a provider maps SecretSpec's `{project}/{profile}/{key}` naming
+/// convention onto its own store.
+///
+/// This is a **general provider setting**, not one backend's quirk: every
+/// hierarchical store faces the same question, so it is spelled the same way --
+/// `?layout=flat` -- across Infisical, Vault, AWS Secrets Manager, Google Cloud
+/// Secret Manager and Azure Key Vault. Providers whose store has no hierarchy
+/// (`dotenv`, `env`, `bws`) are already flat and ignore the setting.
+///
+/// Available since SecretSpec 0.17.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Layout {
+    /// Secrets live under `secretspec/{project}/{profile}`, so many projects and
+    /// profiles share one store without colliding. This is the default, and the
+    /// shape SecretSpec creates when it writes a store itself.
+    #[default]
+    Nested,
+    /// Secrets sit at the store root -- under any provider-native container (a
+    /// Vault mount) or user-supplied prefix, but with no
+    /// `secretspec/{project}/{profile}` scaffolding -- and are addressed by key
+    /// alone. This is the natural shape of a single-project store, e.g. one
+    /// migrated from another manager where the secrets already live at the root.
+    ///
+    /// Dropping the profile folder means distinct profiles no longer separate
+    /// themselves by path; a provider that pins its environment another way (an
+    /// Infisical `?env=`) can still keep them apart, but flat plus a pinned
+    /// environment collapses every profile onto one key and gives up profile
+    /// separation deliberately.
+    Flat,
 }
 
 /// Executes an async future in a blocking context.

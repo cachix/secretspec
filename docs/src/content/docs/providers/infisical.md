@@ -93,14 +93,16 @@ environment variable when it is not declared. Use
 ### URI format
 
 ```
-infisical://[host]/{project-id}[?env=slug&path=/prefix&tls=false]
+infisical://[host]/{project-id}[?env=slug&path=/prefix&layout=flat&tls=false]
 ```
 
 - `host`: the Infisical instance (falls back to `INFISICAL_DOMAIN`, then the legacy
   `INFISICAL_API_URL`, then `app.infisical.com`)
 - `{project-id}`: the project's **UUID**, from Project Settings → Project ID
 - `?env=`: environment slug. Without it, the SecretSpec profile names the environment
-- `?path=`: folder prefix holding SecretSpec's secrets (default: `/secretspec`)
+- `?path=`: folder prefix holding SecretSpec's secrets. Defaults to `/secretspec` under the
+  nested layout and to the environment root (`/`) under the flat one
+- `?layout=` (0.17+): `nested` (default) or `flat` — see [Layout](#layout-017)
 - `?tls=false`: disable TLS, for self-hosted instances served over plain HTTP
 
 Infisical's API addresses a project by UUID, not by the slug shown in its UI.
@@ -171,6 +173,50 @@ underscores — so a project or profile Infisical cannot spell is refused rather
 renamed.
 
 Folders are created as needed when writing a secret.
+
+### Layout (0.17+)
+
+Added in SecretSpec 0.17; the flat layout is not available in SecretSpec 0.16.
+
+The default **nested** layout stores secrets under `{path}/{project}/{profile}`, so many projects
+and profiles can share one Infisical store without colliding.
+
+The **flat** layout (`?layout=flat`) drops the `{project}/{profile}` folders, so a secret sits
+directly at the folder prefix — the environment root by default, or `{path}` when one is given:
+
+```
+project "myapp", profile "prod", key "DATABASE_URL", layout flat
+  -> environment prod
+     folder      /
+     key         DATABASE_URL
+```
+
+```toml title="secretspec.toml"
+[providers]
+# Read secrets straight from each environment's root
+infisical = "infisical://app.infisical.com/7e2f1a4c-...?layout=flat"
+
+# ...or from a shared prefix, still with no project/profile folders
+infisical_team = "infisical://app.infisical.com/7e2f1a4c-...?layout=flat&path=/team"
+```
+
+This is the natural shape for a **single-project store** — one migrated from another secret
+manager, say — where SecretSpec's namespace folders would only be in the way. Because the flat
+layout no longer puts the project or profile in a folder name, those names are unconstrained under
+it.
+
+The profile still names the environment, so distinct profiles stay apart:
+
+```
+dev  profile, key DATABASE_URL  -> environment dev,  folder /, key DATABASE_URL
+prod profile, key DATABASE_URL  -> environment prod, folder /, key DATABASE_URL
+```
+
+:::caution
+Pinning `?env=` **and** `?layout=flat` together collapses every profile onto one environment root,
+so they share a key. That combination gives up profile separation deliberately, and is only safe
+when a single profile is ever resolved against the store.
+:::
 
 ## Use existing secrets
 

@@ -124,29 +124,31 @@ protonpass://Work/{project}/{profile}/{key}        # Custom vault and title temp
 
 ## Google Cloud Secret Manager Provider
 
-**URI**: `gcsm://PROJECT_ID` - Stores secrets in Google Cloud Secret Manager
+**URI**: `gcsm://PROJECT_ID[?layout=flat]` - Stores secrets in Google Cloud Secret Manager
 
 ```bash
-gcsm://my-gcp-project         # GCP project ID
+gcsm://my-gcp-project              # GCP project ID
+gcsm://my-gcp-project?layout=flat  # (0.17+) Secret id is the key alone
 ```
 
 **Features**: Read/write, cloud sync, profiles, service account support
 **Prerequisites**: `gcloud` CLI, authenticated, Secret Manager API enabled, build with `--features gcsm`
-**Storage**: Secret name `secretspec-{project}-{profile}-{key}`
+**Storage**: Secret name `secretspec-{project}-{profile}-{key}`, or the `{key}` alone under [`?layout=flat`](#layout-flat-017)
 
 ## AWS Secrets Manager Provider
 
-**URI**: `awssm://[profile@]REGION` - Stores secrets in AWS Secrets Manager
+**URI**: `awssm://[profile@]REGION[?prefix=PREFIX][&layout=flat]` - Stores secrets in AWS Secrets Manager
 
 ```bash
 awssm://us-east-1             # Specific AWS region
 awssm://production@us-east-1  # Specific AWS profile and region
+awssm://us-east-1?layout=flat # (0.17+) Secret name is [prefix/]key
 awssm://                      # SDK default region and credentials
 ```
 
 **Features**: Read/write, cloud sync, profiles, IAM/SSO authentication
 **Prerequisites**: AWS credentials configured, build with `--features awssm`
-**Storage**: Secret name `secretspec/{project}/{profile}/{key}`
+**Storage**: Secret name `[prefix/]secretspec/{project}/{profile}/{key}`, or `[prefix/]{key}` under [`?layout=flat`](#layout-flat-017)
 
 ## Vault Provider
 
@@ -165,7 +167,7 @@ vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
 
 **Features**: Read/write, KV v1 and v2, namespaces; token and AppRole authentication; JWT/OIDC authentication (0.17+)
 **Prerequisites**: Vault server, authentication credentials, build with `--features vault`
-**Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
+**Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field, or the `{key}` alone at the mount root under [`?layout=flat`](#layout-flat-017)
 
 ## OpenBao Provider (0.17+)
 
@@ -183,11 +185,12 @@ openbao://team-a@bao.example.com:8200/secret
 openbao://bao.example.com:8200/secret?auth=approle
 openbao://bao.example.com:8200/secret?auth=jwt&role=ci
 openbao://127.0.0.1:8200/secret?kv=1&tls=false
+openbao://bao.example.com:8200/secret?layout=flat
 ```
 
 **Features**: Read/write, KV v1 and v2, namespaces; token, AppRole, and JWT/OIDC authentication; documented OpenBao CLI variables plus SecretSpec-defined `BAO_*` AppRole/JWT inputs, all with `VAULT_*` compatibility fallbacks
 **Prerequisites**: OpenBao server, authentication credentials, build with `--features openbao` (0.17+)
-**Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
+**Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field, or the `{key}` alone at the mount root under [`?layout=flat`](#layout-flat-017)
 
 ## Bitwarden Secrets Manager Provider
 
@@ -221,18 +224,19 @@ akv://myvault?suffix=vault.azure.cn      # Sovereign cloud (explicit suffix, bar
 
 **Features**: Read/write, cloud sync, profiles, service principal/managed identity/workload identity auth
 **Prerequisites**: An Azure Key Vault instance, authenticated via one of the methods above, build with `--features akv`
-**Storage**: Secret name `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}` (lowercase, unpadded Base32 preserves case and punctuation distinctions within Azure's case-insensitive secret-name namespace)
+**Storage**: Secret name `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}` (lowercase, unpadded Base32 preserves case and punctuation distinctions within Azure's case-insensitive secret-name namespace), or the `{key}` used verbatim as the secret name under [`?layout=flat`](#layout-flat-017)
 
 ## Infisical Provider
 
 Available since SecretSpec 0.16.
 
-**URI**: `infisical://[HOST]/PROJECT_ID[?env=SLUG][&path=/PREFIX][&tls=false]` - Stores secrets in Infisical
+**URI**: `infisical://[HOST]/PROJECT_ID[?env=SLUG][&path=/PREFIX][&layout=flat][&tls=false]` - Stores secrets in Infisical
 
 ```bash
 infisical://app.infisical.com/7e2f1a4c-...            # Infisical Cloud (US)
 infisical://eu.infisical.com/7e2f1a4c-...             # Infisical Cloud (EU)
 infisical://vault.example.com/7e2f1a4c-...?env=prod   # Read every profile from one environment
+infisical://app.infisical.com/7e2f1a4c-...?layout=flat  # (0.17+) Read from the environment root, no folders
 infisical://localhost:8080/7e2f1a4c-...?tls=false     # Self-hosted over plain HTTP
 ```
 
@@ -249,8 +253,50 @@ By default the SecretSpec profile names the Infisical environment, so a `product
 the `production` environment. Projects whose environments do not correspond to profiles pin one with
 `?env=`; the profile still names the folder, so profiles never share a secret.
 
+`?layout=flat` (0.17+) drops the `{project}/{profile}` folders so secrets resolve at the environment
+root (or at `?path=` when given) — the natural shape for a single-project store, e.g. one migrated
+from another manager. The profile still names the environment, so profiles stay apart; combining
+`?layout=flat` with a pinned `?env=` collapses them onto one root and is only safe when a single
+profile is resolved against the store.
+
 Values are read with Infisical's secret references expanded, matching its own CLI, so a value of
 `postgres://${DB_USER}@host` arrives resolved.
+
+## Layout: `flat` (0.17+)
+
+:::note[Version compatibility]
+Added in SecretSpec 0.17. `?layout=flat` is not available in SecretSpec 0.16 or earlier.
+:::
+
+`?layout=` is a **general provider setting**, spelled the same way across every provider whose
+store has a hierarchy: Infisical, Vault, OpenBao, AWS Secrets Manager, Google Cloud Secret Manager
+and Azure Key Vault. It controls how SecretSpec's `{project}/{profile}/{key}` naming convention maps onto the
+store:
+
+- **`nested`** (the default) keeps the `secretspec/{project}/{profile}` scaffolding, so many
+  projects and profiles can share one store without colliding. This is the shape SecretSpec creates.
+- **`flat`** drops that scaffolding, so a convention secret is addressed by its **key alone**, at
+  the store root — under any provider-native container (a Vault mount) or user-supplied prefix (an
+  AWS `?prefix=`, an Infisical `?path=`), but with no project/profile segments. This is the natural
+  shape of a **single-project store**, e.g. one migrated from another secret manager where the
+  secrets already live at the root.
+
+Because the flat layout no longer puts the project or profile in a name, those names are
+unconstrained under it. Two caveats follow from addressing by key alone:
+
+- **Profile separation.** Dropping the profile means distinct profiles no longer separate
+  themselves by name. A provider that pins its environment another way (an Infisical `?env=`) can
+  still keep profiles apart, but flat plus such a pin collapses every profile onto one key and gives
+  up profile separation deliberately — only safe when a single profile is ever resolved against the
+  store.
+- **The key must fit the store.** With no `secretspec-` rewriting to fall back on, the key itself
+  must be a legal name in the backend. Azure Key Vault is the strictest: under flat the key is used
+  as the secret name verbatim, so it must match `^[0-9a-zA-Z-]+$` (an underscore, which the nested
+  layout would have Base32-encoded away, is refused).
+
+Providers with no hierarchy (`dotenv`, `env`, `bws`) are already flat and ignore the setting.
+
+An unreadable value (anything but `nested` or `flat`) is refused rather than guessed.
 
 ## Provider Selection
 

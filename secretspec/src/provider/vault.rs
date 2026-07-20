@@ -25,6 +25,8 @@
 //! - `auth` -- `token` (default), `approle`, or `jwt` (0.17+)
 //! - `kv` -- KV engine version: `1` or `2` (default)
 //! - `tls` -- `true` (default) or `false`; the latter is intended for dev mode
+//! - `layout` -- `nested` (default) or `flat`; flat addresses a convention
+//!   secret by its key alone at the mount root (0.17+)
 //! - `role` -- Vault role for JWT auth, falling back to `VAULT_JWT_ROLE` (0.17+)
 //! - `audience` -- audience requested from the CI OIDC issuer, falling back to
 //!   `VAULT_JWT_AUDIENCE` (0.17+)
@@ -43,7 +45,8 @@
 //! # Secret naming
 //!
 //! Convention-addressed secrets live at
-//! `secretspec/{project}/{profile}/{key}` under the configured KV mount. Each
+//! `secretspec/{project}/{profile}/{key}` under the configured KV mount, or --
+//! under `?layout=flat` (0.17+) -- at the `{key}` alone at the mount root. Each
 //! entry is a map whose `value` field contains the SecretSpec value. Native
 //! references name a KV path with `item` and select a map entry with `field`;
 //! they are read-only so changing one field cannot overwrite its siblings.
@@ -217,5 +220,63 @@ mod tests {
         };
         let error = provider.get(Address::Native(&address)).unwrap_err();
         assert!(error.to_string().contains("`version`"), "{error}");
+    }
+
+    /// The flat layout drops the `secretspec/{project}/{profile}` scaffolding,
+    /// so a convention secret is the key itself at the mount root.
+    #[test]
+    fn flat_layout_addresses_the_key_at_the_mount_root() {
+        let provider =
+            VaultProvider::new(config("vault://vault.example.com:8200/secret?layout=flat"));
+        let address = provider
+            .resolve_coords(Address::convention("myapp", "prod", "API_KEY"))
+            .unwrap();
+        assert_eq!(address.item, "API_KEY");
+        assert_eq!(address.field.as_deref(), Some("value"));
+    }
+
+    /// Flat addresses by key alone, so a project or profile that names no path
+    /// segment is not required.
+    #[test]
+    fn flat_layout_does_not_require_project_or_profile() {
+        let provider =
+            VaultProvider::new(config("vault://vault.example.com:8200/secret?layout=flat"));
+        assert_eq!(
+            provider
+                .resolve_coords(Address::convention("", "", "API_KEY"))
+                .unwrap()
+                .item,
+            "API_KEY"
+        );
+    }
+
+    /// `?layout=flat` survives the round-trip through `uri()`, while the
+    /// default nested layout stays unspelled.
+    #[test]
+    fn flat_layout_round_trips_through_uri() {
+        let provider =
+            VaultProvider::new(config("vault://vault.example.com:8200/secret?layout=flat"));
+        let uri = provider.uri();
+        assert!(uri.contains("layout=flat"), "{uri}");
+        assert_eq!(
+            VaultProvider::new(config(&uri))
+                .resolve_coords(Address::convention("myapp", "prod", "API_KEY"))
+                .unwrap()
+                .item,
+            "API_KEY"
+        );
+
+        let nested = VaultProvider::new(config("vault://vault.example.com:8200/secret"));
+        assert!(!nested.uri().contains("layout"), "{}", nested.uri());
+    }
+
+    /// An unreadable layout is refused rather than guessed.
+    #[test]
+    fn unreadable_layout_is_rejected() {
+        let err = VaultConfig::try_from(&ProviderUrl::new(
+            Url::parse("vault://vault.example.com:8200/secret?layout=banana").unwrap(),
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("layout value 'banana'"), "{err}");
     }
 }

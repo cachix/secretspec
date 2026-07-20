@@ -47,7 +47,7 @@
 //! secretspec check --provider awssm://production@us-east-1
 //! ```
 
-use super::{Address, Provider, ProviderUrl};
+use super::{Address, Layout, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use aws_sdk_secretsmanager::Client;
 use aws_sdk_secretsmanager::types::Tag;
@@ -76,6 +76,9 @@ pub struct AwssmConfig {
     /// iteration (and thus `uri()`) is deterministic for the audit log.
     #[serde(default)]
     pub tags: BTreeMap<String, String>,
+    /// How convention secrets map onto secret names (SecretSpec 0.17+).
+    #[serde(default)]
+    pub layout: Layout,
 }
 
 impl TryFrom<&ProviderUrl> for AwssmConfig {
@@ -130,12 +133,17 @@ impl TryFrom<&ProviderUrl> for AwssmConfig {
             )));
         }
 
+        // `layout` is the shared, cross-provider setting, parsed the same way
+        // everywhere; an unreadable value is refused rather than guessed.
+        let layout = url.layout()?;
+
         Ok(Self {
             region,
             aws_profile,
             prefix,
             kms_key_id,
             tags,
+            layout,
         })
     }
 }
@@ -165,32 +173,45 @@ impl AwssmProvider {
 
     /// Formats the secret name for AWS Secrets Manager.
     ///
-    /// Uses the pattern: `[prefix/]secretspec/{project}/{profile}/{key}`
+    /// Under the nested [`Layout`] the pattern is
+    /// `[prefix/]secretspec/{project}/{profile}/{key}`. Under the flat layout
+    /// the `secretspec/{project}/{profile}` scaffolding is dropped, so the name
+    /// is `[prefix/]{key}` -- the shape a store migrated from elsewhere already
+    /// has, with any IAM-scoping prefix still applied.
     fn format_secret_name(
+        layout: Layout,
         prefix: Option<&str>,
         project: &str,
         profile: &str,
         key: &str,
     ) -> Result<String> {
-        if project.is_empty() {
-            return Err(SecretSpecError::ProviderOperationFailed(
-                "project cannot be empty".to_string(),
-            ));
-        }
-        if profile.is_empty() {
-            return Err(SecretSpecError::ProviderOperationFailed(
-                "profile cannot be empty".to_string(),
-            ));
-        }
         if key.is_empty() {
             return Err(SecretSpecError::ProviderOperationFailed(
                 "key cannot be empty".to_string(),
             ));
         }
-
-        let secret_name = match prefix {
-            Some(p) => format!("{}/secretspec/{}/{}/{}", p, project, profile, key),
-            None => format!("secretspec/{}/{}/{}", project, profile, key),
+        let secret_name = if layout == Layout::Flat {
+            // Flat addresses by key alone, so the project and profile that name
+            // no path segment are not required and are not validated.
+            match prefix {
+                Some(p) => format!("{}/{}", p, key),
+                None => key.to_string(),
+            }
+        } else {
+            if project.is_empty() {
+                return Err(SecretSpecError::ProviderOperationFailed(
+                    "project cannot be empty".to_string(),
+                ));
+            }
+            if profile.is_empty() {
+                return Err(SecretSpecError::ProviderOperationFailed(
+                    "profile cannot be empty".to_string(),
+                ));
+            }
+            match prefix {
+                Some(p) => format!("{}/secretspec/{}/{}/{}", p, project, profile, key),
+                None => format!("secretspec/{}/{}/{}", project, profile, key),
+            }
         };
 
         // AWS secret names can be up to 512 characters
@@ -399,7 +420,8 @@ impl AwssmProvider {
 }
 
 impl Provider for AwssmProvider {
-    /// Convention secrets are named `[{prefix}/]secretspec/{project}/{profile}/{key}`.
+    /// Convention secrets are named `[{prefix}/]secretspec/{project}/{profile}/{key}`,
+    /// or `[{prefix}/]{key}` under `?layout=flat`.
     fn convention_address(
         &self,
         project: &str,
@@ -407,7 +429,13 @@ impl Provider for AwssmProvider {
         key: &str,
     ) -> Result<crate::config::NativeAddress> {
         Ok(crate::config::NativeAddress {
-            item: Self::format_secret_name(self.config.prefix.as_deref(), project, profile, key)?,
+            item: Self::format_secret_name(
+                self.config.layout,
+                self.config.prefix.as_deref(),
+                project,
+                profile,
+                key,
+            )?,
             ..Default::default()
         })
     }
@@ -426,6 +454,9 @@ impl Provider for AwssmProvider {
         // Reconstruct every query parameter. `tags` is a BTreeMap, so it
         // iterates in sorted key order and `uri()` is deterministic.
         let mut params: Vec<String> = Vec::new();
+        if self.config.layout == Layout::Flat {
+            params.push("layout=flat".to_string());
+        }
         if let Some(prefix) = &self.config.prefix {
             params.push(format!("prefix={}", ProviderUrl::encode_query(prefix)));
         }
@@ -505,36 +536,57 @@ mod tests {
 
     #[test]
     fn test_format_secret_name() {
-        let name = AwssmProvider::format_secret_name(None, "myapp", "prod", "DB_URL").unwrap();
+        let name =
+            AwssmProvider::format_secret_name(Layout::Nested, None, "myapp", "prod", "DB_URL")
+                .unwrap();
         assert_eq!(name, "secretspec/myapp/prod/DB_URL");
     }
 
     #[test]
     fn test_format_secret_name_with_prefix() {
-        let name =
-            AwssmProvider::format_secret_name(Some("myteam"), "myapp", "prod", "DB_URL").unwrap();
+        let name = AwssmProvider::format_secret_name(
+            Layout::Nested,
+            Some("myteam"),
+            "myapp",
+            "prod",
+            "DB_URL",
+        )
+        .unwrap();
         assert_eq!(name, "myteam/secretspec/myapp/prod/DB_URL");
     }
 
     #[test]
     fn test_format_secret_name_with_nested_prefix() {
-        let name =
-            AwssmProvider::format_secret_name(Some("org/team"), "myapp", "prod", "DB_URL").unwrap();
+        let name = AwssmProvider::format_secret_name(
+            Layout::Nested,
+            Some("org/team"),
+            "myapp",
+            "prod",
+            "DB_URL",
+        )
+        .unwrap();
         assert_eq!(name, "org/team/secretspec/myapp/prod/DB_URL");
     }
 
     #[test]
     fn test_format_secret_name_too_long() {
         let long_key = "A".repeat(500);
-        let result = AwssmProvider::format_secret_name(None, "myapp", "prod", &long_key);
+        let result =
+            AwssmProvider::format_secret_name(Layout::Nested, None, "myapp", "prod", &long_key);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_format_secret_name_empty_inputs() {
-        assert!(AwssmProvider::format_secret_name(None, "", "prod", "KEY").is_err());
-        assert!(AwssmProvider::format_secret_name(None, "proj", "", "KEY").is_err());
-        assert!(AwssmProvider::format_secret_name(None, "proj", "prod", "").is_err());
+        assert!(
+            AwssmProvider::format_secret_name(Layout::Nested, None, "", "prod", "KEY").is_err()
+        );
+        assert!(
+            AwssmProvider::format_secret_name(Layout::Nested, None, "proj", "", "KEY").is_err()
+        );
+        assert!(
+            AwssmProvider::format_secret_name(Layout::Nested, None, "proj", "prod", "").is_err()
+        );
     }
 
     #[test]
@@ -708,5 +760,62 @@ mod tests {
         // The error names both the secret and the key so the user can locate it.
         assert!(msg.contains("is not JSON"), "{msg}");
         assert!(msg.contains("db") && msg.contains("password"), "{msg}");
+    }
+
+    /// Flat drops the `secretspec/{project}/{profile}` scaffolding: a convention
+    /// secret is named by its key alone.
+    #[test]
+    fn flat_layout_names_by_key_alone() {
+        let p = AwssmProvider::new(config("awssm://us-east-1?layout=flat"));
+        assert_eq!(p.config.layout, Layout::Flat);
+        assert_eq!(
+            p.convention_address("myapp", "prod", "DB_URL")
+                .unwrap()
+                .item,
+            "DB_URL"
+        );
+        // Flat needs no project/profile, so neither is validated.
+        assert_eq!(
+            p.convention_address("", "", "DB_URL").unwrap().item,
+            "DB_URL"
+        );
+    }
+
+    /// A user prefix still scopes the name under flat, ahead of the bare key --
+    /// IAM policies keyed on the prefix keep working.
+    #[test]
+    fn flat_layout_keeps_the_user_prefix() {
+        let p = AwssmProvider::new(config("awssm://us-east-1?prefix=myteam&layout=flat"));
+        assert_eq!(
+            p.convention_address("myapp", "prod", "DB_URL")
+                .unwrap()
+                .item,
+            "myteam/DB_URL"
+        );
+    }
+
+    /// `?layout=flat` round-trips through `uri()`; the default nested layout
+    /// stays unspelled.
+    #[test]
+    fn flat_layout_round_trips_through_uri() {
+        let p = AwssmProvider::new(config("awssm://us-east-1?prefix=myteam&layout=flat"));
+        assert_eq!(config(&p.uri()).layout, Layout::Flat);
+        assert!(p.uri().contains("layout=flat"), "{}", p.uri());
+        assert!(
+            !AwssmProvider::new(config("awssm://us-east-1"))
+                .uri()
+                .contains("layout")
+        );
+    }
+
+    /// An unreadable layout is refused rather than guessed.
+    #[test]
+    fn unreadable_layout_is_rejected() {
+        use url::Url;
+        let err = AwssmConfig::try_from(&ProviderUrl::new(
+            Url::parse("awssm://us-east-1?layout=banana").unwrap(),
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("layout value 'banana'"), "{err}");
     }
 }

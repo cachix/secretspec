@@ -1362,3 +1362,80 @@ mod integration_tests {
         );
     }
 }
+
+/// Item names a store may or may not be able to represent, drawn from the
+/// dotenv corruption incident (a dash smuggled in by a `ref` item) plus other
+/// shapes env-style formats reject.
+#[cfg(test)]
+const HOSTILE_ITEMS: &[&str] = &[
+    "CACHIX_SIGNING_KEY_cache-a",
+    "with space",
+    "1LEADING_DIGIT",
+    "dotted.name",
+    "sla/sh",
+    "_VALID_UNDERSCORE",
+    "PLAIN_VALID_1",
+];
+
+/// The write/read symmetry contract every writable provider must keep: a `set`
+/// that reports success is readable back by `get`, and a name the store cannot
+/// represent is rejected up front, never written in a form that breaks later
+/// reads of other secrets. Each provider is free to accept or reject any given
+/// name; what it may not do is accept a write it cannot serve back.
+#[cfg(test)]
+fn assert_write_read_symmetry(provider: &dyn Provider) {
+    use secrecy::ExposeSecret;
+
+    // A convention secret written first must stay readable throughout.
+    provider
+        .set(
+            Address::convention("proj", "default", "KEEP"),
+            &SecretString::new("kept".into()),
+        )
+        .unwrap();
+
+    for item in HOSTILE_ITEMS {
+        let addr = crate::config::NativeAddress {
+            item: (*item).to_string(),
+            ..Default::default()
+        };
+        let wrote = provider
+            .set(Address::Native(&addr), &SecretString::new("v".into()))
+            .is_ok();
+        if wrote {
+            let got = provider.get(Address::Native(&addr)).unwrap();
+            assert_eq!(
+                got.map(|s| s.expose_secret().to_string()),
+                Some("v".to_string()),
+                "provider `{}` accepted a write of `{item}` it cannot read back",
+                provider.name(),
+            );
+        }
+        // Accepted or rejected, the write must not have damaged the store.
+        let kept = provider
+            .get(Address::convention("proj", "default", "KEEP"))
+            .unwrap();
+        assert_eq!(
+            kept.map(|s| s.expose_secret().to_string()),
+            Some("kept".to_string()),
+            "provider `{}`: a write of `{item}` corrupted other secrets",
+            provider.name(),
+        );
+    }
+}
+
+#[test]
+fn dotenv_write_read_symmetry() {
+    use super::dotenv::{DotEnvConfig, DotEnvProvider};
+
+    let dir = TempDir::new().unwrap();
+    let provider = DotEnvProvider::new(DotEnvConfig {
+        path: dir.path().join(".env"),
+    });
+    assert_write_read_symmetry(&provider);
+}
+
+#[test]
+fn mock_provider_write_read_symmetry() {
+    assert_write_read_symmetry(&MockProvider::new());
+}

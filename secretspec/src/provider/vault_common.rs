@@ -204,6 +204,11 @@ impl KvConfig {
                 ))
             })?,
         };
+        // Both CLIs accept an address with a trailing slash. Request paths are
+        // appended below, so retain one separator instead of producing
+        // `//v1/...`, which OpenBao and Vault reject rather than normalize.
+        let endpoint = endpoint.trim_end_matches('/').to_string();
+
         // The provider path identifies only the engine mount. Per-secret KV
         // paths belong to convention coordinates or a secret's `ref`.
         let path = url.path();
@@ -478,9 +483,8 @@ impl KvProvider {
             "secret_id": secret_id,
         });
 
-        let response = reqwest::Client::new()
-            .post(&url)
-            .json(&body)
+        let response = self
+            .build_login_request(&url, &body)?
             .send()
             .await
             .map_err(|error| {
@@ -531,9 +535,8 @@ impl KvProvider {
             "role": role,
             "jwt": jwt.expose_secret(),
         });
-        let response = reqwest::Client::new()
-            .post(&url)
-            .json(&body)
+        let response = self
+            .build_login_request(&url, &body)?
             .send()
             .await
             .map_err(|error| {
@@ -623,18 +626,40 @@ impl KvProvider {
         Ok(SecretString::new(jwt.to_string().into()))
     }
 
+    /// Builds an authentication request in the provider's configured namespace.
+    ///
+    /// Auth methods are mounted inside a namespace just like secrets engines,
+    /// so their login exchanges need `X-Vault-Namespace` before a client token
+    /// exists. Both products retain that wire name for protocol compatibility.
+    fn build_login_request(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+    ) -> Result<reqwest::RequestBuilder> {
+        Ok(reqwest::Client::new()
+            .post(url)
+            .headers(self.build_namespace_headers()?)
+            .json(body))
+    }
+
     /// Builds headers shared by authenticated Vault-compatible API requests.
     ///
     /// OpenBao intentionally retains the `X-Vault-*` wire names for protocol
     /// compatibility; using them does not collapse its provider identity.
     fn build_headers(&self, token: &SecretString) -> Result<HeaderMap> {
-        let mut headers = HeaderMap::new();
+        let mut headers = self.build_namespace_headers()?;
         headers.insert(
             "X-Vault-Token",
             HeaderValue::from_str(token.expose_secret()).map_err(|error| {
                 SecretSpecError::ProviderOperationFailed(format!("Invalid token value: {error}"))
             })?,
         );
+        Ok(headers)
+    }
+
+    /// Builds the namespace header used by login and authenticated requests.
+    fn build_namespace_headers(&self) -> Result<HeaderMap> {
+        let mut headers = HeaderMap::new();
         if let Some(namespace) = &self.config.namespace {
             headers.insert(
                 "X-Vault-Namespace",
@@ -770,6 +795,12 @@ impl KvProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::EnvVarGuard;
+    use url::Url;
+
+    fn provider_url(spec: &str) -> ProviderUrl {
+        ProviderUrl::new(Url::parse(spec).unwrap())
+    }
 
     #[test]
     fn openbao_environment_names_separate_cli_and_secretspec_conventions() {
@@ -803,6 +834,62 @@ mod tests {
         assert_eq!(
             Product::OpenBao.jwt_audience_envs(),
             &["BAO_JWT_AUDIENCE", "VAULT_JWT_AUDIENCE"]
+        );
+    }
+
+    #[test]
+    fn environment_addresses_drop_trailing_slashes_before_request_paths_are_appended() {
+        let _lock = crate::tests::scrub_resolution_env();
+
+        {
+            let _bao_addr = EnvVarGuard::set("BAO_ADDR", "http://127.0.0.1:8200/");
+            let _vault_addr = EnvVarGuard::remove("VAULT_ADDR");
+            let config = KvConfig::parse(&provider_url("openbao://"), Product::OpenBao).unwrap();
+            let provider = KvProvider::new(config, Product::OpenBao);
+            assert_eq!(
+                provider.build_url("app/config"),
+                "http://127.0.0.1:8200/v1/secret/data/app/config"
+            );
+        }
+
+        {
+            let _vault_addr = EnvVarGuard::set("VAULT_ADDR", "http://127.0.0.1:8200///");
+            let config = KvConfig::parse(&provider_url("vault://"), Product::Vault).unwrap();
+            let provider = KvProvider::new(config, Product::Vault);
+            assert_eq!(
+                provider.build_url("app/config"),
+                "http://127.0.0.1:8200/v1/secret/data/app/config"
+            );
+        }
+    }
+
+    #[test]
+    fn login_requests_include_the_configured_namespace() {
+        let provider = KvProvider::new(
+            KvConfig {
+                endpoint: "https://bao.example.com:8200".to_string(),
+                namespace: Some("team-a".to_string()),
+                ..Default::default()
+            },
+            Product::OpenBao,
+        );
+        let request = provider
+            .build_login_request(
+                "https://bao.example.com:8200/v1/auth/approle/login",
+                &serde_json::json!({ "role_id": "role", "secret_id": "secret" }),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            request
+                .headers()
+                .get("X-Vault-Namespace")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "team-a"
         );
     }
 }

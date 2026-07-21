@@ -1373,3 +1373,67 @@ mod provider_credentials_tests {
         );
     }
 }
+
+/// Property tests for the URI encoding every provider's `uri()` runs through.
+///
+/// `QUERY_ENCODE_SET` states its own contract: it "makes `ProviderUrl::encode_query`
+/// a true inverse of that parsing, so query values round-trip". That is a claim
+/// about every string, checked today against one hand-written value in one
+/// provider's tests. These quantify it.
+#[cfg(test)]
+mod encoding_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Reads a query value back the way a provider's `TryFrom` does.
+    fn query_value_of(uri: &str, key: &str) -> Option<String> {
+        let url = ProviderUrl::new(Url::parse(uri).ok()?);
+        url.query_pairs()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.into_owned())
+    }
+
+    proptest! {
+        /// A query value survives `encode_query` -> parse unchanged.
+        ///
+        /// The characters that break this are the ones form-urlencoded parsing
+        /// claims: `&` splits a pair, `+` becomes a space, `%` starts an escape,
+        /// `#` ends the query. Each silently truncates or mangles a value rather
+        /// than failing, so the store a provider ends up talking to is not the
+        /// one the URI named.
+        #[test]
+        fn encode_query_round_trips(value in ".*") {
+            let uri = format!("keyring://?v={}", ProviderUrl::encode_query(&value));
+            let decoded = query_value_of(&uri, "v");
+            prop_assert_eq!(
+                decoded.as_deref(),
+                Some(value.as_str()),
+                "value {:?} did not survive the round-trip through {:?}",
+                value,
+                uri,
+            );
+        }
+
+        /// Encoding is deterministic: the same value always encodes the same
+        /// way, so a `uri()` rendering is stable across runs (it lands in audit
+        /// records, which are compared).
+        #[test]
+        fn encode_query_is_deterministic(value in ".*") {
+            prop_assert_eq!(
+                ProviderUrl::encode_query(&value),
+                ProviderUrl::encode_query(&value),
+            );
+        }
+
+        /// An encoded value never carries a character that would end the query
+        /// or start a new pair, whatever went in.
+        #[test]
+        fn encoded_values_are_query_safe(value in ".*") {
+            let encoded = ProviderUrl::encode_query(&value);
+            prop_assert!(
+                !encoded.contains('&') && !encoded.contains('#') && !encoded.contains('+'),
+                "encoded {encoded:?} still carries a query-structural character",
+            );
+        }
+    }
+}

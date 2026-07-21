@@ -13,7 +13,7 @@ The Vault provider integrates with HashiCorp Vault and OpenBao for centralized s
 | URI | `vault://[namespace@]host[:port][/mount][?options]` |
 | Access | Read and write; secret references are read-only |
 | Best for | Self-managed, policy-controlled secret infrastructure |
-| Authentication | Token or AppRole |
+| Authentication | Token or AppRole; JWT/OIDC (0.17+) |
 | Build feature | `vault` |
 | Default storage | KV path `secretspec/{project}/{profile}/{key}`, field `value` |
 
@@ -70,6 +70,19 @@ secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "vault-a
 
 SecretSpec 0.14 supports only `VAULT_ROLE_ID` and `VAULT_SECRET_ID`.
 
+### JWT / OIDC authentication (0.17+)
+
+:::note[Version compatibility]
+Added in SecretSpec 0.17.
+:::
+
+Select JWT with `?auth=jwt` and a `role`. The provider performs the `auth/jwt/login` exchange itself. The JWT comes from `VAULT_JWT` when set. Otherwise, in a GitHub Actions or Forgejo job with `id-token: write`, the provider mints one from the runner's OIDC identity, so CI stores no static secret.
+
+Both `role` and `audience` accept a URI query parameter or an environment variable:
+
+- `?role=` or `VAULT_JWT_ROLE` (required)
+- `?audience=` or `VAULT_JWT_AUDIENCE`, matched against the role's `bound_audiences`
+
 ## Configuration
 
 ### URI format
@@ -83,6 +96,9 @@ openbao://[namespace@]host[:port][/mount][?key=value&...]
 - `mount`: KV engine mount path (default: `secret`)
 - `namespace@`: Optional Vault namespace (also reads `VAULT_NAMESPACE` env var)
 - `?auth=approle`: Use AppRole authentication (default: `token`)
+- `?auth=jwt` (0.17+): Use JWT/OIDC authentication (requires `?role=`)
+- `?role=` (0.17+): Vault role for JWT auth (or `VAULT_JWT_ROLE`)
+- `?audience=` (0.17+): OIDC token audience for JWT auth (or `VAULT_JWT_AUDIENCE`)
 - `?kv=1`: Use KV v1 engine (default: v2)
 - `?tls=false`: Disable TLS (for development servers)
 
@@ -92,6 +108,8 @@ openbao://[namespace@]host[:port][/mount][?key=value&...]
 vault://vault.example.com:8200/secret
 vault://team-a@vault.example.com:8200/secret
 vault://vault.example.com:8200/secret?auth=approle
+# SecretSpec 0.17+
+vault://vault.example.com:8200/secret?auth=jwt&role=ci
 openbao://bao.internal:8200/secret
 ```
 
@@ -132,12 +150,22 @@ a `providers` entry with the mount in the URI.
 
 ## CI/CD
 
-AppRole avoids relying on a user token in deployment environments:
+SecretSpec 0.16 can use AppRole to keep a user token out of the environment by
+logging in from `VAULT_ROLE_ID` and `VAULT_SECRET_ID`:
 
 ```bash
 $ export VAULT_ROLE_ID="$CI_VAULT_ROLE_ID"
 $ export VAULT_SECRET_ID="$CI_VAULT_SECRET_ID"
-$ secretspec run --provider "vault://vault.example.com:8200/secret?auth=approle" -- deploy
+$ secretspec export --format gha --provider "vault://vault.example.com:8200/secret?auth=approle"
+```
+
+SecretSpec 0.17 ships a tokenless JWT/OIDC path, avoiding a static credential in
+the CI platform. Under GitHub Actions or Forgejo Actions with `id-token: write`,
+the provider mints the job's OIDC token and logs in with a `role` bound to the
+workflow's claims:
+
+```bash
+$ secretspec export --format gha --provider "vault://vault.example.com:8200/secret?auth=jwt&role=ci"
 ```
 
 ## Advanced configuration

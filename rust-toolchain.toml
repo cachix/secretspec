@@ -7,6 +7,13 @@
 [toolchain]
 channel = "1.92.0"
 # musl targets for the fully-static Go SDK binary (-tags static + -extldflags
-# -static, built in the SDKs/go-static workflows). rustup reads these on the
-# native runners; devenv reads them via toolchainFile.
-targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]
+# -static, built in the SDKs/go-static workflows). The windows-gnu target
+# feeds the MinGW-linked staticlib that the Ruby gem and Haskell SDK embed on
+# Windows (RubyInstaller's devkit and GHC both link with a MinGW toolchain,
+# which cannot consume MSVC archives). rustup reads these on the native
+# runners; devenv reads them via toolchainFile.
+targets = [
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "x86_64-pc-windows-gnu",
+]

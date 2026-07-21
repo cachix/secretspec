@@ -150,19 +150,26 @@ awssm://                      # SDK default region and credentials
 
 ## Vault / OpenBao Provider
 
-**URI**: `vault://[namespace@]host[:port][/mount]` or `openbao://[namespace@]host[:port][/mount]` - Stores secrets in HashiCorp Vault or OpenBao KV engine
+**URI**: `vault://[namespace@]host[:port][/mount][?options]` or `openbao://[namespace@]host[:port][/mount][?options]` - Stores secrets in HashiCorp Vault or OpenBao KV engine
+
+:::note[Version compatibility]
+Added in SecretSpec 0.17.
+:::
 
 ```bash
 vault://vault.example.com:8200/secret       # KV v2 at "secret" mount
 vault://vault.example.com:8200              # Default "secret" mount
 vault://ns1@vault.example.com:8200/secret   # With namespace
 openbao://bao.internal:8200/secret          # OpenBao server
+vault://vault.example.com:8200/secret?auth=approle
+# SecretSpec 0.17+
+vault://vault.example.com:8200/secret?auth=jwt&role=ci
 vault://127.0.0.1:8200/secret?kv=1         # KV v1 engine
 vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
 ```
 
-**Features**: Read/write, KV v1 and v2, namespaces, OpenBao compatible
-**Prerequisites**: Vault/OpenBao server, `VAULT_TOKEN` env var or `~/.vault-token`, build with `--features vault`
+**Features**: Read/write, KV v1 and v2, namespaces, OpenBao compatible; token and AppRole authentication; JWT/OIDC authentication (0.17+)
+**Prerequisites**: Vault/OpenBao server, authentication credentials, build with `--features vault`
 **Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
 
 ## Bitwarden Secrets Manager Provider
@@ -199,7 +206,9 @@ akv://myvault?suffix=vault.azure.cn      # Sovereign cloud (explicit suffix, bar
 **Prerequisites**: An Azure Key Vault instance, authenticated via one of the methods above, build with `--features akv`
 **Storage**: Secret name `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}` (lowercase, unpadded Base32 preserves case and punctuation distinctions within Azure's case-insensitive secret-name namespace)
 
-## Infisical Provider (0.16+)
+## Infisical Provider
+
+Available since SecretSpec 0.16.
 
 **URI**: `infisical://[HOST]/PROJECT_ID[?env=SLUG][&path=/PREFIX][&tls=false]` - Stores secrets in Infisical
 
@@ -265,4 +274,4 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Vault/OpenBao | ✅ Vault encryption | Vault/OpenBao server | ✅ Yes |
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
-| Infisical (0.16+) | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |
+| Infisical | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |

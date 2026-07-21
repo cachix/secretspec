@@ -102,3 +102,26 @@ Because the resolver is linked or embedded directly, the SDKs do not depend on a
 separately installed `cdylib` or an `LD_LIBRARY_PATH`/`SECRETSPEC_FFI_LIB`
 override at runtime — the one exception being PHP's optional `ext-ffi` fallback,
 where `SECRETSPEC_FFI_LIB` can point at a specific library build.
+
+## Platform support
+
+Prebuilt packages cover the following platforms. Windows support for the
+Python wheel, the Ruby gem, and the PHP extension binaries targets SecretSpec
+0.17 and is not available in the current release.
+
+| SDK | Linux x64 | Linux arm64 | macOS Intel | macOS Apple silicon | Windows x64 | Windows arm64 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Rust (source crate) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Python | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
+| Node.js | ✓ | ✓ | — | ✓ | ✓ | — |
+| Go | ✓ | ✓ | — | ✓ | ✓ | — |
+| Ruby | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
+| C# | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| PHP | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
+| Haskell (source) | ✓ | — | — | — | ✓ (0.17+) | — |
+
+Most Linux packages build against a manylinux_2_28 baseline (glibc 2.28 or
+newer); the C# package additionally ships musl Linux assets. Hackage
+distributes the Haskell SDK as source, so its row records the platforms CI
+builds and tests. Contributors: the [SDK development](/development/sdks) page
+documents how these artifacts are built and how to add a platform.

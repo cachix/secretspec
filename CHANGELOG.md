@@ -5,7 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [Unreleased]
+
+### Added
+- Vault / OpenBao JWT/OIDC authentication (`?auth=jwt`) logs in through a
+  configured Vault role using `VAULT_JWT`, or requests a short-lived OIDC token
+  automatically in GitHub Actions and Forgejo Actions jobs with `id-token:
+  write`. The role and optional audience can be set in the provider URI or with
+  `VAULT_JWT_ROLE` and `VAULT_JWT_AUDIENCE`.
+- The Python SDK now publishes a Windows x64 wheel to PyPI, so
+  `pip install secretspec` and `uv add secretspec` work on Windows.
+  ([#177](https://github.com/cachix/secretspec/issues/177))
+- The Ruby SDK now publishes a Windows gem (`x64-mingw-ucrt`) to RubyGems, so
+  `gem install secretspec` works with RubyInstaller on Windows.
+- The PHP SDK now publishes prebuilt Windows x64 extension binaries
+  (`secretspec-php-native-<php>-nts-x86_64-pc-windows-msvc.dll`) alongside the
+  Linux and macOS builds on each release.
+
+### Changed
+- Secret status output now emphasizes secret names, de-emphasizes descriptions,
+  and omits placeholder text when a description is unavailable, making long
+  `check` and `import` results easier to scan.
+  ([#139](https://github.com/cachix/secretspec/issues/139))
 
 ### Fixed
 - The dotenv provider rejects variable names its parser cannot read back

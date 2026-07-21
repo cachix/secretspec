@@ -21,5 +21,8 @@ path = "native/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-ext-php-rs = "0.13"
+# 0.15+: the 0.13 series leaves Zend data symbols (zend_ce_*,
+# zend_string_init_interned) without dllimport linkage on Windows, which
+# fails the MSVC link of the extension DLL.
+ext-php-rs = "0.15"
 secretspec = { workspace = true }

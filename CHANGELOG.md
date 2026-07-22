@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The `required` field accepts `at_least_one` and `exactly_one` group tables,
+  supporting overlapping alternative and mutually exclusive credentials
+  across `check`, `run`, and SDK resolution.
 - Vault / OpenBao JWT/OIDC authentication (`?auth=jwt`) logs in through a
   configured Vault role using `VAULT_JWT`, or requests a short-lived OIDC token
   automatically in GitHub Actions and Forgejo Actions jobs with `id-token:

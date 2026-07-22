@@ -289,6 +289,28 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
             );
             if let Some(required) = secret_config.required {
                 inline.insert("required", Value::from(required));
+            } else if secret_config.at_least_one.is_some() || secret_config.exactly_one.is_some() {
+                let mut groups = InlineTable::new();
+                for (name, memberships) in [
+                    ("at_least_one", &secret_config.at_least_one),
+                    ("exactly_one", &secret_config.exactly_one),
+                ] {
+                    let Some(memberships) = memberships else {
+                        continue;
+                    };
+                    let value = match memberships.as_slice() {
+                        [membership] => Value::from(membership.as_str()),
+                        memberships => {
+                            let mut array = Array::new();
+                            for membership in memberships {
+                                array.push(membership.as_str());
+                            }
+                            Value::Array(array)
+                        }
+                    };
+                    groups.insert(name, value);
+                }
+                inline.insert("required", Value::InlineTable(groups));
             }
             if let Some(default) = &secret_config.default {
                 inline.insert("default", Value::from(default.as_str()));
@@ -1261,6 +1283,33 @@ mod tests {
         let out = generate_toml_with_comments(&config_with_secret(secret)).unwrap();
         assert!(out.contains(", required = false"), "got: {out}");
         assert!(out.contains(", default = \"v\""), "got: {out}");
+    }
+
+    #[test]
+    fn generate_toml_emits_grouped_requiredness() {
+        let secret = Secret {
+            description: Some("desc".to_string()),
+            at_least_one: Some(vec!["auth".to_string(), "deploy".to_string()]),
+            exactly_one: Some(vec!["identity".to_string()]),
+            ..Default::default()
+        };
+        let out = generate_toml_with_comments(&config_with_secret(secret)).unwrap();
+        assert!(
+            out.contains(
+                "required = { at_least_one = [\"auth\", \"deploy\"], exactly_one = \"identity\" }"
+            ),
+            "got: {out}"
+        );
+        let parsed: Config = toml::from_str(&out).expect("must round-trip");
+        let secret = &parsed.profiles["default"].secrets["S"];
+        assert_eq!(
+            secret.at_least_one.as_deref(),
+            Some(["auth".to_string(), "deploy".to_string()].as_slice())
+        );
+        assert_eq!(
+            secret.exactly_one.as_deref(),
+            Some(["identity".to_string()].as_slice())
+        );
     }
 
     #[test]

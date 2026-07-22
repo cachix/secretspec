@@ -17,7 +17,7 @@
 //!
 //! # URI Format
 //!
-//! `infisical://[host]/{project-id}[?env=slug&path=/prefix&tls=false]`
+//! `infisical://[host]/{project-id}[?env=slug&path=/prefix&layout=flat&tls=false]`
 //!
 //! The project is Infisical's own project UUID; its v4 API does not accept a
 //! project slug. Query parameters:
@@ -26,8 +26,10 @@
 //!   environment, so a `production` profile reads Infisical's `production`
 //!   environment. Set it to read every profile from one environment, e.g. an
 //!   instance whose environments do not correspond to profiles.
-//! - `path` -- folder prefix holding SecretSpec's secrets (default:
-//!   `/secretspec`).
+//! - `path` -- folder prefix holding SecretSpec's secrets. Defaults to
+//!   `/secretspec` under the nested layout and to the environment root (`/`)
+//!   under the flat one.
+//! - `layout` -- `nested` (default) or `flat`; see [Secret Naming](#secret-naming).
 //! - `tls` -- enable TLS: `true` (default) or `false`, for self-hosted
 //!   instances served over plain HTTP.
 //!
@@ -43,8 +45,9 @@
 //!
 //! # Secret Naming
 //!
-//! A secret lives at the folder `{path}/{project}/{profile}` in the
-//! environment named by the profile, under the key itself:
+//! Under the default **nested** layout a secret lives at the folder
+//! `{path}/{project}/{profile}` in the environment named by the profile, under
+//! the key itself:
 //!
 //! ```text
 //! project "myapp", profile "prod", key "DATABASE_URL"
@@ -57,6 +60,25 @@
 //! `?env=` moves every profile into one environment without two of them
 //! landing on the same secret.
 //!
+//! The **flat** layout (`?layout=flat`) drops the `{project}/{profile}`
+//! scaffolding, so a secret sits directly at the folder prefix -- the
+//! environment root by default, or `{path}` when one is given:
+//!
+//! ```text
+//! project "myapp", profile "prod", key "DATABASE_URL", layout flat
+//!   -> environment prod
+//!      secretPath  /
+//!      secretKey   DATABASE_URL
+//! ```
+//!
+//! This is the shape a single-project store already has -- a store migrated
+//! from another manager, say -- where SecretSpec's namespace folders would only
+//! be in the way. The profile still names the environment, so distinct profiles
+//! stay apart. But pinning `?env=` under a flat layout collapses every profile
+//! onto one environment root, so they share a key: that combination gives up
+//! profile separation deliberately, and is only safe when a single profile is
+//! ever resolved against the store.
+//!
 //! Keys are stored verbatim: Infisical imposes no charset of its own, so no
 //! rewriting is needed and distinct keys cannot collide. Folder names are
 //! narrower, so a project or profile Infisical cannot spell is refused rather
@@ -66,7 +88,7 @@
 //! Infisical's own precedence: a secret defined directly in the folder wins
 //! over an imported one, and a later import wins over an earlier one.
 
-use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
+use super::{Address, Layout, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use reqwest::StatusCode;
@@ -75,8 +97,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-/// Default folder prefix holding SecretSpec's secrets.
+/// Default folder prefix holding SecretSpec's secrets under the nested layout.
 const DEFAULT_PATH: &str = "/secretspec";
+/// The environment root, which is where the flat layout defaults its prefix.
+const ROOT_PATH: &str = "/";
 /// Infisical Cloud's US host, used when neither the URI nor the environment
 /// names one.
 const DEFAULT_HOST: &str = "app.infisical.com";
@@ -94,6 +118,27 @@ const INFISICAL_TOKEN_ENV: &str = "INFISICAL_TOKEN";
 /// self-hosted setup, configured with the legacy one, to US Cloud.
 const INFISICAL_DOMAIN_ENVS: [&str; 2] = ["INFISICAL_DOMAIN", "INFISICAL_API_URL"];
 
+/// The folder prefix used when the URI names none: the `/secretspec` namespace
+/// container under the nested [`Layout`], and the environment root under the
+/// flat one. The layout is the shared, cross-provider setting; this is how
+/// Infisical maps it onto its own default folder.
+fn default_path(layout: Layout) -> &'static str {
+    match layout {
+        Layout::Nested => DEFAULT_PATH,
+        Layout::Flat => ROOT_PATH,
+    }
+}
+
+/// Joins an absolute folder prefix and a key into a secret path, without
+/// doubling the separator when the prefix is the root.
+fn join_prefix(path: &str, key: &str) -> String {
+    if path == ROOT_PATH {
+        format!("/{key}")
+    } else {
+        format!("{path}/{key}")
+    }
+}
+
 /// Configuration for the Infisical provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InfisicalConfig {
@@ -105,6 +150,9 @@ pub struct InfisicalConfig {
     pub environment: Option<String>,
     /// Folder prefix holding SecretSpec's secrets.
     pub path: String,
+    /// How a convention address maps onto Infisical's folders.
+    #[serde(default)]
+    pub layout: Layout,
 }
 
 impl Default for InfisicalConfig {
@@ -114,6 +162,7 @@ impl Default for InfisicalConfig {
             project_id: String::new(),
             environment: None,
             path: DEFAULT_PATH.to_string(),
+            layout: Layout::Nested,
         }
     }
 }
@@ -230,6 +279,12 @@ impl TryFrom<&ProviderUrl> for InfisicalConfig {
 
         let environment = url.query_value("env").filter(|s| !s.is_empty());
 
+        // `layout` is the shared, cross-provider setting, parsed the same way
+        // everywhere; an unreadable value is refused rather than guessed.
+        let layout = url.layout()?;
+
+        // The default prefix follows the layout: `/secretspec` namespaces the
+        // nested layout, while the flat one sits at the environment root.
         let path = match url.query_value("path").filter(|s| !s.is_empty()) {
             Some(p) => {
                 let trimmed = p.trim_end_matches('/');
@@ -239,7 +294,7 @@ impl TryFrom<&ProviderUrl> for InfisicalConfig {
                     format!("/{trimmed}")
                 }
             }
-            None => DEFAULT_PATH.to_string(),
+            None => default_path(layout).to_string(),
         };
 
         Ok(Self {
@@ -247,6 +302,7 @@ impl TryFrom<&ProviderUrl> for InfisicalConfig {
             project_id,
             environment,
             path,
+            layout,
         })
     }
 }
@@ -896,6 +952,17 @@ impl Provider for InfisicalProvider {
                  move the secret to another folder."
             )));
         }
+
+        // The flat layout drops the `{project}/{profile}` folders, so the
+        // secret sits at the prefix itself and neither name reaches a folder --
+        // the folder-spelling rule below has nothing to constrain.
+        if self.config.layout == Layout::Flat {
+            return Ok(NativeAddress {
+                item: join_prefix(&self.config.path, key),
+                ..Default::default()
+            });
+        }
+
         // The project and profile each name a folder, and Infisical spells
         // folder names in a narrower alphabet than keys. Rewriting a name to
         // fit would let two projects share a folder, so an unspellable one is
@@ -944,7 +1011,12 @@ impl Provider for InfisicalProvider {
         if let Some(env) = &self.config.environment {
             query.push(format!("env={}", ProviderUrl::encode_query(env)));
         }
-        if self.config.path != DEFAULT_PATH {
+        if self.config.layout == Layout::Flat {
+            query.push("layout=flat".to_string());
+        }
+        // A prefix equal to the layout's own default reads back the same
+        // without being spelled, so only a divergent one is rendered.
+        if self.config.path != default_path(self.config.layout) {
             query.push(format!(
                 "path={}",
                 ProviderUrl::encode_query(&self.config.path)
@@ -1146,6 +1218,146 @@ mod tests {
             err.to_string().contains("cannot name an Infisical folder"),
             "{err}"
         );
+    }
+
+    /// The flat layout defaults its prefix to the environment root, so a
+    /// convention secret sits there with no `{project}/{profile}` folders.
+    #[test]
+    fn flat_layout_addresses_the_root() {
+        let c = config(&format!(
+            "infisical://app.infisical.com/{PROJECT}?layout=flat"
+        ));
+        assert_eq!(c.layout, Layout::Flat);
+        assert_eq!(c.path, "/");
+
+        let p = InfisicalProvider::new(c);
+        assert_eq!(
+            p.convention_address("myapp", "prod", "API_KEY")
+                .unwrap()
+                .item,
+            "/API_KEY"
+        );
+        let loc = p
+            .locate(Address::convention("myapp", "prod", "API_KEY"))
+            .unwrap();
+        assert_eq!(loc.secret_path, "/");
+        assert_eq!(loc.environment, "prod");
+        assert_eq!(loc.key, "API_KEY");
+    }
+
+    /// An explicit `?path=` under the flat layout is honored as the prefix,
+    /// still with no `{project}/{profile}` scaffolding.
+    #[test]
+    fn flat_layout_honors_an_explicit_prefix() {
+        let p = provider(&format!(
+            "infisical://app.infisical.com/{PROJECT}?layout=flat&path=/team"
+        ));
+        assert_eq!(
+            p.convention_address("myapp", "prod", "API_KEY")
+                .unwrap()
+                .item,
+            "/team/API_KEY"
+        );
+        let loc = p
+            .locate(Address::convention("myapp", "prod", "API_KEY"))
+            .unwrap();
+        assert_eq!(loc.secret_path, "/team");
+        assert_eq!(loc.key, "API_KEY");
+    }
+
+    /// The flat layout puts neither project nor profile in a folder, so a name
+    /// Infisical could not spell as a folder is no longer constrained.
+    #[test]
+    fn flat_layout_does_not_constrain_project_or_profile_names() {
+        let p = provider(&format!(
+            "infisical://app.infisical.com/{PROJECT}?layout=flat"
+        ));
+        assert_eq!(
+            p.convention_address("my.app", "my.profile", "API_KEY")
+                .unwrap()
+                .item,
+            "/API_KEY"
+        );
+    }
+
+    /// A key carrying a separator is still refused under the flat layout: it
+    /// would move the secret to another folder.
+    #[test]
+    fn flat_layout_still_rejects_a_key_with_a_slash() {
+        let p = provider(&format!(
+            "infisical://app.infisical.com/{PROJECT}?layout=flat"
+        ));
+        let err = p.convention_address("myapp", "prod", "a/b").unwrap_err();
+        assert!(err.to_string().contains("move the secret"), "{err}");
+    }
+
+    /// Flat without `?env=` still lets the profile name the environment, so
+    /// distinct profiles stay apart even sharing the root and key.
+    #[test]
+    fn flat_layout_separates_profiles_by_environment() {
+        let p = provider(&format!(
+            "infisical://app.infisical.com/{PROJECT}?layout=flat"
+        ));
+        let dev = p
+            .locate(Address::convention("myapp", "dev", "API_KEY"))
+            .unwrap();
+        let prod = p
+            .locate(Address::convention("myapp", "prod", "API_KEY"))
+            .unwrap();
+        assert_eq!(
+            (dev.secret_path.as_str(), dev.key.as_str()),
+            ("/", "API_KEY")
+        );
+        assert_eq!(
+            (prod.secret_path.as_str(), prod.key.as_str()),
+            ("/", "API_KEY")
+        );
+        // Same root and key, but different environments keep them apart.
+        assert_eq!(dev.environment, "dev");
+        assert_eq!(prod.environment, "prod");
+    }
+
+    /// Flat plus a pinned `?env=` collapses every profile onto one environment
+    /// root and key -- the deliberate "no profile separation" mode.
+    #[test]
+    fn flat_layout_with_pinned_env_collapses_profiles() {
+        let p = provider(&format!(
+            "infisical://app.infisical.com/{PROJECT}?layout=flat&env=prod"
+        ));
+        let dev = p
+            .locate(Address::convention("myapp", "dev", "API_KEY"))
+            .unwrap();
+        let prod = p
+            .locate(Address::convention("myapp", "prod", "API_KEY"))
+            .unwrap();
+        assert_eq!(dev.environment, prod.environment);
+        assert_eq!(dev.secret_path, prod.secret_path);
+        assert_eq!(dev.key, prod.key);
+    }
+
+    /// The default and explicit nested layout are the same store, and neither
+    /// touches the flat behavior.
+    #[test]
+    fn nested_layout_is_the_default() {
+        let default = config(&format!("infisical://app.infisical.com/{PROJECT}"));
+        let explicit = config(&format!(
+            "infisical://app.infisical.com/{PROJECT}?layout=nested"
+        ));
+        assert_eq!(default.layout, Layout::Nested);
+        assert_eq!(explicit.layout, Layout::Nested);
+        assert_eq!(default.path, "/secretspec");
+        assert_eq!(explicit.path, "/secretspec");
+    }
+
+    /// An unreadable `layout` is refused rather than silently meaning one of
+    /// its two values, exactly like `tls`.
+    #[test]
+    fn unreadable_layout_is_rejected() {
+        let err = InfisicalConfig::try_from(&ProviderUrl::new(
+            Url::parse(&format!("infisical://host/{PROJECT}?layout=banana")).unwrap(),
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("layout value 'banana'"), "{err}");
     }
 
     /// A ref names a folder and key; Infisical values have no components, so
@@ -1380,6 +1592,11 @@ mod tests {
             format!("infisical://app.infisical.com/{PROJECT}"),
             format!("infisical://app.infisical.com/{PROJECT}?env=prod"),
             format!("infisical://app.infisical.com/{PROJECT}?env=prod&path=/team"),
+            // Flat at the root renders `layout=flat` but suppresses the default
+            // `path=/`; an explicit prefix under flat renders both.
+            format!("infisical://app.infisical.com/{PROJECT}?layout=flat"),
+            format!("infisical://app.infisical.com/{PROJECT}?layout=flat&path=/team"),
+            format!("infisical://app.infisical.com/{PROJECT}?env=prod&layout=flat"),
             format!("infisical://localhost:8080/{PROJECT}?tls=false"),
             format!("infisical://localhost:8080/{PROJECT}?env=dev&tls=false"),
         ] {

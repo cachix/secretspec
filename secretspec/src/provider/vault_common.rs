@@ -4,7 +4,7 @@
 //! configuration conventions. This module contains only the compatible KV,
 //! authentication-exchange, and HTTP mechanics used by both providers.
 
-use super::{Address, ProviderCredentials, ProviderUrl, credential_or_envs, preferred_env};
+use super::{Address, Layout, ProviderCredentials, ProviderUrl, credential_or_envs, preferred_env};
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -147,6 +147,9 @@ pub(crate) struct KvConfig {
     pub(crate) role: Option<String>,
     /// Audience requested when SecretSpec mints a CI OIDC token.
     pub(crate) audience: Option<String>,
+    /// How convention secrets map onto KV paths (SecretSpec 0.17+).
+    #[serde(default)]
+    pub(crate) layout: Layout,
 }
 
 impl Default for KvConfig {
@@ -159,6 +162,7 @@ impl Default for KvConfig {
             auth: AuthMethod::default(),
             role: None,
             audience: None,
+            layout: Layout::Nested,
         }
     }
 }
@@ -323,6 +327,10 @@ impl KvConfig {
             )));
         }
 
+        // `layout` is the shared, cross-provider setting, parsed the same way
+        // everywhere; an unreadable value is refused rather than guessed.
+        let layout = url.layout()?;
+
         Ok(Self {
             endpoint,
             mount,
@@ -331,6 +339,7 @@ impl KvConfig {
             auth,
             role,
             audience,
+            layout,
         })
     }
 }
@@ -363,12 +372,31 @@ impl KvProvider {
     ///
     /// Storing one value per path makes convention writes safe: unlike a native
     /// multi-field KV entry, no unrelated fields can be overwritten.
+    ///
+    /// Under the nested [`Layout`] the path is
+    /// `secretspec/{project}/{profile}/{key}`. Under the flat layout the
+    /// scaffolding is dropped and the secret is the `key` itself at the mount
+    /// root -- the shape a store migrated from elsewhere already has.
     pub(crate) fn convention_address(
         &self,
         project: &str,
         profile: &str,
         key: &str,
     ) -> Result<NativeAddress> {
+        if key.is_empty() {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "key cannot be empty".to_string(),
+            ));
+        }
+        // Flat addresses by key alone, so the project and profile that name no
+        // path segment are not required and are not validated.
+        if self.config.layout == Layout::Flat {
+            return Ok(NativeAddress {
+                item: key.to_string(),
+                field: Some("value".to_string()),
+                ..Default::default()
+            });
+        }
         if project.is_empty() {
             return Err(SecretSpecError::ProviderOperationFailed(
                 "project cannot be empty".to_string(),
@@ -377,11 +405,6 @@ impl KvProvider {
         if profile.is_empty() {
             return Err(SecretSpecError::ProviderOperationFailed(
                 "profile cannot be empty".to_string(),
-            ));
-        }
-        if key.is_empty() {
-            return Err(SecretSpecError::ProviderOperationFailed(
-                "key cannot be empty".to_string(),
             ));
         }
 
@@ -434,6 +457,9 @@ impl KvProvider {
                     uri.query_pairs_mut().append_pair("audience", audience);
                 }
             }
+        }
+        if self.config.layout == Layout::Flat {
+            uri.query_pairs_mut().append_pair("layout", "flat");
         }
 
         uri.into()

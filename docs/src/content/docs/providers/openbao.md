@@ -131,6 +131,7 @@ openbao://[namespace@]host[:port][/mount][?key=value&...]
 - `?role=`: OpenBao role for JWT auth
 - `?audience=`: Audience requested from the CI OIDC issuer
 - `?kv=1`: Use KV v1 (default: v2)
+- `?layout=flat`: address secrets by key alone at the mount root, with no `secretspec/{project}/{profile}` scaffolding — see [Layout](#layout)
 - `?tls=false`: Disable TLS for development servers
 
 ### URI examples
@@ -159,6 +160,24 @@ configured mount, with its value in a field named `value`.
 
 For KV v2, `DATABASE_URL` for project `myapp` and profile `production` is read
 from `GET /v1/secret/data/secretspec/myapp/production/DATABASE_URL`.
+
+### Layout
+
+`?layout=` is a [general provider setting](/reference/providers/#layout-flat-017), spelled the same
+way across every hierarchical backend. The default **nested** layout stores each secret at
+`secretspec/{project}/{profile}/{key}` under the mount, as above.
+
+The **flat** layout (`?layout=flat`) drops that scaffolding, so a convention secret is the `{key}`
+itself at the mount root — for KV v2, `DATABASE_URL` is read from
+`GET /v1/secret/data/DATABASE_URL` under the configured mount, still with its value in a `value`
+field. This is the natural shape for a single-project store, e.g. one migrated from another manager
+where the secrets already live at the mount root. Because the project and profile name no path
+segment under flat, they are not required.
+
+```toml title="secretspec.toml"
+[providers]
+openbao = "openbao://bao.example.com:8200/secret?layout=flat"
+```
 
 ## Use existing secrets
 

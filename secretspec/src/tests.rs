@@ -7739,6 +7739,117 @@ secrets = ["UNRELATED"]
         assert_eq!(violation.present.len(), 2);
     }
 
+    /// A visible composition whose input is an `as_path` secret embeds that
+    /// input's **temp-file path** in its value (composition substitutes the
+    /// resolved value, which for `as_path` is the path). Scoping must therefore
+    /// keep the hidden input's temp file alive: dropping it would hand the
+    /// consumer a path to a file that no longer exists.
+    #[test]
+    fn a_hidden_as_path_input_keeps_its_file_alive_for_the_visible_composition() {
+        let _env = scrub_resolution_env();
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "DB_CERT=certificate-body\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let manifest = r#"
+[project]
+name = "as-path-scope"
+revision = "1.0"
+
+[profiles.default]
+DB_CERT = { description = "Client certificate", as_path = true }
+PG_ARGS = { description = "Connection args", composed = "sslcert=${DB_CERT}" }
+
+[scopes.api]
+secrets = ["PG_ARGS"]
+"#;
+        let mut spec = Secrets::new(config(manifest), None, Some(provider), None);
+        spec.set_scope("api");
+
+        let args_file = temp.path().join("args");
+        let body_file = temp.path().join("body");
+        let cert_file = temp.path().join("cert");
+        let exit = spec
+            .run_command(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "printf '%s' \"$PG_ARGS\" > {}; cat \"${{PG_ARGS#sslcert=}}\" > {} 2>/dev/null; printf '%s' \"$DB_CERT\" > {}",
+                    args_file.display(),
+                    body_file.display(),
+                    cert_file.display()
+                ),
+            ])
+            .unwrap();
+        assert_eq!(exit, 0);
+
+        // The composed value names a path...
+        let args = fs::read_to_string(&args_file).unwrap();
+        assert!(
+            args.starts_with("sslcert=/"),
+            "the composition embeds the input's temp-file path: {args}"
+        );
+        // ...and that path must still resolve to the certificate.
+        assert_eq!(
+            fs::read_to_string(&body_file).unwrap(),
+            "certificate-body",
+            "a hidden as_path input's file must outlive scope filtering"
+        );
+        // The hidden input is still absent from the environment itself.
+        assert_eq!(
+            fs::read_to_string(&cert_file).unwrap(),
+            "",
+            "DB_CERT must not reach the scoped child as a variable"
+        );
+    }
+
+    /// The audit answers "what was read from a provider", so a scoped `check`
+    /// records the *accessed* set — including a composition input the scope
+    /// hides — while `run` records what it actually injected, the visible set.
+    /// The two events record different facts and must not be conflated.
+    #[test]
+    fn audit_records_accessed_secrets_for_a_scoped_check() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DB_USER=alice\nDB_PASSWORD=s3cret\nDB_HOST=db.example\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut spec = Secrets::new(config(COMPOSED_MANIFEST), None, Some(provider), None);
+        spec.set_scope("api");
+        let (logger, lines) = crate::audit::test_support::collecting_logger();
+        spec.set_audit_for_test(logger);
+
+        spec.check(true).expect("the scoped check resolves");
+
+        let events = super::audit_events(&lines);
+        let check = events
+            .iter()
+            .find(|e| e["action"] == "check")
+            .expect("a check event is recorded");
+        let mut keys: Vec<String> = check["keys"]
+            .as_array()
+            .expect("the check event lists keys")
+            .iter()
+            .map(|k| k.as_str().unwrap().to_string())
+            .collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "DATABASE_URL".to_string(),
+                "DB_HOST".to_string(),
+                "DB_PASSWORD".to_string(),
+                "DB_USER".to_string(),
+            ],
+            "the audit records every secret actually read, not only the visible one"
+        );
+    }
+
     /// A secret fetched only as an out-of-scope composition input never counts
     /// as "present" for a presence group: constraints are judged after the
     /// output is narrowed to the visible set.

@@ -258,6 +258,21 @@ Behavior:
   provider credentials could resolve another scope itself.
 - An **empty** scope (or a scope whose intersection with the profile is empty)
   resolves to nothing and contacts no provider.
+- [Audit](#audit-logging) records what was **read**, not what was exposed: a
+  scoped `check` logs the accessed set, including a composition input the scope
+  hides, since the point of the log is to capture provider access. A `run` event
+  logs what it injected — the visible set.
+- An `as_path` secret's resolved value is its temp-file path, so a visible
+  composition built from a hidden `as_path` input embeds that path. The file
+  stays alive for the duration of the command rather than being cleaned up with
+  the hidden secret, so the path resolves. The hidden input is still absent from
+  the environment; only its content, in the form the composition derived, is
+  reachable — the same contract as a composed DSN that embeds a password.
+- A secret the scope **admits** but that does not resolve (an optional secret
+  with no stored value) is not scrubbed from `run`. It is inside the visible
+  set, so a value the parent exported is inherited exactly as it would be
+  without a scope; scoping changes which secrets are in play, never the
+  semantics of one it admits.
 - Under project `extends`, a child `[scopes.<name>]` **replaces** the parent
   scope of the same name outright — the two `secrets` lists are not unioned (see
   [Configuration Inheritance](/concepts/inheritance/)).

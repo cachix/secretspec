@@ -2981,11 +2981,7 @@ impl Secrets {
         // sorted names are the audit keys, and — when unscoped — the plan's input
         // directly.
         let visible_result = self.resolve_profile_secret_names(Some(&profile_name));
-        // Keys for the single read-audit event, computed before any planning can
-        // fail (e.g. on an undefined alias) so a failed read is still attributed
-        // to every visible secret it attempted; they stay empty only if the
-        // profile/scope itself fails to resolve.
-        let audit_keys: Vec<String> = visible_result.as_ref().ok().cloned().unwrap_or_default();
+        let visible: Vec<String> = visible_result.as_ref().ok().cloned().unwrap_or_default();
 
         // When a scope is active, resolution must additionally fetch the
         // composed-secret dependency closure of the visible set (an in-scope
@@ -2995,12 +2991,22 @@ impl Secrets {
         // worklist is just `visible` and nothing is filtered.
         let scoped = self.resolve_scope_name(None).is_some();
         let worklist = if scoped {
-            self.accessed_names(&profile_name, &audit_keys)
+            self.accessed_names(&profile_name, &visible)
         } else {
-            audit_keys.clone()
+            visible.clone()
         };
         let output_filter: Option<HashSet<String>> =
-            scoped.then(|| audit_keys.iter().cloned().collect());
+            scoped.then(|| visible.iter().cloned().collect());
+
+        // Keys for the single read-audit event, computed before any planning can
+        // fail (e.g. on an undefined alias) so a failed read is still attributed
+        // to every secret it attempted; they stay empty only if the
+        // profile/scope itself fails to resolve. This is the *accessed* set, not
+        // the visible one: the audit answers "what was read from a provider",
+        // and a hidden composition input is read even though it is never
+        // exposed. Recording only the visible names would understate provider
+        // access, which is the one thing the log exists to capture.
+        let audit_keys: Vec<String> = worklist.clone();
 
         // Decide the whole plan up front (pure, no I/O), then execute it. Each
         // step returns `Result`, so *any* error — an undefined alias, an
@@ -3584,14 +3590,19 @@ impl Secrets {
         // `None` (no scope active) leaves everything untouched.
         if let Some(filter) = output_filter {
             secrets.retain(|name, _| filter.contains(name));
-            temp_files.retain(|(name, _)| filter.contains(name));
             resolution.retain(|entry| filter.contains(&entry.name));
             missing_required.retain(|name| filter.contains(name));
             missing_optional.retain(|name| filter.contains(name));
             with_defaults.retain(|(name, _)| filter.contains(name));
         }
 
-        // Strip the temp-file bookkeeping names now that filtering is done.
+        // Temp files are deliberately *not* filtered. An `as_path` secret's
+        // resolved value is its temp-file path, so a visible composition built
+        // from a hidden `as_path` input embeds that path in its own value.
+        // Dropping the file here would delete it and hand the consumer a
+        // dangling path. Keeping it is consistent with composition's existing
+        // contract — a composed DSN already carries its inputs' content in
+        // derived form — while the input itself stays out of the environment.
         let temp_files: Vec<tempfile::NamedTempFile> =
             temp_files.into_iter().map(|(_, file)| file).collect();
 

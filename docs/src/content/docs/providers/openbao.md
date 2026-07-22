@@ -209,7 +209,7 @@ $ secretspec check --provider openbao://bao.example.com:8200/secret
 ### Development mode
 
 ```bash
-$ bao server -dev
-$ export BAO_TOKEN=hvs.dev-root-token
+$ bao server -dev -dev-root-token-id="dev-only-token"
+$ export BAO_TOKEN="dev-only-token"
 $ secretspec check --provider "openbao://127.0.0.1:8200/secret?tls=false"
 ```

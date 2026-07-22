@@ -1219,7 +1219,7 @@ mod integration_tests {
     fn test_openbao_provider_creation() {
         let provider = Box::<dyn Provider>::try_from("openbao://bao.internal:8200/secret").unwrap();
         assert_eq!(provider.name(), "openbao");
-        assert_eq!(provider.uri(), "openbao://bao.internal:8200");
+        assert_eq!(provider.uri(), "openbao://bao.internal:8200/secret");
     }
 
     #[cfg(feature = "vault")]

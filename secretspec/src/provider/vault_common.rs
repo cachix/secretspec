@@ -11,6 +11,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use url::Url;
 
 pub(crate) const ROLE_ID: &str = "role_id";
 pub(crate) const SECRET_ID: &str = "secret_id";
@@ -163,6 +164,49 @@ impl Default for KvConfig {
 }
 
 impl KvConfig {
+    /// Parses an API address into the credential-free HTTP origin used for
+    /// requests, diagnostics, and provider attribution.
+    ///
+    /// Vault-compatible address variables are URLs, but userinfo and arbitrary
+    /// query parameters are not part of the server identity. Keeping the raw
+    /// value would let credentials reach `Provider::uri()` and audit output.
+    fn normalize_endpoint(endpoint: &str, product: Product) -> Result<String> {
+        let mut endpoint = Url::parse(endpoint).map_err(|error| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Invalid {} address: {error}",
+                product.display_name()
+            ))
+        })?;
+
+        if !matches!(endpoint.scheme(), "http" | "https") || endpoint.host().is_none() {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Invalid {} address: expected an http:// or https:// URL with a host",
+                product.display_name()
+            )));
+        }
+
+        // Requests use token-based provider authentication, never URL basic
+        // authentication. Retain only the origin so paths and unknown query
+        // parameters cannot alter requests or leak through provider reporting.
+        endpoint.set_password(None).map_err(|_| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Invalid {} address password",
+                product.display_name()
+            ))
+        })?;
+        endpoint.set_username("").map_err(|_| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Invalid {} address username",
+                product.display_name()
+            ))
+        })?;
+        endpoint.set_path("");
+        endpoint.set_query(None);
+        endpoint.set_fragment(None);
+
+        Ok(endpoint.as_str().trim_end_matches('/').to_string())
+    }
+
     /// Parses the common URI grammar with the selected product's scheme and
     /// environment precedence.
     ///
@@ -204,10 +248,10 @@ impl KvConfig {
                 ))
             })?,
         };
-        // Both CLIs accept an address with a trailing slash. Request paths are
-        // appended below, so retain one separator instead of producing
-        // `//v1/...`, which OpenBao and Vault reject rather than normalize.
-        let endpoint = endpoint.trim_end_matches('/').to_string();
+        // Both CLIs accept addresses with trailing slashes. Normalizing the
+        // complete URL also strips unsupported components that must not reach
+        // request paths, diagnostics, or audit records.
+        let endpoint = Self::normalize_endpoint(&endpoint, product)?;
 
         // The provider path identifies only the engine mount. Per-secret KV
         // paths belong to convention coordinates or a secret's `ref`.
@@ -351,20 +395,48 @@ impl KvProvider {
     /// Returns the credential-free provider URI used in audit records and
     /// fallback diagnostics.
     ///
-    /// This retains the historical compact form while using the actual product
-    /// scheme, which is the identity bug the first-class split fixes.
+    /// The URI is canonical rather than source-preserving: implicit defaults
+    /// stay implicit, while every setting that changes the effective store or
+    /// authentication context is retained.
     pub(crate) fn uri(&self) -> String {
-        let host = self
+        let authority = self
             .config
             .endpoint
-            .trim_start_matches("https://")
-            .trim_start_matches("http://");
-        let mut uri = format!("{}://{host}", self.product.scheme());
-        if self.config.mount != "secret" {
-            uri.push('/');
-            uri.push_str(&self.config.mount);
+            .strip_prefix("https://")
+            .or_else(|| self.config.endpoint.strip_prefix("http://"))
+            .expect("KvConfig endpoints are normalized HTTP origins");
+        let mut uri = Url::parse(&format!("{}://{authority}", self.product.scheme()))
+            .expect("a normalized endpoint forms a provider URI");
+
+        if let Some(namespace) = &self.config.namespace {
+            uri.set_username(namespace)
+                .expect("a provider URI supports namespace userinfo");
         }
-        uri
+        uri.set_path(&format!("/{}", self.config.mount));
+
+        if self.config.endpoint.starts_with("http://") {
+            uri.query_pairs_mut().append_pair("tls", "false");
+        }
+        if self.config.kv_version == KvVersion::V1 {
+            uri.query_pairs_mut().append_pair("kv", "1");
+        }
+        match self.config.auth {
+            AuthMethod::Token => {}
+            AuthMethod::AppRole => {
+                uri.query_pairs_mut().append_pair("auth", "approle");
+            }
+            AuthMethod::Jwt => {
+                uri.query_pairs_mut().append_pair("auth", "jwt");
+                if let Some(role) = &self.config.role {
+                    uri.query_pairs_mut().append_pair("role", role);
+                }
+                if let Some(audience) = &self.config.audience {
+                    uri.query_pairs_mut().append_pair("audience", audience);
+                }
+            }
+        }
+
+        uri.into()
     }
 
     /// Reads the requested field from a resolved native KV address.
@@ -796,7 +868,6 @@ impl KvProvider {
 mod tests {
     use super::*;
     use crate::tests::EnvVarGuard;
-    use url::Url;
 
     fn provider_url(spec: &str) -> ProviderUrl {
         ProviderUrl::new(Url::parse(spec).unwrap())
@@ -861,6 +932,56 @@ mod tests {
                 "http://127.0.0.1:8200/v1/secret/data/app/config"
             );
         }
+    }
+
+    #[test]
+    fn environment_endpoints_drop_credentials_and_unsupported_url_components() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _bao_addr = EnvVarGuard::set(
+            "BAO_ADDR",
+            "https://alice:leaked-password@bao.example.com:8200/prefix?token=leaked-query#fragment",
+        );
+        let _vault_addr = EnvVarGuard::remove("VAULT_ADDR");
+
+        let config = KvConfig::parse(&provider_url("openbao://"), Product::OpenBao).unwrap();
+        assert_eq!(config.endpoint, "https://bao.example.com:8200");
+
+        let provider = KvProvider::new(config, Product::OpenBao);
+        assert_eq!(provider.uri(), "openbao://bao.example.com:8200/secret");
+        assert_eq!(
+            provider.build_url("app/config"),
+            "https://bao.example.com:8200/v1/secret/data/app/config"
+        );
+        assert!(!provider.uri().contains("alice"));
+        assert!(!provider.uri().contains("leaked-password"));
+        assert!(!provider.uri().contains("leaked-query"));
+    }
+
+    #[test]
+    fn uri_retains_effective_non_secret_attribution() {
+        let config = KvConfig::parse(
+            &provider_url(
+                "openbao://team-a@bao.example.com:8200/team/secret?tls=false&kv=1&auth=jwt&role=ci-role&audience=deploy",
+            ),
+            Product::OpenBao,
+        )
+        .unwrap();
+        let provider = KvProvider::new(config, Product::OpenBao);
+
+        assert_eq!(
+            provider.uri(),
+            "openbao://team-a@bao.example.com:8200/team/secret?tls=false&kv=1&auth=jwt&role=ci-role&audience=deploy"
+        );
+
+        let approle = KvConfig::parse(
+            &provider_url("openbao://team-a@bao.example.com:8200/secret?auth=approle"),
+            Product::OpenBao,
+        )
+        .unwrap();
+        assert_eq!(
+            KvProvider::new(approle, Product::OpenBao).uri(),
+            "openbao://team-a@bao.example.com:8200/secret?auth=approle"
+        );
     }
 
     #[test]

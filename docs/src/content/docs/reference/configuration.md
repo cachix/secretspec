@@ -419,7 +419,8 @@ chain, and each provider is asked for the same coordinates.
 | [Gopass (0.15+)](/providers/gopass/#use-existing-secrets) | Entry path, including any mount-point prefix | Rejected | Reads the entry | ✅ |
 | [LastPass](/providers/lastpass/#use-existing-secrets) | Item name | Rejected | Reads the item | ✅ |
 | [Proton Pass](/providers/protonpass/#use-existing-secrets) | Item title | Rejected | Reads the note | ✅ |
-| [Vault / OpenBao](/providers/vault/#use-existing-secrets) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
+| [Vault](/providers/vault/#use-existing-secrets) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
+| [OpenBao](/providers/openbao/#use-existing-secrets) (0.17+) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
 | [AWS Secrets Manager](/providers/awssm/#use-existing-secrets) | Secret name or ARN | JSON key | Whole secret string | — (read-only) |
 | [GCSM](/providers/gcsm/#use-existing-secrets) | Secret id; `version` also applies | Rejected | Reads latest or the pinned version | — (read-only) |
 | [Bitwarden (bws)](/providers/bws/#use-existing-secrets) | BWS key name | Rejected | Reads the key | ✅ |

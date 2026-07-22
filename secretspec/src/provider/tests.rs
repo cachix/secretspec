@@ -545,8 +545,8 @@ mod integration_tests {
             }
             #[cfg(feature = "vault")]
             // "vault" tests KV v2 (default), "vault-kv1" tests KV v1.
-            // Set VAULT_TOKEN and run a dev server (bao server -dev).
-            // For KV v1: bao secrets enable -path=kv1 -version=1 kv
+            // Set VAULT_TOKEN and run a Vault-compatible dev server.
+            // For KV v1: vault secrets enable -path=kv1 -version=1 kv
             "vault" | "vault-kv1" => {
                 let provider_spec = if provider_name == "vault-kv1" {
                     "vault://127.0.0.1:8200/kv1?tls=false&kv=1"
@@ -555,6 +555,20 @@ mod integration_tests {
                 };
                 let provider = Box::<dyn Provider>::try_from(provider_spec)
                     .expect("Should create vault provider");
+                (provider, None)
+            }
+            #[cfg(feature = "openbao")]
+            // "openbao" tests KV v2 (default), "openbao-kv1" tests KV v1.
+            // Set BAO_TOKEN and run `bao server -dev`.
+            // For KV v1: bao secrets enable -path=kv1 -version=1 kv
+            "openbao" | "openbao-kv1" => {
+                let provider_spec = if provider_name == "openbao-kv1" {
+                    "openbao://127.0.0.1:8200/kv1?tls=false&kv=1"
+                } else {
+                    "openbao://127.0.0.1:8200?tls=false"
+                };
+                let provider = Box::<dyn Provider>::try_from(provider_spec)
+                    .expect("Should create openbao provider");
                 (provider, None)
             }
             #[cfg(feature = "infisical")]
@@ -1200,12 +1214,12 @@ mod integration_tests {
         assert_eq!(provider.name(), "vault");
     }
 
-    #[cfg(feature = "vault")]
+    #[cfg(feature = "openbao")]
     #[test]
-    fn test_openbao_scheme() {
-        // Test OpenBao URI scheme
+    fn test_openbao_provider_creation() {
         let provider = Box::<dyn Provider>::try_from("openbao://bao.internal:8200/secret").unwrap();
-        assert_eq!(provider.name(), "vault");
+        assert_eq!(provider.name(), "openbao");
+        assert_eq!(provider.uri(), "openbao://bao.internal:8200/secret");
     }
 
     #[cfg(feature = "vault")]

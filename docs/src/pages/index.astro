@@ -39,7 +39,8 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: '1password', slug: 'onepassword', label: '1Password' },
   { icon: 'lastpass', slug: 'lastpass', label: 'LastPass' },
   { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden' },
-  { icon: 'vault', slug: 'vault', label: 'Vault / OpenBao' },
+  { icon: 'vault', slug: 'vault', label: 'Vault' },
+  { slug: 'openbao', label: 'OpenBao (0.17+)' },
   { slug: 'awssm', label: 'AWS Secrets Manager' },
   { icon: 'googlecloud', slug: 'gcsm', label: 'Google Cloud Secret Manager' },
   { icon: 'microsoftazure', slug: 'akv', label: 'Azure Key Vault' },
@@ -141,6 +142,7 @@ $ secretspec config init
 ? Select your preferred provider backend:
 <span class="tok-pun">›</span> keyring: Uses system keychain (Recommended)
   infisical: Infisical secret management
+  openbao: OpenBao secret management (0.17+)
 <span class="tok-str">✓</span> Saved to ~/.config/secretspec/config.toml
 
 <span class="tok-com"># 3. Run your app with secrets injected</span>
@@ -207,7 +209,8 @@ $ secretspec run --profile production -- npm start
         <pre is:raw class="landing-step-code"><code>$ secretspec config init
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
-  infisical: Infisical secret management</code></pre>
+  infisical: Infisical secret management
+  openbao: OpenBao secret management (0.17+)</code></pre>
       </div>
 
       <div class="landing-step">
@@ -318,6 +321,7 @@ println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span cla
           <button type="button" class="landing-provider-tab is-active" data-provider="keyring">Keyring</button>
           <button type="button" class="landing-provider-tab" data-provider="onepassword">1Password</button>
           <button type="button" class="landing-provider-tab" data-provider="vault">Vault</button>
+          <button type="button" class="landing-provider-tab" data-provider="openbao">OpenBao (0.17+)</button>
           <button type="button" class="landing-provider-tab" data-provider="awssm">AWS</button>
           <button type="button" class="landing-provider-tab" data-provider="gcsm">GCP</button>
           <button type="button" class="landing-provider-tab" data-provider="akv">Azure</button>
@@ -917,6 +921,7 @@ REDIS_URL=redis://…</code></pre>
       keyring:     'System keyring',
       onepassword: '1Password vault',
       vault:       'HashiCorp Vault',
+      openbao:     'OpenBao (0.17+)',
       awssm:       'AWS Secrets Manager',
       gcsm:        'Google Cloud Secret Manager',
       akv:         'Azure Key Vault',

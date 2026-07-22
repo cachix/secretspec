@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `required` field accepts `at_least_one` and `exactly_one` group tables,
   supporting overlapping alternative and mutually exclusive credentials
   across `check`, `run`, and SDK resolution.
+- OpenBao provider (`openbao://`, `openbao` build feature) with its
+  own provider identity, documentation, and OpenBao CLI configuration through
+  `BAO_ADDR`, `BAO_NAMESPACE`, `BAO_TOKEN`, and `BAO_TOKEN_PATH`. The
+  provider also has OpenBao-prefixed AppRole and JWT inputs; corresponding
+  `VAULT_*` names remain compatibility fallbacks. Compatible KV and standard
+  authentication mechanics are shared internally with the Vault provider.
+  Vault-compatible addresses accept trailing slashes, and AppRole/JWT login
+  exchanges now honor the configured namespace. Reported provider URIs strip
+  endpoint credentials while retaining non-secret store and authentication
+  attribution.
 - Vault / OpenBao JWT/OIDC authentication (`?auth=jwt`) logs in through a
   configured Vault role using `VAULT_JWT`, or requests a short-lived OIDC token
   automatically in GitHub Actions and Forgejo Actions jobs with `id-token:

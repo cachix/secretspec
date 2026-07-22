@@ -1,9 +1,10 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Cachix.SecretSpec;
 
-internal static class Native
+internal static partial class Native
 {
     private const string LibraryName = "secretspec_ffi";
 
@@ -103,13 +104,15 @@ internal static class Native
         return IntPtr.Zero;
     }
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr secretspec_resolve(
-        [MarshalAs(UnmanagedType.LPUTF8Str)] string requestJson);
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial IntPtr secretspec_resolve(string requestJson);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern void secretspec_free(IntPtr pointer);
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial void secretspec_free(IntPtr pointer);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr secretspec_abi_version();
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial IntPtr secretspec_abi_version();
 }

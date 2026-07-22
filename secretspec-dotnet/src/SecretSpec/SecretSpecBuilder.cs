@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 
 namespace Cachix.SecretSpec;
 
@@ -42,7 +43,10 @@ public sealed class SecretSpecBuilder
     /// <exception cref="SecretSpecException">Resolution otherwise failed.</exception>
     public Resolved Load()
     {
-        var response = Call<ResolveResponseContract>(_request, "resolve");
+        var response = Call(
+            _request,
+            "resolve",
+            SecretSpecJsonContext.Default.ResolveEnvelope);
         EnsureSchemaVersion(response.SchemaVersion, JsonContracts.ResolveSchemaVersion, "resolve");
 
         if (response.MissingRequired.Count > 0)
@@ -62,21 +66,29 @@ public sealed class SecretSpecBuilder
     public ResolutionReport Report()
     {
         var request = _request with { Mode = "report" };
-        var response = Call<ReportResponseContract>(request, "report");
+        var response = Call(
+            request,
+            "report",
+            SecretSpecJsonContext.Default.ReportEnvelope);
         EnsureSchemaVersion(response.SchemaVersion, JsonContracts.ReportSchemaVersion, "report");
 
         return new ResolutionReport(response.Provider, response.Profile, response.Secrets);
     }
 
-    private static T Call<T>(ResolveRequest request, string kind)
+    private static T Call<T>(
+        ResolveRequest request,
+        string kind,
+        JsonTypeInfo<Envelope<T>> envelopeTypeInfo)
         where T : class
     {
-        var payload = JsonSerializer.Serialize(request, JsonContracts.Options);
+        var payload = JsonSerializer.Serialize(
+            request,
+            SecretSpecJsonContext.Default.ResolveRequest);
         var raw = Native.Resolve(payload);
         Envelope<T>? envelope;
         try
         {
-            envelope = JsonSerializer.Deserialize<Envelope<T>>(raw, JsonContracts.Options);
+            envelope = JsonSerializer.Deserialize(raw, envelopeTypeInfo);
         }
         catch (JsonException error)
         {

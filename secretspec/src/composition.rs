@@ -1,10 +1,9 @@
 //! Strict parsing and one-pass rendering for composed secrets.
 //!
 //! This deliberately is not a dotenv or shell interpolator. References may
-//! name only declared secrets, inserted values are opaque, and literal braces
-//! must be escaped as `{{` and `}}`.
+//! name only declared uppercase secrets, inserted values are opaque, and `$$`
+//! produces a literal dollar sign.
 
-use crate::config::is_valid_identifier;
 use std::collections::BTreeSet;
 
 const MAX_RENDERED_BYTES: usize = 16 * 1024 * 1024;
@@ -30,21 +29,12 @@ impl Template {
 
         while let Some(ch) = chars.next() {
             match ch {
+                '$' if chars.peek() == Some(&'$') => {
+                    chars.next();
+                    literal.push('$');
+                }
                 '$' if chars.peek() == Some(&'{') => {
-                    return Err(
-                        "dotenv-style `${...}` expansion is not supported; use `{SECRET_NAME}`"
-                            .into(),
-                    );
-                }
-                '{' if chars.peek() == Some(&'{') => {
                     chars.next();
-                    literal.push('{');
-                }
-                '}' if chars.peek() == Some(&'}') => {
-                    chars.next();
-                    literal.push('}');
-                }
-                '{' => {
                     if !literal.is_empty() {
                         parts.push(Part::Literal(std::mem::take(&mut literal)));
                     }
@@ -55,32 +45,27 @@ impl Template {
                             Some('}') => break,
                             Some('{') => {
                                 return Err(
-                                    "nested `{` in a composed reference; use `{{` for a literal brace"
-                                        .into(),
+                                    "nested `{` in a composed reference; references use `${UPPERCASE_NAME}`"
+                                        .into()
                                 );
                             }
                             Some(ch) => name.push(ch),
                             None => {
                                 return Err(
-                                    "unclosed `{` in composed template; use `{{` for a literal brace"
-                                        .into(),
+                                    "unclosed `${` in composed template; references use `${UPPERCASE_NAME}`"
+                                        .into()
                                 );
                             }
                         }
                     }
 
-                    if !is_valid_identifier(&name) {
+                    if !is_valid_reference_name(&name) {
                         return Err(format!(
-                            "invalid composed reference `{{{name}}}`; references must be secret identifiers"
+                            "invalid composed reference `${{{name}}}`; names must match `[A-Z][A-Z0-9_]*`"
                         ));
                     }
                     dependencies.insert(name.clone());
                     parts.push(Part::Reference(name));
-                }
-                '}' => {
-                    return Err(
-                        "unmatched `}` in composed template; use `}}` for a literal brace".into(),
-                    );
                 }
                 other => literal.push(other),
             }
@@ -128,14 +113,24 @@ impl Template {
     }
 }
 
+fn is_valid_reference_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    matches!(bytes.next(), Some(b'A'..=b'Z'))
+        && bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
 
     #[test]
-    fn parses_escaped_braces_and_deduplicates_dependencies() {
-        let template = Template::parse("{{dsn}}:{USER}:{USER}@{HOST}").unwrap();
+    fn parses_dollar_references_and_deduplicates_dependencies() {
+        let template =
+            Template::parse(
+                r#"{"dsn":"${USER}:${USER}@${HOST}","pattern":"a{2,4}","env":"$$HOME","literal":"$${EXTERNAL}"}"#,
+            )
+            .unwrap();
         assert_eq!(
             template.dependencies(),
             &["HOST".to_string(), "USER".to_string()]
@@ -143,31 +138,42 @@ mod tests {
         let values = HashMap::from([("USER", "alice"), ("HOST", "db")]);
         assert_eq!(
             template.render(|name| values.get(name).copied()).unwrap(),
-            "{dsn}:alice:alice@db"
+            r#"{"dsn":"alice:alice@db","pattern":"a{2,4}","env":"$HOME","literal":"${EXTERNAL}"}"#
         );
     }
 
     #[test]
     fn inserted_values_are_not_reparsed() {
-        let template = Template::parse("value={A}").unwrap();
+        let template = Template::parse("value=${A}").unwrap();
         assert_eq!(
             template
-                .render(|name| (name == "A").then_some("{B}"))
+                .render(|name| (name == "A").then_some("${B}"))
                 .unwrap(),
-            "value={B}"
+            "value=${B}"
         );
     }
 
     #[test]
-    fn rejects_shell_and_malformed_syntax() {
-        for invalid in ["{A:-fallback}", "${A}", "{A", "A}", "{}", "{A{B}}"] {
+    fn rejects_operators_lowercase_names_and_malformed_syntax() {
+        for invalid in [
+            "${A:-fallback}",
+            "${A",
+            "${}",
+            "${A${B}}",
+            "${lower}",
+            "${Mixed}",
+            "${_A}",
+            "${1A}",
+            "${Ä}",
+            "{A}",
+        ] {
             assert!(Template::parse(invalid).is_err(), "{invalid} should fail");
         }
     }
 
     #[test]
     fn missing_value_is_not_replaced_with_empty_text() {
-        let template = Template::parse("{A}:{B}").unwrap();
+        let template = Template::parse("${A}:${B}").unwrap();
         assert_eq!(
             template.render(|name| (name == "A").then_some("set")),
             Err("composed dependency `B` is not resolved".into())

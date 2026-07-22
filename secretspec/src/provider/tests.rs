@@ -545,8 +545,8 @@ mod integration_tests {
             }
             #[cfg(feature = "vault")]
             // "vault" tests KV v2 (default), "vault-kv1" tests KV v1.
-            // Set VAULT_TOKEN and run a dev server (bao server -dev).
-            // For KV v1: bao secrets enable -path=kv1 -version=1 kv
+            // Set VAULT_TOKEN and run a Vault-compatible dev server.
+            // For KV v1: vault secrets enable -path=kv1 -version=1 kv
             "vault" | "vault-kv1" => {
                 let provider_spec = if provider_name == "vault-kv1" {
                     "vault://127.0.0.1:8200/kv1?tls=false&kv=1"
@@ -555,6 +555,20 @@ mod integration_tests {
                 };
                 let provider = Box::<dyn Provider>::try_from(provider_spec)
                     .expect("Should create vault provider");
+                (provider, None)
+            }
+            #[cfg(feature = "openbao")]
+            // "openbao" tests KV v2 (default), "openbao-kv1" tests KV v1.
+            // Set BAO_TOKEN and run `bao server -dev`.
+            // For KV v1: bao secrets enable -path=kv1 -version=1 kv
+            "openbao" | "openbao-kv1" => {
+                let provider_spec = if provider_name == "openbao-kv1" {
+                    "openbao://127.0.0.1:8200/kv1?tls=false&kv=1"
+                } else {
+                    "openbao://127.0.0.1:8200?tls=false"
+                };
+                let provider = Box::<dyn Provider>::try_from(provider_spec)
+                    .expect("Should create openbao provider");
                 (provider, None)
             }
             #[cfg(feature = "infisical")]
@@ -1200,12 +1214,12 @@ mod integration_tests {
         assert_eq!(provider.name(), "vault");
     }
 
-    #[cfg(feature = "vault")]
+    #[cfg(feature = "openbao")]
     #[test]
-    fn test_openbao_scheme() {
-        // Test OpenBao URI scheme
+    fn test_openbao_provider_creation() {
         let provider = Box::<dyn Provider>::try_from("openbao://bao.internal:8200/secret").unwrap();
-        assert_eq!(provider.name(), "vault");
+        assert_eq!(provider.name(), "openbao");
+        assert_eq!(provider.uri(), "openbao://bao.internal:8200/secret");
     }
 
     #[cfg(feature = "vault")]
@@ -1395,4 +1409,81 @@ mod integration_tests {
             "auth scope key must not embed the plaintext token: {with_token}"
         );
     }
+}
+
+/// Item names a store may or may not be able to represent, drawn from the
+/// dotenv corruption incident (a dash smuggled in by a `ref` item) plus other
+/// shapes env-style formats reject.
+#[cfg(test)]
+const HOSTILE_ITEMS: &[&str] = &[
+    "CACHIX_SIGNING_KEY_cache-a",
+    "with space",
+    "1LEADING_DIGIT",
+    "dotted.name",
+    "sla/sh",
+    "_VALID_UNDERSCORE",
+    "PLAIN_VALID_1",
+];
+
+/// The write/read symmetry contract every writable provider must keep: a `set`
+/// that reports success is readable back by `get`, and a name the store cannot
+/// represent is rejected up front, never written in a form that breaks later
+/// reads of other secrets. Each provider is free to accept or reject any given
+/// name; what it may not do is accept a write it cannot serve back.
+#[cfg(test)]
+fn assert_write_read_symmetry(provider: &dyn Provider) {
+    use secrecy::ExposeSecret;
+
+    // A convention secret written first must stay readable throughout.
+    provider
+        .set(
+            Address::convention("proj", "default", "KEEP"),
+            &SecretString::new("kept".into()),
+        )
+        .unwrap();
+
+    for item in HOSTILE_ITEMS {
+        let addr = crate::config::NativeAddress {
+            item: (*item).to_string(),
+            ..Default::default()
+        };
+        let wrote = provider
+            .set(Address::Native(&addr), &SecretString::new("v".into()))
+            .is_ok();
+        if wrote {
+            let got = provider.get(Address::Native(&addr)).unwrap();
+            assert_eq!(
+                got.map(|s| s.expose_secret().to_string()),
+                Some("v".to_string()),
+                "provider `{}` accepted a write of `{item}` it cannot read back",
+                provider.name(),
+            );
+        }
+        // Accepted or rejected, the write must not have damaged the store.
+        let kept = provider
+            .get(Address::convention("proj", "default", "KEEP"))
+            .unwrap();
+        assert_eq!(
+            kept.map(|s| s.expose_secret().to_string()),
+            Some("kept".to_string()),
+            "provider `{}`: a write of `{item}` corrupted other secrets",
+            provider.name(),
+        );
+    }
+}
+
+#[test]
+fn dotenv_write_read_symmetry() {
+    use super::dotenv::{DotEnvConfig, DotEnvProvider};
+
+    let dir = TempDir::new().unwrap();
+    let provider = DotEnvProvider::new(DotEnvConfig {
+        path: dir.path().join(".env"),
+    });
+    assert_write_read_symmetry(&provider);
+}
+
+#[test]
+fn mock_provider_write_read_symmetry() {
+    assert_write_read_symmetry(&MockProvider::new());
 }

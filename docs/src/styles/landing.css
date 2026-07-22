@@ -171,24 +171,6 @@
   margin: 0 auto 3rem;
 }
 
-.landing-badge {
-  display: inline-block;
-  font-size: 0.8125rem;
-  font-weight: 500;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--color-accent-600);
-  border: 1px solid var(--color-accent-200);
-  border-radius: 999px;
-  padding: 0.25rem 1rem;
-  margin-bottom: 1.5rem;
-}
-
-[data-theme='dark'] .landing-badge {
-  color: var(--color-accent-200);
-  border-color: rgba(168, 189, 212, 0.25);
-}
-
 .landing-hero-title {
   font-size: clamp(2.25rem, 5vw, 3.5rem);
   font-weight: 700;
@@ -572,6 +554,12 @@
   gap: 0.75rem;
 }
 
+.landing-step-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 .landing-step-num {
   display: inline-flex;
   align-items: center;
@@ -801,12 +789,26 @@
   padding: 0;
 }
 
-.landing-terminal-body .tok-key { color: #8ea3c0; }
-.landing-terminal-body .tok-str { color: #b5d0a6; }
-.landing-terminal-body .tok-com { color: #6a6f7a; font-style: italic; }
-.landing-terminal-body .tok-num { color: #d8a162; }
-.landing-terminal-body .tok-pun { color: rgba(255, 255, 255, 0.55); }
-.landing-terminal-body .tok-sec { color: #c79be0; }
+.landing-terminal-body .tok-key,
+.landing-bento-mini-code .tok-key { color: #8ea3c0; }
+
+.landing-terminal-body .tok-str,
+.landing-bento-mini-code .tok-str { color: #b5d0a6; }
+
+.landing-terminal-body .tok-com,
+.landing-bento-mini-code .tok-com {
+  color: #6a6f7a;
+  font-style: italic;
+}
+
+.landing-terminal-body .tok-num,
+.landing-bento-mini-code .tok-num { color: #d8a162; }
+
+.landing-terminal-body .tok-pun,
+.landing-bento-mini-code .tok-pun { color: rgba(255, 255, 255, 0.55); }
+
+.landing-terminal-body .tok-sec,
+.landing-bento-mini-code .tok-sec { color: #c79be0; }
 
 /* ── Provider switcher (SecretSpec showcase) ── */
 

@@ -148,21 +148,45 @@ awssm://                      # SDK default region and credentials
 **Prerequisites**: AWS credentials configured, build with `--features awssm`
 **Storage**: Secret name `secretspec/{project}/{profile}/{key}`
 
-## Vault / OpenBao Provider
+## Vault Provider
 
-**URI**: `vault://[namespace@]host[:port][/mount]` or `openbao://[namespace@]host[:port][/mount]` - Stores secrets in HashiCorp Vault or OpenBao KV engine
+**URI**: `vault://[namespace@]host[:port][/mount][?options]` - Stores secrets in HashiCorp Vault's KV engine
 
 ```bash
 vault://vault.example.com:8200/secret       # KV v2 at "secret" mount
 vault://vault.example.com:8200              # Default "secret" mount
 vault://ns1@vault.example.com:8200/secret   # With namespace
-openbao://bao.internal:8200/secret          # OpenBao server
+vault://vault.example.com:8200/secret?auth=approle
+# SecretSpec 0.17+
+vault://vault.example.com:8200/secret?auth=jwt&role=ci
 vault://127.0.0.1:8200/secret?kv=1         # KV v1 engine
 vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
 ```
 
-**Features**: Read/write, KV v1 and v2, namespaces, OpenBao compatible
-**Prerequisites**: Vault/OpenBao server, `VAULT_TOKEN` env var or `~/.vault-token`, build with `--features vault`
+**Features**: Read/write, KV v1 and v2, namespaces; token and AppRole authentication; JWT/OIDC authentication (0.17+)
+**Prerequisites**: Vault server, authentication credentials, build with `--features vault`
+**Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
+
+## OpenBao Provider (0.17+)
+
+:::caution[Version compatibility]
+The `openbao` provider is added in SecretSpec 0.17 and is unavailable in the
+current 0.16 release. With 0.16, use `openbao://` through the `vault` build
+feature and configure `VAULT_*` environment variables.
+:::
+
+**URI**: `openbao://[namespace@]host[:port][/mount][?options]` - Stores secrets in OpenBao's KV engine
+
+```bash
+openbao://bao.example.com:8200/secret
+openbao://team-a@bao.example.com:8200/secret
+openbao://bao.example.com:8200/secret?auth=approle
+openbao://bao.example.com:8200/secret?auth=jwt&role=ci
+openbao://127.0.0.1:8200/secret?kv=1&tls=false
+```
+
+**Features**: Read/write, KV v1 and v2, namespaces; token, AppRole, and JWT/OIDC authentication; documented OpenBao CLI variables plus SecretSpec-defined `BAO_*` AppRole/JWT inputs, all with `VAULT_*` compatibility fallbacks
+**Prerequisites**: OpenBao server, authentication credentials, build with `--features openbao` (0.17+)
 **Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
 
 ## Bitwarden Password Manager Provider (0.16+)
@@ -215,7 +239,9 @@ akv://myvault?suffix=vault.azure.cn      # Sovereign cloud (explicit suffix, bar
 **Prerequisites**: An Azure Key Vault instance, authenticated via one of the methods above, build with `--features akv`
 **Storage**: Secret name `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}` (lowercase, unpadded Base32 preserves case and punctuation distinctions within Azure's case-insensitive secret-name namespace)
 
-## Infisical Provider (0.16+)
+## Infisical Provider
+
+Available since SecretSpec 0.16.
 
 **URI**: `infisical://[HOST]/PROJECT_ID[?env=SLUG][&path=/PREFIX][&tls=false]` - Stores secrets in Infisical
 
@@ -278,8 +304,9 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | OnePassword | ✅ End-to-end | Cloud (OnePassword) | ✅ Yes |
 | GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |
-| Vault/OpenBao | ✅ Vault encryption | Vault/OpenBao server | ✅ Yes |
+| Vault | ✅ Vault encryption | Vault server | ✅ Yes |
+| OpenBao (0.17+) | ✅ OpenBao encryption | OpenBao server | ✅ Yes |
 | BW (0.16+) | ✅ End-to-end | Cloud (Bitwarden) or self-hosted | ✅ Yes |
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
-| Infisical (0.16+) | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |
+| Infisical | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |

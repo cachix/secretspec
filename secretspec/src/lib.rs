@@ -84,7 +84,7 @@ pub use resolve::{
 };
 pub use secrets::ExportFormat;
 pub use secrets::Secrets;
-pub use validation::ValidatedSecrets;
+pub use validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
 
 #[cfg(test)]
 mod tests;

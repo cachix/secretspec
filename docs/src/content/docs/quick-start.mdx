@@ -16,6 +16,16 @@ Choose your preferred installation method:
 curl -sSL https://install.secretspec.dev | sh
 ```
 
+The static installer also installs `secretspec-update`. Run it to install the
+latest SecretSpec release:
+
+```bash
+secretspec-update
+```
+
+If you installed SecretSpec through Nix or another package manager, update it
+through that package manager instead.
+
 </TabItem>
 <TabItem label="Devenv.sh">
 
@@ -99,7 +109,8 @@ $ secretspec config init
   lastpass: LastPass password manager
   gcsm: Google Cloud Secret Manager
   awssm: AWS Secrets Manager
-  vault: HashiCorp Vault / OpenBao secret management
+  vault: HashiCorp Vault secret management
+  openbao: OpenBao secret management (0.17+)
   bw: Bitwarden Password Manager (0.16+)
   bws: Bitwarden Secrets Manager
   akv: Azure Key Vault

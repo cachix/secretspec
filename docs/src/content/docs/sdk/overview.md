@@ -8,10 +8,9 @@ PHP, and C# (0.16+). They all resolve secrets from the same declarative
 `secretspec.toml`, and they all behave identically, because they share one
 resolver.
 
-> **C# compatibility:** The C# SDK targets SecretSpec 0.16 and is unavailable
-> in the current 0.15 release. With 0.15, run a .NET application through
-> `secretspec run -- dotnet run`; the `Cachix.SecretSpec` NuGet API shown in the
-> C# guide becomes available in 0.16.
+> **C# compatibility:** Available since SecretSpec 0.16. The 0.15.0 NuGet
+> package is an unsupported package-ID bootstrap; use version 0.16 or later
+> for the API shown in the C# guide.
 
 ## One resolver, thin clients
 
@@ -90,7 +89,9 @@ no runtime library path to set:
   native C extension in the gem.
 - **Haskell** statically links the same archive at build time via the GHC FFI.
 - **C# (0.16+)** ships the `cdylib` as runtime-specific native assets in one
-  NuGet package and loads the matching asset through P/Invoke.
+  NuGet package and loads the matching asset through P/Invoke. The managed
+  client supports trimming and NativeAOT; glibc/musl Linux, Intel/Arm macOS,
+  and x64/Arm64 Windows assets are included.
 - **Go** embeds the `cdylib` in the module and loads it at runtime via purego
   (no cgo); an opt-in `-tags static` build links it statically instead.
 - **Node.js** builds the resolver into a napi-rs addon.
@@ -101,3 +102,26 @@ Because the resolver is linked or embedded directly, the SDKs do not depend on a
 separately installed `cdylib` or an `LD_LIBRARY_PATH`/`SECRETSPEC_FFI_LIB`
 override at runtime — the one exception being PHP's optional `ext-ffi` fallback,
 where `SECRETSPEC_FFI_LIB` can point at a specific library build.
+
+## Platform support
+
+Prebuilt packages cover the following platforms. Windows support for the
+Python wheel, the Ruby gem, and the PHP extension binaries targets SecretSpec
+0.17 and is not available in the current release.
+
+| SDK | Linux x64 | Linux arm64 | macOS Intel | macOS Apple silicon | Windows x64 | Windows arm64 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Rust (source crate) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Python | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
+| Node.js | ✓ | ✓ | — | ✓ | ✓ | — |
+| Go | ✓ | ✓ | — | ✓ | ✓ | — |
+| Ruby | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
+| C# | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| PHP | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
+| Haskell (source) | ✓ | — | — | — | ✓ (0.17+) | — |
+
+Most Linux packages build against a manylinux_2_28 baseline (glibc 2.28 or
+newer); the C# package additionally ships musl Linux assets. Hackage
+distributes the Haskell SDK as source, so its row records the platforms CI
+builds and tests. Contributors: the [SDK development](/development/sdks) page
+documents how these artifacts are built and how to add a platform.

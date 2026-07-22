@@ -51,18 +51,22 @@ jobs:
         # Full php x target cross-product: the `include` entries share the
         # `target` key with the axis, so they merge in the runner (rather than
         # creating standalone combinations). Non-thread-safe (NTS) is the default
-        # CLI/FPM build. 8.1 is omitted (end of life). Windows and ZTS builds are
-        # a follow-up (ext-php-rs on Windows needs the PHP SDK dev pack + rust-lld;
-        # Windows users can use the ext-ffi backend meanwhile).
+        # CLI/FPM build. 8.1 is omitted (end of life). ZTS builds are a
+        # follow-up. On Windows, ext-php-rs's build script downloads the PHP
+        # devel pack matching the installed php.exe (setup-php installs the
+        # official windows.php.net build) and links its php8.lib, so no manual
+        # dev-pack step is needed.
         php: ["8.2", "8.3", "8.4"]
         target:
           - x86_64-unknown-linux-gnu
           - aarch64-unknown-linux-gnu
           - aarch64-apple-darwin
+          - x86_64-pc-windows-msvc
         include:
-          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-latest }
-          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm }
-          - { target: aarch64-apple-darwin, runner: macos-latest }
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-latest, libext: so }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm, libext: so }
+          - { target: aarch64-apple-darwin, runner: macos-latest, libext: so }
+          - { target: x86_64-pc-windows-msvc, runner: windows-latest, libext: dll }
 
     steps:
       - uses: actions/checkout@v5
@@ -84,24 +88,51 @@ jobs:
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
 
+      # PHP's Windows ABI uses the vectorcall calling convention, which stable
+      # Rust does not expose; ext-php-rs therefore requires nightly on Windows
+      # (its own CI builds Windows on nightly, all other platforms on stable).
+      - name: Install Rust nightly (vectorcall ABI, Windows only)
+        if: runner.os == 'Windows'
+        run: rustup toolchain install nightly --profile minimal
+
+      # Keyed per target and PHP minor: ext-php-rs's build script generates
+      # per-PHP-version bindings into the build dir. (The Windows rows build
+      # on nightly, whose daily version bump naturally expires their cache.)
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}-php${{ matrix.php }}
+
       - name: Build and stage the extension under its distribution name
         id: stage
         shell: bash
         # Each runner is the target's native arch, so a plain release build emits
         # the target's binary (no cross-compilation). build-ext.sh owns the
-        # platform-to-library-name mapping and stages lib/secretspec.so.
+        # platform-to-library-name mapping and stages lib/secretspec.<ext>.
         run: |
           set -euo pipefail
+          # RUSTUP_TOOLCHAIN outranks rust-toolchain.toml; see the nightly note.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            export RUSTUP_TOOLCHAIN=nightly
+            # PHP's Windows loader refuses modules linked with a newer MSVC
+            # linker than the php.exe core (the official 8.x builds are
+            # VS16/VS17; the runner's link.exe is newer). rust-lld stamps a
+            # compatible PE linker version -- the setup ext-php-rs recommends.
+            export RUSTFLAGS="-C linker=rust-lld"
+          fi
           bash secretspec-php/scripts/build-ext.sh
-          asset="secretspec-php-native-${{ matrix.php }}-nts-${{ matrix.target }}.so"
-          cp secretspec-php/lib/secretspec.so "$asset"
+          asset="secretspec-php-native-${{ matrix.php }}-nts-${{ matrix.target }}.${{ matrix.libext }}"
+          cp "secretspec-php/lib/secretspec.${{ matrix.libext }}" "$asset"
           echo "asset=$asset" >> "$GITHUB_OUTPUT"
 
       - name: Smoke test (load the extension, check it registers)
         # Every row builds natively, so the runner can load what it built.
         shell: bash
         run: |
-          php -d extension="$PWD/${{ steps.stage.outputs.asset }}" -r '
+          # php.exe needs a Windows path, not Git Bash's /d/a/... form.
+          dir="$PWD"
+          case "$(uname -s)" in MINGW*|MSYS*) dir="$(pwd -W)" ;; esac
+          php -d extension="$dir/${{ steps.stage.outputs.asset }}" -r '
             assert(function_exists("secretspec_native_resolve"));
             assert(function_exists("secretspec_native_abi_version"));
             echo secretspec_native_abi_version(), PHP_EOL;

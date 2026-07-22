@@ -2,8 +2,10 @@
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 import { getCollection } from 'astro:content';
 
-// Latest blog post — surfaced in a banner near the top of the landing page.
-const posts = (await getCollection('docs'))
+const docs = await getCollection('docs');
+
+// Latest blog post, surfaced in a banner near the top of the landing page.
+const posts = docs
   .filter((e) => e.id.startsWith('blog/') && !e.data.draft)
   .sort(
     (a, b) =>
@@ -11,6 +13,10 @@ const posts = (await getCollection('docs'))
   );
 
 const latestPost = posts[0];
+const providerCount = docs.filter((e) => e.id.startsWith('providers/')).length;
+const sdkCount = docs.filter(
+  (e) => e.id.startsWith('sdk/') && e.id !== 'sdk/overview',
+).length;
 
 const latestPostDate = latestPost?.data.date
   ? new Intl.DateTimeFormat('en', {
@@ -34,7 +40,8 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'lastpass', slug: 'lastpass', label: 'LastPass' },
   { icon: 'bitwarden', slug: 'bw', label: 'Bitwarden Password Manager' },
   { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden Secrets Manager' },
-  { icon: 'vault', slug: 'vault', label: 'Vault / OpenBao' },
+  { icon: 'vault', slug: 'vault', label: 'Vault' },
+  { slug: 'openbao', label: 'OpenBao (0.17+)' },
   { slug: 'awssm', label: 'AWS Secrets Manager' },
   { icon: 'googlecloud', slug: 'gcsm', label: 'Google Cloud Secret Manager' },
   { icon: 'microsoftazure', slug: 'akv', label: 'Azure Key Vault' },
@@ -55,7 +62,7 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
 <StarlightPage
   frontmatter={{
     title: 'Declare secrets once. Store them anywhere.',
-    description: 'Declare what your application needs in secretspec.toml — resolve the values through any of 15 providers. No secrets in git. Same code, every environment.',
+    description: `Replace shared .env files with a manifest of what your application expects. Keep values out of git and resolve them from any of ${providerCount} providers.`,
     template: 'splash',
     hero: { tagline: '' },
   }}
@@ -66,7 +73,7 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
 <!-- ============ HERO ============ -->
 <section class="landing-hero">
   <div class="landing-hero-inner">
-    <!-- Latest blog post — sits inside the hero so the grid backdrop shows through -->
+    <!-- Latest blog post. It sits inside the hero so the grid backdrop shows through. -->
     {latestPost && (
     <a href={`/blog/${latestPost.id.replace(/^blog\//, '')}/`} class="landing-blog-banner">
       <span class="landing-blog-aside">
@@ -84,15 +91,15 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
     )}
 
     <div class="landing-hero-head">
-      <p class="landing-badge">Declarative secrets manager</p>
       <h1 id="_top" class="landing-hero-title">Declare secrets once.<br>Store them anywhere.</h1>
       <p class="landing-hero-subtitle">
-        Stop leaking <code class="inline-code">.env</code> files. Define what your application needs in <code class="inline-code">secretspec.toml</code>, then plug in keyring, 1Password, Vault, AWS, Azure, Gopass, or any of 15 providers — same code, every environment.
+        Stop leaking <code class="inline-code">.env</code> files. Commit what your application expects in <code class="inline-code">secretspec.toml</code>, never the values. Developers, CI, and production can each resolve the same declaration from any of {providerCount} providers.
       </p>
       <div class="landing-hero-actions">
         <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
-        <a href="/concepts/overview/" class="landing-btn landing-btn-secondary">Read the concepts</a>
-        <a href="https://github.com/cachix/secretspec" class="landing-btn landing-btn-secondary">View on GitHub</a>
+        <a href="/concepts/overview/" class="landing-btn landing-btn-secondary">Concepts</a>
+        <a href="/concepts/providers/" class="landing-btn landing-btn-secondary">Providers ({providerCount})</a>
+        <a href="/sdk/overview/" class="landing-btn landing-btn-secondary">SDKs ({sdkCount})</a>
       </div>
     </div>
 
@@ -115,7 +122,7 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
 <span class="tok-key">DB_PASSWORD</span>  <span class="tok-pun">= {</span> <span class="tok-key">type</span> <span class="tok-pun">=</span> <span class="tok-str">"password"</span><span class="tok-pun">,</span> <span class="tok-key">generate</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span>
 
 <span class="tok-sec">[profiles.development]</span>
-<span class="tok-com"># Inherits from default — override what changes</span>
+<span class="tok-com"># Inherits from default; override what changes</span>
 <span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">default</span> <span class="tok-pun">=</span> <span class="tok-str">"postgresql://localhost/dev"</span> <span class="tok-pun">}</span></code></pre>
         </div>
       </div>
@@ -137,6 +144,7 @@ $ secretspec config init
 <span class="tok-pun">›</span> keyring: Uses system keychain (Recommended)
   bw: Bitwarden Password Manager
   infisical: Infisical secret management
+  openbao: OpenBao secret management (0.17+)
 <span class="tok-str">✓</span> Saved to ~/.config/secretspec/config.toml
 
 <span class="tok-com"># 3. Run your app with secrets injected</span>
@@ -178,35 +186,42 @@ $ secretspec run --profile production -- npm start
 <section class="landing-section">
   <div class="landing-container">
     <div class="landing-section-centered">
-      <h2 class="landing-section-title">Three commands. Done.</h2>
+      <h2 class="landing-section-title">Set up SecretSpec in three steps.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        From a leaky <code class="inline-code">.env</code> to a portable, declarative secrets setup the whole team can use.
+        Create a shared contract for the secrets your application needs, choose a provider for the values, and run.
       </p>
     </div>
 
     <div class="landing-steps">
       <div class="landing-step">
-        <span class="landing-step-num">1</span>
-        <p class="landing-step-title">Declare</p>
-        <p class="landing-step-desc">Generate <code class="inline-code">secretspec.toml</code> from your existing <code class="inline-code">.env</code>, or write it by hand. Names and descriptions only — never values.</p>
+        <div class="landing-step-head">
+          <span class="landing-step-num">1</span>
+          <p class="landing-step-title">Declare</p>
+        </div>
+        <p class="landing-step-desc">Create <code class="inline-code">secretspec.toml</code> from an existing <code class="inline-code">.env</code> or by hand. Commit secret names and requirements, not their values.</p>
         <pre is:raw class="landing-step-code"><code>$ secretspec init --from dotenv</code></pre>
       </div>
 
       <div class="landing-step">
-        <span class="landing-step-num">2</span>
-        <p class="landing-step-title">Configure</p>
-        <p class="landing-step-desc">Pick from 15 providers: system keyring, password managers, cloud secret stores, Gopass, dotenv, or environment variables.</p>
+        <div class="landing-step-head">
+          <span class="landing-step-num">2</span>
+          <p class="landing-step-title">Provider</p>
+        </div>
+        <p class="landing-step-desc">Choose where this machine looks for values: a system keyring, password manager, cloud secret store, or one of {providerCount} providers.</p>
         <pre is:raw class="landing-step-code"><code>$ secretspec config init
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
   bw: Bitwarden Password Manager
-  infisical: Infisical secret management</code></pre>
+  infisical: Infisical secret management
+  openbao: OpenBao secret management (0.17+)</code></pre>
       </div>
 
       <div class="landing-step">
-        <span class="landing-step-num">3</span>
-        <p class="landing-step-title">Run</p>
-        <p class="landing-step-desc">Secrets are loaded at runtime and injected as environment variables. Same command, every environment.</p>
+        <div class="landing-step-head">
+          <span class="landing-step-num">3</span>
+          <p class="landing-step-title">Run</p>
+        </div>
+        <p class="landing-step-desc">SecretSpec validates the active profile, resolves its values, and launches your application with them in the environment.</p>
         <pre is:raw class="landing-step-code"><code>$ secretspec run -- npm start</code></pre>
       </div>
     </div>
@@ -217,71 +232,76 @@ $ secretspec run --profile production -- npm start
 <section class="landing-section">
   <div class="landing-container">
     <div class="landing-section-centered">
-      <h2 class="landing-section-title">One file. Every secret. Every environment.</h2>
+      <h2 class="landing-section-title">Make the declaration your source of truth.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Built around the three questions every project answers: <strong>what</strong> secrets, <strong>how</strong> requirements differ per environment, and <strong>where</strong> values live.
+        The manifest describes <strong>what</strong> your application needs. Profiles describe <strong>when</strong> it is required. Providers decide <strong>where</strong> each value comes from.
       </p>
     </div>
 
     <div class="landing-bento">
       <a href="/concepts/providers/" class="landing-bento-card is-link landing-bento-2">
-        <div class="landing-bento-big-num">15</div>
+        <div class="landing-bento-big-num">{providerCount}</div>
         <p class="landing-bento-title">Providers</p>
-        <p class="landing-bento-desc">Keyring · 1Password · LastPass · Bitwarden PM · Bitwarden SM · Vault · AWS · GCP · Azure · Infisical · Gopass · Pass · Proton Pass · dotenv · env.</p>
+        <p class="landing-bento-desc">Keep values in a local keyring, a team password manager, a cloud secret store, <code class="inline-code">.env</code>, or environment variables.</p>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-sec">[defaults]</span>
+<span class="tok-key">provider</span> <span class="tok-pun">=</span> <span class="tok-str">"keyring"</span></code></pre>
       </a>
 
       <a href="/concepts/profiles/" class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">Profiles</p>
-        <p class="landing-bento-desc">Different requirements, defaults, and validation per environment. Optional locally, required in production — without touching app code.</p>
-        <pre is:raw class="landing-bento-mini-code"><code>[profiles.production]
-DATABASE_URL = { required = true }</code></pre>
+        <p class="landing-bento-desc">Use convenient local defaults while requiring managed values in production, without changing application code.</p>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-sec">[profiles.production]</span>
+<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span></code></pre>
       </a>
 
       <a href="/concepts/generation/" class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">Auto-generation</p>
-        <p class="landing-bento-desc">Passwords, tokens, and keys created automatically when missing — no manual setup, no copy paste.</p>
-        <pre is:raw class="landing-bento-mini-code"><code>DB_PASSWORD = { type = "password", generate = true }</code></pre>
+        <p class="landing-bento-desc">Create a password, token, or key automatically when a required value does not exist yet.</p>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">DB_PASSWORD</span> <span class="tok-pun">= {</span> <span class="tok-key">type</span> <span class="tok-pun">=</span> <span class="tok-str">"password"</span><span class="tok-pun">,</span> <span class="tok-key">generate</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span></code></pre>
       </a>
 
-      <a href="/concepts/composed-secrets/" class="landing-bento-card is-link landing-bento-2">
+      <a href="/concepts/composed-secrets/" class="landing-bento-card is-link landing-bento-3">
         <p class="landing-bento-title">Composed secrets</p>
-        <p class="landing-bento-desc">Build read-only DSNs and arguments from independently stored secrets with strict, order-independent references.</p>
-        <pre is:raw class="landing-bento-mini-code"><code>DATABASE_URL = { composed = "postgres://{USER}:{PASSWORD}@{HOST}/app" }</code></pre>
+        <p class="landing-bento-desc">Store credentials separately, then assemble connection strings and other application-ready values during resolution.</p>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">composed</span> <span class="tok-pun">=</span> <span class="tok-str">"postgres://${USER}:${PASSWORD}@${HOST}/app"</span> <span class="tok-pun">}</span></code></pre>
       </a>
 
       <a href="/concepts/providers/" class="landing-bento-card is-link landing-bento-3">
         <p class="landing-bento-title">Per-secret fallback chains</p>
-        <p class="landing-bento-desc">Each secret can specify its own ordered provider list. Tries Vault first, falls back to keyring, then env — until the value is found.</p>
-        <pre is:raw class="landing-bento-mini-code"><code>API_KEY = { providers = ["vault", "keyring", "env"] }</code></pre>
+        <p class="landing-bento-desc">Look in the team store first, then fall back to a personal keyring or environment variable when needed.</p>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">API_KEY</span> <span class="tok-pun">= {</span> <span class="tok-key">providers</span> <span class="tok-pun">= [</span><span class="tok-str">"vault"</span><span class="tok-pun">,</span> <span class="tok-str">"keyring"</span><span class="tok-pun">,</span> <span class="tok-str">"env"</span><span class="tok-pun">] }</span></code></pre>
       </a>
 
       <a href="/sdk/rust/" class="landing-bento-card is-link landing-bento-3">
         <p class="landing-bento-title">Type-safe Rust SDK</p>
-        <p class="landing-bento-desc">Proc macro reads <code class="inline-code">secretspec.toml</code> at compile time and generates strongly-typed structs. Typos fail to compile.</p>
-        <pre is:raw class="landing-bento-mini-code"><code>secretspec_derive::declare_secrets!("secretspec.toml");
-let s = Secrets::builder().load()?;
-println!("{}", s.secrets.database_url);</code></pre>
+        <p class="landing-bento-desc">Generate typed Rust fields from <code class="inline-code">secretspec.toml</code> so misspelled secret names fail at compile time.</p>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">secretspec_derive</span><span class="tok-pun">::</span><span class="tok-key">declare_secrets!</span><span class="tok-pun">(</span><span class="tok-str">"secretspec.toml"</span><span class="tok-pun">);</span>
+<span class="tok-key">let</span> s <span class="tok-pun">=</span> Secrets<span class="tok-pun">::</span>builder<span class="tok-pun">().</span>load<span class="tok-pun">()?;</span>
+println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span class="tok-pun">,</span> s<span class="tok-pun">.</span>secrets<span class="tok-pun">.</span>database_url<span class="tok-pun">);</span></code></pre>
       </a>
 
-      <a href="/concepts/inheritance/" class="landing-bento-card is-link landing-bento-2">
+      <a href="/concepts/inheritance/" class="landing-bento-card is-link landing-bento-3">
         <p class="landing-bento-title">Config inheritance</p>
-        <p class="landing-bento-desc">Extend shared configs across services with <code class="inline-code">extends</code>. Define once, reuse everywhere with proper precedence.</p>
+        <p class="landing-bento-desc">Share a base declaration across services, then add or override only what each service needs.</p>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">extends</span> <span class="tok-pun">= [</span><span class="tok-str">"../shared/common"</span><span class="tok-pun">]</span></code></pre>
       </a>
 
       <a href="/reference/cli/" class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">File-path secrets</p>
-        <p class="landing-bento-desc">Secrets with <code class="inline-code">as_path = true</code> get written to temp files — perfect for TLS certs and service account keys.</p>
+        <p class="landing-bento-desc">Materialize certificates and service account keys as temporary files for applications that expect a path.</p>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">TLS_CERT</span> <span class="tok-pun">= {</span> <span class="tok-key">as_path</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span></code></pre>
       </a>
 
       <a href="/reference/cli/" class="landing-bento-card is-link landing-bento-2">
-        <p class="landing-bento-title">One-line migration</p>
-        <p class="landing-bento-desc">Move all secrets between providers without changing application code. <code class="inline-code">secretspec import</code> does the rest.</p>
+        <p class="landing-bento-title">Provider migration</p>
+        <p class="landing-bento-desc">Copy values to a new provider without renaming variables or changing application code.</p>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-pun">$</span> <span class="tok-key">secretspec import</span> <span class="tok-str">dotenv://.env</span></code></pre>
       </a>
 
       <a href="/reference/cli/#export" class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">Export for shells and CI</p>
-        <p class="landing-bento-desc">Resolve a complete profile as shell exports, dotenv, JSON, or masked GitHub Actions environment variables.</p>
-        <pre is:raw class="landing-bento-mini-code"><code>$ secretspec export --format json</code></pre>
+        <p class="landing-bento-desc">Pass a resolved profile to shells, scripts, and CI as dotenv, JSON, shell exports, or GitHub Actions variables.</p>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-pun">$</span> <span class="tok-key">secretspec export</span> <span class="tok-pun">--format</span> <span class="tok-str">json</span></code></pre>
       </a>
     </div>
   </div>
@@ -292,9 +312,9 @@ println!("{}", s.secrets.database_url);</code></pre>
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Declaration vs storage</span>
-      <h2 class="landing-section-title">Declare a secret. Swap the source.</h2>
+      <h2 class="landing-section-title">Keep secret names separate from storage.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Your <code class="inline-code">secretspec.toml</code> never changes. The same code reads from Keychain, 1Password, Vault, AWS, Azure, or any of 15 providers.
+        Keep the declaration in your repository while each developer, CI job, or deployment chooses an appropriate provider. The application still receives the same variables.
       </p>
     </div>
 
@@ -304,6 +324,7 @@ println!("{}", s.secrets.database_url);</code></pre>
           <button type="button" class="landing-provider-tab is-active" data-provider="keyring">Keyring</button>
           <button type="button" class="landing-provider-tab" data-provider="onepassword">1Password</button>
           <button type="button" class="landing-provider-tab" data-provider="vault">Vault</button>
+          <button type="button" class="landing-provider-tab" data-provider="openbao">OpenBao (0.17+)</button>
           <button type="button" class="landing-provider-tab" data-provider="awssm">AWS</button>
           <button type="button" class="landing-provider-tab" data-provider="gcsm">GCP</button>
           <button type="button" class="landing-provider-tab" data-provider="akv">Azure</button>
@@ -326,24 +347,24 @@ println!("{}", s.secrets.database_url);</code></pre>
       </div>
 
       <div class="landing-secret-flow">
-        <div class="landing-secret-step is-source">
-          <span aria-hidden="true">🔐</span>
-          <span>Source: <strong id="secret-provider-name">System keyring</strong></span>
-        </div>
-        <div class="landing-secret-arrow" aria-hidden="true">↓</div>
         <div class="landing-secret-step">
           <span aria-hidden="true">📄</span>
-          <span><strong>secretspec.toml</strong> declares <code class="inline-code">DATABASE_URL</code></span>
+          <span><strong>secretspec.toml</strong> says the app requires <code class="inline-code">DATABASE_URL</code></span>
+        </div>
+        <div class="landing-secret-arrow" aria-hidden="true">↓</div>
+        <div class="landing-secret-step is-source">
+          <span aria-hidden="true">🔐</span>
+          <span>SecretSpec resolves it from <strong id="secret-provider-name">System keyring</strong></span>
         </div>
         <div class="landing-secret-arrow" aria-hidden="true">↓</div>
         <div class="landing-secret-step">
           <span aria-hidden="true">🐚</span>
-          <span><code class="inline-code">$ secretspec run</code> — injected as env var at runtime</span>
+          <span><code class="inline-code">$ secretspec run</code> adds it to the process environment</span>
         </div>
         <div class="landing-secret-arrow" aria-hidden="true">↓</div>
         <div class="landing-secret-step">
           <span aria-hidden="true">🚀</span>
-          <span>Your app reads <code class="inline-code">DATABASE_URL</code> from <strong>env</strong></span>
+          <span>Your app reads <code class="inline-code">DATABASE_URL</code> as usual</span>
         </div>
       </div>
     </div>
@@ -355,9 +376,9 @@ println!("{}", s.secrets.database_url);</code></pre>
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Profiles</span>
-      <h2 class="landing-section-title">One config. Every environment.</h2>
+      <h2 class="landing-section-title">Change requirements by environment.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Profiles let the same secret be optional in development, required in production — without changing application code. <a href="/concepts/profiles/" class="landing-link">How profiles work →</a>
+        Start with shared requirements, then override only what changes. A secret can use a local default in development and a managed provider in production. <a href="/concepts/profiles/" class="landing-link">How profiles work →</a>
       </p>
     </div>
 
@@ -398,9 +419,9 @@ println!("{}", s.secrets.database_url);</code></pre>
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Per-secret providers</span>
-      <h2 class="landing-section-title">Fallback chains, per secret.</h2>
+      <h2 class="landing-section-title">Give each secret its own fallback.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Specify an ordered list of providers for each secret. SecretSpec walks the chain until it finds the value — perfect for shared team vaults with personal overrides.
+        Give a secret an ordered provider list. SecretSpec can use the shared team vault when a value exists there, then fall back to a personal keyring or CI environment.
       </p>
     </div>
 
@@ -432,7 +453,7 @@ println!("{}", s.secrets.database_url);</code></pre>
           <span aria-hidden="true">②</span>
           <span>Found in <strong>keyring</strong> ✓</span>
         </div>
-        <p class="landing-chain-result">Same code. Same secret. Different source per machine.</p>
+        <p class="landing-chain-result">One declaration, with a source that can vary by machine.</p>
       </div>
     </div>
   </div>
@@ -443,9 +464,9 @@ println!("{}", s.secrets.database_url);</code></pre>
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Provider credentials</span>
-      <h2 class="landing-section-title">Keep the key to your vault in another vault.</h2>
+      <h2 class="landing-section-title">Keep provider credentials out of your app.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Authenticate a provider with credentials stored in another provider. SecretSpec fetches them in memory, hands them directly to the destination store, and never exposes them to your application environment. <a href="/concepts/providers/#provider-credentials" class="landing-link">How provider credentials work →</a>
+        Store a provider token or machine credential in another provider, such as the OS keyring. SecretSpec uses it to connect to the destination store without adding it to your application's environment. <a href="/concepts/providers/#provider-credentials" class="landing-link">How provider credentials work →</a>
       </p>
     </div>
 
@@ -487,7 +508,7 @@ $ secretspec run --provider bws -- ./deploy
     </div>
 
     <p class="landing-chain-result" style="margin-top: 1.5rem;">
-      Use convention paths for simple credentials, or a <code class="inline-code">ref</code> to source a specific 1Password field, Vault entry, or other provider-native address. Credential access is audited and cached for the invocation.
+      Provider credentials are resolved separately from application secrets, so your application receives <code class="inline-code">DATABASE_URL</code> but not the token used to fetch it.
     </p>
   </div>
 </section>
@@ -497,9 +518,9 @@ $ secretspec run --provider bws -- ./deploy
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Secret references</span>
-      <h2 class="landing-section-title">Name it once. Point it anywhere.</h2>
+      <h2 class="landing-section-title">Use secrets where they already live.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Already managing a secret in 1Password, Vault, or a <code class="inline-code">.env</code> file? Point at it by the store's own coordinates with <code class="inline-code">ref</code>. No renaming, no copying it into SecretSpec's own layout. <a href="/concepts/references/" class="landing-link">How references work →</a>
+        Map an application variable to an existing item or field in 1Password, Vault, or another provider. You do not need to rename or copy the stored secret. <a href="/concepts/references/" class="landing-link">How references work →</a>
       </p>
     </div>
 
@@ -520,14 +541,14 @@ $ secretspec run --provider bws -- ./deploy
       <div class="landing-chain">
         <div class="landing-chain-step">
           <span aria-hidden="true">🧭</span>
-          <span>A <code>ref</code> names the store's own coordinates: <code>item</code> plus an optional <code>field</code></span>
+          <span><code>ref</code> identifies the existing <code>item</code> and optional <code>field</code></span>
         </div>
-        <div class="landing-chain-arrow" aria-hidden="true">↓ resolves through</div>
+        <div class="landing-chain-arrow" aria-hidden="true">↓ resolves as</div>
         <div class="landing-chain-step is-hit">
           <span aria-hidden="true">🔀</span>
-          <span>The same coordinates work in <strong>1Password</strong>, <strong>Vault</strong>, <strong>keyring</strong>, or <strong>.env</strong></span>
+          <span>Your application receives it as <strong>DATABASE_URL</strong></span>
         </div>
-        <p class="landing-chain-result">Point at secrets you already have. Switch stores without editing the ref.</p>
+        <p class="landing-chain-result">Adopt SecretSpec without moving or renaming existing secrets.</p>
       </div>
     </div>
   </div>
@@ -538,9 +559,9 @@ $ secretspec run --provider bws -- ./deploy
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Audit &amp; AI agents</span>
-      <h2 class="landing-section-title">Know who read a secret — and why.</h2>
+      <h2 class="landing-section-title">See which secrets were accessed, by whom, and why.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Every access is appended to a local, append-only log — values never written, URI credentials redacted. And when an AI agent is driving, SecretSpec makes it state a reason first. <a href="/concepts/audit/" class="landing-link">How auditing works →</a>
+        SecretSpec records access metadata in a local append-only log without recording secret values. You can also require AI agents to provide a reason before they access secrets. <a href="/concepts/audit/" class="landing-link">How auditing works →</a>
       </p>
     </div>
 
@@ -550,12 +571,12 @@ $ secretspec run --provider bws -- ./deploy
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">agent session</span>
         </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># An AI agent runs your app — no reason given</span>
+        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># An AI agent runs your app without a reason</span>
 $ secretspec run -- ./deploy.sh
 Error: accessing secrets requires a reason.
        Provide one with --reason <span class="tok-str">"&lt;why...&gt;"</span>
 
-<span class="tok-com"># State why — required for agents by default</span>
+<span class="tok-com"># State why; required for agents by default</span>
 $ secretspec run --reason <span class="tok-str">"Deploy web frontend"</span> \
     -- ./deploy.sh
 <span class="tok-str">✓</span> Loaded DATABASE_URL from keyring
@@ -576,7 +597,7 @@ $ secretspec audit -n 1
     </div>
 
     <p class="landing-chain-result" style="margin-top: 1.5rem;">
-      The default <code class="inline-code">require_reason = "agents"</code> policy is checked into <code class="inline-code">secretspec.toml</code>, so every clone, CI runner, and agent is held to it — humans running interactively are unaffected. <a href="/reference/configuration/#requiring-a-reason-for-secret-access" class="landing-link">Configure the policy →</a>
+      Commit <code class="inline-code">require_reason = "agents"</code> with the manifest to apply the same policy in every clone while leaving interactive human use unchanged. <a href="/reference/configuration/#requiring-a-reason-for-secret-access" class="landing-link">Configure the policy →</a>
     </p>
   </div>
 </section>
@@ -586,9 +607,9 @@ $ secretspec audit -n 1
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Export</span>
-      <h2 class="landing-section-title">Resolve once. Hand secrets to anything.</h2>
+      <h2 class="landing-section-title">Export secrets to shells, tools, and CI.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        <code class="inline-code">secretspec export</code> resolves the complete active profile without launching a command. It never prompts and exits non-zero when a required secret is missing, making it a clean boundary for shells, scripts, and CI. <a href="/reference/cli/#export" class="landing-link">Export command reference →</a>
+        Export the active profile for a shell, another tool, or a CI workflow. Required secrets are still validated before any output is produced. <a href="/reference/cli/#export" class="landing-link">Export command reference →</a>
       </p>
     </div>
 
@@ -624,7 +645,7 @@ $ secretspec export --format json
     </div>
 
     <p class="landing-chain-result" style="margin-top: 1.5rem;">
-      Choose <code class="inline-code">shell</code>, <code class="inline-code">dotenv</code>, <code class="inline-code">json</code>, or <code class="inline-code">gha</code> output without changing how secrets are declared or routed.
+      Choose shell, dotenv, JSON, or GitHub Actions output without maintaining a separate secret list for each tool.
     </p>
   </div>
 </section>
@@ -634,13 +655,27 @@ $ secretspec export --format json
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Language SDKs</span>
-      <h2 class="landing-section-title">Use it from any language.</h2>
+      <h2 class="landing-section-title">Resolve secrets directly from your language.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, and C# all resolve from the same <code class="inline-code">secretspec.toml</code> through one Rust core — every provider, chain, and profile behaves identically, with no per-language logic. <a href="/sdk/overview/" class="landing-link">How the SDKs work →</a>
+        All {sdkCount} SDKs—Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, and C#—use the same resolver as the CLI, so provider and profile behavior stays consistent. <a href="/sdk/overview/" class="landing-link">Explore the SDKs →</a>
       </p>
     </div>
 
     <div class="landing-fallback">
+      <!-- Rust -->
+      <div class="landing-terminal">
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">Rust</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code><span class="tok-key">secretspec_derive</span><span class="tok-pun">::</span><span class="tok-key">declare_secrets!</span><span class="tok-pun">(</span><span class="tok-str">"secretspec.toml"</span><span class="tok-pun">);</span>
+
+<span class="tok-key">let</span> s <span class="tok-pun">=</span> SecretSpec<span class="tok-pun">::</span>builder<span class="tok-pun">()</span>
+    <span class="tok-pun">.</span>with_provider<span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
+    <span class="tok-pun">.</span>with_reason<span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span>load<span class="tok-pun">()?;</span>
+println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span class="tok-pun">,</span> s<span class="tok-pun">.</span>secrets<span class="tok-pun">.</span>database_url<span class="tok-pun">);</span></code></pre>
+      </div>
+
       <!-- Python -->
       <div class="landing-terminal">
         <div class="landing-terminal-header">
@@ -654,7 +689,9 @@ s <span class="tok-pun">=</span> SecretSpec.builder() \
     .with_reason(<span class="tok-str">"boot"</span>).load()
 print(s.secrets[<span class="tok-str">"DATABASE_URL"</span>].get)</code></pre>
       </div>
+    </div>
 
+    <div class="landing-fallback" style="margin-top: 1.5rem;">
       <!-- Node.js / TypeScript -->
       <div class="landing-terminal">
         <div class="landing-terminal-header">
@@ -668,9 +705,7 @@ print(s.secrets[<span class="tok-str">"DATABASE_URL"</span>].get)</code></pre>
   .withReason(<span class="tok-str">"boot"</span>).load();
 console.log(s.secrets.DATABASE_URL.get());</code></pre>
       </div>
-    </div>
 
-    <div class="landing-fallback" style="margin-top: 1.5rem;">
       <!-- Go -->
       <div class="landing-terminal">
         <div class="landing-terminal-header">
@@ -682,7 +717,9 @@ console.log(s.secrets.DATABASE_URL.get());</code></pre>
     WithReason(<span class="tok-str">"boot"</span>).Load()
 fmt.Println(s.Secrets[<span class="tok-str">"DATABASE_URL"</span>].Get())</code></pre>
       </div>
+    </div>
 
+    <div class="landing-fallback" style="margin-top: 1.5rem;">
       <!-- Ruby -->
       <div class="landing-terminal">
         <div class="landing-terminal-header">
@@ -694,9 +731,7 @@ fmt.Println(s.Secrets[<span class="tok-str">"DATABASE_URL"</span>].Get())</code>
       .with_reason(<span class="tok-str">"boot"</span>).load
 puts s.secrets[<span class="tok-str">"DATABASE_URL"</span>].get</code></pre>
       </div>
-    </div>
 
-    <div class="landing-fallback" style="margin-top: 1.5rem;">
       <!-- Haskell -->
       <div class="landing-terminal">
         <div class="landing-terminal-header">
@@ -708,7 +743,9 @@ puts s.secrets[<span class="tok-str">"DATABASE_URL"</span>].get</code></pre>
       <span class="tok-pun">&amp;</span> S.withReason <span class="tok-str">"boot"</span>)
 print (S.get <span class="tok-pun">=&lt;&lt;</span> Map.lookup <span class="tok-str">"DATABASE_URL"</span> (S.resolvedSecrets s))</code></pre>
       </div>
+    </div>
 
+    <div class="landing-fallback" style="margin-top: 1.5rem;">
       <!-- PHP -->
       <div class="landing-terminal">
         <div class="landing-terminal-header">
@@ -722,9 +759,7 @@ print (S.get <span class="tok-pun">=&lt;&lt;</span> Map.lookup <span class="tok-
     <span class="tok-pun">-&gt;</span>withReason<span class="tok-pun">(</span><span class="tok-str">'boot web app'</span><span class="tok-pun">)-&gt;</span>load<span class="tok-pun">();</span>
 <span class="tok-key">$s</span><span class="tok-pun">-&gt;</span>setAsEnv<span class="tok-pun">();</span></code></pre>
       </div>
-    </div>
 
-    <div class="landing-fallback" style="margin-top: 1.5rem;">
       <!-- C# -->
       <div class="landing-terminal">
         <div class="landing-terminal-header">
@@ -741,7 +776,7 @@ Console.WriteLine(s.Secrets[<span class="tok-str">"DATABASE_URL"</span>].Get());
     </div>
 
     <p class="landing-chain-result" style="margin-top: 2.5rem;">
-      Every SDK is a thin client over one native core — the <code class="inline-code">secretspec-ffi</code> library, or a native extension that embeds it for Python, Node, and PHP — so a new provider is available everywhere at once. For typed access in the dynamic languages, <code class="inline-code">secretspec schema</code> feeds <a href="https://quicktype.io" class="landing-link">quicktype</a> to generate typed classes. <a href="/sdk/overview/" class="landing-link">SDK overview →</a>
+      Choose the API for your language without reimplementing secret resolution. Generate typed models from <code class="inline-code">secretspec schema</code> when you want typed access. <a href="/sdk/overview/" class="landing-link">SDK overview →</a>
     </p>
   </div>
 </section>
@@ -751,9 +786,9 @@ Console.WriteLine(s.Secrets[<span class="tok-str">"DATABASE_URL"</span>].Get());
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Migration</span>
-      <h2 class="landing-section-title">Switch backends with one command.</h2>
+      <h2 class="landing-section-title">Move secrets without changing your application.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Outgrowing dotenv? Standardizing on Vault? <code class="inline-code">secretspec import</code> moves every secret without touching a single line of application code.
+        Copy values from dotenv or another provider into the provider you use now. The declared names and the way your application reads them stay the same.
       </p>
     </div>
 
@@ -784,9 +819,9 @@ REDIS_URL=redis://…</code></pre>
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">devenv &amp; Nix</span>
-      <h2 class="landing-section-title">Native devenv &amp; Nix integration.</h2>
+      <h2 class="landing-section-title">Use SecretSpec with devenv and Nix.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Enable SecretSpec in your <code class="inline-code">devenv.yaml</code> and every secret declared in <code class="inline-code">secretspec.toml</code> is loaded into <code class="inline-code">config.secretspec.secrets</code> — wire them into env vars, services, or processes from <code class="inline-code">devenv.nix</code>. <a href="https://devenv.sh/integrations/secretspec/" class="landing-link">devenv docs →</a>
+        Enable the integration, choose a provider and profile, then use resolved values in your development shell, services, and processes. <a href="https://devenv.sh/integrations/secretspec/" class="landing-link">devenv docs →</a>
       </p>
     </div>
 
@@ -816,7 +851,7 @@ REDIS_URL=redis://…</code></pre>
     </div>
 
     <p class="landing-chain-result" style="margin-top: 1.5rem;">
-      Switch providers per machine without touching <code class="inline-code">devenv.nix</code>: <code class="inline-code">devenv --secretspec-provider dotenv --secretspec-profile dev shell</code>.
+      Each machine can select its own provider and profile without changing the shared <code class="inline-code">devenv.nix</code>.
     </p>
   </div>
 </section>
@@ -827,7 +862,7 @@ REDIS_URL=redis://…</code></pre>
     <div class="landing-section-centered">
       <h2 class="landing-section-title">Built in the open</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Designed by <a href="https://cachix.org" class="landing-link">Cachix</a> for <a href="https://devenv.sh" class="landing-link">devenv.sh</a>. Apache 2.0 licensed and community driven.
+        SecretSpec is an Apache 2.0 project built by <a href="https://cachix.org" class="landing-link">Cachix</a> for <a href="https://devenv.sh" class="landing-link">devenv.sh</a>, with development happening in public.
       </p>
     </div>
 
@@ -860,9 +895,9 @@ REDIS_URL=redis://…</code></pre>
 <section class="landing-section">
   <div class="landing-container">
     <div class="landing-cta-card">
-      <h2 class="landing-section-title">Stop leaking secrets.</h2>
+      <h2 class="landing-section-title">Stop leaking <code class="inline-code">.env</code> files.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Declare what your application needs. Store the values anywhere. Onboard new developers in one command.
+        Start from your existing <code class="inline-code">.env</code>, commit the declaration, and let every environment choose where its values live.
       </p>
       <div class="landing-hero-actions" style="justify-content: center;">
         <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
@@ -889,6 +924,7 @@ REDIS_URL=redis://…</code></pre>
       keyring:     'System keyring',
       onepassword: '1Password vault',
       vault:       'HashiCorp Vault',
+      openbao:     'OpenBao (0.17+)',
       awssm:       'AWS Secrets Manager',
       gcsm:        'Google Cloud Secret Manager',
       akv:         'Azure Key Vault',

@@ -10,18 +10,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Bitwarden Password Manager provider. `bw://` uses the `bw` CLI for
   vault-wide secret storage across all Bitwarden item types.
+- The `required` field accepts `at_least_one` and `exactly_one` group tables,
+  supporting overlapping alternative and mutually exclusive credentials
+  across `check`, `run`, and SDK resolution.
+- OpenBao provider (`openbao://`, `openbao` build feature) with its
+  own provider identity, documentation, and OpenBao CLI configuration through
+  `BAO_ADDR`, `BAO_NAMESPACE`, `BAO_TOKEN`, and `BAO_TOKEN_PATH`. The
+  provider also has OpenBao-prefixed AppRole and JWT inputs; corresponding
+  `VAULT_*` names remain compatibility fallbacks. Compatible KV and standard
+  authentication mechanics are shared internally with the Vault provider.
+  Vault-compatible addresses accept trailing slashes, and AppRole/JWT login
+  exchanges now honor the configured namespace. Reported provider URIs strip
+  endpoint credentials while retaining non-secret store and authentication
+  attribution.
+- Vault / OpenBao JWT/OIDC authentication (`?auth=jwt`) logs in through a
+  configured Vault role using `VAULT_JWT`, or requests a short-lived OIDC token
+  automatically in GitHub Actions and Forgejo Actions jobs with `id-token:
+  write`. The role and optional audience can be set in the provider URI or with
+  `VAULT_JWT_ROLE` and `VAULT_JWT_AUDIENCE`.
+- The Python SDK now publishes a Windows x64 wheel to PyPI, so
+  `pip install secretspec` and `uv add secretspec` work on Windows.
+  ([#177](https://github.com/cachix/secretspec/issues/177))
+- The Ruby SDK now publishes a Windows gem (`x64-mingw-ucrt`) to RubyGems, so
+  `gem install secretspec` works with RubyInstaller on Windows.
+- The PHP SDK now publishes prebuilt Windows x64 extension binaries
+  (`secretspec-php-native-<php>-nts-x86_64-pc-windows-msvc.dll`) alongside the
+  Linux and macOS builds on each release.
+
+### Changed
+- Secret status output now emphasizes secret names, de-emphasizes descriptions,
+  and omits placeholder text when a description is unavailable, making long
+  `check` and `import` results easier to scan.
+  ([#139](https://github.com/cachix/secretspec/issues/139))
+
+### Fixed
+- The dotenv provider rejects variable names its parser cannot read back
+  (anything outside `[A-Za-z_][A-Za-z0-9_.]*`, for example a `ref` item
+  containing a dash) instead of writing a line that made every later read and
+  write of the whole file fail to parse. The rejection happens before the CLI
+  prompts for a value and names the offending item.
+
+## [0.16.0] - 2026-07-17
+
+### Added
+>>>>>>> upstream/main
 - Composed secrets derive read-only values such as connection strings from
-  other declared secrets using strict `{SECRET_NAME}` templates. Dependencies
-  are order-independent, may include other compositions, and are validated for
-  unknown references and cycles before provider access; unlike dotenv
-  expansion, values are substituted once without ambient environment lookup,
-  fallback operators, recursive expansion, or silent empty replacements.
+  other declared secrets using strict `${UPPERCASE_NAME}` templates; names must
+  match `[A-Z][A-Z0-9_]*`, `$$` produces a literal dollar sign, and ordinary
+  braces remain literal. Dependencies are order-independent, may include other
+  compositions, and are validated for unknown references and cycles before
+  provider access; unlike dotenv expansion, values are substituted once
+  without ambient environment lookup, fallback operators, recursive expansion,
+  or silent empty replacements.
 - C# SDK (`Cachix.SecretSpec`, available in 0.16): resolve secrets from .NET
   through the shared native resolver, with fluent builder and one-shot APIs,
   typed failure exceptions, value-free preflight reports, provenance,
   environment export, typed-codegen input, and deterministic cleanup of
-  `as_path` files. The NuGet package includes native resolver builds for Linux
-  x64/Arm64, macOS Arm64, and Windows x64.
+  `as_path` files. The trimming-safe, NativeAOT-compatible NuGet package
+  includes native resolver builds for glibc and musl Linux x64/Arm64, macOS
+  x64/Arm64, and Windows x64/Arm64; Windows applications do not need a separate
+  Visual C++ Redistributable.
 - Infisical provider (`infisical://`), for Infisical Cloud and self-hosted
   instances. Authenticates as a machine identity via Universal Auth, whose
   `client_id` and `client_secret` can be sourced as provider credentials (with

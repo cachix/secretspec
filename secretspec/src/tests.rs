@@ -437,6 +437,114 @@ fn test_resolution_report_provenance() {
     assert!(stripe.required);
 }
 
+#[test]
+fn profile_presence_constraints_validate_resolved_values() {
+    use crate::validation::ConstraintKind;
+
+    fn app(env_contents: &str, kind: ConstraintKind, groups: &[&str]) -> (TempDir, Secrets) {
+        let temp_dir = TempDir::new().unwrap();
+        let env_path = temp_dir.path().join(".env");
+        fs::write(&env_path, env_contents).unwrap();
+
+        let member = || Secret {
+            description: Some("alternative credential".to_string()),
+            at_least_one: (kind == ConstraintKind::AtLeastOne)
+                .then(|| groups.iter().map(|group| (*group).to_string()).collect()),
+            exactly_one: (kind == ConstraintKind::ExactlyOne)
+                .then(|| groups.iter().map(|group| (*group).to_string()).collect()),
+            ..Default::default()
+        };
+        let config = Config {
+            project: Project {
+                name: "constraint-test".to_string(),
+                ..Default::default()
+            },
+            profiles: HashMap::from([(
+                "default".to_string(),
+                Profile {
+                    defaults: None,
+                    secrets: HashMap::from([
+                        ("PASSWORD".to_string(), member()),
+                        ("ACCESS_TOKEN".to_string(), member()),
+                    ]),
+                },
+            )]),
+            providers: None,
+        };
+        let provider = format!("dotenv://{}", env_path.display());
+        let app = Secrets::new(config, None, Some(provider), None);
+        (temp_dir, app)
+    }
+
+    fn validation_errors(spec: &Secrets) -> ValidationErrors {
+        match spec.validate().unwrap() {
+            Ok(_) => panic!("expected presence constraint to fail"),
+            Err(errors) => errors,
+        }
+    }
+
+    let (_temp_dir, spec) = app("", ConstraintKind::AtLeastOne, &["auth"]);
+    let errors = validation_errors(&spec);
+    assert!(errors.missing_required.is_empty());
+    assert_eq!(errors.constraint_violations.len(), 1);
+    assert_eq!(
+        errors.constraint_violations[0].kind,
+        ConstraintKind::AtLeastOne
+    );
+    assert_eq!(errors.constraint_violations[0].group, "auth");
+    assert!(errors.constraint_violations[0].present.is_empty());
+    let report = errors.report();
+    assert!(!report.all_required_present());
+    assert_eq!(
+        serde_json::to_value(&report).unwrap()["constraint_violations"][0]["kind"],
+        "at_least_one"
+    );
+    assert!(matches!(
+        spec.resolve(),
+        Err(SecretSpecError::ValidationFailed(_))
+    ));
+
+    let (_temp_dir, spec) = app(
+        "ACCESS_TOKEN=token\n",
+        ConstraintKind::AtLeastOne,
+        &["auth"],
+    );
+    assert!(spec.validate().unwrap().is_ok());
+
+    let (_temp_dir, spec) = app("", ConstraintKind::AtLeastOne, &["auth", "deploy"]);
+    let errors = validation_errors(&spec);
+    assert_eq!(
+        errors
+            .constraint_violations
+            .iter()
+            .map(|violation| violation.group.as_str())
+            .collect::<Vec<_>>(),
+        vec!["auth", "deploy"]
+    );
+
+    let (_temp_dir, spec) = app("", ConstraintKind::ExactlyOne, &["auth"]);
+    let errors = validation_errors(&spec);
+    assert_eq!(
+        errors.constraint_violations[0].kind,
+        ConstraintKind::ExactlyOne
+    );
+    assert!(errors.constraint_violations[0].present.is_empty());
+
+    let (_temp_dir, spec) = app(
+        "PASSWORD=p\nACCESS_TOKEN=t\n",
+        ConstraintKind::ExactlyOne,
+        &["auth"],
+    );
+    let errors = validation_errors(&spec);
+    assert_eq!(
+        errors.constraint_violations[0].present,
+        vec!["ACCESS_TOKEN".to_string(), "PASSWORD".to_string()]
+    );
+
+    let (_temp_dir, spec) = app("PASSWORD=p\n", ConstraintKind::ExactlyOne, &["auth"]);
+    assert!(spec.validate().unwrap().is_ok());
+}
+
 pub(crate) fn resolve_test_config(secrets: HashMap<String, Secret>) -> Config {
     let mut profiles = HashMap::new();
     profiles.insert(
@@ -597,10 +705,10 @@ fn composed_secrets_resolve_in_dependency_order_without_reparsing_values() {
     let temp_dir = TempDir::new().unwrap();
     let env_path = temp_dir.path().join(".env");
     // The reference-looking password is intentional: composition must insert
-    // it as opaque text rather than recursively interpreting `{DB_HOST}`.
+    // it as opaque text rather than recursively interpreting `${DB_HOST}`.
     fs::write(
         &env_path,
-        "DB_USER=alice\nDB_PASSWORD={DB_HOST}\nDB_HOST=db.example\n",
+        "DB_USER=alice\nDB_PASSWORD='${DB_HOST}'\nDB_HOST=db.example\n",
     )
     .unwrap();
 
@@ -619,7 +727,7 @@ fn composed_secrets_resolve_in_dependency_order_without_reparsing_values() {
         "AUTH".to_string(),
         Secret {
             description: Some("credentials".to_string()),
-            composed: Some("{DB_USER}:{DB_PASSWORD}".to_string()),
+            composed: Some("${DB_USER}:${DB_PASSWORD}".to_string()),
             ..Default::default()
         },
     );
@@ -627,7 +735,7 @@ fn composed_secrets_resolve_in_dependency_order_without_reparsing_values() {
         "DATABASE_URL".to_string(),
         Secret {
             description: Some("dsn".to_string()),
-            composed: Some("postgres://{AUTH}@{DB_HOST}/app".to_string()),
+            composed: Some("postgres://${AUTH}@${DB_HOST}/app".to_string()),
             ..Default::default()
         },
     );
@@ -639,12 +747,12 @@ fn composed_secrets_resolve_in_dependency_order_without_reparsing_values() {
 
     let response = spec.resolve().unwrap();
     let auth = &response.secrets["AUTH"];
-    assert_eq!(auth.value.as_deref(), Some("alice:{DB_HOST}"));
+    assert_eq!(auth.value.as_deref(), Some("alice:${DB_HOST}"));
     assert_eq!(auth.source, ResolvedSource::Composed);
     let dsn = &response.secrets["DATABASE_URL"];
     assert_eq!(
         dsn.value.as_deref(),
-        Some("postgres://alice:{DB_HOST}@db.example/app")
+        Some("postgres://alice:${DB_HOST}@db.example/app")
     );
     assert_eq!(dsn.source, ResolvedSource::Composed);
     assert!(dsn.source_provider.is_none());
@@ -676,7 +784,7 @@ fn composed_secrets_propagate_missingness_and_are_read_only() {
             Secret {
                 description: Some("optional result".to_string()),
                 required: Some(false),
-                composed: Some("prefix-{OPTIONAL_PART}".to_string()),
+                composed: Some("prefix-${OPTIONAL_PART}".to_string()),
                 ..Default::default()
             },
         ),
@@ -684,7 +792,7 @@ fn composed_secrets_propagate_missingness_and_are_read_only() {
             "REQUIRED_RESULT".to_string(),
             Secret {
                 description: Some("required result".to_string()),
-                composed: Some("prefix-{OPTIONAL_PART}".to_string()),
+                composed: Some("prefix-${OPTIONAL_PART}".to_string()),
                 ..Default::default()
             },
         ),
@@ -736,7 +844,7 @@ fn composed_secrets_use_the_exported_path_of_as_path_dependencies() {
             "CERT_ARG".to_string(),
             Secret {
                 description: Some("certificate argument".to_string()),
-                composed: Some("--cert={CERT}".to_string()),
+                composed: Some("--cert=${CERT}".to_string()),
                 ..Default::default()
             },
         ),
@@ -5033,6 +5141,8 @@ fn test_resolve_secret_config_merges_type_and_generate() {
         Secret {
             description: Some("Database password".to_string()),
             required: None,
+            at_least_one: None,
+            exactly_one: None,
             default: None,
             composed: None,
             providers: None,

@@ -79,6 +79,29 @@ REDIS_URL = { description = "Redis cache", required = false, default = "redis://
 DATABASE_URL = { description = "Production database", required = true }
 ```
 
+#### Cross-secret presence constraints (0.17+)
+
+:::caution[Version compatibility]
+Added in SecretSpec 0.17.
+:::
+
+A profile can require alternative credentials by assigning secrets to a named
+group:
+
+```toml
+[profiles.default]
+PASSWORD = { description = "Account password", required = { at_least_one = "account_auth" } }
+ACCESS_TOKEN = { description = "Personal access token", required = { at_least_one = "account_auth" } }
+
+GITHUB_TOKEN = { description = "GitHub token", required = { exactly_one = "github_auth" } }
+GITHUB_APP_KEY = { description = "GitHub App private key", required = { exactly_one = "github_auth" } }
+```
+
+`at_least_one` requires one or more group members to resolve; `exactly_one`
+requires one. Each field also accepts an array of group names for overlapping
+groups. Groups must contain at least two secrets and cannot mix modes. Group
+members are individually optional.
+
 #### Secret Variable Options
 
 Each secret variable is defined as a table with the following fields:
@@ -86,9 +109,9 @@ Each secret variable is defined as a table with the following fields:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `description` | string | Yes (see notes) | Human-readable description of the secret |
-| `required` | boolean | No | Whether absence is an error (default: true, or false when `default` is present) |
+| `required` | boolean or table | No | Whether absence is an error; the table form (0.17+) accepts `at_least_one`/`exactly_one` presence groups (defaults to true; false with `default` or a presence group) |
 | `default` | string | No | Default value if not provided |
-| `composed` (0.16+) | string | No | Derive a read-only value from other declared secrets using `{SECRET_NAME}` references |
+| `composed` (0.16+) | string | No | Derive a read-only value from other declared secrets using `${UPPERCASE_NAME}` references |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `ref` | table | No | Coordinates naming an externally managed secret in the provider's store (e.g. `ref = { item = "db", field = "password" }`) |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
@@ -100,7 +123,8 @@ Field notes:
 - `description` is required in the `default` profile. A secret overriding one
   that the default profile already declares inherits its `description` (and
   other omitted fields) and may leave it out.
-- `required` defaults to false when `default` is provided.
+- `required` defaults to false when `default` is provided. In 0.17+, its table
+  form accepts `at_least_one` and `exactly_one` as a group name or array of names.
 - `default` is invalid with an explicit `required = true`. A defaulted secret is
   guaranteed to be present in successful resolution and generated types, even
   though the provider does not have to supply it.
@@ -122,23 +146,25 @@ CLI behavior, profile inheritance, and the differences from dotenv expansion:
 DB_USER = { description = "Database user" }
 DB_PASSWORD = { description = "Database password" }
 DB_HOST = { description = "Database host" }
-DATABASE_URL = { description = "PostgreSQL DSN", composed = "postgres://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/app" }
+DATABASE_URL = { description = "PostgreSQL DSN", composed = "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}/app" }
 ```
 
 References form a static dependency graph. Declaration order does not matter,
 and composed secrets may reference other composed secrets. SecretSpec rejects
-unknown references, cycles, malformed braces, and source conflicts while
+unknown references, cycles, malformed references, and source conflicts while
 loading the manifest. A composed secret is read-only and cannot also set
 `default`, `providers`, `ref`, `type`, or enabled `generate`.
 
 Composition intentionally does **not** implement dotenv or shell expansion:
 
-- only `{DECLARED_SECRET}` is a reference; ambient environment variables are
-  never consulted;
-- `${NAME}`, fallback operators such as `${NAME:-fallback}`, commands, and
-  recursive expansion are unsupported;
+- only `${UPPERCASE_NAME}` is a reference, and the name must match
+  `[A-Z][A-Z0-9_]*` and identify a declared secret;
+- ambient environment variables are never consulted;
+- fallback operators such as `${NAME:-fallback}`, commands, and recursive
+  expansion are unsupported;
 - inserted values are opaque and are never scanned again;
-- `{{` and `}}` produce literal braces;
+- `$$` produces a literal `$` (`$${NAME}` renders `${NAME}`), while ordinary
+  braces are literal;
 - a missing dependency makes a required composition missing, while a
   `required = false` composition is omitted;
 - empty values remain empty and are distinct from missing values.
@@ -148,9 +174,11 @@ text inserted into the composed value. Applying `as_path = true` to the
 composed secret materializes the final combined value.
 
 Composition is raw string concatenation. SecretSpec cannot know whether a
-component occupies a URL username, password, host, path, or query position, so
-it does not URL-encode components. Store components in the form required by the
-target format.
+component occupies a URL username, password, host, path, query, or structured
+document position, so it does not URL-encode or JSON-encode components. Store
+components in the form required by the target format; use
+`secretspec export --format json` when exporting the resolved secret map as
+JSON.
 
 ## Complete Example
 
@@ -391,7 +419,8 @@ chain, and each provider is asked for the same coordinates.
 | [Gopass (0.15+)](/providers/gopass/#use-existing-secrets) | Entry path, including any mount-point prefix | Rejected | Reads the entry | ✅ |
 | [LastPass](/providers/lastpass/#use-existing-secrets) | Item name | Rejected | Reads the item | ✅ |
 | [Proton Pass](/providers/protonpass/#use-existing-secrets) | Item title | Rejected | Reads the note | ✅ |
-| [Vault / OpenBao](/providers/vault/#use-existing-secrets) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
+| [Vault](/providers/vault/#use-existing-secrets) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
+| [OpenBao](/providers/openbao/#use-existing-secrets) (0.17+) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
 | [AWS Secrets Manager](/providers/awssm/#use-existing-secrets) | Secret name or ARN | JSON key | Whole secret string | — (read-only) |
 | [GCSM](/providers/gcsm/#use-existing-secrets) | Secret id; `version` also applies | Rejected | Reads latest or the pinned version | — (read-only) |
 | [Bitwarden (bws)](/providers/bws/#use-existing-secrets) | BWS key name | Rejected | Reads the key | ✅ |

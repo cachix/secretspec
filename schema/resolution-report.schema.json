@@ -24,9 +24,40 @@
       "description": "One entry per declared secret, sorted by name.",
       "type": "array",
       "items": { "$ref": "#/$defs/secretResolution" }
+    },
+    "constraint_violations": {
+      "description": "Cross-secret presence constraints that failed. Added in SecretSpec 0.17 and omitted when empty.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/constraintViolation" }
     }
   },
   "$defs": {
+    "constraintViolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "group", "secrets", "present"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["at_least_one", "exactly_one"]
+        },
+        "group": {
+          "description": "Group name declared by its member secrets.",
+          "type": "string"
+        },
+        "secrets": {
+          "description": "All declared members of the constraint group.",
+          "type": "array",
+          "minItems": 2,
+          "items": { "type": "string" }
+        },
+        "present": {
+          "description": "Group members that resolved; values are never included.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
     "secretResolution": {
       "type": "object",
       "additionalProperties": false,

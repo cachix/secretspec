@@ -27,7 +27,8 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [environment variables](https://secretspec.dev/providers/env)
   - [Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)
   - [AWS Secrets Manager](https://secretspec.dev/providers/awssm)
-  - [Vault/OpenBao](https://secretspec.dev/providers/vault)
+  - [Vault](https://secretspec.dev/providers/vault)
+  - [OpenBao](https://secretspec.dev/providers/openbao) (0.17+)
   - [Bitwarden Password Manager](https://secretspec.dev/providers/bw) (0.16+)
   - [Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)
   - [Azure Key Vault](https://secretspec.dev/providers/akv)
@@ -35,7 +36,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
 - **[Type-Safe Rust SDK](https://secretspec.dev/sdk/rust/)**: Generate strongly-typed structs from your `secretspec.toml` for compile-time safety
 - **[Profile Support](https://secretspec.dev/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
 - **[Secret Generation](https://secretspec.dev/concepts/generation/)**: Auto-generate passwords, tokens, UUIDs, and more when secrets are missing — declarative "generate if absent"
-- **Composed Secrets (0.16+)**: Derive read-only values such as DSNs from declared secrets with strict, order-independent `{SECRET_NAME}` references
+- **Composed Secrets (0.16+)**: Derive read-only values such as DSNs from declared secrets with strict, order-independent `${UPPERCASE_NAME}` references
 - **[Configuration Inheritance](https://secretspec.dev/concepts/inheritance/)**: Extend and override shared configurations using the `extends` feature
 - **[Audit Logging](https://secretspec.dev/concepts/audit/)**: Every secret access recorded locally (who, when, why, outcome) — on by default, secret values never logged
 - **[Discovery](https://secretspec.dev/reference/cli#init)**: `secretspec init` to discover secrets from existing `.env` files
@@ -65,7 +66,8 @@ $ secretspec config init
   lastpass: LastPass password manager
   gcsm: Google Cloud Secret Manager
   awssm: AWS Secrets Manager
-  vault: HashiCorp Vault / OpenBao secret management
+  vault: HashiCorp Vault secret management
+  openbao: OpenBao secret management (0.17+)
   bw: Bitwarden Password Manager (0.16+)
   bws: Bitwarden Secrets Manager
   akv: Azure Key Vault
@@ -151,7 +153,8 @@ SecretSpec supports multiple storage backends for secrets:
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager
 - **[Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)** - GCP secret management
 - **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
-- **[Vault / OpenBao](https://secretspec.dev/providers/vault)** - HashiCorp Vault and OpenBao KV engine
+- **[Vault](https://secretspec.dev/providers/vault)** - HashiCorp Vault KV engine
+- **[OpenBao](https://secretspec.dev/providers/openbao)** (0.17+) - OpenBao KV integration; SecretSpec 0.16 accepts `openbao://` through the Vault provider
 - **[Bitwarden Password Manager](https://secretspec.dev/providers/bw)** (0.16+) - Bitwarden Password Manager vault via the `bw` CLI
 - **[Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)** - Bitwarden Secrets Manager integration
 - **[Azure Key Vault](https://secretspec.dev/providers/akv)** - Azure secret management
@@ -204,7 +207,7 @@ works identically with no per-language resolution logic:
 - [Node.js / TypeScript](https://secretspec.dev/sdk/nodejs) (napi-rs addon)
 - [Haskell](https://secretspec.dev/sdk/haskell) (build-time FFI link)
 - [PHP](https://secretspec.dev/sdk/php) (ext-php-rs extension, with an `ext-ffi` fallback)
-- [C# (0.16+)](https://secretspec.dev/sdk/csharp) (P/Invoke with native assets in the NuGet package; unavailable in 0.15)
+- [C# (0.16+)](https://secretspec.dev/sdk/csharp) (P/Invoke with native assets in the NuGet package)
 
 ```python
 from secretspec import SecretSpec

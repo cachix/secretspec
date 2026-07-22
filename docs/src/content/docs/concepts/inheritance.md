@@ -65,5 +65,5 @@ extends = ["../../shared/base", "../../shared/database", "../../shared/auth"]
   name — its `secrets` list wins outright; the two lists are **not** unioned.
   Scopes defined only in a parent are inherited. (Whole-value replacement is the
   safe default for an allowlist: extending a config cannot silently widen a scope
-  the parent narrowed.) Available since SecretSpec 0.16.
+  the parent narrowed.) Available from SecretSpec 0.17.
 - Paths are relative to the containing `secretspec.toml` file

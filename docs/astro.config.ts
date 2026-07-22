@@ -149,7 +149,10 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
       sidebar: [
         {
           label: "Getting Started",
-          items: [{ label: "Quick Start", slug: "quick-start" }],
+          items: [
+            { label: "Quick Start", slug: "quick-start" },
+            { label: "Comparison", slug: "comparison" },
+          ],
         },
         {
           label: "Concepts",

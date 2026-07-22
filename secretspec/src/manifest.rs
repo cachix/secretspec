@@ -45,11 +45,15 @@ pub(crate) struct CompiledSecret {
 }
 
 impl CompiledSecret {
-    fn new(config: Secret) -> Self {
+    fn new(config: Secret, conditionally_required: bool) -> Self {
         // An inline default makes an omitted `required` behave as false. This
         // preserves the manifest shorthand while keeping an explicit inherited
-        // `required = true` visible in reports.
-        let declared_required = config.required.unwrap_or(config.default.is_none());
+        // `required = true` visible in reports. Membership in a profile
+        // presence constraint likewise replaces the implicit per-secret
+        // requirement, while an explicit `required = true` remains independent.
+        let declared_required = config
+            .required
+            .unwrap_or(config.default.is_none() && !conditionally_required);
         let missing = if config.would_generate() {
             MissingPolicy::Generate
         } else if config.default.is_some() {
@@ -78,25 +82,35 @@ mod tests {
 
     #[test]
     fn missing_policy_compiles_presence_once() {
-        let required = CompiledSecret::new(Secret::default());
+        let required = CompiledSecret::new(Secret::default(), false);
         assert_eq!(required.missing, MissingPolicy::Error);
         assert!(required.declared_required);
         assert!(required.missing.guaranteed_on_success());
 
-        let defaulted = CompiledSecret::new(Secret {
-            default: Some("fallback".to_string()),
-            ..Default::default()
-        });
+        let defaulted = CompiledSecret::new(
+            Secret {
+                default: Some("fallback".to_string()),
+                ..Default::default()
+            },
+            false,
+        );
         assert_eq!(defaulted.missing, MissingPolicy::UseDefault);
         assert!(!defaulted.declared_required);
         assert!(defaulted.missing.guaranteed_on_success());
 
-        let optional = CompiledSecret::new(Secret {
-            required: Some(false),
-            ..Default::default()
-        });
+        let optional = CompiledSecret::new(
+            Secret {
+                required: Some(false),
+                ..Default::default()
+            },
+            false,
+        );
         assert_eq!(optional.missing, MissingPolicy::Omit);
         assert!(!optional.missing.guaranteed_on_success());
+
+        let alternative = CompiledSecret::new(Secret::default(), true);
+        assert_eq!(alternative.missing, MissingPolicy::Omit);
+        assert!(!alternative.declared_required);
     }
 }
 
@@ -104,6 +118,21 @@ mod tests {
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledProfile {
     pub(crate) secrets: BTreeMap<String, CompiledSecret>,
+    pub(crate) constraints: CompiledConstraints,
+}
+
+/// One named cross-secret presence group.
+#[derive(Debug, Clone)]
+pub(crate) struct CompiledConstraintGroup {
+    pub(crate) name: String,
+    pub(crate) members: Vec<String>,
+}
+
+/// Named presence groups compiled from each effective secret's membership.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CompiledConstraints {
+    pub(crate) at_least_one: Vec<CompiledConstraintGroup>,
+    pub(crate) exactly_one: Vec<CompiledConstraintGroup>,
 }
 
 /// A parsed manifest reduced to the semantics shared by runtime and codegen.
@@ -130,17 +159,70 @@ impl CompiledManifest {
                 names.extend(default.secrets.keys());
             }
 
-            let secrets = names
+            let effective: BTreeMap<String, Secret> = names
                 .into_iter()
                 .map(|name| {
                     let current = profile.secrets.get(name);
                     let default = inherited.and_then(|p| p.secrets.get(name));
                     let effective = Secret::resolved(current, default, profile.defaults.as_ref())
                         .expect("an effective name comes from current or default");
-                    (name.clone(), CompiledSecret::new(effective))
+                    (name.clone(), effective)
                 })
                 .collect();
-            profiles.insert(profile_name.clone(), CompiledProfile { secrets });
+
+            let mut at_least_one: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            let mut exactly_one: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for (name, secret) in &effective {
+                if let Some(groups) = &secret.at_least_one {
+                    for group in groups {
+                        at_least_one
+                            .entry(group.clone())
+                            .or_default()
+                            .push(name.clone());
+                    }
+                }
+                if let Some(groups) = &secret.exactly_one {
+                    for group in groups {
+                        exactly_one
+                            .entry(group.clone())
+                            .or_default()
+                            .push(name.clone());
+                    }
+                }
+            }
+            fn groups(grouped: BTreeMap<String, Vec<String>>) -> Vec<CompiledConstraintGroup> {
+                grouped
+                    .into_iter()
+                    .map(|(name, members)| CompiledConstraintGroup { name, members })
+                    .collect()
+            }
+            let constraints = CompiledConstraints {
+                at_least_one: groups(at_least_one),
+                exactly_one: groups(exactly_one),
+            };
+
+            let secrets = effective
+                .into_iter()
+                .map(|(name, secret)| {
+                    let conditionally_required = secret
+                        .at_least_one
+                        .as_ref()
+                        .is_some_and(|groups| !groups.is_empty())
+                        || secret
+                            .exactly_one
+                            .as_ref()
+                            .is_some_and(|groups| !groups.is_empty());
+                    (name, CompiledSecret::new(secret, conditionally_required))
+                })
+                .collect();
+
+            profiles.insert(
+                profile_name.clone(),
+                CompiledProfile {
+                    secrets,
+                    constraints,
+                },
+            );
         }
 
         Self {

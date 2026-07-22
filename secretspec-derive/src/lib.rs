@@ -959,8 +959,13 @@ mod secret_spec_generation {
                 }
                 match spec.validate()? {
                     Ok(valid_secrets) => Ok(valid_secrets),
-                    Err(validation_errors) => Err(secretspec::SecretSpecError::RequiredSecretMissing(
-                        validation_errors.missing_required.join(", ")
+                    Err(validation_errors) if validation_errors.constraint_violations.is_empty() => {
+                        Err(secretspec::SecretSpecError::RequiredSecretMissing(
+                            validation_errors.missing_required.join(", ")
+                        ))
+                    }
+                    Err(validation_errors) => Err(secretspec::SecretSpecError::ValidationFailed(
+                        Box::new(validation_errors)
                     ))
                 }
             }

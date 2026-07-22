@@ -102,6 +102,10 @@ requires one. Each field also accepts an array of group names for overlapping
 groups. Groups must contain at least two secrets and cannot mix modes. Group
 members are individually optional.
 
+Under a [scope](#scopes-section), a group is judged over the members that scope
+exposes, so a scoped consumer never inherits a guarantee that rests on a secret
+it cannot see.
+
 #### Secret Variable Options
 
 Each secret variable is defined as a table with the following fields:
@@ -183,8 +187,9 @@ JSON.
 ### [scopes] Section
 
 :::note[Version compatibility]
-Scopes are available from **SecretSpec 0.16**. They are not available in
-0.15 or earlier.
+Scopes are added in **SecretSpec 0.17** and are unavailable in the current 0.16
+release. With 0.16, give each service its own profile, or its own
+`secretspec.toml`.
 :::
 
 Scopes name membership-only subsets of a profile's secrets, so a single service
@@ -232,6 +237,19 @@ Behavior:
   fetched, so no provider is contacted for it.
 - A scope does not change a secret's storage address
   (`{project}/{profile}/{key}`); it only narrows the set.
+- **Presence groups are judged over the visible members.** A `required =
+  { at_least_one = … }` or `{ exactly_one = … }` group (see
+  [Cross-secret presence constraints](#cross-secret-presence-constraints-017))
+  is evaluated against the members
+  the scope actually exposes. A group with no visible member is not that
+  consumer's concern and is not enforced. A group with some visible members is
+  enforced over those alone, so a scope never inherits a guarantee that rests on
+  a secret it hides — if `at_least_one = "cloud"` is satisfied profile-wide by
+  `GCP_KEY`, a scope showing only `AWS_KEY` still fails when `AWS_KEY` is absent.
+  `exactly_one` remains enforced whenever two visible members are both present:
+  scoping narrows what is judged, never whether it is judged. A secret fetched
+  only as a hidden composition input does not count as present, and a violation
+  message names only visible members.
 - `run --scope` removes **every** manifest-declared secret outside the visible
   set from the launched command's environment — across *all* profiles, not just
   the selected one — **even if the parent shell already exported them**, so a

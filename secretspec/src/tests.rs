@@ -7474,7 +7474,7 @@ revision = "1.0"
 DB_USER = { description = "DB user" }
 DB_PASSWORD = { description = "DB password" }
 DB_HOST = { description = "DB host" }
-DATABASE_URL = { description = "DSN", composed = "postgres://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/app" }
+DATABASE_URL = { description = "DSN", composed = "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}/app" }
 
 [scopes.api]
 secrets = ["DATABASE_URL"]
@@ -7629,5 +7629,147 @@ secrets = ["DATABASE_URL"]
         let unscoped = Secrets::new(config(MANIFEST), None, Some(provider), None);
         assert_eq!(unscoped.resolve().unwrap().scope, None);
         assert_eq!(unscoped.report().unwrap().scope, None);
+    }
+
+    const CONSTRAINT_MANIFEST: &str = r#"
+[project]
+name = "scoped-constraints"
+revision = "1.0"
+
+[profiles.default]
+AWS_KEY = { description = "AWS credential", required = { at_least_one = "cloud" } }
+GCP_KEY = { description = "GCP credential", required = { at_least_one = "cloud" } }
+PRIMARY = { description = "Primary token", required = { exactly_one = "token" } }
+FALLBACK = { description = "Fallback token", required = { exactly_one = "token" } }
+UNRELATED = { description = "Unrelated" }
+
+[scopes.aws]
+secrets = ["AWS_KEY", "UNRELATED"]
+
+[scopes.tokens]
+secrets = ["PRIMARY", "FALLBACK"]
+
+[scopes.plain]
+secrets = ["UNRELATED"]
+"#;
+
+    /// A presence group is judged on the members the scope actually exposes.
+    /// `at_least_one = ["cloud"]` is satisfied for the whole profile by GCP_KEY
+    /// alone, but a scope that shows only AWS_KEY has no satisfying member it
+    /// can see, so the scoped resolution must fail rather than silently inherit
+    /// a guarantee backed by a secret it hides.
+    #[test]
+    fn a_presence_group_is_enforced_over_the_visible_members() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        // Only the *out-of-scope* member of the group is present.
+        fs::write(&env_path, "GCP_KEY=g\nPRIMARY=p\nUNRELATED=u\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        // Unscoped, GCP_KEY satisfies the `cloud` group.
+        let unscoped = Secrets::new(
+            config(CONSTRAINT_MANIFEST),
+            None,
+            Some(provider.clone()),
+            None,
+        );
+        assert!(
+            unscoped.validate().unwrap().is_ok(),
+            "GCP_KEY satisfies at_least_one across the whole profile"
+        );
+
+        // Scoped to {AWS_KEY, UNRELATED}, the only visible `cloud` member is
+        // absent, so the group is violated.
+        let mut scoped = Secrets::new(config(CONSTRAINT_MANIFEST), None, Some(provider), None);
+        scoped.set_scope("aws");
+        let errors = match scoped.validate().unwrap() {
+            Ok(_) => panic!("a scope whose only visible group member is missing must fail"),
+            Err(e) => e,
+        };
+        let violation = errors
+            .constraint_violations
+            .iter()
+            .find(|v| v.group == "cloud")
+            .expect("the cloud group is violated under this scope");
+        // The message names only what the scope exposes: the hidden GCP_KEY,
+        // which is what satisfies the group unscoped, is never disclosed.
+        assert_eq!(violation.secrets, vec!["AWS_KEY".to_string()]);
+        assert!(violation.present.is_empty());
+    }
+
+    /// A group with no visible member is not the scoped consumer's concern and
+    /// must not fail its resolution.
+    #[test]
+    fn a_presence_group_with_no_visible_member_is_not_enforced() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        // Neither `cloud` nor `token` has a present member.
+        fs::write(&env_path, "UNRELATED=u\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut scoped = Secrets::new(config(CONSTRAINT_MANIFEST), None, Some(provider), None);
+        scoped.set_scope("plain");
+        assert!(
+            scoped.validate().unwrap().is_ok(),
+            "a scope exposing no member of any group resolves cleanly"
+        );
+    }
+
+    /// `exactly_one` is a safety property, so a scope that exposes both members
+    /// still rejects having both present — scoping narrows what is judged, it
+    /// never disables the judgement.
+    #[test]
+    fn exactly_one_is_still_enforced_when_the_scope_shows_both_members() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "PRIMARY=p\nFALLBACK=f\nGCP_KEY=g\nUNRELATED=u\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut scoped = Secrets::new(config(CONSTRAINT_MANIFEST), None, Some(provider), None);
+        scoped.set_scope("tokens");
+        let errors = match scoped.validate().unwrap() {
+            Ok(_) => panic!("both members present must violate exactly_one under a scope"),
+            Err(e) => e,
+        };
+        let violation = errors
+            .constraint_violations
+            .iter()
+            .find(|v| v.group == "token")
+            .expect("the token group is violated under this scope");
+        assert_eq!(violation.present.len(), 2);
+    }
+
+    /// A secret fetched only as an out-of-scope composition input never counts
+    /// as "present" for a presence group: constraints are judged after the
+    /// output is narrowed to the visible set.
+    #[test]
+    fn a_hidden_composition_input_does_not_satisfy_a_group() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "AWS_KEY=a\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let manifest = r#"
+[project]
+name = "hidden-input-constraint"
+revision = "1.0"
+
+[profiles.default]
+AWS_KEY = { description = "AWS credential", required = { at_least_one = "cloud" } }
+GCP_KEY = { description = "GCP credential", required = { at_least_one = "cloud" } }
+DERIVED = { description = "Derived", composed = "aws=${AWS_KEY}" }
+
+[scopes.derived]
+secrets = ["DERIVED"]
+"#;
+        let mut scoped = Secrets::new(config(manifest), None, Some(provider), None);
+        scoped.set_scope("derived");
+        // AWS_KEY is fetched (DERIVED needs it) but hidden, so the `cloud` group
+        // has no visible member and is not enforced — rather than being counted
+        // as satisfied by a secret the consumer cannot see.
+        let validated = scoped.validate().unwrap();
+        assert!(validated.is_ok(), "the hidden input renders DERIVED");
+        let resolved = validated.unwrap();
+        assert!(!resolved.resolved.secrets.contains_key("AWS_KEY"));
     }
 }

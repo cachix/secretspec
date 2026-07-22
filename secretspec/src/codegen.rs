@@ -285,6 +285,7 @@ mod tests {
             },
             profiles: map,
             providers: None,
+            scopes: None,
         }
     }
 

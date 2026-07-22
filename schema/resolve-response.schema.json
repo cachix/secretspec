@@ -20,6 +20,10 @@
       "description": "The profile that was resolved.",
       "type": "string"
     },
+    "scope": {
+      "description": "The active secret scope, when resolution was scoped. Absent when the whole profile resolved.",
+      "type": "string"
+    },
     "secrets": {
       "description": "Resolved secrets by name. Empty when a required secret is missing.",
       "type": "object",

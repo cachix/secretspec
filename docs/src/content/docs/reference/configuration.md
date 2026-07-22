@@ -102,6 +102,10 @@ requires one. Each field also accepts an array of group names for overlapping
 groups. Groups must contain at least two secrets and cannot mix modes. Group
 members are individually optional.
 
+Under a [scope](#scopes-section), a group is judged over the members that scope
+exposes, so a scoped consumer never inherits a guarantee that rests on a secret
+it cannot see.
+
 #### Secret Variable Options
 
 Each secret variable is defined as a table with the following fields:
@@ -179,6 +183,107 @@ document position, so it does not URL-encode or JSON-encode components. Store
 components in the form required by the target format; use
 `secretspec export --format json` when exporting the resolved secret map as
 JSON.
+
+### [scopes] Section
+
+:::note[Version compatibility]
+Scopes are added in **SecretSpec 0.17** and are unavailable in the current 0.16
+release. With 0.16, give each service its own profile, or its own
+`secretspec.toml`.
+:::
+
+Scopes name membership-only subsets of a profile's secrets, so a single service
+or task resolves only what it declares instead of the entire profile. They are
+**orthogonal to profiles**: a profile decides how each secret resolves
+(`required`, `default`, providers, references, generation, `as_path`, and the
+storage namespace); a scope only decides *which* secrets take part in a given
+resolution.
+
+```toml
+[profiles.default]
+DATABASE_URL = { description = "Database", required = true }
+API_KEY      = { description = "API key", required = true }
+QUEUE_TOKEN  = { description = "Queue token", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "API_KEY"]
+
+[scopes.worker]
+secrets = ["DATABASE_URL", "QUEUE_TOKEN"]
+```
+
+```bash
+secretspec run --scope api    -- ./api      # sees DATABASE_URL, API_KEY
+secretspec run --scope worker -- ./worker   # sees DATABASE_URL, QUEUE_TOKEN
+secretspec check  --scope api
+secretspec export --scope worker --format dotenv
+```
+
+Behavior:
+
+- **No scope** resolves the complete profile, exactly as before scopes existed.
+- Selecting a scope resolves the **intersection** of the merged profile and the
+  scope's `secrets` list — the *visible* set. A secret the profile does not
+  declare is simply absent from that resolution rather than an error, so a scope
+  can be reused across profiles that declare different subsets.
+- A required secret **excluded** by the active scope does not block resolution —
+  it is not part of the scoped set.
+- **Composed secrets resolve their inputs without exposing them.** When a visible
+  [composed secret](/concepts/composed-secrets/) references secrets the scope
+  leaves out (for example `DATABASE_URL` built from `DB_USER` and `DB_PASSWORD`),
+  those dependencies are fetched to build the composition and then dropped from
+  the output — the child sees `DATABASE_URL`, never `DB_USER`/`DB_PASSWORD`. A
+  secret that is neither visible nor a dependency of a visible secret is never
+  fetched, so no provider is contacted for it.
+- A scope does not change a secret's storage address
+  (`{project}/{profile}/{key}`); it only narrows the set.
+- **Presence groups are judged over the visible members.** A `required =
+  { at_least_one = … }` or `{ exactly_one = … }` group (see
+  [Cross-secret presence constraints](#cross-secret-presence-constraints-017))
+  is evaluated against the members
+  the scope actually exposes. A group with no visible member is not that
+  consumer's concern and is not enforced. A group with some visible members is
+  enforced over those alone, so a scope never inherits a guarantee that rests on
+  a secret it hides — if `at_least_one = "cloud"` is satisfied profile-wide by
+  `GCP_KEY`, a scope showing only `AWS_KEY` still fails when `AWS_KEY` is absent.
+  `exactly_one` remains enforced whenever two visible members are both present:
+  scoping narrows what is judged, never whether it is judged. A secret fetched
+  only as a hidden composition input does not count as present, and a violation
+  message names only visible members.
+- `run --scope` removes **every** manifest-declared secret outside the visible
+  set from the launched command's environment — across *all* profiles, not just
+  the selected one — **even if the parent shell already exported them**, so a
+  value inherited from another profile cannot leak into the child. This is secret
+  minimization, not an authorization boundary: a process that still holds
+  provider credentials could resolve another scope itself.
+- An **empty** scope (or a scope whose intersection with the profile is empty)
+  resolves to nothing and contacts no provider.
+- [Audit](#audit-logging) records what was **read**, not what was exposed: a
+  scoped `check` logs the accessed set, including a composition input the scope
+  hides, since the point of the log is to capture provider access. A `run` event
+  logs what it injected — the visible set.
+- An `as_path` secret's resolved value is its temp-file path, so a visible
+  composition built from a hidden `as_path` input embeds that path. The file
+  stays alive for the duration of the command rather than being cleaned up with
+  the hidden secret, so the path resolves. The hidden input is still absent from
+  the environment; only its content, in the form the composition derived, is
+  reachable — the same contract as a composed DSN that embeds a password.
+- A secret the scope **admits** but that does not resolve (an optional secret
+  with no stored value) is not scrubbed from `run`. It is inside the visible
+  set, so a value the parent exported is inherited exactly as it would be
+  without a scope; scoping changes which secrets are in play, never the
+  semantics of one it admits.
+- Under project `extends`, a child `[scopes.<name>]` **replaces** the parent
+  scope of the same name outright — the two `secrets` lists are not unioned (see
+  [Configuration Inheritance](/concepts/inheritance/)).
+- Selecting an undefined scope, or a scope that lists a secret no profile
+  declares, is a configuration error.
+
+The `--scope` flag (and the `SECRETSPEC_SCOPE` environment variable) apply to
+`check`, `run`, and `export`. Scopes are a resolution-time feature of these
+untyped paths; the typed SDK loaders generated by `secretspec-derive` always
+resolve the **full** profile and deliberately **ignore** an ambient
+`SECRETSPEC_SCOPE`, since a generated struct expects every declared field.
 
 ## Complete Example
 

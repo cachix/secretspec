@@ -18,6 +18,7 @@ required-features = ["cli"]
 [dependencies]
 clap.workspace = true
 keyring = { workspace = true, optional = true }
+keepass = { workspace = true, optional = true }
 serde.workspace = true
 toml.workspace = true
 toml_edit = { workspace = true, optional = true }
@@ -53,9 +54,10 @@ detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
 
 [features]
-default = ["cli", "keyring", "gcsm", "awssm", "vault", "openbao", "bws", "akv", "infisical", "age"]
+default = ["cli", "keyring", "kdbx", "gcsm", "awssm", "vault", "openbao", "bws", "akv", "infisical", "age"]
 cli = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
+kdbx = ["dep:keepass"]
 # Compile libdbus from source into the binary instead of linking the system
 # library at runtime (keyring's secret-service transport on Linux). Used by
 # prebuilt release artifacts that must run on distros we don't build on.

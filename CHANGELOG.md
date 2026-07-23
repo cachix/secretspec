@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   secrets and provider authentication credentials from the current service's
   `$CREDENTIALS_DIRECTORY`, including exact-name references and strict
   filename, file-type, and text validation.
+- KeePass KDBX provider (`kdbx:`, `kdbx` build feature) for local encrypted
+  databases. It reads KDBX 3 and KDBX 4, writes KDBX 4 with atomic file
+  replacement, supports master passwords and key files, and can address
+  standard or custom entry fields through secret references.
 - The `required` field accepts `at_least_one` and `exactly_one` group tables,
   supporting overlapping alternative and mutually exclusive credentials
   across `check`, `run`, and SDK resolution.

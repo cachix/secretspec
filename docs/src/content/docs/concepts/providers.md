@@ -40,6 +40,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | Provider | Storage backend | Read | Write | Encrypted at rest | TPM-backed keys |
 |----------|-----------------|------|-------|-------------------|-----------------|
 | [keyring](/providers/keyring/) | [macOS Keychain](https://support.apple.com/guide/security/keychain-data-protection-secb0694df1a/web), [Windows Credential Manager](https://learn.microsoft.com/windows/win32/secauthn/credentials-management), or [Linux Secret Service](https://gnome.pages.gitlab.gnome.org/libsecret/) | ✓ | ✓ | ✓ | — |
+| [kdbx](/providers/kdbx/) (0.17+) | KeePass KDBX file (requires the `kdbx` build feature) | ✓ | KDBX 4 | ✓ | — |
 | [dotenv](/providers/dotenv/) | A `.env` file | ✓ | ✓ | ✗ | — |
 | [env](/providers/env/) | Current process environment | ✓ | ✗ | ✗ | — |
 | [systemd-credential](/providers/systemd-credential/) (0.17+) | Credentials passed to the current systemd service | ✓ | ✗ | Depends on the unit's credential source | [Via systemd-creds](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html) |

@@ -36,6 +36,7 @@ type ProviderMetadata = {
 
 const providerMetadata: ProviderMetadata[] = [
   { icon: 'apple', slug: 'keyring', label: 'macOS Keychain' },
+  { slug: 'kdbx', label: 'KeePass KDBX (0.17+)' },
   { icon: '1password', slug: 'onepassword', label: '1Password' },
   { icon: 'lastpass', slug: 'lastpass', label: 'LastPass' },
   { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden' },
@@ -143,6 +144,7 @@ $ secretspec init --from dotenv
 $ secretspec config init
 ? Select your preferred provider backend:
 <span class="tok-pun">›</span> keyring: Uses system keychain (Recommended)
+  kdbx: KeePass KDBX databases (0.17+)
   infisical: Infisical secret management
   openbao: OpenBao secret management (0.17+)
   age: age-encrypted file (0.17+)
@@ -213,6 +215,7 @@ $ secretspec run --profile production -- npm start
         <pre is:raw class="landing-step-code"><code>$ secretspec config init
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
+  kdbx: KeePass KDBX databases (0.17+)
   infisical: Infisical secret management
   openbao: OpenBao secret management (0.17+)
   age: age-encrypted file (0.17+)

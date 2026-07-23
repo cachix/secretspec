@@ -152,6 +152,7 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
           items: [
             { label: "Quick Start", slug: "quick-start" },
             { label: "Comparison", slug: "comparison" },
+            { label: "Continuous Integration", slug: "ci" },
           ],
         },
         {

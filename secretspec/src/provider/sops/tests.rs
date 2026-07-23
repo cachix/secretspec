@@ -271,6 +271,91 @@ fn test_sops_directory_get_dotenv() {
 }
 
 #[test]
+fn test_sops_set_directory_dotenv_with_format_override() {
+    let temp = TempDir::new().unwrap();
+    let url = build_sops_url(
+        &format!("{}/{{project}}/.env.{{profile}}.enc", temp.path().display()),
+        Some(HashMap::from([("format", "dotenv")])),
+    );
+    let provider: Box<dyn Provider> = (&url).try_into().expect("Provider init failed");
+    let addr = Address::convention("myapp", "production", "API_KEY");
+
+    provider
+        .set(addr, &SecretString::new("dotenv-value".into()))
+        .expect("set failed");
+    let value = provider.get(addr).unwrap().expect("missing value");
+
+    assert_eq!(value.expose_secret(), "dotenv-value");
+}
+
+#[test]
+fn test_sops_set_single_file_dotenv_uses_a_flat_key() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("secrets.enc");
+    let url = build_sops_url(
+        &path.to_string_lossy(),
+        Some(HashMap::from([("format", "dotenv")])),
+    );
+    let provider: Box<dyn Provider> = (&url).try_into().expect("Provider init failed");
+    let addr = Address::convention("myapp", "production", "API_KEY");
+
+    provider
+        .set(addr, &SecretString::new("flat-value".into()))
+        .expect("set failed");
+    let value = provider.get(addr).unwrap().expect("missing value");
+
+    assert_eq!(value.expose_secret(), "flat-value");
+}
+
+#[test]
+fn test_sops_json_override_works_with_ini_extension() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("secrets.enc.ini");
+    let url = build_sops_url(
+        &path.to_string_lossy(),
+        Some(HashMap::from([("format", "json")])),
+    );
+    let provider: Box<dyn Provider> = (&url).try_into().expect("Provider init failed");
+    let addr = Address::convention("myapp", "production", "API_KEY");
+
+    provider
+        .set(addr, &SecretString::new("json-value".into()))
+        .expect("set failed");
+    let value = provider.get(addr).unwrap().expect("missing value");
+
+    assert_eq!(value.expose_secret(), "json-value");
+}
+
+#[test]
+fn test_sops_age_key_provider_credential_overrides_the_environment() {
+    let url =
+        Url::parse("sops://src/provider/sops/test_fixtures/single_file/some-project-name.enc.json")
+            .unwrap();
+    let provider_url = ProviderUrl::new(url);
+    let config = SopsConfig::try_from(&provider_url).unwrap();
+    let mut provider = SopsProvider::new(config);
+    let key_file = fs::read_to_string("src/provider/sops/test_fixtures/key.txt").unwrap();
+    let age_key = key_file
+        .lines()
+        .find(|line| line.starts_with("AGE-SECRET-KEY-"))
+        .unwrap();
+    let mut credentials = ProviderCredentials::new();
+    credentials.insert(AGE_KEY.to_string(), SecretString::new(age_key.into()));
+    provider.with_credentials(credentials);
+
+    let value = provider
+        .get(Address::convention(
+            "some-project-name",
+            "production",
+            "foobar",
+        ))
+        .unwrap()
+        .expect("missing value");
+
+    assert_eq!(value.expose_secret(), "baz");
+}
+
+#[test]
 fn test_sops_set_single_file_creates_tree_and_sets_value() {
     let temp = TempDir::new().unwrap();
 

@@ -176,6 +176,12 @@ when the filename itself ends in `.ini`. Without `?format=`, the filename must
 end in `.yaml`, `.yml`, `.json`, `.env`, `.dotenv`, or `.ini`; an unrecognized
 extension is reported as a configuration error.
 
+YAML and JSON single-file layouts can nest values by project and profile. INI
+uses profile sections, while dotenv is always flat; in a single dotenv file,
+the same key therefore cannot hold different values for different profiles.
+Use a templated path such as `.env.{profile}.enc?format=dotenv` when profiles
+need separate dotenv values.
+
 ## Usage
 
 ### Set a secret with age

@@ -336,8 +336,9 @@ support, and profile-aware templated paths
 build with `--features sops` (0.17+)
 **Authentication**: SOPS environment variables or provider credentials such as
 `age_key`, `aws_secret_access_key`, `azure_client_secret`, and `hc_vault_token`
-**Storage**: Single-file mode namespaces convention secrets by project and
-profile; templated paths contain flat keys in one file per project/profile
+**Storage**: Single-file YAML and JSON can namespace convention secrets by
+project and profile; INI uses profile sections and dotenv is flat. Templated
+paths contain flat keys in one file per project/profile.
 
 ## Provider Selection
 

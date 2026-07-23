@@ -25,6 +25,9 @@ MANIFEST = <<~TOML
   DATABASE_URL = { description = "DB", required = true }
   LOG_LEVEL = { description = "log", required = false, default = "info" }
   SENTRY_DSN = { description = "sentry", required = false }
+
+  [scopes.database]
+  secrets = ["DATABASE_URL"]
 TOML
 
 def project(dir, dotenv, manifest: MANIFEST)
@@ -78,6 +81,28 @@ class ResolveTest < Minitest::Test
                             .set_as_env!
 
       assert_equal "postgres://db", ENV.fetch("DATABASE_URL")
+    end
+  end
+
+  def test_scope_is_selected_and_returned
+    Dir.mktmpdir do |dir|
+      manifest, provider = project(
+        dir,
+        "DATABASE_URL=postgres://db\nSENTRY_DSN=https://sentry\n"
+      )
+      builder = Secretspec::SecretSpec.builder
+                                       .with_path(manifest)
+                                       .with_provider(provider)
+                                       .with_scope("database")
+                                       .with_reason("rb scoped test")
+
+      resolved = builder.load
+      assert_equal "database", resolved.scope
+      assert_equal ["DATABASE_URL"], resolved.secrets.keys
+
+      report = builder.report
+      assert_equal "database", report.scope
+      assert_equal ["DATABASE_URL"], report.secrets.map(&:name)
     end
   end
 

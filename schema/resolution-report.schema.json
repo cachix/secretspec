@@ -20,6 +20,10 @@
       "description": "The profile that was resolved.",
       "type": "string"
     },
+    "scope": {
+      "description": "The active secret scope, when resolution was scoped. Absent when the whole profile resolved.",
+      "type": "string"
+    },
     "secrets": {
       "description": "One entry per declared secret, sorted by name.",
       "type": "array",
@@ -46,9 +50,9 @@
           "type": "string"
         },
         "secrets": {
-          "description": "All declared members of the constraint group.",
+          "description": "The constraint group's members that participated in this resolution. Normally all declared members (a group has at least two); under an active scope it is narrowed to the members the scope exposes, which may be a single secret.",
           "type": "array",
-          "minItems": 2,
+          "minItems": 1,
           "items": { "type": "string" }
         },
         "present": {

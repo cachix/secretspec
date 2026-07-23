@@ -12,6 +12,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   global defaults without interactive prompts, including `--profile none` to
   clear the default profile.
   ([#171](https://github.com/cachix/secretspec/issues/171))
+- Secret **scopes**: a `[scopes]` table names membership-only subsets of a
+  profile's secrets, so a single service or task resolves only what it declares
+  instead of the whole profile. `check`, `run`, and `export` take `--scope`
+  (`SECRETSPEC_SCOPE`); the consumer-visible set is the intersection of the
+  selected profile and the scope's secret list. Scopes are orthogonal to
+  profiles and never change a secret's `required`/`default`/providers or its
+  storage address. A composed secret in a scope still resolves its dependencies
+  — even ones the scope leaves out — to build its value, but those dependencies
+  are never exposed to the scope; a secret that is neither in the scope nor a
+  dependency of one is never fetched, and an empty scope contacts no provider at
+  all. `run --scope` removes every manifest-declared secret outside the scoped
+  set from the child environment — across all profiles, even one the parent
+  already exported — so no value can leak into the launched process. Under
+  project `extends`, a child scope replaces the parent scope of the same name
+  outright rather than unioning their secret lists. Typed SDK loaders ignore an
+  ambient `SECRETSPEC_SCOPE`, since a generated struct always expects the full
+  profile; `import` likewise ignores scope and always copies the whole profile.
+  Untyped SDK/FFI builders expose explicit scope selection and return the active
+  scope in resolve/report results. Audit events for scoped `check`, `run`, and
+  `export` operations record the scope name as well as the keys accessed or
+  exposed.
 - age provider (`age://`) for storing dotenv-style secret sets in an
   age-encrypted file, with ASCII armor by default, team recipient rosters,
   direct X25519 and SSH key support, native tagged recipients, and

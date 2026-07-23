@@ -79,6 +79,10 @@ enum Commands {
         /// Profile to use
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
         profile: Option<String>,
+        /// Scope to resolve (a `[scopes]` subset of the profile). Excluded
+        /// secrets are removed from the child environment even if inherited.
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE")]
+        scope: Option<String>,
         /// Command and arguments to run
         #[arg(trailing_var_arg = true)]
         command: Vec<String>,
@@ -91,6 +95,9 @@ enum Commands {
         /// Profile to use
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
         profile: Option<String>,
+        /// Scope to resolve (a `[scopes]` subset of the profile)
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE")]
+        scope: Option<String>,
         /// Output format
         #[arg(long, value_enum, default_value = "shell")]
         format: ExportFormat,
@@ -103,6 +110,9 @@ enum Commands {
         /// Profile to use
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
         profile: Option<String>,
+        /// Scope to check (a `[scopes]` subset of the profile)
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE")]
+        scope: Option<String>,
         /// Don't prompt for missing secrets (exit with error if any are missing)
         #[arg(short = 'n', long)]
         no_prompt: bool,
@@ -488,6 +498,7 @@ pub fn main() -> Result<()> {
                 },
                 profiles,
                 providers: None,
+                scopes: None,
             };
             let mut content = generate_toml_with_comments(&project_config).into_diagnostic()?;
 
@@ -776,6 +787,7 @@ pub fn main() -> Result<()> {
             command,
             provider,
             profile,
+            scope,
         } => {
             let mut app = load_secrets(&cli.file, &cli.reason)?;
             if let Some(p) = provider {
@@ -783,6 +795,9 @@ pub fn main() -> Result<()> {
             }
             if let Some(p) = profile {
                 app.set_profile(p);
+            }
+            if let Some(s) = scope {
+                app.set_scope(s);
             }
             app.run(command)
                 .into_diagnostic()
@@ -793,6 +808,7 @@ pub fn main() -> Result<()> {
         Commands::Export {
             provider,
             profile,
+            scope,
             format,
         } => {
             let mut app = load_secrets(&cli.file, &cli.reason)?;
@@ -801,6 +817,9 @@ pub fn main() -> Result<()> {
             }
             if let Some(p) = profile {
                 app.set_profile(p);
+            }
+            if let Some(s) = scope {
+                app.set_scope(s);
             }
             let mut out = std::io::stdout().lock();
             app.export(format, &mut out)
@@ -812,6 +831,7 @@ pub fn main() -> Result<()> {
         Commands::Check {
             provider,
             profile,
+            scope,
             no_prompt,
             json,
             explain,
@@ -822,6 +842,9 @@ pub fn main() -> Result<()> {
             }
             if let Some(p) = profile {
                 app.set_profile(p);
+            }
+            if let Some(s) = scope {
+                app.set_scope(s);
             }
 
             // `--json`/`--explain` surface the value-free resolution report
@@ -1016,6 +1039,7 @@ fn format_audit_line(v: &serde_json::Value) -> String {
     let outcome = sanitize_field(str_field("outcome").unwrap_or("?"));
     let project = sanitize_field(str_field("project").unwrap_or(""));
     let profile = sanitize_field(str_field("profile").unwrap_or(""));
+    let scope = str_field("scope").map(sanitize_field);
 
     let target = if let Some(key) = str_field("key") {
         sanitize_field(key)
@@ -1043,6 +1067,9 @@ fn format_audit_line(v: &serde_json::Value) -> String {
         s += &format!("  {target}");
     }
     s += &format!("  ({project}/{profile}");
+    if let Some(scope) = scope {
+        s += &format!(" scope:{scope}");
+    }
     if let Some(provider) = str_field("provider") {
         s += &format!(" via {}", sanitize_field(provider));
     }
@@ -1082,6 +1109,7 @@ mod tests {
                 },
             )]),
             providers: None,
+            scopes: None,
         }
     }
 
@@ -1197,12 +1225,13 @@ mod tests {
         // A bulk entry joins `keys[]` and shows the executed command.
         let bulk: serde_json::Value = serde_json::from_str(
             r#"{"ts":"t","action":"run","outcome":"started","project":"demo",
-                "profile":"prod","keys":["A","B"],"command":"./deploy.sh"}"#,
+                "profile":"prod","scope":"api","keys":["A","B"],"command":"./deploy.sh"}"#,
         )
         .unwrap();
         let line = format_audit_line(&bulk);
         assert!(line.contains("./deploy.sh"));
         assert!(line.contains("A,B"));
+        assert!(line.contains("(demo/prod scope:api)"));
 
         colored::control::unset_override();
     }
@@ -1291,6 +1320,7 @@ mod tests {
                 },
             )]),
             providers: None,
+            scopes: None,
         };
 
         let generated = generate_toml_with_comments(&config).unwrap();

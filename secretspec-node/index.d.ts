@@ -21,6 +21,8 @@ export class ResolvedSecret {
 export class Resolved {
   provider: string;
   profile: string;
+  /** Selected manifest scope, or null for a full-profile resolve (0.17+). */
+  scope: string | null;
   secrets: Record<string, ResolvedSecret>;
   missingOptional: string[];
   /** Export each resolved secret into process.env by its declared name. */
@@ -56,6 +58,8 @@ export class SecretReport {
 export class Report {
   provider: string;
   profile: string;
+  /** Selected manifest scope, or null for a full-profile report (0.17+). */
+  scope: string | null;
   secrets: SecretReport[];
 }
 
@@ -63,6 +67,8 @@ export class Builder {
   withPath(path: string): this;
   withProvider(provider: string): this;
   withProfile(profile: string): this;
+  /** Limit resolution to a named manifest scope (SecretSpec 0.17+). */
+  withScope(scope: string): this;
   withReason(reason: string): this;
   /** Omit secret values, returning only structure and provenance. */
   withNoValues(noValues?: boolean): this;

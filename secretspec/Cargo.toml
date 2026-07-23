@@ -73,3 +73,7 @@ infisical = ["dep:reqwest", "tokio/sync"]
 bws = ["dep:bitwarden", "dep:rustls"]
 akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secrets"]
 age = ["dep:age"]
+
+[dev-dependencies]
+# Validates serialized resolution reports against the committed JSON Schema.
+jsonschema = { version = "0.48.5", default-features = false }

@@ -12,11 +12,15 @@ namespace Secretspec;
  */
 final class Report
 {
-    /** @param list<SecretReport> $secrets one entry per declared secret */
+    /**
+     * @param list<SecretReport> $secrets one entry per declared secret
+     * @param string|null        $scope   selected manifest scope (0.17+)
+     */
     public function __construct(
         public readonly string $provider,
         public readonly string $profile,
         public readonly array $secrets,
+        public readonly ?string $scope = null,
     ) {
     }
 }

@@ -30,6 +30,15 @@ main = do
 A missing required secret throws `MissingRequiredError`; any other failure
 throws `SecretSpecError` (with a stable `errorKind`).
 
+## Scopes (0.17+)
+
+Use `withScope "api"` to resolve only a named `[scopes.api]` subset. Both
+`resolvedScope` and `reportScope` return the selected scope:
+
+```haskell
+resolved <- S.load (S.builder & S.withScope "api")
+```
+
 ## Cleanup
 
 `as_path` secrets are materialized to temp files that outlive the call. Call

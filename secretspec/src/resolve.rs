@@ -72,6 +72,11 @@ pub struct ResolveResponse {
     pub provider: String,
     /// The profile that was resolved.
     pub profile: String,
+    /// The active secret scope, when resolution was scoped (`--scope`,
+    /// `SECRETSPEC_SCOPE`, or the SDK builder). `None` — the whole profile
+    /// resolved — is omitted from JSON, so unscoped output is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
     /// Resolved secrets by name. Empty when a required secret is missing.
     /// `BTreeMap` keeps the JSON object key order deterministic.
     pub secrets: BTreeMap<String, ResolvedSecret>,
@@ -122,6 +127,8 @@ struct JsonRequest {
     #[serde(default)]
     profile: Option<String>,
     #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
     reason: Option<String>,
     #[serde(default)]
     no_values: bool,
@@ -161,6 +168,9 @@ fn dispatch(request_json: &str) -> serde_json::Value {
     if let Some(profile) = request.profile {
         app.set_profile(profile);
     }
+    if let Some(scope) = request.scope {
+        app.set_scope(scope);
+    }
     if let Some(reason) = request.reason {
         app = app.with_reason(reason);
     }
@@ -195,8 +205,9 @@ fn dispatch(request_json: &str) -> serde_json::Value {
 /// This is the shared JSON boundary used by every native binding (the C ABI in
 /// `secretspec-ffi` and the napi-rs Node addon), so the envelope contract is
 /// defined in exactly one place. The request accepts optional `path`,
-/// `provider`, `profile`, `reason`, `no_values`, and `mode` (`"resolve"` by
-/// default, or `"report"` for the value-free [`crate::report::ResolutionReport`]).
+/// `provider`, `profile`, `scope`, `reason`, `no_values`, and `mode`
+/// (`"resolve"` by default, or `"report"` for the value-free
+/// [`crate::report::ResolutionReport`]).
 /// A `resolve` response carries secret values; treat its bytes as sensitive. A
 /// `report` response never does.
 pub fn resolve_json(request_json: &str) -> String {

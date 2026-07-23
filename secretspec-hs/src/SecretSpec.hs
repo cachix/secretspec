@@ -23,6 +23,7 @@ module SecretSpec
   , withPath
   , withProvider
   , withProfile
+  , withScope
   , withReason
   , withNoValues
     -- * Resolve (value-carrying)
@@ -125,6 +126,8 @@ instance FromJSON ResolvedSecret where
 data Resolved = Resolved
   { resolvedProvider        :: Text
   , resolvedProfile         :: Text
+  -- | Selected manifest scope, or 'Nothing' for a full-profile resolve (0.17+).
+  , resolvedScope           :: Maybe Text
   , resolvedSecrets         :: Map Text ResolvedSecret
   , resolvedMissingOptional :: [Text]
   } deriving (Show, Eq)
@@ -157,6 +160,8 @@ instance FromJSON SecretReport where
 data Report = Report
   { reportProvider :: Text
   , reportProfile  :: Text
+  -- | Selected manifest scope, or 'Nothing' for a full-profile report (0.17+).
+  , reportScope    :: Maybe Text
   , reportSecrets  :: [SecretReport]
   } deriving (Show, Eq)
 
@@ -166,13 +171,14 @@ data Builder = Builder
   { bPath     :: Maybe Text
   , bProvider :: Maybe Text
   , bProfile  :: Maybe Text
+  , bScope    :: Maybe Text
   , bReason   :: Maybe Text
   , bNoValues :: Bool
   }
 
 -- | A builder with no options set.
 builder :: Builder
-builder = Builder Nothing Nothing Nothing Nothing False
+builder = Builder Nothing Nothing Nothing Nothing Nothing False
 
 -- | Resolve from a manifest at this path instead of walking up from the working
 -- directory.
@@ -186,6 +192,10 @@ withProvider v b = b { bProvider = Just v }
 -- | Override the profile.
 withProfile :: Text -> Builder -> Builder
 withProfile v b = b { bProfile = Just v }
+
+-- | Limit resolution to a named manifest scope (SecretSpec 0.17+).
+withScope :: Text -> Builder -> Builder
+withScope v b = b { bScope = Just v }
 
 -- | Set a human-readable reason for this access (for audited providers).
 withReason :: Text -> Builder -> Builder
@@ -249,15 +259,16 @@ load :: Builder -> IO Resolved
 load b = do
   resp <- callNative (requestBytes b Nothing)
   value <- responseValue resp resolveSchemaVersion "resolve"
-  (prov, prof, secs, mreq, mopt) <- fromResult (parseEither pResolve value)
+  (prov, prof, scope, secs, mreq, mopt) <- fromResult (parseEither pResolve value)
   case mreq of
-    [] -> pure (Resolved prov prof secs mopt)
+    [] -> pure (Resolved prov prof scope secs mopt)
     xs -> throwIO (MissingRequiredError xs)
   where
     pResolve = withObject "response" $ \o ->
-      (,,,,)
+      (,,,,,)
         <$> o .: "provider"
         <*> o .: "profile"
+        <*> o .:? "scope"
         <*> o .:? "secrets" .!= Map.empty
         <*> o .:? "missing_required" .!= []
         <*> o .:? "missing_optional" .!= []
@@ -270,13 +281,14 @@ report :: Builder -> IO Report
 report b = do
   resp <- callNative (requestBytes b (Just "report"))
   value <- responseValue resp reportSchemaVersion "report"
-  (prov, prof, secs) <- fromResult (parseEither pReport value)
-  pure (Report prov prof secs)
+  (prov, prof, scope, secs) <- fromResult (parseEither pReport value)
+  pure (Report prov prof scope secs)
   where
     pReport = withObject "response" $ \o ->
-      (,,)
+      (,,,)
         <$> o .: "provider"
         <*> o .: "profile"
+        <*> o .:? "scope"
         <*> o .:? "secrets" .!= []
 
 -- Build the request JSON for a resolve (@mode = Nothing@) or report
@@ -288,6 +300,7 @@ requestBytes b mode =
       [ ("path" .=) <$> bPath b
       , ("provider" .=) <$> bProvider b
       , ("profile" .=) <$> bProfile b
+      , ("scope" .=) <$> bScope b
       , ("reason" .=) <$> bReason b
       ]
       ++ ["no_values" .= True | bNoValues b]

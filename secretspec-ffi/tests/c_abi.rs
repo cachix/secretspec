@@ -48,6 +48,9 @@ revision = "1.0"
 DATABASE_URL = { description = "DB", required = true }
 LOG_LEVEL = { description = "log", required = false, default = "info" }
 SENTRY_DSN = { description = "sentry", required = false }
+
+[scopes.database]
+secrets = ["DATABASE_URL"]
 "#;
 
 #[test]
@@ -85,6 +88,54 @@ fn resolve_returns_values_and_provenance() {
     assert_eq!(response["secrets"]["LOG_LEVEL"]["source"], "default");
     assert_eq!(response["missing_optional"][0], "SENTRY_DSN");
     assert!(response["missing_required"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn explicit_scope_is_honored_and_returned() {
+    let dir = TempDir::new().unwrap();
+    let (manifest_path, provider) = write_project(
+        &dir,
+        MANIFEST,
+        "DATABASE_URL=postgres://db\nSENTRY_DSN=https://sentry\n",
+    );
+
+    let request = serde_json::json!({
+        "path": manifest_path,
+        "provider": provider,
+        "scope": "database",
+        "reason": "ffi scoped test",
+    })
+    .to_string();
+
+    let env = resolve(&request);
+    assert_eq!(env["ok"], true, "envelope: {env}");
+    let response = &env["response"];
+    assert_eq!(response["scope"], "database");
+    assert!(response["secrets"].get("DATABASE_URL").is_some());
+    assert!(response["secrets"].get("LOG_LEVEL").is_none());
+    assert!(response["secrets"].get("SENTRY_DSN").is_none());
+}
+
+#[test]
+fn explicit_scope_is_returned_by_report_mode() {
+    let dir = TempDir::new().unwrap();
+    let (manifest_path, provider) = write_project(&dir, MANIFEST, "DATABASE_URL=postgres://db\n");
+
+    let request = serde_json::json!({
+        "path": manifest_path,
+        "provider": provider,
+        "scope": "database",
+        "reason": "ffi scoped report test",
+        "mode": "report",
+    })
+    .to_string();
+
+    let env = resolve(&request);
+    assert_eq!(env["ok"], true, "envelope: {env}");
+    assert_eq!(env["response"]["scope"], "database");
+    let secrets = env["response"]["secrets"].as_array().unwrap();
+    assert_eq!(secrets.len(), 1);
+    assert_eq!(secrets[0]["name"], "DATABASE_URL");
 }
 
 #[test]

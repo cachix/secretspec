@@ -48,6 +48,15 @@ $resolved->setAsEnv();                            // export into getenv()/$_ENV/
 A missing required secret throws `Secretspec\MissingRequiredException`; any other
 failure throws `Secretspec\SecretSpecException` (with a stable `->kind`).
 
+## Scopes (0.17+)
+
+Use `withScope('api')` to resolve only a named `[scopes.api]` subset. Both
+`$resolved->scope` and `$report->scope` return the selected scope:
+
+```php
+$resolved = SecretSpec::builder()->withScope('api')->load();
+```
+
 ## Development
 
 The SDK talks to the resolver built from this repository. The Composer manifest

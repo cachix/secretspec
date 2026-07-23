@@ -40,6 +40,7 @@ fn test_new_with_project_config() {
         },
         profiles: HashMap::new(),
         providers: None,
+        scopes: None,
     };
 
     let spec = Secrets::new(config, None, None, None);
@@ -202,6 +203,7 @@ fn test_new_with_default_overrides() {
         },
         profiles: HashMap::new(),
         providers: None,
+        scopes: None,
     };
 
     // Create a global config with specific defaults
@@ -385,6 +387,7 @@ fn test_resolution_report_provenance() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let provider = format!("dotenv://{}", env_path.display());
@@ -470,6 +473,7 @@ fn profile_presence_constraints_validate_resolved_values() {
                 },
             )]),
             providers: None,
+            scopes: None,
         };
         let provider = format!("dotenv://{}", env_path.display());
         let app = Secrets::new(config, None, Some(provider), None);
@@ -561,6 +565,7 @@ pub(crate) fn resolve_test_config(secrets: HashMap<String, Secret>) -> Config {
         },
         profiles,
         providers: None,
+        scopes: None,
     }
 }
 
@@ -583,16 +588,20 @@ pub(crate) fn scrub_resolution_env() -> ResolutionEnvGuard {
     let lock = RESOLUTION_ENV_GUARD
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let saved = ["SECRETSPEC_PROVIDER", "SECRETSPEC_PROFILE"]
-        .into_iter()
-        .map(|key| {
-            let previous = std::env::var_os(key);
-            // SAFETY: `RESOLUTION_ENV_GUARD` is held for the guard's whole
-            // lifetime, so no two guards mutate the environment concurrently.
-            unsafe { std::env::remove_var(key) };
-            (key, previous)
-        })
-        .collect();
+    let saved = [
+        "SECRETSPEC_PROVIDER",
+        "SECRETSPEC_PROFILE",
+        "SECRETSPEC_SCOPE",
+    ]
+    .into_iter()
+    .map(|key| {
+        let previous = std::env::var_os(key);
+        // SAFETY: `RESOLUTION_ENV_GUARD` is held for the guard's whole
+        // lifetime, so no two guards mutate the environment concurrently.
+        unsafe { std::env::remove_var(key) };
+        (key, previous)
+    })
+    .collect();
     ResolutionEnvGuard { _lock: lock, saved }
 }
 
@@ -1166,6 +1175,7 @@ fn test_secretspec_new() {
         },
         profiles: HashMap::new(),
         providers: None,
+        scopes: None,
     };
 
     let global_config = GlobalConfig {
@@ -1208,6 +1218,7 @@ fn test_resolve_profile() {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         },
         Some(global_config),
         None,
@@ -1229,6 +1240,7 @@ fn test_resolve_profile() {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         },
         None,
         None,
@@ -1300,6 +1312,7 @@ fn test_resolve_secret_config() {
             },
             profiles,
             providers: None,
+            scopes: None,
         },
         None,
         None,
@@ -1340,6 +1353,7 @@ fn test_get_provider_error_cases() {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         },
         None,
         None,
@@ -1370,6 +1384,7 @@ fn test_get_provider_with_global_config() {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         },
         Some(global_config),
         None,
@@ -2522,6 +2537,7 @@ fn test_set_with_undefined_secret() {
             profiles
         },
         providers: None,
+        scopes: None,
     };
 
     let global_config = GlobalConfig {
@@ -2593,6 +2609,7 @@ fn test_set_with_defined_secret() {
             profiles
         },
         providers: None,
+        scopes: None,
     };
 
     let global_config = GlobalConfig {
@@ -2647,6 +2664,7 @@ fn test_set_with_readonly_provider() {
             profiles
         },
         providers: None,
+        scopes: None,
     };
 
     let global_config = GlobalConfig {
@@ -2744,6 +2762,7 @@ fn test_import_between_dotenv_files() {
             profiles
         },
         providers: None,
+        scopes: None,
     };
 
     // Create source .env file
@@ -2871,6 +2890,7 @@ fn test_import_edge_cases() {
             profiles
         },
         providers: None,
+        scopes: None,
     };
 
     // Create source .env file with edge case values
@@ -3137,6 +3157,7 @@ fn test_import_with_profiles() {
             profiles
         },
         providers: None,
+        scopes: None,
     };
 
     // Create source .env file with all secrets
@@ -3210,6 +3231,7 @@ fn test_run_with_empty_command() {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -3272,6 +3294,7 @@ fn test_run_with_missing_required_secrets() {
             },
             profiles,
             providers: None,
+            scopes: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -3332,6 +3355,7 @@ fn test_get_existing_secret() {
             },
             profiles,
             providers: None,
+            scopes: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -3386,6 +3410,7 @@ fn test_get_secret_with_default() {
             },
             profiles,
             providers: None,
+            scopes: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -3439,6 +3464,7 @@ fn test_get_nonexistent_secret() {
             },
             profiles,
             providers: None,
+            scopes: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -3606,6 +3632,7 @@ fn test_per_secret_provider_configuration() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     // Create global config with provider aliases
@@ -3659,6 +3686,7 @@ fn test_provider_alias_resolution() {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         },
         Some(global_config),
         None,
@@ -3699,6 +3727,7 @@ fn test_provider_alias_not_found() {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         },
         Some(global_config),
         None,
@@ -3772,6 +3801,7 @@ fn test_per_secret_provider_with_fallback_chain() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let providers_map = aliases_map(&[
@@ -3865,6 +3895,7 @@ fn test_get_secret_with_fallback_chain() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let providers_map = aliases_map(&[
@@ -3943,6 +3974,7 @@ fn test_validate_falls_back_on_primary_provider_error() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let providers_map = aliases_map(&[
@@ -4012,6 +4044,7 @@ fn test_validate_surfaces_error_when_all_providers_fail() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let providers_map = aliases_map(&[
@@ -4106,6 +4139,7 @@ fn test_validate_with_per_secret_providers() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let providers_map = aliases_map(&[
@@ -4234,6 +4268,7 @@ fn test_secret_config_merges_providers_from_default() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let spec = Secrets::new(config, None, None, None);
@@ -5187,6 +5222,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
         },
         profiles,
         providers: None,
+        scopes: None,
     };
 
     let spec = Secrets::new(config, None, Some("production".to_string()), None);
@@ -5243,6 +5279,7 @@ fn build_chain_scenario(
             profiles
         },
         providers: None,
+        scopes: None,
     };
 
     let providers_map = aliases_map(&[
@@ -5726,6 +5763,7 @@ fn config_with_project_aliases(aliases: &[(&str, &str)]) -> Config {
         },
         profiles: HashMap::new(),
         providers: Some(aliases_map(aliases)),
+        scopes: None,
     }
 }
 
@@ -5772,6 +5810,7 @@ fn config_with_project_alias_secret(
         },
         profiles,
         providers: Some(aliases_map(&[(alias, uri)])),
+        scopes: None,
     }
 }
 
@@ -6133,6 +6172,7 @@ fn dotenv_spec(
             },
             profiles,
             providers: None,
+            scopes: None,
         },
         Some(GlobalConfig {
             defaults: GlobalDefaults {
@@ -6464,6 +6504,7 @@ fn audit_set_readonly_provider_records_error() {
         },
         profiles: required_secret_profile("REQUIRED"),
         providers: None,
+        scopes: None,
     };
     // `env` is read-only, so a `set` is rejected and recorded as an error.
     let global_config = GlobalConfig {
@@ -7023,4 +7064,986 @@ fn store_provider_credential_rejects_a_read_only_source() {
         &secrecy::SecretString::new("x".into()),
     );
     assert!(result.is_err(), "the env provider is read-only");
+}
+
+// ========== Secret scope tests (#137) ==========
+
+#[cfg(test)]
+mod scopes {
+    use super::*;
+
+    /// Three required secrets in `default`, with two scopes carving out subsets.
+    const MANIFEST: &str = r#"
+[project]
+name = "scope-test"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+API_KEY = { description = "API key", required = true }
+QUEUE_TOKEN = { description = "Queue token", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "API_KEY"]
+
+[scopes.worker]
+secrets = ["DATABASE_URL", "QUEUE_TOKEN"]
+"#;
+
+    fn config(toml: &str) -> Config {
+        toml::from_str(toml).expect("valid manifest")
+    }
+
+    #[test]
+    fn scope_narrows_resolution_to_the_intersection() {
+        let mut spec = Secrets::new(config(MANIFEST), None, None, None);
+        spec.set_scope("api");
+        // Sorted, and only the scope's members — QUEUE_TOKEN is excluded.
+        assert_eq!(
+            spec.resolve_profile_secret_names(None).unwrap(),
+            vec!["API_KEY".to_string(), "DATABASE_URL".to_string()]
+        );
+    }
+
+    #[test]
+    fn no_scope_resolves_every_secret() {
+        let spec = Secrets::new(config(MANIFEST), None, None, None);
+        assert_eq!(
+            spec.resolve_profile_secret_names(None).unwrap(),
+            vec![
+                "API_KEY".to_string(),
+                "DATABASE_URL".to_string(),
+                "QUEUE_TOKEN".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_scope_errors_and_lists_the_defined_ones() {
+        let mut spec = Secrets::new(config(MANIFEST), None, None, None);
+        spec.set_scope("nope");
+        let err = spec
+            .resolve_profile_secret_names(None)
+            .expect_err("an undefined scope must fail resolution");
+        let SecretSpecError::InvalidScope(msg) = err else {
+            panic!("expected InvalidScope, got {err:?}");
+        };
+        assert!(msg.contains("nope"), "names the bad scope: {msg}");
+        assert!(
+            msg.contains("api") && msg.contains("worker"),
+            "lists the available scopes: {msg}"
+        );
+    }
+
+    #[test]
+    fn scope_membership_is_intersected_with_the_selected_profile() {
+        // `api` lists a secret that only `production` declares; resolving it under
+        // `default` yields just the intersection, with no error.
+        let manifest = r#"
+[project]
+name = "scope-intersect"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[profiles.production]
+SENTRY_DSN = { description = "Sentry", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "SENTRY_DSN"]
+"#;
+        let mut spec = Secrets::new(config(manifest), None, None, None);
+        spec.set_scope("api");
+        // `default` does not declare SENTRY_DSN, so the scoped set is just DATABASE_URL.
+        assert_eq!(
+            spec.resolve_profile_secret_names(Some("default")).unwrap(),
+            vec!["DATABASE_URL".to_string()]
+        );
+        // `production` inherits DATABASE_URL from `default` and adds SENTRY_DSN,
+        // so the same scope admits both.
+        assert_eq!(
+            spec.resolve_profile_secret_names(Some("production"))
+                .unwrap(),
+            vec!["DATABASE_URL".to_string(), "SENTRY_DSN".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolving_values_skips_required_secrets_outside_the_scope() {
+        // The `api` scope's own secrets (DATABASE_URL, API_KEY) are available;
+        // QUEUE_TOKEN is required but excluded by the scope, so resolution still
+        // succeeds even though the provider never supplies it.
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DATABASE_URL=postgres://localhost/db\nAPI_KEY=secret\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut scoped = Secrets::new(config(MANIFEST), None, Some(provider.clone()), None);
+        scoped.set_scope("api");
+        let response = scoped.resolve().unwrap();
+        assert!(
+            response.is_ok(),
+            "excluded required secret must not fail resolution"
+        );
+        assert!(response.secrets.contains_key("DATABASE_URL"));
+        assert!(response.secrets.contains_key("API_KEY"));
+        assert!(!response.secrets.contains_key("QUEUE_TOKEN"));
+
+        // Without a scope the same manifest fails: QUEUE_TOKEN is required and
+        // the provider does not supply it.
+        let unscoped = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        let response = unscoped.resolve().unwrap();
+        assert!(!response.is_ok());
+        assert!(
+            response
+                .missing_required
+                .contains(&"QUEUE_TOKEN".to_string())
+        );
+    }
+
+    /// The scope's core isolation guarantee: `run --scope` removes a
+    /// declared-but-excluded secret the parent already exported, so it cannot
+    /// leak into the child even though the child would otherwise inherit it.
+    #[cfg(unix)]
+    #[test]
+    fn run_scope_scrubs_an_excluded_inherited_secret_from_the_child() {
+        let _env = scrub_resolution_env();
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DATABASE_URL=postgres://localhost/db\nAPI_KEY=secret\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        // Simulate a parent shell that already holds the full profile: QUEUE_TOKEN
+        // is exported into this process's environment, and the child would inherit
+        // it unless `run --scope api` actively removes it.
+        let _leaked = EnvVarGuard::set("QUEUE_TOKEN", "leaked-from-parent");
+
+        let mut spec = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        spec.set_scope("api");
+
+        let excluded_file = temp.path().join("excluded");
+        let included_file = temp.path().join("included");
+        let exit = spec
+            .run_command(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "printf '%s' \"$QUEUE_TOKEN\" > {}; printf '%s' \"$DATABASE_URL\" > {}",
+                    excluded_file.display(),
+                    included_file.display()
+                ),
+            ])
+            .unwrap();
+        assert_eq!(exit, 0);
+
+        assert_eq!(
+            fs::read_to_string(&excluded_file).unwrap(),
+            "",
+            "excluded QUEUE_TOKEN must not reach the child, even inherited from the parent"
+        );
+        assert_eq!(
+            fs::read_to_string(&included_file).unwrap(),
+            "postgres://localhost/db",
+            "the scoped DATABASE_URL is still injected"
+        );
+    }
+
+    /// A composed secret in the scope resolves its out-of-scope inputs to build
+    /// its value, but those inputs are never exposed: the scope sees the derived
+    /// value alone (`visible = {DATABASE_URL}`; `accessed` also fetched the
+    /// `DB_*` leaves, which are then dropped from the output).
+    #[test]
+    fn composed_scope_resolves_dependencies_without_exposing_them() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DB_USER=alice\nDB_PASSWORD=s3cret\nDB_HOST=db.example\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let manifest = r#"
+[project]
+name = "composed-scope"
+revision = "1.0"
+
+[profiles.default]
+DB_USER = { description = "DB user" }
+DB_PASSWORD = { description = "DB password" }
+DB_HOST = { description = "DB host" }
+DATABASE_URL = { description = "DSN", composed = "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}/app" }
+
+[scopes.api]
+secrets = ["DATABASE_URL"]
+"#;
+        let mut spec = Secrets::new(config(manifest), None, Some(provider), None);
+        spec.set_scope("api");
+        let response = spec.resolve().unwrap();
+        assert!(response.is_ok());
+        // The composed value is built from its (out-of-scope) inputs...
+        assert_eq!(
+            response
+                .secrets
+                .get("DATABASE_URL")
+                .and_then(|s| s.value.as_deref()),
+            Some("postgres://alice:s3cret@db.example/app")
+        );
+        // ...but the inputs themselves never reach the scope.
+        assert!(!response.secrets.contains_key("DB_USER"));
+        assert!(!response.secrets.contains_key("DB_PASSWORD"));
+        assert!(!response.secrets.contains_key("DB_HOST"));
+    }
+
+    /// The dependency closure recurses: a composed secret whose only dependency
+    /// is itself composed still resolves under a scope naming just the outermost
+    /// secret, and neither the intermediate composition nor the leaves leak.
+    #[test]
+    fn nested_composition_resolves_under_scope_without_exposing_intermediates() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DB_USER=alice\nDB_PASSWORD=s3cret\nDB_HOST=db.example\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let manifest = r#"
+[project]
+name = "nested-composed-scope"
+revision = "1.0"
+
+[profiles.default]
+DB_USER = { description = "DB user" }
+DB_PASSWORD = { description = "DB password" }
+DB_HOST = { description = "DB host" }
+DATABASE_URL = { description = "DSN", composed = "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}/app" }
+CONN = { description = "Connection string", composed = "url=${DATABASE_URL}" }
+
+[scopes.api]
+secrets = ["CONN"]
+"#;
+        let mut spec = Secrets::new(config(manifest), None, Some(provider), None);
+        spec.set_scope("api");
+        let response = spec.resolve().unwrap();
+        assert!(response.is_ok());
+        assert_eq!(
+            response
+                .secrets
+                .get("CONN")
+                .and_then(|s| s.value.as_deref()),
+            Some("url=postgres://alice:s3cret@db.example/app")
+        );
+        // Neither the intermediate composed secret nor the leaves are exposed.
+        assert!(!response.secrets.contains_key("DATABASE_URL"));
+        assert!(!response.secrets.contains_key("DB_USER"));
+        assert!(!response.secrets.contains_key("DB_PASSWORD"));
+        assert!(!response.secrets.contains_key("DB_HOST"));
+    }
+
+    /// `run --scope` scrubs a secret declared only under *another* profile: it is
+    /// manifest-declared and not visible, so an inherited parent value must not
+    /// reach the scoped child even though the selected profile never declares it.
+    #[cfg(unix)]
+    #[test]
+    fn run_scope_scrubs_a_secret_declared_only_under_another_profile() {
+        let _env = scrub_resolution_env();
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "DATABASE_URL=postgres://localhost/db\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        // PROD_ONLY is declared only under `production`; the active profile is
+        // `default`. A parent shell exported it (e.g. a prior production run).
+        let manifest = r#"
+[project]
+name = "cross-profile-scrub"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[profiles.production]
+PROD_ONLY = { description = "prod secret", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL"]
+"#;
+        let _leaked = EnvVarGuard::set("PROD_ONLY", "leaked-from-parent");
+
+        let mut spec = Secrets::new(config(manifest), None, Some(provider), None);
+        spec.set_scope("api");
+
+        let leaked_file = temp.path().join("prod_only");
+        let included_file = temp.path().join("db");
+        let exit = spec
+            .run_command(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "printf '%s' \"$PROD_ONLY\" > {}; printf '%s' \"$DATABASE_URL\" > {}",
+                    leaked_file.display(),
+                    included_file.display()
+                ),
+            ])
+            .unwrap();
+        assert_eq!(exit, 0);
+        assert_eq!(
+            fs::read_to_string(&leaked_file).unwrap(),
+            "",
+            "a secret from another profile must be scrubbed from the scoped child"
+        );
+        assert_eq!(
+            fs::read_to_string(&included_file).unwrap(),
+            "postgres://localhost/db",
+            "the scoped DATABASE_URL is still injected"
+        );
+    }
+
+    /// An empty scope (or an empty intersection) resolves to nothing and must not
+    /// initialize or contact any provider. Proven with a deliberately broken
+    /// provider: an unscoped resolve fails building it, while the empty scope
+    /// short-circuits before any provider is built and so succeeds.
+    #[test]
+    fn empty_scope_contacts_no_provider() {
+        let _env = scrub_resolution_env();
+        let manifest = r#"
+[project]
+name = "empty-scope"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.none]
+secrets = []
+"#;
+        let mut spec = Secrets::new(config(manifest), None, Some("bogus://x".to_string()), None);
+        spec.set_scope("none");
+        let response = spec
+            .resolve()
+            .expect("an empty scope resolves without contacting a provider");
+        assert!(response.is_ok());
+        assert!(
+            response.secrets.is_empty(),
+            "an empty scope resolves to nothing"
+        );
+        assert!(response.missing_required.is_empty());
+
+        // Control: the same broken provider under no scope *does* fail, proving
+        // the provider is skipped only because the scope is empty.
+        let unscoped = Secrets::new(config(manifest), None, Some("bogus://x".to_string()), None);
+        assert!(
+            unscoped.resolve().is_err(),
+            "a broken provider must fail an unscoped resolve"
+        );
+    }
+
+    /// The `ignore_ambient_scope` flag gates *only* the ambient `SECRETSPEC_SCOPE`
+    /// fallback, never an explicitly set scope. (End-to-end coverage that a typed
+    /// load actually ignores the environment variable — which requires mutating
+    /// the process environment — lives in the isolated subprocess integration
+    /// test `tests/typed_scope_env.rs`, so it cannot race the parallel unit
+    /// suite, every member of which reads the scope env fallback.)
+    #[test]
+    fn ignore_ambient_scope_still_honors_an_explicit_scope() {
+        let mut spec = Secrets::new(config(MANIFEST), None, None, None);
+        spec.set_ignore_ambient_scope(true);
+        spec.set_scope("api");
+        assert_eq!(
+            spec.resolve_profile_secret_names(None).unwrap(),
+            vec!["API_KEY".to_string(), "DATABASE_URL".to_string()],
+            "an explicit scope is honored even when the ambient fallback is suppressed"
+        );
+    }
+
+    const COMPOSED_MANIFEST: &str = r#"
+[project]
+name = "composed-scope"
+revision = "1.0"
+
+[profiles.default]
+DB_USER = { description = "DB user" }
+DB_PASSWORD = { description = "DB password" }
+DB_HOST = { description = "DB host" }
+DATABASE_URL = { description = "DSN", composed = "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}/app" }
+
+[scopes.api]
+secrets = ["DATABASE_URL"]
+"#;
+
+    /// A scoped interactive resolution must never offer to prompt for — or name —
+    /// a secret the scope hides. An out-of-scope composition dependency reaches
+    /// the raw promptable set (the visible-only resolution list makes its status
+    /// look unresolved); scoping must filter it back out, or `check --scope`
+    /// would disclose the hidden name and overwrite an already-present value.
+    #[test]
+    fn scoped_prompting_never_offers_out_of_scope_dependencies() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        // DB_PASSWORD is absent, so the composed DATABASE_URL cannot render.
+        fs::write(&env_path, "DB_USER=alice\nDB_HOST=db.example\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        // Unscoped: prompting offers the genuinely-missing leaf.
+        let unscoped = Secrets::new(
+            config(COMPOSED_MANIFEST),
+            None,
+            Some(provider.clone()),
+            None,
+        );
+        let uerr = match unscoped.validate().unwrap() {
+            Ok(_) => panic!("DB_PASSWORD missing must fail resolution"),
+            Err(e) => e,
+        };
+        let uprompt = unscoped
+            .scoped_promptable_missing(&uerr, "default")
+            .unwrap();
+        assert!(
+            uprompt.contains(&"DB_PASSWORD".to_string()),
+            "unscoped prompting offers the missing leaf: {uprompt:?}"
+        );
+
+        // Scoped to {DATABASE_URL}: no hidden dependency is ever offered, and the
+        // only missing_required surfaced is the visible composed secret itself.
+        let mut scoped = Secrets::new(config(COMPOSED_MANIFEST), None, Some(provider), None);
+        scoped.set_scope("api");
+        let serr = match scoped.validate().unwrap() {
+            Ok(_) => panic!("the visible composed secret must be unrenderable"),
+            Err(e) => e,
+        };
+        assert_eq!(serr.missing_required, vec!["DATABASE_URL".to_string()]);
+        let sprompt = scoped.scoped_promptable_missing(&serr, "default").unwrap();
+        assert!(
+            sprompt.is_empty(),
+            "a scope must not offer hidden dependencies for prompting: {sprompt:?}"
+        );
+    }
+
+    /// `run --scope` scrubs the raw dependencies of an in-scope composed secret
+    /// from the child — via the separate `scope_excluded_names` path, not the
+    /// resolution output filter — even when the parent shell exported them.
+    #[cfg(unix)]
+    #[test]
+    fn run_scope_scrubs_composed_dependencies_from_the_child() {
+        let _env = scrub_resolution_env();
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DB_USER=alice\nDB_PASSWORD=s3cret\nDB_HOST=db.example\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        // A parent shell that already holds the raw dependency values.
+        let _u = EnvVarGuard::set("DB_USER", "leaked-user");
+        let _p = EnvVarGuard::set("DB_PASSWORD", "leaked-pass");
+
+        let mut spec = Secrets::new(config(COMPOSED_MANIFEST), None, Some(provider), None);
+        spec.set_scope("api");
+
+        let url_file = temp.path().join("url");
+        let user_file = temp.path().join("user");
+        let pass_file = temp.path().join("pass");
+        let exit = spec
+            .run_command(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "printf '%s' \"$DATABASE_URL\" > {}; printf '%s' \"$DB_USER\" > {}; printf '%s' \"$DB_PASSWORD\" > {}",
+                    url_file.display(),
+                    user_file.display(),
+                    pass_file.display()
+                ),
+            ])
+            .unwrap();
+        assert_eq!(exit, 0);
+        // The composed value is injected...
+        assert_eq!(
+            fs::read_to_string(&url_file).unwrap(),
+            "postgres://alice:s3cret@db.example/app"
+        );
+        // ...but its raw dependencies are scrubbed, even the parent-exported ones.
+        assert_eq!(
+            fs::read_to_string(&user_file).unwrap(),
+            "",
+            "DB_USER must not reach the scoped child"
+        );
+        assert_eq!(
+            fs::read_to_string(&pass_file).unwrap(),
+            "",
+            "DB_PASSWORD must not reach the scoped child"
+        );
+    }
+
+    /// `export --scope` emits only the visible set.
+    #[test]
+    fn export_scope_emits_only_visible_secrets() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "DATABASE_URL=db\nAPI_KEY=key\nQUEUE_TOKEN=tok\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut spec = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        spec.set_scope("api");
+        let mut out = Vec::new();
+        spec.export(crate::ExportFormat::Dotenv, &mut out).unwrap();
+        let rendered = String::from_utf8(out).unwrap();
+        assert!(rendered.contains("DATABASE_URL"));
+        assert!(rendered.contains("API_KEY"));
+        assert!(
+            !rendered.contains("QUEUE_TOKEN"),
+            "export --scope must not emit an out-of-scope secret: {rendered}"
+        );
+    }
+
+    /// The active scope is surfaced in the untyped resolver and report output,
+    /// and omitted when no scope is active.
+    #[test]
+    fn active_scope_is_surfaced_in_resolve_and_report_output() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "DATABASE_URL=db\nAPI_KEY=key\nQUEUE_TOKEN=tok\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut scoped = Secrets::new(config(MANIFEST), None, Some(provider.clone()), None);
+        scoped.set_scope("api");
+        assert_eq!(scoped.resolve().unwrap().scope.as_deref(), Some("api"));
+        let report = scoped.report().unwrap();
+        assert_eq!(report.scope.as_deref(), Some("api"));
+        let explained = report.to_explain_string();
+        assert!(
+            explained.contains("scope:") && explained.contains("api"),
+            "the explain output names the active scope: {explained}"
+        );
+
+        // Unscoped resolution omits the scope entirely.
+        let unscoped = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        assert_eq!(unscoped.resolve().unwrap().scope, None);
+        assert_eq!(unscoped.report().unwrap().scope, None);
+    }
+
+    const CONSTRAINT_MANIFEST: &str = r#"
+[project]
+name = "scoped-constraints"
+revision = "1.0"
+
+[profiles.default]
+AWS_KEY = { description = "AWS credential", required = { at_least_one = "cloud" } }
+GCP_KEY = { description = "GCP credential", required = { at_least_one = "cloud" } }
+PRIMARY = { description = "Primary token", required = { exactly_one = "token" } }
+FALLBACK = { description = "Fallback token", required = { exactly_one = "token" } }
+UNRELATED = { description = "Unrelated" }
+
+[scopes.aws]
+secrets = ["AWS_KEY", "UNRELATED"]
+
+[scopes.tokens]
+secrets = ["PRIMARY", "FALLBACK"]
+
+[scopes.plain]
+secrets = ["UNRELATED"]
+"#;
+
+    /// A presence group is judged on the members the scope actually exposes.
+    /// `at_least_one = ["cloud"]` is satisfied for the whole profile by GCP_KEY
+    /// alone, but a scope that shows only AWS_KEY has no satisfying member it
+    /// can see, so the scoped resolution must fail rather than silently inherit
+    /// a guarantee backed by a secret it hides.
+    #[test]
+    fn a_presence_group_is_enforced_over_the_visible_members() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        // Only the *out-of-scope* member of the group is present.
+        fs::write(&env_path, "GCP_KEY=g\nPRIMARY=p\nUNRELATED=u\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        // Unscoped, GCP_KEY satisfies the `cloud` group.
+        let unscoped = Secrets::new(
+            config(CONSTRAINT_MANIFEST),
+            None,
+            Some(provider.clone()),
+            None,
+        );
+        assert!(
+            unscoped.validate().unwrap().is_ok(),
+            "GCP_KEY satisfies at_least_one across the whole profile"
+        );
+
+        // Scoped to {AWS_KEY, UNRELATED}, the only visible `cloud` member is
+        // absent, so the group is violated.
+        let mut scoped = Secrets::new(config(CONSTRAINT_MANIFEST), None, Some(provider), None);
+        scoped.set_scope("aws");
+        let errors = match scoped.validate().unwrap() {
+            Ok(_) => panic!("a scope whose only visible group member is missing must fail"),
+            Err(e) => e,
+        };
+        let violation = errors
+            .constraint_violations
+            .iter()
+            .find(|v| v.group == "cloud")
+            .expect("the cloud group is violated under this scope");
+        // The message names only what the scope exposes: the hidden GCP_KEY,
+        // which is what satisfies the group unscoped, is never disclosed.
+        assert_eq!(violation.secrets, vec!["AWS_KEY".to_string()]);
+        assert!(violation.present.is_empty());
+    }
+
+    /// A scoped `constraintViolation.secrets` can hold a single visible member,
+    /// so the serialized `check --json` report must still validate against the
+    /// canonical schema.
+    #[test]
+    fn scoped_constraint_violation_report_matches_the_schema() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "GCP_KEY=g\nPRIMARY=p\nUNRELATED=u\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut scoped = Secrets::new(config(CONSTRAINT_MANIFEST), None, Some(provider), None);
+        scoped.set_scope("aws");
+        let report = scoped.report().unwrap();
+
+        let violation = report
+            .constraint_violations
+            .iter()
+            .find(|v| v.group == "cloud")
+            .expect("the cloud group is violated under the aws scope");
+        assert_eq!(violation.secrets, vec!["AWS_KEY".to_string()]);
+
+        let instance = serde_json::to_value(&report).unwrap();
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../schema/resolution-report.schema.json"))
+                .unwrap();
+        let validator = jsonschema::validator_for(&schema).expect("the committed schema compiles");
+        let errors: Vec<String> = validator
+            .iter_errors(&instance)
+            .map(|e| e.to_string())
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "scoped report must validate against the schema: {errors:?}"
+        );
+    }
+
+    /// `import` has no `--scope`, so an active scope (here an ambient-style one
+    /// set on the builder) must not narrow its copy worklist: the out-of-scope
+    /// secret still gets imported.
+    #[test]
+    fn import_ignores_the_active_scope() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join(".env.source");
+        let target = temp.path().join(".env.target");
+        fs::write(&source, "IN_SCOPE=a\nOUT_OF_SCOPE=b\n").unwrap();
+        fs::write(&target, "").unwrap();
+
+        const MANIFEST: &str = r#"
+[project]
+name = "scoped-import"
+revision = "1.0"
+
+[profiles.default]
+IN_SCOPE = { description = "In scope" }
+OUT_OF_SCOPE = { description = "Out of scope" }
+
+[scopes.only_in]
+secrets = ["IN_SCOPE"]
+"#;
+        let mut spec = Secrets::new(
+            config(MANIFEST),
+            None,
+            Some(format!("dotenv://{}", target.display())),
+            None,
+        );
+        spec.set_scope("only_in");
+        spec.import(&format!("dotenv://{}", source.display()))
+            .unwrap();
+
+        let imported: HashMap<String, String> = dotenvy::from_path_iter(&target)
+            .unwrap()
+            .map(|item| item.unwrap())
+            .collect();
+        assert_eq!(imported.get("IN_SCOPE"), Some(&"a".to_string()));
+        assert_eq!(
+            imported.get("OUT_OF_SCOPE"),
+            Some(&"b".to_string()),
+            "import must copy the out-of-scope secret too"
+        );
+    }
+
+    /// A group with no visible member is not the scoped consumer's concern and
+    /// must not fail its resolution.
+    #[test]
+    fn a_presence_group_with_no_visible_member_is_not_enforced() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        // Neither `cloud` nor `token` has a present member.
+        fs::write(&env_path, "UNRELATED=u\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut scoped = Secrets::new(config(CONSTRAINT_MANIFEST), None, Some(provider), None);
+        scoped.set_scope("plain");
+        assert!(
+            scoped.validate().unwrap().is_ok(),
+            "a scope exposing no member of any group resolves cleanly"
+        );
+    }
+
+    /// `exactly_one` is a safety property, so a scope that exposes both members
+    /// still rejects having both present — scoping narrows what is judged, it
+    /// never disables the judgement.
+    #[test]
+    fn exactly_one_is_still_enforced_when_the_scope_shows_both_members() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "PRIMARY=p\nFALLBACK=f\nGCP_KEY=g\nUNRELATED=u\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut scoped = Secrets::new(config(CONSTRAINT_MANIFEST), None, Some(provider), None);
+        scoped.set_scope("tokens");
+        let errors = match scoped.validate().unwrap() {
+            Ok(_) => panic!("both members present must violate exactly_one under a scope"),
+            Err(e) => e,
+        };
+        let violation = errors
+            .constraint_violations
+            .iter()
+            .find(|v| v.group == "token")
+            .expect("the token group is violated under this scope");
+        assert_eq!(violation.present.len(), 2);
+    }
+
+    /// A visible composition whose input is an `as_path` secret embeds that
+    /// input's **temp-file path** in its value (composition substitutes the
+    /// resolved value, which for `as_path` is the path). Scoping must therefore
+    /// keep the hidden input's temp file alive: dropping it would hand the
+    /// consumer a path to a file that no longer exists.
+    #[cfg(unix)]
+    #[test]
+    fn a_hidden_as_path_input_keeps_its_file_alive_for_the_visible_composition() {
+        let _env = scrub_resolution_env();
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "DB_CERT=certificate-body\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let manifest = r#"
+[project]
+name = "as-path-scope"
+revision = "1.0"
+
+[profiles.default]
+DB_CERT = { description = "Client certificate", as_path = true }
+PG_ARGS = { description = "Connection args", composed = "sslcert=${DB_CERT}" }
+
+[scopes.api]
+secrets = ["PG_ARGS"]
+"#;
+        let mut spec = Secrets::new(config(manifest), None, Some(provider), None);
+        spec.set_scope("api");
+
+        let args_file = temp.path().join("args");
+        let body_file = temp.path().join("body");
+        let cert_file = temp.path().join("cert");
+        let exit = spec
+            .run_command(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "printf '%s' \"$PG_ARGS\" > {}; cat \"${{PG_ARGS#sslcert=}}\" > {} 2>/dev/null; printf '%s' \"$DB_CERT\" > {}",
+                    args_file.display(),
+                    body_file.display(),
+                    cert_file.display()
+                ),
+            ])
+            .unwrap();
+        assert_eq!(exit, 0);
+
+        // The composed value names a path...
+        let args = fs::read_to_string(&args_file).unwrap();
+        assert!(
+            args.starts_with("sslcert=/"),
+            "the composition embeds the input's temp-file path: {args}"
+        );
+        // ...and that path must still resolve to the certificate.
+        assert_eq!(
+            fs::read_to_string(&body_file).unwrap(),
+            "certificate-body",
+            "a hidden as_path input's file must outlive scope filtering"
+        );
+        // The hidden input is still absent from the environment itself.
+        assert_eq!(
+            fs::read_to_string(&cert_file).unwrap(),
+            "",
+            "DB_CERT must not reach the scoped child as a variable"
+        );
+    }
+
+    /// The audit answers "what was read from a provider", so a scoped `check`
+    /// records the *accessed* set — including a composition input the scope
+    /// hides — while `run` records what it actually injected, the visible set.
+    /// The two events record different facts and must not be conflated.
+    #[test]
+    fn audit_records_accessed_secrets_for_a_scoped_check() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DB_USER=alice\nDB_PASSWORD=s3cret\nDB_HOST=db.example\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut spec = Secrets::new(config(COMPOSED_MANIFEST), None, Some(provider), None);
+        spec.set_scope("api");
+        let (logger, lines) = crate::audit::test_support::collecting_logger();
+        spec.set_audit_for_test(logger);
+
+        spec.check(true).expect("the scoped check resolves");
+
+        let events = super::audit_events(&lines);
+        let check = events
+            .iter()
+            .find(|e| e["action"] == "check")
+            .expect("a check event is recorded");
+        assert_eq!(check["scope"], "api");
+        let mut keys: Vec<String> = check["keys"]
+            .as_array()
+            .expect("the check event lists keys")
+            .iter()
+            .map(|k| k.as_str().unwrap().to_string())
+            .collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "DATABASE_URL".to_string(),
+                "DB_HOST".to_string(),
+                "DB_PASSWORD".to_string(),
+                "DB_USER".to_string(),
+            ],
+            "the audit records every secret actually read, not only the visible one"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn audit_records_scope_and_visible_keys_for_run() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DATABASE_URL=db\nAPI_KEY=key\nQUEUE_TOKEN=token\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut spec = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        spec.set_scope("api");
+        let (logger, lines) = crate::audit::test_support::collecting_logger();
+        spec.set_audit_for_test(logger);
+
+        assert_eq!(spec.run_command(vec!["true".to_string()]).unwrap(), 0);
+
+        let events = super::audit_events(&lines);
+        let run = events
+            .iter()
+            .find(|e| e["action"] == "run")
+            .expect("a run event is recorded");
+        assert_eq!(run["scope"], "api");
+        assert_eq!(run["keys"], serde_json::json!(["API_KEY", "DATABASE_URL"]));
+    }
+
+    #[test]
+    fn audit_records_scope_and_visible_keys_for_export() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DATABASE_URL=db\nAPI_KEY=key\nQUEUE_TOKEN=token\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut spec = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        spec.set_scope("worker");
+        let (logger, lines) = crate::audit::test_support::collecting_logger();
+        spec.set_audit_for_test(logger);
+
+        spec.export(crate::ExportFormat::Dotenv, &mut Vec::new())
+            .unwrap();
+
+        let events = super::audit_events(&lines);
+        let export = events
+            .iter()
+            .find(|e| e["action"] == "export")
+            .expect("an export event is recorded");
+        assert_eq!(export["scope"], "worker");
+        assert_eq!(
+            export["keys"],
+            serde_json::json!(["DATABASE_URL", "QUEUE_TOKEN"])
+        );
+    }
+
+    #[test]
+    fn audit_records_an_invalid_scope_name_on_failure() {
+        let mut spec = Secrets::new(config(MANIFEST), None, Some("env://".to_string()), None);
+        spec.set_scope("does-not-exist");
+        let (logger, lines) = crate::audit::test_support::collecting_logger();
+        spec.set_audit_for_test(logger);
+
+        assert!(spec.check(true).is_err());
+
+        let events = super::audit_events(&lines);
+        let check = events
+            .iter()
+            .find(|e| e["action"] == "check")
+            .expect("the failed check is recorded");
+        assert_eq!(check["scope"], "does-not-exist");
+        assert_eq!(check["outcome"], "error");
+    }
+
+    /// A secret fetched only as an out-of-scope composition input never counts
+    /// as "present" for a presence group: constraints are judged after the
+    /// output is narrowed to the visible set.
+    #[test]
+    fn a_hidden_composition_input_does_not_satisfy_a_group() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "AWS_KEY=a\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let manifest = r#"
+[project]
+name = "hidden-input-constraint"
+revision = "1.0"
+
+[profiles.default]
+AWS_KEY = { description = "AWS credential", required = { at_least_one = "cloud" } }
+GCP_KEY = { description = "GCP credential", required = { at_least_one = "cloud" } }
+DERIVED = { description = "Derived", composed = "aws=${AWS_KEY}" }
+
+[scopes.derived]
+secrets = ["DERIVED"]
+"#;
+        let mut scoped = Secrets::new(config(manifest), None, Some(provider), None);
+        scoped.set_scope("derived");
+        // AWS_KEY is fetched (DERIVED needs it) but hidden, so the `cloud` group
+        // has no visible member and is not enforced — rather than being counted
+        // as satisfied by a secret the consumer cannot see.
+        let validated = scoped.validate().unwrap();
+        assert!(validated.is_ok(), "the hidden input renders DERIVED");
+        let resolved = validated.unwrap();
+        assert!(!resolved.resolved.secrets.contains_key("AWS_KEY"));
+    }
 }

@@ -57,10 +57,11 @@ and how to turn it off.
 | `ts` | RFC 3339 UTC timestamp |
 | `session_id` | Shared by every event from one `secretspec` invocation |
 | `seq` | Monotonic sequence within that invocation |
-| `action` | The operation: `get`, `set`, `check`, `run`, or `import` |
+| `action` | The operation: `get`, `set`, `check`, `run`, `import`, or `export` |
 | `project` / `profile` | The project and profile in effect |
+| `scope` | The named scope for a scoped `check`, `run`, or `export`; omitted otherwise (SecretSpec 0.17+) |
 | `key` | The secret name for single-secret actions (`get`/`set`); never its value |
-| `keys` | The set of secret names for bulk actions (`check`/`run`/`import`) |
+| `keys` | The set of secret names for bulk actions (`check`/`run`/`import`/`export`) |
 | `command` | For `run`, the executed program (argv[0] only — never its arguments, which may contain secrets) |
 | `provider` | The provider URI that served the access, with credentials redacted |
 | `outcome` | `found`, `missing`, `default`, `written`, `started` (a `run` launched its command), or `error` |

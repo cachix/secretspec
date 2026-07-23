@@ -50,9 +50,9 @@
           "type": "string"
         },
         "secrets": {
-          "description": "All declared members of the constraint group.",
+          "description": "The constraint group's members that participated in this resolution. Normally all declared members (a group has at least two); under an active scope it is narrowed to the members the scope exposes, which may be a single secret.",
           "type": "array",
-          "minItems": 2,
+          "minItems": 1,
           "items": { "type": "string" }
         },
         "present": {

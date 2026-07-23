@@ -7697,6 +7697,87 @@ secrets = ["UNRELATED"]
         assert!(violation.present.is_empty());
     }
 
+    /// A scoped `constraintViolation.secrets` can hold a single visible member,
+    /// so the serialized `check --json` report must still validate against the
+    /// canonical schema.
+    #[test]
+    fn scoped_constraint_violation_report_matches_the_schema() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "GCP_KEY=g\nPRIMARY=p\nUNRELATED=u\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut scoped = Secrets::new(config(CONSTRAINT_MANIFEST), None, Some(provider), None);
+        scoped.set_scope("aws");
+        let report = scoped.report().unwrap();
+
+        let violation = report
+            .constraint_violations
+            .iter()
+            .find(|v| v.group == "cloud")
+            .expect("the cloud group is violated under the aws scope");
+        assert_eq!(violation.secrets, vec!["AWS_KEY".to_string()]);
+
+        let instance = serde_json::to_value(&report).unwrap();
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../schema/resolution-report.schema.json"))
+                .unwrap();
+        let validator = jsonschema::validator_for(&schema).expect("the committed schema compiles");
+        let errors: Vec<String> = validator
+            .iter_errors(&instance)
+            .map(|e| e.to_string())
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "scoped report must validate against the schema: {errors:?}"
+        );
+    }
+
+    /// `import` has no `--scope`, so an active scope (here an ambient-style one
+    /// set on the builder) must not narrow its copy worklist: the out-of-scope
+    /// secret still gets imported.
+    #[test]
+    fn import_ignores_the_active_scope() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join(".env.source");
+        let target = temp.path().join(".env.target");
+        fs::write(&source, "IN_SCOPE=a\nOUT_OF_SCOPE=b\n").unwrap();
+        fs::write(&target, "").unwrap();
+
+        const MANIFEST: &str = r#"
+[project]
+name = "scoped-import"
+revision = "1.0"
+
+[profiles.default]
+IN_SCOPE = { description = "In scope" }
+OUT_OF_SCOPE = { description = "Out of scope" }
+
+[scopes.only_in]
+secrets = ["IN_SCOPE"]
+"#;
+        let mut spec = Secrets::new(
+            config(MANIFEST),
+            None,
+            Some(format!("dotenv://{}", target.display())),
+            None,
+        );
+        spec.set_scope("only_in");
+        spec.import(&format!("dotenv://{}", source.display()))
+            .unwrap();
+
+        let imported: HashMap<String, String> = dotenvy::from_path_iter(&target)
+            .unwrap()
+            .map(|item| item.unwrap())
+            .collect();
+        assert_eq!(imported.get("IN_SCOPE"), Some(&"a".to_string()));
+        assert_eq!(
+            imported.get("OUT_OF_SCOPE"),
+            Some(&"b".to_string()),
+            "import must copy the out-of-scope secret too"
+        );
+    }
+
     /// A group with no visible member is not the scoped consumer's concern and
     /// must not fail its resolution.
     #[test]

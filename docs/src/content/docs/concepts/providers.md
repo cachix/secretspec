@@ -42,6 +42,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [keyring](/providers/keyring/) | [macOS Keychain](https://support.apple.com/guide/security/keychain-data-protection-secb0694df1a/web), [Windows Credential Manager](https://learn.microsoft.com/windows/win32/secauthn/credentials-management), or [Linux Secret Service](https://gnome.pages.gitlab.gnome.org/libsecret/) | ✓ | ✓ | ✓ | — |
 | [dotenv](/providers/dotenv/) | A `.env` file | ✓ | ✓ | ✗ | — |
 | [env](/providers/env/) | Current process environment | ✓ | ✗ | ✗ | — |
+| [systemd-credential](/providers/systemd-credential/) (0.17+) | Credentials passed to the current systemd service | ✓ | ✗ | Depends on the unit's credential source | [Via systemd-creds](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html) |
 | [pass](/providers/pass/) | Unix `pass` password store | ✓ | ✓ | ✓ | [Via GnuPG](https://gnupg.org/blog/20210315-using-tpm-with-gnupg-2.3.html) |
 | [gopass](/providers/gopass/) (0.15+) | `gopass` password store (git-synced, GPG-encrypted) | ✓ | ✓ | ✓ | [Via GnuPG](https://gnupg.org/blog/20210315-using-tpm-with-gnupg-2.3.html) |
 | [protonpass](/providers/protonpass/) | Proton Pass | ✓ | ✓ | ✓ | — |
@@ -59,7 +60,10 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 “TPM-backed keys” means the local key used by the provider can be protected by
 a [TPM 2.0](https://trustedcomputinggroup.org/resource/tpm-library-specification/)
 through the provider path SecretSpec uses. Pass and Gopass inherit this
-capability from GnuPG when its encryption key is moved to the TPM.
+capability from GnuPG when its encryption key is moved to the TPM. systemd
+credentials inherit it from
+[systemd-creds](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html),
+which seals encrypted credentials to the TPM2 by default when the host has one.
 [libsecret has an optional TPM2-enabled file backend](https://gnome.pages.gitlab.gnome.org/libsecret/libsecret-tpm2.html),
 but SecretSpec's Linux keyring transport uses the Secret Service D-Bus API
 rather than that file backend. macOS Keychain uses Apple's Secure Enclave
@@ -68,7 +72,6 @@ rather than a TPM, and
 An em dash means SecretSpec has no documented TPM integration for that
 provider; it does not describe other hardware security used internally by the
 provider service.
-
 Each provider page starts with a minimal working example, then covers setup,
 project configuration, storage conventions, existing provider-native secrets,
 and CI/CD where applicable.

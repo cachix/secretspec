@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   direct X25519 and SSH key support, native tagged recipients, and
   non-interactive age plugins. Hybrid ML-KEM-768 + X25519 keys are recommended
   for new setups to protect stored ciphertext against future quantum attacks.
+- Read-only systemd credential provider (`systemd-credential://`) for resolving
+  secrets and provider authentication credentials from the current service's
+  `$CREDENTIALS_DIRECTORY`, including exact-name references and strict
+  filename, file-type, and text validation.
 - The `required` field accepts `at_least_one` and `exactly_one` group tables,
   supporting overlapping alternative and mutually exclusive credentials
   across `check`, `run`, and SDK resolution.

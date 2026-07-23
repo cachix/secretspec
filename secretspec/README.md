@@ -25,6 +25,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [Gopass](https://secretspec.dev/providers/gopass) (0.15+)
   - [Proton Pass](https://secretspec.dev/providers/protonpass)
   - [environment variables](https://secretspec.dev/providers/env)
+  - [systemd credentials](https://secretspec.dev/providers/systemd-credential) (0.17+)
   - [Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)
   - [AWS Secrets Manager](https://secretspec.dev/providers/awssm)
   - [Vault](https://secretspec.dev/providers/vault)
@@ -60,6 +61,7 @@ $ secretspec config init
   onepassword: OnePassword password manager
   dotenv: Traditional .env files
   env: Read-only environment variables
+  systemd-credential: Read-only systemd service credentials (0.17+)
   pass: Unix password manager with GPG encryption
   gopass: Gopass CLI password manager with GPG encryption (0.15+)
   protonpass: Proton Pass via official pass-cli
@@ -146,6 +148,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Keyring](https://secretspec.dev/providers/keyring)** - System credential store (recommended)
 - **[.env files](https://secretspec.dev/providers/dotenv)** - Traditional dotenv files
 - **[Environment variables](https://secretspec.dev/providers/env)** - Read-only for CI/CD
+- **[systemd credentials](https://secretspec.dev/providers/systemd-credential)** (0.17+) - Read-only credentials passed to the current service
 - **[Pass](https://secretspec.dev/providers/pass)** - Unix password manager with GPG encryption
 - **[Gopass](https://secretspec.dev/providers/gopass)** (0.15+) - GPG-based password manager with git-synced password store
 - **[Proton Pass](https://secretspec.dev/providers/protonpass)** - End-to-end encrypted via Proton's official pass-cli

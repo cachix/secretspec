@@ -51,6 +51,7 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'gnuprivacyguard', slug: 'pass', label: 'Pass (GPG)' },
   { icon: 'dotenv', slug: 'dotenv', label: '.env files' },
   { slug: 'env', label: 'Environment variables' },
+  { icon: 'systemd', slug: 'systemd-credential', label: 'systemd credentials (0.17+)' },
   { icon: 'linux', slug: 'keyring', label: 'Secret Service' },
   { slug: 'keyring', label: 'Credential Manager' },
 ];
@@ -145,6 +146,7 @@ $ secretspec config init
   infisical: Infisical secret management
   openbao: OpenBao secret management (0.17+)
   age: age-encrypted file (0.17+)
+  systemd-credential: Read-only systemd service credentials (0.17+)
 <span class="tok-str">✓</span> Saved to ~/.config/secretspec/config.toml
 
 <span class="tok-com"># 3. Run your app with secrets injected</span>
@@ -213,7 +215,8 @@ $ secretspec run --profile production -- npm start
 > keyring: Uses system keychain (Recommended)
   infisical: Infisical secret management
   openbao: OpenBao secret management (0.17+)
-  age: age-encrypted file (0.17+)</code></pre>
+  age: age-encrypted file (0.17+)
+  systemd-credential: Read-only systemd service credentials (0.17+)</code></pre>
       </div>
 
       <div class="landing-step">
@@ -330,6 +333,7 @@ println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span cla
           <button type="button" class="landing-provider-tab" data-provider="akv">Azure</button>
           <button type="button" class="landing-provider-tab" data-provider="dotenv">.env</button>
           <button type="button" class="landing-provider-tab" data-provider="env">env</button>
+          <button type="button" class="landing-provider-tab" data-provider="systemdCredential">systemd (0.17+)</button>
         </div>
 
         <div class="landing-terminal">
@@ -930,6 +934,7 @@ REDIS_URL=redis://…</code></pre>
       akv:         'Azure Key Vault',
       dotenv:      '.env file',
       env:         'Environment variables',
+      systemdCredential: 'systemd credentials (0.17+)',
     };
 
     tabs.forEach(function (tab) {

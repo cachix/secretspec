@@ -20,6 +20,7 @@
 //! - [`env::EnvProvider`]: Environment variables (read-only)
 //! - [`pass::PassProvider`]: Pass integration
 //! - [`gopass::GoPassProvider`]: Gopass integration
+//! - [`systemd_credential::SystemdCredentialProvider`]: systemd service credentials (0.17+)
 //! - [`protonpass::ProtonPassProvider`]: Proton Pass integration
 //! - [`onepassword::OnePasswordProvider`]: 1Password integration
 //! - [`lastpass::LastPassProvider`]: LastPass integration
@@ -224,6 +225,12 @@ impl ProviderUrl {
             .filter(|v| !v.is_empty())
     }
 
+    /// Whether the provider URI contains a query component, including an
+    /// explicitly empty one.
+    pub(crate) fn has_query(&self) -> bool {
+        self.0.query().is_some()
+    }
+
     /// Percent-encode a value for use in a URI path or host component (e.g., in
     /// `uri()` methods).
     pub fn encode(value: &str) -> String {
@@ -279,6 +286,7 @@ pub mod onepassword;
 pub mod openbao;
 pub mod pass;
 pub mod protonpass;
+pub mod systemd_credential;
 #[cfg(feature = "vault")]
 pub mod vault;
 #[cfg(any(feature = "openbao", feature = "vault"))]

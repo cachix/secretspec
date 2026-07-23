@@ -415,6 +415,7 @@ chain, and each provider is asked for the same coordinates.
 | [keyring](/providers/keyring/#use-existing-secrets) | Service | Account (defaults to the current system username) | Current user's entry | ✅ |
 | [dotenv](/providers/dotenv/#use-existing-secrets) | `.env` key | Rejected | Reads the key | ✅ |
 | [env](/providers/env/#use-existing-secrets) | Variable name | Rejected | Reads the variable | — (read-only) |
+| [systemd credentials (0.17+)](/providers/systemd-credential/#use-an-existing-credential-name) | Credential filename | Rejected | Reads the credential | — (read-only) |
 | [pass](/providers/pass/#use-existing-secrets) | Entry path | Rejected | Reads the entry | ✅ |
 | [Gopass (0.15+)](/providers/gopass/#use-existing-secrets) | Entry path, including any mount-point prefix | Rejected | Reads the entry | ✅ |
 | [LastPass](/providers/lastpass/#use-existing-secrets) | Item name | Rejected | Reads the item | ✅ |

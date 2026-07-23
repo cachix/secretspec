@@ -7,26 +7,8 @@ The OpenBao provider integrates with OpenBao's KV (Key-Value) secrets engine
 using OpenBao's own provider identity and configuration conventions.
 
 :::caution[Version compatibility]
-The `openbao` provider targets SecretSpec 0.17 and is unavailable
-in the current 0.16 release. SecretSpec 0.16 can still connect to OpenBao with
-an `openbao://` URI through the `vault` build feature, but reports the provider
-as Vault and uses `VAULT_*` environment variables.
+The `openbao` provider is added in SecretSpec 0.17.
 :::
-
-## Using SecretSpec 0.16 today
-
-The current release's practical form is:
-
-```bash
-$ export VAULT_TOKEN=hvs.your-token-here
-$ secretspec check --provider openbao://bao.example.com:8200/secret
-```
-
-For a minimal Rust build, enable `vault`:
-
-```toml
-secretspec = { version = "0.16", default-features = false, features = ["vault"] }
-```
 
 ## At a glance
 

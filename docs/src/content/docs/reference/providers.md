@@ -218,9 +218,7 @@ vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
 ## OpenBao Provider (0.17+)
 
 :::caution[Version compatibility]
-The `openbao` provider is added in SecretSpec 0.17 and is unavailable in the
-current 0.16 release. With 0.16, use `openbao://` through the `vault` build
-feature and configure `VAULT_*` environment variables.
+The `openbao` provider is added in SecretSpec 0.17.
 :::
 
 **URI**: `openbao://[namespace@]host[:port][/mount][?options]` - Stores secrets in OpenBao's KV engine
@@ -302,8 +300,7 @@ Values are read with Infisical's secret references expanded, matching its own CL
 
 ## age Provider (0.17+)
 
-> **Version compatibility:** The age provider is upcoming in SecretSpec 0.17
-> and is unavailable in the current SecretSpec 0.16 release.
+> **Version compatibility:** The age provider is added in SecretSpec 0.17.
 
 **URI**: `age://PATH[?identity=FILE][&recipients-file=FILE][&armor=false]` - Stores secrets in a single age-encrypted file committed alongside code
 

@@ -105,7 +105,7 @@ boundary into the client through the SecretSpec Haskell SDK. It resolves
 `CACHIX_AUTH_TOKEN` and `CACHIX_SIGNING_KEY` from SecretSpec and can store them
 in the user's chosen provider instead of `cachix.dhall`. Existing environment
 variables and config files remain higher-priority fallbacks for compatibility.
-The PR is still open and is not available in a released Cachix version yet.
+The PR is still open.
 
 That is the problem SecretSpec is designed to solve: configuration declares the
 requirement, while each environment chooses where the value lives.

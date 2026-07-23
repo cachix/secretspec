@@ -12,6 +12,7 @@
 //! mismatched version rather than silently misparse. The canonical JSON Schema
 //! lives at `schema/resolution-report.schema.json` in the repository root.
 
+use crate::validation::ConstraintViolation;
 use serde::{Deserialize, Serialize};
 
 /// Version of the [`ResolutionReport`] wire format.
@@ -74,6 +75,11 @@ pub struct ResolutionReport {
     pub profile: String,
     /// One entry per declared secret, sorted by name for deterministic output.
     pub secrets: Vec<SecretResolution>,
+    /// Cross-secret presence constraints that failed.
+    ///
+    /// Available since SecretSpec 0.17. Omitted when all constraints pass.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraint_violations: Vec<ConstraintViolation>,
 }
 
 impl ResolutionReport {
@@ -87,15 +93,25 @@ impl ResolutionReport {
             provider,
             profile,
             secrets,
+            constraint_violations: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_constraint_violations(
+        mut self,
+        violations: Vec<ConstraintViolation>,
+    ) -> Self {
+        self.constraint_violations = violations;
+        self
     }
 
     /// True when no required secret is missing (i.e. resolution would succeed).
     pub fn all_required_present(&self) -> bool {
-        !self
-            .secrets
-            .iter()
-            .any(|s| s.status == ResolutionStatus::MissingRequired)
+        self.constraint_violations.is_empty()
+            && !self
+                .secrets
+                .iter()
+                .any(|s| s.status == ResolutionStatus::MissingRequired)
     }
 
     /// Render a human-readable resolution trace. Value-free, word-based status
@@ -135,6 +151,9 @@ impl ResolutionReport {
                 path,
                 width = width
             ));
+        }
+        for violation in &self.constraint_violations {
+            out.push_str(&format!("  CONSTRAINT  FAILED    {}\n", violation));
         }
         out
     }

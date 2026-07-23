@@ -11,6 +11,12 @@
 //! no `ffi.enable`, and it works in FPM/web the same way `ext-redis` or
 //! `ext-pdo` do — the deployment model Laravel and Symfony users already manage.
 
+// PHP's Windows ABI uses the vectorcall calling convention, which is feature
+// gated per crate (nightly only): ext-php-rs's macros emit
+// `extern "vectorcall"` items into this crate, so the gate must be enabled
+// here. Other platforms build on stable, where the cfg_attr stays inert.
+#![cfg_attr(windows, feature(abi_vectorcall))]
+
 use ext_php_rs::prelude::*;
 
 /// Resolve secrets from a JSON request string, returning the JSON response
@@ -32,4 +38,6 @@ pub fn secretspec_native_abi_version() -> String {
 #[php_module]
 pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
     module
+        .function(wrap_function!(secretspec_native_resolve))
+        .function(wrap_function!(secretspec_native_abi_version))
 }

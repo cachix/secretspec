@@ -11,7 +11,7 @@ use crate::plan::{PlannedSecret, ResolutionPlan, Route};
 use crate::provider::{Address, Provider as ProviderTrait, ProviderCredentials};
 use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
 use crate::resolve::{RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource};
-use crate::validation::{ValidatedSecrets, ValidationErrors};
+use crate::validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
 use colored::Colorize;
 use secrecy::{ExposeSecret, SecretString};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -36,6 +36,16 @@ fn format_secret_label(name: &str, description: Option<&str>) -> String {
             description.dimmed()
         ),
         None => name.cyan().bold().to_string(),
+    }
+}
+
+/// Preserve the established missing-secret error for ordinary required fields,
+/// while retaining structured group diagnostics for cross-secret constraints.
+fn validation_failure(errors: ValidationErrors) -> SecretSpecError {
+    if errors.constraint_violations.is_empty() {
+        SecretSpecError::RequiredSecretMissing(errors.missing_required.join(", "))
+    } else {
+        SecretSpecError::ValidationFailed(Box::new(errors))
     }
 }
 
@@ -1780,8 +1790,7 @@ impl Secrets {
                     Ok(())
                 }
                 Err(errors) => {
-                    let err =
-                        SecretSpecError::RequiredSecretMissing(errors.missing_required.join(", "));
+                    let err = validation_failure(errors);
                     self.record_key_error(AuditAction::Get, &profile_name, name, None, None, &err);
                     Err(err)
                 }
@@ -1930,17 +1939,13 @@ impl Secrets {
                 // If we're in interactive mode and have missing required secrets, prompt for them
                 if interactive && !validation_errors.missing_required.is_empty() {
                     if !io::stdin().is_terminal() {
-                        return Err(SecretSpecError::RequiredSecretMissing(
-                            validation_errors.missing_required.join(", "),
-                        ));
+                        return Err(validation_failure(validation_errors));
                     }
 
                     let missing =
                         self.promptable_missing_names(&validation_errors, &profile_display);
                     if missing.is_empty() {
-                        return Err(SecretSpecError::RequiredSecretMissing(
-                            validation_errors.missing_required.join(", "),
-                        ));
+                        return Err(validation_failure(validation_errors));
                     }
                     let total = missing.len();
                     // Name the provider without constructing it: this value is
@@ -2035,15 +2040,11 @@ impl Secrets {
                     // operation, so do not emit another `Check` event.
                     match self.validate_audited(false, Materialize::Values)? {
                         Ok(valid_secrets) => Ok(valid_secrets),
-                        Err(still_errors) => Err(SecretSpecError::RequiredSecretMissing(
-                            still_errors.missing_required.join(", "),
-                        )),
+                        Err(still_errors) => Err(validation_failure(still_errors)),
                     }
                 } else {
                     // Not interactive or no missing required secrets
-                    Err(SecretSpecError::RequiredSecretMissing(
-                        validation_errors.missing_required.join(", "),
-                    ))
+                    Err(validation_failure(validation_errors))
                 }
             }
         }
@@ -2167,6 +2168,9 @@ impl Secrets {
             "\n{}",
             Self::format_summary(found_count, missing_count, optional_count)
         );
+        for violation in &errors.constraint_violations {
+            eprintln!("{} {}", "Constraint failed:".red().bold(), violation);
+        }
 
         Ok(())
     }
@@ -2681,6 +2685,9 @@ impl Secrets {
                 })
             }
             Err(errors) => {
+                if !errors.constraint_violations.is_empty() {
+                    return Err(SecretSpecError::ValidationFailed(Box::new(errors)));
+                }
                 let mut missing_required = errors.missing_required.clone();
                 missing_required.sort();
                 let mut missing_optional = errors.missing_optional.clone();
@@ -3285,7 +3292,58 @@ impl Secrets {
             Some(&plan.profile),
         )?;
 
-        if !missing_required.is_empty() {
+        let resolved_names: HashSet<&str> = resolution
+            .iter()
+            .filter(|entry| entry.status == ResolutionStatus::Resolved)
+            .map(|entry| entry.name.as_str())
+            .collect();
+        let compiled_profile = self
+            .manifest
+            .profile(profile)
+            .expect("profile is validated before execution");
+        // `get` executes a deliberately partial plan for a composed secret and
+        // its dependencies. Profile constraints govern whole-profile
+        // validation (`check`, `run`, and SDK resolution), not that least-access
+        // read.
+        let constraints = (plan.secrets.len() == compiled_profile.secrets.len())
+            .then_some(&compiled_profile.constraints);
+        let mut constraint_violations = Vec::new();
+        if let Some(constraints) = constraints {
+            for group in &constraints.at_least_one {
+                let present: Vec<String> = group
+                    .members
+                    .iter()
+                    .filter(|name| resolved_names.contains(name.as_str()))
+                    .cloned()
+                    .collect();
+                if present.is_empty() {
+                    constraint_violations.push(ConstraintViolation {
+                        kind: ConstraintKind::AtLeastOne,
+                        group: group.name.clone(),
+                        secrets: group.members.clone(),
+                        present,
+                    });
+                }
+            }
+            for group in &constraints.exactly_one {
+                let present: Vec<String> = group
+                    .members
+                    .iter()
+                    .filter(|name| resolved_names.contains(name.as_str()))
+                    .cloned()
+                    .collect();
+                if present.len() != 1 {
+                    constraint_violations.push(ConstraintViolation {
+                        kind: ConstraintKind::ExactlyOne,
+                        group: group.name.clone(),
+                        secrets: group.members.clone(),
+                        present,
+                    });
+                }
+            }
+        }
+
+        if !missing_required.is_empty() || !constraint_violations.is_empty() {
             let mut errors = ValidationErrors::new(
                 missing_required,
                 missing_optional,
@@ -3294,6 +3352,7 @@ impl Secrets {
                 profile.to_string(),
             );
             errors.resolution = resolution;
+            errors.constraint_violations = constraint_violations;
             Ok(Err(errors))
         } else {
             Ok(Ok(ValidatedSecrets {

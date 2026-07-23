@@ -25,7 +25,8 @@
 //! - [`lastpass::LastPassProvider`]: LastPass integration
 //! - [`gcsm::GcsmProvider`]: Google Cloud Secret Manager integration
 //! - [`awssm::AwssmProvider`]: AWS Secrets Manager integration
-//! - [`vault::VaultProvider`]: HashiCorp Vault and OpenBao integration
+//! - [`vault::VaultProvider`]: HashiCorp Vault integration
+//! - [`openbao::OpenBaoProvider`]: OpenBao integration (0.17+)
 //! - [`bws::BwsProvider`]: Bitwarden Secrets Manager integration
 //! - [`akv::AkvProvider`]: Azure Key Vault integration
 //! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
@@ -85,15 +86,35 @@ pub(crate) fn credential_or_env(
     name: &str,
     env_var: &str,
 ) -> Option<String> {
+    credential_or_envs(credentials, name, &[env_var])
+}
+
+/// Resolves a semantic provider credential, falling back through the provider's
+/// conventional environment variables in order.
+pub(crate) fn credential_or_envs(
+    credentials: &ProviderCredentials,
+    name: &str,
+    env_vars: &[&str],
+) -> Option<String> {
     credentials
         .get(name)
         .map(|secret| secret.expose_secret().to_string())
         .filter(|value| !value.is_empty())
-        .or_else(|| {
-            std::env::var(env_var)
-                .ok()
-                .filter(|value| !value.is_empty())
-        })
+        .or_else(|| preferred_env(env_vars))
+}
+
+/// Returns the first configured environment variable in precedence order.
+///
+/// A present but empty (or non-Unicode) value resolves to `None` without
+/// falling through to the next name. This matches OpenBao's `BAO_*` behavior:
+/// presence overrides the corresponding `VAULT_*` compatibility variable.
+pub(crate) fn preferred_env(names: &[&str]) -> Option<String> {
+    for name in names {
+        if let Some(value) = std::env::var_os(name) {
+            return value.into_string().ok().filter(|value| !value.is_empty());
+        }
+    }
+    None
 }
 
 /// Characters that are invalid in URI hosts but might appear in provider config
@@ -176,12 +197,18 @@ impl ProviderUrl {
             .into_owned()
     }
 
-    #[cfg(any(feature = "infisical", feature = "vault", test))]
+    #[cfg(any(feature = "infisical", feature = "openbao", feature = "vault", test))]
     pub fn port(&self) -> Option<u16> {
         self.0.port()
     }
 
-    #[cfg(any(feature = "awssm", feature = "infisical", feature = "vault", test))]
+    #[cfg(any(
+        feature = "awssm",
+        feature = "infisical",
+        feature = "openbao",
+        feature = "vault",
+        test
+    ))]
     pub fn query_pairs(&self) -> url::form_urlencoded::Parse<'_> {
         self.0.query_pairs()
     }
@@ -248,10 +275,14 @@ pub mod infisical;
 pub mod keyring;
 pub mod lastpass;
 pub mod onepassword;
+#[cfg(feature = "openbao")]
+pub mod openbao;
 pub mod pass;
 pub mod protonpass;
 #[cfg(feature = "vault")]
 pub mod vault;
+#[cfg(any(feature = "openbao", feature = "vault"))]
+mod vault_common;
 #[macro_use]
 pub mod macros;
 
@@ -1330,7 +1361,7 @@ mod url_tests {
 
 #[cfg(test)]
 mod provider_credentials_tests {
-    use super::{ProviderCredentials, credential_or_env};
+    use super::{ProviderCredentials, credential_or_env, preferred_env};
     use crate::tests::EnvVarGuard;
     use secrecy::SecretString;
 
@@ -1373,5 +1404,27 @@ mod provider_credentials_tests {
             credential_or_env(&credentials(NAME, ""), NAME, ENV_VAR).as_deref(),
             Some("from-env"),
         );
+    }
+
+    #[test]
+    fn a_present_preferred_environment_variable_blocks_compatibility_fallback() {
+        let _lock = crate::tests::scrub_resolution_env();
+        const PREFERRED: &str = "SECRETSPEC_TEST_PREFERRED_ENV";
+        const FALLBACK: &str = "SECRETSPEC_TEST_COMPATIBILITY_ENV";
+
+        {
+            let _preferred = EnvVarGuard::set(PREFERRED, "");
+            let _fallback = EnvVarGuard::set(FALLBACK, "from-fallback");
+            assert_eq!(preferred_env(&[PREFERRED, FALLBACK]), None);
+        }
+
+        {
+            let _preferred = EnvVarGuard::remove(PREFERRED);
+            let _fallback = EnvVarGuard::set(FALLBACK, "from-fallback");
+            assert_eq!(
+                preferred_env(&[PREFERRED, FALLBACK]).as_deref(),
+                Some("from-fallback")
+            );
+        }
     }
 }

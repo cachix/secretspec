@@ -27,7 +27,8 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [environment variables](https://secretspec.dev/providers/env)
   - [Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)
   - [AWS Secrets Manager](https://secretspec.dev/providers/awssm)
-  - [Vault/OpenBao](https://secretspec.dev/providers/vault)
+  - [Vault](https://secretspec.dev/providers/vault)
+  - [OpenBao](https://secretspec.dev/providers/openbao) (0.17+)
   - [Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)
   - [Azure Key Vault](https://secretspec.dev/providers/akv)
   - [Infisical](https://secretspec.dev/providers/infisical) (0.16+)
@@ -65,7 +66,8 @@ $ secretspec config init
   lastpass: LastPass password manager
   gcsm: Google Cloud Secret Manager
   awssm: AWS Secrets Manager
-  vault: HashiCorp Vault / OpenBao secret management
+  vault: HashiCorp Vault secret management
+  openbao: OpenBao secret management (0.17+)
   bws: Bitwarden Secrets Manager
   akv: Azure Key Vault
   infisical: Infisical secret management (0.16+)
@@ -151,7 +153,8 @@ SecretSpec supports multiple storage backends for secrets:
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager
 - **[Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)** - GCP secret management
 - **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
-- **[Vault / OpenBao](https://secretspec.dev/providers/vault)** - HashiCorp Vault and OpenBao KV engine
+- **[Vault](https://secretspec.dev/providers/vault)** - HashiCorp Vault KV engine
+- **[OpenBao](https://secretspec.dev/providers/openbao)** (0.17+) - OpenBao KV integration; SecretSpec 0.16 accepts `openbao://` through the Vault provider
 - **[Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)** - Bitwarden Secrets Manager integration
 - **[Azure Key Vault](https://secretspec.dev/providers/akv)** - Azure secret management
 - **[Infisical](https://secretspec.dev/providers/infisical)** (0.16+) - Infisical secret management

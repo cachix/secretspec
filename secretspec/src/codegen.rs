@@ -388,6 +388,34 @@ mod tests {
     }
 
     #[test]
+    fn constraint_members_are_optional() {
+        let config = config_with(vec![(
+            "default",
+            vec![
+                (
+                    "PASSWORD",
+                    Secret {
+                        at_least_one: Some(vec!["auth".to_string()]),
+                        ..secret(None, None, None)
+                    },
+                ),
+                (
+                    "TOKEN",
+                    Secret {
+                        at_least_one: Some(vec!["auth".to_string(), "deploy".to_string()]),
+                        exactly_one: Some(vec!["github".to_string()]),
+                        ..secret(None, None, None)
+                    },
+                ),
+            ],
+        )]);
+
+        let ir = build_ir(&config);
+        assert!(union_field(&ir, "PASSWORD").optional);
+        assert!(union_field(&ir, "TOKEN").optional);
+    }
+
+    #[test]
     fn defaulted_secret_is_non_optional_because_resolution_guarantees_a_value() {
         let mut token = secret(None, None, None);
         token.default = Some("fallback".to_string());

@@ -57,5 +57,9 @@ $INCFLAGS << " -I#{include_dir}"
 # for the referenced symbols) precedes the system libs it depends on.
 $LOCAL_LIBS << " #{staticlib}"
 $libs = "#{$libs} #{find_native_libs(vendor, repo_root)}"
+# The Windows gem bundles MinGW import libraries next to the staticlib
+# (libwindows.*.a / libwinapi_*.a ship inside cargo registry crates, so an
+# installing machine has them nowhere else); let the linker search vendor/.
+$LIBPATH << vendor if File.directory?(vendor)
 
 create_makefile("secretspec/secretspec_ext")

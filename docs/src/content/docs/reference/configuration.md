@@ -79,6 +79,29 @@ REDIS_URL = { description = "Redis cache", required = false, default = "redis://
 DATABASE_URL = { description = "Production database", required = true }
 ```
 
+#### Cross-secret presence constraints (0.17+)
+
+:::caution[Version compatibility]
+Added in SecretSpec 0.17.
+:::
+
+A profile can require alternative credentials by assigning secrets to a named
+group:
+
+```toml
+[profiles.default]
+PASSWORD = { description = "Account password", required = { at_least_one = "account_auth" } }
+ACCESS_TOKEN = { description = "Personal access token", required = { at_least_one = "account_auth" } }
+
+GITHUB_TOKEN = { description = "GitHub token", required = { exactly_one = "github_auth" } }
+GITHUB_APP_KEY = { description = "GitHub App private key", required = { exactly_one = "github_auth" } }
+```
+
+`at_least_one` requires one or more group members to resolve; `exactly_one`
+requires one. Each field also accepts an array of group names for overlapping
+groups. Groups must contain at least two secrets and cannot mix modes. Group
+members are individually optional.
+
 #### Secret Variable Options
 
 Each secret variable is defined as a table with the following fields:
@@ -86,7 +109,7 @@ Each secret variable is defined as a table with the following fields:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `description` | string | Yes (see notes) | Human-readable description of the secret |
-| `required` | boolean | No | Whether absence is an error (default: true, or false when `default` is present) |
+| `required` | boolean or table | No | Whether absence is an error; the table form (0.17+) accepts `at_least_one`/`exactly_one` presence groups (defaults to true; false with `default` or a presence group) |
 | `default` | string | No | Default value if not provided |
 | `composed` (0.16+) | string | No | Derive a read-only value from other declared secrets using `${UPPERCASE_NAME}` references |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
@@ -100,7 +123,8 @@ Field notes:
 - `description` is required in the `default` profile. A secret overriding one
   that the default profile already declares inherits its `description` (and
   other omitted fields) and may leave it out.
-- `required` defaults to false when `default` is provided.
+- `required` defaults to false when `default` is provided. In 0.17+, its table
+  form accepts `at_least_one` and `exactly_one` as a group name or array of names.
 - `default` is invalid with an explicit `required = true`. A defaulted secret is
   guaranteed to be present in successful resolution and generated types, even
   though the provider does not have to supply it.
@@ -395,7 +419,8 @@ chain, and each provider is asked for the same coordinates.
 | [Gopass (0.15+)](/providers/gopass/#use-existing-secrets) | Entry path, including any mount-point prefix | Rejected | Reads the entry | ✅ |
 | [LastPass](/providers/lastpass/#use-existing-secrets) | Item name | Rejected | Reads the item | ✅ |
 | [Proton Pass](/providers/protonpass/#use-existing-secrets) | Item title | Rejected | Reads the note | ✅ |
-| [Vault / OpenBao](/providers/vault/#use-existing-secrets) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
+| [Vault](/providers/vault/#use-existing-secrets) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
+| [OpenBao](/providers/openbao/#use-existing-secrets) (0.17+) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
 | [AWS Secrets Manager](/providers/awssm/#use-existing-secrets) | Secret name or ARN | JSON key | Whole secret string | — (read-only) |
 | [GCSM](/providers/gcsm/#use-existing-secrets) | Secret id; `version` also applies | Rejected | Reads latest or the pinned version | — (read-only) |
 | [Bitwarden (bws)](/providers/bws/#use-existing-secrets) | BWS key name | Rejected | Reads the key | ✅ |

@@ -37,23 +37,37 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 
 ## Available providers
 
-| Provider | Storage backend | Read | Write | Encrypted at rest |
-|----------|-----------------|------|-------|-------------------|
-| [keyring](/providers/keyring/) | macOS Keychain, Windows Credential Manager, or Linux Secret Service | ✓ | ✓ | ✓ |
-| [dotenv](/providers/dotenv/) | A `.env` file | ✓ | ✓ | ✗ |
-| [env](/providers/env/) | Current process environment | ✓ | ✗ | ✗ |
-| [pass](/providers/pass/) | Unix `pass` password store | ✓ | ✓ | ✓ |
-| [gopass](/providers/gopass/) (0.15+) | `gopass` password store (git-synced, GPG-encrypted) | ✓ | ✓ | ✓ |
-| [protonpass](/providers/protonpass/) | Proton Pass | ✓ | ✓ | ✓ |
-| [onepassword](/providers/onepassword/) | 1Password | ✓ | ✓ | ✓ |
-| [lastpass](/providers/lastpass/) | LastPass | ✓ | ✓ | ✓ |
-| [gcsm](/providers/gcsm/) | Google Cloud Secret Manager (requires the `gcsm` build feature) | ✓ | ✓ | ✓ |
-| [awssm](/providers/awssm/) | AWS Secrets Manager (requires the `awssm` build feature) | ✓ | ✓ | ✓ |
-| [vault](/providers/vault/) | HashiCorp Vault or OpenBao (requires the `vault` build feature) | ✓ | ✓ | ✓ |
-| [bws](/providers/bws/) | Bitwarden Secrets Manager (requires the `bws` build feature) | ✓ | ✓ | ✓ |
-| [akv](/providers/akv/) | Azure Key Vault (requires the `akv` build feature) | ✓ | ✓ | ✓ |
-| [infisical](/providers/infisical/) (0.16+) | Infisical (requires the `infisical` build feature) | ✓ | ✓ | ✓ |
-| [age](/providers/age/) (0.17+) | An age-encrypted file (requires the `age` build feature) | ✓ | ✓ | ✓ |
+| Provider | Storage backend | Read | Write | Encrypted at rest | TPM-backed keys |
+|----------|-----------------|------|-------|-------------------|-----------------|
+| [keyring](/providers/keyring/) | [macOS Keychain](https://support.apple.com/guide/security/keychain-data-protection-secb0694df1a/web), [Windows Credential Manager](https://learn.microsoft.com/windows/win32/secauthn/credentials-management), or [Linux Secret Service](https://gnome.pages.gitlab.gnome.org/libsecret/) | ✓ | ✓ | ✓ | — |
+| [dotenv](/providers/dotenv/) | A `.env` file | ✓ | ✓ | ✗ | — |
+| [env](/providers/env/) | Current process environment | ✓ | ✗ | ✗ | — |
+| [pass](/providers/pass/) | Unix `pass` password store | ✓ | ✓ | ✓ | [Via GnuPG](https://gnupg.org/blog/20210315-using-tpm-with-gnupg-2.3.html) |
+| [gopass](/providers/gopass/) (0.15+) | `gopass` password store (git-synced, GPG-encrypted) | ✓ | ✓ | ✓ | [Via GnuPG](https://gnupg.org/blog/20210315-using-tpm-with-gnupg-2.3.html) |
+| [protonpass](/providers/protonpass/) | Proton Pass | ✓ | ✓ | ✓ | — |
+| [onepassword](/providers/onepassword/) | 1Password | ✓ | ✓ | ✓ | — |
+| [lastpass](/providers/lastpass/) | LastPass | ✓ | ✓ | ✓ | — |
+| [gcsm](/providers/gcsm/) | Google Cloud Secret Manager (requires the `gcsm` build feature) | ✓ | ✓ | ✓ | — |
+| [awssm](/providers/awssm/) | AWS Secrets Manager (requires the `awssm` build feature) | ✓ | ✓ | ✓ | — |
+| [vault](/providers/vault/) | HashiCorp Vault (requires the `vault` build feature) | ✓ | ✓ | ✓ | — |
+| [openbao](/providers/openbao/) (0.17+) | OpenBao (requires the `openbao` build feature; 0.16 uses `openbao://` through `vault`) | ✓ | ✓ | ✓ | — |
+| [bws](/providers/bws/) | Bitwarden Secrets Manager (requires the `bws` build feature) | ✓ | ✓ | ✓ | — |
+| [akv](/providers/akv/) | Azure Key Vault (requires the `akv` build feature) | ✓ | ✓ | ✓ | — |
+| [infisical](/providers/infisical/) (0.16+) | Infisical (requires the `infisical` build feature) | ✓ | ✓ | ✓ | — |
+| [age](/providers/age/) (0.17+) | An age-encrypted file (requires the `age` build feature) | ✓ | ✓ | ✓ | — |
+
+“TPM-backed keys” means the local key used by the provider can be protected by
+a [TPM 2.0](https://trustedcomputinggroup.org/resource/tpm-library-specification/)
+through the provider path SecretSpec uses. Pass and Gopass inherit this
+capability from GnuPG when its encryption key is moved to the TPM.
+[libsecret has an optional TPM2-enabled file backend](https://gnome.pages.gitlab.gnome.org/libsecret/libsecret-tpm2.html),
+but SecretSpec's Linux keyring transport uses the Secret Service D-Bus API
+rather than that file backend. macOS Keychain uses Apple's Secure Enclave
+rather than a TPM, and
+[Windows Vault credentials are not protected by Credential Guard](https://learn.microsoft.com/windows/security/identity-protection/credential-guard/how-it-works).
+An em dash means SecretSpec has no documented TPM integration for that
+provider; it does not describe other hardware security used internally by the
+provider service.
 
 Each provider page starts with a minimal working example, then covers setup,
 project configuration, storage conventions, existing provider-native secrets,

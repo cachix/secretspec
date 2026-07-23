@@ -415,7 +415,60 @@ fn validate_compiled_profile(
             ))
         })?;
     }
+    validate_profile_constraints(profile_name, profile)?;
     validate_composition_graph(profile_name, profile)?;
+    Ok(())
+}
+
+fn validate_profile_constraints(
+    profile_name: &str,
+    profile: &crate::manifest::CompiledProfile,
+) -> Result<(), ParseError> {
+    fn validate_groups(
+        profile_name: &str,
+        kind: &str,
+        groups: &[crate::manifest::CompiledConstraintGroup],
+    ) -> Result<(), ParseError> {
+        for group in groups {
+            if group.members.len() < 2 {
+                return Err(ParseError::Validation(format!(
+                    "Profile '{}': {} group '{}' must contain at least two secrets",
+                    profile_name, kind, group.name
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    let at_least_names: HashSet<&str> = profile
+        .constraints
+        .at_least_one
+        .iter()
+        .map(|group| group.name.as_str())
+        .collect();
+    if let Some(group) = profile
+        .constraints
+        .exactly_one
+        .iter()
+        .find(|group| at_least_names.contains(group.name.as_str()))
+    {
+        return Err(ParseError::Validation(format!(
+            "Profile '{}': group '{}' cannot mix at_least_one and exactly_one membership",
+            profile_name, group.name
+        )));
+    }
+
+    validate_groups(
+        profile_name,
+        "at_least_one",
+        &profile.constraints.at_least_one,
+    )?;
+    validate_groups(
+        profile_name,
+        "exactly_one",
+        &profile.constraints.exactly_one,
+    )?;
+
     Ok(())
 }
 
@@ -1153,6 +1206,41 @@ fn ref_string_hint(s: &str) -> String {
     )
 }
 
+/// Deserialize a group membership as either `"name"` or `["name", ...]`.
+fn deserialize_group_names<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    Ok(Some(match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::One(name) => vec![name],
+        OneOrMany::Many(names) => names,
+    }))
+}
+
+/// Preserve the compact string form when a secret belongs to one group.
+fn serialize_group_names<S>(
+    groups: &Option<Vec<String>>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match groups.as_deref() {
+        Some([group]) => serializer.serialize_str(group),
+        Some(groups) => groups.serialize(serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
 impl<'de> Deserialize<'de> for NativeAddress {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -1190,34 +1278,92 @@ impl<'de> Deserialize<'de> for NativeAddress {
     }
 }
 
+/// The serialized form of `required`: either the existing boolean or a table
+/// of cross-secret presence groups.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum RequiredSetting {
+    Bool(bool),
+    Groups(RequiredGroups),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequiredGroups {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_group_names",
+        serialize_with = "serialize_group_names",
+        skip_serializing_if = "Option::is_none"
+    )]
+    at_least_one: Option<Vec<String>>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_group_names",
+        serialize_with = "serialize_group_names",
+        skip_serializing_if = "Option::is_none"
+    )]
+    exactly_one: Option<Vec<String>>,
+}
+
+/// Serde proxy that keeps the established Rust `Secret` API while presenting
+/// requiredness as one boolean-or-table field in TOML.
+#[derive(Serialize, Deserialize)]
+struct SecretSerde {
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required: Option<RequiredSetting>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    composed: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    providers: Option<Vec<String>>,
+    #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+    reference: Option<NativeAddress>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    as_path: Option<bool>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    secret_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generate: Option<GenerateConfig>,
+}
+
 /// Configuration for an individual secret.
 ///
 /// Defines the properties of a secret including its documentation,
 /// whether it's required, an optional default value, and optionally
 /// which providers to use for retrieving this secret (in fallback order).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(try_from = "SecretSerde", into = "SecretSerde")]
 pub struct Secret {
     /// Human-readable description of what this secret is used for
     pub description: Option<String>,
     /// Whether this secret must be provided (no default value)
     /// If not specified, defaults to true unless overridden by profile defaults
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
+    /// Named groups in which at least one member must resolve. Serialized
+    /// inside the `required` table as either one string or an array of strings.
+    ///
+    /// Available since SecretSpec 0.17.
+    pub at_least_one: Option<Vec<String>>,
+    /// Named groups in which exactly one member must resolve. Serialized
+    /// inside the `required` table as either one string or an array of strings.
+    ///
+    /// Available since SecretSpec 0.17.
+    pub exactly_one: Option<Vec<String>>,
     /// Optional default value if the secret is not provided
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
     /// A strict template derived from other declared secrets. References use
     /// `${UPPERCASE_NAME}`; `$$` produces a literal dollar sign.
     ///
     /// Available since SecretSpec 0.16.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub composed: Option<String>,
     /// Optional list of provider aliases for retrieving this secret.
     /// Providers are tried in order until one has the secret.
     /// If not specified, uses the profile defaults.providers or global provider.
     /// Each alias is resolved against the providers map in GlobalConfig.
     /// Example: providers = ["keyring", "env"] will try keyring first, then env.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub providers: Option<Vec<String>>,
     /// Native coordinates naming one externally managed secret (see
     /// [`NativeAddress`]): `ref = { item = "db", field = "password" }`.
@@ -1230,20 +1376,72 @@ pub struct Secret {
     /// tests) without editing it, and composes with `providers`. Also composes
     /// with `generate`: a missing referenced secret is minted and written to
     /// its coordinates. Serialized as `ref` in TOML.
-    #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
     pub reference: Option<NativeAddress>,
     /// Whether to write the secret value to a temporary file and return the path.
     /// If true, the secret will be written to a temporary file and the field
     /// will contain the path to that file instead of the secret value.
     /// The temporary file will be cleaned up when the resolved secrets are dropped.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub as_path: Option<bool>,
     /// The type of secret, used for generation (e.g., "password", "hex", "base64", "uuid", "command", "rsa_private_key")
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub secret_type: Option<String>,
     /// Auto-generation configuration. Either `true` for defaults or a table with options.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub generate: Option<GenerateConfig>,
+}
+
+impl TryFrom<SecretSerde> for Secret {
+    type Error = String;
+
+    fn try_from(value: SecretSerde) -> Result<Self, Self::Error> {
+        let (required, at_least_one, exactly_one) = match value.required {
+            Some(RequiredSetting::Bool(required)) => (Some(required), None, None),
+            Some(RequiredSetting::Groups(groups)) => {
+                if groups.at_least_one.is_none() && groups.exactly_one.is_none() {
+                    return Err("`required` table must set `at_least_one` or `exactly_one`".into());
+                }
+                (None, groups.at_least_one, groups.exactly_one)
+            }
+            None => (None, None, None),
+        };
+
+        Ok(Self {
+            description: value.description,
+            required,
+            at_least_one,
+            exactly_one,
+            default: value.default,
+            composed: value.composed,
+            providers: value.providers,
+            reference: value.reference,
+            as_path: value.as_path,
+            secret_type: value.secret_type,
+            generate: value.generate,
+        })
+    }
+}
+
+impl From<Secret> for SecretSerde {
+    fn from(value: Secret) -> Self {
+        let required = if value.at_least_one.is_some() || value.exactly_one.is_some() {
+            Some(RequiredSetting::Groups(RequiredGroups {
+                at_least_one: value.at_least_one,
+                exactly_one: value.exactly_one,
+            }))
+        } else {
+            value.required.map(RequiredSetting::Bool)
+        };
+
+        Self {
+            description: value.description,
+            required,
+            default: value.default,
+            composed: value.composed,
+            providers: value.providers,
+            reference: value.reference,
+            as_path: value.as_path,
+            secret_type: value.secret_type,
+            generate: value.generate,
+        }
+    }
 }
 
 impl Secret {
@@ -1292,7 +1490,51 @@ impl Secret {
         self.generate.as_ref().is_some_and(|g| g.is_enabled())
     }
 
+    /// Whether this declaration supplies an individual or grouped requiredness
+    /// policy. The three Rust fields serialize as one TOML field and therefore
+    /// inherit as one unit.
+    fn has_required_setting(&self) -> bool {
+        self.required.is_some() || self.at_least_one.is_some() || self.exactly_one.is_some()
+    }
+
     fn validate_semantics(&self) -> Result<(), String> {
+        for (field, groups) in [
+            ("at_least_one", self.at_least_one.as_deref()),
+            ("exactly_one", self.exactly_one.as_deref()),
+        ] {
+            let Some(groups) = groups else {
+                continue;
+            };
+            if groups.is_empty() {
+                return Err(format!("`{field}` must name at least one group"));
+            }
+            let mut unique = HashSet::new();
+            for group in groups {
+                if group.trim().is_empty() {
+                    return Err(format!(
+                        "`{field}` group name cannot be empty or whitespace"
+                    ));
+                }
+                if !unique.insert(group) {
+                    return Err(format!("`{field}` contains duplicate group name '{group}'"));
+                }
+            }
+        }
+
+        // A presence group governs when its members' absence is an error, so an
+        // explicit `required = true` on a member is a contradiction: it demands
+        // the secret individually while the group offers it as one alternative.
+        // The value can be inherited from the `default` profile, so this runs on
+        // the merged view; drop `required` or set it to false to join a group.
+        if self.required == Some(true)
+            && (self.at_least_one.is_some() || self.exactly_one.is_some())
+        {
+            return Err(
+                "`required = true` cannot be combined with `at_least_one` or `exactly_one`; group membership governs the secret's presence, so drop `required` or set it to false"
+                    .into(),
+            );
+        }
+
         if let Some(composed) = &self.composed {
             Template::parse(composed)?;
             if self.default.is_some()
@@ -1417,13 +1659,26 @@ impl Secret {
         }
 
         let composed = inherit(current, default, |s| s.composed.clone());
+        let required_source = current
+            .filter(|secret| secret.has_required_setting())
+            .or_else(|| default.filter(|secret| secret.has_required_setting()));
+        let (required, at_least_one, exactly_one) = if let Some(secret) = required_source {
+            (
+                secret.required,
+                secret.at_least_one.clone(),
+                secret.exactly_one.clone(),
+            )
+        } else {
+            (defaults.and_then(|d| d.required), None, None)
+        };
         // A composed secret's source is its dependency graph, so the
         // `[defaults]` storage fields (`default`, `providers`) do not apply.
         let storage_defaults = if composed.is_some() { None } else { defaults };
         Some(Secret {
             description: inherit(current, default, |s| s.description.clone()),
-            required: inherit(current, default, |s| s.required)
-                .or(defaults.and_then(|d| d.required)),
+            required,
+            at_least_one,
+            exactly_one,
             default: inherit(current, default, |s| s.default.clone())
                 .or_else(|| storage_defaults.and_then(|d| d.default.clone())),
             composed,
@@ -2060,6 +2315,140 @@ ADMIN_PASSWORD = { description = "Password securing the admin page", required = 
         );
         assert_eq!(resolved.required, Some(true));
         assert_eq!(resolved.secret_type.as_deref(), Some("password"));
+    }
+
+    #[test]
+    fn config_validate_accepts_presence_constraints_and_default_inheritance() {
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "auth"
+revision = "1.0"
+
+[profiles.default]
+PASSWORD = { description = "Password", required = { at_least_one = ["auth", "fallback_auth"], exactly_one = "exclusive_auth" } }
+ACCESS_TOKEN = { description = "Access token", required = { at_least_one = ["auth", "fallback_auth"], exactly_one = "exclusive_auth" } }
+
+[profiles.production]
+"#,
+        )
+        .unwrap();
+
+        config.validate().unwrap();
+        let compiled = CompiledManifest::compile(&config);
+        let production = compiled.profile("production").unwrap();
+        assert_eq!(production.constraints.at_least_one[0].name, "auth");
+        assert_eq!(
+            production.constraints.at_least_one[0].members,
+            vec!["ACCESS_TOKEN".to_string(), "PASSWORD".to_string()]
+        );
+        assert_eq!(production.constraints.at_least_one[1].name, "fallback_auth");
+        assert_eq!(production.constraints.exactly_one[0].name, "exclusive_auth");
+        assert_eq!(production.constraints.exactly_one.len(), 1);
+
+        let rendered = toml::to_string(&config).unwrap();
+        assert!(
+            rendered.contains("[profiles.default.ACCESS_TOKEN.required]"),
+            "{rendered}"
+        );
+        assert!(rendered.contains(r#"at_least_one = ["auth", "fallback_auth"]"#));
+        assert!(rendered.contains(r#"exactly_one = "exclusive_auth""#));
+    }
+
+    #[test]
+    fn config_validate_rejects_invalid_presence_constraints() {
+        for (secrets, expected) in [
+            (
+                r#"PASSWORD = { description = "Password", required = { at_least_one = "auth" } }"#,
+                "at_least_one group 'auth' must contain at least two secrets",
+            ),
+            (
+                r#"
+PASSWORD = { description = "Password", required = { at_least_one = " " } }
+ACCESS_TOKEN = { description = "Access token", required = { at_least_one = " " } }
+"#,
+                "`at_least_one` group name cannot be empty or whitespace",
+            ),
+            (
+                r#"
+PASSWORD = { description = "Password", required = { at_least_one = [] } }
+ACCESS_TOKEN = { description = "Access token", required = { at_least_one = [] } }
+"#,
+                "`at_least_one` must name at least one group",
+            ),
+            (
+                r#"
+PASSWORD = { description = "Password", required = { at_least_one = ["auth", "auth"] } }
+ACCESS_TOKEN = { description = "Access token", required = { at_least_one = "auth" } }
+"#,
+                "`at_least_one` contains duplicate group name 'auth'",
+            ),
+            (
+                r#"
+PASSWORD = { description = "Password", required = { at_least_one = "auth" } }
+ACCESS_TOKEN = { description = "Access token", required = { exactly_one = "auth" } }
+"#,
+                "group 'auth' cannot mix at_least_one and exactly_one membership",
+            ),
+        ] {
+            let source = format!(
+                r#"
+[project]
+name = "auth"
+revision = "1.0"
+
+[profiles.default]
+{secrets}
+"#
+            );
+            let config: Config = toml::from_str(&source).unwrap();
+            let error = config.validate().unwrap_err().to_string();
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn required_group_table_must_name_a_constraint() {
+        let error = toml::from_str::<Secret>(
+            r#"description = "d"
+required = {}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("`required` table must set `at_least_one` or `exactly_one`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn grouped_requiredness_replaces_inherited_boolean_requiredness() {
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "auth"
+revision = "1.0"
+
+[profiles.default]
+PASSWORD = { description = "Password", required = true }
+ACCESS_TOKEN = { description = "Access token" }
+
+[profiles.production]
+PASSWORD = { required = { at_least_one = "auth" } }
+ACCESS_TOKEN = { required = { at_least_one = "auth" } }
+"#,
+        )
+        .unwrap();
+
+        config.validate().unwrap();
+        let compiled = CompiledManifest::compile(&config);
+        let password = &compiled.profile("production").unwrap().secrets["PASSWORD"];
+        assert!(!password.declared_required);
+        assert_eq!(password.config.required, None);
+        assert_eq!(
+            password.config.at_least_one.as_deref(),
+            Some(&["auth".into()][..])
+        );
     }
 
     #[test]

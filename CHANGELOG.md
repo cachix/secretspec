@@ -13,17 +13,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   direct X25519 and SSH key support, native tagged recipients, and
   non-interactive age plugins. Hybrid ML-KEM-768 + X25519 keys are recommended
   for new setups to protect stored ciphertext against future quantum attacks.
+- The `required` field accepts `at_least_one` and `exactly_one` group tables,
+  supporting overlapping alternative and mutually exclusive credentials
+  across `check`, `run`, and SDK resolution.
+- OpenBao provider (`openbao://`, `openbao` build feature) with its
+  own provider identity, documentation, and OpenBao CLI configuration through
+  `BAO_ADDR`, `BAO_NAMESPACE`, `BAO_TOKEN`, and `BAO_TOKEN_PATH`. The
+  provider also has OpenBao-prefixed AppRole and JWT inputs; corresponding
+  `VAULT_*` names remain compatibility fallbacks. Compatible KV and standard
+  authentication mechanics are shared internally with the Vault provider.
+  Vault-compatible addresses accept trailing slashes, and AppRole/JWT login
+  exchanges now honor the configured namespace. Reported provider URIs strip
+  endpoint credentials while retaining non-secret store and authentication
+  attribution.
 - Vault / OpenBao JWT/OIDC authentication (`?auth=jwt`) logs in through a
   configured Vault role using `VAULT_JWT`, or requests a short-lived OIDC token
   automatically in GitHub Actions and Forgejo Actions jobs with `id-token:
   write`. The role and optional audience can be set in the provider URI or with
   `VAULT_JWT_ROLE` and `VAULT_JWT_AUDIENCE`.
+- The Python SDK now publishes a Windows x64 wheel to PyPI, so
+  `pip install secretspec` and `uv add secretspec` work on Windows.
+  ([#177](https://github.com/cachix/secretspec/issues/177))
+- The Ruby SDK now publishes a Windows gem (`x64-mingw-ucrt`) to RubyGems, so
+  `gem install secretspec` works with RubyInstaller on Windows.
+- The PHP SDK now publishes prebuilt Windows x64 extension binaries
+  (`secretspec-php-native-<php>-nts-x86_64-pc-windows-msvc.dll`) alongside the
+  Linux and macOS builds on each release.
 
 ### Changed
 - Secret status output now emphasizes secret names, de-emphasizes descriptions,
   and omits placeholder text when a description is unavailable, making long
   `check` and `import` results easier to scan.
   ([#139](https://github.com/cachix/secretspec/issues/139))
+
+### Fixed
+- The dotenv provider rejects variable names its parser cannot read back
+  (anything outside `[A-Za-z_][A-Za-z0-9_.]*`, for example a `ref` item
+  containing a dash) instead of writing a line that made every later read and
+  write of the whole file fail to parse. The rejection happens before the CLI
+  prompts for a value and names the offending item.
 
 ## [0.16.0] - 2026-07-17
 

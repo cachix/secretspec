@@ -1039,6 +1039,7 @@ fn format_audit_line(v: &serde_json::Value) -> String {
     let outcome = sanitize_field(str_field("outcome").unwrap_or("?"));
     let project = sanitize_field(str_field("project").unwrap_or(""));
     let profile = sanitize_field(str_field("profile").unwrap_or(""));
+    let scope = str_field("scope").map(sanitize_field);
 
     let target = if let Some(key) = str_field("key") {
         sanitize_field(key)
@@ -1066,6 +1067,9 @@ fn format_audit_line(v: &serde_json::Value) -> String {
         s += &format!("  {target}");
     }
     s += &format!("  ({project}/{profile}");
+    if let Some(scope) = scope {
+        s += &format!(" scope:{scope}");
+    }
     if let Some(provider) = str_field("provider") {
         s += &format!(" via {}", sanitize_field(provider));
     }
@@ -1221,12 +1225,13 @@ mod tests {
         // A bulk entry joins `keys[]` and shows the executed command.
         let bulk: serde_json::Value = serde_json::from_str(
             r#"{"ts":"t","action":"run","outcome":"started","project":"demo",
-                "profile":"prod","keys":["A","B"],"command":"./deploy.sh"}"#,
+                "profile":"prod","scope":"api","keys":["A","B"],"command":"./deploy.sh"}"#,
         )
         .unwrap();
         let line = format_audit_line(&bulk);
         assert!(line.contains("./deploy.sh"));
         assert!(line.contains("A,B"));
+        assert!(line.contains("(demo/prod scope:api)"));
 
         colored::control::unset_override();
     }

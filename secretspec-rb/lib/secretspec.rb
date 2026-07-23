@@ -54,7 +54,7 @@ module Secretspec
   end
 
   # A successful resolution, mirroring the Rust Resolved wrapper.
-  Resolved = Struct.new(:provider, :profile, :secrets, :missing_optional) do
+  Resolved = Struct.new(:provider, :profile, :secrets, :missing_optional, :scope) do
     # Export each resolved secret into ENV by its declared name. Secrets with no
     # usable value (e.g. under no_values) are skipped rather than deleted from
     # ENV (assigning nil would remove the variable).
@@ -97,7 +97,7 @@ module Secretspec
   # A value-free resolution snapshot. Unlike Resolved, a missing required secret
   # is a "missing_required" status here, not an error, so a report describes a
   # profile even when its secrets are not all available.
-  Report = Struct.new(:provider, :profile, :secrets)
+  Report = Struct.new(:provider, :profile, :secrets, :scope)
 
   # The narrow C ABI, statically linked into the secretspec_ext extension. The
   # Native.c_resolve / c_abi_version C functions are defined in
@@ -145,6 +145,12 @@ module Secretspec
       self
     end
 
+    # Limit resolution to a named manifest scope (SecretSpec 0.17+).
+    def with_scope(scope)
+      @request["scope"] = scope if scope
+      self
+    end
+
     def with_reason(reason)
       @request["reason"] = reason if reason
       self
@@ -178,7 +184,7 @@ module Secretspec
 
       resolved = Resolved.new(
         response["provider"], response["profile"], secrets,
-        response["missing_optional"] || []
+        response["missing_optional"] || [], response["scope"]
       )
       return resolved unless block_given?
 
@@ -202,7 +208,7 @@ module Secretspec
                          s["source_provider"], s["default_applied"],
                          s["generated"], s["as_path"])
       end
-      Report.new(response["provider"], response["profile"], secrets)
+      Report.new(response["provider"], response["profile"], secrets, response["scope"])
     end
 
     private

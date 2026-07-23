@@ -31,6 +31,15 @@ A missing required secret throws `MissingRequiredException`, whose `Missing`
 property contains the names. Other failures throw `SecretSpecException`, with a
 stable `Kind`.
 
+## Scopes (0.17+)
+
+Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. Both
+`Resolved.Scope` and `ResolutionReport.Scope` return the selected scope:
+
+```csharp
+using var resolved = SecretSpec.Builder().WithScope("api").Load();
+```
+
 ## Value-free reports
 
 `Report()` returns the same inventory/preflight view as

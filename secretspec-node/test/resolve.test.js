@@ -33,6 +33,9 @@ revision = "1.0"
 DATABASE_URL = { description = "DB", required = true }
 LOG_LEVEL = { description = "log", required = false, default = "info" }
 SENTRY_DSN = { description = "sentry", required = false }
+
+[scopes.database]
+secrets = ["DATABASE_URL"]
 `;
 
 function project(dotenv, manifest = MANIFEST) {
@@ -69,6 +72,25 @@ test('load returns values and provenance', () => {
 
   assert.deepEqual(resolved.missingOptional, ['SENTRY_DSN']);
   assert.ok(!('SENTRY_DSN' in resolved.secrets));
+});
+
+test('scope is selected and returned', () => {
+  const { manifestPath, provider } = project(
+    'DATABASE_URL=postgres://db\nSENTRY_DSN=https://sentry\n',
+  );
+  const builder = SecretSpec.builder()
+    .withPath(manifestPath)
+    .withProvider(provider)
+    .withScope('database')
+    .withReason('node scoped test');
+
+  const resolved = builder.load();
+  assert.equal(resolved.scope, 'database');
+  assert.deepEqual(Object.keys(resolved.secrets), ['DATABASE_URL']);
+
+  const report = builder.report();
+  assert.equal(report.scope, 'database');
+  assert.deepEqual(report.secrets.map((secret) => secret.name), ['DATABASE_URL']);
 });
 
 test('setAsEnv exports secrets', () => {

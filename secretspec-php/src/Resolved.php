@@ -13,12 +13,14 @@ final class Resolved
     /**
      * @param array<string, ResolvedSecret> $secrets         resolved secrets by declared name
      * @param list<string>                   $missingOptional optional secrets that were not found
+     * @param string|null                    $scope           selected manifest scope (0.17+)
      */
     public function __construct(
         public readonly string $provider,
         public readonly string $profile,
         public readonly array $secrets,
         public readonly array $missingOptional = [],
+        public readonly ?string $scope = null,
     ) {
     }
 

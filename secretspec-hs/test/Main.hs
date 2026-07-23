@@ -41,6 +41,7 @@ main = do
   let tests =
         [ ("abi_version_nonempty", testAbiVersion)
         , ("missing_required_throws", testMissingRequired)
+        , ("scoped_resolution", testScope)
         , ("codegen", testCodegen)
         ]
           ++ concatMap conformanceTests fixtures
@@ -92,6 +93,41 @@ testMissingRequired = do
   case r of
     Left _  -> pure ()
     Right _ -> ioError (userError "expected MissingRequiredError")
+
+testScope :: IO ()
+testScope = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "secretspec-hs-scope"
+  createDirectoryIfMissing True dir
+  writeFile (dir </> "secretspec.toml") $
+    unlines
+      [ "[project]"
+      , "name = \"hs-scope\""
+      , "revision = \"1.0\""
+      , ""
+      , "[profiles.default]"
+      , "DATABASE_URL = { description = \"DB\", required = true }"
+      , "SENTRY_DSN = { description = \"Sentry\", required = false }"
+      , ""
+      , "[scopes.database]"
+      , "secrets = [\"DATABASE_URL\"]"
+      ]
+  writeFile
+    (dir </> ".env")
+    "DATABASE_URL=postgres://db\nSENTRY_DSN=https://sentry\n"
+  let scoped = fixtureBuilder dir & S.withScope "database"
+
+  resolved <- S.load scoped
+  expect (S.resolvedScope resolved == Just "database") "resolve scope was not returned"
+  expect
+    (Map.keys (S.resolvedSecrets resolved) == ["DATABASE_URL"])
+    "resolve exposed an out-of-scope secret"
+
+  rep <- S.report scoped
+  expect (S.reportScope rep == Just "database") "report scope was not returned"
+  expect
+    (map S.srName (S.reportSecrets rep) == ["DATABASE_URL"])
+    "report exposed an out-of-scope secret"
 
 -- End-to-end codegen: secretspec schema -> quicktype --lang haskell -> compile
 -- the generated module and decode the SDK's own fieldsJson output with it, so

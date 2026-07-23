@@ -26,6 +26,13 @@ public sealed class SecretSpecBuilder
         return this;
     }
 
+    /// <summary>Limits resolution to a named manifest scope (SecretSpec 0.17+).</summary>
+    public SecretSpecBuilder WithScope(string? scope)
+    {
+        _request.Scope = scope;
+        return this;
+    }
+
     public SecretSpecBuilder WithReason(string? reason)
     {
         _request.Reason = reason;
@@ -55,6 +62,7 @@ public sealed class SecretSpecBuilder
         return new Resolved(
             response.Provider,
             response.Profile,
+            response.Scope,
             response.Secrets,
             response.MissingOptional);
     }
@@ -72,7 +80,11 @@ public sealed class SecretSpecBuilder
             SecretSpecJsonContext.Default.ReportEnvelope);
         EnsureSchemaVersion(response.SchemaVersion, JsonContracts.ReportSchemaVersion, "report");
 
-        return new ResolutionReport(response.Provider, response.Profile, response.Secrets);
+        return new ResolutionReport(
+            response.Provider,
+            response.Profile,
+            response.Scope,
+            response.Secrets);
     }
 
     private static T Call<T>(

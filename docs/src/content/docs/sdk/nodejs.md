@@ -30,6 +30,15 @@ resolved.setAsEnv();     // export everything into process.env
 A missing required secret throws `MissingRequiredError`; any other failure
 throws `SecretSpecError` (with a stable `.kind`).
 
+## Scopes (0.17+)
+
+Use `.withScope('api')` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `resolved.scope` and `report.scope`:
+
+```js
+const resolved = SecretSpec.builder().withScope('api').load();
+```
+
 ## Typed access (codegen)
 
 Generate typed interfaces with `secretspec schema` plus

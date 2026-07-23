@@ -87,6 +87,7 @@ class Resolved:
     profile: str
     secrets: dict[str, ResolvedSecret]
     missing_optional: list[str] = field(default_factory=list)
+    scope: Optional[str] = None
 
     def set_as_env(self) -> None:
         """Export each resolved secret into ``os.environ`` by its declared name."""
@@ -152,6 +153,7 @@ class Report:
     provider: str
     profile: str
     secrets: list[SecretReport]
+    scope: Optional[str] = None
 
 
 def abi_version() -> str:
@@ -193,6 +195,7 @@ def resolve(
     path: Optional[str] = None,
     provider: Optional[str] = None,
     profile: Optional[str] = None,
+    scope: Optional[str] = None,
     reason: Optional[str] = None,
 ) -> Resolved:
     """Resolve secrets and return a :class:`Resolved`.
@@ -200,9 +203,15 @@ def resolve(
     Raises :class:`MissingRequiredError` if a required secret is missing, and
     :class:`SecretSpecError` for any other failure.
     """
-    return SecretSpec.builder().with_path(path).with_provider(provider).with_profile(
-        profile
-    ).with_reason(reason).load()
+    return (
+        SecretSpec.builder()
+        .with_path(path)
+        .with_provider(provider)
+        .with_profile(profile)
+        .with_scope(scope)
+        .with_reason(reason)
+        .load()
+    )
 
 
 def report(
@@ -210,6 +219,7 @@ def report(
     path: Optional[str] = None,
     provider: Optional[str] = None,
     profile: Optional[str] = None,
+    scope: Optional[str] = None,
     reason: Optional[str] = None,
 ) -> Report:
     """Resolve a value-free :class:`Report` (the inventory/preflight view).
@@ -218,9 +228,15 @@ def report(
     required secret appears as a :class:`SecretReport` with status
     ``"missing_required"``.
     """
-    return SecretSpec.builder().with_path(path).with_provider(provider).with_profile(
-        profile
-    ).with_reason(reason).report()
+    return (
+        SecretSpec.builder()
+        .with_path(path)
+        .with_provider(provider)
+        .with_profile(profile)
+        .with_scope(scope)
+        .with_reason(reason)
+        .report()
+    )
 
 
 class SecretSpec:
@@ -248,6 +264,12 @@ class _Builder:
     def with_profile(self, profile: Optional[str]) -> "_Builder":
         if profile is not None:
             self._request["profile"] = profile
+        return self
+
+    def with_scope(self, scope: Optional[str]) -> "_Builder":
+        """Limit resolution to a named manifest scope (SecretSpec 0.17+)."""
+        if scope is not None:
+            self._request["scope"] = scope
         return self
 
     def with_reason(self, reason: Optional[str]) -> "_Builder":
@@ -281,6 +303,7 @@ class _Builder:
             provider=response["provider"],
             profile=response["profile"],
             secrets=secrets,
+            scope=response.get("scope"),
             missing_optional=response.get("missing_optional", []),
         )
 
@@ -310,4 +333,5 @@ class _Builder:
             provider=response["provider"],
             profile=response["profile"],
             secrets=secrets,
+            scope=response.get("scope"),
         )

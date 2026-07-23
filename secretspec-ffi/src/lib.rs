@@ -20,12 +20,13 @@
 //!
 //! ```json
 //! { "path": "…/secretspec.toml", "provider": "keyring://",
-//!   "profile": "production", "reason": "boot", "no_values": false,
-//!   "mode": "resolve" }
+//!   "profile": "production", "scope": "api", "reason": "boot",
+//!   "no_values": false, "mode": "resolve" }
 //! ```
 //!
 //! All fields are optional. `path` omitted means "walk up from the working
-//! directory" like the CLI.
+//! directory" like the CLI. `scope` selects a `[scopes]` subset of the active
+//! profile (SecretSpec 0.17+).
 //!
 //! `mode` selects which shape comes back, and defaults to `"resolve"`:
 //!

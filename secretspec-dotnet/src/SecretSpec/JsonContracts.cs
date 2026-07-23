@@ -36,6 +36,9 @@ internal sealed record ResolveRequest
     [JsonPropertyName("profile")]
     public string? Profile { get; set; }
 
+    [JsonPropertyName("scope")]
+    public string? Scope { get; set; }
+
     [JsonPropertyName("reason")]
     public string? Reason { get; set; }
 
@@ -78,6 +81,9 @@ internal sealed class ResolveResponseContract
     [JsonPropertyName("profile")]
     public string Profile { get; set; } = "";
 
+    [JsonPropertyName("scope")]
+    public string? Scope { get; set; }
+
     [JsonPropertyName("secrets")]
     public Dictionary<string, ResolvedSecret> Secrets { get; set; } = [];
 
@@ -98,6 +104,9 @@ internal sealed class ReportResponseContract
 
     [JsonPropertyName("profile")]
     public string Profile { get; set; } = "";
+
+    [JsonPropertyName("scope")]
+    public string? Scope { get; set; }
 
     [JsonPropertyName("secrets")]
     public List<SecretReport> Secrets { get; set; } = [];

@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outright rather than unioning their secret lists. Typed SDK loaders ignore an
   ambient `SECRETSPEC_SCOPE`, since a generated struct always expects the full
   profile; `import` likewise ignores scope and always copies the whole profile.
+  Untyped SDK/FFI builders expose explicit scope selection and return the active
+  scope in resolve/report results. Audit events for scoped `check`, `run`, and
+  `export` operations record the scope name as well as the keys accessed or
+  exposed.
 - age provider (`age://`) for storing dotenv-style secret sets in an
   age-encrypted file, with ASCII armor by default, team recipient rosters,
   direct X25519 and SSH key support, native tagged recipients, and

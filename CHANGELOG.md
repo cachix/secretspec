@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   project `extends`, a child scope replaces the parent scope of the same name
   outright rather than unioning their secret lists. Typed SDK loaders ignore an
   ambient `SECRETSPEC_SCOPE`, since a generated struct always expects the full
-  profile.
+  profile; `import` likewise ignores scope and always copies the whole profile.
 - age provider (`age://`) for storing dotenv-style secret sets in an
   age-encrypted file, with ASCII armor by default, team recipient rosters,
   direct X25519 and SSH key support, native tagged recipients, and

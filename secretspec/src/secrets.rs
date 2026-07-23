@@ -1341,6 +1341,26 @@ impl Secrets {
         &self,
         profile: Option<&str>,
     ) -> Result<Vec<String>> {
+        let all = self.profile_secret_names_unscoped(profile)?;
+        // An active scope narrows the profile to its membership intersection —
+        // the single worklist that scopes every consumer at once, failing on an
+        // unknown scope before any provider is touched.
+        match self.active_scope_members()? {
+            None => Ok(all),
+            Some(members) => Ok(all
+                .into_iter()
+                .filter(|name| members.contains(name.as_str()))
+                .collect()),
+        }
+    }
+
+    /// Every secret name in `profile` (∪ `default`), sorted, with no scope
+    /// filtering. `import` uses this directly so an ambient `SECRETSPEC_SCOPE`
+    /// can't narrow a command that has no `--scope`.
+    pub(crate) fn profile_secret_names_unscoped(
+        &self,
+        profile: Option<&str>,
+    ) -> Result<Vec<String>> {
         let profile_name = profile
             .map(str::to_string)
             .unwrap_or_else(|| self.resolve_profile_name(None));
@@ -1349,21 +1369,8 @@ impl Secrets {
             .manifest
             .profile(&profile_name)
             .expect("raw and compiled profile sets stay identical");
-        // `CompiledProfile.secrets` is a `BTreeMap`, so its keys are already
-        // sorted — no clone of the secret configs, which every caller discarded.
-        //
-        // An active scope narrows the profile to the intersection with its
-        // membership. This is the single upstream worklist for validation,
-        // resolution, planning, prompting, generation, and audit attribution, so
-        // filtering here scopes every one of them at once — and an unknown scope
-        // fails before any provider is touched.
-        let members = self.active_scope_members()?;
-        Ok(compiled
-            .secrets
-            .keys()
-            .filter(|name| members.as_ref().is_none_or(|m| m.contains(name.as_str())))
-            .cloned()
-            .collect())
+        // `CompiledProfile.secrets` is a sorted `BTreeMap`.
+        Ok(compiled.secrets.keys().cloned().collect())
     }
 
     /// Expands the *visible* set (the scope ∩ profile output) to the set
@@ -2470,9 +2477,9 @@ impl Secrets {
                 profile_display.cyan()
             );
 
-            // Collect all secrets to import - from current profile and default profile
-            // This ensures we can import secrets defined in default profile when using other profiles
-            let import_names = self.resolve_profile_secret_names(Some(&profile_display))?;
+            // Current + default profile secrets. Unscoped: `import` has no
+            // `--scope`, so an ambient SECRETSPEC_SCOPE must not narrow the copy.
+            let import_names = self.profile_secret_names_unscoped(Some(&profile_display))?;
 
             // Process each secret using proper profile resolution: the plan
             // supplies the same write route and address `set` executes. Sorted

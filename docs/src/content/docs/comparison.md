@@ -49,30 +49,9 @@ central compliance records.
 
 ## Supported providers
 
-| Provider | What the provider adds beneath SecretSpec | TPM-backed keys |
-|---|---|---|
-| [System keyring](/providers/keyring/) | Native local credential storage through [macOS Keychain](https://support.apple.com/guide/security/keychain-data-protection-secb0694df1a/web), [Windows Credential Manager](https://learn.microsoft.com/windows/win32/secauthn/credentials-management), or [Linux Secret Service via libsecret](https://gnome.pages.gitlab.gnome.org/libsecret/) | — |
-| [Dotenv](/providers/dotenv/) | Compatibility with existing local `.env` workflows; values remain plaintext on disk | — |
-| [Environment variables](/providers/env/) | Read-only access to values already injected by CI, containers, or the parent process | — |
-| [Pass](/providers/pass/) | A local GPG-encrypted Unix password store | [Via GnuPG](https://gnupg.org/blog/20210315-using-tpm-with-gnupg-2.3.html) |
-| [Gopass (0.15+)](/providers/gopass/) | GPG-encrypted, Git-synchronized, multi-store password management | [Via GnuPG](https://gnupg.org/blog/20210315-using-tpm-with-gnupg-2.3.html) |
-| [Proton Pass](/providers/protonpass/) | End-to-end encrypted, synchronized password storage through Proton Pass | — |
-| [1Password](/providers/onepassword/) | Shared vaults, user and service-account access, and 1Password's administrative controls | — |
-| [LastPass](/providers/lastpass/) | Shared password-manager storage and LastPass access controls | — |
-| [Google Cloud Secret Manager](/providers/gcsm/) | Google Cloud IAM, encrypted storage, secret versions, and configured Cloud Audit Logs | — |
-| [AWS Secrets Manager](/providers/awssm/) | AWS IAM, KMS-backed storage, secret versions, and configured CloudTrail records | — |
-| [Vault or OpenBao](/providers/vault/) | Centralized KV storage and policy-based access in a self-managed service | — |
-| [Bitwarden Secrets Manager](/providers/bws/) | Organization and project-based machine-secret storage and access | — |
-| [Azure Key Vault (0.15+)](/providers/akv/) | Microsoft Entra identity, encrypted storage, secret versions, and configured Azure logs | — |
-| [Infisical (0.16+)](/providers/infisical/) | Cloud or self-hosted storage organized by projects, environments, and machine identities | — |
-
-“TPM-backed keys” means the local key used by the provider can be protected by
-a [TPM 2.0](https://trustedcomputinggroup.org/resource/tpm-library-specification/)
-through the provider path SecretSpec uses. Pass and Gopass inherit this
-capability from GnuPG when its encryption key is moved to the TPM. An em dash
-means SecretSpec has no documented TPM integration for that provider; it does
-not describe other hardware security used internally by the provider service.
-For example, macOS Keychain can use Apple's Secure Enclave, which is not a TPM.
+See [Available providers](/concepts/providers/#available-providers) for the
+provider comparison, including storage backend, read and write support,
+encryption at rest, and TPM-backed keys.
 
 Providers can be mixed within one project. For example, an application can
 read a shared credential from 1Password in the production profile, read the same

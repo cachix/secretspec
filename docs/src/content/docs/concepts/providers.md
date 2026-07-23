@@ -54,6 +54,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [bws](/providers/bws/) | Bitwarden Secrets Manager (requires the `bws` build feature) | ✓ | ✓ | ✓ | — |
 | [akv](/providers/akv/) | Azure Key Vault (requires the `akv` build feature) | ✓ | ✓ | ✓ | — |
 | [infisical](/providers/infisical/) (0.16+) | Infisical (requires the `infisical` build feature) | ✓ | ✓ | ✓ | — |
+| [age](/providers/age/) (0.17+) | An age-encrypted file (requires the `age` build feature) | ✓ | ✓ | ✓ | — |
 
 “TPM-backed keys” means the local key used by the provider can be protected by
 a [TPM 2.0](https://trustedcomputinggroup.org/resource/tpm-library-specification/)

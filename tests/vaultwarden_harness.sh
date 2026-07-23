@@ -90,3 +90,11 @@ echo "✓ logged in as $FIXTURE_EMAIL"
 echo "── 4/4 integration suite ──"
 cd "$REPO_ROOT"
 bash tests/bitwarden_integration.sh "$BW_SESSION" </dev/null
+
+# Optional: regression tests for the PR #166 review findings. They exit
+# non-zero while any finding is still REPRODUCED, so they're opt-in until
+# the fixes land — then they become part of the green path.
+if [ "${RUN_REGRESSIONS:-0}" = "1" ]; then
+  echo "── regressions: review findings ──"
+  bash tests/bitwarden_regression_findings.sh </dev/null
+fi

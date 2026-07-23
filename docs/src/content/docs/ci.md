@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: cachix/secretspec/secretspec-action@main
+      - uses: cachix/secretspec-action@main
         with:
           profile: production
       - run: ./deploy.sh
@@ -26,7 +26,7 @@ For secrets kept in a dedicated store, resolve them on the runner with the match
 Grant the job `id-token: write` and select `?auth=jwt` with a `role`. Vault exchanges the runner's OIDC token for a client token, so nothing is stored on the platform.
 
 ```yaml
-      - uses: cachix/secretspec/secretspec-action@main
+      - uses: cachix/secretspec-action@main
         with:
           profile: production
           provider: vault://vault.example.com:8200/secret?auth=jwt&role=ci
@@ -35,7 +35,7 @@ Grant the job `id-token: write` and select `?auth=jwt` with a `role`. Vault exch
 Without an OIDC identity to draw on, select `?auth=approle` instead and pass `VAULT_ROLE_ID` and `VAULT_SECRET_ID` as CI secrets.
 
 ```yaml
-      - uses: cachix/secretspec/secretspec-action@main
+      - uses: cachix/secretspec-action@main
         with:
           profile: production
           provider: vault://vault.example.com:8200/secret?auth=approle

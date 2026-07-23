@@ -93,6 +93,22 @@ the monorepo — the manifest lives at the repository root (`/composer.json`, wi
 
 No CI workflow or token is involved — Packagist pulls from the tag on push.
 
+### NuGet (.NET) — trusted publishing set up, done
+
+`Cachix.SecretSpec` publishes via NuGet Trusted Publishing (OIDC), so no
+long-lived API key is stored. The nuget.org policy is configured (repository
+owner `cachix`, repository `secretspec`, workflow file `dotnet-package.yml`,
+environment `nuget`), and the repository's `nuget` GitHub environment holds
+`NUGET_USER` — the nuget.org profile name that owns the policy. The first
+publish (0.15.0, a manual `dotnet-package.yml` run with `publish: true`)
+claimed the package ID and permanently activated the policy. It is an
+unsupported bootstrap artifact rather than the C# SDK release; the first
+supported package is 0.16.0, whose publish job also unlists 0.15.0. Nothing
+else is needed — version tags build all native runtime assets, pack them into
+one `.nupkg`, run clean-package and NativeAOT consumers on every RID, and
+publish with a short-lived OIDC-issued API key (`--skip-duplicate` makes
+re-runs of an already-published version harmless).
+
 ## Python (PyPI) — `python-wheels.yml`
 
 - **Build:** the Rust resolver is statically linked into a pyo3 extension
@@ -234,3 +250,21 @@ In order:
    `vendor/bin/secretspec-install-lib` for the ext-ffi path, and a downloaded
    `secretspec-php-native` `.so` (`extension=…`) for the extension path — and
    confirm a resolve works under each.
+
+## .NET (NuGet) — `dotnet-package.yml`
+
+- **Client:** a trimming-safe, NativeAOT-compatible .NET 8 assembly with no
+  managed package dependencies. It invokes the stable JSON C ABI through
+  source-generated P/Invoke and exposes the same builder, resolved value,
+  report, and typed-error vocabulary as the other SDKs.
+- **Native assets:** one NuGet package carries `secretspec-ffi` under the
+  standard `runtimes/<rid>/native/` layout for glibc and musl Linux x64/Arm64,
+  macOS x64/Arm64, and Windows x64/Arm64. Glibc builds use a manylinux 2.28
+  baseline, Linux builds vendor dbus, and Windows builds statically link the
+  MSVC runtime.
+- **Publish:** `dotnet-package.yml` tests every native asset on its target,
+  assembles `Cachix.SecretSpec.<version>.nupkg`, then installs that exact
+  package in isolated framework-dependent and NativeAOT consumers on all eight
+  RIDs before pushing it with a short-lived API key from NuGet Trusted
+  Publishing (OIDC), running in the `nuget` GitHub environment. One-time setup
+  is described above.

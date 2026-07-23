@@ -1,6 +1,8 @@
 name: "Test"
 
 on:
+  workflow_call:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [ main ]
@@ -14,6 +16,17 @@ jobs:
 
     steps:
     - uses: actions/checkout@v5
+    # The full devenv shell includes every SDK toolchain plus the musl static
+    # dependencies. It no longer fits alongside the preinstalled software on
+    # GitHub's Ubuntu image, so reclaim that space before populating /nix.
+    - name: Free up disk space
+      if: runner.os == 'Linux'
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android \
+          /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /opt/ghc \
+          /usr/local/share/boost /usr/local/share/powershell
+        sudo docker image prune --all --force
+        df -h /
     - uses: cachix/install-nix-action@v31
     - uses: cachix/cachix-action@v17
       with:
@@ -21,8 +34,38 @@ jobs:
     - name: Install devenv.sh
       run: nix profile install nixpkgs#devenv
 
-    - name: Build the devenv shell and run any pre-commit hooks
-      run: devenv test
+    # `devenv test` also starts every configured process. The docs dev server is
+    # unrelated to this suite and makes process-compose wait for its timeout when
+    # docs dependencies are not installed, so run the hooks and tests directly.
+    - name: Run pre-commit hooks
+      run: devenv tasks run devenv:git-hooks:run --show-output
+    - name: Run tests
+      run: devenv shell -- cargo test --all
+
+  # Each optional provider must compile on its own, not just in the default
+  # feature set. `cargo test` above cannot catch a missing feature gate: it
+  # builds with every provider enabled and with `cfg(test)` on, and shared
+  # helpers gated on `any(feature = "...", test)` are reachable under either.
+  # A provider that forgets to add itself to such a gate only breaks for the
+  # user who builds it standalone, which is precisely who `--features` is for.
+  features:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - name: Install Rust
+      run: rustup toolchain install stable --profile minimal
+    # `keyring` links libdbus for its secret-service transport on Linux. The
+    # devenv job above gets it from the shell; a bare runner does not.
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+    - name: Check each provider feature standalone
+      run: |
+        set -euo pipefail
+        for feature in cli keyring gcsm awssm vault openbao infisical bws akv; do
+          echo "::group::$feature"
+          cargo check --package secretspec --no-default-features --features "$feature"
+          echo "::endgroup::"
+        done
 
   # Windows runners can't run Nix/devenv, so the suite runs here natively via
   # rustup + cargo. This exists specifically to catch Windows-only path handling

@@ -79,24 +79,106 @@ REDIS_URL = { description = "Redis cache", required = false, default = "redis://
 DATABASE_URL = { description = "Production database", required = true }
 ```
 
+#### Cross-secret presence constraints (0.17+)
+
+:::caution[Version compatibility]
+Added in SecretSpec 0.17.
+:::
+
+A profile can require alternative credentials by assigning secrets to a named
+group:
+
+```toml
+[profiles.default]
+PASSWORD = { description = "Account password", required = { at_least_one = "account_auth" } }
+ACCESS_TOKEN = { description = "Personal access token", required = { at_least_one = "account_auth" } }
+
+GITHUB_TOKEN = { description = "GitHub token", required = { exactly_one = "github_auth" } }
+GITHUB_APP_KEY = { description = "GitHub App private key", required = { exactly_one = "github_auth" } }
+```
+
+`at_least_one` requires one or more group members to resolve; `exactly_one`
+requires one. Each field also accepts an array of group names for overlapping
+groups. Groups must contain at least two secrets and cannot mix modes. Group
+members are individually optional.
+
 #### Secret Variable Options
 
 Each secret variable is defined as a table with the following fields:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `description` | string | Yes | Human-readable description of the secret |
-| `required` | boolean | No* | Whether the value must be provided (default: true) |
-| `default` | string | No** | Default value if not provided |
+| `description` | string | Yes (see notes) | Human-readable description of the secret |
+| `required` | boolean or table | No | Whether absence is an error; the table form (0.17+) accepts `at_least_one`/`exactly_one` presence groups (defaults to true; false with `default` or a presence group) |
+| `default` | string | No | Default value if not provided |
+| `composed` (0.16+) | string | No | Derive a read-only value from other declared secrets using `${UPPERCASE_NAME}` references |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `ref` | table | No | Coordinates naming an externally managed secret in the provider's store (e.g. `ref = { item = "db", field = "password" }`) |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
-| `type` | string | No*** | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
-| `generate` | boolean or table | No*** | Enable auto-generation when secret is missing |
+| `type` | string | No | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
+| `generate` | boolean or table | No | Enable auto-generation when secret is missing |
 
-*If `default` is provided, `required` defaults to false
-**Only valid when `required = false`
-***`type` is required when `generate` is enabled; `generate` and `default` cannot both be set
+Field notes:
+
+- `description` is required in the `default` profile. A secret overriding one
+  that the default profile already declares inherits its `description` (and
+  other omitted fields) and may leave it out.
+- `required` defaults to false when `default` is provided. In 0.17+, its table
+  form accepts `at_least_one` and `exactly_one` as a group name or array of names.
+- `default` is invalid with an explicit `required = true`. A defaulted secret is
+  guaranteed to be present in successful resolution and generated types, even
+  though the provider does not have to supply it.
+- `type` is required when `generate` is enabled.
+- `generate` and `default` cannot both be set.
+
+#### Composed secrets
+
+:::caution[Version compatibility]
+Available since SecretSpec 0.16.
+:::
+
+A composed secret derives a value from other secrets in the effective profile.
+See [Composed Secrets](/concepts/composed-secrets/) for the dependency model,
+CLI behavior, profile inheritance, and the differences from dotenv expansion:
+
+```toml
+[profiles.default]
+DB_USER = { description = "Database user" }
+DB_PASSWORD = { description = "Database password" }
+DB_HOST = { description = "Database host" }
+DATABASE_URL = { description = "PostgreSQL DSN", composed = "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}/app" }
+```
+
+References form a static dependency graph. Declaration order does not matter,
+and composed secrets may reference other composed secrets. SecretSpec rejects
+unknown references, cycles, malformed references, and source conflicts while
+loading the manifest. A composed secret is read-only and cannot also set
+`default`, `providers`, `ref`, `type`, or enabled `generate`.
+
+Composition intentionally does **not** implement dotenv or shell expansion:
+
+- only `${UPPERCASE_NAME}` is a reference, and the name must match
+  `[A-Z][A-Z0-9_]*` and identify a declared secret;
+- ambient environment variables are never consulted;
+- fallback operators such as `${NAME:-fallback}`, commands, and recursive
+  expansion are unsupported;
+- inserted values are opaque and are never scanned again;
+- `$$` produces a literal `$` (`$${NAME}` renders `${NAME}`), while ordinary
+  braces are literal;
+- a missing dependency makes a required composition missing, while a
+  `required = false` composition is omitted;
+- empty values remain empty and are distinct from missing values.
+
+If a dependency uses `as_path = true`, its exported temporary-file path is the
+text inserted into the composed value. Applying `as_path = true` to the
+composed secret materializes the final combined value.
+
+Composition is raw string concatenation. SecretSpec cannot know whether a
+component occupies a URL username, password, host, path, query, or structured
+document position, so it does not URL-encode or JSON-encode components. Store
+components in the form required by the target format; use
+`secretspec export --format json` when exporting the resolved secret map as
+JSON.
 
 ## Complete Example
 
@@ -143,6 +225,13 @@ Provider aliases may be declared in two places:
 
 On conflict the project-level alias wins, so a stale local config cannot silently shadow the team's mapping.
 
+:::note[Version compatibility]
+Provider alias tables with `uri` and `credentials` are available since
+SecretSpec 0.15. SecretSpec 0.14 accepts only bare URI strings; when using
+0.14, configure provider credentials through the provider's existing
+environment variables, such as `BWS_ACCESS_TOKEN`.
+:::
+
 ```toml title="secretspec.toml"
 [providers]
 prod_vault = "onepassword://Production"
@@ -179,6 +268,51 @@ $ secretspec config provider remove prod_vault
 ```
 
 The CLI commands operate on the user-global config only — edit `secretspec.toml` by hand to change project-level aliases.
+
+#### SecretSpec 0.15 alias values
+
+In SecretSpec 0.15 and later, an alias value is either a bare provider URI
+string or a table that also declares the credentials the provider needs. Both
+forms are accepted in the project `[providers]` and user
+`[defaults.providers]` tables.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `uri` | string | Yes (table form) | The provider URI. A bare-string alias is shorthand for `{ uri = "..." }`. |
+| `credentials` | table | No | Maps a semantic provider credential name to its [source](/concepts/providers/#provider-credentials). |
+
+Each `credentials` value is either a bare provider spec — read at the convention path for the active project and profile — or a table `{ provider = "...", ref = { ... } }` that pins the exact location with the same `ref` coordinates a secret uses.
+
+```toml title="secretspec.toml"
+[providers]
+keyring = "keyring://"
+# bare string: read access_token from keyring at the convention path
+bws = { uri = "bws://project-uuid", credentials = { access_token = "keyring" } }
+
+[providers.vault_prod]
+uri = "vault://secret/myapp?auth=approle"
+credentials = { role_id   = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "role_id" } },
+                secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "vault-approle", field = "secret_id" } } }
+```
+
+Configured credentials take precedence over provider environment fallbacks, credential chains are limited to one hop, and a fetched credential is never written to the environment. Store the credentials with [`secretspec config provider login`](/reference/cli/#config-provider-login). See [Provider Credentials](/concepts/providers/#provider-credentials) for the full behavior.
+
+#### SecretSpec 0.14 alias values
+
+In SecretSpec 0.14, every alias value must be a provider URI string:
+
+```toml title="secretspec.toml"
+[providers]
+bws = "bws://project-uuid"
+```
+
+For example, authenticate the 0.14 BWS provider by setting its environment
+variable before running SecretSpec:
+
+```bash
+export BWS_ACCESS_TOKEN="0.your-access-token..."
+secretspec check
+```
 
 ### Audit Logging
 
@@ -277,17 +411,21 @@ chain, and each provider is asked for the same coordinates.
 
 | Provider | `item` | `field` | Without `field` | Writes via ref |
 |----------|--------|---------|-----------------|----------------|
-| [OnePassword](/providers/onepassword/#secret-references) | Item title or UUID | Field label; `vault` and `section` also apply | Reads the item like a convention secret (its value or password field); writes edit the `value` field | ✅ via `op item edit` (adds a missing field, never creates items) |
-| [keyring](/providers/keyring/#secret-references) | Service | Account (defaults to the current system username) | Current user's entry | ✅ |
-| [dotenv](/providers/dotenv/#secret-references) | `.env` key | Rejected | Reads the key | ✅ |
-| [env](/providers/env/#secret-references) | Variable name | Rejected | Reads the variable | — (read-only) |
-| [pass](/providers/pass/#secret-references) | Entry path | Rejected | Reads the entry | ✅ |
-| [LastPass](/providers/lastpass/#secret-references) | Item name | Rejected | Reads the item | ✅ |
-| [Proton Pass](/providers/protonpass/#secret-references) | Item title | Rejected | Reads the note | ✅ |
-| [Vault / OpenBao](/providers/vault/#secret-references) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
-| [AWS Secrets Manager](/providers/awssm/#secret-references) | Secret name or ARN | JSON key | Whole secret string | — (read-only) |
-| [GCSM](/providers/gcsm/#secret-references) | Secret id; `version` also applies | Rejected | Reads latest or the pinned version | — (read-only) |
-| [Bitwarden (bws)](/providers/bws/#secret-references) | BWS key name | Rejected | Reads the key | ✅ |
+| [OnePassword](/providers/onepassword/#use-existing-secrets) | Item title or UUID | Field label; `vault` and `section` also apply | Reads the item like a convention secret (its value or password field); writes edit the `value` field | ✅ via `op item edit` (adds a missing field, never creates items) |
+| [keyring](/providers/keyring/#use-existing-secrets) | Service | Account (defaults to the current system username) | Current user's entry | ✅ |
+| [dotenv](/providers/dotenv/#use-existing-secrets) | `.env` key | Rejected | Reads the key | ✅ |
+| [env](/providers/env/#use-existing-secrets) | Variable name | Rejected | Reads the variable | — (read-only) |
+| [pass](/providers/pass/#use-existing-secrets) | Entry path | Rejected | Reads the entry | ✅ |
+| [Gopass (0.15+)](/providers/gopass/#use-existing-secrets) | Entry path, including any mount-point prefix | Rejected | Reads the entry | ✅ |
+| [LastPass](/providers/lastpass/#use-existing-secrets) | Item name | Rejected | Reads the item | ✅ |
+| [Proton Pass](/providers/protonpass/#use-existing-secrets) | Item title | Rejected | Reads the note | ✅ |
+| [Vault](/providers/vault/#use-existing-secrets) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
+| [OpenBao](/providers/openbao/#use-existing-secrets) (0.17+) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
+| [AWS Secrets Manager](/providers/awssm/#use-existing-secrets) | Secret name or ARN | JSON key | Whole secret string | — (read-only) |
+| [GCSM](/providers/gcsm/#use-existing-secrets) | Secret id; `version` also applies | Rejected | Reads latest or the pinned version | — (read-only) |
+| [Bitwarden (bws)](/providers/bws/#use-existing-secrets) | BWS key name | Rejected | Reads the key | ✅ |
+| [Azure Key Vault (0.15+)](/providers/akv/#use-existing-secrets) | Secret name | Rejected | Reads the secret | — (read-only) |
+| [Infisical (0.16+)](/providers/infisical/#use-existing-secrets) | Folder and key; `version` also applies | Rejected | Reads the latest version | ✅ unless a version is pinned |
 
 A provider rejects coordinates it has no equivalent for, with an error naming
 the coordinate (for example, `field` on the env provider).

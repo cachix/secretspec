@@ -40,6 +40,9 @@ rustls = { workspace = true, optional = true }
 google-cloud-secretmanager-v1 = { workspace = true, optional = true }
 aws-config = { workspace = true, optional = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
+azure_core = { workspace = true, optional = true }
+azure_identity = { workspace = true, optional = true }
+azure_security_keyvault_secrets = { workspace = true, optional = true }
 tokio.workspace = true
 reqwest = { workspace = true, optional = true }
 rand.workspace = true
@@ -47,12 +50,24 @@ rsa.workspace = true
 uuid.workspace = true
 data-encoding.workspace = true
 detect-coding-agent.workspace = true
+age = { workspace = true, optional = true }
 
 [features]
-default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws"]
+default = ["cli", "keyring", "gcsm", "awssm", "vault", "openbao", "bws", "akv", "infisical", "age"]
 cli = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
+# Compile libdbus from source into the binary instead of linking the system
+# library at runtime (keyring's secret-service transport on Linux). Used by
+# prebuilt release artifacts that must run on distros we don't build on.
+vendored-dbus = ["keyring?/vendored"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]
 awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
 vault = ["dep:reqwest"]
+openbao = ["dep:reqwest"]
+# `tokio/sync` for the async `OnceCell` that serializes the Universal Auth
+# exchange. It is already on transitively via reqwest, but a provider should
+# name the features it uses rather than inherit them from a sibling.
+infisical = ["dep:reqwest", "tokio/sync"]
 bws = ["dep:bitwarden", "dep:rustls"]
+akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secrets"]
+age = ["dep:age"]

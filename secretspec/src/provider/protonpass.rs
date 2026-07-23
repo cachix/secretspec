@@ -487,11 +487,9 @@ impl Provider for ProtonPassProvider {
                         Ok(output) if output.status.success() => {
                             let stdout = String::from_utf8_lossy(&output.stdout);
                             if let Ok(res) = serde_json::from_str::<ProtonPassViewResponse>(&stdout)
+                                && let Some(note) = res.item.content.note.filter(|n| !n.is_empty())
                             {
-                                if let Some(note) = res.item.content.note.filter(|n| !n.is_empty())
-                                {
-                                    return Some((key_owned, SecretString::new(note.into())));
-                                }
+                                return Some((key_owned, SecretString::new(note.into())));
                             }
                             None
                         }

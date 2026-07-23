@@ -1,0 +1,532 @@
+name: ".NET SDK"
+
+# Builds the C# client and the runtime-specific secretspec-ffi libraries packed
+# into Cachix.SecretSpec. Glibc Linux uses a manylinux_2_28 baseline; Alpine
+# receives separate musl assets. Both vendor dbus so consumers do not need a
+# system libdbus installation.
+
+on:
+  workflow_call:
+    inputs:
+      publish:
+        description: Publish the built package to NuGet
+        required: false
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the built package to NuGet
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - v**
+  pull_request:
+    paths:
+      - "secretspec-dotnet/**"
+      - "secretspec-ffi/**"
+      - ".github/workflows/dotnet-package.yml"
+      - "scripts/sync-sdk-versions.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.rid }}
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container || null }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            library: libsecretspec_ffi.so
+            cargo_features: --features vendored-dbus
+            rustflags: -C strip=symbols
+          - rid: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
+            library: libsecretspec_ffi.so
+            cargo_features: --features vendored-dbus
+            rustflags: -C strip=symbols
+          - rid: osx-x64
+            target: x86_64-apple-darwin
+            runner: macos-15-intel
+            library: libsecretspec_ffi.dylib
+            deployment_target: "12.0"
+            rustflags: -C strip=symbols
+          - rid: osx-arm64
+            target: aarch64-apple-darwin
+            runner: macos-latest
+            library: libsecretspec_ffi.dylib
+            deployment_target: "12.0"
+            rustflags: -C strip=symbols
+          - rid: win-x64
+            target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            library: secretspec_ffi.dll
+            rustflags: -C strip=symbols -C target-feature=+crt-static
+          - rid: win-arm64
+            target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            library: secretspec_ffi.dll
+            rustflags: -C strip=symbols -C target-feature=+crt-static
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        shell: bash
+        run: bash scripts/sync-sdk-versions.sh
+
+      - name: Install ICU in manylinux (the .NET runtime needs it)
+        if: matrix.container
+        shell: bash
+        run: yum install -y libicu
+
+      - name: Install rustup in manylinux
+        if: matrix.container
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+            sh -s -- -y --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build native resolver
+        shell: bash
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: >-
+          cargo build -p secretspec-ffi --release
+          --target ${{ matrix.target }} ${{ matrix.cargo_features }}
+
+      - name: Verify glibc portability (glibc <= 2.28, no dynamic libdbus)
+        if: matrix.container
+        shell: bash
+        run: >-
+          bash scripts/check-linux-portability.sh
+          "target/${{ matrix.target }}/release/${{ matrix.library }}"
+
+      - name: Verify Windows CRT is statically linked
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          rustup component add llvm-tools-preview
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          llvm_objdump="$(rustc --print sysroot)/lib/rustlib/$host/bin/llvm-objdump"
+          imports="$("$llvm_objdump" -p \
+            "target/${{ matrix.target }}/release/${{ matrix.library }}")"
+          if grep -Eiq 'DLL Name: (VCRUNTIME|MSVCP)' <<<"$imports"; then
+            echo "the packaged resolver still depends on the MSVC runtime" >&2
+            grep -Ei 'DLL Name: (VCRUNTIME|MSVCP)' <<<"$imports" >&2
+            exit 1
+          fi
+
+      - name: Run C# SDK tests against native resolver
+        shell: bash
+        env:
+          SECRETSPEC_FFI_LIB: ${{ github.workspace }}/target/${{ matrix.target }}/release/${{ matrix.library }}
+        run: >-
+          dotnet run
+          --project secretspec-dotnet/tests/SecretSpec.Tests
+          --configuration Release
+
+      - name: Stage native NuGet asset
+        shell: bash
+        run: |
+          mkdir -p "staged/${{ matrix.rid }}/native"
+          cp "target/${{ matrix.target }}/release/${{ matrix.library }}" \
+             "staged/${{ matrix.rid }}/native/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-native-${{ matrix.rid }}
+          path: staged/${{ matrix.rid }}
+
+  musl:
+    name: ${{ matrix.rid }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-musl-x64
+            target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            image: quay.io/pypa/musllinux_1_2_x86_64
+          - rid: linux-musl-arm64
+            target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/musllinux_1_2_aarch64
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+      - name: Build dynamically loadable musl resolver
+        shell: bash
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            --env CARGO_TARGET_DIR=/workspace/target \
+            --env "RUSTFLAGS=-C target-feature=-crt-static -C strip=symbols" \
+            "${{ matrix.image }}" \
+            bash -c '
+              set -euo pipefail
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs |
+                sh -s -- -y --default-toolchain none
+              export PATH="$HOME/.cargo/bin:$PATH"
+              rustup toolchain install
+              cargo build -p secretspec-ffi --release \
+                --target "${{ matrix.target }}" --features vendored-dbus
+            '
+          test -f \
+            "target/${{ matrix.target }}/release/libsecretspec_ffi.so"
+      - name: Verify musl portability
+        shell: bash
+        run: |
+          library="target/${{ matrix.target }}/release/libsecretspec_ffi.so"
+          dynamic="$(readelf -d "$library")"
+          needed="$(grep NEEDED <<<"$dynamic")"
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-musl)
+              expected_libc=libc.musl-x86_64.so.1
+              ;;
+            aarch64-unknown-linux-musl)
+              expected_libc=libc.musl-aarch64.so.1
+              ;;
+          esac
+          # ARM musl's libgcc_s exports a compatibility symbol version named
+          # GLIBC_2.0, so inspect the actual dynamic dependencies instead.
+          if grep -q '\[libc\.so\.6\]' <<<"$needed" ||
+             ! grep -Fq "[$expected_libc]" <<<"$needed"; then
+            echo "$library does not use the expected musl libc" >&2
+            echo "$needed" >&2
+            exit 1
+          fi
+          if grep -q dbus <<<"$needed"; then
+            echo "$library links libdbus dynamically" >&2
+            echo "$needed" >&2
+            exit 1
+          fi
+      - name: Stage native NuGet asset
+        run: |
+          mkdir -p "staged/${{ matrix.rid }}/native"
+          cp "target/${{ matrix.target }}/release/libsecretspec_ffi.so" \
+             "staged/${{ matrix.rid }}/native/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-native-${{ matrix.rid }}
+          path: staged/${{ matrix.rid }}
+
+  package:
+    name: NuGet package
+    needs: [native, musl]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dotnet-native-*
+          path: staged
+      - name: Place runtime assets
+        shell: bash
+        run: |
+          for artifact in staged/dotnet-native-*; do
+            rid="${artifact##*/dotnet-native-}"
+            mkdir -p "secretspec-dotnet/src/SecretSpec/runtimes/$rid"
+            cp -R "$artifact/"* "secretspec-dotnet/src/SecretSpec/runtimes/$rid/"
+          done
+      - name: Pack
+        run: >-
+          dotnet pack secretspec-dotnet/src/SecretSpec/SecretSpec.csproj
+          --configuration Release --output artifacts
+      - name: Verify runtime assets are present
+        shell: bash
+        run: |
+          # The staged directories come from the same matrix that builds the
+          # native libraries, so this check cannot drift from the matrix.
+          package="$(find artifacts -name '*.nupkg' ! -name '*.symbols.nupkg' -print -quit)"
+          shopt -s nullglob
+          staged=(staged/dotnet-native-*)
+          if [ "${#staged[@]}" -eq 0 ]; then
+            echo "no staged native artifacts were downloaded" >&2
+            exit 1
+          fi
+          for artifact in "${staged[@]}"; do
+            rid="${artifact##*/dotnet-native-}"
+            unzip -l "$package" | grep -q "runtimes/$rid/native/"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-nuget
+          path: artifacts/*.nupkg
+
+  consumer:
+    name: consume ${{ matrix.rid }}
+    needs: [package]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            runner: ubuntu-latest
+            musl: false
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+            musl: false
+          - rid: linux-musl-x64
+            runner: ubuntu-latest
+            musl: true
+          - rid: linux-musl-arm64
+            runner: ubuntu-24.04-arm
+            musl: true
+          - rid: osx-x64
+            runner: macos-15-intel
+            musl: false
+          - rid: osx-arm64
+            runner: macos-latest
+            musl: false
+          - rid: win-x64
+            runner: windows-latest
+            musl: false
+          - rid: win-arm64
+            runner: windows-11-arm
+            musl: false
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: dotnet-nuget
+          path: artifacts
+      - uses: actions/setup-dotnet@v4
+        if: matrix.musl == false
+        with:
+          dotnet-version: "8.0.x"
+      - name: Install Linux NativeAOT toolchain
+        if: runner.os == 'Linux' && matrix.musl == false
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
+
+      - name: Restore, run, and NativeAOT-publish a clean NuGet consumer
+        if: matrix.musl == false && runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n \
+            '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' \
+            Cargo.toml)"
+          test_root="$RUNNER_TEMP/SecretSpec.PackageSmoke"
+          package_source="$GITHUB_WORKSPACE/artifacts"
+          export NUGET_PACKAGES="$RUNNER_TEMP/nuget-packages"
+          cp -R secretspec-dotnet/tests/SecretSpec.PackageSmoke "$test_root"
+          project="$test_root/SecretSpec.PackageSmoke.csproj"
+
+          # Prime an isolated package cache from the artifact-only source. The
+          # RID restore then adds NuGet.org for Microsoft runtime/AOT packs
+          # without any chance of selecting the already-published bootstrap.
+          dotnet restore "$project" --source "$package_source" \
+            -p:Version="$version"
+          dotnet restore "$project" --runtime "${{ matrix.rid }}" \
+            --source "$package_source" \
+            --source https://api.nuget.org/v3/index.json \
+            -p:Version="$version"
+          (
+            cd "$RUNNER_TEMP"
+            unset SECRETSPEC_FFI_LIB
+            dotnet run --project "$project" --configuration Release \
+              --runtime "${{ matrix.rid }}" --no-restore -p:Version="$version"
+          )
+
+          publish_dir="$RUNNER_TEMP/publish-${{ matrix.rid }}"
+          dotnet publish "$project" --configuration Release \
+            --runtime "${{ matrix.rid }}" --self-contained true \
+            -p:PublishAot=true -p:Version="$version" \
+            --source "$package_source" \
+            --source https://api.nuget.org/v3/index.json \
+            --output "$publish_dir"
+          app="$publish_dir/SecretSpec.PackageSmoke"
+          if [[ -f "$app.exe" ]]; then app="$app.exe"; fi
+          (
+            cd "$RUNNER_TEMP"
+            unset SECRETSPEC_FFI_LIB
+            "$app"
+          )
+
+      - name: Restore, run, and NativeAOT-publish a clean NuGet consumer on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $versionMatch = Select-String -Path Cargo.toml `
+            -Pattern '^version = "([^"]+)"' | Select-Object -First 1
+          if (-not $versionMatch) {
+            throw "workspace package version not found"
+          }
+          $version = $versionMatch.Matches[0].Groups[1].Value
+          $testRoot = Join-Path $env:RUNNER_TEMP "SecretSpec.PackageSmoke"
+          $packageSource = Join-Path $env:GITHUB_WORKSPACE "artifacts"
+          $env:NUGET_PACKAGES = Join-Path $env:RUNNER_TEMP "nuget-packages"
+          New-Item -ItemType Directory -Path $testRoot | Out-Null
+          Copy-Item -Recurse `
+            "secretspec-dotnet/tests/SecretSpec.PackageSmoke/*" $testRoot
+          $project = Join-Path $testRoot "SecretSpec.PackageSmoke.csproj"
+
+          # Prime an isolated package cache from the artifact-only source. The
+          # RID/AOT restore then uses the runner's standard NuGet configuration
+          # for Microsoft runtime packs without selecting a published SDK copy.
+          dotnet restore $project --source $packageSource "-p:Version=$version"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet restore $project --runtime "${{ matrix.rid }}" `
+            "-p:PublishAot=true" "-p:Version=$version"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Remove-Item Env:SECRETSPEC_FFI_LIB -ErrorAction SilentlyContinue
+          Push-Location $env:RUNNER_TEMP
+          try {
+            dotnet run --project $project --configuration Release `
+              --runtime "${{ matrix.rid }}" --no-restore `
+              "-p:Version=$version"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+
+          $publishDir = Join-Path `
+            $env:RUNNER_TEMP "publish-${{ matrix.rid }}"
+          dotnet publish $project --configuration Release `
+            --runtime "${{ matrix.rid }}" --self-contained true `
+            "-p:PublishAot=true" "-p:Version=$version" `
+            --no-restore --output $publishDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $app = Join-Path $publishDir "SecretSpec.PackageSmoke.exe"
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & $app
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Restore, run, and NativeAOT-publish on Alpine
+        if: matrix.musl
+        shell: bash
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --volume "$RUNNER_TEMP:/runner" \
+            --workdir /runner \
+            mcr.microsoft.com/dotnet/sdk:8.0-alpine \
+            sh -c '
+              set -eu
+              apk add --no-cache build-base clang zlib-dev
+              version="$(sed -n \
+                "/^\[workspace.package\]/,/^\[/s/^version = \"\(.*\)\"/\1/p" \
+                /workspace/Cargo.toml)"
+              test_root=/runner/SecretSpec.PackageSmoke
+              package_source=/workspace/artifacts
+              export NUGET_PACKAGES=/runner/nuget-packages
+              cp -R /workspace/secretspec-dotnet/tests/SecretSpec.PackageSmoke \
+                "$test_root"
+              project="$test_root/SecretSpec.PackageSmoke.csproj"
+
+              # Prime the isolated cache from the just-built package before
+              # NuGet.org is enabled for Microsoft runtime/AOT packs.
+              dotnet restore "$project" --source "$package_source" \
+                -p:Version="$version"
+              dotnet restore "$project" --runtime "${{ matrix.rid }}" \
+                --source "$package_source" \
+                --source https://api.nuget.org/v3/index.json \
+                -p:Version="$version"
+              unset SECRETSPEC_FFI_LIB
+              dotnet run --project "$project" --configuration Release \
+                --runtime "${{ matrix.rid }}" --no-restore -p:Version="$version"
+
+              publish_dir=/runner/publish-${{ matrix.rid }}
+              dotnet publish "$project" --configuration Release \
+                --runtime "${{ matrix.rid }}" --self-contained true \
+                -p:PublishAot=true -p:Version="$version" \
+                --source "$package_source" \
+                --source https://api.nuget.org/v3/index.json \
+                --output "$publish_dir"
+              cd /runner
+              unset SECRETSPEC_FFI_LIB
+              "$publish_dir/SecretSpec.PackageSmoke"
+            '
+
+  publish:
+    name: publish to NuGet
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish
+    needs: [consumer]
+    runs-on: ubuntu-latest
+    # Must match the "Environment" on nuget.org's trusted publishing policy
+    # for Cachix.SecretSpec (see RELEASE.md); nuget.org matches policies by
+    # repo + workflow filename + environment.
+    environment: nuget
+    permissions:
+      id-token: write # NuGet Trusted Publishing (OIDC), no long-lived key
+      contents: read
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dotnet-nuget
+          path: artifacts
+      # Trades the job's OIDC token for an API key that expires in about an
+      # hour, so it must stay immediately before the push.
+      - name: NuGet login (OIDC trusted publishing)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ secrets.NUGET_USER }}
+      - name: Publish package
+        run: >-
+          dotnet nuget push "artifacts/*.nupkg"
+          --api-key "${{ steps.login.outputs.NUGET_API_KEY }}"
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
+      - name: Unlist the unsupported 0.15.0 bootstrap
+        shell: bash
+        run: |
+          package="$(find artifacts -name '*.nupkg' \
+            ! -name '*.symbols.nupkg' -print -quit)"
+          if [[ "$package" == *Cachix.SecretSpec.0.15.0.nupkg ]]; then
+            echo "keeping the bootstrap listed until 0.16.0 is published"
+            exit 0
+          fi
+          listed="$(curl -fsSL \
+            https://api.nuget.org/v3/registration5-semver1/cachix.secretspec/0.15.0.json |
+            python3 -c 'import json, sys; print(str(json.load(sys.stdin)["listed"]).lower())')"
+          if [[ "$listed" != true ]]; then
+            echo "the 0.15.0 bootstrap is already unlisted"
+            exit 0
+          fi
+          dotnet nuget delete Cachix.SecretSpec 0.15.0 \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --non-interactive

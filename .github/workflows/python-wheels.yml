@@ -11,16 +11,18 @@ name: "Python wheels"
 # dynamic system deps, notably libdbus from the keyring provider), so no
 # separate auditwheel step is needed. macOS builds natively.
 #
-# A Windows wheel is a follow-up: the default Windows toolchain is MSVC, and
-# the wheel build would have to vendor the provider system deps. The SDK
-# itself is exercised on every PR by the devenv-based sdks.yml; this workflow
-# only builds the distributable wheels.
+# Windows builds natively on the MSVC toolchain; the keyring provider uses
+# Windows Credential Manager (keyring's windows-native feature), so unlike
+# Linux there are no system deps to vendor into the wheel. The SDK itself is
+# exercised on every PR by the devenv-based sdks.yml; this workflow only
+# builds the distributable wheels.
 #
 # The build/repair pipeline is validated in CI; the publish job additionally
 # needs PyPI Trusted Publishing configured for this repo's "pypi" environment
 # before the first version tag.
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     tags:
@@ -57,6 +59,9 @@ jobs:
           manylinux: 2_28
           rust-toolchain: "1.92.0" # matches rust-toolchain.toml
           before-script-linux: yum install -y dbus-devel
+          # Compiler cache backed by the GitHub Actions cache; works inside
+          # the manylinux container, where a host-level cargo cache cannot.
+          sccache: true
           args: --release --out ${{ github.workspace }}/wheelhouse
       - uses: actions/upload-artifact@v4
         with:
@@ -71,6 +76,7 @@ jobs:
       matrix:
         include:
           - { target: macos-aarch64, runner: macos-latest }
+          - { target: windows-x86_64, runner: windows-latest }
     steps:
       - uses: actions/checkout@v5
       - name: Sync SDK package versions
@@ -84,6 +90,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           working-directory: secretspec-py
+          sccache: true
           args: --release --out ${{ github.workspace }}/wheelhouse
       - uses: actions/upload-artifact@v4
         with:
@@ -92,7 +99,7 @@ jobs:
 
   publish:
     name: publish to PyPI
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [linux, native]
     runs-on: ubuntu-latest
     environment: pypi

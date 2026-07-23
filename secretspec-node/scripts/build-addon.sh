@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Build the napi-rs addon (release) via `napi build` and place it as
-# secretspec.node next to index.js.
+# secretspec.node next to index.js. Extra arguments are forwarded to
+# `napi build` (e.g. `--features vendored-dbus` for the Linux release CI).
 set -euo pipefail
 
 pkg_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,7 +12,7 @@ napi_bin="$pkg_dir/node_modules/.bin/napi"
 # clobber the hand-maintained index.d.ts) out of pkg_dir entirely.
 tmp_out="$(mktemp -d)"
 trap 'rm -rf "$tmp_out"' EXIT
-( cd "$pkg_dir" && "$napi_bin" build --release --output-dir "$tmp_out" )
+( cd "$pkg_dir" && "$napi_bin" build --release --output-dir "$tmp_out" "$@" )
 
 # Install atomically: node --test runs test files in parallel processes that
 # may build concurrently, and overwriting in place SIGBUSes a process that has

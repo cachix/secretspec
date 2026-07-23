@@ -24,7 +24,7 @@ from secretspec import _native
 
 # Response wire-format version this SDK understands. Tracks secretspec-ffi's
 # RESOLVE_SCHEMA_VERSION; a mismatch means the loaded library is incompatible.
-_RESOLVE_SCHEMA_VERSION = 1
+_RESOLVE_SCHEMA_VERSION = 2
 
 # Wire-format version of the value-free report. Tracks secretspec's
 # RESOLUTION_REPORT_SCHEMA_VERSION.

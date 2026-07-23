@@ -1,13 +1,17 @@
 //! Core secrets management functionality
 
 use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
-use crate::config::{Config, GlobalConfig, NativeAddress, Profile, RequireReason, Resolved};
+use crate::config::{
+    Config, CredentialSource, GlobalConfig, NativeAddress, Profile, ProviderAlias, RequireReason,
+    Resolved,
+};
 use crate::error::{Result, SecretSpecError};
+use crate::manifest::{CompiledManifest, MissingPolicy};
 use crate::plan::{PlannedSecret, ResolutionPlan, Route};
-use crate::provider::{Address, Provider as ProviderTrait};
+use crate::provider::{Address, Provider as ProviderTrait, ProviderCredentials};
 use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
 use crate::resolve::{RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource};
-use crate::validation::{ValidatedSecrets, ValidationErrors};
+use crate::validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
 use colored::Colorize;
 use secrecy::{ExposeSecret, SecretString};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -16,6 +20,34 @@ use std::env;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
+
+/// Format the human-facing name and optional description used by status output.
+///
+/// The name carries the visual emphasis while the description is secondary.
+/// When no description is available, omit it entirely instead of printing a
+/// repetitive placeholder (and avoid leaving a dangling separator).
+fn format_secret_label(name: &str, description: Option<&str>) -> String {
+    match description {
+        Some(description) => format!(
+            "{} {} {}",
+            name.cyan().bold(),
+            "-".dimmed(),
+            description.dimmed()
+        ),
+        None => name.cyan().bold().to_string(),
+    }
+}
+
+/// Preserve the established missing-secret error for ordinary required fields,
+/// while retaining structured group diagnostics for cross-secret constraints.
+fn validation_failure(errors: ValidationErrors) -> SecretSpecError {
+    if errors.constraint_violations.is_empty() {
+        SecretSpecError::RequiredSecretMissing(errors.missing_required.join(", "))
+    } else {
+        SecretSpecError::ValidationFailed(Box::new(errors))
+    }
+}
 
 /// Emits a warning when a provider in a fallback chain fails so the user
 /// can see why a particular link was skipped, without aborting the chain.
@@ -35,6 +67,137 @@ fn warn_provider_failure(display_uri: &str, secret_name: &str, err: &SecretSpecE
         secret_name.bold(),
         err
     );
+}
+
+/// The error for a declared provider credential that could not be found in its
+/// source provider. Names the credential, the provider needing it, the exact
+/// location searched, and how to fix it.
+fn credential_missing_error(name: &str, alias_spec: &str, location: &str) -> SecretSpecError {
+    SecretSpecError::ProviderOperationFailed(format!(
+        "credential '{name}' for provider '{alias_spec}' was not found in {location}; \
+         store it there with `secretspec config provider login {alias_spec}`"
+    ))
+}
+
+/// An alias's credential entries sorted by semantic name. The one
+/// ordering rule, so fetch order, validation-error order, and the login prompt
+/// order all agree.
+fn sorted_credential_entries(
+    credentials: &HashMap<String, CredentialSource>,
+) -> Vec<(&String, &CredentialSource)> {
+    let mut entries: Vec<(&String, &CredentialSource)> = credentials.iter().collect();
+    entries.sort_by_key(|(name, _)| name.as_str());
+    entries
+}
+
+/// Convention-path profile segment for provider credentials. A provider's
+/// authentication (an access token, an AppRole id) is a property of the alias,
+/// not of any one profile, so a convention-path credential is stored under one
+/// fixed segment rather than the active profile. Scoping it by profile would
+/// make a credential stored via `config provider login` (which runs under the
+/// session profile) invisible when the provider is later used under a different
+/// profile, hard-erroring with "credential not found".
+const PROVIDER_CREDENTIAL_SCOPE: &str = "_provider";
+
+impl CredentialSource {
+    /// Credential-free provider text for prompts and diagnostics.
+    pub(crate) fn display_provider(&self) -> String {
+        crate::audit::redact_uri_strict(&self.provider)
+    }
+
+    /// The store location this source reads and writes: the pinned `ref`, or
+    /// the profile-independent convention path for the active project. The
+    /// single derivation both [`Secrets::resolve_provider_credentials`] (read)
+    /// and [`Secrets::store_provider_credential`] (write) use, so
+    /// login-then-resolve round-trips regardless of the profile either runs
+    /// under.
+    fn address<'a>(&'a self, project: &'a str, name: &'a str) -> Address<'a> {
+        match &self.reference {
+            Some(reference) => Address::Native(reference),
+            None => Address::convention(project, PROVIDER_CREDENTIAL_SCOPE, name),
+        }
+    }
+
+    /// Human-readable `<provider> at <location>` for prompts and errors,
+    /// describing exactly what [`Self::address`] resolves to. The source spec
+    /// is redacted: a URI-form source may embed an inline credential
+    /// (`onepassword+token://tok@Vault`), and this string reaches stderr and
+    /// the `config provider login` output.
+    fn location(&self, project: &str, name: &str) -> String {
+        let provider = self.display_provider();
+        match &self.reference {
+            Some(reference) => format!("{provider} at {}", reference.render()),
+            None => format!("{provider} at {project}/{PROVIDER_CREDENTIAL_SCOPE}/{name}"),
+        }
+    }
+}
+
+type ProviderCredentialsKey = (String, String);
+type ProviderCredentialsSlot = Arc<Mutex<Option<ProviderCredentials>>>;
+type GroupFetch<'a> = (
+    Option<&'a str>,
+    Vec<&'a PlannedSecret>,
+    Box<dyn ProviderTrait>,
+);
+
+/// Memoized provider credentials with single-flight population per key.
+///
+/// The outer mutex protects only the key-to-slot map. Resolution runs while
+/// holding the selected slot, so callers for the same alias/profile wait for
+/// its first fetch while unrelated keys can populate concurrently.
+#[derive(Default)]
+struct ProviderCredentialsCache {
+    entries: Mutex<HashMap<ProviderCredentialsKey, ProviderCredentialsSlot>>,
+}
+
+impl ProviderCredentialsCache {
+    fn get_or_try_init<F>(
+        &self,
+        key: ProviderCredentialsKey,
+        resolve: F,
+    ) -> Result<ProviderCredentials>
+    where
+        F: FnOnce() -> Result<ProviderCredentials>,
+    {
+        let slot = {
+            let mut entries = self.entries.lock().unwrap();
+            Arc::clone(
+                entries
+                    .entry(key.clone())
+                    .or_insert_with(|| Arc::new(Mutex::new(None))),
+            )
+        };
+
+        let mut cached = slot.lock().unwrap();
+        if let Some(credentials) = cached.as_ref() {
+            return Ok(credentials.clone());
+        }
+
+        match resolve() {
+            Ok(credentials) => {
+                *cached = Some(credentials.clone());
+                Ok(credentials)
+            }
+            Err(err) => {
+                // Do not memoize failures: a later operation may succeed after
+                // credentials or provider availability change.
+                drop(cached);
+                let mut entries = self.entries.lock().unwrap();
+                if entries
+                    .get(&key)
+                    .is_some_and(|current| Arc::ptr_eq(current, &slot))
+                {
+                    entries.remove(&key);
+                }
+                Err(err)
+            }
+        }
+    }
+
+    #[cfg(any(feature = "cli", test))]
+    fn clear(&self) {
+        self.entries.lock().unwrap().clear();
+    }
 }
 
 /// Emits a warning when the primary provider for a batch fetch fails (either
@@ -113,6 +276,9 @@ fn find_config_file_from(start: PathBuf) -> Result<PathBuf> {
 pub struct Secrets {
     /// The project-specific configuration
     config: Config,
+    /// Effective profile semantics compiled once from `config` and shared by
+    /// planning, runtime resolution, and inventory surfaces.
+    pub(crate) manifest: CompiledManifest,
     /// Directory containing the loaded `secretspec.toml`. Relative filesystem
     /// paths held by file-backed providers (e.g. `dotenv`) are resolved against
     /// this rather than the process's current working directory, so running
@@ -134,6 +300,14 @@ pub struct Secrets {
     /// Audit logger, if auditing is enabled (user-global `[audit]` config). `None`
     /// disables auditing. Built once per `Secrets` so all events share a session id.
     audit: Option<AuditLogger>,
+    /// Provider credentials memoized per (profile, raw provider spec), so N
+    /// secrets routed at one alias fetch its credentials from the source provider
+    /// once per session, not once per provider build. The stored *values* are
+    /// profile-independent (see `PROVIDER_CREDENTIAL_SCOPE`); the profile is kept
+    /// in the key only so each profile's operations audit their own credential
+    /// read. Cleared by [`Secrets::store_provider_credential`] so a freshly
+    /// stored credential is re-read.
+    provider_credentials_cache: ProviderCredentialsCache,
 }
 
 /// secretspec's own opt-in for marking the current process as an agent. Lets any
@@ -164,6 +338,28 @@ where
     vars.into_iter()
         .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
         .collect()
+}
+
+/// The child-process environment for `run`: the parent environment plus the
+/// resolved secrets.
+///
+/// Kept as `OsString` end to end and captured with `vars_os` (never `vars`,
+/// whose iterator panics on non-UTF-8 entries — env vars are arbitrary bytes on
+/// Unix). Unlike agent detection ([`utf8_env`]), which may safely *drop*
+/// non-UTF-8 entries, `run` must stay transparent: the child inherits every
+/// parent variable untouched, UTF-8 or not. Secrets overwrite same-named vars.
+fn child_env_from<I, S>(
+    vars: I,
+    secrets: S,
+) -> std::collections::HashMap<std::ffi::OsString, std::ffi::OsString>
+where
+    I: IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    S: IntoIterator<Item = (String, String)>,
+{
+    let mut env: std::collections::HashMap<std::ffi::OsString, std::ffi::OsString> =
+        vars.into_iter().collect();
+    env.extend(secrets.into_iter().map(|(k, v)| (k.into(), v.into())));
+    env
 }
 
 /// The id of the detected coding agent (e.g. `"claude-code"`), or `None`.
@@ -208,6 +404,17 @@ fn policy_requires_reason(mode: RequireReason, is_agent: bool) -> bool {
 /// changes, mirroring how `SECRETSPEC_PROVIDER`/`SECRETSPEC_PROFILE` are honored.
 const REASON_ENV: &str = "SECRETSPEC_REASON";
 
+/// Trims `value` and returns it owned when non-empty, or `None` when the input
+/// is blank (empty or whitespace-only). The single choke point for the "blank
+/// means unset" rule: a stray empty `--provider`/`--profile`, a whitespace-only
+/// override, or a padded env var (a trailing newline from `$(cat file)` is the
+/// common CI case) neither shadows the configured fallback chain nor is stored
+/// verbatim — the value that survives is always trimmed.
+pub(crate) fn non_blank(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 /// Normalizes a session reason: trims surrounding whitespace and treats a blank
 /// result as "no reason given". Applied to every reason source so the policy gate
 /// and the audit log agree on what counts as a real reason (a blank `--reason ""`
@@ -216,8 +423,7 @@ const REASON_ENV: &str = "SECRETSPEC_REASON";
 /// Shared with providers (e.g. Proton Pass) so the gate and the audit reason agree
 /// on what counts as a real reason.
 pub(crate) fn normalize_reason(reason: &str) -> Option<String> {
-    let trimmed = reason.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
+    non_blank(reason)
 }
 
 /// Resolves the session reason from the `SECRETSPEC_REASON` environment variable,
@@ -271,8 +477,10 @@ impl Secrets {
         provider: Option<String>,
         profile: Option<String>,
     ) -> Self {
+        let manifest = CompiledManifest::compile(&config);
         Self {
             config,
+            manifest,
             config_dir: PathBuf::from("."),
             global_config,
             provider,
@@ -280,6 +488,7 @@ impl Secrets {
             reason: None,
             require_reason: RequireReason::Never,
             audit: None,
+            provider_credentials_cache: ProviderCredentialsCache::default(),
         }
     }
 
@@ -324,8 +533,10 @@ impl Secrets {
         let project_config = Config::try_from(path)?;
         // Semantic validation (required vs default, ref coordinate rules,
         // generate consistency) runs here so every CLI and SDK entry point
-        // enforces the same rules the config documents.
-        project_config.validate()?;
+        // enforces the same rules the config documents. The compiled manifest it
+        // produces is the one stored below, so the effective view is compiled
+        // exactly once per load.
+        let manifest = project_config.validate_and_compile()?;
         let global_config = GlobalConfig::load()?;
         // Auditing is a per-machine concern configured in the user-global config
         // (`[audit]` in ~/.config/secretspec/config.toml), not the project. It is
@@ -349,18 +560,26 @@ impl Secrets {
         Ok(Self {
             require_reason: project_config.project.require_reason.unwrap_or_default(),
             config: project_config,
+            manifest,
             config_dir,
             global_config,
             provider: None,
             profile: None,
             reason: env_reason(),
             audit,
+            provider_credentials_cache: ProviderCredentialsCache::default(),
         })
     }
 
     /// Sets the provider to use for secret operations
     ///
     /// This overrides the provider from global configuration.
+    /// Blank input (empty or whitespace-only) is ignored, so a blank
+    /// `--provider` or `SECRETSPEC_PROVIDER` cannot shadow the configured
+    /// fallback chain. CI templates and workflow `env:` maps routinely
+    /// materialize unset values as empty strings. A padded-but-nonblank value
+    /// is trimmed before it is stored, so a trailing newline from `$(cat file)`
+    /// does not select a nonexistent provider (see [`non_blank`]).
     ///
     /// # Arguments
     ///
@@ -376,12 +595,15 @@ impl Secrets {
     /// spec.check(false).unwrap();
     /// ```
     pub fn set_provider(&mut self, provider: impl Into<String>) {
-        self.provider = Some(provider.into());
+        if let Some(provider) = non_blank(&provider.into()) {
+            self.provider = Some(provider);
+        }
     }
 
     /// Sets the profile to use for secret operations
     ///
     /// This overrides the profile from global configuration.
+    /// Blank input is ignored, matching [`Secrets::set_provider`].
     ///
     /// # Arguments
     ///
@@ -397,7 +619,9 @@ impl Secrets {
     /// spec.check(false).unwrap();
     /// ```
     pub fn set_profile(&mut self, profile: impl Into<String>) {
-        self.profile = Some(profile.into());
+        if let Some(profile) = non_blank(&profile.into()) {
+            self.profile = Some(profile);
+        }
     }
 
     /// Sets a human-readable reason for this session's secret access.
@@ -455,18 +679,264 @@ impl Secrets {
     ///
     /// All provider construction in this module goes through here so that the
     /// reason set via [`Secrets::with_reason`] reaches every provider instance.
-    fn build_provider(&self, spec: String) -> Result<Box<dyn ProviderTrait>> {
+    ///
+    /// `profile` is the profile the caller resolved for the surrounding
+    /// operation (`None` falls back to the session profile): an alias's
+    /// convention-path credentials live at `{project}/{profile}/{credential}`,
+    /// so the provider must be built for the same profile its secrets are
+    /// addressed under.
+    fn build_provider(
+        &self,
+        spec: String,
+        profile: Option<&str>,
+    ) -> Result<Box<dyn ProviderTrait>> {
+        // When `spec` names an alias with a `credentials` map, resolve those
+        // values from their source providers and hand them to the built provider.
+        // Memoized per (profile, spec) so rebuilding a provider (per-secret chain walks,
+        // interactive prompting) does not refetch the same credentials from
+        // the source store, while a profile switch on this instance does not
+        // reuse the other profile's credentials.
+        let profile = self.resolve_profile_name(profile);
+        let key = (profile.clone(), spec.clone());
+        let credentials = self
+            .provider_credentials_cache
+            .get_or_try_init(key, || self.resolve_provider_credentials(&spec, &profile))?;
+        self.build_provider_with_credentials(&spec, credentials)
+    }
+
+    /// Builds a credential source provider without resolving credentials for it,
+    /// so credential-source chains are at most one hop and cannot recurse.
+    fn build_source_provider(&self, spec: &str) -> Result<Box<dyn ProviderTrait>> {
+        self.build_provider_with_credentials(spec, ProviderCredentials::new())
+    }
+
+    /// The shared construction body behind [`Self::build_provider`] and
+    /// [`Self::build_source_provider`]: alias expansion, error enrichment, and
+    /// the base-dir/reason hooks live only here, so the two paths cannot drift.
+    fn build_provider_with_credentials(
+        &self,
+        spec: &str,
+        credentials: ProviderCredentials,
+    ) -> Result<Box<dyn ProviderTrait>> {
         // Resolve provider aliases here, at the single construction chokepoint, so
         // every caller that hands us a user-supplied spec gets alias expansion for
         // free and no new entry point can forget it. Resolution is a no-op on an
         // already-resolved URI (a `scheme://...` string is never an alias key), so
         // callers that pass pre-resolved URIs (the per-secret chain) are unaffected.
-        let resolved = self.resolve_provider_spec(spec);
-        let mut provider = Box::<dyn ProviderTrait>::try_from(resolved.as_str())
+        let resolved = self.resolve_provider_spec(spec.to_string());
+        let mut provider = crate::provider::provider_from_spec(resolved.as_str(), credentials)
             .map_err(|err| self.explain_unknown_provider(err, &resolved))?;
         provider.with_base_dir(&self.config_dir);
         provider.set_reason(self.reason.clone());
         Ok(provider)
+    }
+
+    /// Resolves the credentials declared by a provider alias, fetching each
+    /// semantic `(name, source)` entry from its source provider.
+    ///
+    /// `profile` scopes the convention path a bare-string source reads from.
+    /// Returns an empty map for a spec that is not an alias, or an alias with
+    /// no credentials. A declared credential that cannot be found is a
+    /// hard error naming exactly how to fix it. Sources pass
+    /// [`Self::validate_credential_sources`] and are built without credentials, so a
+    /// chain is at most one hop and cannot recurse. Each source read is audited
+    /// with a `credential` marker, so the audit trail explains why the source
+    /// store was touched during an operation on the target provider.
+    pub(crate) fn resolve_provider_credentials(
+        &self,
+        spec: &str,
+        profile: &str,
+    ) -> Result<ProviderCredentials> {
+        let mut credentials = ProviderCredentials::new();
+        let Some(declared) = self
+            .lookup_provider_alias_entry(spec)
+            .map(|alias| &alias.credentials)
+            .filter(|credentials| !credentials.is_empty())
+        else {
+            return Ok(credentials);
+        };
+        self.validate_credential_sources(spec)?;
+
+        let project = self.config.project.name.clone();
+
+        // One provider per distinct source spec, so credentials sharing a source
+        // (e.g. AppRole role and secret ids from one vault) reuse the instance
+        // and whatever it caches, instead of authenticating once per variable.
+        let mut sources: HashMap<String, Box<dyn ProviderTrait>> = HashMap::new();
+
+        for (name, source) in sorted_credential_entries(declared) {
+            let source_provider = match sources.entry(source.provider.clone()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(self.build_source_provider(&source.provider)?)
+                }
+            };
+            let fetched = source_provider.get(source.address(&project, name));
+            // Audit the source read (design: every secret access is recorded).
+            // The key is the semantic credential name and the event carries a
+            // `credential` marker plus the source provider's credential-free
+            // `uri()`, so the trail explains why this store was touched.
+            let (outcome, error_kind) = match &fetched {
+                Ok(Some(_)) => (AuditOutcome::Found, None),
+                Ok(None) => (AuditOutcome::Missing, None),
+                Err(e) => (AuditOutcome::Error, Some(e.kind())),
+            };
+            self.record(
+                AuditAction::Get,
+                profile,
+                outcome,
+                AuditFields {
+                    key: Some(name),
+                    command: Some("credential"),
+                    provider_uri: Some(source_provider.uri()),
+                    reference: source.reference.as_ref(),
+                    error_kind,
+                    ..Default::default()
+                },
+            );
+            match fetched? {
+                Some(value) => {
+                    credentials.insert(name.clone(), value);
+                }
+                None => {
+                    return Err(credential_missing_error(
+                        name,
+                        spec,
+                        &source.location(&project, name),
+                    ));
+                }
+            }
+        }
+
+        Ok(credentials)
+    }
+
+    /// The credentials a provider alias declares, sorted by semantic name
+    /// name, for the `config provider login` flow. Validates every source before
+    /// returning any credentials. Errors if the alias is not defined; returns
+    /// an empty list for an alias with no `credentials`.
+    #[cfg(any(feature = "cli", test))]
+    pub(crate) fn declared_provider_credentials(
+        &self,
+        alias: &str,
+    ) -> Result<Vec<(String, CredentialSource)>> {
+        // Validate the complete map before returning any entry. The login CLI
+        // prompts and writes only after this method succeeds, so a later-sorted
+        // invalid source cannot leave earlier credentials partially stored.
+        self.validate_credential_sources(alias)?;
+        let entry = self
+            .lookup_provider_alias_entry(alias)
+            .ok_or_else(|| SecretSpecError::ProviderNotFound(alias.to_string()))?;
+        Ok(sorted_credential_entries(&entry.credentials)
+            .into_iter()
+            .map(|(name, source)| (name.clone(), source.clone()))
+            .collect())
+    }
+
+    /// Stores one provider credential at its source provider — the exact
+    /// location [`Self::resolve_provider_credentials`] later reads it from (a `ref`
+    /// or the profile-independent convention path for the active project). Errors
+    /// if the source provider is read-only. Returns a human-readable description
+    /// of where it was stored.
+    ///
+    /// Like every other write path, the write is gated by the `require_reason`
+    /// policy and audited (with a `credential` marker). A successful store also
+    /// clears the credential memo, so a credential rotated through this instance
+    /// is re-read instead of resolving to the stale cached value.
+    #[cfg(any(feature = "cli", test))]
+    pub(crate) fn store_provider_credential(
+        &self,
+        source: &CredentialSource,
+        name: &str,
+        value: &SecretString,
+    ) -> Result<String> {
+        self.ensure_reason_for(AuditAction::Set, Some(name))?;
+        let provider = self.build_source_provider(&source.provider)?;
+        // The store location is profile-independent (see `PROVIDER_CREDENTIAL_SCOPE`);
+        // the session profile is used only to attribute the audit event.
+        let profile = self.resolve_profile_name(None);
+        let project = self.config.project.name.clone();
+        let address = source.address(&project, name);
+        let result = provider
+            .check_writable(address)
+            .and_then(|()| provider.set(address, value));
+        self.audit_write_result(
+            &result,
+            name,
+            &profile,
+            Some(provider.uri()),
+            source.reference.as_ref(),
+            Some("credential"),
+        );
+        result?;
+        // The stored credential replaces whatever an earlier resolution
+        // memoized; drop the memo so the next build re-reads it.
+        self.provider_credentials_cache.clear();
+        Ok(source.location(&project, name))
+    }
+
+    /// Validates a spec's `credentials` (pure map lookups, no I/O): every name
+    /// must be accepted by the target provider, every source must resolve to a
+    /// known provider, and no source may itself declare credentials. Credential
+    /// chains are limited to one hop, which also makes cycles impossible.
+    /// Run at plan time to fail fast on a routed primary or override, and again
+    /// by [`Self::resolve_provider_credentials`], so every construction path —
+    /// fallback links and the default provider included — enforces the same
+    /// invariants instead of silently dropping a chained source's credentials.
+    pub(crate) fn validate_credential_sources(&self, spec: &str) -> Result<()> {
+        let Some(alias) = self.lookup_provider_alias_entry(spec) else {
+            return Ok(());
+        };
+        let resolved_target = self.resolve_provider_spec(spec.to_string());
+        let supported = crate::provider::credential_names_for_spec(&resolved_target);
+        let provider_name = crate::provider::provider_display_name_for_spec(&resolved_target);
+        for (name, source) in sorted_credential_entries(&alias.credentials) {
+            if !supported.contains(&name.as_str()) {
+                let supported_display = if supported.is_empty() {
+                    "none".to_string()
+                } else {
+                    supported.join(", ")
+                };
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "credential '{name}' is not supported by provider '{provider_name}' \
+                     for alias '{spec}' (supported credentials: {supported_display})"
+                )));
+            }
+            // Compose the underlying error into the message instead of
+            // replacing it: it carries the corrective guidance (the
+            // `1password` -> `onepassword` hint, the defined-aliases listing)
+            // that the other resolution paths give for the same mistakes.
+            let context = |err: SecretSpecError| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "credential source for '{name}' in provider alias '{spec}': {err}"
+                ))
+            };
+            let resolved = self
+                .resolve_one_provider(&source.provider)
+                .map_err(context)?;
+            // `resolve_one_provider` passes URI-form specs through untouched,
+            // so gate the resolved spec's scheme against the registry here:
+            // a typo'd scheme should fail at plan time, not surface later as
+            // a construction failure a fallback chain downgrades to a warning.
+            let known = crate::provider::spec_names_known_provider(&resolved).map_err(context)?;
+            if !known {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "credential source for '{name}' in provider alias '{spec}' names an unknown \
+                     provider '{}'",
+                    crate::audit::redact_uri_strict(&source.provider)
+                )));
+            }
+            if let Some(source_alias) = self.lookup_provider_alias_entry(&source.provider)
+                && !source_alias.credentials.is_empty()
+            {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "provider alias '{}' cannot be a credential source for '{spec}' because it \
+                     declares its own credentials; credential chains are limited to one hop",
+                    source.provider
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Enriches a provider-construction failure: when a bare token (no scheme
@@ -522,10 +992,12 @@ impl Secrets {
         }
     }
 
-    /// Audits the result of a single secret write (`set`/generate/prompt): a
-    /// `Written` event on success, an `Error` event (tagged with the error kind)
-    /// on failure. Centralizes the write-audit so every write path records the
-    /// same way and a new one cannot accidentally diverge or skip auditing.
+    /// Audits the result of a single secret or provider-credential write: a
+    /// `Written` event on success, an `Error` event (tagged with
+    /// the error kind) on failure. Centralizes the write-audit so every write
+    /// path records the same way and a new one cannot accidentally diverge or
+    /// skip auditing. `command` marks a special-purpose credential store;
+    /// `None` denotes a plain secret write.
     fn audit_write_result(
         &self,
         result: &Result<()>,
@@ -533,6 +1005,7 @@ impl Secrets {
         profile: &str,
         provider_uri: Option<String>,
         reference: Option<&NativeAddress>,
+        command: Option<&str>,
     ) {
         let (outcome, error_kind) = match result {
             Ok(()) => (AuditOutcome::Written, None),
@@ -544,6 +1017,7 @@ impl Secrets {
             outcome,
             AuditFields {
                 key: Some(key),
+                command,
                 provider_uri,
                 reference,
                 error_kind,
@@ -626,6 +1100,7 @@ impl Secrets {
 
     /// Get a reference to the project configuration. Used by `secretspec
     /// codegen` (which needs the manifest, not a provider) and by tests.
+    #[cfg(any(feature = "cli", test))]
     pub(crate) fn config(&self) -> &Config {
         &self.config
     }
@@ -670,7 +1145,12 @@ impl Secrets {
         profile
             .map(|p| p.to_string())
             .or_else(|| self.profile.clone())
-            .or_else(|| env::var("SECRETSPEC_PROFILE").ok())
+            .or_else(|| {
+                env::var("SECRETSPEC_PROFILE")
+                    .ok()
+                    .as_deref()
+                    .and_then(non_blank)
+            })
             .or_else(|| {
                 self.global_config
                     .as_ref()
@@ -694,140 +1174,72 @@ impl Secrets {
         })
     }
 
-    /// Resolves the full profile configuration, merging with default profile if needed
+    /// Validates that the profile exists and returns its effective secret names
+    /// in sorted order — the union of the profile's own and the `default`
+    /// profile's secrets, as the compiled manifest records them.
     ///
     /// # Arguments
     ///
     /// * `profile` - Optional profile name to resolve (if None, uses resolved profile name)
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// The resolved profile configuration
-    pub(crate) fn resolve_profile(&self, profile: Option<&str>) -> Result<Profile> {
+    /// Returns `InvalidProfile` when the named profile is not defined.
+    pub(crate) fn resolve_profile_secret_names(
+        &self,
+        profile: Option<&str>,
+    ) -> Result<Vec<String>> {
         let profile_name = profile
             .map(str::to_string)
             .unwrap_or_else(|| self.resolve_profile_name(None));
-        let mut profile_config = self.require_profile(&profile_name)?.clone();
-
-        // If not the default profile, also add secrets from default profile
-        if profile_name != "default"
-            && let Some(default_profile) = self.config.profiles.get("default").cloned()
-        {
-            profile_config.merge_with(default_profile);
-        }
-
-        Ok(profile_config)
+        self.require_profile(&profile_name)?;
+        let compiled = self
+            .manifest
+            .profile(&profile_name)
+            .expect("raw and compiled profile sets stay identical");
+        // `CompiledProfile.secrets` is a `BTreeMap`, so its keys are already
+        // sorted — no clone of the secret configs, which every caller discarded.
+        Ok(compiled.secrets.keys().cloned().collect())
     }
 
-    /// Resolves the configuration for a specific secret
-    ///
-    /// This method looks for the secret in the specified profile, falling back
-    /// to the default profile if not found. If the secret exists in both profiles,
-    /// fields are merged with the current profile taking precedence.
-    /// Profile defaults are also applied with lower precedence than explicit secret config.
-    ///
-    /// Precedence order (highest to lowest):
-    /// 1. Secret config in current profile
-    /// 2. Secret config in default profile
-    /// 3. Profile defaults from current profile
+    /// Returns the effective configuration for a specific secret, or `None` if
+    /// the profile does not carry it. The field-level merge with the `default`
+    /// profile and `[defaults]` already happened once during manifest
+    /// compilation ([`crate::config::Secret::resolved`]); this only reads it.
     ///
     /// # Arguments
     ///
     /// * `name` - The name of the secret
     /// * `profile` - Optional profile to search in (if None, uses resolved profile)
-    ///
-    /// # Returns
-    ///
-    /// The secret configuration if found (may be merged from multiple profiles)
     pub(crate) fn resolve_secret_config(
         &self,
         name: &str,
         profile: Option<&str>,
     ) -> Option<crate::config::Secret> {
         let profile_name = self.resolve_profile_name(profile);
+        self.manifest
+            .profile(&profile_name)
+            .and_then(|profile| profile.secrets.get(name))
+            .map(|secret| secret.config.clone())
+    }
 
-        let current_profile = self.config.profiles.get(&profile_name);
-        let current_secret =
-            current_profile.and_then(|profile_config| profile_config.secrets.get(name));
-        let current_defaults =
-            current_profile.and_then(|profile_config| profile_config.defaults.as_ref());
-
-        let default_secret = if profile_name != "default" {
-            self.config
-                .profiles
-                .get("default")
-                .and_then(|default_profile| default_profile.secrets.get(name))
-        } else {
-            None
-        };
-
-        match (current_secret, default_secret) {
-            (Some(current), Some(default)) => {
-                // Merge: current profile takes precedence, then default profile, then profile defaults
-                Some(crate::config::Secret {
-                    description: current
-                        .description
-                        .clone()
-                        .or_else(|| default.description.clone()),
-                    required: current
-                        .required
-                        .or(default.required)
-                        .or(current_defaults.and_then(|d| d.required)),
-                    default: current
-                        .default
-                        .clone()
-                        .or_else(|| default.default.clone())
-                        .or_else(|| current_defaults.and_then(|d| d.default.clone())),
-                    providers: current
-                        .providers
-                        .clone()
-                        .or_else(|| default.providers.clone())
-                        .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
-                    reference: current
-                        .reference
-                        .clone()
-                        .or_else(|| default.reference.clone()),
-                    as_path: current.as_path.or(default.as_path),
-                    secret_type: current
-                        .secret_type
-                        .clone()
-                        .or_else(|| default.secret_type.clone()),
-                    generate: current
-                        .generate
-                        .clone()
-                        .or_else(|| default.generate.clone()),
-                })
-            }
-            (Some(secret), None) | (None, Some(secret)) => {
-                // Apply profile defaults to the found secret
-                Some(crate::config::Secret {
-                    description: secret.description.clone(),
-                    required: secret
-                        .required
-                        .or(current_defaults.and_then(|d| d.required)),
-                    default: secret
-                        .default
-                        .clone()
-                        .or_else(|| current_defaults.and_then(|d| d.default.clone())),
-                    providers: secret
-                        .providers
-                        .clone()
-                        .or_else(|| current_defaults.and_then(|d| d.providers.clone())),
-                    reference: secret.reference.clone(),
-                    as_path: secret.as_path,
-                    secret_type: secret.secret_type.clone(),
-                    generate: secret.generate.clone(),
-                })
-            }
-            (None, None) => None,
-        }
+    /// The effective (field-level merged) secrets of `profile_name` in
+    /// name-sorted order, read directly off the compiled manifest. This is the
+    /// view `check`/`run` list, matching what resolution acts on.
+    fn effective_secrets(&self, profile_name: &str) -> Vec<(String, crate::config::Secret)> {
+        self.manifest
+            .profile(profile_name)
+            .into_iter()
+            .flat_map(|profile| &profile.secrets)
+            .map(|(name, secret)| (name.clone(), secret.config.clone()))
+            .collect()
     }
 
     /// Provider-alias maps in lookup order: project `secretspec.toml` first,
     /// then user-global config. Project entries win on conflict so teams can
     /// pin shareable mappings in version control while still allowing per-user
     /// overrides via the global config.
-    fn provider_alias_sources(&self) -> impl Iterator<Item = &HashMap<String, String>> {
+    fn provider_alias_sources(&self) -> impl Iterator<Item = &HashMap<String, ProviderAlias>> {
         self.config.providers.iter().chain(
             self.global_config
                 .as_ref()
@@ -835,15 +1247,21 @@ impl Secrets {
         )
     }
 
+    /// Resolves a provider alias to its full entry (URI plus any provider
+    /// credentials), walking [`Self::provider_alias_sources`] in order. Project
+    /// entries win over user-global ones.
+    fn lookup_provider_alias_entry(&self, alias: &str) -> Option<&ProviderAlias> {
+        self.provider_alias_sources().find_map(|m| m.get(alias))
+    }
+
     /// Resolves a single provider alias to its URI, walking
     /// [`Self::provider_alias_sources`] in order.
     fn lookup_provider_alias(&self, alias: &str) -> Option<String> {
-        self.provider_alias_sources()
-            .find_map(|m| m.get(alias))
-            .cloned()
+        self.lookup_provider_alias_entry(alias)
+            .map(|alias| alias.uri.clone())
     }
 
-    fn resolve_provider_spec(&self, spec: String) -> String {
+    pub(crate) fn resolve_provider_spec(&self, spec: String) -> String {
         self.lookup_provider_alias(&spec).unwrap_or(spec)
     }
 
@@ -907,20 +1325,16 @@ impl Secrets {
     /// Used as the shared head of provider resolution so the precedence between
     /// the `--provider` flag (forwarded via `set_provider`) and the
     /// `SECRETSPEC_PROVIDER` env var stays consistent across resolvers.
-    fn explicit_provider_spec(&self, override_arg: Option<&str>) -> Option<String> {
+    pub(crate) fn explicit_provider_spec(&self, override_arg: Option<&str>) -> Option<String> {
         override_arg
             .map(|spec| spec.to_string())
             .or_else(|| self.provider.clone())
-            .or_else(|| env::var("SECRETSPEC_PROVIDER").ok())
-    }
-
-    /// Returns the explicit provider override resolved to a URI, if one is set.
-    ///
-    /// Resolves the explicit spec via [`Self::explicit_provider_spec`], then
-    /// expands any matching alias via [`Self::lookup_provider_alias`].
-    pub(crate) fn resolve_provider_override(&self, override_arg: Option<&str>) -> Option<String> {
-        let spec = self.explicit_provider_spec(override_arg)?;
-        Some(self.resolve_provider_spec(spec))
+            .or_else(|| {
+                env::var("SECRETSPEC_PROVIDER")
+                    .ok()
+                    .as_deref()
+                    .and_then(non_blank)
+            })
     }
 
     /// Fetches one provider group's secrets through the provider's batch
@@ -944,9 +1358,15 @@ impl Secrets {
     /// Builds the provider a write goes to for a resolved [`Route`]: the primary
     /// store, or the default provider when the route sets none. A write never
     /// consults the fallback, so an undefined alias further down the chain does
-    /// not affect it.
-    fn write_provider_for_route(&self, route: &Route) -> Result<Box<dyn ProviderTrait>> {
-        self.get_provider(route.primary())
+    /// not affect it. `profile` is the profile the write is addressed under.
+    fn write_provider_for_route(
+        &self,
+        route: &Route,
+        profile: Option<&str>,
+    ) -> Result<Box<dyn ProviderTrait>> {
+        // Build from the primary spec (not the resolved URI) so an alias's
+        // `credentials` is applied to the write target too.
+        self.get_provider(route.group_key(), profile)
     }
 
     /// Gets the provider instance to use for secret operations
@@ -961,6 +1381,9 @@ impl Secrets {
     /// # Arguments
     ///
     /// * `provider_arg` - Optional provider specification (name or URI)
+    /// * `profile` - The profile the operation is addressed under (`None`
+    ///   falls back to the session profile); scopes any provider credentials
+    ///   fetched during construction
     ///
     /// # Returns
     ///
@@ -974,20 +1397,29 @@ impl Secrets {
     pub(crate) fn get_provider(
         &self,
         provider_arg: Option<&str>,
+        profile: Option<&str>,
     ) -> Result<Box<dyn ProviderTrait>> {
-        let provider_spec = self
-            .explicit_provider_spec(provider_arg)
+        let provider_spec = self.default_provider_spec(provider_arg)?;
+
+        // Alias resolution happens inside `build_provider`.
+        let provider = self.build_provider(provider_spec, profile)?;
+
+        Ok(provider)
+    }
+
+    /// The raw provider spec [`Self::get_provider`] would build for
+    /// `provider_arg`: the explicit override, else the user-global default.
+    /// Split out so display paths can name the provider without constructing
+    /// it (construction fetches provider credentials, so a display-only build
+    /// could fail or do I/O).
+    fn default_provider_spec(&self, provider_arg: Option<&str>) -> Result<String> {
+        self.explicit_provider_spec(provider_arg)
             .or_else(|| {
                 self.global_config
                     .as_ref()
                     .and_then(|gc| gc.defaults.provider.clone())
             })
-            .ok_or(SecretSpecError::NoProviderConfigured)?;
-
-        // Alias resolution happens inside `build_provider`.
-        let provider = self.build_provider(provider_spec)?;
-
-        Ok(provider)
+            .ok_or(SecretSpecError::NoProviderConfigured)
     }
 
     /// Returns a provider URI for validation result metadata without forcing a
@@ -1003,6 +1435,7 @@ impl Secrets {
         &self,
         override_uri: Option<&str>,
         primary_uris: impl Iterator<Item = Option<&'a str>>,
+        profile: Option<&str>,
     ) -> Result<String> {
         if let Some(uri) = override_uri {
             return Ok(crate::audit::redact_uri_strict(uri));
@@ -1014,7 +1447,9 @@ impl Secrets {
         match provider_uris.and_then(|uris| uris.into_iter().min()) {
             Some(uri) => Ok(crate::audit::redact_uri_strict(uri)),
             // A secret on the default provider, or no secrets at all.
-            None => self.get_provider(None).map(|provider| provider.uri()),
+            None => self
+                .get_provider(None, profile)
+                .map(|provider| provider.uri()),
         }
     }
 
@@ -1039,6 +1474,8 @@ impl Secrets {
     ///   the same address is asked of every provider in the chain
     /// * `provider_specs` - Optional chain of provider specs (aliases or inline
     ///   URIs) to try in order, resolved lazily per entry
+    /// * `profile` - The profile the read is addressed under; scopes any
+    ///   provider credentials fetched when a chain link is built
     ///
     /// # Returns
     ///
@@ -1051,6 +1488,7 @@ impl Secrets {
         secret_name: &str,
         addr: Address<'_>,
         provider_specs: Option<&[String]>,
+        profile: Option<&str>,
     ) -> Result<(Option<SecretString>, Option<String>)> {
         // If a provider chain is supplied, try it in order.
         if let Some(specs) = provider_specs {
@@ -1075,7 +1513,9 @@ impl Secrets {
                         continue;
                     }
                 };
-                let provider = match self.build_provider(uri.clone()) {
+                // Build from the raw spec (not the resolved URI) so an alias's
+                // `credentials` is applied to this chain link too.
+                let provider = match self.build_provider(spec.clone(), profile) {
                     Ok(p) => p,
                     Err(e) => {
                         // Construction failed after resolution, so redact the
@@ -1118,7 +1558,7 @@ impl Secrets {
             }
         } else {
             // No per-secret providers, use default provider
-            let backend = self.get_provider(None)?;
+            let backend = self.get_provider(None, profile)?;
             let uri = backend.uri();
             backend.get(addr).map(|opt| (opt, Some(uri)))
         }
@@ -1173,8 +1613,7 @@ impl Secrets {
                 return Err(err);
             }
             Ok(None) => {
-                let profile = self.resolve_profile(Some(&profile_name))?;
-                let available_secrets = profile.sorted_secret_names();
+                let available_secrets = self.resolve_profile_secret_names(Some(&profile_name))?;
 
                 let err = SecretSpecError::SecretNotFound(format!(
                     "Secret '{}' is not defined in profile '{}'. Available secrets: {}",
@@ -1188,7 +1627,15 @@ impl Secrets {
             }
         };
 
-        let backend = match self.write_provider_for_route(&planned.route) {
+        // A composed secret plans no route: its value is derived, so a write
+        // has nowhere to go.
+        let Some(route) = &planned.route else {
+            let err = SecretSpecError::ComposedSecretReadOnly(name.to_string());
+            self.record_key_error(AuditAction::Set, &profile_name, name, None, None, &err);
+            return Err(err);
+        };
+
+        let backend = match self.write_provider_for_route(route, Some(&profile_name)) {
             Ok(backend) => backend,
             Err(err) => {
                 self.record_key_error(AuditAction::Set, &profile_name, name, None, None, &err);
@@ -1250,6 +1697,7 @@ impl Secrets {
             &profile_name,
             Some(backend.uri()),
             planned.reference(),
+            None,
         );
         result?;
 
@@ -1308,17 +1756,58 @@ impl Secrets {
                 return Err(err);
             }
         };
-        let default = planned.config.default.clone();
+        // A composed secret plans no route: resolve its dependency closure
+        // through the batch executor and print the rendered value.
+        let Some(route) = &planned.route else {
+            let names = self.composed_dependency_names(name, &profile_name);
+            let plan = self.build_plan_from_names(profile_name.clone(), names)?;
+            return match self.execute_plan(&plan, Materialize::Values)? {
+                Ok(mut validated) => {
+                    if !validated.resolved.secrets.contains_key(name) {
+                        let err = SecretSpecError::SecretNotFound(name.to_string());
+                        self.record_key_error(
+                            AuditAction::Get,
+                            &profile_name,
+                            name,
+                            None,
+                            None,
+                            &err,
+                        );
+                        return Err(err);
+                    }
+                    validated.keep_temp_files()?;
+                    let value = &validated.resolved.secrets[name];
+                    self.record(
+                        AuditAction::Get,
+                        &profile_name,
+                        AuditOutcome::Found,
+                        AuditFields {
+                            key: Some(name),
+                            ..Default::default()
+                        },
+                    );
+                    println!("{}", value.expose_secret());
+                    Ok(())
+                }
+                Err(errors) => {
+                    let err = validation_failure(errors);
+                    self.record_key_error(AuditAction::Get, &profile_name, name, None, None, &err);
+                    Err(err)
+                }
+            };
+        };
+        let default = planned.config().default.clone();
         let as_path = planned.as_path();
 
         // Walk the route's chain in order; each entry is resolved lazily and a
         // broken link is skipped with a warning, so an undefined alias never
         // blocks a provider elsewhere in the chain from answering.
-        let read_specs = planned.route.specs();
+        let read_specs = route.specs();
         let result = self.get_secret_from_providers(
             name,
             planned.as_address(&self.config.project.name, &profile_name),
             read_specs.as_deref(),
+            Some(&profile_name),
         );
 
         // Audit the access at the provider boundary, before defaults are applied.
@@ -1450,14 +1939,25 @@ impl Secrets {
                 // If we're in interactive mode and have missing required secrets, prompt for them
                 if interactive && !validation_errors.missing_required.is_empty() {
                     if !io::stdin().is_terminal() {
-                        return Err(SecretSpecError::RequiredSecretMissing(
-                            validation_errors.missing_required.join(", "),
-                        ));
+                        return Err(validation_failure(validation_errors));
                     }
 
-                    let missing = &validation_errors.missing_required;
+                    let missing =
+                        self.promptable_missing_names(&validation_errors, &profile_display);
+                    if missing.is_empty() {
+                        return Err(validation_failure(validation_errors));
+                    }
                     let total = missing.len();
-                    let default_backend = self.get_provider(provider_arg.as_deref())?;
+                    // Name the provider without constructing it: this value is
+                    // display-only (each prompted write builds its own route's
+                    // provider below), and construction now fetches provider
+                    // credentials, so a display-only build could hard-error on
+                    // a credential-backed default alias no missing secret routes to.
+                    let default_backend_name = crate::provider::provider_display_name_for_spec(
+                        &self.resolve_provider_spec(
+                            self.default_provider_spec(provider_arg.as_deref())?,
+                        ),
+                    );
 
                     // List all missing secrets upfront
                     eprintln!(
@@ -1469,9 +1969,9 @@ impl Secrets {
                             "secrets are"
                         },
                         profile_display.bold(),
-                        default_backend.name().bold(),
+                        default_backend_name.bold(),
                     );
-                    for secret_name in missing {
+                    for secret_name in &missing {
                         let description = self
                             .resolve_secret_config(secret_name, Some(&profile_display))
                             .and_then(|c| c.description)
@@ -1503,7 +2003,13 @@ impl Secrets {
 
                             let value = prompt.prompt()?;
 
-                            let backend = self.write_provider_for_route(&planned.route)?;
+                            let backend = self.write_provider_for_route(
+                                planned
+                                    .route
+                                    .as_ref()
+                                    .expect("prompted names are provider-backed leaves"),
+                                Some(&profile_display),
+                            )?;
                             let set_result = backend.set(
                                 planned.as_address(&self.config.project.name, &profile_display),
                                 &SecretString::new(value.into()),
@@ -1514,6 +2020,7 @@ impl Secrets {
                                 &profile_display,
                                 Some(backend.uri()),
                                 planned.reference(),
+                                None,
                             );
                             set_result?;
                             eprintln!(
@@ -1533,15 +2040,11 @@ impl Secrets {
                     // operation, so do not emit another `Check` event.
                     match self.validate_audited(false, Materialize::Values)? {
                         Ok(valid_secrets) => Ok(valid_secrets),
-                        Err(still_errors) => Err(SecretSpecError::RequiredSecretMissing(
-                            still_errors.missing_required.join(", "),
-                        )),
+                        Err(still_errors) => Err(validation_failure(still_errors)),
                     }
                 } else {
                     // Not interactive or no missing required secrets
-                    Err(SecretSpecError::RequiredSecretMissing(
-                        validation_errors.missing_required.join(", "),
-                    ))
+                    Err(validation_failure(validation_errors))
                 }
             }
         }
@@ -1604,7 +2107,6 @@ impl Secrets {
 
     /// Display validation success results
     fn display_validation_success(&self, valid: &ValidatedSecrets) -> Result<()> {
-        let profile = self.resolve_profile(Some(&valid.resolved.profile))?;
         let mut found_count = 0;
         let mut optional_count = 0;
         let default_names = valid
@@ -1614,33 +2116,17 @@ impl Secrets {
             .collect::<HashSet<_>>();
         let missing_optional: HashSet<&String> = valid.missing_optional.iter().collect();
 
-        for (name, config) in profile.iter() {
+        for (name, config) in &self.effective_secrets(&valid.resolved.profile) {
+            let label = format_secret_label(name, config.description.as_deref());
             if missing_optional.contains(&name) {
                 optional_count += 1;
-                eprintln!(
-                    "{} {} - {} {}",
-                    "○".blue(),
-                    name,
-                    config.description.as_deref().unwrap_or("No description"),
-                    "(optional)".blue()
-                );
+                eprintln!("{} {} {}", "○".blue(), label, "(optional)".blue());
             } else if config.default.is_some() && default_names.contains(&name) {
                 found_count += 1;
-                eprintln!(
-                    "{} {} - {} {}",
-                    "○".yellow(),
-                    name,
-                    config.description.as_deref().unwrap_or("No description"),
-                    "(has default)".yellow()
-                );
+                eprintln!("{} {} {}", "○".yellow(), label, "(has default)".yellow());
             } else {
                 found_count += 1;
-                eprintln!(
-                    "{} {} - {}",
-                    "✓".green(),
-                    name,
-                    config.description.as_deref().unwrap_or("No description")
-                );
+                eprintln!("{} {}", "✓".green(), label);
             }
         }
 
@@ -1651,7 +2137,6 @@ impl Secrets {
 
     /// Display validation error results
     fn display_validation_errors(&self, errors: &ValidationErrors) -> Result<()> {
-        let profile = self.resolve_profile(Some(&errors.profile))?;
         let mut found_count = 0;
         let mut missing_count = 0;
         let mut optional_count = 0;
@@ -1661,42 +2146,20 @@ impl Secrets {
             .map(|(name, _)| name)
             .collect::<HashSet<_>>();
 
-        for (name, config) in &profile {
+        for (name, config) in &self.effective_secrets(&errors.profile) {
+            let label = format_secret_label(name, config.description.as_deref());
             if errors.missing_required.contains(name) {
                 missing_count += 1;
-                eprintln!(
-                    "{} {} - {} {}",
-                    "✗".red(),
-                    name,
-                    config.description.as_deref().unwrap_or("No description"),
-                    "(required)".red()
-                );
+                eprintln!("{} {} {}", "✗".red(), label, "(required)".red());
             } else if errors.missing_optional.contains(name) {
                 optional_count += 1;
-                eprintln!(
-                    "{} {} - {} {}",
-                    "○".blue(),
-                    name,
-                    config.description.as_deref().unwrap_or("No description"),
-                    "(optional)".blue()
-                );
+                eprintln!("{} {} {}", "○".blue(), label, "(optional)".blue());
             } else {
                 found_count += 1;
                 if default_names.contains(name) {
-                    eprintln!(
-                        "{} {} - {} {}",
-                        "○".yellow(),
-                        name,
-                        config.description.as_deref().unwrap_or("No description"),
-                        "(has default)".yellow()
-                    );
+                    eprintln!("{} {} {}", "○".yellow(), label, "(has default)".yellow());
                 } else {
-                    eprintln!(
-                        "{} {} - {}",
-                        "✓".green(),
-                        name,
-                        config.description.as_deref().unwrap_or("No description")
-                    );
+                    eprintln!("{} {}", "✓".green(), label);
                 }
             }
         }
@@ -1705,6 +2168,9 @@ impl Secrets {
             "\n{}",
             Self::format_summary(found_count, missing_count, optional_count)
         );
+        for violation in &errors.constraint_violations {
+            eprintln!("{} {}", "Constraint failed:".red().bold(), violation);
+        }
 
         Ok(())
     }
@@ -1780,7 +2246,8 @@ impl Secrets {
         let copy_result = (|| -> Result<()> {
             // Create the "from" provider and check availability. `build_provider`
             // expands a provider alias used as the import source.
-            let from_provider_instance = self.build_provider(from_provider.to_string())?;
+            let from_provider_instance =
+                self.build_provider(from_provider.to_string(), Some(&profile_display))?;
             source_uri = Some(from_provider_instance.uri());
 
             eprintln!(
@@ -1791,19 +2258,24 @@ impl Secrets {
 
             // Collect all secrets to import - from current profile and default profile
             // This ensures we can import secrets defined in default profile when using other profiles
-            let profile = self.resolve_profile(Some(&profile_display))?;
+            let import_names = self.resolve_profile_secret_names(Some(&profile_display))?;
 
             // Process each secret using proper profile resolution: the plan
             // supplies the same write route and address `set` executes. Sorted
             // names keep the per-secret summary lines in a stable order.
-            for name in profile.sorted_secret_names() {
-                read_names.push(name.clone());
+            for name in import_names {
                 let planned = self
                     .plan_secret(&name, &profile_display, None)?
                     .expect("Secret should exist since we're iterating over it");
-                let description = planned.config.description.as_deref();
+                // A composed secret has no stored value to copy.
+                let Some(route) = &planned.route else {
+                    continue;
+                };
+                read_names.push(name.clone());
+                let description = planned.config().description.as_deref();
+                let label = format_secret_label(&name, description);
 
-                let to_provider = self.write_provider_for_route(&planned.route)?;
+                let to_provider = self.write_provider_for_route(route, Some(&profile_display))?;
 
                 // The secret's address (native `ref` coordinates or convention
                 // naming) applies to both stores: naming is orthogonal to
@@ -1816,10 +2288,9 @@ impl Secrets {
                         match to_provider.get(addr)? {
                             Some(_) => {
                                 eprintln!(
-                                    "{} {} - {} {} (→ {})",
+                                    "{} {} {} (→ {})",
                                     "○".yellow(),
-                                    name,
-                                    description.unwrap_or("No description"),
+                                    label,
                                     "(already exists in target)".yellow(),
                                     to_provider.name().blue()
                                 );
@@ -1838,13 +2309,13 @@ impl Secrets {
                                     &profile_display,
                                     Some(to_provider.uri()),
                                     planned.reference(),
+                                    None,
                                 );
                                 set_result?;
                                 eprintln!(
-                                    "{} {} - {} (→ {})",
+                                    "{} {} (→ {})",
                                     "✓".green(),
-                                    name,
-                                    description.unwrap_or("No description"),
+                                    label,
                                     to_provider.name().blue()
                                 );
                                 imported += 1;
@@ -1857,10 +2328,9 @@ impl Secrets {
                         match to_provider.get(addr)? {
                             Some(_) => {
                                 eprintln!(
-                                    "{} {} - {} {} (→ {})",
+                                    "{} {} {} (→ {})",
                                     "○".blue(),
-                                    name,
-                                    description.unwrap_or("No description"),
+                                    label,
                                     "(already in target, not in source)".blue(),
                                     to_provider.name().blue()
                                 );
@@ -1868,10 +2338,9 @@ impl Secrets {
                             }
                             None => {
                                 eprintln!(
-                                    "{} {} - {} {}",
+                                    "{} {} {}",
                                     "✗".red(),
-                                    name,
-                                    description.unwrap_or("No description"),
+                                    label,
                                     "(not found in source)".red()
                                 );
                                 not_found += 1;
@@ -1945,17 +2414,6 @@ impl Secrets {
         Ok(())
     }
 
-    /// Whether an absent secret would be auto-generated on a full resolve: it
-    /// declares an enabled `generate` config. Lets the value-free pass report
-    /// that a missing secret *would* resolve via generation without minting and
-    /// storing it (the side effect [`Self::try_generate_secret`] performs). A
-    /// `generate`-enabled secret with no declared type still counts here; the
-    /// resulting "no type" error is raised only on the full pass that actually
-    /// generates, keeping the value-free preflight failure-free.
-    fn would_generate(secret_config: &crate::config::Secret) -> bool {
-        matches!(&secret_config.generate, Some(g) if g.is_enabled())
-    }
-
     /// Attempts to generate a secret if it has generation config.
     ///
     /// Returns `Ok(Some(value))` if generation succeeded,
@@ -1967,12 +2425,12 @@ impl Secrets {
         profile_name: &str,
     ) -> Result<Option<SecretString>> {
         let name = planned.name.as_str();
-        let gen_config = match &planned.config.generate {
+        let gen_config = match &planned.config().generate {
             Some(config) if config.is_enabled() => config,
             _ => return Ok(None),
         };
 
-        let secret_type = match &planned.config.secret_type {
+        let secret_type = match &planned.config().secret_type {
             Some(t) => t.as_str(),
             None => {
                 return Err(SecretSpecError::GenerationFailed(format!(
@@ -1987,7 +2445,13 @@ impl Secrets {
         // Store the generated value at the plan's address, through the plan's
         // write route: the same decisions every other write path executes.
         let addr = planned.as_address(&self.config.project.name, profile_name);
-        let backend = self.write_provider_for_route(&planned.route)?;
+        let backend = self.write_provider_for_route(
+            planned
+                .route
+                .as_ref()
+                .expect("a generating secret is provider-backed"),
+            Some(profile_name),
+        )?;
         // The provider states why a write is refused; wrapping it here would
         // only nest a second "Provider operation failed" prefix.
         backend.check_writable(addr)?;
@@ -2000,6 +2464,7 @@ impl Secrets {
             profile_name,
             Some(backend.uri()),
             planned.reference(),
+            None,
         );
         set_result?;
 
@@ -2172,6 +2637,8 @@ impl Secrets {
                         ResolvedSource::Generated
                     } else if entry.default_applied {
                         ResolvedSource::Default
+                    } else if entry.composed {
+                        ResolvedSource::Composed
                     } else {
                         ResolvedSource::Provider
                     };
@@ -2218,6 +2685,9 @@ impl Secrets {
                 })
             }
             Err(errors) => {
+                if !errors.constraint_violations.is_empty() {
+                    return Err(SecretSpecError::ValidationFailed(Box::new(errors)));
+                }
                 let mut missing_required = errors.missing_required.clone();
                 missing_required.sort();
                 let mut missing_optional = errors.missing_optional.clone();
@@ -2289,15 +2759,12 @@ impl Secrets {
         // The profile is resolved once; its sorted names serve both as the
         // audit keys and as the plan's input, so nothing is merged or sorted
         // twice.
-        let profile_result = self.resolve_profile(Some(&profile_name));
+        let names_result = self.resolve_profile_secret_names(Some(&profile_name));
         // Keys for the single read-audit event, computed before any planning
         // can fail (e.g. on an undefined alias) so a failed read is still
         // attributed to every secret it attempted; they stay empty only if the
         // profile itself fails to resolve.
-        let audit_keys: Vec<String> = profile_result
-            .as_ref()
-            .map(|profile| profile.sorted_secret_names())
-            .unwrap_or_default();
+        let audit_keys: Vec<String> = names_result.as_ref().ok().cloned().unwrap_or_default();
 
         // Decide the whole profile up front (pure, no I/O), then execute the
         // plan. Each step returns `Result`, so *any* error — an undefined
@@ -2305,10 +2772,9 @@ impl Secrets {
         // report-URI failure — is captured in `result` and recorded as the
         // single `Check` event below rather than escaping unaudited. `record`
         // is a no-op when auditing is off.
-        let result: Result<std::result::Result<ValidatedSecrets, ValidationErrors>> =
-            profile_result
-                .and_then(|_| self.build_plan_from_names(profile_name.clone(), audit_keys.clone()))
-                .and_then(|plan| self.execute_plan(&plan, materialize));
+        let result: Result<std::result::Result<ValidatedSecrets, ValidationErrors>> = names_result
+            .and_then(|_| self.build_plan_from_names(profile_name.clone(), audit_keys.clone()))
+            .and_then(|plan| self.execute_plan(&plan, materialize));
 
         // Record exactly one `Check` event for the whole batch when this is a
         // top-level read, regardless of how the resolution exited — so a failed
@@ -2335,6 +2801,79 @@ impl Secrets {
         result
     }
 
+    /// The target plus its transitive declared dependencies, sorted for a
+    /// deterministic, least-access `get` plan.
+    fn composed_dependency_names(&self, target: &str, profile_name: &str) -> Vec<String> {
+        fn visit(
+            name: &str,
+            profile: &crate::manifest::CompiledProfile,
+            names: &mut HashSet<String>,
+        ) {
+            if !names.insert(name.to_string()) {
+                return;
+            }
+            if let Some(template) = &profile.secrets[name].composition {
+                for dependency in template.dependencies() {
+                    visit(dependency, profile, names);
+                }
+            }
+        }
+
+        let profile = self
+            .manifest
+            .profile(profile_name)
+            .expect("profile is validated before dependency planning");
+        let mut names = HashSet::new();
+        visit(target, profile, &mut names);
+        let mut names: Vec<String> = names.into_iter().collect();
+        names.sort();
+        names
+    }
+
+    /// Replace missing derived nodes with the unresolved provider-backed leaves
+    /// a user can actually set. This also permits an optional leaf to be
+    /// prompted when a required composition depends on it.
+    fn promptable_missing_names(
+        &self,
+        errors: &ValidationErrors,
+        profile_name: &str,
+    ) -> Vec<String> {
+        let statuses: HashMap<&str, &ResolutionStatus> = errors
+            .resolution
+            .iter()
+            .map(|entry| (entry.name.as_str(), &entry.status))
+            .collect();
+        let profile = self
+            .manifest
+            .profile(profile_name)
+            .expect("profile is validated before prompting");
+
+        fn visit(
+            name: &str,
+            profile: &crate::manifest::CompiledProfile,
+            statuses: &HashMap<&str, &ResolutionStatus>,
+            promptable: &mut HashSet<String>,
+        ) {
+            let Some(template) = &profile.secrets[name].composition else {
+                promptable.insert(name.to_string());
+                return;
+            };
+            for dependency in template.dependencies() {
+                if statuses.get(dependency.as_str()).copied() != Some(&ResolutionStatus::Resolved) {
+                    visit(dependency, profile, statuses, promptable);
+                }
+            }
+        }
+
+        let mut promptable = HashSet::new();
+        for name in &errors.missing_required {
+            visit(name, profile, &statuses, &mut promptable);
+        }
+        let mut promptable: Vec<String> = promptable.into_iter().collect();
+        promptable.sort();
+        promptable
+    }
+
     /// Rejects a `ref` routed at exactly one store that cannot honor its
     /// coordinates. Run per primary-store group right after the provider is
     /// built and before any fetch is spawned, so the definite error surfaces up
@@ -2357,7 +2896,11 @@ impl Secrets {
         for planned in group {
             // Only the routes that consult exactly one store; a chain with a
             // fallback defers coordinate checking to per-store read time.
-            if planned.route.fallback_specs().is_some() {
+            // (Groups never contain a routeless composed secret.)
+            let Some(route) = &planned.route else {
+                continue;
+            };
+            if route.fallback_specs().is_some() {
                 continue;
             }
             if let Some(native) = planned.reference() {
@@ -2410,12 +2953,14 @@ impl Secrets {
         let mut fetched_values: HashMap<String, SecretString> = HashMap::new();
         let mut failed_primary_uris: HashMap<Option<&str>, SecretSpecError> = HashMap::new();
 
-        // Construction is cheap and stays on this thread; only the fetches run
-        // concurrently below.
-        let mut group_fetches: Vec<(Option<&str>, Vec<&PlannedSecret>, Box<dyn ProviderTrait>)> =
-            Vec::new();
+        // Construction stays on this thread: the up-front single-store `ref`
+        // check below must see every built provider before any store is
+        // contacted. Building a credential-backed alias's provider already fetches
+        // its provider credentials here (memoized per spec); only the group
+        // fetches run concurrently below.
+        let mut group_fetches: Vec<GroupFetch<'_>> = Vec::new();
         for (provider_uri, group) in plan.groups() {
-            match self.get_provider(provider_uri) {
+            match self.get_provider(provider_uri, Some(&plan.profile)) {
                 Ok(provider) => {
                     // Attribute primary hits to the provider's own credential-free
                     // `uri()`, never the raw configured alias (which may embed a
@@ -2445,18 +2990,25 @@ impl Secrets {
         // round-trip. One thread per group mirrors the per-item threading
         // providers already do inside `get_many`. A single group (the common
         // case) stays on this thread.
-        let fetch_group =
-            |(provider_uri, group, provider): (_, Vec<&PlannedSecret>, Box<dyn ProviderTrait>)| {
-                let result = Self::fetch_group(&*provider, &group, project, profile);
-                (provider_uri, result)
-            };
+        fn fetch_group<'a>(
+            (provider_uri, group, provider): GroupFetch<'a>,
+            project: &str,
+            profile: &str,
+        ) -> (Option<&'a str>, Result<HashMap<String, SecretString>>) {
+            let result = Secrets::fetch_group(&*provider, &group, project, profile);
+            (provider_uri, result)
+        }
+
         let fetch_results: Vec<(Option<&str>, Result<_>)> = if group_fetches.len() <= 1 {
-            group_fetches.into_iter().map(fetch_group).collect()
+            group_fetches
+                .into_iter()
+                .map(|group| fetch_group(group, project, profile))
+                .collect()
         } else {
             std::thread::scope(|scope| {
                 let handles: Vec<_> = group_fetches
                     .into_iter()
-                    .map(|group| scope.spawn(|| fetch_group(group)))
+                    .map(|group| scope.spawn(|| fetch_group(group, project, profile)))
                     .collect();
                 handles
                     .into_iter()
@@ -2482,10 +3034,17 @@ impl Secrets {
         // chain, generation, or default, and record a value-free provenance entry
         // for the resolution report.
         for planned in &plan.secrets {
+            // Composed secrets have no route; they render after this loop,
+            // once their dependencies are decided.
+            let Some(route) = &planned.route else {
+                continue;
+            };
             let name = &planned.name;
             let required = planned.required();
             let as_path = planned.as_path();
-            let primary_uri = planned.route.primary();
+            // The group key (primary spec), matching how `group_uris` and
+            // `failed_primary_uris` were keyed from `plan.groups()` above.
+            let primary_uri = route.group_key();
 
             let status;
             let mut source_provider = None;
@@ -2517,12 +3076,13 @@ impl Secrets {
                     // undefined alias is skipped with a warning so a working
                     // provider after it still answers. An override or the
                     // default store has no fallback.
-                    let (fallback_value, fallback_uri) = match planned.route.fallback_specs() {
+                    let (fallback_value, fallback_uri) = match route.fallback_specs() {
                         Some(fallback) => {
                             let resolved = self.get_secret_from_providers(
                                 name,
                                 planned.as_address(project, profile),
                                 Some(fallback),
+                                Some(profile),
                             )?;
                             // A primary that errored plus an exhausted fallback
                             // chain is not "missing": the authoritative provider
@@ -2559,44 +3119,55 @@ impl Secrets {
                             )?;
                         }
                         status = ResolutionStatus::Resolved;
-                    } else if Self::would_generate(&planned.config) {
-                        // The secret would be auto-generated. A full pass mints and
-                        // stores it (writing a temp file when `as_path`); a
-                        // value-free pass reports that it would resolve without
-                        // minting or storing anything.
-                        generated = true;
-                        if materialize == Materialize::Values {
-                            let generated_value = self
-                                .try_generate_secret(planned, profile)?
-                                .expect("would_generate implies a generated value");
-                            self.insert_resolved(
-                                &mut secrets,
-                                &mut temp_files,
-                                name.clone(),
-                                generated_value,
-                                as_path,
-                            )?;
-                        }
-                        status = ResolutionStatus::Resolved;
-                    } else if let Some(default_value) = &planned.config.default {
-                        default_applied = true;
-                        if materialize == Materialize::Values {
-                            self.insert_resolved(
-                                &mut secrets,
-                                &mut temp_files,
-                                name.clone(),
-                                SecretString::new(default_value.clone().into()),
-                                as_path,
-                            )?;
-                            with_defaults.push((name.clone(), default_value.clone()));
-                        }
-                        status = ResolutionStatus::Resolved;
-                    } else if required {
-                        missing_required.push(name.clone());
-                        status = ResolutionStatus::MissingRequired;
                     } else {
-                        missing_optional.push(name.clone());
-                        status = ResolutionStatus::MissingOptional;
+                        match planned.secret.missing {
+                            MissingPolicy::Generate => {
+                                // A full pass mints and stores; a value-free pass
+                                // reports that generation would resolve without
+                                // performing that side effect.
+                                generated = true;
+                                if materialize == Materialize::Values {
+                                    let generated_value = self
+                                        .try_generate_secret(planned, profile)?
+                                        .expect("compiled Generate policy has a generator");
+                                    self.insert_resolved(
+                                        &mut secrets,
+                                        &mut temp_files,
+                                        name.clone(),
+                                        generated_value,
+                                        as_path,
+                                    )?;
+                                }
+                                status = ResolutionStatus::Resolved;
+                            }
+                            MissingPolicy::UseDefault => {
+                                let default_value = planned
+                                    .config()
+                                    .default
+                                    .as_ref()
+                                    .expect("compiled UseDefault policy has a default");
+                                default_applied = true;
+                                if materialize == Materialize::Values {
+                                    self.insert_resolved(
+                                        &mut secrets,
+                                        &mut temp_files,
+                                        name.clone(),
+                                        SecretString::new(default_value.clone().into()),
+                                        as_path,
+                                    )?;
+                                    with_defaults.push((name.clone(), default_value.clone()));
+                                }
+                                status = ResolutionStatus::Resolved;
+                            }
+                            MissingPolicy::Error => {
+                                missing_required.push(name.clone());
+                                status = ResolutionStatus::MissingRequired;
+                            }
+                            MissingPolicy::Omit => {
+                                missing_optional.push(name.clone());
+                                status = ResolutionStatus::MissingOptional;
+                            }
+                        }
                     }
                 }
             }
@@ -2608,16 +3179,171 @@ impl Secrets {
                 source_provider,
                 default_applied,
                 generated,
+                composed: false,
                 as_path,
             });
         }
 
+        // Render composed secrets after every provider-backed secret has been
+        // decided, dependencies before dependents. Load-time graph validation
+        // guarantees acyclicity, so a depth-first post-order over the composed
+        // nodes is a topological order; rooting the walk at the plan's
+        // name-sorted secrets keeps the report order deterministic.
+        fn composition_order<'a>(
+            planned: &'a PlannedSecret,
+            composed: &HashMap<&str, &'a PlannedSecret>,
+            visited: &mut HashSet<&'a str>,
+            ordered: &mut Vec<&'a PlannedSecret>,
+        ) {
+            if !visited.insert(planned.name.as_str()) {
+                return;
+            }
+            let template = planned
+                .composition()
+                .expect("only composed nodes are ordered");
+            for dependency in template.dependencies() {
+                if let Some(dependency) = composed.get(dependency.as_str()) {
+                    composition_order(dependency, composed, visited, ordered);
+                }
+            }
+            ordered.push(planned);
+        }
+        let composed: HashMap<&str, &PlannedSecret> = plan
+            .secrets
+            .iter()
+            .filter(|secret| secret.is_composed())
+            .map(|secret| (secret.name.as_str(), secret))
+            .collect();
+        let mut ordered = Vec::with_capacity(composed.len());
+        let mut visited = HashSet::new();
+        for planned in plan.secrets.iter().filter(|secret| secret.is_composed()) {
+            composition_order(planned, &composed, &mut visited, &mut ordered);
+        }
+
+        if !ordered.is_empty() {
+            // Statuses of the already-decided secrets, extended as each
+            // composition renders so nested compositions see derived
+            // dependencies. Built only when the plan has composed secrets.
+            let mut statuses: HashMap<String, ResolutionStatus> = resolution
+                .iter()
+                .map(|entry| (entry.name.clone(), entry.status.clone()))
+                .collect();
+            for planned in ordered {
+                let template = planned
+                    .composition()
+                    .expect("only composed nodes are ordered");
+                let dependencies_resolved = template.dependencies().iter().all(|dependency| {
+                    statuses.get(dependency) == Some(&ResolutionStatus::Resolved)
+                });
+                let status = if dependencies_resolved {
+                    if materialize == Materialize::Values {
+                        let rendered = template
+                            .render(|dependency| {
+                                secrets.get(dependency).map(|value| value.expose_secret())
+                            })
+                            .map_err(SecretSpecError::CompositionFailed)?;
+                        self.insert_resolved(
+                            &mut secrets,
+                            &mut temp_files,
+                            planned.name.clone(),
+                            SecretString::new(rendered.into()),
+                            planned.as_path(),
+                        )?;
+                    }
+                    ResolutionStatus::Resolved
+                } else {
+                    match planned.secret.missing {
+                        MissingPolicy::Error => {
+                            missing_required.push(planned.name.clone());
+                            ResolutionStatus::MissingRequired
+                        }
+                        MissingPolicy::Omit => {
+                            missing_optional.push(planned.name.clone());
+                            ResolutionStatus::MissingOptional
+                        }
+                        MissingPolicy::Generate | MissingPolicy::UseDefault => {
+                            unreachable!("composed source conflicts are rejected at load time")
+                        }
+                    }
+                };
+
+                statuses.insert(planned.name.clone(), status.clone());
+                resolution.push(SecretResolution {
+                    name: planned.name.clone(),
+                    status,
+                    required: planned.required(),
+                    source_provider: None,
+                    default_applied: false,
+                    generated: false,
+                    composed: true,
+                    as_path: planned.as_path(),
+                });
+            }
+        }
+
+        // Composed secrets carry no route; the stores their leaves route to
+        // name the report, exactly as for ordinary secrets.
         let report_provider_uri = self.validation_report_provider_uri(
             plan.override_uri.as_deref(),
-            plan.secrets.iter().map(|s| s.route.primary()),
+            plan.secrets
+                .iter()
+                .filter_map(|secret| secret.route.as_ref())
+                .map(|route| route.primary()),
+            Some(&plan.profile),
         )?;
 
-        if !missing_required.is_empty() {
+        let resolved_names: HashSet<&str> = resolution
+            .iter()
+            .filter(|entry| entry.status == ResolutionStatus::Resolved)
+            .map(|entry| entry.name.as_str())
+            .collect();
+        let compiled_profile = self
+            .manifest
+            .profile(profile)
+            .expect("profile is validated before execution");
+        // `get` executes a deliberately partial plan for a composed secret and
+        // its dependencies. Profile constraints govern whole-profile
+        // validation (`check`, `run`, and SDK resolution), not that least-access
+        // read.
+        let constraints = (plan.secrets.len() == compiled_profile.secrets.len())
+            .then_some(&compiled_profile.constraints);
+        let mut constraint_violations = Vec::new();
+        if let Some(constraints) = constraints {
+            for group in &constraints.at_least_one {
+                let present: Vec<String> = group
+                    .members
+                    .iter()
+                    .filter(|name| resolved_names.contains(name.as_str()))
+                    .cloned()
+                    .collect();
+                if present.is_empty() {
+                    constraint_violations.push(ConstraintViolation {
+                        kind: ConstraintKind::AtLeastOne,
+                        group: group.name.clone(),
+                        secrets: group.members.clone(),
+                        present,
+                    });
+                }
+            }
+            for group in &constraints.exactly_one {
+                let present: Vec<String> = group
+                    .members
+                    .iter()
+                    .filter(|name| resolved_names.contains(name.as_str()))
+                    .cloned()
+                    .collect();
+                if present.len() != 1 {
+                    constraint_violations.push(ConstraintViolation {
+                        kind: ConstraintKind::ExactlyOne,
+                        group: group.name.clone(),
+                        secrets: group.members.clone(),
+                        present,
+                    });
+                }
+            }
+        }
+
+        if !missing_required.is_empty() || !constraint_violations.is_empty() {
             let mut errors = ValidationErrors::new(
                 missing_required,
                 missing_optional,
@@ -2626,6 +3352,7 @@ impl Secrets {
                 profile.to_string(),
             );
             errors.resolution = resolution;
+            errors.constraint_violations = constraint_violations;
             Ok(Err(errors))
         } else {
             Ok(Ok(ValidatedSecrets {
@@ -2710,10 +3437,14 @@ impl Secrets {
             }
         };
 
-        let mut env_vars = env::vars().collect::<HashMap<_, _>>();
-        for (key, secret) in &validation_result.resolved.secrets {
-            env_vars.insert(key.clone(), secret.expose_secret().to_string());
-        }
+        let env_vars = child_env_from(
+            env::vars_os(),
+            validation_result
+                .resolved
+                .secrets
+                .iter()
+                .map(|(key, secret)| (key.clone(), secret.expose_secret().to_string())),
+        );
 
         // Record which secrets were injected into which command (argv[0] only —
         // arguments may contain secrets). Keys are computed before the spawn but
@@ -2761,6 +3492,353 @@ impl Secrets {
         let status = child?.wait()?;
         Ok(status.code().unwrap_or(1))
     }
+
+    /// Resolves every secret for the active profile and emits them in `format`,
+    /// without executing a command. This is the non-interactive, scripting
+    /// counterpart to [`Secrets::run`]: it never prompts and errors when a
+    /// required secret is missing, so CI can gate on it.
+    ///
+    /// `as_path` secrets keep their backing temp files, like [`Secrets::check`],
+    /// so the emitted paths stay valid for whatever consumes the output.
+    ///
+    /// Output is written to `out` rather than directly to stdout, so an SDK/FFI
+    /// caller can capture the formatted bytes and a broken pipe surfaces as a
+    /// returned error (and is audited) instead of a panic. The CLI passes a
+    /// locked stdout handle.
+    pub fn export(&self, format: ExportFormat, out: &mut dyn io::Write) -> Result<()> {
+        self.ensure_reason_for(AuditAction::Export, None)?;
+        let profile = self.resolve_profile_name(None);
+
+        let mut validated = match self.ensure_secrets(None, None, false) {
+            Ok(v) => v,
+            Err(e) => {
+                self.record(
+                    AuditAction::Export,
+                    &profile,
+                    AuditOutcome::Error,
+                    AuditFields {
+                        error_kind: Some(e.kind()),
+                        ..Default::default()
+                    },
+                );
+                return Err(e);
+            }
+        };
+
+        // Persist as_path temp files *before* emitting, so a persistence failure
+        // aborts up front rather than after the paths have already been written
+        // out (a consumer captures stdout regardless of the exit code) and the
+        // temp files are then deleted on drop. The path strings already live in
+        // `resolved.secrets`, so keeping first does not change what is emitted.
+        if let Err(e) = validated.keep_temp_files() {
+            let err = SecretSpecError::Io(e);
+            self.record(
+                AuditAction::Export,
+                &validated.resolved.profile,
+                AuditOutcome::Error,
+                AuditFields {
+                    error_kind: Some(err.kind()),
+                    ..Default::default()
+                },
+            );
+            return Err(err);
+        }
+
+        // Deterministic key order regardless of HashMap iteration. Values are
+        // borrowed (not copied) out of the resolved map, so secret material is
+        // not duplicated into a second set of heap buffers.
+        let mut entries: Vec<(&str, &str)> = validated
+            .resolved
+            .secrets
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.expose_secret()))
+            .collect();
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        let keys: Vec<String> = if self.audit.is_some() {
+            entries.iter().map(|(key, _)| key.to_string()).collect()
+        } else {
+            Vec::new()
+        };
+
+        let result = write_export(format, &entries, out);
+        self.record(
+            AuditAction::Export,
+            &validated.resolved.profile,
+            if result.is_ok() {
+                AuditOutcome::Found
+            } else {
+                AuditOutcome::Error
+            },
+            AuditFields {
+                keys: &keys,
+                error_kind: result.as_ref().err().map(|e| e.kind()),
+                ..Default::default()
+            },
+        );
+        result?;
+
+        Ok(())
+    }
+}
+
+/// Output format for [`Secrets::export`]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+pub enum ExportFormat {
+    /// `export KEY='value'` lines for `eval "$(secretspec export)"`
+    #[default]
+    Shell,
+    /// `KEY=value` lines in dotenv syntax
+    Dotenv,
+    /// A single JSON object mapping each secret name to its value
+    Json,
+    /// GitHub/Forgejo Actions `$GITHUB_ENV` file plus `::add-mask::` on stdout
+    Gha,
+}
+
+/// Write entries (pre-sorted by key) to `out` in the given format. Writing to
+/// an injected sink (rather than `print!`) lets an SDK caller capture the bytes
+/// and turns a broken pipe into a returned error instead of a panic.
+fn write_export(
+    format: ExportFormat,
+    entries: &[(&str, &str)],
+    out: &mut dyn io::Write,
+) -> Result<()> {
+    match format {
+        ExportFormat::Shell => {
+            let mut buf = String::new();
+            for (key, value) in entries {
+                buf.push_str("export ");
+                buf.push_str(key);
+                buf.push('=');
+                buf.push_str(&shell_single_quote(value));
+                buf.push('\n');
+            }
+            out.write_all(buf.as_bytes()).map_err(SecretSpecError::Io)?;
+        }
+        ExportFormat::Dotenv => {
+            // entries are already sorted, so serialize them directly instead of
+            // rebuilding and re-sorting a map (which would also re-copy values).
+            let content = crate::provider::dotenv::serialize_dotenv_pairs(
+                entries.iter().map(|(key, value)| (*key, *value)),
+            );
+            out.write_all(content.as_bytes())
+                .map_err(SecretSpecError::Io)?;
+        }
+        ExportFormat::Json => {
+            let map: BTreeMap<&str, &str> = entries.iter().copied().collect();
+            let json = serde_json::to_string(&map)
+                .map_err(|e| SecretSpecError::Io(io::Error::other(e)))?;
+            out.write_all(json.as_bytes())
+                .and_then(|()| out.write_all(b"\n"))
+                .map_err(SecretSpecError::Io)?;
+        }
+        ExportFormat::Gha => write_gha(entries, out)?,
+    }
+
+    Ok(())
+}
+
+/// POSIX single-quote escaping so the value survives `eval` verbatim
+fn shell_single_quote(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('\'');
+    for ch in value.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// GitHub/Forgejo Actions writer that masks every value line on `out` and
+/// appends the assignments to `$GITHUB_ENV`. Multi-line values use the heredoc
+/// form so they survive. Errors when `$GITHUB_ENV` is unset.
+fn write_gha(entries: &[(&str, &str)], out: &mut dyn io::Write) -> Result<()> {
+    use std::io::Write;
+
+    let github_env = env::var("GITHUB_ENV").map_err(|_| {
+        SecretSpecError::Io(io::Error::new(
+            io::ErrorKind::NotFound,
+            "GITHUB_ENV is not set; `--format gha` only works inside a GitHub/Forgejo Actions runner",
+        ))
+    })?;
+
+    // Mask every value line so the runner scrubs accidental echoes. The data
+    // must be percent-encoded the way the runner expects, since it *unescapes*
+    // add-mask data before registering the mask; emitting the raw value would
+    // register a different string and leave the true secret unmasked.
+    let mut masks = String::new();
+    for (_, value) in entries {
+        for line in value.split('\n') {
+            if !line.is_empty() {
+                masks.push_str("::add-mask::");
+                masks.push_str(&gha_escape_data(line));
+                masks.push('\n');
+            }
+        }
+    }
+    out.write_all(masks.as_bytes())
+        .map_err(SecretSpecError::Io)?;
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&github_env)
+        .map_err(SecretSpecError::Io)?;
+
+    let mut block = String::new();
+    for (key, value) in entries {
+        if value.contains('\n') {
+            let delimiter = gha_heredoc_delimiter(value);
+            block.push_str(key);
+            block.push_str("<<");
+            block.push_str(&delimiter);
+            block.push('\n');
+            block.push_str(value);
+            block.push('\n');
+            block.push_str(&delimiter);
+            block.push('\n');
+        } else {
+            block.push_str(key);
+            block.push('=');
+            block.push_str(value);
+            block.push('\n');
+        }
+    }
+
+    // Record the length before appending so a partial write can be rolled back:
+    // a truncated heredoc opener with no closing delimiter would otherwise
+    // corrupt `$GITHUB_ENV` parsing for every later step in the job.
+    let start_len = file.metadata().map_err(SecretSpecError::Io)?.len();
+    if let Err(e) = file.write_all(block.as_bytes()) {
+        let _ = file.set_len(start_len);
+        return Err(SecretSpecError::Io(e));
+    }
+
+    Ok(())
+}
+
+/// Percent-encodes workflow-command data the way the Actions runner expects (it
+/// unescapes the data before registering the mask), so the masked string equals
+/// the real secret. Mirrors `@actions/core`'s `escapeData`. `%` is escaped first
+/// so an embedded `%25`/`%0D`/`%0A` in the value is not later read back as `%`,
+/// CR, or LF.
+fn gha_escape_data(value: &str) -> String {
+    value
+        .replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
+}
+
+/// A heredoc delimiter that does not collide with any line of `value`
+fn gha_heredoc_delimiter(value: &str) -> String {
+    loop {
+        let delimiter = format!("ghadelimiter_{}", uuid::Uuid::new_v4().simple());
+        if !value.lines().any(|line| line == delimiter) {
+            return delimiter;
+        }
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+
+    #[test]
+    fn secret_label_emphasizes_the_name_and_deemphasizes_the_description() {
+        assert_eq!(
+            format_secret_label("DATABASE_URL", Some("PostgreSQL connection string")),
+            format!(
+                "{} {} {}",
+                "DATABASE_URL".cyan().bold(),
+                "-".dimmed(),
+                "PostgreSQL connection string".dimmed()
+            )
+        );
+    }
+
+    #[test]
+    fn secret_label_omits_a_missing_description_without_a_placeholder() {
+        let label = format_secret_label("DATABASE_URL", None);
+
+        assert_eq!(label, "DATABASE_URL".cyan().bold().to_string());
+        assert!(!label.contains("No description"));
+        assert!(!label.contains('-'));
+    }
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+
+    /// A POSIX shell evaluating `export K=<quoted>` must read the variable back
+    /// as exactly the original value. This round-trip is the real contract that
+    /// `shell_single_quote` defends, across quotes, spaces, `$`, `"`, and empty.
+    #[cfg(unix)]
+    #[test]
+    fn shell_single_quote_round_trips_through_sh() {
+        let cases = ["abc'123", "a b c", "pa$$word", "he said \"hi\"", "", "'"];
+
+        for value in cases {
+            let script = format!("export K={}; printf '%s' \"$K\"", shell_single_quote(value));
+
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&script)
+                .output()
+                .expect("sh should be available in the test environment");
+
+            assert!(
+                output.status.success(),
+                "sh failed for {value:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+
+            let read_back = String::from_utf8(output.stdout).expect("sh stdout is utf-8");
+            assert_eq!(read_back, value, "round-trip mismatch for {value:?}");
+        }
+    }
+
+    fn rendered(format: ExportFormat, entries: &[(&str, &str)]) -> String {
+        let mut buf = Vec::new();
+        write_export(format, entries, &mut buf).expect("write_export should succeed");
+        String::from_utf8(buf).expect("export output is utf-8")
+    }
+
+    #[test]
+    fn shell_format_quotes_each_value() {
+        let out = rendered(ExportFormat::Shell, &[("A", "x y"), ("B", "a'b")]);
+        assert_eq!(out, "export A='x y'\nexport B='a'\\''b'\n");
+    }
+
+    #[test]
+    fn json_format_is_compact() {
+        let out = rendered(ExportFormat::Json, &[("A", "1"), ("B", "2")]);
+        assert_eq!(out, "{\"A\":\"1\",\"B\":\"2\"}\n");
+    }
+
+    #[test]
+    fn dotenv_format_double_quotes_and_escapes() {
+        let out = rendered(ExportFormat::Dotenv, &[("A", "pa$$"), ("B", "x")]);
+        assert_eq!(out, "A=\"pa\\$\\$\"\nB=\"x\"\n");
+    }
+
+    /// The runner unescapes add-mask data before registering it, so the data we
+    /// emit must be percent-encoded or the true value is left unmasked.
+    #[test]
+    fn gha_escape_data_encodes_percent_cr_and_lf() {
+        assert_eq!(gha_escape_data("plain"), "plain");
+        assert_eq!(gha_escape_data("a%b"), "a%25b");
+        assert_eq!(gha_escape_data("a\rb"), "a%0Db");
+        assert_eq!(gha_escape_data("a\nb"), "a%0Ab");
+        // `%` is escaped first, so a literal `%0A` is not decoded back to a newline.
+        assert_eq!(gha_escape_data("a%0Ab"), "a%250Ab");
+    }
 }
 
 #[cfg(test)]
@@ -2790,6 +3868,19 @@ mod policy_tests {
         assert_eq!(normalize_reason("\t\n"), None);
     }
 
+    #[test]
+    fn non_blank_trims_and_blanks_to_none() {
+        // A padded-but-nonblank override (e.g. a `$(cat file)` trailing newline)
+        // is trimmed, not used verbatim, so it cannot select a nonexistent
+        // profile/provider.
+        assert_eq!(non_blank("production\n"), Some("production".to_string()));
+        assert_eq!(non_blank("  keyring  "), Some("keyring".to_string()));
+        // Blank input (empty or whitespace-only) is dropped.
+        assert_eq!(non_blank(""), None);
+        assert_eq!(non_blank("   "), None);
+        assert_eq!(non_blank("\t\n"), None);
+    }
+
     /// A non-UTF-8 environment variable must not crash detection: the offending
     /// entry is dropped and the UTF-8 entries survive. This guards against the
     /// `std::env::vars()` panic in `detect-coding-agent`, which auditing (on by
@@ -2816,6 +3907,168 @@ mod policy_tests {
             Some("clean_value")
         );
         assert_eq!(env.len(), 1);
+    }
+
+    /// The `run` child environment must tolerate non-UTF-8 parent variables
+    /// (`env::vars()` would panic on them — see #140) AND pass them through to
+    /// the child untouched, unlike agent detection which drops them. Resolved
+    /// secrets are added on top and overwrite same-named parent variables.
+    #[cfg(unix)]
+    #[test]
+    fn child_env_passes_through_non_utf8_and_overlays_secrets() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let bad_val = OsString::from_vec(vec![0x64, 0x61, 0x63, 0xa3]); // "dac\xa3"
+        let vars = vec![
+            (OsString::from("CLEAN_KEY"), OsString::from("clean_value")),
+            (OsString::from("BAD"), bad_val.clone()),
+            (OsString::from("OVERRIDDEN"), OsString::from("parent_value")),
+        ];
+        let secrets = vec![
+            ("SECRET_KEY".to_string(), "secret_value".to_string()),
+            ("OVERRIDDEN".to_string(), "secret_wins".to_string()),
+        ];
+
+        let env = child_env_from(vars, secrets);
+
+        // Non-UTF-8 parent entry survives byte-for-byte instead of panicking.
+        assert_eq!(env.get(&OsString::from("BAD")), Some(&bad_val));
+        assert_eq!(
+            env.get(&OsString::from("CLEAN_KEY")),
+            Some(&OsString::from("clean_value"))
+        );
+        // Secrets are injected and win over same-named parent variables.
+        assert_eq!(
+            env.get(&OsString::from("SECRET_KEY")),
+            Some(&OsString::from("secret_value"))
+        );
+        assert_eq!(
+            env.get(&OsString::from("OVERRIDDEN")),
+            Some(&OsString::from("secret_wins"))
+        );
+        assert_eq!(env.len(), 4);
+    }
+}
+
+#[cfg(test)]
+mod provider_credentials_cache_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn concurrent_population_for_one_key_is_single_flight() {
+        const CALLERS: usize = 8;
+        let cache = Arc::new(ProviderCredentialsCache::default());
+        let start = Arc::new(Barrier::new(CALLERS));
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        let threads: Vec<_> = (0..CALLERS)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                let start = Arc::clone(&start);
+                let fetches = Arc::clone(&fetches);
+                thread::spawn(move || {
+                    start.wait();
+                    cache
+                        .get_or_try_init(("default".into(), "target".into()), || {
+                            fetches.fetch_add(1, Ordering::SeqCst);
+                            // Keep the first population in flight long enough for
+                            // every caller to contend on the same key.
+                            thread::sleep(Duration::from_millis(50));
+                            let mut credentials = ProviderCredentials::new();
+                            credentials.insert("token".into(), SecretString::new("value".into()));
+                            Ok(credentials)
+                        })
+                        .unwrap()
+                })
+            })
+            .collect();
+
+        for thread in threads {
+            let credentials = thread.join().unwrap();
+            assert_eq!(
+                credentials.get("token").map(|value| value.expose_secret()),
+                Some("value")
+            );
+        }
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[cfg(test)]
+mod provider_credential_scope_tests {
+    use super::*;
+    use crate::config::{CredentialSource, Profile, ProviderAlias, Secret};
+    use crate::tests::{resolve_test_config, scrub_resolution_env};
+    use tempfile::TempDir;
+
+    /// A provider's authentication credential belongs to the alias, not to any
+    /// one profile: `config provider login` stores under the session profile,
+    /// but the same credential must resolve when the provider is used under a
+    /// different profile. Before the fix the convention path embedded the active
+    /// profile, so a credential stored under `default` was invisible to
+    /// `production` and resolution hard-errored "credential not found".
+    #[test]
+    fn provider_credentials_resolve_under_any_profile() {
+        let _env = scrub_resolution_env();
+        let _cwd = crate::secrets::lock_cwd();
+        let _store = TempDir::new().unwrap();
+
+        // `access_token` is sourced from a writable, profile-namespacing store.
+        let providers = HashMap::from([(
+            "bws".to_string(),
+            ProviderAlias {
+                uri: "bws://proj".to_string(),
+                credentials: HashMap::from([(
+                    "access_token".to_string(),
+                    CredentialSource::from("memtest://"),
+                )]),
+            },
+        )]);
+
+        let mut config =
+            resolve_test_config(HashMap::from([("API_KEY".to_string(), Secret::default())]));
+        config.profiles.insert(
+            "production".to_string(),
+            Profile {
+                defaults: None,
+                secrets: HashMap::new(),
+            },
+        );
+        config.providers = Some(providers);
+
+        // `login` runs under the session/default profile.
+        let logged_in = Secrets::new(config.clone(), None, None, None);
+        let source = logged_in
+            .declared_provider_credentials("bws")
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("alias declares one credential")
+            .1;
+        logged_in
+            .store_provider_credential(
+                &source,
+                "access_token",
+                &SecretString::new("tok-123".into()),
+            )
+            .unwrap();
+
+        // Resolving the same alias under `production` must still find it.
+        let resolver = Secrets::new(config, None, None, Some("production".to_string()));
+        let resolved = resolver
+            .resolve_provider_credentials("bws", "production")
+            .expect("a stored provider credential must resolve under any profile");
+        assert_eq!(
+            resolved
+                .get("access_token")
+                .map(|value| value.expose_secret()),
+            Some("tok-123"),
+        );
     }
 }
 
@@ -2947,6 +4200,7 @@ mod report_provider_tests {
             .validation_report_provider_uri(
                 Some("vault+token:s3cr3t@host/db?token=abc"),
                 std::iter::empty(),
+                None,
             )
             .unwrap();
         assert_eq!(got, "vault+token:host/db");
@@ -2954,7 +4208,11 @@ mod report_provider_tests {
 
         // Per-secret alias branch: the first sorted primary URI is redacted too.
         let got = spec
-            .validation_report_provider_uri(None, [Some("vault://host?token=zzz")].into_iter())
+            .validation_report_provider_uri(
+                None,
+                [Some("vault://host?token=zzz")].into_iter(),
+                None,
+            )
             .unwrap();
         assert_eq!(got, "vault://host");
         assert!(!got.contains("zzz"));
@@ -3003,8 +4261,8 @@ mod reference_routing_tests {
         config: &Secret,
         override_arg: Option<&str>,
     ) -> Option<Vec<String>> {
-        let override_uri = spec.resolve_provider_override(override_arg);
-        spec.route_for(config, &override_uri).unwrap().specs()
+        let override_spec = spec.explicit_provider_spec(override_arg);
+        spec.route_for(config, &override_spec).unwrap().specs()
     }
 
     /// A `ref` supplies naming only: it never contributes to the read chain,
@@ -3056,14 +4314,14 @@ mod reference_routing_tests {
         let _env = crate::tests::scrub_resolution_env();
         let spec = spec_with_provider(None);
         let write_provider = |override_arg: Option<&str>| {
-            let override_uri = spec.resolve_provider_override(override_arg);
+            let override_spec = spec.explicit_provider_spec(override_arg);
             let route = spec
                 .route_for(
                     &ref_secret(Some(vec!["onepassword://Production"])),
-                    &override_uri,
+                    &override_spec,
                 )
                 .unwrap();
-            spec.write_provider_for_route(&route).unwrap()
+            spec.write_provider_for_route(&route, None).unwrap()
         };
 
         assert_eq!(write_provider(None).name(), "onepassword");
@@ -3079,7 +4337,7 @@ mod reference_routing_tests {
         let spec = Secrets::new(crate::tests::resolve_test_config(secrets), None, None, None);
         let plan = spec.build_plan(None).unwrap();
         for (primary, group) in plan.groups() {
-            let provider = spec.get_provider(primary).unwrap();
+            let provider = spec.get_provider(primary, None).unwrap();
             Secrets::check_single_store_ref_coords(&group, provider.as_ref())?;
         }
         Ok(())

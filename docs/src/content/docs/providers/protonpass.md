@@ -5,15 +5,52 @@ description: Proton Pass integration via the official pass-cli
 
 The Proton Pass provider integrates with [Proton Pass](https://proton.me/pass) for end-to-end encrypted cloud secret storage.
 
-## Prerequisites
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `protonpass` |
+| URI | `protonpass://[vault_name[/title-template]]` |
+| Access | Read and write |
+| Best for | End-to-end encrypted cloud storage through Proton Pass |
+| Authentication | A `pass-cli` login or personal access token |
+| Default storage | Note item `{project}/{profile}/{key}` in the `secretspec` vault |
+
+## Quick start
+
+```bash
+# Set a secret
+$ secretspec set DATABASE_URL --provider protonpass://Personal
+Enter value for DATABASE_URL: postgresql://localhost/mydb
+
+# Get a secret
+$ secretspec get DATABASE_URL --provider protonpass://Personal
+
+# Run with secrets
+$ secretspec run --provider protonpass://Personal -- npm start
+```
+
+## Setup
+
+### Prerequisites
 
 - Proton Pass CLI (`pass-cli`) - download from [proton.me/pass/download](https://proton.me/pass/download)
 - A Proton account, signed in via `pass-cli login`
 - A vault to store secrets in (e.g. `pass-cli vault create secretspec`)
 
+### Authentication
+
+For local use, sign in interactively:
+
+```bash
+$ pass-cli login
+```
+
+For CI, use a personal access token as shown in [CI/CD](#cicd).
+
 ## Configuration
 
-### URI Format
+### URI format
 
 ```
 protonpass://[vault_name[/title-template]]
@@ -22,7 +59,7 @@ protonpass://[vault_name[/title-template]]
 - `vault_name`: Target vault (defaults to `secretspec`)
 - `title-template`: Item title pattern supporting `{project}`, `{profile}`, `{key}` placeholders
 
-### Examples
+### URI examples
 
 ```bash
 # Default vault ("secretspec")
@@ -35,10 +72,25 @@ protonpass://Work
 protonpass://Work/{project}/{profile}/{key}
 ```
 
-## Secret References
+### Project configuration
 
-By default each secret maps to an item titled `{project}/{profile}/{key}`. A
-secret's [`ref`](/reference/configuration/#secret-references) field names an
+```toml title="secretspec.toml"
+[providers]
+team = "protonpass://Work"
+
+[profiles.production]
+DATABASE_URL = { description = "Database URL", providers = ["team"] }
+```
+
+## Storage model
+
+Secrets are stored as note items. The vault defaults to `secretspec`, and the
+item title defaults to `{project}/{profile}/{key}`. The URI can select another
+vault or replace the title template.
+
+## Use existing secrets
+
+A secret's [`ref`](/reference/configuration/#secret-references) field names an
 existing item instead: `item` is the exact item title, whose note is read
 (`field` is not supported). Reads and writes target that item in place.
 
@@ -47,26 +99,7 @@ existing item instead: `item` is the exact item title, whose note is read
 DATABASE_URL = { description = "DB", ref = { item = "Production Database" }, providers = ["protonpass://Work"] }
 ```
 
-## Usage
-
-```bash
-# Set a secret
-$ secretspec set DATABASE_URL --provider protonpass://Personal
-Enter value for DATABASE_URL: postgresql://localhost/mydb
-
-# Get a secret
-$ secretspec get DATABASE_URL --provider protonpass://Personal
-
-# Run with secrets
-$ secretspec run --provider protonpass://Personal -- npm start
-
-# Profile-specific vault
-$ secretspec set DATABASE_URL --profile prod --provider protonpass://Production
-```
-
-Secrets are stored as note items; the item title defaults to `{project}/{profile}/{key}`.
-
-### CI/CD with Personal Access Tokens
+## CI/CD
 
 ```bash
 # Create a token
@@ -76,6 +109,8 @@ $ pass-cli personal-access-token create --name ci --expiration 1y
 $ pass-cli login --pat $PROTON_PASS_PAT
 $ secretspec run -- deploy
 ```
+
+## Advanced configuration
 
 ### Agent sessions
 

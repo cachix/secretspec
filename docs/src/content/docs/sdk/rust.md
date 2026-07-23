@@ -31,7 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Access secrets (field names are lowercased)
     println!("Database: {}", secretspec.secrets.database_url);  // DATABASE_URL → database_url
 
-    // Optional secrets are Option<String>
+    // Secrets that may be absent are Option<String>. A manifest default makes
+    // the generated field String because successful resolution always supplies it.
     if let Some(redis) = &secretspec.secrets.redis_url {
         println!("Redis: {}", redis);
     }
@@ -73,10 +74,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("API Key: {}", api_key);
         }
         SecretsProfile::Development { database_url, api_key, .. } => {
-            // In development: these might be Option<String> if they have defaults
-            if let Some(db) = database_url {
-                println!("Database: {}", db);
-            }
+            // Defaulted fields are String: the default guarantees a value.
+            println!("Database: {}", database_url);
         }
         _ => {}
     }
@@ -84,6 +83,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+Profile-specific variants use the effective profile shape. They include common
+fields inherited from `[profiles.default]`, so the type exactly matches the map
+returned when that profile resolves.
 
 ## Secrets as File Paths
 

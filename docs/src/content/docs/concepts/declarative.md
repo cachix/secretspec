@@ -32,9 +32,10 @@ SECRET_NAME = {
 ```
 
 **Options:**
-- `description`: Explains the secret's purpose (required)
+- `description`: Explains the secret's purpose (required in the `default` profile; profile overrides inherit it when omitted)
 - `required`: Whether the secret must be provided (default: `true`)
 - `default`: Fallback value for optional secrets
+- `composed` (0.16+): Derive a read-only value from other declared secrets (see [Composed Secrets](/concepts/composed-secrets/) for the strict template and dependency semantics)
 - `type`: Secret type for auto-generation (`password`, `hex`, `base64`, `uuid`, `command`)
 - `generate`: Enable auto-generation when the secret is missing (`true` or a table with options)
 
@@ -42,6 +43,8 @@ SECRET_NAME = {
 
 - [Configuration Inheritance](/concepts/inheritance/) lets projects share common secret definitions via the `extends` field
 - [Secret Generation](/concepts/generation/) auto-creates passwords, tokens, and keys when secrets are missing
+- [Composed Secrets (0.16+)](/concepts/composed-secrets/) derive values from
+  other declared secrets without dotenv or shell expansion
 
 ## Best Practices
 

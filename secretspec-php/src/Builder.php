@@ -15,7 +15,7 @@ final class Builder
      * Response wire-format version this SDK understands. Tracks secretspec-ffi's
      * RESOLVE_SCHEMA_VERSION; a mismatch means the loaded library is incompatible.
      */
-    private const RESOLVE_SCHEMA_VERSION = 1;
+    private const RESOLVE_SCHEMA_VERSION = 2;
 
     /**
      * Wire-format version of the value-free report. Tracks secretspec's

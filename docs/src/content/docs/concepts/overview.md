@@ -34,3 +34,5 @@ Each concern is independent: you can change your storage backend without touchin
 
 - [Configuration Inheritance](/concepts/inheritance/) lets projects share common secret definitions via `extends`
 - [Secret Generation](/concepts/generation/) auto-creates passwords, tokens, and keys when secrets are missing
+- [Composed Secrets (0.16+)](/concepts/composed-secrets/) derive read-only
+  values from other declared secrets

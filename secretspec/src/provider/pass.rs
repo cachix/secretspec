@@ -40,9 +40,10 @@ impl TryFrom<&ProviderUrl> for PassConfig {
             )));
         }
 
-        let mut config = Self::default();
-
-        config.store_dir = url.query_value("store_dir");
+        let mut config = Self {
+            store_dir: url.query_value("store_dir"),
+            ..Self::default()
+        };
 
         if let Some(host) = url.host() {
             let path = url.path();

@@ -22,15 +22,21 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [OnePassword](https://secretspec.dev/providers/onepassword)
   - [LastPass](https://secretspec.dev/providers/lastpass)
   - [Pass](https://secretspec.dev/providers/pass)
+  - [Gopass](https://secretspec.dev/providers/gopass) (0.15+)
   - [Proton Pass](https://secretspec.dev/providers/protonpass)
   - [environment variables](https://secretspec.dev/providers/env)
   - [Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)
   - [AWS Secrets Manager](https://secretspec.dev/providers/awssm)
-  - [Vault/OpenBao](https://secretspec.dev/providers/vault)
+  - [Vault](https://secretspec.dev/providers/vault)
+  - [OpenBao](https://secretspec.dev/providers/openbao) (0.17+)
   - [Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)
+  - [Azure Key Vault](https://secretspec.dev/providers/akv)
+  - [Infisical](https://secretspec.dev/providers/infisical) (0.16+)
+  - [age](https://secretspec.dev/providers/age) (0.17+)
 - **[Type-Safe Rust SDK](https://secretspec.dev/sdk/rust/)**: Generate strongly-typed structs from your `secretspec.toml` for compile-time safety
 - **[Profile Support](https://secretspec.dev/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
 - **[Secret Generation](https://secretspec.dev/concepts/generation/)**: Auto-generate passwords, tokens, UUIDs, and more when secrets are missing — declarative "generate if absent"
+- **Composed Secrets (0.16+)**: Derive read-only values such as DSNs from declared secrets with strict, order-independent `${UPPERCASE_NAME}` references
 - **[Configuration Inheritance](https://secretspec.dev/concepts/inheritance/)**: Extend and override shared configurations using the `extends` feature
 - **[Audit Logging](https://secretspec.dev/concepts/audit/)**: Every secret access recorded locally (who, when, why, outcome) — on by default, secret values never logged
 - **[Discovery](https://secretspec.dev/reference/cli#init)**: `secretspec init` to discover secrets from existing `.env` files
@@ -55,12 +61,17 @@ $ secretspec config init
   dotenv: Traditional .env files
   env: Read-only environment variables
   pass: Unix password manager with GPG encryption
+  gopass: Gopass CLI password manager with GPG encryption (0.15+)
   protonpass: Proton Pass via official pass-cli
   lastpass: LastPass password manager
   gcsm: Google Cloud Secret Manager
   awssm: AWS Secrets Manager
-  vault: HashiCorp Vault / OpenBao secret management
+  vault: HashiCorp Vault secret management
+  openbao: OpenBao secret management (0.17+)
   bws: Bitwarden Secrets Manager
+  akv: Azure Key Vault
+  infisical: Infisical secret management (0.16+)
+  age: age-encrypted file (0.17+)
 ? Select your default profile:
 > development
   default
@@ -82,7 +93,7 @@ See the [Quick Start Guide](https://secretspec.dev/quick-start) for detailed ins
 ## Installation
 
 ```shell-session
-$ curl -sSL https://install.secretspec.dev | sh
+curl -sSL https://install.secretspec.dev | sh
 ```
 
 See the [installation guide](https://secretspec.dev/quick-start#installation) for more options including Nix and Devenv.
@@ -136,13 +147,18 @@ SecretSpec supports multiple storage backends for secrets:
 - **[.env files](https://secretspec.dev/providers/dotenv)** - Traditional dotenv files
 - **[Environment variables](https://secretspec.dev/providers/env)** - Read-only for CI/CD
 - **[Pass](https://secretspec.dev/providers/pass)** - Unix password manager with GPG encryption
+- **[Gopass](https://secretspec.dev/providers/gopass)** (0.15+) - GPG-based password manager with git-synced password store
 - **[Proton Pass](https://secretspec.dev/providers/protonpass)** - End-to-end encrypted via Proton's official pass-cli
 - **[OnePassword](https://secretspec.dev/providers/onepassword)** - Team secret management
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager
 - **[Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)** - GCP secret management
 - **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
-- **[Vault / OpenBao](https://secretspec.dev/providers/vault)** - HashiCorp Vault and OpenBao KV engine
+- **[Vault](https://secretspec.dev/providers/vault)** - HashiCorp Vault KV engine
+- **[OpenBao](https://secretspec.dev/providers/openbao)** (0.17+) - OpenBao KV integration; SecretSpec 0.16 accepts `openbao://` through the Vault provider
 - **[Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)** - Bitwarden Secrets Manager integration
+- **[Azure Key Vault](https://secretspec.dev/providers/akv)** - Azure secret management
+- **[Infisical](https://secretspec.dev/providers/infisical)** (0.16+) - Infisical secret management
+- **[age](https://secretspec.dev/providers/age)** (0.17+) - age-encrypted file
 
 ```bash
 $ secretspec run --provider keyring -- npm start
@@ -191,6 +207,7 @@ works identically with no per-language resolution logic:
 - [Node.js / TypeScript](https://secretspec.dev/sdk/nodejs) (napi-rs addon)
 - [Haskell](https://secretspec.dev/sdk/haskell) (build-time FFI link)
 - [PHP](https://secretspec.dev/sdk/php) (ext-php-rs extension, with an `ext-ffi` fallback)
+- [C# (0.16+)](https://secretspec.dev/sdk/csharp) (P/Invoke with native assets in the NuGet package)
 
 ```python
 from secretspec import SecretSpec
@@ -231,7 +248,7 @@ See the [full CLI reference](https://secretspec.dev/reference/cli) for all comma
 
 We welcome contributions! Areas where you can help:
 
-- **New provider backends** - See the [provider implementation guide](https://secretspec.dev/reference/adding-providers)
+- **New provider backends** - See the [provider implementation guide](https://secretspec.dev/development/adding-providers)
 - **Language SDKs** - Help us support more languages beyond Rust
 - **Package managers** - Get SecretSpec into your favorite package manager
 - **Documentation** - Improve guides and examples

@@ -16,6 +16,16 @@ Choose your preferred installation method:
 curl -sSL https://install.secretspec.dev | sh
 ```
 
+The static installer also installs `secretspec-update`. Run it to install the
+latest SecretSpec release:
+
+```bash
+secretspec-update
+```
+
+If you installed SecretSpec through Nix or another package manager, update it
+through that package manager instead.
+
 </TabItem>
 <TabItem label="Devenv.sh">
 
@@ -94,12 +104,17 @@ $ secretspec config init
   dotenv: Traditional .env files
   env: Read-only environment variables
   pass: Unix password manager with GPG encryption
+  gopass: Gopass CLI password manager with GPG encryption (0.15+)
   protonpass: Proton Pass via official pass-cli
   lastpass: LastPass password manager
   gcsm: Google Cloud Secret Manager
   awssm: AWS Secrets Manager
-  vault: HashiCorp Vault / OpenBao secret management
+  vault: HashiCorp Vault secret management
+  openbao: OpenBao secret management (0.17+)
   bws: Bitwarden Secrets Manager
+  akv: Azure Key Vault
+  infisical: Infisical secret management (0.16+)
+  age: age-encrypted file (0.17+)
 ? Select your default profile:
 > development
   default

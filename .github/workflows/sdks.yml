@@ -2,9 +2,11 @@ name: "SDKs"
 
 # Runs every language SDK's full test suite (unit + cross-language conformance +
 # the schema/quicktype codegen pipeline) against a freshly built cdylib, so the
-# Python/Go/Ruby/Node/Haskell/PHP bindings cannot silently rot.
+# Python/Go/Ruby/Node/Haskell/C#/PHP bindings cannot silently rot.
 
 on:
+  workflow_call:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [main]
@@ -16,6 +18,7 @@ jobs:
       - uses: actions/checkout@v5
       # The full workspace debug build (AWS/GCP/Bitwarden providers) plus the
       # Nix store overflows the ~14GB free on a hosted runner.
+      # /usr/share/dotnet is safe to purge: the C# suite uses devenv's dotnet.
       - name: Free up disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android \

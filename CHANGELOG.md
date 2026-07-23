@@ -8,13 +8,163 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- age provider (`age://`) for storing dotenv-style secret sets in an
+  age-encrypted file, with ASCII armor by default, team recipient rosters,
+  direct X25519 and SSH key support, native tagged recipients, and
+  non-interactive age plugins. Hybrid ML-KEM-768 + X25519 keys are recommended
+  for new setups to protect stored ciphertext against future quantum attacks.
+- The `required` field accepts `at_least_one` and `exactly_one` group tables,
+  supporting overlapping alternative and mutually exclusive credentials
+  across `check`, `run`, and SDK resolution.
+- OpenBao provider (`openbao://`, `openbao` build feature) with its
+  own provider identity, documentation, and OpenBao CLI configuration through
+  `BAO_ADDR`, `BAO_NAMESPACE`, `BAO_TOKEN`, and `BAO_TOKEN_PATH`. The
+  provider also has OpenBao-prefixed AppRole and JWT inputs; corresponding
+  `VAULT_*` names remain compatibility fallbacks. Compatible KV and standard
+  authentication mechanics are shared internally with the Vault provider.
+  Vault-compatible addresses accept trailing slashes, and AppRole/JWT login
+  exchanges now honor the configured namespace. Reported provider URIs strip
+  endpoint credentials while retaining non-secret store and authentication
+  attribution.
+- Vault / OpenBao JWT/OIDC authentication (`?auth=jwt`) logs in through a
+  configured Vault role using `VAULT_JWT`, or requests a short-lived OIDC token
+  automatically in GitHub Actions and Forgejo Actions jobs with `id-token:
+  write`. The role and optional audience can be set in the provider URI or with
+  `VAULT_JWT_ROLE` and `VAULT_JWT_AUDIENCE`.
+- The Python SDK now publishes a Windows x64 wheel to PyPI, so
+  `pip install secretspec` and `uv add secretspec` work on Windows.
+  ([#177](https://github.com/cachix/secretspec/issues/177))
+- The Ruby SDK now publishes a Windows gem (`x64-mingw-ucrt`) to RubyGems, so
+  `gem install secretspec` works with RubyInstaller on Windows.
+- The PHP SDK now publishes prebuilt Windows x64 extension binaries
+  (`secretspec-php-native-<php>-nts-x86_64-pc-windows-msvc.dll`) alongside the
+  Linux and macOS builds on each release.
+
+### Changed
+- Secret status output now emphasizes secret names, de-emphasizes descriptions,
+  and omits placeholder text when a description is unavailable, making long
+  `check` and `import` results easier to scan.
+  ([#139](https://github.com/cachix/secretspec/issues/139))
+
+### Fixed
+- The dotenv provider rejects variable names its parser cannot read back
+  (anything outside `[A-Za-z_][A-Za-z0-9_.]*`, for example a `ref` item
+  containing a dash) instead of writing a line that made every later read and
+  write of the whole file fail to parse. The rejection happens before the CLI
+  prompts for a value and names the offending item.
+
+## [0.16.0] - 2026-07-17
+
+### Added
+- Composed secrets derive read-only values such as connection strings from
+  other declared secrets using strict `${UPPERCASE_NAME}` templates; names must
+  match `[A-Z][A-Z0-9_]*`, `$$` produces a literal dollar sign, and ordinary
+  braces remain literal. Dependencies are order-independent, may include other
+  compositions, and are validated for unknown references and cycles before
+  provider access; unlike dotenv expansion, values are substituted once
+  without ambient environment lookup, fallback operators, recursive expansion,
+  or silent empty replacements.
+- C# SDK (`Cachix.SecretSpec`, available in 0.16): resolve secrets from .NET
+  through the shared native resolver, with fluent builder and one-shot APIs,
+  typed failure exceptions, value-free preflight reports, provenance,
+  environment export, typed-codegen input, and deterministic cleanup of
+  `as_path` files. The trimming-safe, NativeAOT-compatible NuGet package
+  includes native resolver builds for glibc and musl Linux x64/Arm64, macOS
+  x64/Arm64, and Windows x64/Arm64; Windows applications do not need a separate
+  Visual C++ Redistributable.
+- Infisical provider (`infisical://`), for Infisical Cloud and self-hosted
+  instances. Authenticates as a machine identity via Universal Auth, whose
+  `client_id` and `client_secret` can be sourced as provider credentials (with
+  `INFISICAL_CLIENT_ID`/`INFISICAL_CLIENT_SECRET` fallbacks), or with a
+  ready-made `token`/`INFISICAL_TOKEN`. A profile names the Infisical
+  environment, so a `production` profile reads the `production` environment;
+  projects whose environments do not correspond to profiles pin one with
+  `?env=`, and profiles stay separate either way. Secrets live at
+  `/secretspec/{project}/{profile}` (`?path=` overrides the prefix), with keys
+  stored verbatim, and secrets sharing a folder are fetched in one request. A
+  folder's imported secrets resolve too, with Infisical's own precedence. A
+  secret's `ref` can name an Infisical secret by folder, key and `version`.
+  Self-hosted and EU instances are named by the URI host, `INFISICAL_DOMAIN`, or
+  Infisical's legacy `INFISICAL_API_URL`. Provider selection and Rust API
+  documentation identify Infisical as available from SecretSpec 0.16.
+
+## [0.15.0] - 2026-07-16
+
+### Added
+- Gopass provider (`gopass://`) for GPG-based password manager with git-synced password store.
+- `secretspec export` command that resolves every secret for the active profile
+  and writes them to stdout without running a command, in a chosen `--format`:
+  `shell` (`export KEY='value'`, for `eval "$(secretspec export)"`), `dotenv`,
+  `json`, or `gha` (appends to `$GITHUB_ENV` and emits `::add-mask::` for each
+  value). Unlike `run` it never prompts and exits non-zero on a missing required
+  secret, so CI can gate on it.
+- Azure Key Vault provider (`akv://`). Authenticates via a service principal
+  whose `tenant_id`, `client_id`, and `client_secret` can be sourced as provider
+  credentials (with `AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`
+  fallbacks), falling back to a signed-in Azure CLI / Azure Developer CLI
+  session when none are available; managed identity and
+  AKS workload identity are also available via `?auth=managed_identity` and
+  `?auth=workload_identity`. Sovereign clouds can be addressed with a full
+  DNS hostname or an explicit `?suffix=` override. Project/profile/key
+  components use lowercase, unpadded Base32 so case and punctuation remain
+  distinct within Azure's restricted, case-insensitive secret-name namespace.
+- The `awssm` provider accepts `kms_key_id` and `tag.NAME=VALUE` query
+  parameters (e.g. `awssm://prod@us-east-1?kms_key_id=alias/my-key&tag.team=platform`).
+  Both are applied only when secretspec creates a secret, so accounts that enforce
+  a customer-managed KMS key or "tag-on-create" guardrails (an SCP requiring
+  `aws:RequestTag/*` on `CreateSecret`) can now store secrets. A pre-existing
+  secret keeps the key and tags it was created with.
 - PHP SDK (`cachix/secretspec`): resolve secrets from PHP, Laravel, and Symfony
   over the same shared resolver as the other language SDKs. It ships as a native
   PHP extension that embeds the resolver (works under PHP-FPM with no
   `ffi.enable`, like `ext-redis`), with an `ext-ffi` fallback that dlopens the
   library at runtime for CLI and local development.
+- Provider aliases can now source their own credentials from another provider.
+  An alias in `[providers]` may declare a `credentials` map binding a semantic,
+  provider-specific name (such as `access_token`, `token`, `role_id`, or
+  `client_secret`) to a source: a bare provider spec, which reads the value at
+  the convention path, or a table with a `ref` giving the exact coordinates.
+  The credential is fetched from that provider and handed to the store, so a
+  machine token can live in the OS keyring instead of a plaintext environment
+  variable, and is never written
+  into the environment of processes started by `secretspec run`. A configured
+  credential is authoritative; providers retain their conventional environment
+  fallback when no explicit credential is supplied. Chains are limited to one
+  hop, and that limit is enforced wherever the alias appears, as a chain
+  fallback or the default provider included. Provider credentials also apply
+  when the alias is selected with an explicit `--provider <alias>` or
+  `SECRETSPEC_PROVIDER`, and
+  they are fetched from their source once per invocation and profile, then
+  reused across all secrets routed at the alias (convention-path credentials
+  live under a profile, so switching profiles re-reads them). Each source read,
+  and each credential stored through `login`, is audited with a `credential`
+  marker naming the semantic credential and the source store; a credential
+  stored through `login` takes effect immediately. Unsupported credential names
+  fail validation before a source is accessed.
+
+  ```toml
+  [providers]
+  bws = { uri = "bws://project-uuid", credentials = { access_token = "keyring" } }
+  akv = { uri = "akv://myvault", credentials = { tenant_id = "keyring", client_id = "keyring", client_secret = "keyring" } }
+  vault = { uri = "vault://kv/app?auth=approle", credentials = {
+    role_id   = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "role_id" } },
+    secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "secret_id" } },
+  } }
+  ```
+- `secretspec config provider login <alias>` prompts for each provider
+  credential a provider alias declares and stores it in its source provider, so
+  it can be read back on the next resolution. `secretspec config provider add`
+  gains a repeatable `--credential NAME=PROVIDER` flag for declaring credential
+  sources from the command line.
 
 ### Changed
+- Rust SDK validation errors now store their detailed report out of line,
+  reducing the size of `SecretSpecError` values while preserving diagnostics.
+- Generated types now describe the values resolution can actually return:
+  omitted `required` still means required, secrets supplied by a manifest
+  default or generator are non-nullable, and profile-specific types include
+  secrets inherited from the `default` profile. Profile JSON Schemas are now
+  exhaustive (`additionalProperties: false`) for the same reason.
 - A `ref` routed at a single store (an explicit `--provider`, a single-provider
   chain, or the default provider) is now checked up front, before any store is
   contacted, for coordinates that store cannot honor (e.g. a `field` ref pointed
@@ -32,8 +182,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead" message — the same hard error any other invalid primary gets —
   instead of warning and falling through to the rest of the chain. As a
   fallback entry it is still skipped with a warning, like any broken link.
+- Rust SDK: `ProviderAlias::credentials` is a plain map whose empty state means
+  "no provider credentials", rather than an `Option`, so the two ways of spelling
+  an alias without credentials cannot diverge.
+
+### Removed
+- The unused public `Config::merge_with` and `Profile::merge_with` methods.
+  Configuration inheritance (`extends`) is now applied entirely through the
+  internal overlay used by the loader, so these self-wins merge helpers no
+  longer had any callers.
 
 ### Fixed
+- Configuration inheritance now loads an `extends` hierarchy as a DAG. Shared
+  ancestors in diamond-shaped graphs are applied once instead of being reported
+  as cycles, later entries in `extends` correctly override earlier entries, and
+  profile `[defaults]` are inherited across source files.
+- Runtime planning, semantic validation, Rust derive output, and JSON Schema
+  generation now share one compiled effective-manifest model and one
+  missing-value policy, preventing raw `required`/`default` interpretation from
+  drifting between surfaces.
+- Profile overrides no longer need to repeat the secret's `description`:
+  validation now checks each secret's effective, merged configuration, so a
+  partial override like `[profiles.development] DATABASE_URL = { default =
+  "sqlite:///dev.db" }` inherits the description (and `type`, for `generate`)
+  from the default profile instead of failing with "missing description".
+  The merged view is also validated for real conflicts, so a `generate`
+  secret in the default profile combined with a `default` value from an
+  override or a profile `[defaults]` table is now rejected at load instead of
+  silently generating a random value and ignoring the default. Validation
+  errors are reported deterministically, attributed to the profile that
+  declares the offending field, and `check` and `run` list secrets in stable
+  name-sorted order.
 - Provider fallback chains (`providers = [...]`) are now tried strictly in
   order: each link is resolved only when a read actually reaches it, and a
   broken link (an undefined alias, an unreachable store) is skipped with a
@@ -45,7 +224,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A provider chain entry that misspells `onepassword` as `1password` now gets
   the same "use `onepassword` instead" correction that `--provider 1password`
   gives, instead of a generic undefined-alias error.
+- Blank or whitespace-only profile and provider overrides (`--profile`,
+  `SECRETSPEC_PROFILE`, `--provider`, `SECRETSPEC_PROVIDER`, and the Rust SDK
+  builder) are now trimmed and treated as unset, so a padded value such as a
+  trailing newline from `$(cat file)` can no longer select a nonexistent
+  profile or provider.
 - `import` prints its per-secret summary in a stable, name-sorted order.
+- `run` no longer aborts when the environment contains a non-UTF-8 variable.
+  Such variables are now passed through to the child process untouched, with
+  resolved secrets overlaid on top.
+- The prebuilt Linux addons of the Node SDK are now built against glibc 2.28
+  (manylinux_2_28) with libdbus compiled in statically, so `npm install
+  secretspec` works on Amazon Linux 2023, RHEL 8/9, and other distros with an
+  older glibc, instead of the addon failing to load with "version `GLIBC_2.38'
+  not found". ([#136](https://github.com/cachix/secretspec/issues/136))
 
 ## [0.14.0] - 2026-07-09
 

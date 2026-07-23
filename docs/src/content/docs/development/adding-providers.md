@@ -56,6 +56,103 @@ one refusal message.
 4. **Implement Provider trait** for your provider struct
 5. **Export from mod.rs**: Add `pub mod mybackend;`
 
+## Documentation and Release Visibility
+
+The documentation site is built from `main`, so it can describe code that has
+not reached the latest SecretSpec release yet. A new provider must not appear
+to be available in the currently released binary before it is published.
+
+### Provider page structure
+
+Provider pages should be predictable to scan. Keep the shared sections in the
+following relative order, inserting provider-specific topics where readers need
+them:
+
+1. A one-sentence description and, for an unreleased provider, the version
+   compatibility notice.
+2. **At a glance**: the provider name, URI, read/write behavior, best use case,
+   authentication, optional build feature or availability, and default storage
+   layout.
+3. **Quick start**: the shortest useful `set`, `get`, and `run` workflow.
+   Assume the reader completes the following setup section first; keep this
+   example focused on the successful path.
+4. **Setup**: prerequisites, authentication methods, and required permissions.
+5. **Configuration**: **URI format**, copyable **URI examples**, and a
+   **Project configuration** example showing a checked-in alias used by a
+   secret.
+6. **Storage model**: the exact provider-native name or path SecretSpec creates,
+   including how projects and profiles stay isolated.
+7. **Use existing secrets**: how `ref` maps to provider-native coordinates and
+   whether referenced secrets are writable.
+8. **CI/CD**, when machine authentication or deployment setup differs from
+   local use.
+9. **Advanced configuration** for optional provider-specific behavior.
+10. **Troubleshooting and limitations** or **Security considerations**, when
+    there are important operational constraints.
+
+Keep the at-a-glance table compact; explain edge cases in the relevant section
+instead of expanding the table. Start with this shape:
+
+```md
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `mybackend` |
+| URI | `mybackend://HOST[/path]` |
+| Access | Read and write |
+| Best for | The main workload or audience this provider serves |
+| Authentication | The identity or credential users need |
+| Build feature | `mybackend` |
+| Default storage | `secretspec/{project}/{profile}/{key}` |
+```
+
+Use sentence case for section headings. If a standard section does not apply,
+omit it rather than adding an empty placeholder. Keep command sequences in
+**Quick start** and list bare provider specifications in **URI examples** so
+the two sections do not repeat one another.
+
+When adding a provider for an upcoming release:
+
+1. Add a version notice near the top of the provider page:
+
+   ```md
+   :::note[Version compatibility]
+   The MyBackend provider is an upcoming SecretSpec 0.16 feature and is not
+   available in SecretSpec 0.15.
+   :::
+   ```
+
+2. Mark the provider as `(0.16+)` anywhere it appears in a provider list,
+   table, selector example, sidebar, landing page, README, or generated
+   documentation description.
+3. If the provider changes authentication or configuration syntax, show the
+   latest released version's working form first, then label the upcoming form
+   explicitly. Include a practical fallback such as the environment variable
+   used by the released version.
+4. Add the provider under the existing `Unreleased` section in `CHANGELOG.md`.
+
+Update every provider location; names otherwise drift out of sync:
+
+1. `docs/src/content/docs/providers/<provider>.md`
+2. `docs/astro.config.ts` — sidebar and `starlightLlmsTxt` provider summary
+3. `docs/src/content/docs/concepts/providers.md` — available providers table
+4. `docs/src/content/docs/reference/providers.md` — provider details and
+   security considerations
+5. `docs/src/pages/index.astro` — `providerMetadata` and any provider selector
+   examples
+6. `docs/src/content/docs/quick-start.mdx` — provider selector example
+7. `README.md` — provider lists and provider selector example
+
+When the release is published, replace temporary wording such as “upcoming”
+and “not available in 0.15” with durable wording such as “Available since
+SecretSpec 0.16.” The `(0.16+)` labels may remain where knowing the minimum
+version is useful.
+
+Apply the same rule to unreleased CLI commands and configuration fields:
+place a version notice beside the command or field, not only on a separate
+concept page. Readers often arrive directly from search results.
+
 ## Example Implementation
 
 ```rust

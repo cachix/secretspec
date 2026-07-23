@@ -18,6 +18,11 @@ crate-type = ["cdylib", "staticlib", "lib"]
 # crate is only the C ABI wrapper.
 secretspec = { workspace = true }
 
+[features]
+# Binary SDK packages use this on Linux so the resolver does not acquire a
+# runtime dependency on the host's libdbus.
+vendored-dbus = ["secretspec/vendored-dbus"]
+
 [dev-dependencies]
 serde_json = { workspace = true }
 tempfile = { workspace = true }

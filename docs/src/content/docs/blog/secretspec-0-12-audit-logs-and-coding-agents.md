@@ -1,5 +1,5 @@
 ---
-title: "SecretSpec 0.12: audit logs and coding agents"
+title: "SecretSpec 0.12: Audit logs and coding agents"
 description: Require a human-readable reason whenever a coding agent reaches for your secrets.
 date: 2026-06-08
 authors:

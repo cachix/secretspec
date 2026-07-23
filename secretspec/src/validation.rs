@@ -3,6 +3,7 @@
 use crate::config::Resolved;
 use crate::report::{ResolutionReport, SecretResolution};
 use secrecy::SecretString;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use tempfile::NamedTempFile;
@@ -68,6 +69,67 @@ impl ValidatedSecrets {
     }
 }
 
+/// The kind of cross-secret presence constraint that failed.
+///
+/// Available since SecretSpec 0.17.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConstraintKind {
+    /// None of a group whose rule requires at least one member resolved.
+    AtLeastOne,
+    /// Zero or multiple members of a group whose rule requires exactly one
+    /// member resolved.
+    ExactlyOne,
+}
+
+/// A failed cross-secret presence constraint.
+///
+/// `secrets` is the configured group and `present` is the subset that resolved.
+/// Values are never included.
+///
+/// Available since SecretSpec 0.17.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConstraintViolation {
+    /// Which presence rule failed.
+    pub kind: ConstraintKind,
+    /// The group name declared by its member secrets.
+    pub group: String,
+    /// All secret names in the configured group.
+    pub secrets: Vec<String>,
+    /// Group members that resolved.
+    pub present: Vec<String>,
+}
+
+impl fmt::Display for ConstraintViolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.kind {
+            ConstraintKind::AtLeastOne => {
+                write!(
+                    f,
+                    "at least one secret in group '{}' must be provided ({})",
+                    self.group,
+                    self.secrets.join(", ")
+                )
+            }
+            ConstraintKind::ExactlyOne if self.present.is_empty() => {
+                write!(
+                    f,
+                    "exactly one secret in group '{}' must be provided ({})",
+                    self.group,
+                    self.secrets.join(", ")
+                )
+            }
+            ConstraintKind::ExactlyOne => write!(
+                f,
+                "exactly one secret in group '{}' must be provided ({}); found {}",
+                self.group,
+                self.secrets.join(", "),
+                self.present.join(", ")
+            ),
+        }
+    }
+}
+
 /// Container for validation errors
 ///
 /// This struct contains all the validation errors that occurred when
@@ -88,6 +150,10 @@ pub struct ValidationErrors {
     /// required secrets that caused this error. Empty unless populated by the
     /// resolver; see [`ValidationErrors::report`].
     pub resolution: Vec<SecretResolution>,
+    /// Cross-secret presence constraints that failed.
+    ///
+    /// Available since SecretSpec 0.17.
+    pub constraint_violations: Vec<ConstraintViolation>,
 }
 
 impl ValidationErrors {
@@ -106,12 +172,13 @@ impl ValidationErrors {
             provider,
             profile,
             resolution: Vec::new(),
+            constraint_violations: Vec::new(),
         }
     }
 
     /// Check if there are any critical errors (missing required secrets)
     pub fn has_errors(&self) -> bool {
-        !self.missing_required.is_empty()
+        !self.missing_required.is_empty() || !self.constraint_violations.is_empty()
     }
 
     /// Build the value-free [`ResolutionReport`] for this failed resolution.
@@ -123,6 +190,7 @@ impl ValidationErrors {
             self.profile.clone(),
             self.resolution.clone(),
         )
+        .with_constraint_violations(self.constraint_violations.clone())
     }
 }
 
@@ -134,6 +202,17 @@ impl fmt::Display for ValidationErrors {
                 "Missing required secrets: {}",
                 self.missing_required.join(", ")
             )?;
+        }
+        if !self.constraint_violations.is_empty() {
+            if !self.missing_required.is_empty() {
+                write!(f, "; ")?;
+            }
+            let messages: Vec<String> = self
+                .constraint_violations
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            write!(f, "Secret constraints failed: {}", messages.join("; "))?;
         }
         Ok(())
     }

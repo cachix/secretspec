@@ -5,13 +5,42 @@ description: Secure system credential store integration
 
 The Keyring provider stores secrets in your system's native credential store. Recommended for local development.
 
-## Supported Platforms
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `keyring` |
+| URI | `keyring://[folder_prefix]` |
+| Access | Read and write |
+| Best for | Secure local development |
+| Authentication | Current operating-system user |
+| Default storage | `secretspec/{project}/{profile}/{key}` |
+
+## Quick start
+
+```bash
+# Set a secret
+$ secretspec set DATABASE_URL --provider keyring
+Enter value for DATABASE_URL: postgresql://localhost/mydb
+✓ Secret DATABASE_URL saved to keyring
+
+# Get a secret
+$ secretspec get DATABASE_URL --provider keyring
+postgresql://localhost/mydb
+
+# Run with secrets
+$ secretspec run --provider keyring -- npm start
+```
+
+## Setup
+
+### Supported platforms
 
 - **macOS**: Keychain
 - **Windows**: Credential Manager
 - **Linux**: Secret Service (GNOME Keyring, KWallet)
 
-## Installation
+### Linux prerequisites
 
 Linux only - install if missing:
 ```bash
@@ -27,7 +56,7 @@ $ sudo pacman -S gnome-keyring
 
 ## Configuration
 
-### URI Format
+### URI format
 
 ```
 keyring://[folder_prefix]
@@ -35,20 +64,32 @@ keyring://[folder_prefix]
 
 - `folder_prefix`: Optional path prefix supporting `{project}`, `{profile}`, and `{key}` placeholders. Defaults to `secretspec/{project}/{profile}/{key}`.
 
-### Examples
+### URI examples
 
-```bash
-# Use default keyring storage
-$ secretspec set DATABASE_URL --provider keyring
-
-# Custom folder prefix (e.g., to share secrets across projects — see below)
-$ secretspec set DATABASE_URL --provider "keyring://shared/{profile}/{key}"
+```text
+keyring
+keyring://shared/{profile}/{key}
 ```
 
-## Secret References
+### Project configuration
 
-By default each secret is stored under `secretspec/{project}/{profile}/{key}` with
-the current system username as the account. A secret's
+```toml title="secretspec.toml"
+[providers]
+local = "keyring://"
+
+[profiles.default]
+DATABASE_URL = { description = "Database URL", providers = ["local"] }
+```
+
+## Storage model
+
+Each secret is stored under `secretspec/{project}/{profile}/{key}` as the
+keyring service, with the current system username as the account. Project and
+profile names keep convention secrets isolated.
+
+## Use existing secrets
+
+A secret's
 [`ref`](/reference/configuration/#secret-references) field names an exact keyring
 entry instead, useful for reading a credential another application already
 stored: `item` is the service, and the optional `field` is the account
@@ -60,27 +101,9 @@ place.
 API_TOKEN = { description = "Token", ref = { item = "com.example.app", field = "me@example.com" }, providers = ["keyring"] }
 ```
 
-## Usage
+## Advanced configuration
 
-```bash
-# Set a secret
-$ secretspec set DATABASE_URL
-Enter value for DATABASE_URL: postgresql://localhost/mydb
-✓ Secret DATABASE_URL saved to keyring
-
-# Get a secret
-$ secretspec get DATABASE_URL
-postgresql://localhost/mydb
-
-# Run with secrets
-$ secretspec run -- npm start
-
-# Use with profiles
-$ secretspec set API_KEY --profile production
-$ secretspec run --profile production -- npm start
-```
-
-## Shared Secrets
+### Shared secrets
 
 By default, secrets are stored under `secretspec/{project}/{profile}/{key}`, which isolates them per project. To share secrets across projects, use a custom folder prefix via the URI:
 

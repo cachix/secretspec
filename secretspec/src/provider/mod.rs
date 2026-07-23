@@ -15,11 +15,21 @@
 //!
 //! ## Available Providers
 //!
-//! - [`KeyringProvider`]: System keyring integration (default)
-//! - [`DotEnvProvider`]: `.env` file support
-//! - [`EnvProvider`]: Environment variables (read-only)
-//! - [`OnePasswordProvider`]: OnePassword integration
-//! - [`LastPassProvider`]: LastPass integration
+//! - [`keyring::KeyringProvider`]: System keyring integration (default)
+//! - [`dotenv::DotEnvProvider`]: `.env` file support
+//! - [`env::EnvProvider`]: Environment variables (read-only)
+//! - [`pass::PassProvider`]: Pass integration
+//! - [`gopass::GoPassProvider`]: Gopass integration
+//! - [`protonpass::ProtonPassProvider`]: Proton Pass integration
+//! - [`onepassword::OnePasswordProvider`]: 1Password integration
+//! - [`lastpass::LastPassProvider`]: LastPass integration
+//! - [`gcsm::GcsmProvider`]: Google Cloud Secret Manager integration
+//! - [`awssm::AwssmProvider`]: AWS Secrets Manager integration
+//! - [`vault::VaultProvider`]: HashiCorp Vault integration
+//! - [`openbao::OpenBaoProvider`]: OpenBao integration (0.17+)
+//! - [`bws::BwsProvider`]: Bitwarden Secrets Manager integration
+//! - [`akv::AkvProvider`]: Azure Key Vault integration
+//! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
 //!
 //! ## URI-Based Configuration
 //!
@@ -55,12 +65,57 @@
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, percent_encode};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use url::Url;
+
+/// Credentials handed to a provider at construction.
+///
+/// Maps semantic provider-specific names (for example `access_token`) to
+/// secret values. Providers may retain environment-variable fallback for
+/// standalone compatibility, but environment names are not part of this API.
+pub(crate) type ProviderCredentials = HashMap<String, SecretString>;
+
+/// Resolves a semantic provider credential, falling back to the provider's
+/// conventional environment variable when no explicit credential was supplied.
+pub(crate) fn credential_or_env(
+    credentials: &ProviderCredentials,
+    name: &str,
+    env_var: &str,
+) -> Option<String> {
+    credential_or_envs(credentials, name, &[env_var])
+}
+
+/// Resolves a semantic provider credential, falling back through the provider's
+/// conventional environment variables in order.
+pub(crate) fn credential_or_envs(
+    credentials: &ProviderCredentials,
+    name: &str,
+    env_vars: &[&str],
+) -> Option<String> {
+    credentials
+        .get(name)
+        .map(|secret| secret.expose_secret().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| preferred_env(env_vars))
+}
+
+/// Returns the first configured environment variable in precedence order.
+///
+/// A present but empty (or non-Unicode) value resolves to `None` without
+/// falling through to the next name. This matches OpenBao's `BAO_*` behavior:
+/// presence overrides the corresponding `VAULT_*` compatibility variable.
+pub(crate) fn preferred_env(names: &[&str]) -> Option<String> {
+    for name in names {
+        if let Some(value) = std::env::var_os(name) {
+            return value.into_string().ok().filter(|value| !value.is_empty());
+        }
+    }
+    None
+}
 
 /// Characters that are invalid in URI hosts but might appear in provider config
 /// values like vault names (e.g., 1Password vault "Home Lab").
@@ -142,10 +197,18 @@ impl ProviderUrl {
             .into_owned()
     }
 
+    #[cfg(any(feature = "infisical", feature = "openbao", feature = "vault", test))]
     pub fn port(&self) -> Option<u16> {
         self.0.port()
     }
 
+    #[cfg(any(
+        feature = "awssm",
+        feature = "infisical",
+        feature = "openbao",
+        feature = "vault",
+        test
+    ))]
     pub fn query_pairs(&self) -> url::form_urlencoded::Parse<'_> {
         self.0.query_pairs()
     }
@@ -193,6 +256,10 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
     }
 }
 
+#[cfg(feature = "age")]
+pub mod age;
+#[cfg(feature = "akv")]
+pub mod akv;
 #[cfg(feature = "awssm")]
 pub mod awssm;
 #[cfg(feature = "bws")]
@@ -201,14 +268,21 @@ pub mod dotenv;
 pub mod env;
 #[cfg(feature = "gcsm")]
 pub mod gcsm;
+pub mod gopass;
+#[cfg(feature = "infisical")]
+pub mod infisical;
 #[cfg(feature = "keyring")]
 pub mod keyring;
 pub mod lastpass;
 pub mod onepassword;
+#[cfg(feature = "openbao")]
+pub mod openbao;
 pub mod pass;
 pub mod protonpass;
 #[cfg(feature = "vault")]
 pub mod vault;
+#[cfg(any(feature = "openbao", feature = "vault"))]
+mod vault_common;
 #[macro_use]
 pub mod macros;
 
@@ -224,8 +298,10 @@ pub struct ProviderInfo {
     /// The canonical name of the provider (e.g., "keyring", "1password").
     pub name: &'static str,
     /// A human-readable description of what the provider does.
+    #[cfg_attr(not(any(feature = "cli", test)), allow(dead_code))]
     pub description: &'static str,
     /// Example URIs showing how to configure this provider.
+    #[cfg_attr(not(any(feature = "cli", test)), allow(dead_code))]
     pub examples: &'static [&'static str],
 }
 
@@ -251,6 +327,7 @@ impl ProviderInfo {
     ///     "onepassword: OnePassword password manager (e.g., onepassword://vault, onepassword://work@Production)"
     /// );
     /// ```
+    #[cfg(any(feature = "cli", test))]
     pub fn display_with_examples(&self) -> String {
         if self.examples.is_empty() {
             format!("{}: {}", self.name, self.description)
@@ -359,6 +436,7 @@ pub use macros::{PROVIDER_REGISTRY, ProviderRegistration};
 /// # Returns
 ///
 /// A vector of `ProviderInfo` structs containing metadata for each provider.
+#[cfg(feature = "cli")]
 pub fn providers() -> Vec<ProviderInfo> {
     PROVIDER_REGISTRY
         .iter()
@@ -375,6 +453,15 @@ fn split_spec(spec: &str) -> (&str, &str) {
         Some(pos) => (&spec[..pos], &spec[pos + 1..]),
         None => (spec, ""),
     }
+}
+
+/// The registry entry whose schemes contain `scheme`. The one definition of
+/// "which registration a scheme resolves to", shared by every lookup below and
+/// by [`provider_from_url`], so they cannot drift on the matching rule.
+fn registration_for_scheme(scheme: &str) -> Option<&'static ProviderRegistration> {
+    PROVIDER_REGISTRY
+        .iter()
+        .find(|reg| reg.schemes.contains(&scheme))
 }
 
 /// Whether `spec` names a registered provider: a bare name (`keyring`), a
@@ -395,9 +482,26 @@ pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
                 .to_string(),
         ));
     }
-    Ok(PROVIDER_REGISTRY
-        .iter()
-        .any(|reg| reg.schemes.contains(&scheme)))
+    Ok(registration_for_scheme(scheme).is_some())
+}
+
+/// The semantic credential names accepted by the provider named by `spec`, or
+/// an empty slice for an unknown scheme. Lets alias validation reject a
+/// declaration the provider would silently ignore.
+pub(crate) fn credential_names_for_spec(spec: &str) -> &'static [&'static str] {
+    let (scheme, _) = split_spec(spec);
+    registration_for_scheme(scheme).map_or(&[], |reg| reg.credential_names)
+}
+
+/// The registered display name for the provider `spec` names, falling back to
+/// the spec's scheme token. Pure registry lookup: lets callers show which
+/// provider a spec routes to without constructing it (construction now fetches
+/// provider credentials, so a display-only build could fail or do I/O).
+pub(crate) fn provider_display_name_for_spec(spec: &str) -> String {
+    let (scheme, _) = split_spec(spec);
+    registration_for_scheme(scheme)
+        .map(|reg| reg.info.name.to_string())
+        .unwrap_or_else(|| scheme.to_string())
 }
 
 /// Trait defining the interface for secret storage providers.
@@ -592,6 +696,20 @@ pub trait Provider: Send + Sync {
     /// [`Secrets`]: crate::Secrets
     fn with_base_dir(&mut self, _base_dir: &std::path::Path) {}
 
+    /// Hands semantic credentials to the provider.
+    ///
+    /// Called once inside the registration factory, on the concrete provider
+    /// value *before* any `Arc`/`Box` wrapping. This must not be a
+    /// post-construction call on a `Box<dyn Provider>`: like [`with_base_dir`],
+    /// a `&mut self` hook cannot be forwarded through the blanket
+    /// `impl Provider for Arc<T>` (an `Arc` gives no `&mut` access to its
+    /// inner value), so a preflight provider — wrapped as `Box<Arc<P>>` — would
+    /// silently receive the default no-op. The default implementation ignores
+    /// the values, which is correct for providers that need no credentials.
+    ///
+    /// [`with_base_dir`]: Provider::with_base_dir
+    fn with_credentials(&mut self, _credentials: ProviderCredentials) {}
+
     /// Discovers and returns all secrets available in this provider.
     ///
     /// This method is used to introspect the provider and find all available secrets.
@@ -749,8 +867,11 @@ pub(crate) struct ProviderWithPreflight {
 /// Failures are returned to every caller waiting on the in-flight probe but
 /// are not cached beyond that: the user may fix auth mid-process (e.g. unlock
 /// the desktop app in a long-lived SDK process), so the next check re-probes.
+type AuthCheckResult = std::result::Result<(), String>;
+type AuthCheckCell = Arc<OnceLock<AuthCheckResult>>;
+
 pub(crate) struct AuthCheckCache<K> {
-    cells: Mutex<HashMap<K, Arc<OnceLock<std::result::Result<(), String>>>>>,
+    cells: Mutex<HashMap<K, AuthCheckCell>>,
 }
 
 impl<K> Default for AuthCheckCache<K> {
@@ -882,6 +1003,10 @@ impl Provider for PreflightGuard {
         self.inner.with_base_dir(base_dir);
     }
 
+    fn with_credentials(&mut self, credentials: ProviderCredentials) {
+        self.inner.with_credentials(credentials);
+    }
+
     fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
         self.check()?;
         self.inner.reflect()
@@ -933,91 +1058,102 @@ impl TryFrom<&str> for Box<dyn Provider> {
     type Error = SecretSpecError;
 
     fn try_from(s: &str) -> Result<Self> {
-        // Parse the scheme from the input string
-        let (scheme, rest) = split_spec(s);
+        provider_from_spec(s, ProviderCredentials::new())
+    }
+}
 
-        // Reject the `1password` misspelling (with its corrective error) and
-        // check the scheme against the registry, through the same gate alias
-        // resolution uses.
-        if !spec_names_known_provider(s)? {
-            // Check if it's a known provider name to give a better error
-            if PROVIDER_REGISTRY.iter().any(|reg| reg.info.name == scheme) {
-                return Err(SecretSpecError::ProviderOperationFailed(format!(
-                    "Provider '{}' exists but URI parsing failed",
-                    scheme
-                )));
-            } else {
-                return Err(SecretSpecError::ProviderNotFound(scheme.to_string()));
-            }
-        }
+/// Builds a boxed provider from a spec string (a bare name, `scheme:...`
+/// shorthand, or full URI), handing it the supplied credentials. The shared
+/// body of the string `TryFrom` impls: construction funnels here so URL
+/// normalization and credential injection have exactly one home.
+pub(crate) fn provider_from_spec(
+    s: &str,
+    credentials: ProviderCredentials,
+) -> Result<Box<dyn Provider>> {
+    // Parse the scheme from the input string
+    let (scheme, rest) = split_spec(s);
 
-        // Build a proper URL with the correct scheme.
-        //
-        // Windows absolute paths (e.g. `dotenv://C:\path\.env`) need special care:
-        // the drive-letter colon looks like a `host:port` separator and parsing
-        // fails with "invalid port number". Encode the whole path (drive colon and
-        // backslashes included) into an opaque host so it round-trips back out via
-        // `ProviderUrl::host()`. A Unix absolute path stays in the authority-less
-        // `scheme:///abs/path` form, which already parses cleanly.
-        let path_candidate = rest.trim_start_matches('/');
-        let url_string = if is_windows_abs_path(path_candidate) {
-            format!(
-                "{}://{}",
-                scheme,
-                percent_encode(path_candidate.as_bytes(), WINDOWS_PATH_ENCODE_SET)
-            )
+    // Reject the `1password` misspelling (with its corrective error) and
+    // check the scheme against the registry, through the same gate alias
+    // resolution uses.
+    if !spec_names_known_provider(s)? {
+        // Check if it's a known provider name to give a better error
+        if PROVIDER_REGISTRY.iter().any(|reg| reg.info.name == scheme) {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Provider '{}' exists but URI parsing failed",
+                scheme
+            )));
         } else {
-            let url_string = match rest {
-                // Just scheme name (e.g., "keyring")
-                "" | ":" => format!("{}://", scheme),
-                // Standard URI format already has // (e.g., "onepassword://vault")
-                s if s.starts_with("//") => format!("{}:{}", scheme, s),
-                // Path only format (e.g., "dotenv:/path/to/.env")
-                s if s.starts_with('/') => format!("{}://{}", scheme, s),
-                // Everything else - assume it's a host or path component
-                s => format!("{}://{}", scheme, s),
-            };
+            return Err(SecretSpecError::ProviderNotFound(scheme.to_string()));
+        }
+    }
 
-            // Percent-encode characters that are invalid in URIs but might appear in
-            // provider config values (e.g., spaces in 1Password vault names like "Home Lab")
-            let scheme_end = url_string.find("://").unwrap() + 3;
-            let (prefix, rest) = url_string.split_at(scheme_end);
-            format!(
-                "{}{}",
-                prefix,
-                percent_encode(rest.as_bytes(), URI_ENCODE_SET)
-            )
+    // Build a proper URL with the correct scheme.
+    //
+    // Windows absolute paths (e.g. `dotenv://C:\path\.env`) need special care:
+    // the drive-letter colon looks like a `host:port` separator and parsing
+    // fails with "invalid port number". Encode the whole path (drive colon and
+    // backslashes included) into an opaque host so it round-trips back out via
+    // `ProviderUrl::host()`. A Unix absolute path stays in the authority-less
+    // `scheme:///abs/path` form, which already parses cleanly.
+    let path_candidate = rest.trim_start_matches('/');
+    let url_string = if is_windows_abs_path(path_candidate) {
+        format!(
+            "{}://{}",
+            scheme,
+            percent_encode(path_candidate.as_bytes(), WINDOWS_PATH_ENCODE_SET)
+        )
+    } else {
+        let url_string = match rest {
+            // Just scheme name (e.g., "keyring")
+            "" | ":" => format!("{}://", scheme),
+            // Standard URI format already has // (e.g., "onepassword://vault")
+            s if s.starts_with("//") => format!("{}:{}", scheme, s),
+            // Path only format (e.g., "dotenv:/path/to/.env")
+            s if s.starts_with('/') => format!("{}://{}", scheme, s),
+            // Everything else - assume it's a host or path component
+            s => format!("{}://{}", scheme, s),
         };
 
-        let proper_url = Url::parse(&url_string).map_err(|e| {
-            SecretSpecError::ProviderOperationFailed(format!(
-                "Invalid provider specification '{}': {}",
-                s, e
-            ))
-        })?;
+        // Percent-encode characters that are invalid in URIs but might appear in
+        // provider config values (e.g., spaces in 1Password vault names like "Home Lab")
+        let scheme_end = url_string.find("://").unwrap() + 3;
+        let (prefix, rest) = url_string.split_at(scheme_end);
+        format!(
+            "{}{}",
+            prefix,
+            percent_encode(rest.as_bytes(), URI_ENCODE_SET)
+        )
+    };
 
-        provider_from_url(&ProviderUrl::new(proper_url))
-    }
+    let proper_url = Url::parse(&url_string).map_err(|e| {
+        SecretSpecError::ProviderOperationFailed(format!(
+            "Invalid provider specification '{}': {}",
+            s, e
+        ))
+    })?;
+
+    provider_from_url(&ProviderUrl::new(proper_url), credentials)
 }
 
 impl TryFrom<&Url> for Box<dyn Provider> {
     type Error = SecretSpecError;
 
     fn try_from(url: &Url) -> Result<Self> {
-        provider_from_url(&ProviderUrl::new(url.clone()))
+        provider_from_url(&ProviderUrl::new(url.clone()), ProviderCredentials::new())
     }
 }
 
-fn provider_from_url(url: &ProviderUrl) -> Result<Box<dyn Provider>> {
+pub(crate) fn provider_from_url(
+    url: &ProviderUrl,
+    credentials: ProviderCredentials,
+) -> Result<Box<dyn Provider>> {
     let scheme = url.scheme();
 
-    // Find the provider registration for this scheme
-    let registration = PROVIDER_REGISTRY
-        .iter()
-        .find(|reg| reg.schemes.contains(&scheme))
+    let registration = registration_for_scheme(scheme)
         .ok_or_else(|| SecretSpecError::ProviderNotFound(scheme.to_string()))?;
 
-    let pwp = (registration.factory)(url)?;
+    let pwp = (registration.factory)(url, credentials)?;
     if pwp.preflight.is_some() {
         Ok(Box::new(PreflightGuard::new(pwp)))
     } else {
@@ -1220,5 +1356,75 @@ mod url_tests {
             without.display_with_examples(),
             "env: Environment variables"
         );
+    }
+}
+
+#[cfg(test)]
+mod provider_credentials_tests {
+    use super::{ProviderCredentials, credential_or_env, preferred_env};
+    use crate::tests::EnvVarGuard;
+    use secrecy::SecretString;
+
+    fn credentials(name: &str, value: &str) -> ProviderCredentials {
+        let mut credentials = ProviderCredentials::new();
+        credentials.insert(name.to_string(), SecretString::new(value.into()));
+        credentials
+    }
+
+    #[test]
+    fn explicit_credential_wins_over_environment() {
+        // The lock guard serializes all env mutation across the test binary;
+        // the var guard restores the previous value even if an assert panics.
+        let _lock = crate::tests::scrub_resolution_env();
+        const NAME: &str = "access_token";
+        const ENV_VAR: &str = "SECRETSPEC_TEST_PROVIDER_CREDENTIAL";
+        let _var = EnvVarGuard::set(ENV_VAR, "from-env");
+
+        assert_eq!(
+            credential_or_env(&credentials(NAME, "explicit"), NAME, ENV_VAR).as_deref(),
+            Some("explicit"),
+        );
+    }
+
+    #[test]
+    fn environment_is_a_fallback() {
+        let _lock = crate::tests::scrub_resolution_env();
+        const NAME: &str = "access_token";
+        const ENV_VAR: &str = "SECRETSPEC_TEST_PROVIDER_CREDENTIAL_FALLBACK";
+        let _var = EnvVarGuard::set(ENV_VAR, "from-env");
+
+        // With no explicit credential, the provider's conventional environment
+        // variable remains available as a fallback.
+        assert_eq!(
+            credential_or_env(&ProviderCredentials::new(), NAME, ENV_VAR).as_deref(),
+            Some("from-env"),
+        );
+        // Empty explicit values are ignored and fall through as well.
+        assert_eq!(
+            credential_or_env(&credentials(NAME, ""), NAME, ENV_VAR).as_deref(),
+            Some("from-env"),
+        );
+    }
+
+    #[test]
+    fn a_present_preferred_environment_variable_blocks_compatibility_fallback() {
+        let _lock = crate::tests::scrub_resolution_env();
+        const PREFERRED: &str = "SECRETSPEC_TEST_PREFERRED_ENV";
+        const FALLBACK: &str = "SECRETSPEC_TEST_COMPATIBILITY_ENV";
+
+        {
+            let _preferred = EnvVarGuard::set(PREFERRED, "");
+            let _fallback = EnvVarGuard::set(FALLBACK, "from-fallback");
+            assert_eq!(preferred_env(&[PREFERRED, FALLBACK]), None);
+        }
+
+        {
+            let _preferred = EnvVarGuard::remove(PREFERRED);
+            let _fallback = EnvVarGuard::set(FALLBACK, "from-fallback");
+            assert_eq!(
+                preferred_env(&[PREFERRED, FALLBACK]).as_deref(),
+                Some("from-fallback")
+            );
+        }
     }
 }

@@ -13,10 +13,20 @@ use std::path::PathBuf;
 /// `\$` (suppresses variable substitution), and `\n` (literal
 /// newlines folded onto a single line). Keys are sorted for stable
 /// output.
-fn serialize_dotenv(vars: &HashMap<String, String>) -> String {
+pub(crate) fn serialize_dotenv(vars: &HashMap<String, String>) -> String {
     let sorted: BTreeMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    serialize_dotenv_pairs(sorted.into_iter())
+}
+
+/// Serializes key/value pairs (already in the desired order) into `.env`
+/// content, applying the same double-quoting and escaping as
+/// [`serialize_dotenv`]. Shared with `secretspec export`, which passes its
+/// pre-sorted entries directly instead of rebuilding and re-sorting a map.
+pub(crate) fn serialize_dotenv_pairs<'a>(
+    pairs: impl Iterator<Item = (&'a str, &'a str)>,
+) -> String {
     let mut out = String::new();
-    for (key, value) in sorted {
+    for (key, value) in pairs {
         out.push_str(key);
         out.push_str("=\"");
         for ch in value.chars() {
@@ -31,6 +41,35 @@ fn serialize_dotenv(vars: &HashMap<String, String>) -> String {
         out.push_str("\"\n");
     }
     out
+}
+
+/// Rejects names the `.env` format cannot represent.
+///
+/// The dotenvy parser only accepts variable names matching
+/// `[A-Za-z_][A-Za-z0-9_.]*` (its exact grammar, mirrored here), while the
+/// serializer would happily emit any name it is handed. A single accepted
+/// write of an unparseable name (e.g. one with a dash) poisons the whole
+/// file: every later read or write of any secret in the store fails at that
+/// line. Rejecting the name up front keeps `set` the mirror of `get` (what
+/// one accepts, the other can read back). Convention names come from
+/// validated manifest declarations, so in practice this bites
+/// `ref = { item = ... }` coordinates, which name store entries freely.
+fn validate_env_key(key: &str) -> Result<()> {
+    let mut chars = key.chars();
+    let valid = match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(SecretSpecError::ProviderOperationFailed(format!(
+            "the dotenv provider cannot store `{key}`: .env variable names must \
+             match [A-Za-z_][A-Za-z0-9_.]*. Rename the `ref` item to a valid name."
+        )))
+    }
 }
 
 /// Configuration for the dotenv provider.
@@ -91,7 +130,7 @@ impl TryFrom<&ProviderUrl> for DotEnvConfig {
         }
 
         let path_str = url.path();
-        let path = if path_str != "" && path_str != "/" {
+        let path = if !path_str.is_empty() && path_str != "/" {
             if let Some(host) = url.host() {
                 format!("{}{}", host, path_str)
             } else {
@@ -232,6 +271,9 @@ impl Provider for DotEnvProvider {
     /// multiline strings, and escape sequences.
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
         let lookup = super::flat_item(self, addr)?;
+        // A name the format cannot represent can never be read back; reject it
+        // like any other coordinate this store has no equivalent for.
+        validate_env_key(&lookup)?;
         if !self.config.path.exists() {
             return Ok(None);
         }
@@ -247,6 +289,12 @@ impl Provider for DotEnvProvider {
         Ok(vars
             .get(&*lookup)
             .map(|v| SecretString::new(v.clone().into())))
+    }
+
+    /// Refuses an unrepresentable name before the CLI prompts for a value,
+    /// with the same error `set` would return.
+    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+        validate_env_key(&super::flat_item(self, addr)?)
     }
 
     /// Sets a secret value in the .env file.
@@ -273,6 +321,9 @@ impl Provider for DotEnvProvider {
     /// 3. Serializes back with `serialize_dotenv` for proper escaping
     fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
         let target = super::flat_item(self, addr)?;
+        // Refuse before touching the file: writing this name would produce a
+        // store no later read can parse.
+        validate_env_key(&target)?;
         // Load existing vars using dotenvy
         let mut vars = HashMap::new();
         if self.config.path.exists() {
@@ -594,6 +645,78 @@ mod tests {
 
         let contents = fs::read_to_string(&path).unwrap();
         assert!(contents.contains("PINNED_KEY="), "wrote: {contents}");
+    }
+
+    /// Regression test for the write/read asymmetry hit by cachix: `set` used
+    /// to write any ref item verbatim, including names dotenvy cannot parse
+    /// back (e.g. containing a dash), after which every read or write of any
+    /// secret in the file failed at the poisoned line. Unrepresentable names
+    /// are now rejected up front by `set`, `get`, and `check_writable`, and a
+    /// rejected write leaves the store intact.
+    #[test]
+    fn rejects_names_the_env_format_cannot_represent() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_file = dir.path().join(".env");
+        let provider = DotEnvProvider::new(DotEnvConfig {
+            path: env_file.clone(),
+        });
+
+        // A pre-existing secret that must survive every rejected write.
+        provider
+            .set(
+                Address::convention("proj", "default", "KEEP"),
+                &SecretString::new("kept".into()),
+            )
+            .unwrap();
+
+        for bad in [
+            "CACHIX_SIGNING_KEY_cache-a",
+            "with space",
+            "1LEADING_DIGIT",
+            ".leading.dot",
+            "",
+        ] {
+            let addr = crate::config::NativeAddress {
+                item: bad.into(),
+                ..Default::default()
+            };
+            for result in [
+                provider.set(Address::Native(&addr), &SecretString::new("v".into())),
+                provider.get(Address::Native(&addr)).map(|_| ()),
+                provider.check_writable(Address::Native(&addr)),
+            ] {
+                let err = result.unwrap_err();
+                assert!(err.to_string().contains("variable names"), "`{bad}`: {err}");
+            }
+        }
+
+        // The store is still parseable and the existing secret still readable.
+        let kept = provider
+            .get(Address::convention("proj", "default", "KEEP"))
+            .unwrap();
+        assert_eq!(
+            kept.map(|s| s.expose_secret().to_string()),
+            Some("kept".to_string())
+        );
+
+        // Names dotenvy's grammar does accept keep round-tripping: the
+        // sanitized shape cachix writes, and interior dots, which dotenvy
+        // parses even though POSIX shells cannot export them.
+        for good in ["CACHIX_SIGNING_KEY_CACHE_A", "dotted.name"] {
+            let addr = crate::config::NativeAddress {
+                item: good.into(),
+                ..Default::default()
+            };
+            provider
+                .set(Address::Native(&addr), &SecretString::new("key".into()))
+                .unwrap();
+            let got = provider.get(Address::Native(&addr)).unwrap();
+            assert_eq!(
+                got.map(|s| s.expose_secret().to_string()),
+                Some("key".to_string()),
+                "`{good}` should round-trip"
+            );
+        }
     }
 
     /// `.env` entries have no sub-components; a `field` coordinate is rejected.

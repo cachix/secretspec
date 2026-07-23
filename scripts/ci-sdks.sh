@@ -85,6 +85,9 @@ echo "==> Haskell"
     --write-ghc-environment-files=always
 )
 
+echo "==> C# / .NET"
+( cd secretspec-dotnet && dotnet run --project tests/SecretSpec.Tests --configuration Release )
+
 echo "==> PHP"
 # The PHP SDK has two native backends over the same resolver; exercise both.
 # The Composer manifest is at the repo root (so Packagist can read it from the
@@ -98,11 +101,8 @@ echo "==> PHP (ext-ffi fallback, dlopens the cdylib via SECRETSPEC_FFI_LIB)"
 echo "==> PHP (secretspec-php-native extension, ext-php-rs)"
 # Build the extension in debug and load it directly; when it is present the SDK
 # prefers it over ext-ffi. This also proves the extension registers its functions.
-cargo build -p secretspec-php-native
-case "$(uname -s)" in
-  Darwin) php_ext="$target_dir/debug/libsecretspec_php_native.dylib" ;;
-  *)      php_ext="$target_dir/debug/libsecretspec_php_native.so" ;;
-esac
-( cd secretspec-php && php -d extension="$php_ext" ./vendor/bin/phpunit )
+CARGO_TARGET_DIR="$target_dir" SECRETSPEC_PHP_PROFILE=debug \
+  bash secretspec-php/scripts/build-ext.sh
+( cd secretspec-php && php -d extension="$PWD/lib/secretspec.so" ./vendor/bin/phpunit )
 
 echo "==> All SDK suites passed"

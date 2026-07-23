@@ -39,6 +39,10 @@ pub enum SecretSpecError {
     SecretNotFound(String),
     #[error("Secret '{0}' is required but not set")]
     RequiredSecretMissing(String),
+    #[error("Composed secret '{0}' is derived from other secrets and cannot be written")]
+    ComposedSecretReadOnly(String),
+    #[error("Failed to compose secret: {0}")]
+    CompositionFailed(String),
     #[error("No secretspec.toml found in current or any parent directory")]
     NoManifest,
     #[error("Extended config file not found: {0}")]
@@ -54,7 +58,7 @@ pub enum SecretSpecError {
     #[error("Invalid profile: {0}")]
     InvalidProfile(String),
     #[error("Validation failed: {0}")]
-    ValidationFailed(ValidationErrors),
+    ValidationFailed(Box<ValidationErrors>),
     #[error("Secret generation failed: {0}")]
     GenerationFailed(String),
     #[error(
@@ -85,6 +89,8 @@ impl SecretSpecError {
             SecretSpecError::ProviderNotFound(_) => "provider_not_found",
             SecretSpecError::SecretNotFound(_) => "secret_not_found",
             SecretSpecError::RequiredSecretMissing(_) => "required_secret_missing",
+            SecretSpecError::ComposedSecretReadOnly(_) => "composed_secret_read_only",
+            SecretSpecError::CompositionFailed(_) => "composition_failed",
             SecretSpecError::NoManifest => "no_manifest",
             SecretSpecError::ExtendedConfigNotFound(_) => "extended_config_not_found",
             SecretSpecError::NoProjectName => "no_project_name",
@@ -95,6 +101,37 @@ impl SecretSpecError {
             SecretSpecError::ValidationFailed(_) => "validation_failed",
             SecretSpecError::GenerationFailed(_) => "generation_failed",
             SecretSpecError::ReasonRequired => "reason_required",
+        }
+    }
+}
+
+/// A type alias for `Result<T, SecretSpecError>`
+///
+/// This provides a convenient shorthand for functions that return
+/// a result with a `SecretSpecError` as the error type.
+pub type Result<T> = std::result::Result<T, SecretSpecError>;
+
+impl From<ParseError> for SecretSpecError {
+    fn from(err: ParseError) -> Self {
+        match err {
+            ParseError::Io(io_err) => {
+                if io_err.kind() == io::ErrorKind::NotFound {
+                    SecretSpecError::NoManifest
+                } else {
+                    SecretSpecError::Io(io_err)
+                }
+            }
+            ParseError::Toml(toml_err) => SecretSpecError::Toml(toml_err),
+            ParseError::UnsupportedRevision(rev) => SecretSpecError::UnsupportedRevision(rev),
+            ParseError::CircularDependency(msg) => {
+                SecretSpecError::Io(io::Error::new(io::ErrorKind::InvalidData, msg))
+            }
+            ParseError::Validation(msg) => {
+                SecretSpecError::Io(io::Error::new(io::ErrorKind::InvalidData, msg))
+            }
+            ParseError::ExtendedConfigNotFound(path) => {
+                SecretSpecError::ExtendedConfigNotFound(path)
+            }
         }
     }
 }
@@ -128,6 +165,14 @@ mod tests {
             (
                 SecretSpecError::RequiredSecretMissing("X".into()),
                 "required_secret_missing",
+            ),
+            (
+                SecretSpecError::ComposedSecretReadOnly("X".into()),
+                "composed_secret_read_only",
+            ),
+            (
+                SecretSpecError::CompositionFailed("too large".into()),
+                "composition_failed",
             ),
             (SecretSpecError::NoManifest, "no_manifest"),
             (
@@ -164,36 +209,5 @@ mod tests {
 
         let toml: SecretSpecError = "= bad".parse::<toml::Table>().unwrap_err().into();
         assert_eq!(toml.kind(), "toml");
-    }
-}
-
-/// A type alias for `Result<T, SecretSpecError>`
-///
-/// This provides a convenient shorthand for functions that return
-/// a result with a `SecretSpecError` as the error type.
-pub type Result<T> = std::result::Result<T, SecretSpecError>;
-
-impl From<ParseError> for SecretSpecError {
-    fn from(err: ParseError) -> Self {
-        match err {
-            ParseError::Io(io_err) => {
-                if io_err.kind() == io::ErrorKind::NotFound {
-                    SecretSpecError::NoManifest
-                } else {
-                    SecretSpecError::Io(io_err)
-                }
-            }
-            ParseError::Toml(toml_err) => SecretSpecError::Toml(toml_err),
-            ParseError::UnsupportedRevision(rev) => SecretSpecError::UnsupportedRevision(rev),
-            ParseError::CircularDependency(msg) => {
-                SecretSpecError::Io(io::Error::new(io::ErrorKind::InvalidData, msg))
-            }
-            ParseError::Validation(msg) => {
-                SecretSpecError::Io(io::Error::new(io::ErrorKind::InvalidData, msg))
-            }
-            ParseError::ExtendedConfigNotFound(path) => {
-                SecretSpecError::ExtendedConfigNotFound(path)
-            }
-        }
     }
 }

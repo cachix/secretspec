@@ -12,6 +12,7 @@ set -euo pipefail
 pkg_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo_root="$(cd "$pkg_dir/.." && pwd)"
 profile="${SECRETSPEC_PHP_PROFILE:-release}"
+target_dir="${CARGO_TARGET_DIR:-$repo_root/target}"
 
 case "$(uname -s)" in
   Darwin)               built="libsecretspec_php_native.dylib"; staged="secretspec.so" ;;
@@ -26,5 +27,5 @@ build_flag=()
 mkdir -p "$pkg_dir/lib"
 # dlopen (which PHP uses to load extensions) resolves by path, not by suffix, so
 # staging the macOS .dylib under a .so name loads fine.
-cp -f "$repo_root/target/$profile/$built" "$pkg_dir/lib/$staged"
+cp -f "$target_dir/$profile/$built" "$pkg_dir/lib/$staged"
 echo "built $pkg_dir/lib/$staged"

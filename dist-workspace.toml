@@ -7,6 +7,9 @@ members = ["cargo:."]
 cargo-dist-version = "0.28.2"
 # CI backends to support
 ci = "github"
+# Only root release tags (vX.Y.Z) should invoke cargo-dist. Language SDKs in
+# subdirectories use namespaced tags such as secretspec-go/vX.Y.Z.
+tag-namespace = "v"
 # The installers to generate for each app
 installers = ["shell"]
 # Build only the `secretspec` CLI app, package-by-package, instead of a

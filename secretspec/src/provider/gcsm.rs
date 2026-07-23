@@ -55,7 +55,7 @@ pub struct GcsmConfig {
 /// - Not end with a hyphen
 fn validate_gcp_project_id(project_id: &str) -> std::result::Result<(), SecretSpecError> {
     let len = project_id.len();
-    if len < 6 || len > 30 {
+    if !(6..=30).contains(&len) {
         return Err(SecretSpecError::ProviderOperationFailed(format!(
             "GCP project ID must be 6-30 characters, got {}",
             len
@@ -306,15 +306,15 @@ impl GcsmProvider {
             .await;
 
         // Only fail on errors OTHER than ALREADY_EXISTS
-        if let Err(e) = create_result {
-            if !Self::is_already_exists_error(&e) {
-                return Err(SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to create secret '{}': {}",
-                    secret_name, e
-                )));
-            }
-            // ALREADY_EXISTS is expected for existing secrets, continue to add version
+        if let Err(e) = create_result
+            && !Self::is_already_exists_error(&e)
+        {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to create secret '{}': {}",
+                secret_name, e
+            )));
         }
+        // ALREADY_EXISTS is expected for existing secrets, continue to add version
 
         // Add a new version with the secret data
         client

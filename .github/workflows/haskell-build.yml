@@ -4,8 +4,23 @@ name: "Haskell SDK"
 # secretspec-ffi staticlib. The SDK statically links the C ABI archive at build
 # time, so the Rust resolver is embedded in the binary and there is no runtime
 # loader path (no LD_LIBRARY_PATH).
+#
+# The Windows job cannot use devenv (no Nix on Windows runners), so it sets up
+# rustup + MSYS2 + GHC directly. GHC on Windows links with a MinGW toolchain,
+# so the staticlib comes from the x86_64-pc-windows-gnu Rust target (declared
+# in rust-toolchain.toml); the MSYS2 mingw gcc compiles the archive's C deps
+# (aws-lc-sys, sqlite, zstd) and NASM assembles aws-lc's x86_64 assembly. Some
+# of the archive's link libraries are import libraries shipped inside cargo
+# registry crates rather than in any MinGW distribution -- those are staged
+# next to the archive (scripts/copy-mingw-import-libs.sh) so GHC's linker
+# finds them.
 
 on:
+  workflow_call:
+    secrets:
+      HACKAGE_TOKEN:
+        description: Hackage API token used only by the tag-push publish job
+        required: false
   workflow_dispatch:
   pull_request:
     paths:
@@ -14,6 +29,7 @@ on:
       - "secretspec/**"
       - ".github/workflows/haskell-build.yml"
       - "scripts/sync-sdk-versions.sh"
+      - "scripts/copy-mingw-import-libs.sh"
   push:
     branches: [main]
     tags:
@@ -66,10 +82,108 @@ jobs:
               --write-ghc-environment-files=always --test-show-details=streaming
           '
 
+  build-windows:
+    name: build (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+      - name: Install NASM (aws-lc-sys assembly)
+        uses: ilammy/setup-nasm@v1
+      # MINGW64 (msvcrt-based) matches the CRT the x86_64-pc-windows-gnu Rust
+      # target links, so every object in the archive agrees on one C runtime.
+      - name: Install MSYS2 MinGW toolchain (compiles the staticlib's C deps)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils
+      - name: Install GHC and cabal
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.6"
+      - name: Build staticlib + CLI and run the Haskell SDK test-suite
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          # The archive for GHC's MinGW linker; --crate-type overrides the
+          # crate's list so the unused cdylib is never linked. Release like
+          # the shipped artifacts: a debug archive carries sectionless .dwo
+          # members that objcopy below refuses to process.
+          cargo rustc -p secretspec-ffi --release --target x86_64-pc-windows-gnu \
+            --crate-type staticlib
+          # The CLI (for the test-suite's end-to-end codegen test) builds for
+          # the default MSVC host target, same as the released binaries.
+          cargo build -p secretspec
+          export SECRETSPEC_BIN="$(cygpath -w "$PWD/target/debug/secretspec.exe")"
+          native_libs="$(cargo rustc -q -p secretspec-ffi --release \
+            --target x86_64-pc-windows-gnu --crate-type staticlib -- \
+            --print native-static-libs 2>&1 \
+            | sed -n 's/^note: native-static-libs: //p' | tail -1)"
+          # Stage the .a alone (target/ also holds rlibs) plus the import
+          # libraries that ship inside cargo registry crates (see header).
+          hs_lib_dir="$(mktemp -d)"
+          cp target/x86_64-pc-windows-gnu/release/libsecretspec_ffi.a "$hs_lib_dir/"
+          # Two archive fixups for GHC's older bundled toolchain, which links
+          # the final test binary:
+          #  * rustc's windows-gnu objects carry `-exclude-symbols` .drectve
+          #    directives (DLL export hygiene) that GHC 9.6's ld.lld rejects
+          #    inside .drectve (LLVM allows them only from 17); meaningless
+          #    for a static executable link, so strip the section.
+          #  * the MSYS2-compiled aws-lc objects call nanosleep through its
+          #    time64 asm alias (nanosleep64), which GHC's older winpthreads
+          #    does not export; on x86_64 time_t is 64-bit either way, so
+          #    alias it back and GHC's winpthreads import library satisfies
+          #    it. (Linking MSYS2's winpthreads statically instead collides:
+          #    GHC's driver always links its own winpthreads import library,
+          #    and the two define overlapping internals.)
+          # objcopy refuses archives holding sectionless split-debuginfo
+          # members (the prebuilt std ships .dwo members a linker never
+          # selects), so drop those first.
+          ar t "$hs_lib_dir/libsecretspec_ffi.a" | grep '\.dwo$' | while read -r m; do
+            ar d "$hs_lib_dir/libsecretspec_ffi.a" "$m"
+          done
+          objcopy --remove-section=.drectve --redefine-sym nanosleep64=nanosleep \
+            "$hs_lib_dir/libsecretspec_ffi.a"
+          printf '%s\n' "$native_libs" > "$hs_lib_dir/native-static-libs.txt"
+          bash scripts/copy-mingw-import-libs.sh \
+            "$hs_lib_dir/native-static-libs.txt" "$hs_lib_dir"
+          ghc_optl=()
+          for l in $native_libs; do ghc_optl+=("--ghc-options=-optl$l"); done
+          # Resolving pthread symbols from GHC's winpthreads import library
+          # makes the test binary import libwinpthread-1.dll at runtime, and
+          # cabal does not put GHC's bundled toolchain bin on PATH
+          # (STATUS_DLL_NOT_FOUND when the suite starts). Add it ourselves;
+          # the ls fails the job early if the GHC layout ever changes.
+          mingw_bin="$(cygpath -u "$(ghc --print-libdir)")/../mingw/bin"
+          ls "$mingw_bin"/libwinpthread-1.dll
+          export PATH="$PATH:$mingw_bin"
+          cd secretspec-hs
+          cabal update
+          cabal test --extra-lib-dirs="$(cygpath -w "$hs_lib_dir")" "${ghc_optl[@]}" \
+            --write-ghc-environment-files=always --test-show-details=streaming || {
+            # cabal keeps the suite's output in a log file; surface it, and
+            # run the binary directly to expose a load-time failure's status.
+            echo "=== test suite log ==="
+            find dist-newstyle -name "*.log" -path "*secretspec-test*" -exec cat {} +
+            exe="$(find dist-newstyle -name "secretspec-test.exe" | head -1)"
+            echo "=== imported DLLs ==="
+            objdump -p "$exe" | grep -i "DLL Name" || true
+            ldd "$exe" || true
+            echo "=== direct run: $exe ==="
+            "$exe" || echo "direct run exit code: $?"
+            exit 1
+          }
+
   publish:
     name: publish to Hackage
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [build, build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

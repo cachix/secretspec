@@ -11,7 +11,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.14.0"
+version = "0.16.0"
 edition = "2024"
 
 [workspace.dependencies]
@@ -49,15 +49,19 @@ rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] 
 google-cloud-secretmanager-v1 = "1.2"
 aws-config = "1"
 aws-sdk-secretsmanager = "1"
+azure_core = "1.0.0"
+azure_identity = "1.0.0"
+azure_security_keyvault_secrets = "1.0.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
-secretspec-derive = { version = "0.14.0", path = "./secretspec-derive" }
-secretspec = { version = "0.14.0", path = "./secretspec" }
+secretspec-derive = { version = "0.16.0", path = "./secretspec-derive" }
+secretspec = { version = "0.16.0", path = "./secretspec" }
 rand = "0.9"
 rsa = { version = "0.9", features = ["pem"] }
 uuid = { version = "1", features = ["v4"] }
 data-encoding = "2"
 detect-coding-agent = "0.1"
+age = { version = "0.12", features = ["armor", "plugin", "ssh"] }
 
 # The profile that 'dist' will build with
 [profile.dist]

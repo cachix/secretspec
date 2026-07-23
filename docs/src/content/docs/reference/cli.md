@@ -72,21 +72,31 @@ Add a provider alias to your user-level configuration (`~/.config/secretspec/con
 
 To share aliases with your team, declare them in a top-level `[providers]` table in `secretspec.toml` instead — they take precedence over user-level aliases on name conflict.
 
+:::note[Version compatibility]
+SecretSpec 0.14 supports adding aliases with `<ALIAS>` and `<URI>`.
+The `--credential` option is available starting with SecretSpec 0.15.
+:::
+
 ```bash
-secretspec config provider add <ALIAS> <URI>
+secretspec config provider add <ALIAS> <URI> [--credential NAME=PROVIDER]...
 ```
 
 **Arguments:**
 - `<ALIAS>` - Short name for the provider (e.g., `prod_vault`, `shared`)
 - `<URI>` - Provider URI (e.g., `onepassword://Production`, `env://`)
 
+**Options:**
+- `--credential <NAME=PROVIDER>` - Declare a [provider credential](/concepts/providers/#provider-credentials) and its source. `NAME` is semantic and provider-specific, such as `access_token` or `role_id`. Repeatable. Only the bare-string source form is expressible on the command line; add a `ref` by editing the config.
+
 **Example:**
 ```bash
 $ secretspec config provider add prod_vault "onepassword://Production"
-✓ Provider alias 'prod_vault' saved
+✓ Provider alias 'prod_vault' added: 'onepassword://Production'
 
-$ secretspec config provider add shared "onepassword://Shared"
-✓ Provider alias 'shared' saved
+$ secretspec config provider add bws "bws://project-uuid" --credential access_token=keyring
+✓ Provider alias 'bws' added: 'bws://project-uuid'
+  credentials: access_token=keyring
+  run 'secretspec config provider login bws' to store the credentials
 ```
 
 ### config provider list
@@ -119,6 +129,33 @@ secretspec config provider remove <ALIAS>
 $ secretspec config provider remove prod_vault
 ✓ Provider alias 'prod_vault' removed
 ```
+
+### config provider login
+Store the [credentials](/concepts/providers/#provider-credentials) a provider alias declares. Prompts (hidden input) for each credential and writes it to its source provider at the exact location resolution reads it back from. Runs in a project, like `set` and `check`.
+
+:::note[Version compatibility]
+`config provider login` is available starting with SecretSpec 0.15. In
+SecretSpec 0.14, supply provider credentials through the provider's existing
+environment variables.
+:::
+
+```bash
+secretspec config provider login <ALIAS>
+```
+
+**Arguments:**
+- `<ALIAS>` - Name of the alias whose credentials to store
+
+**Example:**
+```bash
+$ secretspec config provider login bws
+Enter access_token for provider 'bws' (source: keyring): ****
+✓ stored access_token in keyring at myproject/default/access_token
+
+Run 'secretspec check --provider bws' to verify authentication.
+```
+
+A read-only source provider is rejected. An alias that declares no credentials reports that there is nothing to store.
 
 ### check
 Check if all required secrets are available, with interactive prompting for missing secrets.
@@ -199,6 +236,9 @@ $ secretspec get DATABASE_URL --profile production
 postgresql://prod.example.com/mydb
 ```
 
+For a composed secret, `get` resolves its transitive dependencies and prints
+the derived value. Available since SecretSpec 0.16.
+
 ### schema
 Emit a single-root JSON Schema for the manifest's typed shape: by default the
 union `SecretSpec` (safe for any profile); with `--profile`, that profile's exact
@@ -251,6 +291,9 @@ $ secretspec set API_KEY sk-1234567890
 ✓ Secret 'API_KEY' saved to keyring (profile: development)
 ```
 
+`set` rejects composed secrets because their values are derived and read-only.
+Available since SecretSpec 0.16.
+
 ### run
 Run a command with secrets injected as environment variables.
 
@@ -301,6 +344,33 @@ $ secretspec run -- node app.js  # app.js reads process.env.DATABASE_URL
 ```
 :::
 
+### export
+Resolve every secret for the active profile and write it to stdout in a chosen format, without running a command. Unlike `run`, it never prompts and exits non-zero when a required secret is missing, so CI can gate on it.
+
+```bash
+secretspec export [OPTIONS]
+```
+
+Options are `-p, --provider <PROVIDER>`, `-P, --profile <PROFILE>`, and `--format <FORMAT>` (default `shell`).
+
+| Format | Output |
+|--------|--------|
+| `shell` | `export KEY='value'` lines, ready for `eval "$(secretspec export)"` |
+| `dotenv` | `KEY="value"` lines in dotenv syntax (double-quoted, with `\`, `"`, `$`, and newline escaped) |
+| `json` | a single compact JSON object mapping each secret name to its value |
+| `gha` | appends `KEY=value` to the file named by `$GITHUB_ENV` and prints an `::add-mask::` command per value to stdout, so later workflow steps and third-party actions see the secrets |
+
+```bash
+# Load secrets into the current shell
+$ eval "$(secretspec export --profile production)"
+
+# Emit JSON for another tool to consume
+$ secretspec export --profile production --format json
+{"DATABASE_URL":"postgresql://prod.example.com/mydb"}
+```
+
+The `gha` format targets a `secretspec export --format gha` step in a GitHub or Forgejo Actions job: it masks the values in the runner log and persists them to the job environment for the steps that follow.
+
 ### import
 Import secrets from one provider to another.
 
@@ -334,6 +404,9 @@ $ secretspec import dotenv:/home/user/old-project/.env
 - Copy secrets between different profiles or projects
 - Import existing environment variables into SecretSpec management
 
+`import` skips composed secrets because they have no stored value to copy; their
+component secrets are imported normally. Available since SecretSpec 0.16.
+
 ### audit
 
 Show the local [audit log](/concepts/audit/) of secret access.
@@ -344,7 +417,7 @@ secretspec audit [--project <NAME>] [--action <ACTION>] [-n <N>] [--json]
 
 **Options:**
 - `--project <NAME>` - Only show entries for this project
-- `--action <ACTION>` - Only show entries for this action (`get`, `set`, `check`, `run`, `import`)
+- `--action <ACTION>` - Only show entries for this action (`get`, `set`, `check`, `run`, `import`, `export`)
 - `-n, --tail <N>` - Show only the last N entries
 - `--json` - Output raw JSON Lines instead of the formatted summary
 

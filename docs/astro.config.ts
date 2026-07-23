@@ -35,6 +35,9 @@ const devStarsApi: PluginOption = {
 // https://astro.build/config
 export default defineConfig({
   site: "https://secretspec.dev/",
+  redirects: {
+    "/reference/adding-providers": "/development/adding-providers",
+  },
   vite: {
     plugins: [devStarsApi],
   },
@@ -83,6 +86,13 @@ DB_PASSWORD  = { description = "DB password", type = "password", generate = true
 DATABASE_URL = { default = "postgresql://localhost/dev" }
 \`\`\`
 
+## Composed Secrets (0.16+)
+
+\`composed\` derives a read-only value from other declared secrets with strict,
+order-independent \`\${UPPERCASE_NAME}\` references. Names must match
+\`[A-Z][A-Z0-9_]*\`; it does not perform dotenv, shell, ambient-environment, or
+recursive expansion.
+
 ## Type-safe Rust SDK
 
 \`\`\`rust
@@ -109,7 +119,7 @@ $ secretspec import dotenv://.env.production
 
 ## Providers
 
-Secrets can be stored in: keyring (default), dotenv files, environment variables, 1Password, LastPass, Pass, Proton Pass, Google Cloud Secret Manager, AWS Secrets Manager, HashiCorp Vault / OpenBao, or Bitwarden Secrets Manager.`,
+Secrets can be stored in: keyring (default), dotenv files, environment variables, 1Password, Gopass (0.15+), LastPass, Pass, Proton Pass, Google Cloud Secret Manager, AWS Secrets Manager, HashiCorp Vault, OpenBao (0.17+), Bitwarden Secrets Manager, Azure Key Vault, Infisical (0.16+), or age (0.17+).`,
         }),
       ],
       title: "SecretSpec",
@@ -141,6 +151,7 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
           label: "Getting Started",
           items: [
             { label: "Quick Start", slug: "quick-start" },
+            { label: "Comparison", slug: "comparison" },
             { label: "Continuous Integration", slug: "ci" },
           ],
         },
@@ -158,9 +169,26 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
               label: "Configuration Inheritance",
               slug: "concepts/inheritance",
             },
-            { label: "Secret Generation", slug: "concepts/generation" },
-            { label: "Secret References", slug: "concepts/references" },
-            { label: "Audit Logging", slug: "concepts/audit" },
+            {
+              label: "Secret Generation",
+              slug: "concepts/generation",
+              badge: { text: "0.7+", variant: "note" },
+            },
+            {
+              label: "Composed Secrets",
+              slug: "concepts/composed-secrets",
+              badge: { text: "0.16+", variant: "note" },
+            },
+            {
+              label: "Secret References",
+              slug: "concepts/references",
+              badge: { text: "0.14+", variant: "note" },
+            },
+            {
+              label: "Audit Logging",
+              slug: "concepts/audit",
+              badge: { text: "0.12+", variant: "note" },
+            },
           ],
         },
         {
@@ -174,6 +202,11 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
             { label: "LastPass", slug: "providers/lastpass" },
             { label: "1Password", slug: "providers/onepassword" },
             {
+              label: "Gopass",
+              slug: "providers/gopass",
+              badge: { text: "0.15+", variant: "note" },
+            },
+            {
               label: "Google Cloud Secret Manager",
               slug: "providers/gcsm",
             },
@@ -182,26 +215,79 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
               slug: "providers/awssm",
             },
             {
-              label: "Vault / OpenBao",
+              label: "Vault",
               slug: "providers/vault",
+            },
+            {
+              label: "OpenBao",
+              slug: "providers/openbao",
+              badge: { text: "0.17+", variant: "note" },
             },
             {
               label: "Bitwarden Secrets Manager",
               slug: "providers/bws",
+            },
+            {
+              label: "Azure Key Vault",
+              slug: "providers/akv",
+              badge: { text: "0.15+", variant: "note" },
+            },
+            {
+              label: "Infisical",
+              slug: "providers/infisical",
+              badge: { text: "0.16+", variant: "note" },
+            },
+            {
+              label: "age",
+              slug: "providers/age",
+              badge: { text: "0.17+", variant: "note" },
             },
           ],
         },
         {
           label: "SDK",
           items: [
-            { label: "Overview", slug: "sdk/overview" },
-            { label: "Rust SDK", slug: "sdk/rust" },
-            { label: "Python SDK", slug: "sdk/python" },
-            { label: "Go SDK", slug: "sdk/go" },
-            { label: "Ruby SDK", slug: "sdk/ruby" },
-            { label: "Node.js SDK", slug: "sdk/nodejs" },
-            { label: "Haskell SDK", slug: "sdk/haskell" },
-            { label: "PHP SDK", slug: "sdk/php" },
+            {
+              label: "Overview",
+              slug: "sdk/overview",
+              badge: { text: "0.13+", variant: "note" },
+            },
+            { label: "Rust", slug: "sdk/rust" },
+            {
+              label: "Python",
+              slug: "sdk/python",
+              badge: { text: "0.13+", variant: "note" },
+            },
+            {
+              label: "Go",
+              slug: "sdk/go",
+              badge: { text: "0.13+", variant: "note" },
+            },
+            {
+              label: "Ruby",
+              slug: "sdk/ruby",
+              badge: { text: "0.13+", variant: "note" },
+            },
+            {
+              label: "Node.js",
+              slug: "sdk/nodejs",
+              badge: { text: "0.13+", variant: "note" },
+            },
+            {
+              label: "Haskell",
+              slug: "sdk/haskell",
+              badge: { text: "0.13+", variant: "note" },
+            },
+            {
+              label: "PHP",
+              slug: "sdk/php",
+              badge: { text: "0.15+", variant: "note" },
+            },
+            {
+              label: "C#",
+              slug: "sdk/csharp",
+              badge: { text: "0.16+", variant: "note" },
+            },
           ],
         },
         {
@@ -210,7 +296,19 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
             { label: "Configuration", slug: "reference/configuration" },
             { label: "CLI Commands", slug: "reference/cli" },
             { label: "Providers", slug: "reference/providers" },
-            { label: "Adding Providers", slug: "reference/adding-providers" },
+          ],
+        },
+        {
+          label: "Development",
+          items: [
+            {
+              label: "Adding Providers",
+              slug: "development/adding-providers",
+            },
+            {
+              label: "SDK Development",
+              slug: "development/sdks",
+            },
           ],
         },
       ],

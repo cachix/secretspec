@@ -43,9 +43,11 @@
 // Internal modules
 mod audit;
 pub mod codegen;
+mod composition;
 mod config;
 mod error;
 pub(crate) mod generator;
+mod manifest;
 mod plan;
 mod report;
 mod resolve;
@@ -80,8 +82,9 @@ pub use report::{
 pub use resolve::{
     RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource, resolve_json,
 };
+pub use secrets::ExportFormat;
 pub use secrets::Secrets;
-pub use validation::ValidatedSecrets;
+pub use validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
 
 #[cfg(test)]
 mod tests;

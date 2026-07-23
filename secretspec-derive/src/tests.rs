@@ -91,7 +91,7 @@ SOMETIMES_REQUIRED = { description = "Sometimes required secret", required = fal
         // Simulate the logic from the macro - check if secret is optional across all profiles
         let mut is_ever_optional = false;
 
-        for (_profile_name, profile_config) in &config.profiles {
+        for profile_config in config.profiles.values() {
             if let Some(secret_config) = profile_config.secrets.get("SOMETIMES_REQUIRED") {
                 if secret_config.required != Some(true) || secret_config.default.is_some() {
                     is_ever_optional = true;
@@ -141,24 +141,18 @@ ALWAYS_REQUIRED = { description = "Always required secret", required = true }
     }
 
     #[test]
-    fn test_default_makes_optional() {
+    fn test_default_guarantees_generated_field_presence() {
         let toml_str = r#"[project]
 name = "test"
 revision = "1.0"
 
 [profiles.default]
-HAS_DEFAULT = { description = "Secret with default", required = true, default = "some-default" }
+HAS_DEFAULT = { description = "Secret with default", required = false, default = "some-default" }
 "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
-        let secret_config = &config.profiles["default"].secrets["HAS_DEFAULT"];
-
-        let is_ever_optional =
-            secret_config.required != Some(true) || secret_config.default.is_some();
-        assert!(
-            is_ever_optional,
-            "Field with default should be treated as optional"
-        );
+        let ir = secretspec::codegen::build_ir(&config);
+        assert!(!ir.union[0].optional, "a default always supplies a value");
     }
 
     // ===== STAGE 1: HELPER FUNCTION TESTS =====

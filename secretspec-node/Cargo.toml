@@ -14,5 +14,10 @@ napi = { version = "2.16", default-features = false, features = ["napi8"] }
 napi-derive = "2.16"
 secretspec = { workspace = true }
 
+[features]
+# Statically link a from-source libdbus so the prebuilt Linux addon has no
+# runtime dependency beyond glibc (enabled by the node-addon release CI).
+vendored-dbus = ["secretspec/vendored-dbus"]
+
 [build-dependencies]
 napi-build = "2.1"

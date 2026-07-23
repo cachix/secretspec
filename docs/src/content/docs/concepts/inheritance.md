@@ -58,5 +58,7 @@ extends = ["../../shared/base", "../../shared/database", "../../shared/auth"]
 
 - Child definitions completely replace parent definitions for the same secret
 - Later sources in `extends` override earlier ones
+- Shared ancestors are applied once, so diamond-shaped inheritance is supported
 - Each profile is merged independently
+- Profile `[defaults]` inherit field by field across source files
 - Paths are relative to the containing `secretspec.toml` file

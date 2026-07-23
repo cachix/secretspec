@@ -1,5 +1,5 @@
 use crate::provider::{Provider, providers};
-use crate::{Config, GlobalConfig, GlobalDefaults, Profile, Project, Secrets};
+use crate::{Config, ExportFormat, GlobalConfig, GlobalDefaults, Profile, Project, Secrets};
 use clap::{Parser, Subcommand};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use std::collections::HashMap;
@@ -83,6 +83,18 @@ enum Commands {
         #[arg(trailing_var_arg = true)]
         command: Vec<String>,
     },
+    /// Resolve secrets and print them for another tool to consume
+    Export {
+        /// Provider backend to use
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        provider: Option<String>,
+        /// Profile to use
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        profile: Option<String>,
+        /// Output format
+        #[arg(long, value_enum, default_value = "shell")]
+        format: ExportFormat,
+    },
     /// Check if all required secrets are in the provider, if not set them
     Check {
         /// Provider backend to use
@@ -135,7 +147,7 @@ enum Commands {
         /// Only show entries for this project
         #[arg(long)]
         project: Option<String>,
-        /// Only show entries for this action (get, set, check, run, import)
+        /// Only show entries for this action (get, set, check, run, import, export)
         #[arg(long)]
         action: Option<String>,
         /// Show only the last N entries
@@ -173,6 +185,12 @@ enum ProviderAction {
         name: String,
         /// Provider URI (e.g., "keyring://", "onepassword://Shared", "dotenv://.env.local")
         uri: String,
+        /// Provider credential binding `NAME=PROVIDER` (repeatable). `NAME` is
+        /// semantic and provider-specific, such as `access_token` or `role_id`.
+        /// Only the bare-string source form is expressible here; add a `ref` by
+        /// editing the config.
+        #[arg(long = "credential", value_name = "NAME=PROVIDER")]
+        credential: Vec<String>,
     },
     /// Remove a provider alias
     Remove {
@@ -181,6 +199,11 @@ enum ProviderAction {
     },
     /// List all configured provider aliases
     List,
+    /// Store the credentials declared by a provider alias
+    Login {
+        /// Name of the provider alias to store credentials for
+        name: String,
+    },
 }
 
 /// Returns an example TOML configuration string
@@ -266,9 +289,34 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
             );
             if let Some(required) = secret_config.required {
                 inline.insert("required", Value::from(required));
+            } else if secret_config.at_least_one.is_some() || secret_config.exactly_one.is_some() {
+                let mut groups = InlineTable::new();
+                for (name, memberships) in [
+                    ("at_least_one", &secret_config.at_least_one),
+                    ("exactly_one", &secret_config.exactly_one),
+                ] {
+                    let Some(memberships) = memberships else {
+                        continue;
+                    };
+                    let value = match memberships.as_slice() {
+                        [membership] => Value::from(membership.as_str()),
+                        memberships => {
+                            let mut array = Array::new();
+                            for membership in memberships {
+                                array.push(membership.as_str());
+                            }
+                            Value::Array(array)
+                        }
+                    };
+                    groups.insert(name, value);
+                }
+                inline.insert("required", Value::InlineTable(groups));
             }
             if let Some(default) = &secret_config.default {
                 inline.insert("default", Value::from(default.as_str()));
+            }
+            if let Some(composed) = &secret_config.composed {
+                inline.insert("composed", Value::from(composed.as_str()));
             }
             profile_table.insert(&secret_name, toml_edit::value(inline));
         }
@@ -496,7 +544,34 @@ pub fn main() -> Result<()> {
             // Manage provider aliases
             ConfigAction::Provider(action) => {
                 match action {
-                    ProviderAction::Add { name, uri } => {
+                    ProviderAction::Add {
+                        name,
+                        uri,
+                        credential,
+                    } => {
+                        // Parse each `NAME=PROVIDER` binding into a credential source.
+                        let mut credentials = HashMap::new();
+                        for binding in &credential {
+                            let (credential_name, spec) =
+                                binding.split_once('=').ok_or_else(|| {
+                                    miette!("--credential expects NAME=PROVIDER, got '{binding}'")
+                                })?;
+                            if credential_name.is_empty() || spec.is_empty() {
+                                return Err(miette!(
+                                    "--credential expects a non-empty NAME=PROVIDER, got '{binding}'"
+                                ));
+                            }
+                            credentials.insert(
+                                credential_name.to_string(),
+                                crate::config::CredentialSource::from(spec),
+                            );
+                        }
+                        // An empty map keeps the compact bare-string alias form.
+                        let alias_value = crate::config::ProviderAlias {
+                            uri: uri.clone(),
+                            credentials,
+                        };
+
                         // Load or create config
                         let mut config =
                             GlobalConfig::load()
@@ -517,13 +592,16 @@ pub fn main() -> Result<()> {
 
                         // Add or update the provider alias
                         if let Some(providers) = &mut config.defaults.providers {
-                            let existing = providers.insert(name.clone(), uri.clone());
+                            let display = providers
+                                .insert(name.clone(), alias_value)
+                                .map_or("added", |_| "updated");
                             config.save().into_diagnostic()?;
-
-                            if existing.is_some() {
-                                println!("✓ Provider alias '{}' updated to '{}'", name, uri);
-                            } else {
-                                println!("✓ Provider alias '{}' added: '{}'", name, uri);
+                            println!("✓ Provider alias '{name}' {display}: '{uri}'");
+                            if !credential.is_empty() {
+                                println!("  credentials: {}", credential.join(", "));
+                                println!(
+                                    "  run 'secretspec config provider login {name}' to store the credentials"
+                                );
                             }
                         }
                         Ok(())
@@ -575,6 +653,40 @@ pub fn main() -> Result<()> {
                                 );
                             }
                         }
+                        Ok(())
+                    }
+                    ProviderAction::Login { name } => {
+                        let app = load_secrets(&cli.file, &cli.reason)?;
+                        let credentials =
+                            app.declared_provider_credentials(&name).into_diagnostic()?;
+                        if credentials.is_empty() {
+                            println!("Provider alias '{name}' declares no credentials.");
+                            return Ok(());
+                        }
+                        for (credential_name, source) in credentials {
+                            let entered = inquire::Password::new(&format!(
+                                "Enter {credential_name} for provider '{name}' (source: {}):",
+                                source.display_provider()
+                            ))
+                            .without_confirmation()
+                            .prompt()
+                            .into_diagnostic()?;
+                            if entered.is_empty() {
+                                println!("✗ Skipped {credential_name} (empty)");
+                                continue;
+                            }
+                            let location = app
+                                .store_provider_credential(
+                                    &source,
+                                    &credential_name,
+                                    &secrecy::SecretString::new(entered.into()),
+                                )
+                                .into_diagnostic()?;
+                            println!("✓ stored {credential_name} in {location}");
+                        }
+                        println!(
+                            "\nRun 'secretspec check --provider {name}' to verify authentication."
+                        );
                         Ok(())
                     }
                 }
@@ -633,6 +745,25 @@ pub fn main() -> Result<()> {
             app.run(command)
                 .into_diagnostic()
                 .wrap_err("Failed to run command")?;
+            Ok(())
+        }
+        // Resolve secrets and print them without running a command
+        Commands::Export {
+            provider,
+            profile,
+            format,
+        } => {
+            let mut app = load_secrets(&cli.file, &cli.reason)?;
+            if let Some(p) = provider {
+                app.set_provider(p);
+            }
+            if let Some(p) = profile {
+                app.set_profile(p);
+            }
+            let mut out = std::io::stdout().lock();
+            app.export(format, &mut out)
+                .into_diagnostic()
+                .wrap_err("Failed to export secrets")?;
             Ok(())
         }
         // Verify all required secrets are available
@@ -1155,6 +1286,47 @@ mod tests {
     }
 
     #[test]
+    fn generate_toml_emits_grouped_requiredness() {
+        let secret = Secret {
+            description: Some("desc".to_string()),
+            at_least_one: Some(vec!["auth".to_string(), "deploy".to_string()]),
+            exactly_one: Some(vec!["identity".to_string()]),
+            ..Default::default()
+        };
+        let out = generate_toml_with_comments(&config_with_secret(secret)).unwrap();
+        assert!(
+            out.contains(
+                "required = { at_least_one = [\"auth\", \"deploy\"], exactly_one = \"identity\" }"
+            ),
+            "got: {out}"
+        );
+        let parsed: Config = toml::from_str(&out).expect("must round-trip");
+        let secret = &parsed.profiles["default"].secrets["S"];
+        assert_eq!(
+            secret.at_least_one.as_deref(),
+            Some(["auth".to_string(), "deploy".to_string()].as_slice())
+        );
+        assert_eq!(
+            secret.exactly_one.as_deref(),
+            Some(["identity".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn generate_toml_preserves_composed_templates() {
+        let out = generate_toml_with_comments(&config_with_secret(Secret {
+            description: Some("dsn".to_string()),
+            composed: Some("postgres://${USER}@${HOST}/db".to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        assert!(
+            out.contains(", composed = \"postgres://${USER}@${HOST}/db\""),
+            "got: {out}"
+        );
+    }
+
+    #[test]
     fn generated_config_with_example_template_is_valid_toml() {
         let mut out = generate_toml_with_comments(&config_with_secret(Secret {
             description: Some("desc".to_string()),
@@ -1200,6 +1372,84 @@ mod tests {
         match cli.command {
             Commands::Check { no_prompt, .. } => assert!(no_prompt),
             _ => panic!("expected Check command"),
+        }
+    }
+
+    #[test]
+    fn provider_add_parses_repeated_credential_bindings() {
+        let cli = Cli::try_parse_from([
+            "secretspec",
+            "config",
+            "provider",
+            "add",
+            "bws",
+            "bws://proj",
+            "--credential",
+            "access_token=keyring",
+            "--credential",
+            "other=dotenv://.env",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Config {
+                action:
+                    ConfigAction::Provider(ProviderAction::Add {
+                        name,
+                        uri,
+                        credential,
+                    }),
+            } => {
+                assert_eq!(name, "bws");
+                assert_eq!(uri, "bws://proj");
+                assert_eq!(
+                    credential,
+                    vec!["access_token=keyring", "other=dotenv://.env"]
+                );
+            }
+            _ => panic!("expected config provider add"),
+        }
+    }
+
+    #[test]
+    fn provider_add_help_describes_semantic_credentials() {
+        let help = Cli::try_parse_from(["secretspec", "config", "provider", "add", "--help"])
+            .err()
+            .expect("--help should stop parsing")
+            .to_string();
+
+        assert!(help.contains("semantic and provider-specific"));
+        assert!(help.contains("access_token"));
+    }
+
+    #[test]
+    fn provider_add_rejects_the_environment_shaped_flag() {
+        let error = Cli::try_parse_from([
+            "secretspec",
+            "config",
+            "provider",
+            "add",
+            "bws",
+            "bws://proj",
+            "--env",
+            "BWS_ACCESS_TOKEN=keyring",
+        ])
+        .err()
+        .expect("--env should be rejected");
+
+        assert!(error.to_string().contains("--env"));
+    }
+
+    #[test]
+    fn provider_login_parses() {
+        let cli =
+            Cli::try_parse_from(["secretspec", "config", "provider", "login", "bws"]).unwrap();
+        match cli.command {
+            Commands::Config {
+                action: ConfigAction::Provider(ProviderAction::Login { name }),
+            } => {
+                assert_eq!(name, "bws");
+            }
+            _ => panic!("expected config provider login"),
         }
     }
 }

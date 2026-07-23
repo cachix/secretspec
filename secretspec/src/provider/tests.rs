@@ -118,6 +118,81 @@ impl Provider for CountingProvider {
     }
 }
 
+/// Process-global store backing [`MemTestProvider`], so a freshly built instance
+/// observes writes made through an earlier one — required to exercise
+/// store-then-resolve of a provider credential across separate `Secrets`.
+static MEM_STORE: std::sync::LazyLock<Mutex<HashMap<String, String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Registered, writable, profile-namespacing in-memory provider (`memtest://`).
+/// Unlike `dotenv` (which ignores project/profile), this keys secrets by
+/// `{project}/{profile}/{key}`, so tests can prove whether a store location
+/// depends on the active profile.
+pub(crate) struct MemTestProvider;
+pub(crate) struct MemTestConfig;
+
+impl TryFrom<&super::ProviderUrl> for MemTestConfig {
+    type Error = crate::SecretSpecError;
+    fn try_from(_url: &super::ProviderUrl) -> Result<Self> {
+        Ok(Self)
+    }
+}
+
+impl MemTestProvider {
+    fn new(_config: MemTestConfig) -> Self {
+        Self
+    }
+}
+
+crate::register_provider! {
+    struct: MemTestProvider,
+    config: MemTestConfig,
+    name: "memtest",
+    description: "In-memory provider for tests",
+    schemes: ["memtest"],
+    examples: ["memtest://"],
+}
+
+impl Provider for MemTestProvider {
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: format!("{}/{}/{}", project, profile, key),
+            ..Default::default()
+        })
+    }
+
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let item = super::flat_item(self, addr)?.into_owned();
+        Ok(MEM_STORE
+            .lock()
+            .unwrap()
+            .get(&item)
+            .map(|v| SecretString::new(v.clone().into())))
+    }
+
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        let item = super::flat_item(self, addr)?.into_owned();
+        MEM_STORE
+            .lock()
+            .unwrap()
+            .insert(item, value.expose_secret().to_string());
+        Ok(())
+    }
+
+    fn name(&self) -> &'static str {
+        Self::PROVIDER_NAME
+    }
+
+    fn uri(&self) -> String {
+        "memtest://".to_string()
+    }
+}
+
 /// A single distinct address (the common case: one secret, or several sharing
 /// one `ref`) is fetched once and its value shared, via the inline fast path.
 #[test]
@@ -237,6 +312,9 @@ fn test_create_from_string_with_plain_names() {
 
     let provider = Box::<dyn Provider>::try_from("lastpass").unwrap();
     assert_eq!(provider.name(), "lastpass");
+
+    let provider = Box::<dyn Provider>::try_from("gopass").unwrap();
+    assert_eq!(provider.name(), "gopass");
 
     let provider = Box::<dyn Provider>::try_from("pass").unwrap();
     assert_eq!(provider.name(), "pass");
@@ -467,8 +545,8 @@ mod integration_tests {
             }
             #[cfg(feature = "vault")]
             // "vault" tests KV v2 (default), "vault-kv1" tests KV v1.
-            // Set VAULT_TOKEN and run a dev server (bao server -dev).
-            // For KV v1: bao secrets enable -path=kv1 -version=1 kv
+            // Set VAULT_TOKEN and run a Vault-compatible dev server.
+            // For KV v1: vault secrets enable -path=kv1 -version=1 kv
             "vault" | "vault-kv1" => {
                 let provider_spec = if provider_name == "vault-kv1" {
                     "vault://127.0.0.1:8200/kv1?tls=false&kv=1"
@@ -479,9 +557,70 @@ mod integration_tests {
                     .expect("Should create vault provider");
                 (provider, None)
             }
+            #[cfg(feature = "openbao")]
+            // "openbao" tests KV v2 (default), "openbao-kv1" tests KV v1.
+            // Set BAO_TOKEN and run `bao server -dev`.
+            // For KV v1: bao secrets enable -path=kv1 -version=1 kv
+            "openbao" | "openbao-kv1" => {
+                let provider_spec = if provider_name == "openbao-kv1" {
+                    "openbao://127.0.0.1:8200/kv1?tls=false&kv=1"
+                } else {
+                    "openbao://127.0.0.1:8200?tls=false"
+                };
+                let provider = Box::<dyn Provider>::try_from(provider_spec)
+                    .expect("Should create openbao provider");
+                (provider, None)
+            }
+            #[cfg(feature = "infisical")]
+            // Bare "infisical" names no project, so route it through a real
+            // one instead of failing to parse in the generic `_` branch below.
+            // Set INFISICAL_TEST_PROJECT to a project UUID, INFISICAL_TEST_HOST
+            // to reach a self-hosted instance (default: Infisical Cloud), and
+            // authenticate with INFISICAL_CLIENT_ID/INFISICAL_CLIENT_SECRET or
+            // INFISICAL_TOKEN. Prefer the former, and exercise both: only the
+            // client_id/client_secret path logs in, so a token alone leaves
+            // that request untested. The environment is pinned (INFISICAL_TEST_ENV,
+            // default `dev`, which every new project has) because these tests
+            // run under profiles no Infisical environment is named after;
+            // profiles still separate, by folder.
+            "infisical" => {
+                let project = std::env::var("INFISICAL_TEST_PROJECT").expect(
+                    "Testing the infisical provider requires a real project: set INFISICAL_TEST_PROJECT to a project UUID (and authenticate via INFISICAL_CLIENT_ID/INFISICAL_CLIENT_SECRET or INFISICAL_TOKEN).",
+                );
+                let host = std::env::var("INFISICAL_TEST_HOST")
+                    .unwrap_or_else(|_| "app.infisical.com".to_string());
+                let env = std::env::var("INFISICAL_TEST_ENV").unwrap_or_else(|_| "dev".to_string());
+                // A self-hosted instance is commonly served over plain HTTP.
+                let tls = if host.starts_with("localhost") || host.starts_with("127.0.0.1") {
+                    "&tls=false"
+                } else {
+                    ""
+                };
+                let provider_spec = format!("infisical://{host}/{project}?env={env}{tls}");
+                let provider = Box::<dyn Provider>::try_from(provider_spec.as_str())
+                    .expect("Should create infisical provider");
+                (provider, None)
+            }
+            #[cfg(feature = "akv")]
+            // Bare "akv" has no vault name, so route it through a real
+            // AKV_TEST_VAULT instead of falling into the generic `_` branch
+            // below, where `try_from("akv")` fails to parse and panics with
+            // a misleading "akv provider should exist" instead of pointing
+            // at the missing configuration. Set AKV_TEST_VAULT to a real Key
+            // Vault name and authenticate via AZURE_TENANT_ID/AZURE_CLIENT_ID/
+            // AZURE_CLIENT_SECRET or `az login` to exercise this provider.
+            "akv" => {
+                let vault = std::env::var("AKV_TEST_VAULT").expect(
+                    "Testing the akv provider requires a real Key Vault: set AKV_TEST_VAULT to a vault name (and authenticate via AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET or `az login`).",
+                );
+                let provider_spec = format!("akv://{vault}");
+                let provider = Box::<dyn Provider>::try_from(provider_spec.as_str())
+                    .expect("Should create akv provider");
+                (provider, None)
+            }
             _ => {
                 let provider = Box::<dyn Provider>::try_from(provider_name)
-                    .expect(&format!("{} provider should exist", provider_name));
+                    .unwrap_or_else(|_| panic!("{} provider should exist", provider_name));
                 (provider, None)
             }
         }
@@ -522,10 +661,12 @@ mod integration_tests {
                     Address::convention(&project_name, "default", "TEST_PASSWORD"),
                     &test_value,
                 )
-                .expect(&format!(
-                    "[{}] Provider claims to support set but failed",
-                    provider_name
-                ));
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "[{}] Provider claims to support set but failed",
+                        provider_name
+                    )
+                });
 
             // Verify we can retrieve it
             let retrieved = provider
@@ -534,10 +675,12 @@ mod integration_tests {
                     "default",
                     "TEST_PASSWORD",
                 ))
-                .expect(&format!(
-                    "[{}] Should not error when getting after set",
-                    provider_name
-                ));
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "[{}] Should not error when getting after set",
+                        provider_name
+                    )
+                });
 
             match retrieved {
                 Some(value) => {
@@ -587,6 +730,147 @@ mod integration_tests {
             println!("Testing provider: {}", provider_name);
             let (provider, _temp_dir) = create_provider_with_temp_path(&provider_name);
             test_provider_basic_workflow(provider.as_ref(), &provider_name);
+        }
+    }
+
+    /// A value Infisical withholds surfaces as a refusal, never as a secret.
+    ///
+    /// An identity permitted to see that a secret exists, but not to read it,
+    /// still gets HTTP 200: the value is replaced with a placeholder and
+    /// `secretValueHidden` is set. Handing that on would export a literal
+    /// `<hidden-by-infisical>` to the process SecretSpec runs, and reporting it
+    /// absent would read as an unset secret.
+    ///
+    /// Telling those identities apart needs a custom role, which Infisical
+    /// gates behind a paid tier, so this runs only where one exists: set
+    /// `INFISICAL_TEST_NOREAD_CLIENT_ID` and `INFISICAL_TEST_NOREAD_CLIENT_SECRET`
+    /// to an identity holding that role, alongside the usual
+    /// `INFISICAL_TEST_PROJECT` and a writable identity to plant the secret
+    /// with. The refusal itself is covered without any of that by
+    /// `provider::infisical::tests::a_withheld_value_is_refused`; this test is
+    /// what proves the placeholder still looks like Infisical says it does.
+    #[cfg(feature = "infisical")]
+    #[test]
+    fn test_infisical_refuses_a_withheld_value() {
+        let (Ok(client_id), Ok(client_secret)) = (
+            std::env::var("INFISICAL_TEST_NOREAD_CLIENT_ID"),
+            std::env::var("INFISICAL_TEST_NOREAD_CLIENT_SECRET"),
+        ) else {
+            eprintln!(
+                "skipping: set INFISICAL_TEST_NOREAD_CLIENT_ID/SECRET to an identity that may \
+                 see a secret exists but not read it (needs an Infisical custom role)"
+            );
+            return;
+        };
+        if !get_test_providers().iter().any(|p| p == "infisical") {
+            eprintln!("skipping: SECRETSPEC_TEST_PROVIDERS does not name infisical");
+            return;
+        }
+        // A ready-made token outranks the credentials below, so the reader
+        // would authenticate as whoever minted it -- read the value, and fail
+        // for the wrong reason. The restricted identity has to be the only way
+        // in.
+        if std::env::var("INFISICAL_TOKEN").is_ok() {
+            eprintln!(
+                "skipping: INFISICAL_TOKEN outranks the restricted identity's credentials. \
+                 Unset it and authenticate with INFISICAL_CLIENT_ID/INFISICAL_CLIENT_SECRET \
+                 to exercise a withheld value."
+            );
+            return;
+        }
+
+        // Plant a secret the restricted identity is allowed to know about.
+        let project_name = generate_test_project_name();
+        let (writer, _t) = create_provider_with_temp_path("infisical");
+        writer
+            .set(
+                Address::convention(&project_name, "default", "HIDDEN_KEY"),
+                &SecretString::new("plaintext".into()),
+            )
+            .expect("the writing identity should store a secret");
+
+        // The same store, read by an identity that may not see values.
+        let (mut restricted, _t) = create_provider_with_temp_path("infisical");
+        let mut credentials = crate::provider::ProviderCredentials::new();
+        credentials.insert("client_id".to_string(), SecretString::new(client_id.into()));
+        credentials.insert(
+            "client_secret".to_string(),
+            SecretString::new(client_secret.into()),
+        );
+        restricted.with_credentials(credentials);
+
+        let err = restricted
+            .get(Address::convention(&project_name, "default", "HIDDEN_KEY"))
+            .expect_err("a withheld value must not read as a secret");
+        assert!(
+            err.to_string().contains("withheld"),
+            "the refusal should say the value was withheld, got: {err}"
+        );
+        // The placeholder must never reach the caller.
+        assert!(
+            !err.to_string().contains("plaintext"),
+            "the error must not carry the value"
+        );
+    }
+
+    /// One key, many profiles: each profile keeps its own value.
+    ///
+    /// A store that folds the profile into its naming can map two profiles
+    /// onto one secret, where a write under one profile silently overwrites
+    /// another's. That is invisible to a single-profile test, so every store
+    /// is asked to keep the profiles apart.
+    #[test]
+    fn test_all_providers_isolate_profiles() {
+        let mock = MockProvider::new();
+        test_provider_profile_isolation(&mock, "mock");
+
+        for provider_name in get_test_providers() {
+            println!("Testing provider: {}", provider_name);
+            let (provider, _temp_dir) = create_provider_with_temp_path(&provider_name);
+            test_provider_profile_isolation(provider.as_ref(), &provider_name);
+        }
+    }
+
+    /// Stores that hold one flat namespace, where every profile reads the same
+    /// value by design. Named rather than detected: a store that has collapsed
+    /// its profiles by accident looks exactly like one that never had them,
+    /// which is the bug this test exists to catch.
+    const FLAT_PROVIDERS: &[&str] = &["dotenv", "env"];
+
+    fn test_provider_profile_isolation(provider: &dyn Provider, provider_name: &str) {
+        if FLAT_PROVIDERS.contains(&provider_name)
+            || provider
+                .check_writable(Address::convention("proj", "default", "KEY"))
+                .is_err()
+        {
+            return;
+        }
+
+        let project_name = generate_test_project_name();
+        let profiles = ["dev", "staging", "prod"];
+
+        for profile in profiles {
+            let value = SecretString::new(format!("value_for_{profile}").into());
+            provider
+                .set(
+                    Address::convention(&project_name, profile, "API_KEY"),
+                    &value,
+                )
+                .unwrap_or_else(|e| panic!("[{provider_name}] set under '{profile}': {e}"));
+        }
+
+        // Written last, so a store that collapses the profiles hands "prod"
+        // back for every one of them.
+        for profile in profiles {
+            let found = provider
+                .get(Address::convention(&project_name, profile, "API_KEY"))
+                .unwrap_or_else(|e| panic!("[{provider_name}] get under '{profile}': {e}"))
+                .unwrap_or_else(|| panic!("[{provider_name}] '{profile}' lost its secret"));
+            assert_eq!(
+                found.expose_secret(),
+                format!("value_for_{profile}"),
+                "[{provider_name}] profile '{profile}' reads another profile's value"
+            );
         }
     }
 
@@ -652,23 +936,16 @@ mod integration_tests {
         }
 
         // Verify isolation between profiles
-        for i in 0..profiles.len() {
-            for j in 0..profiles.len() {
-                let result = provider
-                    .get(Address::convention(&project_name, profiles[j], test_key))
-                    .expect("Should not error");
-
-                if i == j {
-                    assert!(result.is_some(), "Should find value in same profile");
-                } else {
-                    let expected_value = format!("key_for_{}", profiles[j]);
-                    assert_eq!(
-                        result.map(|s| s.expose_secret().to_string()),
-                        Some(expected_value),
-                        "Should find profile-specific value"
-                    );
-                }
-            }
+        for profile in profiles {
+            let result = provider
+                .get(Address::convention(&project_name, profile, test_key))
+                .expect("Should not error");
+            let expected_value = format!("key_for_{}", profile);
+            assert_eq!(
+                result.map(|s| s.expose_secret().to_string()),
+                Some(expected_value),
+                "Should find profile-specific value"
+            );
         }
     }
 
@@ -804,7 +1081,7 @@ mod integration_tests {
         }
 
         // Batch get including a key that doesn't exist
-        let keys = vec![
+        let keys = [
             "BATCH_TEST_1",
             "BATCH_TEST_2",
             "BATCH_TEST_3",
@@ -937,12 +1214,12 @@ mod integration_tests {
         assert_eq!(provider.name(), "vault");
     }
 
-    #[cfg(feature = "vault")]
+    #[cfg(feature = "openbao")]
     #[test]
-    fn test_openbao_scheme() {
-        // Test OpenBao URI scheme
+    fn test_openbao_provider_creation() {
         let provider = Box::<dyn Provider>::try_from("openbao://bao.internal:8200/secret").unwrap();
-        assert_eq!(provider.name(), "vault");
+        assert_eq!(provider.name(), "openbao");
+        assert_eq!(provider.uri(), "openbao://bao.internal:8200/secret");
     }
 
     #[cfg(feature = "vault")]
@@ -1048,4 +1325,131 @@ mod integration_tests {
         let provider = Box::<dyn Provider>::try_from("gcsm://project123").unwrap();
         assert_eq!(provider.name(), "gcsm");
     }
+
+    /// Provider credentials must reach a preflight-wrapped provider. onepassword
+    /// is built as `Box<Arc<OnePasswordProvider>>` behind a `PreflightGuard`, so a
+    /// `&mut self` hook applied post-construction would be swallowed by the `Arc`
+    /// layer (which cannot forward `&mut self`); this passes only because the
+    /// credentials are injected inside the factory, before wrapping. The delivered
+    /// token folds into `auth_scope_key` as a hash, so injection shows up as a
+    /// scope-key difference while the plaintext never reaches the
+    /// process-lifetime preflight cache.
+    #[test]
+    fn credentials_reach_preflight_wrapped_provider() {
+        use crate::provider::{ProviderCredentials, ProviderUrl, provider_from_url};
+        use url::Url;
+
+        // Clear any ambient token under the env lock: with one exported, every
+        // instance would resolve the same effective token and the scope keys
+        // below could not tell injection from a silent no-op.
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = crate::tests::EnvVarGuard::remove("OP_SERVICE_ACCOUNT_TOKEN");
+
+        let scope_with = |token: Option<&str>| {
+            let mut credentials = ProviderCredentials::new();
+            if let Some(token) = token {
+                credentials.insert(
+                    "service_account_token".to_string(),
+                    SecretString::new(token.into()),
+                );
+            }
+            let url = ProviderUrl::new(Url::parse("onepassword://Private").unwrap());
+            provider_from_url(&url, credentials)
+                .unwrap()
+                .auth_scope_key()
+                .expect("onepassword advertises an auth scope")
+        };
+
+        let without_token = scope_with(None);
+        let with_token = scope_with(Some("tok-xyz"));
+        assert_ne!(
+            with_token, without_token,
+            "provider credential should be injected before Arc-wrapping"
+        );
+        // Same token, same scope; different tokens probe auth separately.
+        assert_eq!(with_token, scope_with(Some("tok-xyz")));
+        assert_ne!(with_token, scope_with(Some("tok-other")));
+        // The scope key carries a hash of the token, never its plaintext.
+        assert!(
+            !with_token.contains("tok-xyz"),
+            "auth scope key must not embed the plaintext token: {with_token}"
+        );
+    }
+}
+
+/// Item names a store may or may not be able to represent, drawn from the
+/// dotenv corruption incident (a dash smuggled in by a `ref` item) plus other
+/// shapes env-style formats reject.
+#[cfg(test)]
+const HOSTILE_ITEMS: &[&str] = &[
+    "CACHIX_SIGNING_KEY_cache-a",
+    "with space",
+    "1LEADING_DIGIT",
+    "dotted.name",
+    "sla/sh",
+    "_VALID_UNDERSCORE",
+    "PLAIN_VALID_1",
+];
+
+/// The write/read symmetry contract every writable provider must keep: a `set`
+/// that reports success is readable back by `get`, and a name the store cannot
+/// represent is rejected up front, never written in a form that breaks later
+/// reads of other secrets. Each provider is free to accept or reject any given
+/// name; what it may not do is accept a write it cannot serve back.
+#[cfg(test)]
+fn assert_write_read_symmetry(provider: &dyn Provider) {
+    use secrecy::ExposeSecret;
+
+    // A convention secret written first must stay readable throughout.
+    provider
+        .set(
+            Address::convention("proj", "default", "KEEP"),
+            &SecretString::new("kept".into()),
+        )
+        .unwrap();
+
+    for item in HOSTILE_ITEMS {
+        let addr = crate::config::NativeAddress {
+            item: (*item).to_string(),
+            ..Default::default()
+        };
+        let wrote = provider
+            .set(Address::Native(&addr), &SecretString::new("v".into()))
+            .is_ok();
+        if wrote {
+            let got = provider.get(Address::Native(&addr)).unwrap();
+            assert_eq!(
+                got.map(|s| s.expose_secret().to_string()),
+                Some("v".to_string()),
+                "provider `{}` accepted a write of `{item}` it cannot read back",
+                provider.name(),
+            );
+        }
+        // Accepted or rejected, the write must not have damaged the store.
+        let kept = provider
+            .get(Address::convention("proj", "default", "KEEP"))
+            .unwrap();
+        assert_eq!(
+            kept.map(|s| s.expose_secret().to_string()),
+            Some("kept".to_string()),
+            "provider `{}`: a write of `{item}` corrupted other secrets",
+            provider.name(),
+        );
+    }
+}
+
+#[test]
+fn dotenv_write_read_symmetry() {
+    use super::dotenv::{DotEnvConfig, DotEnvProvider};
+
+    let dir = TempDir::new().unwrap();
+    let provider = DotEnvProvider::new(DotEnvConfig {
+        path: dir.path().join(".env"),
+    });
+    assert_write_read_symmetry(&provider);
+}
+
+#[test]
+fn mock_provider_write_read_symmetry() {
+    assert_write_read_symmetry(&MockProvider::new());
 }

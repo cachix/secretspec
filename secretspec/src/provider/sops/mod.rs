@@ -189,6 +189,15 @@ impl SopsProvider {
         args
     }
 
+    fn command_preserving_file_type(&self, command: &str) -> Vec<String> {
+        let mut args = self.command_with_input_type(command);
+        if let Some(output_type) = self.input_type() {
+            args.push("--output-type".to_string());
+            args.push(output_type.to_string());
+        }
+        args
+    }
+
     fn decrypt(&self, path: &Path) -> Result<Vec<u8>> {
         let mut args = self.command_with_input_type("decrypt");
         args.extend([
@@ -286,7 +295,7 @@ impl SopsProvider {
             ))
         })?;
 
-        let mut args = self.command_with_input_type("encrypt");
+        let mut args = self.command_preserving_file_type("encrypt");
         args.extend([
             "--in-place".to_string(),
             path.to_string_lossy().into_owned(),
@@ -374,12 +383,12 @@ impl Provider for SopsProvider {
         // plaintext file, but do not silently proceed until it has been
         // encrypted successfully.
         if self.decrypt(&path).is_err() {
-            let mut encrypt = self.command_with_input_type("encrypt");
+            let mut encrypt = self.command_preserving_file_type("encrypt");
             encrypt.extend(["--in-place".to_string(), file.clone()]);
             self.execute_sops_command(encrypt)?;
         }
 
-        let mut args = self.command_with_input_type("set");
+        let mut args = self.command_preserving_file_type("set");
         args.extend([
             file,
             self.set_path(&parts)?,

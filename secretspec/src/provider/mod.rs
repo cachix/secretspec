@@ -16,6 +16,7 @@
 //! ## Available Providers
 //!
 //! - [`keyring::KeyringProvider`]: System keyring integration (default)
+//! - [`kdbx::KdbxProvider`]: KeePass KDBX database integration (0.17+)
 //! - [`dotenv::DotEnvProvider`]: `.env` file support
 //! - [`env::EnvProvider`]: Environment variables (read-only)
 //! - [`pass::PassProvider`]: Pass integration
@@ -206,6 +207,7 @@ impl ProviderUrl {
     #[cfg(any(
         feature = "awssm",
         feature = "infisical",
+        feature = "kdbx",
         feature = "openbao",
         feature = "vault",
         test
@@ -278,6 +280,8 @@ pub mod gcsm;
 pub mod gopass;
 #[cfg(feature = "infisical")]
 pub mod infisical;
+#[cfg(feature = "kdbx")]
+pub mod kdbx;
 #[cfg(feature = "keyring")]
 pub mod keyring;
 pub mod lastpass;

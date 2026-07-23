@@ -81,6 +81,33 @@ keyring://                   # System default keychain
 **Storage**: Service `secretspec/{project}/{profile}/{key}`, with the current
 operating-system username as the account
 
+## KeePass KDBX Provider (0.17+)
+
+:::caution[Version compatibility]
+The `kdbx` provider is added in SecretSpec 0.17.
+:::
+
+**URI**: `kdbx:PATH[?keyfile=PATH][&prefix=TEMPLATE]` - Stores secrets in a
+KeePass-compatible encrypted database
+
+```bash
+kdbx:./secrets.kdbx
+kdbx:/var/lib/myapp/secrets.kdbx
+kdbx:./secrets.kdbx?keyfile=./secrets.key
+kdbx:./shared.kdbx?prefix=teams/{project}/{profile}/{key}
+```
+
+**Features**: KDBX 3 read, KDBX 4 read/write, password and key-file
+authentication, standard and custom entry fields, profiles
+**Prerequisites**: Master password, key file, or both; build with
+`--features kdbx` (0.17+)
+**Authentication**: `password` provider credential from a bootstrap provider
+(recommended), or the discouraged `SECRETSPEC_KDBX_PASSWORD` fallback; optional
+`?keyfile=PATH`
+**Storage**: Entry path `secretspec/{project}/{profile}/{key}`, field `Password`
+by default. A secret `ref` uses `item` for the complete group path and entry
+title, and optional `field` for a standard or custom field.
+
 ## LastPass Provider
 
 **URI**: `lastpass://[item_template]` - Integrates with LastPass via `lpass` CLI
@@ -321,6 +348,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Environment | ❌ Plain text | Process memory | ❌ No |
 | systemd Credential (0.17+) | Depends on unit source | systemd-managed runtime memory | ❌ No |
 | Keyring | ✅ System encryption | System keychain | ❌ No |
+| KeePass KDBX (0.17+) | ✅ KDBX encryption | Local filesystem | ❌ No |
 | Pass | ✅ GPG encryption | Local filesystem | ❌ No |
 | GoPass | ✅ GPG encryption | Local filesystem | ❌ No |
 | Proton Pass | ✅ End-to-end | Cloud (Proton) | ✅ Yes |

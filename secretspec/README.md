@@ -18,6 +18,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
 - **[Declarative Configuration](https://secretspec.dev/reference/configuration/)**: Define your secrets in `secretspec.toml` with descriptions and requirements
 - **[Multiple Provider Backends](https://secretspec.dev/concepts/providers/)**:
   - [Keyring](https://secretspec.dev/providers/keyring)
+  - [KeePass KDBX](https://secretspec.dev/providers/kdbx) (0.17+)
   - [.env](https://secretspec.dev/providers/dotenv)
   - [OnePassword](https://secretspec.dev/providers/onepassword)
   - [LastPass](https://secretspec.dev/providers/lastpass)
@@ -58,6 +59,7 @@ Next steps:
 $ secretspec config init
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
+  kdbx: KeePass KDBX databases (0.17+)
   onepassword: OnePassword password manager
   dotenv: Traditional .env files
   env: Read-only environment variables
@@ -146,6 +148,7 @@ Learn more about [profiles](https://secretspec.dev/concepts/profiles) and [profi
 SecretSpec supports multiple storage backends for secrets:
 
 - **[Keyring](https://secretspec.dev/providers/keyring)** - System credential store (recommended)
+- **[KeePass KDBX](https://secretspec.dev/providers/kdbx)** (0.17+) - Local KeePass-compatible encrypted database
 - **[.env files](https://secretspec.dev/providers/dotenv)** - Traditional dotenv files
 - **[Environment variables](https://secretspec.dev/providers/env)** - Read-only for CI/CD
 - **[systemd credentials](https://secretspec.dev/providers/systemd-credential)** (0.17+) - Read-only credentials passed to the current service

@@ -37,11 +37,18 @@ $ secretspec init --from .env.example
 ```
 
 ### config init
-Initialize user configuration interactively.
+Initialize user configuration. Without options, SecretSpec prompts for the
+provider and profile.
 
 ```bash
-secretspec config init
+secretspec config init [--provider <PROVIDER>] [--profile <PROFILE>]
 ```
+
+SecretSpec 0.17+ accepts `--provider` and `--profile` so installations can save
+both defaults without interaction. Each omitted option still prompts; use
+`--profile none` to clear the saved default profile. The corresponding
+`SECRETSPEC_PROVIDER` and `SECRETSPEC_PROFILE` environment variables are also
+accepted.
 
 **Example:**
 ```bash
@@ -50,6 +57,12 @@ $ secretspec config init
 > keyring: System keychain
 ? Select your default profile:
 > development
+✓ Configuration saved to ~/.config/secretspec/config.toml
+```
+
+```bash
+# SecretSpec 0.17+: save both defaults without prompting
+$ secretspec config init --provider env --profile default
 ✓ Configuration saved to ~/.config/secretspec/config.toml
 ```
 

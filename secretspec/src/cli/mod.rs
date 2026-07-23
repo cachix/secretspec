@@ -1,4 +1,4 @@
-use crate::provider::{Provider, providers};
+use crate::provider::{Provider, providers, spec_names_known_provider};
 use crate::{Config, ExportFormat, GlobalConfig, GlobalDefaults, Profile, Project, Secrets};
 use clap::{Parser, Subcommand};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
@@ -166,7 +166,14 @@ enum Commands {
 #[derive(Subcommand)]
 enum ConfigAction {
     /// Initialize user configuration
-    Init,
+    Init {
+        /// Provider backend to save without prompting (0.17+)
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        provider: Option<String>,
+        /// Default profile to save without prompting; use "none" to clear it (0.17+)
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        profile: Option<String>,
+    },
     /// Show current configuration
     Show,
     /// Manage provider aliases
@@ -352,6 +359,68 @@ fn load_secrets(file: &Option<PathBuf>, reason: &Option<String>) -> miette::Resu
     })
 }
 
+/// Resolves an explicitly supplied config-init provider or prompts for one.
+///
+/// Explicit values are checked against the same provider registry used for
+/// runtime provider construction, without constructing a provider or doing I/O.
+fn select_config_init_provider(provider: Option<String>) -> Result<String> {
+    if let Some(provider) = provider {
+        let provider = provider.trim();
+        if provider.is_empty() {
+            return Err(miette!("Provider backend cannot be empty"));
+        }
+        if !spec_names_known_provider(provider).into_diagnostic()? {
+            let mut available: Vec<_> = providers().into_iter().map(|info| info.name).collect();
+            available.sort_unstable();
+            return Err(miette!(
+                "Provider backend '{}' not found. Available providers: {}",
+                provider,
+                available.join(", ")
+            ));
+        }
+        return Ok(provider.to_string());
+    }
+
+    use inquire::Select;
+
+    let provider_choices: Vec<String> = providers()
+        .into_iter()
+        .map(|info| info.display_with_examples())
+        .collect();
+    let selected_choice = Select::new("Select your preferred provider backend:", provider_choices)
+        .prompt()
+        .into_diagnostic()?;
+
+    Ok(selected_choice
+        .split(':')
+        .next()
+        .unwrap_or("keyring")
+        .to_string())
+}
+
+/// Resolves an explicitly supplied config-init profile or prompts for one.
+fn select_config_init_profile(profile: Option<String>) -> Result<Option<String>> {
+    if let Some(profile) = profile {
+        let profile = profile.trim();
+        if profile.is_empty() {
+            return Err(miette!(
+                "Default profile cannot be empty; use 'none' to clear it"
+            ));
+        }
+        return Ok((profile != "none").then(|| profile.to_string()));
+    }
+
+    use inquire::Select;
+
+    let profiles = vec!["development", "default", "none"];
+    let profile_choice = Select::new("Select your default profile:", profiles)
+        .with_help_message("'development' is recommended for local development environments")
+        .prompt()
+        .into_diagnostic()?;
+
+    Ok((profile_choice != "none").then(|| profile_choice.to_string()))
+}
+
 /// Main entry point for the secretspec CLI application.
 ///
 /// Parses command-line arguments and executes the appropriate command.
@@ -459,44 +528,17 @@ pub fn main() -> Result<()> {
         }
         // Handle configuration management commands
         Commands::Config { action } => match action {
-            // Initialize user configuration with interactive prompts
-            ConfigAction::Init => {
-                use inquire::Select;
-
-                // Get provider choices from the centralized registry
-                let provider_choices: Vec<String> = providers()
-                    .into_iter()
-                    .map(|info| info.display_with_examples())
-                    .collect();
-
-                let selected_choice =
-                    Select::new("Select your preferred provider backend:", provider_choices)
-                        .prompt()
-                        .into_diagnostic()?;
-
-                // Extract provider name from the selected choice
-                let provider = selected_choice.split(':').next().unwrap_or("keyring");
-
-                let profiles = vec!["development", "default", "none"];
-                let profile_choice = Select::new("Select your default profile:", profiles)
-                    .with_help_message(
-                        "'development' is recommended for local development environments",
-                    )
-                    .prompt()
-                    .into_diagnostic()?;
-
-                let profile = if profile_choice == "none" {
-                    None
-                } else {
-                    Some(profile_choice.to_string())
-                };
+            // Initialize user configuration, prompting only for omitted values.
+            ConfigAction::Init { provider, profile } => {
+                let provider = select_config_init_provider(provider)?;
+                let profile = select_config_init_profile(profile)?;
 
                 // Preserve any existing config (audit settings, provider aliases)
                 // rather than overwriting the whole file: re-running `config init`
                 // must not silently drop a user's `[audit]` table — which would
                 // re-enable disabled logging — or their saved provider aliases.
                 let mut config = GlobalConfig::load().into_diagnostic()?.unwrap_or_default();
-                config.defaults.provider = Some(provider.to_string());
+                config.defaults.provider = Some(provider);
                 config.defaults.profile = profile;
 
                 config.save().into_diagnostic()?;
@@ -1373,6 +1415,54 @@ mod tests {
             Commands::Check { no_prompt, .. } => assert!(no_prompt),
             _ => panic!("expected Check command"),
         }
+    }
+
+    #[test]
+    fn config_init_parses_non_interactive_defaults() {
+        let cli = Cli::try_parse_from([
+            "secretspec",
+            "config",
+            "init",
+            "--provider",
+            "env",
+            "--profile",
+            "default",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Config {
+                action: ConfigAction::Init { provider, profile },
+            } => {
+                assert_eq!(provider.as_deref(), Some("env"));
+                assert_eq!(profile.as_deref(), Some("default"));
+            }
+            _ => panic!("expected config init"),
+        }
+    }
+
+    #[test]
+    fn config_init_explicit_values_skip_selection_and_are_validated() {
+        assert_eq!(
+            select_config_init_provider(Some(" env:// ".to_string())).unwrap(),
+            "env://"
+        );
+        assert!(
+            select_config_init_provider(Some("unknown".to_string()))
+                .unwrap_err()
+                .to_string()
+                .contains("Provider backend 'unknown' not found")
+        );
+
+        assert_eq!(
+            select_config_init_profile(Some(" default ".to_string())).unwrap(),
+            Some("default".to_string())
+        );
+        assert_eq!(
+            select_config_init_profile(Some("none".to_string())).unwrap(),
+            None
+        );
+        assert!(select_config_init_profile(Some(" ".to_string())).is_err());
     }
 
     #[test]

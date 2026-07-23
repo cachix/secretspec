@@ -131,6 +131,12 @@ uses when a secret has no provider-specific configuration:
 $ secretspec config init
 ```
 
+SecretSpec 0.17+ can persist the provider and profile non-interactively:
+
+```bash
+$ secretspec config init --provider env --profile default
+```
+
 The resulting user configuration contains a default provider:
 
 ```toml title="~/.config/secretspec/config.toml"

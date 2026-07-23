@@ -139,6 +139,9 @@ $ secretspec run --profile production -- npm start
 
 # Set default profile
 $ secretspec config init
+
+# SecretSpec 0.17+: set provider and profile defaults without prompting
+$ secretspec config init --provider env --profile default
 ```
 
 Learn more about [profiles](https://secretspec.dev/concepts/profiles) and [profile selection](https://secretspec.dev/concepts/profiles#profile-selection).

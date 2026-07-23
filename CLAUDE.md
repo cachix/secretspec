@@ -10,18 +10,10 @@ users often land directly on provider and reference pages.
 
 For an upcoming provider or feature:
 
-- Add a version compatibility note near the first relevant explanation or
-  example, stating both the target release and that it is unavailable in the
-  current release.
+- Add what version the provider was added in (to be released version)
 - Mark entries in provider lists, tables, sidebars, selector examples, landing
   pages, README files, and generated documentation summaries with the minimum
   version, for example `(0.15+)`.
-- When behavior differs, document the latest released version's working form
-  first and provide its practical fallback (for example an authentication
-  environment variable), then show the upcoming syntax.
-- After publishing the release, replace temporary “upcoming” wording with
-  durable “Available since SecretSpec X.Y” wording.
-
 
 ## Project Overview
 

@@ -7209,6 +7209,7 @@ secrets = ["DATABASE_URL", "SENTRY_DSN"]
     /// The scope's core isolation guarantee: `run --scope` removes a
     /// declared-but-excluded secret the parent already exported, so it cannot
     /// leak into the child even though the child would otherwise inherit it.
+    #[cfg(unix)]
     #[test]
     fn run_scope_scrubs_an_excluded_inherited_secret_from_the_child() {
         let _env = scrub_resolution_env();
@@ -7353,6 +7354,7 @@ secrets = ["CONN"]
     /// `run --scope` scrubs a secret declared only under *another* profile: it is
     /// manifest-declared and not visible, so an inherited parent value must not
     /// reach the scoped child even though the selected profile never declares it.
+    #[cfg(unix)]
     #[test]
     fn run_scope_scrubs_a_secret_declared_only_under_another_profile() {
         let _env = scrub_resolution_env();
@@ -7531,6 +7533,7 @@ secrets = ["DATABASE_URL"]
     /// `run --scope` scrubs the raw dependencies of an in-scope composed secret
     /// from the child — via the separate `scope_excluded_names` path, not the
     /// resolution output filter — even when the parent shell exported them.
+    #[cfg(unix)]
     #[test]
     fn run_scope_scrubs_composed_dependencies_from_the_child() {
         let _env = scrub_resolution_env();
@@ -7825,6 +7828,7 @@ secrets = ["IN_SCOPE"]
     /// resolved value, which for `as_path` is the path). Scoping must therefore
     /// keep the hidden input's temp file alive: dropping it would hand the
     /// consumer a path to a file that no longer exists.
+    #[cfg(unix)]
     #[test]
     fn a_hidden_as_path_input_keeps_its_file_alive_for_the_visible_composition() {
         let _env = scrub_resolution_env();

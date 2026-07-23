@@ -38,7 +38,8 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'apple', slug: 'keyring', label: 'macOS Keychain' },
   { icon: '1password', slug: 'onepassword', label: '1Password' },
   { icon: 'lastpass', slug: 'lastpass', label: 'LastPass' },
-  { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden' },
+  { icon: 'bitwarden', slug: 'bw', label: 'Bitwarden Password Manager' },
+  { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden Secrets Manager' },
   { icon: 'vault', slug: 'vault', label: 'Vault' },
   { slug: 'openbao', label: 'OpenBao (0.17+)' },
   { slug: 'awssm', label: 'AWS Secrets Manager' },
@@ -141,6 +142,7 @@ $ secretspec init --from dotenv
 $ secretspec config init
 ? Select your preferred provider backend:
 <span class="tok-pun">›</span> keyring: Uses system keychain (Recommended)
+  bw: Bitwarden Password Manager
   infisical: Infisical secret management
   openbao: OpenBao secret management (0.17+)
 <span class="tok-str">✓</span> Saved to ~/.config/secretspec/config.toml
@@ -209,6 +211,7 @@ $ secretspec run --profile production -- npm start
         <pre is:raw class="landing-step-code"><code>$ secretspec config init
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
+  bw: Bitwarden Password Manager
   infisical: Infisical secret management
   openbao: OpenBao secret management (0.17+)</code></pre>
       </div>

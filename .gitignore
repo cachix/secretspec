@@ -13,3 +13,5 @@ target
 /secretspec-dotnet/**/obj/
 
 .idea/
+
+.pi/

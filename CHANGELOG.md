@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Bitwarden Password Manager provider. `bw://` uses the `bw` CLI for
+  vault-wide secret storage across all Bitwarden item types.
 - The `required` field accepts `at_least_one` and `exactly_one` group tables,
   supporting overlapping alternative and mutually exclusive credentials
   across `check`, `run`, and SDK resolution.
@@ -51,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.16.0] - 2026-07-17
 
 ### Added
+>>>>>>> upstream/main
 - Composed secrets derive read-only values such as connection strings from
   other declared secrets using strict `${UPPERCASE_NAME}` templates; names must
   match `[A-Z][A-Z0-9_]*`, `$$` produces a literal dollar sign, and ordinary
@@ -86,6 +89,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.15.0] - 2026-07-16
 
 ### Added
+
 - Gopass provider (`gopass://`) for GPG-based password manager with git-synced password store.
 - `secretspec export` command that resolves every secret for the active profile
   and writes them to stdout without running a command, in a chosen `--format`:

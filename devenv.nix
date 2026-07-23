@@ -65,6 +65,8 @@
     pkgs.cargo-tarpaulin
     # installers
     pkgs.cargo-dist
+    # bitwarden-cli for integration testing
+    pkgs.bitwarden-cli
     # Building the secretspec-php-native extension (ext-php-rs) needs php-config +
     # the PHP dev headers, and bindgenHook wires libclang/clang system headers so
     # ext-php-rs's bindgen step can parse php.h.

@@ -6658,6 +6658,37 @@ fn sourced_credential_reaches_target_provider_end_to_end() {
 }
 
 #[test]
+fn provider_credentials_read_from_systemd_credential_source() {
+    let _guard = scrub_resolution_env();
+    let directory = TempDir::new().unwrap();
+    std::fs::write(
+        directory.path().join("test_token"),
+        "systemd-delivered-token",
+    )
+    .unwrap();
+    let _credentials_directory =
+        EnvVarGuard::set("CREDENTIALS_DIRECTORY", directory.path().to_str().unwrap());
+
+    let secrets = secrets_with_credential_alias(
+        "memtest://",
+        HashMap::from([(
+            "test_token".to_string(),
+            CredentialSource::from("systemd-credential"),
+        )]),
+    );
+
+    let credentials = secrets
+        .resolve_provider_credentials("target", "default")
+        .expect("the systemd credential source should resolve");
+    assert_eq!(
+        credentials
+            .get("test_token")
+            .map(|value| value.expose_secret().to_string()),
+        Some("systemd-delivered-token".to_string()),
+    );
+}
+
+#[test]
 fn provider_credentials_read_ref_addressed_credential() {
     let _guard = scrub_resolution_env();
     let temp = TempDir::new().unwrap();

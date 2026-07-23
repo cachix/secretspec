@@ -151,6 +151,7 @@ crate::register_provider! {
     description: "In-memory provider for tests",
     schemes: ["memtest"],
     examples: ["memtest://"],
+    credential_names: ["test_token"],
 }
 
 impl Provider for MemTestProvider {
@@ -297,6 +298,9 @@ fn test_create_from_string_with_plain_names() {
     // Test plain provider names
     let provider = Box::<dyn Provider>::try_from("env").unwrap();
     assert_eq!(provider.name(), "env");
+
+    let provider = Box::<dyn Provider>::try_from("systemd-credential").unwrap();
+    assert_eq!(provider.name(), "systemd-credential");
 
     let provider = Box::<dyn Provider>::try_from("keyring").unwrap();
     assert_eq!(provider.name(), "keyring");

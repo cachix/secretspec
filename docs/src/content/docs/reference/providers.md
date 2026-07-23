@@ -31,6 +31,27 @@ env://                       # Current process environment
 
 **Features**: Read-only, no setup required, no persistence
 
+## systemd Credential Provider (0.17+)
+
+:::caution[Version compatibility]
+The `systemd-credential` provider is added in SecretSpec 0.17.
+:::
+
+**URI**: `systemd-credential://` - Reads credentials passed to the current
+service by systemd
+
+```bash
+systemd-credential://          # $CREDENTIALS_DIRECTORY
+```
+
+**Features**: Read-only, flat credential names, immutable service-lifetime
+values, provider-credential source support
+**Prerequisites**: A process started by systemd with `LoadCredential=`,
+`LoadCredentialEncrypted=`, `SetCredential=`, or `SetCredentialEncrypted=`
+**Storage**: One runtime file per credential under `$CREDENTIALS_DIRECTORY`;
+convention addresses use the SecretSpec key as the filename, and `ref.item`
+selects a different credential name
+
 ## GoPass Provider
 
 Available starting with SecretSpec 0.15.
@@ -298,6 +319,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 |----------|------------|------------------|----------------|
 | DotEnv | ❌ Plain text | Local filesystem | ❌ No |
 | Environment | ❌ Plain text | Process memory | ❌ No |
+| systemd Credential (0.17+) | Depends on unit source | systemd-managed runtime memory | ❌ No |
 | Keyring | ✅ System encryption | System keychain | ❌ No |
 | Pass | ✅ GPG encryption | Local filesystem | ❌ No |
 | GoPass | ✅ GPG encryption | Local filesystem | ❌ No |

@@ -6,7 +6,7 @@ namespace Secretspec;
 
 /**
  * Fluent builder for a resolution, mirroring the Rust derive crate's builder.
- * Accumulates an optional path, provider, profile, and access reason, then
+ * Accumulates an optional path, provider, profile, scope, and access reason, then
  * `load()`s the values or `report()`s the value-free inventory.
  */
 final class Builder
@@ -42,6 +42,12 @@ final class Builder
     public function withProfile(?string $profile): self
     {
         return $this->set('profile', $profile);
+    }
+
+    /** Limit resolution to a named manifest scope (SecretSpec 0.17+). */
+    public function withScope(?string $scope): self
+    {
+        return $this->set('scope', $scope);
     }
 
     /** Human-readable reason for the access, surfaced to reason-policy providers. */
@@ -99,6 +105,7 @@ final class Builder
             $response['profile'],
             $secrets,
             $response['missing_optional'] ?? [],
+            $response['scope'] ?? null,
         );
     }
 
@@ -129,7 +136,12 @@ final class Builder
             );
         }
 
-        return new Report($response['provider'], $response['profile'], $secrets);
+        return new Report(
+            $response['provider'],
+            $response['profile'],
+            $secrets,
+            $response['scope'] ?? null,
+        );
     }
 
     /**

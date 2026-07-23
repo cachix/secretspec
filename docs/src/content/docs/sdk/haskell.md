@@ -37,6 +37,15 @@ throws `SecretSpecError` (with a stable `errorKind`).
 `as_path` secrets are materialized to temp files that outlive the call; call
 `S.close resolved` when done so they do not accumulate in the temp dir.
 
+## Scopes (0.17+)
+
+Use `withScope "api"` to resolve only a named `[scopes.api]` subset. The
+selected name is available through `resolvedScope` and `reportScope`:
+
+```haskell
+resolved <- S.load (S.builder & S.withScope "api")
+```
+
 ## Value-free report
 
 `S.report` returns the inventory/preflight view: per-secret status and

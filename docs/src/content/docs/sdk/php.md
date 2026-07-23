@@ -110,6 +110,15 @@ There is also a one-shot form using named arguments:
 $resolved = SecretSpec::resolve(provider: 'keyring://', reason: 'boot');
 ```
 
+## Scopes (0.17+)
+
+Use `withScope('api')` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `$resolved->scope` and `$report->scope`:
+
+```php
+$resolved = SecretSpec::builder()->withScope('api')->load();
+```
+
 ## Laravel
 
 Resolve your secrets early and export them so Laravel's `env()` and config see

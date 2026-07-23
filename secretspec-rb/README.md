@@ -24,6 +24,15 @@ resolved.set_as_env!    # export everything into ENV
 A missing required secret raises `Secretspec::MissingRequiredError`; any other
 failure raises `Secretspec::Error` (with a stable `#kind`).
 
+## Scopes (0.17+)
+
+Use `.with_scope("api")` to resolve only a named `[scopes.api]` subset. Both
+`resolved.scope` and `report.scope` return the selected scope:
+
+```ruby
+resolved = Secretspec::SecretSpec.builder.with_scope("api").load
+```
+
 ## Cleanup
 
 `as_path` secrets are materialized to temp files that outlive the call. Pass a

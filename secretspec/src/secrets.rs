@@ -1021,11 +1021,21 @@ impl Secrets {
         fields: AuditFields<'_>,
     ) {
         if let Some(logger) = &self.audit {
+            // Scopes affect only these bulk resolution surfaces. `get`, `set`,
+            // and `import` deliberately ignore an ambient scope, so attaching it
+            // to those events would falsely imply that it constrained the action.
+            let scope = match action {
+                AuditAction::Check | AuditAction::Run | AuditAction::Export => {
+                    self.resolve_scope_name(None)
+                }
+                AuditAction::Get | AuditAction::Set | AuditAction::Import => None,
+            };
             logger.record(
                 action,
                 AuditContext {
                     project: &self.config.project.name,
                     profile,
+                    scope: scope.as_deref(),
                     key: fields.key,
                     keys: fields.keys,
                     command: fields.command,

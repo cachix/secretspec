@@ -26,6 +26,15 @@ resolved.set_as_env()      # export everything into os.environ
 A missing required secret raises `MissingRequiredError`; any other failure
 raises `SecretSpecError` (with a stable `.kind`).
 
+## Scopes (0.17+)
+
+Use `.with_scope("api")` to resolve only a named `[scopes.api]` subset. Both
+`resolved.scope` and `report.scope` return the selected scope:
+
+```python
+resolved = SecretSpec.builder().with_scope("api").load()
+```
+
 ## Cleanup
 
 `as_path` secrets are materialized to temp files that outlive the call. Use the

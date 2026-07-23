@@ -111,9 +111,12 @@ impl Actor {
 pub(crate) struct AuditContext<'a> {
     pub project: &'a str,
     pub profile: &'a str,
+    /// The active named scope for scope-aware bulk actions.
+    pub scope: Option<&'a str>,
     /// The single secret involved (`get`/`set`).
     pub key: Option<&'a str>,
-    /// The set of secrets involved in a bulk action (`check`/`run`/`import`).
+    /// The set of secrets involved in a bulk action
+    /// (`check`/`run`/`import`/`export`).
     pub keys: &'a [String],
     /// For `run`, the program that was executed (argv[0] only — never arguments,
     /// which may contain secrets).
@@ -146,6 +149,9 @@ struct AuditEvent<'a> {
     action: AuditAction,
     project: &'a str,
     profile: &'a str,
+    /// Active named scope for `check`, `run`, and `export` (SecretSpec 0.17+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     key: Option<&'a str>,
     /// The set of secrets for a bulk action; omitted for single-key actions.
@@ -382,6 +388,7 @@ impl AuditLogger {
             action,
             project: ctx.project,
             profile: ctx.profile,
+            scope: ctx.scope,
             key: ctx.key,
             keys: ctx.keys,
             command: ctx.command,
@@ -627,6 +634,7 @@ mod tests {
             AuditContext {
                 project: "demo",
                 profile: "production",
+                scope: None,
                 key: Some("DATABASE_URL"),
                 keys: &[],
                 command: None,
@@ -669,6 +677,7 @@ mod tests {
             AuditContext {
                 project: "demo",
                 profile: "production",
+                scope: Some("api"),
                 key: None,
                 keys: &keys,
                 command: Some("./deploy.sh"),
@@ -683,6 +692,7 @@ mod tests {
         let lines = sink.lines.lock().unwrap();
         let event: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
         assert_eq!(event["action"], "run");
+        assert_eq!(event["scope"], "api");
         assert_eq!(event["command"], "./deploy.sh");
         assert_eq!(event["keys"][0], "DATABASE_URL");
         assert_eq!(event["keys"][1], "API_KEY");
@@ -700,6 +710,7 @@ mod tests {
                 AuditContext {
                     project: "demo",
                     profile: "default",
+                    scope: None,
                     key: Some("K"),
                     keys: &[],
                     command: None,
@@ -857,6 +868,7 @@ mod tests {
             AuditContext {
                 project: "demo",
                 profile: "default",
+                scope: None,
                 key: Some("K"),
                 keys: &[],
                 command: None,

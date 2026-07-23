@@ -6,6 +6,7 @@ namespace Secretspec\Tests;
 
 use PHPUnit\Framework\TestCase;
 use Secretspec\MissingRequiredException;
+use Secretspec\SecretReport;
 use Secretspec\SecretSpec;
 use Secretspec\SecretSpecException;
 
@@ -20,6 +21,9 @@ final class ResolveTest extends TestCase
         DATABASE_URL = { description = "DB", required = true }
         LOG_LEVEL = { description = "log", required = false, default = "info" }
         SENTRY_DSN = { description = "sentry", required = false }
+
+        [scopes.database]
+        secrets = ["DATABASE_URL"]
         TOML;
 
     /** @var list<string> directories to remove after each test */
@@ -100,6 +104,29 @@ final class ResolveTest extends TestCase
 
         \putenv('DATABASE_URL');
         unset($_ENV['DATABASE_URL'], $_SERVER['DATABASE_URL']);
+    }
+
+    public function testScopeIsSelectedAndReturned(): void
+    {
+        [$manifest, $provider] = $this->project(
+            "DATABASE_URL=postgres://db\nSENTRY_DSN=https://sentry\n",
+        );
+        $builder = SecretSpec::builder()
+            ->withPath($manifest)
+            ->withProvider($provider)
+            ->withScope('database')
+            ->withReason('php scoped test');
+
+        $resolved = $builder->load();
+        self::assertSame('database', $resolved->scope);
+        self::assertSame(['DATABASE_URL'], \array_keys($resolved->secrets));
+
+        $report = $builder->report();
+        self::assertSame('database', $report->scope);
+        self::assertSame(['DATABASE_URL'], \array_map(
+            static fn (SecretReport $secret): string => $secret->name,
+            $report->secrets,
+        ));
     }
 
     public function testMissingRequiredRaises(): void

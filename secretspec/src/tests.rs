@@ -7916,6 +7916,7 @@ secrets = ["PG_ARGS"]
             .iter()
             .find(|e| e["action"] == "check")
             .expect("a check event is recorded");
+        assert_eq!(check["scope"], "api");
         let mut keys: Vec<String> = check["keys"]
             .as_array()
             .expect("the check event lists keys")
@@ -7933,6 +7934,83 @@ secrets = ["PG_ARGS"]
             ],
             "the audit records every secret actually read, not only the visible one"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn audit_records_scope_and_visible_keys_for_run() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DATABASE_URL=db\nAPI_KEY=key\nQUEUE_TOKEN=token\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut spec = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        spec.set_scope("api");
+        let (logger, lines) = crate::audit::test_support::collecting_logger();
+        spec.set_audit_for_test(logger);
+
+        assert_eq!(spec.run_command(vec!["true".to_string()]).unwrap(), 0);
+
+        let events = super::audit_events(&lines);
+        let run = events
+            .iter()
+            .find(|e| e["action"] == "run")
+            .expect("a run event is recorded");
+        assert_eq!(run["scope"], "api");
+        assert_eq!(run["keys"], serde_json::json!(["API_KEY", "DATABASE_URL"]));
+    }
+
+    #[test]
+    fn audit_records_scope_and_visible_keys_for_export() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(
+            &env_path,
+            "DATABASE_URL=db\nAPI_KEY=key\nQUEUE_TOKEN=token\n",
+        )
+        .unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut spec = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        spec.set_scope("worker");
+        let (logger, lines) = crate::audit::test_support::collecting_logger();
+        spec.set_audit_for_test(logger);
+
+        spec.export(crate::ExportFormat::Dotenv, &mut Vec::new())
+            .unwrap();
+
+        let events = super::audit_events(&lines);
+        let export = events
+            .iter()
+            .find(|e| e["action"] == "export")
+            .expect("an export event is recorded");
+        assert_eq!(export["scope"], "worker");
+        assert_eq!(
+            export["keys"],
+            serde_json::json!(["DATABASE_URL", "QUEUE_TOKEN"])
+        );
+    }
+
+    #[test]
+    fn audit_records_an_invalid_scope_name_on_failure() {
+        let mut spec = Secrets::new(config(MANIFEST), None, Some("env://".to_string()), None);
+        spec.set_scope("does-not-exist");
+        let (logger, lines) = crate::audit::test_support::collecting_logger();
+        spec.set_audit_for_test(logger);
+
+        assert!(spec.check(true).is_err());
+
+        let events = super::audit_events(&lines);
+        let check = events
+            .iter()
+            .find(|e| e["action"] == "check")
+            .expect("the failed check is recorded");
+        assert_eq!(check["scope"], "does-not-exist");
+        assert_eq!(check["outcome"], "error");
     }
 
     /// A secret fetched only as an out-of-scope composition input never counts

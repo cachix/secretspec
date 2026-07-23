@@ -31,6 +31,15 @@ resolved.SetAsEnv()   // export everything into the process environment
 A missing required secret returns `*MissingRequiredError`; any other failure
 returns `*Error` (with a stable `.Kind`).
 
+## Scopes (0.17+)
+
+Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `Resolved.Scope` and `Report.Scope`:
+
+```go
+resolved, err := secretspec.New().WithScope("api").Load()
+```
+
 ## Typed access (codegen)
 
 Generate typed structs with `secretspec schema` plus

@@ -106,8 +106,8 @@ where `SECRETSPEC_FFI_LIB` can point at a specific library build.
 ## Platform support
 
 Prebuilt packages cover the following platforms. Windows support for the
-Python wheel, the Ruby gem, and the PHP extension binaries targets SecretSpec
-0.17 and is not available in the current release.
+Python wheel, the Ruby gem, and the PHP extension binaries is added in
+SecretSpec 0.17.
 
 | SDK | Linux x64 | Linux arm64 | macOS Intel | macOS Apple silicon | Windows x64 | Windows arm64 |
 | --- | --- | --- | --- | --- | --- | --- |

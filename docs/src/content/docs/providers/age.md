@@ -4,7 +4,7 @@ description: Store secrets in an age-encrypted file committed alongside code
 ---
 
 :::note[Version compatibility]
-The age provider is an upcoming SecretSpec 0.17 feature and is not available in SecretSpec 0.16.
+The age provider is added in SecretSpec 0.17.
 :::
 
 The age provider keeps secrets in a single [age](https://age-encryption.org)-encrypted file that you can commit to your repository. The plaintext inside is a dotenv-style `KEY=value` blob that SecretSpec encrypts to one or more age recipients and decrypts with your age identity. A read decrypts the blob; a write decrypts it, updates one key, and re-encrypts the whole blob to the current recipients.

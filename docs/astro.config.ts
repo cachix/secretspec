@@ -260,7 +260,6 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
             {
               label: "Overview",
               slug: "sdk/overview",
-              badge: { text: "0.13+", variant: "note" },
             },
             { label: "Rust", slug: "sdk/rust" },
             {
@@ -312,7 +311,7 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
           label: "Development",
           items: [
             {
-              label: "Adding Providers",
+              label: "Adding SDK",
               slug: "development/adding-providers",
             },
             {

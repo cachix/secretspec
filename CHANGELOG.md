@@ -53,12 +53,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Linux and macOS builds on each release.
 
 ### Changed
+- The Bitwarden Secrets Manager provider now invokes the separately installed
+  official `bws` CLI instead of linking the Bitwarden SDK. This removes the
+  SDK's restricted-license dependency from SecretSpec distributions while
+  preserving project-scoped reads, writes, access-token credentials, and
+  EU/self-hosted server selection.
 - Secret status output now emphasizes secret names, de-emphasizes descriptions,
   and omits placeholder text when a description is unavailable, making long
   `check` and `import` results easier to scan.
   ([#139](https://github.com/cachix/secretspec/issues/139))
 
 ### Fixed
+- BWS CLI writes preserve secret keys and values that begin with `-`, and
+  hostless BWS provider URIs stay pinned to Bitwarden's default server even
+  when ambient BWS profiles or server settings are configured.
 - The dotenv provider rejects variable names its parser cannot read back
   (anything outside `[A-Za-z_][A-Za-z0-9_.]*`, for example a `ref` item
   containing a dash) instead of writing a line that made every later read and

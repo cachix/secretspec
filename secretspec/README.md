@@ -31,7 +31,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [AWS Secrets Manager](https://secretspec.dev/providers/awssm)
   - [Vault](https://secretspec.dev/providers/vault)
   - [OpenBao](https://secretspec.dev/providers/openbao) (0.17+)
-  - [Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)
+  - [Bitwarden Secrets Manager](https://secretspec.dev/providers/bws) (official `bws` CLI required in SecretSpec 0.17+)
   - [Azure Key Vault](https://secretspec.dev/providers/akv)
   - [Infisical](https://secretspec.dev/providers/infisical) (0.16+)
   - [age](https://secretspec.dev/providers/age) (0.17+)
@@ -164,7 +164,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
 - **[Vault](https://secretspec.dev/providers/vault)** - HashiCorp Vault KV engine
 - **[OpenBao](https://secretspec.dev/providers/openbao)** (0.17+) - OpenBao KV integration; SecretSpec 0.16 accepts `openbao://` through the Vault provider
-- **[Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)** - Bitwarden Secrets Manager integration
+- **[Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)** - Bitwarden Secrets Manager integration (official `bws` CLI required in SecretSpec 0.17+)
 - **[Azure Key Vault](https://secretspec.dev/providers/akv)** - Azure secret management
 - **[Infisical](https://secretspec.dev/providers/infisical)** (0.16+) - Infisical secret management
 - **[age](https://secretspec.dev/providers/age)** (0.17+) - age-encrypted file

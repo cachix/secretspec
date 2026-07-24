@@ -312,7 +312,7 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
           label: "Development",
           items: [
             {
-              label: "Adding Providers",
+              label: "Adding SDK",
               slug: "development/adding-providers",
             },
             {

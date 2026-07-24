@@ -140,8 +140,8 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
 $ secretspec init --from dotenv
 <span class="tok-str">✓</span> Created secretspec.toml with 5 secrets
 
-<span class="tok-com"># 2. Pick a storage backend (one-time)</span>
-$ secretspec config init
+<span class="tok-com"># 2. Pick a user-global default (0.17+)</span>
+$ secretspec config global init
 ? Select your preferred provider backend:
 <span class="tok-pun">›</span> keyring: Uses system keychain (Recommended)
   kdbx: KeePass KDBX databases (0.17+)
@@ -212,7 +212,7 @@ $ secretspec run --profile production -- npm start
           <p class="landing-step-title">Provider</p>
         </div>
         <p class="landing-step-desc">Choose where this machine looks for values: a system keyring, password manager, cloud secret store, or one of {providerCount} providers.</p>
-        <pre is:raw class="landing-step-code"><code>$ secretspec config init
+        <pre is:raw class="landing-step-code"><code>$ secretspec config global init <span class="tok-com"># 0.17+</span>
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
   kdbx: KeePass KDBX databases (0.17+)

@@ -63,7 +63,7 @@ $ secretspec init
 ✓ Created secretspec.toml with 0 secrets
 
 Next steps:
-  1. secretspec config init    # Set up user configuration
+  1. secretspec config global init    # Set up user defaults (0.17+)
   2. secretspec check          # Verify all secrets are set
   3. secretspec run -- your-command  # Run with secrets
 ```
@@ -97,7 +97,7 @@ REDIS_URL = { required = true }
 Configure your preferred secrets storage backend:
 
 ```bash
-$ secretspec config init
+$ secretspec config global init  # 0.17+
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
   kdbx: KeePass KDBX databases (0.17+)

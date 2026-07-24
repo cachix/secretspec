@@ -156,12 +156,6 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
           ],
         },
         {
-          label: "CI",
-          items: [
-            { label: "GitHub Actions", slug: "ci/github-actions" },
-          ],
-        },
-        {
           label: "Concepts",
           items: [
             { label: "Overview", slug: "concepts/overview" },
@@ -306,6 +300,12 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
           ],
         },
         {
+          label: "CI",
+          items: [
+            { label: "GitHub Actions", slug: "ci/github-actions" },
+          ],
+        },
+        {
           label: "Reference",
           items: [
             { label: "Configuration", slug: "reference/configuration" },
@@ -317,11 +317,11 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
           label: "Development",
           items: [
             {
-              label: "Adding SDK",
+              label: "Adding a Provider",
               slug: "development/adding-providers",
             },
             {
-              label: "SDK Development",
+              label: "Adding an SDK",
               slug: "development/sdks",
             },
           ],

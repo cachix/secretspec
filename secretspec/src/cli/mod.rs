@@ -132,8 +132,11 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// Init or show ~/.config/secretspec/config.toml
+    /// Manage SecretSpec configuration
     Config {
+        /// Use the user-global configuration at ~/.config/secretspec/config.toml (0.17+)
+        #[arg(long)]
+        global: bool,
         #[command(subcommand)]
         action: ConfigAction,
     },
@@ -161,8 +164,8 @@ enum Commands {
 
 /// Configuration-related subcommands.
 ///
-/// These actions handle the user's global configuration settings,
-/// including initialization, viewing current settings, and managing provider aliases.
+/// Configuration actions. All actions except `provider login` operate on the
+/// user-global configuration. `--global` makes that scope explicit.
 #[derive(Subcommand)]
 enum ConfigAction {
     /// Initialize user configuration
@@ -183,7 +186,7 @@ enum ConfigAction {
 
 /// Provider alias management subcommands.
 ///
-/// These actions allow managing named provider aliases in the global configuration.
+/// These actions manage named provider aliases or store their credentials.
 #[derive(Subcommand)]
 enum ProviderAction {
     /// Add or update a provider alias
@@ -520,14 +523,14 @@ pub fn main() -> Result<()> {
             }
 
             println!("\nNext steps:");
-            println!("  1. secretspec config init    # Set up user configuration");
+            println!("  1. secretspec config --global init    # Set up user defaults (0.17+)");
             println!("  2. secretspec check          # Verify all secrets and set them");
             println!("  3. secretspec run -- your-command  # Run with secrets");
 
             Ok(())
         }
         // Handle configuration management commands
-        Commands::Config { action } => match action {
+        Commands::Config { global, action } => match action {
             // Initialize user configuration, prompting only for omitted values.
             ConfigAction::Init { provider, profile } => {
                 let provider = select_config_init_provider(provider)?;
@@ -577,7 +580,7 @@ pub fn main() -> Result<()> {
                     }
                     None => {
                         println!(
-                            "No configuration found. Run 'secretspec config init' to create one."
+                            "No configuration found. Run 'secretspec config --global init' to create one."
                         );
                     }
                 }
@@ -665,7 +668,7 @@ pub fn main() -> Result<()> {
                             }
                             None => {
                                 println!(
-                                    "✗ No configuration found. Run 'secretspec config init' first."
+                                    "✗ No configuration found. Run 'secretspec config --global init' first."
                                 );
                             }
                         }
@@ -691,13 +694,18 @@ pub fn main() -> Result<()> {
                             }
                             None => {
                                 println!(
-                                    "No configuration found. Run 'secretspec config init' first."
+                                    "No configuration found. Run 'secretspec config --global init' first."
                                 );
                             }
                         }
                         Ok(())
                     }
                     ProviderAction::Login { name } => {
+                        if global {
+                            return Err(miette!(
+                                "'secretspec config provider login' is project-scoped and does not accept '--global'"
+                            ));
+                        }
                         let app = load_secrets(&cli.file, &cli.reason)?;
                         let credentials =
                             app.declared_provider_credentials(&name).into_diagnostic()?;
@@ -1422,6 +1430,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "secretspec",
             "config",
+            "--global",
             "init",
             "--provider",
             "env",
@@ -1432,8 +1441,10 @@ mod tests {
 
         match cli.command {
             Commands::Config {
+                global,
                 action: ConfigAction::Init { provider, profile },
             } => {
+                assert!(global);
                 assert_eq!(provider.as_deref(), Some("env"));
                 assert_eq!(profile.as_deref(), Some("default"));
             }
@@ -1470,6 +1481,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "secretspec",
             "config",
+            "--global",
             "provider",
             "add",
             "bws",
@@ -1482,6 +1494,7 @@ mod tests {
         .unwrap();
         match cli.command {
             Commands::Config {
+                global,
                 action:
                     ConfigAction::Provider(ProviderAction::Add {
                         name,
@@ -1489,6 +1502,7 @@ mod tests {
                         credential,
                     }),
             } => {
+                assert!(global);
                 assert_eq!(name, "bws");
                 assert_eq!(uri, "bws://proj");
                 assert_eq!(
@@ -1535,10 +1549,44 @@ mod tests {
             Cli::try_parse_from(["secretspec", "config", "provider", "login", "bws"]).unwrap();
         match cli.command {
             Commands::Config {
+                global,
                 action: ConfigAction::Provider(ProviderAction::Login { name }),
             } => {
+                assert!(!global);
                 assert_eq!(name, "bws");
             }
+            _ => panic!("expected config provider login"),
+        }
+    }
+
+    #[test]
+    fn legacy_global_config_spelling_remains_supported() {
+        let cli = Cli::try_parse_from(["secretspec", "config", "show"]).unwrap();
+        match cli.command {
+            Commands::Config {
+                global,
+                action: ConfigAction::Show,
+            } => assert!(!global),
+            _ => panic!("expected config show"),
+        }
+    }
+
+    #[test]
+    fn provider_login_rejects_global_scope() {
+        let cli = Cli::try_parse_from([
+            "secretspec",
+            "config",
+            "--global",
+            "provider",
+            "login",
+            "bws",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Config {
+                global,
+                action: ConfigAction::Provider(ProviderAction::Login { .. }),
+            } => assert!(global),
             _ => panic!("expected config provider login"),
         }
     }

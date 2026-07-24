@@ -124,17 +124,19 @@ convention-based secrets.
 
 ## Configure the default provider
 
-Run the interactive configuration command to select the provider SecretSpec
-uses when a secret has no provider-specific configuration:
+Run the interactive configuration command to select the user-global provider
+SecretSpec uses when a secret has no provider-specific configuration.
+SecretSpec 0.17+ accepts an explicit `--global` scope marker; the legacy
+spelling without it remains supported:
 
 ```bash
-$ secretspec config init
+$ secretspec config --global init # 0.17+
 ```
 
 SecretSpec 0.17+ can persist the provider and profile non-interactively:
 
 ```bash
-$ secretspec config init --provider env --profile default
+$ secretspec config --global init --provider env --profile default
 ```
 
 The resulting user configuration contains a default provider:
@@ -201,9 +203,10 @@ DATABASE_URL = { description = "Production database", providers = ["onepassword:
 Use the CLI to manage user-level aliases:
 
 ```bash
-$ secretspec config provider add prod_vault "onepassword://Production"
-$ secretspec config provider list
-$ secretspec config provider remove prod_vault
+# SecretSpec 0.17+
+$ secretspec config --global provider add prod_vault "onepassword://Production"
+$ secretspec config --global provider list
+$ secretspec config --global provider remove prod_vault
 ```
 
 These commands modify only `~/.config/secretspec/config.toml`. Edit the
@@ -273,7 +276,7 @@ You can also create a user-level alias with a convention-address credential
 source from the CLI:
 
 ```bash
-$ secretspec config provider add bws "bws://project-uuid" --credential access_token=keyring
+$ secretspec config --global provider add bws "bws://project-uuid" --credential access_token=keyring # 0.17+
 $ secretspec config provider login bws
 ```
 

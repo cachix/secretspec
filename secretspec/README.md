@@ -29,6 +29,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [systemd credentials](https://secretspec.dev/providers/systemd-credential) (0.17+)
   - [Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)
   - [AWS Secrets Manager](https://secretspec.dev/providers/awssm)
+  - [Scaleway Secret Manager](https://secretspec.dev/providers/scaleway) (0.17+)
   - [Vault](https://secretspec.dev/providers/vault)
   - [OpenBao](https://secretspec.dev/providers/openbao) (0.17+)
   - [Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)
@@ -162,6 +163,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager
 - **[Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)** - GCP secret management
 - **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
+- **[Scaleway Secret Manager](https://secretspec.dev/providers/scaleway)** (0.17+) - Scaleway secret management
 - **[Vault](https://secretspec.dev/providers/vault)** - HashiCorp Vault KV engine
 - **[OpenBao](https://secretspec.dev/providers/openbao)** (0.17+) - OpenBao KV integration; SecretSpec 0.16 accepts `openbao://` through the Vault provider
 - **[Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)** - Bitwarden Secrets Manager integration

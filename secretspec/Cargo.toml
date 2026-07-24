@@ -54,7 +54,7 @@ detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
 
 [features]
-default = ["cli", "keyring", "kdbx", "gcsm", "awssm", "vault", "openbao", "bws", "akv", "infisical", "age"]
+default = ["cli", "keyring", "kdbx", "gcsm", "awssm", "vault", "openbao", "bws", "akv", "infisical", "age", "scaleway"]
 cli = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
@@ -65,6 +65,9 @@ vendored-dbus = ["keyring?/vendored"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]
 awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
 vault = ["dep:reqwest"]
+# Scaleway Secret Manager talks to the v1beta1 REST API directly; base64
+# payloads use data-encoding, which is already a non-optional dependency.
+scaleway = ["dep:reqwest"]
 openbao = ["dep:reqwest"]
 # `tokio/sync` for the async `OnceCell` that serializes the Universal Auth
 # exchange. It is already on transitively via reqwest, but a provider should

@@ -196,6 +196,21 @@ awssm://                      # SDK default region and credentials
 **Prerequisites**: AWS credentials configured, build with `--features awssm`
 **Storage**: Secret name `secretspec/{project}/{profile}/{key}`
 
+## Scaleway Secret Manager Provider (0.17+)
+
+**URI**: `scaleway://[REGION][?project_id=UUID&path=/folder]` - Stores secrets in Scaleway Secret Manager
+
+```bash
+scaleway://fr-par                                    # Region, project from SCW_DEFAULT_PROJECT_ID
+scaleway://nl-ams?project_id=PROJECT_UUID            # Region and project
+scaleway://fr-par?project_id=PROJECT_UUID&path=/team # Nest under a folder
+scaleway://                                          # Region from SCW_DEFAULT_REGION, else fr-par
+```
+
+**Features**: Read/write, cloud sync, profiles via folders, version-pinned refs, JSON-key refs
+**Prerequisites**: Scaleway API secret key (`secret_key` credential or `SCW_SECRET_KEY`), build with `--features scaleway`
+**Storage**: Folder `[{base}/]secretspec/{project}/{profile}`, secret name `{key}`
+
 ## Vault Provider
 
 **URI**: `vault://[namespace@]host[:port][/mount][?options]` - Stores secrets in HashiCorp Vault's KV engine
@@ -353,6 +368,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | OnePassword | ✅ End-to-end | Cloud (OnePassword) | ✅ Yes |
 | GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |
+| Scaleway (0.17+) | ✅ Scaleway-managed | Cloud (Scaleway) | ✅ Yes |
 | Vault | ✅ Vault encryption | Vault server | ✅ Yes |
 | OpenBao (0.17+) | ✅ OpenBao encryption | OpenBao server | ✅ Yes |
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |

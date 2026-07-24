@@ -51,6 +51,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [lastpass](/providers/lastpass/) | LastPass | ✓ | ✓ | ✓ | — |
 | [gcsm](/providers/gcsm/) | Google Cloud Secret Manager (requires the `gcsm` build feature) | ✓ | ✓ | ✓ | — |
 | [awssm](/providers/awssm/) | AWS Secrets Manager (requires the `awssm` build feature) | ✓ | ✓ | ✓ | — |
+| [scaleway](/providers/scaleway/) (0.17+) | Scaleway Secret Manager (requires the `scaleway` build feature) | ✓ | ✓ | ✓ | — |
 | [vault](/providers/vault/) | HashiCorp Vault (requires the `vault` build feature) | ✓ | ✓ | ✓ | — |
 | [openbao](/providers/openbao/) (0.17+) | OpenBao (requires the `openbao` build feature; 0.16 uses `openbao://` through `vault`) | ✓ | ✓ | ✓ | — |
 | [bws](/providers/bws/) | Bitwarden Secrets Manager (requires the `bws` build feature) | ✓ | ✓ | ✓ | — |

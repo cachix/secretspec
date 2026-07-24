@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Scaleway Secret Manager provider (`scaleway://`, `scaleway` build feature) for
+  storing secrets in Scaleway's Secret Manager over its v1beta1 REST API.
+  Authenticates with an API secret key (`secret_key` credential or
+  `SCW_SECRET_KEY`), targets a region (URI host or `SCW_DEFAULT_REGION`, default
+  `fr-par`) and project (`?project_id=` or `SCW_DEFAULT_PROJECT_ID`), and stores
+  convention secrets under the folder path `secretspec/{project}/{profile}` with
+  the key as the secret name. Native `ref` references may select a JSON key with
+  `field` and a revision with `version`, and are read-only.
 - `secretspec config init --provider <PROVIDER> --profile <PROFILE>` can save
   global defaults without interactive prompts, including `--profile none` to
   clear the default profile.

@@ -37,6 +37,7 @@ export default defineConfig({
   site: "https://secretspec.dev/",
   redirects: {
     "/reference/adding-providers": "/development/adding-providers",
+    "/ci": "/ci/github-actions",
   },
   vite: {
     plugins: [devStarsApi],
@@ -152,7 +153,12 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
           items: [
             { label: "Quick Start", slug: "quick-start" },
             { label: "Comparison", slug: "comparison" },
-            { label: "Continuous Integration", slug: "ci" },
+          ],
+        },
+        {
+          label: "CI",
+          items: [
+            { label: "GitHub Actions", slug: "ci/github-actions" },
           ],
         },
         {

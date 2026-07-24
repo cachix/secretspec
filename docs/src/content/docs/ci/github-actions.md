@@ -1,5 +1,5 @@
 ---
-title: Continuous Integration
+title: GitHub Actions
 description: Resolve secrets from secretspec.toml in GitHub Actions, Forgejo Actions, and other CI systems
 ---
 

@@ -52,7 +52,7 @@ detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
 
 [features]
-default = ["cli", "keyring", "kdbx", "gcsm", "awssm", "vault", "openbao", "bws", "akv", "infisical", "age"]
+default = ["cli", "keyring", "kdbx", "gcsm", "awssm", "vault", "openbao", "bws", "akv", "infisical", "age", "sops"]
 cli = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
@@ -71,3 +71,4 @@ infisical = ["dep:reqwest", "tokio/sync"]
 bws = []
 akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secrets"]
 age = ["dep:age"]
+sops = []

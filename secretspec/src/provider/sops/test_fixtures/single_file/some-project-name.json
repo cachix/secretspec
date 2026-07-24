@@ -1,0 +1,8 @@
+{
+  "development": {
+    "foobar": "bar"
+  },
+  "production": {
+    "foobar": "baz"
+  }
+}

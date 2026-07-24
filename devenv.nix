@@ -7,7 +7,9 @@
     # rust-toolchain.toml (read automatically via toolchainFile).
     toolchainFile = ./rust-toolchain.toml;
   };
+
   languages.javascript = {
+    directory = "./docs";
     enable = true;
     # Node 22 (the plain nixpkgs default) bundles npm 10.x, which mishandles
     # npm Trusted Publishing's OIDC handshake and can even misreport a brand
@@ -70,6 +72,8 @@
     # ext-php-rs's bindgen step can parse php.h.
     pkgs.php.unwrapped.dev
     pkgs.rustPlatform.bindgenHook
+    # For development of the SOPS provider
+    pkgs.sops
   ];
 
   # Fully-static musl build of the Go SDK (-tags static + -extldflags -static).
@@ -110,7 +114,7 @@
     # Build the CLI for integration tests
     cargo build --release
     export PATH="$PWD/target/release:$PATH"
-    
+
     # Run CLI integration tests
     bash tests/cli-integration.sh
   '';

@@ -32,6 +32,7 @@
 //! - [`bws::BwsProvider`]: Bitwarden Secrets Manager integration
 //! - [`akv::AkvProvider`]: Azure Key Vault integration
 //! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
+//! - [`sops::SopsProvider`]: SOPS-encrypted file integration (0.17+)
 //!
 //! ## URI-Based Configuration
 //!
@@ -209,6 +210,7 @@ impl ProviderUrl {
         feature = "infisical",
         feature = "kdbx",
         feature = "openbao",
+        feature = "sops",
         feature = "vault",
         test
     ))]
@@ -246,6 +248,12 @@ impl ProviderUrl {
     /// [`query_pairs`](Self::query_pairs).
     pub fn encode_query(value: &str) -> String {
         percent_encode(value.as_bytes(), QUERY_ENCODE_SET).to_string()
+    }
+}
+
+impl std::fmt::Display for ProviderUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
@@ -290,6 +298,8 @@ pub mod onepassword;
 pub mod openbao;
 pub mod pass;
 pub mod protonpass;
+#[cfg(feature = "sops")]
+pub mod sops;
 pub mod systemd_credential;
 #[cfg(feature = "vault")]
 pub mod vault;

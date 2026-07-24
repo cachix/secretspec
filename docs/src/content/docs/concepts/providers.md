@@ -57,6 +57,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [akv](/providers/akv/) | Azure Key Vault (requires the `akv` build feature) | ✓ | ✓ | ✓ | — |
 | [infisical](/providers/infisical/) (0.16+) | Infisical (requires the `infisical` build feature) | ✓ | ✓ | ✓ | — |
 | [age](/providers/age/) (0.17+) | An age-encrypted file (requires the `age` build feature) | ✓ | ✓ | ✓ | — |
+| [sops](/providers/sops/) (0.17+) | SOPS-encrypted files (requires the `sops` build feature and SOPS CLI) | ✓ | ✓ | ✓ | Depends on the configured SOPS key service |
 
 “TPM-backed keys” means the local key used by the provider can be protected by
 a [TPM 2.0](https://trustedcomputinggroup.org/resource/tpm-library-specification/)
@@ -295,7 +296,10 @@ Provider credentials follow these rules:
 - **Names are provider-specific.** Bitwarden accepts `access_token`; Vault
   accepts `token`, `role_id`, and `secret_id`; 1Password accepts
   `service_account_token`; Azure Key Vault accepts `tenant_id`, `client_id`, and
-  `client_secret`. Unsupported names are rejected before any source is read.
+  `client_secret`; SOPS (0.17+) accepts `age_key`, `aws_secret_access_key`,
+  `azure_client_secret`, `google_oauth_access_token`, `hc_vault_token`,
+  `huawei_sdk_ak`, and `huawei_sdk_sk`. Unsupported names are rejected before
+  any source is read.
 
 ## Next steps
 

@@ -322,6 +322,31 @@ age://secrets.age?recipients-file=secrets.age.recipients # Share with a roster
 **Authentication**: The `identity` credential, `AGE_IDENTITY`, or `?identity=`; recipients from `?recipients-file=` or derived from the identity
 **Storage**: One `KEY=value` entry per secret inside the encrypted blob at PATH
 
+## SOPS Provider (0.17+)
+
+:::caution[Version compatibility]
+The `sops` provider is added in SecretSpec 0.17.
+:::
+
+**URI**: `sops://PATH[?format=yaml|json|dotenv|ini]` - Stores secrets in a
+SOPS-encrypted file or a templated set of files
+
+```bash
+sops://secrets.enc.yaml
+sops://secrets/{project}/{profile}.enc.json
+sops://secrets/{project}/.env.{profile}.enc?format=dotenv
+```
+
+**Features**: Read/write, YAML, JSON, dotenv, and INI files, SOPS key-service
+support, and profile-aware templated paths
+**Prerequisites**: The `sops` CLI and the required SOPS key configuration;
+build with `--features sops` (0.17+)
+**Authentication**: SOPS environment variables or provider credentials such as
+`age_key`, `aws_secret_access_key`, `azure_client_secret`, and `hc_vault_token`
+**Storage**: Single-file YAML and JSON can namespace convention secrets by
+project and profile; INI uses profile sections and dotenv is flat. Templated
+paths contain flat keys in one file per project/profile.
+
 ## Provider Selection
 
 ### Command Line
@@ -366,3 +391,4 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
 | Infisical | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |
 | age (0.17+) | ✅ age encryption | Local filesystem | ❌ No |
+| SOPS (0.17+) | ✅ Configured SOPS encryption | Local filesystem | Depends on configured key service |

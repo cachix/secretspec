@@ -258,13 +258,13 @@ Manage user-level aliases via CLI:
 
 ```bash
 # SecretSpec 0.17+: add a provider alias to your user config
-$ secretspec config --global provider add prod_vault "onepassword://Production"
+$ secretspec config global provider add prod_vault "onepassword://Production"
 
 # SecretSpec 0.17+: list all aliases known to your user config
-$ secretspec config --global provider list
+$ secretspec config global provider list
 
 # SecretSpec 0.17+: remove an alias from your user config
-$ secretspec config --global provider remove prod_vault
+$ secretspec config global provider remove prod_vault
 ```
 
 These explicitly scoped CLI commands operate on the user-global config only —

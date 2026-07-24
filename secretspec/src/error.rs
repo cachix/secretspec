@@ -30,7 +30,7 @@ pub enum SecretSpecError {
     #[error("Dotenv error: {0}")]
     Dotenv(#[from] dotenvy::Error),
     #[error(
-        "No provider backend configured.\n\nTo fix this, either:\n  1. Run 'secretspec config --global init' to set up your default provider\n  2. Use --provider flag (e.g., 'secretspec check --provider keyring')"
+        "No provider backend configured.\n\nTo fix this, either:\n  1. Run 'secretspec config global init' to set up your default provider\n  2. Use --provider flag (e.g., 'secretspec check --provider keyring')"
     )]
     NoProviderConfigured,
     #[error("Provider backend '{0}' not found")]

@@ -146,7 +146,7 @@ check_success "Set secret in production profile"
 # Test 9: List secrets - removed as this command doesn't exist
 
 # Test 10: Config command
-secretspec config --global show > /dev/null
+secretspec config global show > /dev/null
 check_success "Config show command works"
 
 # Test 11: Init from provider

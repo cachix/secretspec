@@ -51,12 +51,12 @@ $ secretspec init
 ✓ Created secretspec.toml with 0 secrets
 
 Next steps:
-  1. secretspec config --global init    # Set up user defaults (0.17+)
+  1. secretspec config global init    # Set up user defaults (0.17+)
   2. secretspec check          # Verify all secrets are set
   3. secretspec run -- your-command  # Run with secrets
 
 # 2. Set up provider backend
-$ secretspec config --global init  # 0.17+
+$ secretspec config global init  # 0.17+
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
   kdbx: KeePass KDBX databases (0.17+)
@@ -138,10 +138,10 @@ $ secretspec run --profile development -- npm start
 $ secretspec run --profile production -- npm start
 
 # Set a user-global default profile (0.17+)
-$ secretspec config --global init
+$ secretspec config global init
 
 # SecretSpec 0.17+: set provider and profile defaults without prompting
-$ secretspec config --global init --provider env --profile default
+$ secretspec config global init --provider env --profile default
 ```
 
 Learn more about [profiles](https://secretspec.dev/concepts/profiles) and [profile selection](https://secretspec.dev/concepts/profiles#profile-selection).
@@ -174,7 +174,7 @@ $ secretspec run --provider keyring -- npm start
 $ secretspec run --provider dotenv -- npm start
 
 # Configure a user-global default provider (0.17+)
-$ secretspec config --global init
+$ secretspec config global init
 ```
 
 See [provider concepts](https://secretspec.dev/concepts/providers) and [provider reference](https://secretspec.dev/reference/providers) for details.
@@ -236,7 +236,7 @@ Common commands:
 ```bash
 # Initialize and configure
 secretspec init                    # Create secretspec.toml
-secretspec config --global init   # Set up user defaults (0.17+)
+secretspec config global init    # Set up user defaults (0.17+)
 
 # Manage secrets
 secretspec check                  # Verify all secrets are set

@@ -8,11 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `secretspec config --global init --provider <PROVIDER> --profile <PROFILE>`
+- `secretspec config global init --provider <PROVIDER> --profile <PROFILE>`
   can save explicitly user-global defaults without interactive prompts,
-  including `--profile none` to clear the default profile. `--global` is also
-  accepted by global config inspection and provider-alias commands; existing
-  invocations without the scope marker remain compatible.
+  including `--profile none` to clear the default profile. The `global`
+  namespace also supports config inspection and provider-alias commands;
+  existing invocations without the namespace remain compatible.
   ([#171](https://github.com/cachix/secretspec/issues/171))
 - age provider (`age://`) for storing dotenv-style secret sets in an
   age-encrypted file, with ASCII armor by default, team recipient rosters,

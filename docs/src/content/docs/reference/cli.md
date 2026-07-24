@@ -36,26 +36,26 @@ $ secretspec init --from .env.example
 ✓ Created secretspec.toml with 5 secrets
 ```
 
-### config --global init
-Initialize user-global configuration. SecretSpec 0.17+ accepts the explicit
-`--global` scope marker; without options, it prompts for the provider and
-profile.
+### config global init
+Initialize user-global configuration. The explicit `global` namespace is
+available in SecretSpec 0.17+; without options, the command prompts for the
+provider and profile.
 
 ```bash
-secretspec config [--global] init [--provider <PROVIDER>] [--profile <PROFILE>]
+secretspec config global init [--provider <PROVIDER>] [--profile <PROFILE>] # 0.17+
 ```
 
 SecretSpec 0.17+ accepts `--provider` and `--profile` so installations can save
 both defaults without interaction. Each omitted option still prompts; use
 `--profile none` to clear the saved default profile. The corresponding
 `SECRETSPEC_PROVIDER` and `SECRETSPEC_PROFILE` environment variables are also
-accepted. Project requirements remain in `secretspec.toml`; `--global` makes it
-clear that this command writes user-wide defaults. The legacy spelling without
-`--global` remains supported.
+accepted. Project requirements remain in `secretspec.toml`; the namespace makes
+it clear that this command writes user-wide defaults. The legacy
+`secretspec config init` spelling remains supported as a hidden alias.
 
 **Example:**
 ```bash
-$ secretspec config --global init  # 0.17+
+$ secretspec config global init  # 0.17+
 ? Select your preferred provider backend:
 > keyring: System keychain
 ? Select your default profile:
@@ -65,26 +65,26 @@ $ secretspec config --global init  # 0.17+
 
 ```bash
 # SecretSpec 0.17+: save both defaults without prompting
-$ secretspec config --global init --provider env --profile default
+$ secretspec config global init --provider env --profile default
 ✓ Configuration saved to ~/.config/secretspec/config.toml
 ```
 
-### config --global show
-Display current user-global configuration. SecretSpec 0.17+ accepts the
-explicit `--global` scope marker; the legacy spelling remains supported.
+### config global show
+Display current user-global configuration. The explicit namespace is available
+in SecretSpec 0.17+; `secretspec config show` remains a hidden alias.
 
 ```bash
-secretspec config [--global] show
+secretspec config global show # 0.17+
 ```
 
 **Example:**
 ```bash
-$ secretspec config --global show  # 0.17+
+$ secretspec config global show  # 0.17+
 Provider: keyring
 Profile:  development
 ```
 
-### config --global provider add
+### config global provider add
 Add a provider alias to your user-level configuration (`~/.config/secretspec/config.toml`).
 
 To share aliases with your team, declare them in a top-level `[providers]` table in `secretspec.toml` instead — they take precedence over user-level aliases on name conflict.
@@ -92,12 +92,12 @@ To share aliases with your team, declare them in a top-level `[providers]` table
 :::note[Version compatibility]
 SecretSpec 0.14 supports adding aliases with `<ALIAS>` and `<URI>`.
 The `--credential` option is available starting with SecretSpec 0.15.
-The explicit `--global` scope marker is accepted starting with SecretSpec 0.17;
-the legacy spelling remains supported.
+The explicit `global` namespace is available starting with SecretSpec 0.17;
+the legacy `config provider add` spelling remains a hidden alias.
 :::
 
 ```bash
-secretspec config [--global] provider add <ALIAS> <URI> [--credential NAME=PROVIDER]...
+secretspec config global provider add <ALIAS> <URI> [--credential NAME=PROVIDER]... # 0.17+
 ```
 
 **Arguments:**
@@ -109,35 +109,35 @@ secretspec config [--global] provider add <ALIAS> <URI> [--credential NAME=PROVI
 
 **Example:**
 ```bash
-$ secretspec config --global provider add prod_vault "onepassword://Production" # 0.17+
+$ secretspec config global provider add prod_vault "onepassword://Production" # 0.17+
 ✓ Provider alias 'prod_vault' added: 'onepassword://Production'
 
-$ secretspec config --global provider add bws "bws://project-uuid" --credential access_token=keyring # 0.17+
+$ secretspec config global provider add bws "bws://project-uuid" --credential access_token=keyring # 0.17+
 ✓ Provider alias 'bws' added: 'bws://project-uuid'
   credentials: access_token=keyring
   run 'secretspec config provider login bws' to store the credentials
 ```
 
-### config --global provider list
+### config global provider list
 List all configured user-level provider aliases. Project-level aliases declared in `secretspec.toml` are not shown by this command.
 
 ```bash
-secretspec config [--global] provider list
+secretspec config global provider list # 0.17+
 ```
 
 **Example:**
 ```bash
-$ secretspec config --global provider list  # 0.17+
+$ secretspec config global provider list  # 0.17+
 prod_vault  → onepassword://Production
 shared      → onepassword://Shared
 env         → env://
 ```
 
-### config --global provider remove
+### config global provider remove
 Remove a provider alias from your user-level configuration. To remove a project-level alias, edit the `[providers]` table in `secretspec.toml` directly.
 
 ```bash
-secretspec config [--global] provider remove <ALIAS>
+secretspec config global provider remove <ALIAS> # 0.17+
 ```
 
 **Arguments:**
@@ -145,7 +145,7 @@ secretspec config [--global] provider remove <ALIAS>
 
 **Example:**
 ```bash
-$ secretspec config --global provider remove prod_vault  # 0.17+
+$ secretspec config global provider remove prod_vault  # 0.17+
 ✓ Provider alias 'prod_vault' removed
 ```
 
@@ -467,7 +467,7 @@ $ secretspec audit --json | jq 'select(.outcome == "missing")'
 $ secretspec init --from .env
 
 # Set up user-global defaults (0.17+)
-$ secretspec config --global init
+$ secretspec config global init
 
 # Import existing secrets (optional)
 $ secretspec import env  # or: secretspec import dotenv:.env.old

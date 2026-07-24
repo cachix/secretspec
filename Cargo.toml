@@ -45,8 +45,6 @@ insta = "1.34"
 linkme = "0.3"
 jiff = "0.2"
 secrecy = { version = "0.10.3", features = ["serde"] }
-bitwarden = { version = "2.0.0", features = ["secrets"] }
-rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 google-cloud-secretmanager-v1 = "1.2"
 aws-config = "1"
 aws-sdk-secretsmanager = "1"
@@ -59,7 +57,7 @@ secretspec-derive = { version = "0.16.0", path = "./secretspec-derive" }
 secretspec = { version = "0.16.0", path = "./secretspec" }
 rand = "0.9"
 rsa = { version = "0.9", features = ["pem"] }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["serde", "v4"] }
 data-encoding = "2"
 detect-coding-agent = "0.1"
 age = { version = "0.12", features = ["armor", "plugin", "ssh"] }

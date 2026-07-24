@@ -245,13 +245,20 @@ bws://vault.bitwarden.eu@a9230ec4-5507-4870-b8b5-b3f500587e4c # EU cloud
 bws://bw.example.com@a9230ec4-5507-4870-b8b5-b3f500587e4c     # Self hosted
 ```
 
-`SERVER_BASE` is the bare hostname of the Bitwarden instance; the identity and
-API endpoints are derived as `https://SERVER_BASE/identity` and
-`https://SERVER_BASE/api`. Omit it to use the `bitwarden.com` US cloud.
+`SERVER_BASE` is the bare hostname of the Bitwarden instance. SecretSpec 0.17+
+passes `https://SERVER_BASE` to `bws --server-url`; SecretSpec 0.16 and earlier
+derive the `https://SERVER_BASE/identity` and `https://SERVER_BASE/api`
+endpoints through the SDK. Omit it to use the `bitwarden.com` US cloud.
 
 **Features**: Read/write, cloud sync, project-scoped, end-to-end encryption
 **Prerequisites**: BWS subscription, machine account access token, build with `--features bws`
 **Storage**: Flat key names in the specified BWS project
+
+SecretSpec 0.17 and later require the official `bws` CLI 0.3.0 or later on
+`PATH` and invoke it for all reads and writes; set `SECRETSPEC_BWS_CLI_PATH` to
+use another executable path. The access token is supplied through the child
+process environment. Secret values passed to the CLI for creation or editing
+may briefly be visible to same-user process-inspection tools.
 
 ## Azure Key Vault Provider
 

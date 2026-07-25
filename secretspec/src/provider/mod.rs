@@ -776,7 +776,7 @@ pub trait Provider: Send + Sync {
 /// clients, reverse proxies in front of Vault/OpenBao, rate-limited APIs) can
 /// drop part of an unbounded burst. A modest default keeps resolution fast
 /// without stampeding the store. Override with [`get_each_concurrency`].
-const DEFAULT_GET_EACH_CONCURRENCY: usize = 12;
+const DEFAULT_GET_EACH_CONCURRENCY: usize = 8;
 
 /// Env var that caps concurrent unique-address fetches in [`get_each`].
 ///
@@ -825,11 +825,6 @@ pub(crate) fn get_each<P: Provider + ?Sized>(
         // observed to open one TCP(+TLS) handshake per secret against a
         // reverse-proxied Vault/OpenBao and lose part of the burst.
         for chunk in groups.chunks(concurrency) {
-            if chunk.len() == 1 {
-                let (addr, names) = &chunk[0];
-                fetched.push((names.clone(), provider.get(*addr)));
-                continue;
-            }
             std::thread::scope(|scope| {
                 let handles: Vec<_> = chunk
                     .iter()

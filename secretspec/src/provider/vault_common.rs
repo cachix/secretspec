@@ -364,9 +364,8 @@ impl KvProvider {
         }
     }
 
-    /// Returns the shared HTTP client, creating it on first use.
+    /// The shared HTTP client.
     fn http(&self) -> &reqwest::Client {
-        // Same construction Infisical uses: default client, lazy per instance.
         self.http.get_or_init(reqwest::Client::new)
     }
 
@@ -776,6 +775,47 @@ impl KvProvider {
         }
     }
 
+    /// Sends a request, retrying a few times on connect/timeout errors only.
+    ///
+    /// Auth and HTTP status failures are not retried — those are not the
+    /// reverse-proxy connection storm this targets. The builder is reconstructed
+    /// each attempt because `RequestBuilder` is consumed by `send`.
+    async fn send_with_connect_retry(
+        &self,
+        mut build: impl FnMut() -> Result<reqwest::RequestBuilder>,
+    ) -> Result<reqwest::Response> {
+        const ATTEMPTS: usize = 3;
+        let mut last_error = None;
+        for attempt in 1..=ATTEMPTS {
+            let response = build()?.send().await;
+            match response {
+                Ok(response) => return Ok(response),
+                Err(error)
+                    if attempt < ATTEMPTS && (error.is_connect() || error.is_timeout()) =>
+                {
+                    last_error = Some(error);
+                    // get_each already runs each get on its own thread, so a
+                    // brief blocking backoff is fine and avoids a tokio/time
+                    // feature dependency on the vault build.
+                    std::thread::sleep(std::time::Duration::from_millis(25 * attempt as u64));
+                }
+                Err(error) => {
+                    return Err(SecretSpecError::ProviderOperationFailed(format!(
+                        "Failed to connect to {} at {}: {error}",
+                        self.product.display_name(),
+                        self.config.endpoint
+                    )));
+                }
+            }
+        }
+        Err(SecretSpecError::ProviderOperationFailed(format!(
+            "Failed to connect to {} at {}: {}",
+            self.product.display_name(),
+            self.config.endpoint,
+            last_error.expect("connect retry exhausted with an error")
+        )))
+    }
+
     /// Fetches one KV entry and extracts one string field.
     ///
     /// A missing path maps to `None`, while authorization and protocol failures
@@ -787,19 +827,10 @@ impl KvProvider {
     ) -> Result<Option<SecretString>> {
         let url = self.build_url(secret_path);
         let token = self.resolve_token().await?;
+        let headers = self.build_headers(&token)?;
         let response = self
-            .http()
-            .get(&url)
-            .headers(self.build_headers(&token)?)
-            .send()
-            .await
-            .map_err(|error| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to connect to {} at {}: {error}",
-                    self.product.display_name(),
-                    self.config.endpoint
-                ))
-            })?;
+            .send_with_connect_retry(|| Ok(self.http().get(&url).headers(headers.clone())))
+            .await?;
 
         match response.status().as_u16() {
             200 => {
@@ -849,20 +880,12 @@ impl KvProvider {
             KvVersion::V2 => serde_json::json!({ "data": { "value": value.expose_secret() } }),
             KvVersion::V1 => serde_json::json!({ "value": value.expose_secret() }),
         };
+        let headers = self.build_headers(&token)?;
         let response = self
-            .http()
-            .post(&url)
-            .headers(self.build_headers(&token)?)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to connect to {} at {}: {error}",
-                    self.product.display_name(),
-                    self.config.endpoint
-                ))
-            })?;
+            .send_with_connect_retry(|| {
+                Ok(self.http().post(&url).headers(headers.clone()).json(&body))
+            })
+            .await?;
 
         match response.status().as_u16() {
             200 | 204 => Ok(()),

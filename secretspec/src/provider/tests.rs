@@ -318,7 +318,7 @@ fn get_each_concurrency_defaults_and_parses_env() {
     let _lock = crate::tests::scrub_resolution_env();
 
     let _clear = crate::tests::EnvVarGuard::remove(super::GET_EACH_CONCURRENCY_ENV);
-    assert_eq!(super::get_each_concurrency(), 12);
+    assert_eq!(super::get_each_concurrency(), 8);
 
     let _set = crate::tests::EnvVarGuard::set(super::GET_EACH_CONCURRENCY_ENV, "4");
     assert_eq!(super::get_each_concurrency(), 4);
@@ -327,13 +327,13 @@ fn get_each_concurrency_defaults_and_parses_env() {
     let _zero = crate::tests::EnvVarGuard::set(super::GET_EACH_CONCURRENCY_ENV, "0");
     assert_eq!(
         super::get_each_concurrency(),
-        12,
+        8,
         "zero is invalid and must fall back"
     );
 
     drop(_zero);
     let _bad = crate::tests::EnvVarGuard::set(super::GET_EACH_CONCURRENCY_ENV, "nope");
-    assert_eq!(super::get_each_concurrency(), 12);
+    assert_eq!(super::get_each_concurrency(), 8);
 }
 
 /// `SECRETSPEC_PROVIDER_CONCURRENCY` must cap in-flight unique-address fetches.

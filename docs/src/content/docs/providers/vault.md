@@ -105,10 +105,12 @@ vault://[namespace@]host[:port][/mount][?key=value&...]
 - `?kv=1`: Use KV v1 (default: v2)
 - `?tls=false`: Disable TLS for development servers
 
-When many secrets resolve in one burst, SecretSpec reuses one HTTP client
-per provider and caps concurrent fetches (default 12). Raise or lower the
-cap with `SECRETSPEC_PROVIDER_CONCURRENCY` if your Vault/OpenBao proxy
-tolerates more or less parallel load.
+### Concurrent resolution
+
+- One HTTP client is reused per provider instance (connection pool / h2 reuse).
+- Concurrent unique-address fetches are capped at 8 by default.
+- Override the cap with `SECRETSPEC_PROVIDER_CONCURRENCY` (integer ≥ 1) when your
+  Vault proxy tolerates more or less parallel load.
 
 ### URI examples
 

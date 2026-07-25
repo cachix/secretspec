@@ -15,8 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deployments, which was observed to drop part of the burst with
   `Failed to connect to Vault`.
 - `get_each` (default `Provider::get_many`) caps concurrent unique-address
-  fetches at 12 by default, overridable with `SECRETSPEC_PROVIDER_CONCURRENCY`.
+  fetches at 8 by default, overridable with `SECRETSPEC_PROVIDER_CONCURRENCY`.
   Waves replace a single unbounded `thread::scope` fan-out.
+- Vault/OpenBao HTTP sends retry up to 3 times on connect/timeout errors only
+  (not on HTTP 4xx/5xx), with a short backoff between attempts.
 
 ### Added
 - `secretspec config global init --provider <PROVIDER> --profile <PROFILE>`

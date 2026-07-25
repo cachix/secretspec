@@ -83,6 +83,19 @@ impl TryFrom<&ProviderUrl> for ScalewayConfig {
             )));
         }
 
+        // The URI path is not part of the provider identity: only the host
+        // (region) and query (`project_id`, `path`) are honored, and `uri()`
+        // reconstructs the provider without it. Reject a non-root path rather
+        // than silently ignoring it and falling back to the root hierarchy —
+        // folders are configured through `?path=...`.
+        if !url.path().trim_matches('/').is_empty() {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "scaleway provider URI must not contain a path ('{}'); \
+                 configure a folder with '?path=/folder' instead",
+                url.path()
+            )));
+        }
+
         let region = url
             .host()
             .filter(|s| !s.is_empty())
@@ -562,6 +575,18 @@ mod tests {
         let err = ScalewayConfig::try_from(&ProviderUrl::new(Url::parse("awssm://x").unwrap()))
             .unwrap_err();
         assert!(err.to_string().contains("Invalid scheme"), "{err}");
+    }
+
+    #[test]
+    fn non_root_path_is_rejected() {
+        // `scaleway://fr-par/team` parses, but the path is not part of the
+        // provider identity and `uri()` would drop it, so accepting it would
+        // silently read/write the root hierarchy. Folders go through `?path=`.
+        let err = ScalewayConfig::try_from(&ProviderUrl::new(
+            Url::parse("scaleway://fr-par/team").unwrap(),
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("must not contain a path"), "{err}");
     }
 
     #[test]

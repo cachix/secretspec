@@ -88,7 +88,7 @@ shared code, without any per-provider work.
 ## References name, providers route
 
 A `ref` supplies the name only. Which provider resolves it follows the normal
-[provider resolution order](/concepts/providers/): a `--provider` override, then
+[provider resolution order](/concepts/providers/fallback/): a `--provider` override, then
 the secret's `providers` chain, then profile and global defaults. That is the
 same order every other secret uses.
 

@@ -10,15 +10,14 @@
 //! instead of re-deriving per-secret facts across `get`, `set`, and batch
 //! validation.
 //!
-//! Building a plan performs no I/O. Provider-spec resolution is a map lookup
-//! plus a registry check, so the only errors it can raise are a routing spec
-//! that names neither an alias nor a provider
-//! ([`SecretSpecError::ProviderNotFound`]) and the corrected `1password`
-//! misspelling; a plan never opens a store.
+//! Building a plan performs no store I/O. Provider-spec resolution is a map
+//! lookup plus provider configuration parsing; cached routes also reconstruct
+//! canonical provider URIs so equivalent spellings cannot disguise a cache as
+//! its own authoritative store. A plan never reads or writes a secret.
 
 use crate::composition::Template;
 use crate::config::{NativeAddress, Secret};
-use crate::error::Result;
+use crate::error::{Result, SecretSpecError};
 use crate::manifest::CompiledSecret;
 use crate::provider::Address;
 use crate::secrets::Secrets;
@@ -41,6 +40,19 @@ pub(crate) struct ResolvedPrimary {
     pub uri: String,
 }
 
+/// The leaf store and freshness policy for a cached provider route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedCache {
+    /// Raw provider spec, retained so alias credentials remain available.
+    pub spec: String,
+    /// Credential-free resolved URI, used for diagnostics and provenance.
+    pub uri: String,
+    /// Freshness window in seconds.
+    pub max_age_secs: u64,
+    /// Stable fingerprint of the expanded authoritative provider route.
+    pub route_fingerprint: String,
+}
+
 /// Where a planned secret reads and writes.
 ///
 /// A `providers` chain is a fallback list tried in order. Only the primary
@@ -60,6 +72,8 @@ pub(crate) struct Route {
     /// The chain's remaining specs (aliases or URIs), raw, tried in order —
     /// and resolved — only after the primary misses.
     pub fallback: Vec<String>,
+    /// Local cache consulted before the authoritative route, when configured.
+    pub cache: Option<ResolvedCache>,
 }
 
 impl Route {
@@ -99,6 +113,11 @@ impl Route {
             specs
         })
     }
+
+    /// Cache policy for this route, if its provider alias enables caching.
+    pub(crate) fn cache(&self) -> Option<&ResolvedCache> {
+        self.cache.as_ref()
+    }
 }
 
 /// Everything decided for one declared secret, ready to execute.
@@ -136,6 +155,31 @@ impl PlannedSecret {
     /// The native `ref` coordinates this secret addresses, if any.
     pub(crate) fn reference(&self) -> Option<&NativeAddress> {
         self.secret.config.reference.as_ref()
+    }
+
+    /// Fingerprint stored in this secret's cache entry, over everything that
+    /// decides what the authoritative route would answer: the project and
+    /// profile, the expanded route, the secret's name, and its native
+    /// coordinates. A change to any of them invalidates the entry. Project and
+    /// profile are included even though they are also passed in the cache
+    /// address, because flat stores such as dotenv discard that namespace.
+    pub(crate) fn cache_fingerprint(
+        &self,
+        cache: &ResolvedCache,
+        project: &str,
+        profile: &str,
+    ) -> String {
+        let address = self
+            .reference()
+            .map(NativeAddress::render)
+            .unwrap_or_else(|| "convention".to_string());
+        stable_fingerprint([
+            project,
+            profile,
+            cache.route_fingerprint.as_str(),
+            self.name.as_str(),
+            address.as_str(),
+        ])
     }
 
     /// Whether the active profile treats this secret as required: its compiled
@@ -247,9 +291,14 @@ impl Secrets {
             secrets.push(self.plan_one_secret(name, secret, &override_spec)?);
         }
 
+        let override_uri = override_spec
+            .as_deref()
+            .map(|spec| self.override_display_uri(spec))
+            .transpose()?;
+
         Ok(ResolutionPlan {
             profile: profile_name,
-            override_uri: override_spec.map(|spec| self.resolve_provider_spec(spec)),
+            override_uri,
             secrets,
         })
     }
@@ -270,6 +319,33 @@ impl Secrets {
         profile_name: &str,
         override_arg: Option<&str>,
     ) -> Result<Option<PlannedSecret>> {
+        let override_spec = self.explicit_provider_spec(override_arg);
+        self.plan_one(name, profile_name, &override_spec)
+    }
+
+    /// As [`Secrets::plan_secret`], but ignoring every provider override —
+    /// `--provider`, the builder, and `SECRETSPEC_PROVIDER`.
+    ///
+    /// Cache maintenance needs the route the manifest *declares*, not the one an
+    /// override redirected this command to: an override collapses the route to a
+    /// single store and drops its cache, so planning with one would leave the
+    /// entry that override bypassed in place.
+    pub(crate) fn plan_declared_secret(
+        &self,
+        name: &str,
+        profile_name: &str,
+    ) -> Result<Option<PlannedSecret>> {
+        self.plan_one(name, profile_name, &None)
+    }
+
+    /// Plan one declared secret against an already-decided override spec.
+    /// `Ok(None)` when the secret is not declared in the (merged) profile.
+    fn plan_one(
+        &self,
+        name: &str,
+        profile_name: &str,
+        override_spec: &Option<String>,
+    ) -> Result<Option<PlannedSecret>> {
         let Some(secret) = self
             .manifest
             .profile(profile_name)
@@ -277,11 +353,10 @@ impl Secrets {
         else {
             return Ok(None);
         };
-        let override_spec = self.explicit_provider_spec(override_arg);
         Ok(Some(self.plan_one_secret(
             name.to_string(),
             secret,
-            &override_spec,
+            override_spec,
         )?))
     }
 
@@ -330,6 +405,9 @@ impl Secrets {
         // display, and validates any `credentials` (unknown source, one-hop)
         // up front — all pure map lookups.
         if let Some(spec) = override_spec {
+            if let Some(alias) = self.cached_alias(spec) {
+                return self.cached_route(spec, alias);
+            }
             self.validate_credential_sources(spec)?;
             return Ok(Route {
                 primary: Some(ResolvedPrimary {
@@ -337,10 +415,31 @@ impl Secrets {
                     uri: self.resolve_provider_spec(spec.clone()),
                 }),
                 fallback: Vec::new(),
+                cache: None,
             });
         }
         match config.providers.as_deref() {
             Some([first, fallback @ ..]) => {
+                // A cached alias expands into a whole route — sources, order,
+                // and cache — so it cannot also be one link of a chain, in any
+                // position. Were a later position accepted, the chain walk would
+                // fail to resolve it, warn, and silently continue without the
+                // cache or its sources, and writes would go to the wrong store.
+                if let Some(spec) = std::iter::once(first)
+                    .chain(fallback)
+                    .find(|spec| self.cached_alias(spec).is_some())
+                {
+                    if !fallback.is_empty() {
+                        return Err(SecretSpecError::ProviderOperationFailed(format!(
+                            "cached provider alias '{spec}' is a complete route and cannot be \
+                             combined with additional entries in a secret's providers list"
+                        )));
+                    }
+                    let alias = self
+                        .cached_alias(spec)
+                        .expect("the spec was just found to be a cached alias");
+                    return self.cached_route(spec, alias);
+                }
                 // Unlike an override, an undefined alias as chain primary is a
                 // hard error here (`resolve_one_provider` fails fast).
                 let uri = self.resolve_one_provider(first)?;
@@ -351,19 +450,173 @@ impl Secrets {
                         uri,
                     }),
                     fallback: fallback.to_vec(),
+                    cache: None,
                 })
             }
-            _ => Ok(Route {
-                primary: None,
-                fallback: Vec::new(),
-            }),
+            _ => {
+                if let Some(spec) = self.configured_default_provider_spec()
+                    && let Some(alias) = self.cached_alias(&spec)
+                {
+                    return self.cached_route(&spec, alias);
+                }
+                Ok(Route {
+                    primary: None,
+                    fallback: Vec::new(),
+                    cache: None,
+                })
+            }
         }
     }
+
+    /// Expand a cached alias into its authoritative route plus cache policy.
+    ///
+    /// Cached aliases deliberately cannot be nested: every fallback and the
+    /// cache provider must be a leaf provider spec. This keeps the read/write
+    /// target and cache invalidation semantics obvious and prevents cycles.
+    ///
+    /// Shape validation (a non-empty source list, a parseable `max_age`) lives
+    /// in [`crate::config::ProviderAlias::cached`] and
+    /// [`crate::config::ProviderCache::new`]. Their validated fields are
+    /// immutable after construction; expansion here resolves specs and rejects
+    /// what needs the whole config to see: nesting, and a cache sharing a store
+    /// with its own sources.
+    fn cached_route(&self, name: &str, alias: &crate::config::ProviderAlias) -> Result<Route> {
+        let cache = alias.cache().ok_or_else(|| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "provider alias '{name}' does not declare a cache policy"
+            ))
+        })?;
+        let (first, fallback) = alias.fallback().split_first().ok_or_else(|| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "cached provider alias '{name}' requires at least one authoritative source"
+            ))
+        })?;
+
+        for spec in alias
+            .fallback()
+            .iter()
+            .map(String::as_str)
+            .chain(std::iter::once(cache.provider()))
+        {
+            if self.cached_alias(spec).is_some() {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "cached provider alias '{name}' cannot use cached alias '{spec}' as a \
+                     fallback or cache provider; cached aliases may contain only leaf providers"
+                )));
+            }
+        }
+
+        let mut source_uris = Vec::with_capacity(alias.fallback().len());
+        for spec in alias.fallback() {
+            source_uris.push(self.resolve_one_provider(spec)?);
+            self.validate_credential_sources(spec)?;
+        }
+        let cache_uri = self.resolve_one_provider(cache.provider())?;
+        self.validate_credential_sources(cache.provider())?;
+
+        let source_identities = source_uris
+            .iter()
+            .map(|uri| self.canonical_provider_uri(uri))
+            .collect::<Result<Vec<_>>>()?;
+        let cache_identity = self.canonical_provider_uri(&cache_uri)?;
+
+        // The cache entry lives at the same logical address the authoritative
+        // read asks for, so a cache pointed at one of its own sources would
+        // overwrite the secret with the cache envelope the first time it
+        // refreshed, and then serve that envelope back as the value. Compare
+        // provider-reconstructed URIs after applying the project base directory:
+        // raw specs such as `dotenv:.env` and `dotenv://.env` are different
+        // strings but identify the same store.
+        if let Some(shared) = source_identities
+            .iter()
+            .position(|identity| *identity == cache_identity)
+        {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "cached provider alias '{name}' caches into '{uri}', which is also its \
+                 authoritative source '{source}'. A cache must be a distinct store, otherwise \
+                 refreshing it overwrites the secret it caches.",
+                uri = crate::audit::redact_uri_strict(&cache_uri),
+                source = alias.fallback()[shared],
+            )));
+        }
+
+        // Every way a cached value stops being correct ends in deleting the
+        // entry: `cache clear`, a refresh that failed, a write that bypassed the
+        // route. A store that cannot delete gives an uninvalidatable cache, so
+        // require the capability here rather than discovering it the first time
+        // a stale value needs dropping.
+        if !crate::provider::spec_provider_deletes(&cache_uri) {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "cached provider alias '{name}' caches into '{uri}', which cannot delete secrets, \
+                 so its entries could never be invalidated. Cache into one of: {supported}.",
+                uri = crate::audit::redact_uri_strict(&cache_uri),
+                supported = crate::provider::deleting_provider_names().join(", "),
+            )));
+        }
+
+        Ok(Route {
+            primary: Some(ResolvedPrimary {
+                spec: first.clone(),
+                uri: source_uris[0].clone(),
+            }),
+            fallback: fallback.to_vec(),
+            cache: Some(ResolvedCache {
+                spec: cache.provider().to_string(),
+                uri: cache_uri,
+                max_age_secs: cache.max_age_secs(),
+                route_fingerprint: stable_fingerprint(source_identities.iter().map(String::as_str)),
+            }),
+        })
+    }
+
+    /// Reconstruct a provider's public URI without resolving its credentials or
+    /// touching the store. Provider implementations normalize shorthand,
+    /// defaults, percent encoding, and relative filesystem paths in this URI,
+    /// making it suitable for cache/source identity comparisons.
+    fn canonical_provider_uri(&self, uri: &str) -> Result<String> {
+        let mut provider =
+            crate::provider::provider_from_spec(uri, crate::provider::ProviderCredentials::new())?;
+        provider.with_base_dir(&self.config_dir);
+        Ok(provider.uri())
+    }
+
+    /// The URI to report for an explicit provider override.
+    ///
+    /// A cached alias is a route, not a store, so it has no URI of its own: name
+    /// the store a read consults first. This is what lands in the resolution
+    /// report, `--json`, and the SDK `provider` field, so it must never be a
+    /// bare alias name.
+    pub(crate) fn override_display_uri(&self, spec: &str) -> Result<String> {
+        match self.cached_alias(spec) {
+            Some(alias) => {
+                let first = alias.fallback().first().ok_or_else(|| {
+                    SecretSpecError::ProviderOperationFailed(format!(
+                        "cached provider alias '{spec}' requires at least one authoritative source"
+                    ))
+                })?;
+                self.resolve_one_provider(first)
+            }
+            None => Ok(self.resolve_provider_spec(spec.to_string())),
+        }
+    }
+}
+
+/// Deterministic, dependency-free fingerprint used only for cache invalidation.
+fn stable_fingerprint<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for part in parts {
+        for byte in part.len().to_le_bytes().iter().chain(part.as_bytes()) {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("v1-{hash:016x}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{ProviderAlias, ProviderCache};
     use crate::error::SecretSpecError;
     use crate::tests::{global_config_with_aliases, scrub_resolution_env};
     use std::collections::HashMap;
@@ -654,6 +907,227 @@ mod tests {
         assert_eq!(
             route(&one).primary(),
             route(find(&batch, "API_KEY")).primary()
+        );
+    }
+
+    /// A cached route alias over the given sources, cached in `cache_spec`.
+    fn cached_alias(sources: &[&str], cache_spec: &str, max_age: &str) -> ProviderAlias {
+        ProviderAlias::cached(
+            sources.iter().map(|s| s.to_string()).collect(),
+            ProviderCache::new(cache_spec, max_age).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn cached_aliases() -> HashMap<String, ProviderAlias> {
+        HashMap::from([
+            ("azure".to_string(), ProviderAlias::from("akv://team-vault")),
+            ("env".to_string(), ProviderAlias::from("env://")),
+            ("local".to_string(), ProviderAlias::from("keyring://")),
+            (
+                "myprovider".to_string(),
+                cached_alias(&["azure", "env"], "local", "8h"),
+            ),
+        ])
+    }
+
+    /// A `Secrets` over one `API_KEY` and the cached alias map, with `aliases`
+    /// merged in (later entries replacing the defaults).
+    fn cached_spec_with(secret_providers: Vec<&str>, aliases: &[(&str, ProviderAlias)]) -> Secrets {
+        let mut config = crate::tests::resolve_test_config(HashMap::from([(
+            "API_KEY".to_string(),
+            secret(Some(secret_providers)),
+        )]));
+        let mut providers = cached_aliases();
+        for (name, alias) in aliases {
+            providers.insert(name.to_string(), alias.clone());
+        }
+        config.providers = Some(providers);
+        Secrets::new(config, None, None, None)
+    }
+
+    fn cached_spec(secret_providers: Vec<&str>) -> Secrets {
+        cached_spec_with(secret_providers, &[])
+    }
+
+    #[test]
+    fn cached_alias_expands_into_authoritative_route_and_cache() {
+        let _env = scrub_resolution_env();
+        let plan = plan(&cached_spec(vec!["myprovider"]));
+        let route = route(find(&plan, "API_KEY"));
+
+        assert_eq!(route.group_key(), Some("azure"));
+        assert_eq!(route.primary(), Some("akv://team-vault"));
+        assert_eq!(route.fallback, ["env"]);
+        let cache = route.cache().expect("cached route");
+        assert_eq!(cache.spec, "local");
+        assert_eq!(cache.uri, "keyring://");
+        assert_eq!(cache.max_age_secs, 8 * 60 * 60);
+    }
+
+    #[test]
+    fn cached_alias_is_a_complete_route_not_a_chain_link() {
+        let _env = scrub_resolution_env();
+        // A cached alias is a whole route, so it cannot be a link in a chain in
+        // *any* position. Accepting it after the head would silently drop the
+        // cache and its sources at read time and point writes at the wrong store.
+        for chain in [
+            vec!["myprovider", "env"],
+            vec!["env", "myprovider"],
+            vec!["env", "azure", "myprovider"],
+        ] {
+            let error = cached_spec(chain.clone()).build_plan(None).unwrap_err();
+            assert!(
+                error.to_string().contains("complete route"),
+                "{chain:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cache_may_not_share_a_store_with_its_authoritative_sources() {
+        let _env = scrub_resolution_env();
+        // `local` and `mirror` name the same store, and the cache envelope is
+        // written at the same address the authoritative read uses, so allowing
+        // this would overwrite the real secret with the envelope on the first
+        // refresh — and serve the envelope back as the value once it expired.
+        let spec = cached_spec_with(
+            vec!["myprovider"],
+            &[
+                ("mirror", ProviderAlias::from("keyring://")),
+                (
+                    "myprovider",
+                    cached_alias(&["azure", "mirror"], "local", "8h"),
+                ),
+            ],
+        );
+
+        let error = spec.build_plan(None).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("distinct store"), "{message}");
+        assert!(message.contains("mirror"), "{message}");
+    }
+
+    #[test]
+    fn equivalent_provider_spellings_cannot_bypass_cache_separation() {
+        let _env = scrub_resolution_env();
+        // Both dotenv spellings resolve to the same project-relative file.
+        // Comparing the unresolved strings would let the cache interpret and
+        // delete the authoritative plaintext as a malformed envelope.
+        let spec = cached_spec_with(
+            vec!["myprovider"],
+            &[(
+                "myprovider",
+                cached_alias(&["dotenv:.env"], "dotenv://.env", "8h"),
+            )],
+        );
+
+        let message = spec.build_plan(None).unwrap_err().to_string();
+        assert!(message.contains("distinct store"), "{message}");
+        assert!(message.contains("dotenv:.env"), "{message}");
+    }
+
+    #[test]
+    fn a_cache_must_be_a_store_that_can_delete() {
+        let _env = scrub_resolution_env();
+        // Every way a cached value stops being correct ends in deleting the
+        // entry, so a store that cannot delete would give a cache nothing could
+        // ever invalidate.
+        let spec = cached_spec_with(
+            vec!["myprovider"],
+            &[("myprovider", cached_alias(&["azure"], "env://", "8h"))],
+        );
+
+        let message = spec.build_plan(None).unwrap_err().to_string();
+        assert!(message.contains("cannot delete secrets"), "{message}");
+        assert!(message.contains("keyring"), "{message}");
+    }
+
+    #[test]
+    fn a_cache_may_share_a_store_kind_with_a_different_address() {
+        let _env = scrub_resolution_env();
+        // Same provider, different store: only an identical store is a conflict.
+        let spec = cached_spec_with(
+            vec!["myprovider"],
+            &[
+                (
+                    "sibling",
+                    ProviderAlias::from("keyring://secretspec/source/{project}/{profile}/{key}"),
+                ),
+                ("myprovider", cached_alias(&["sibling"], "local", "8h")),
+            ],
+        );
+
+        let plan = plan(&spec);
+        assert!(route(find(&plan, "API_KEY")).cache().is_some());
+    }
+
+    #[test]
+    fn a_cached_override_reports_its_first_authoritative_store() {
+        let _env = scrub_resolution_env();
+        // The alias itself is not a store, so the report must name the store a
+        // read consults first — including when no secret planned a route and
+        // there is none to borrow.
+        for secrets in [
+            HashMap::new(),
+            HashMap::from([("API_KEY".to_string(), secret(None))]),
+        ] {
+            let mut config = crate::tests::resolve_test_config(secrets);
+            config.providers = Some(cached_aliases());
+            let mut spec = Secrets::new(config, None, None, None);
+            spec.set_provider("myprovider");
+
+            assert_eq!(
+                plan(&spec).override_uri,
+                Some("akv://team-vault".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn cached_alias_can_be_the_global_default_provider() {
+        let _env = scrub_resolution_env();
+        let mut config = crate::tests::resolve_test_config(HashMap::from([(
+            "API_KEY".to_string(),
+            secret(None),
+        )]));
+        config.providers = Some(cached_aliases());
+        let mut global = global_config_with_aliases(&[]);
+        global.defaults.provider = Some("myprovider".to_string());
+        let spec = Secrets::new(config, Some(global), None, None);
+
+        let plan = plan(&spec);
+        let route = route(find(&plan, "API_KEY"));
+        assert_eq!(route.group_key(), Some("azure"));
+        assert!(route.cache().is_some());
+    }
+
+    #[test]
+    fn cached_alias_can_be_an_explicit_provider_override() {
+        let _env = scrub_resolution_env();
+        let spec = cached_spec(vec!["env"]);
+        let planned = spec
+            .plan_secret("API_KEY", "default", Some("myprovider"))
+            .unwrap()
+            .unwrap();
+        let route = route(&planned);
+
+        assert_eq!(route.group_key(), Some("azure"));
+        assert!(route.cache().is_some());
+    }
+
+    #[test]
+    fn cached_aliases_cannot_be_nested() {
+        let _env = scrub_resolution_env();
+        let spec = cached_spec_with(
+            vec!["outer"],
+            &[("outer", cached_alias(&["myprovider"], "local", "1h"))],
+        );
+
+        let error = spec.build_plan(None).unwrap_err();
+        assert!(
+            error.to_string().contains("cannot use cached alias"),
+            "{error}"
         );
     }
 }

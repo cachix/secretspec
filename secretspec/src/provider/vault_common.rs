@@ -455,16 +455,22 @@ impl KvProvider {
         uri.into()
     }
 
-    /// Reads the requested field from a resolved native KV address.
-    /// Convention addresses also arrive here after resolving to field `value`.
-    pub(crate) fn get(&self, coords: &NativeAddress) -> Result<Option<SecretString>> {
-        let Some(field) = &coords.field else {
-            return Err(SecretSpecError::ProviderOperationFailed(format!(
+    /// The map field a resolved address names, which a `ref` must state
+    /// explicitly since a KV entry is a map rather than a single value.
+    fn require_field<'a>(&self, coords: &'a NativeAddress) -> Result<&'a str> {
+        coords.field.as_deref().ok_or_else(|| {
+            SecretSpecError::ProviderOperationFailed(format!(
                 "{} references need a `field`: KV entries are maps, e.g. \
                  ref = {{ item = \"myapp/config\", field = \"db_password\" }}",
                 self.product.scheme()
-            )));
-        };
+            ))
+        })
+    }
+
+    /// Reads the requested field from a resolved native KV address.
+    /// Convention addresses also arrive here after resolving to field `value`.
+    pub(crate) fn get(&self, coords: &NativeAddress) -> Result<Option<SecretString>> {
+        let field = self.require_field(coords)?;
         super::block_on(self.get_field_async(&coords.item, field))
     }
 
@@ -475,6 +481,68 @@ impl KvProvider {
         super::block_on(self.set_secret_async(&coords.item, value))
     }
 
+    /// Writes a convention-owned KV entry the store itself will drop once
+    /// `max_age` has passed.
+    ///
+    /// KV v2 computes a version's deletion time when the version is written,
+    /// from the path's `delete_version_after` metadata, so the metadata is set
+    /// first — and a failure to set it stops the write, since storing a value
+    /// that will never expire is not what the caller asked for.
+    ///
+    /// KV v1 has no expiry at all, so it refuses: the alternative is an
+    /// unexpiring copy of another store's secret.
+    pub(crate) fn set_expiring(
+        &self,
+        coords: &NativeAddress,
+        value: &SecretString,
+        max_age: std::time::Duration,
+    ) -> Result<()> {
+        if self.config.kv_version == KvVersion::V1 {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "{} KV v1 cannot expire a secret; use a KV v2 mount to hold values with a \
+                 maximum age",
+                self.product.scheme()
+            )));
+        }
+        super::block_on(async {
+            self.set_version_ttl_async(&coords.item, max_age).await?;
+            self.set_secret_async(&coords.item, value).await
+        })
+    }
+
+    /// Destroys a convention-owned KV path, reporting whether it held anything.
+    ///
+    /// KV v2 deletes through the metadata endpoint, removing every version: an
+    /// entry SecretSpec owns has no history worth keeping, and a soft-deleted
+    /// version would leave the value recoverable. Both engines answer a delete
+    /// with 204 whether or not the path existed, so existence is read first —
+    /// one extra round trip on a path only cache maintenance takes.
+    ///
+    /// Callers must run [`Self::check_deletable`] before reaching this method.
+    pub(crate) fn delete(&self, coords: &NativeAddress) -> Result<bool> {
+        let field = self.require_field(coords)?;
+        super::block_on(async {
+            match self.config.kv_version {
+                // An expired KV v2 version is no longer readable from the data
+                // endpoint, but its metadata and recoverable version history
+                // still exist. Check the metadata path so cache clearing
+                // permanently destroys that history.
+                KvVersion::V2 => {
+                    if !self.metadata_exists_async(&coords.item).await? {
+                        return Ok(false);
+                    }
+                }
+                KvVersion::V1 => {
+                    if self.get_field_async(&coords.item, field).await?.is_none() {
+                        return Ok(false);
+                    }
+                }
+            }
+            self.delete_path_async(&coords.item).await?;
+            Ok(true)
+        })
+    }
+
     /// Native references are read-only because the current write API replaces
     /// the full map. A future CAS/PATCH implementation could safely relax this.
     pub(crate) fn check_writable(&self, addr: Address<'_>) -> Result<()> {
@@ -483,6 +551,20 @@ impl KvProvider {
             Address::Native(_) => Err(SecretSpecError::ProviderOperationFailed(format!(
                 "{} secret references are read-only: writing a single field would clobber the \
                  other fields at the same KV path",
+                self.product.scheme()
+            ))),
+        }
+    }
+
+    /// Refuses to delete a native reference. A `ref` names a KV path managed
+    /// outside SecretSpec, and deletion here removes the whole path — every
+    /// field, every version — so it is confined to entries SecretSpec owns.
+    pub(crate) fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        match addr {
+            Address::Convention { .. } => Ok(()),
+            Address::Native(_) => Err(SecretSpecError::ProviderOperationFailed(format!(
+                "{} secret references cannot be deleted: the KV path they name is managed outside \
+                 SecretSpec, and deleting it would destroy every field in it",
                 self.product.scheme()
             ))),
         }
@@ -814,6 +896,114 @@ impl KvProvider {
         )))
     }
 
+    /// Builds the KV v2 metadata path, which carries a path's version policy and
+    /// is also the endpoint that removes every version at once. Meaningless for
+    /// KV v1, whose data path is its only path.
+    fn metadata_url(&self, secret_path: &str) -> String {
+        format!(
+            "{}/v1/{}/metadata/{secret_path}",
+            self.config.endpoint, self.config.mount
+        )
+    }
+
+    /// Whether a KV v2 path has metadata, including when every version is
+    /// soft-deleted and therefore absent from the data endpoint.
+    async fn metadata_exists_async(&self, secret_path: &str) -> Result<bool> {
+        let url = self.metadata_url(secret_path);
+        let token = self.resolve_token().await?;
+        let headers = self.build_headers(&token)?;
+        let response = self
+            .send_with_connect_retry(|| Ok(self.http().get(&url).headers(headers.clone())))
+            .await?;
+
+        match response.status().as_u16() {
+            200 => Ok(true),
+            404 => Ok(false),
+            403 => Err(SecretSpecError::ProviderOperationFailed(format!(
+                "{} authentication failed (403 Forbidden) reading version metadata. Check {} and \
+                 ensure it has read access to metadata as well as delete permissions.",
+                self.product.display_name(),
+                self.product.token_envs().join(" or ")
+            ))),
+            status => {
+                let body = response.text().await.unwrap_or_default();
+                Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "{} returned HTTP {status} while reading version metadata: {body}",
+                    self.product.display_name()
+                )))
+            }
+        }
+    }
+
+    /// Sets a KV v2 path's `delete_version_after`, which the engine applies when
+    /// computing each subsequently written version's deletion time.
+    async fn set_version_ttl_async(
+        &self,
+        secret_path: &str,
+        max_age: std::time::Duration,
+    ) -> Result<()> {
+        let url = self.metadata_url(secret_path);
+        let token = self.resolve_token().await?;
+        // Seconds keep the request independent of how the duration was written
+        // in the config (`8h` and `480m` are the same policy).
+        let body = serde_json::json!({ "delete_version_after": format!("{}s", max_age.as_secs()) });
+        let headers = self.build_headers(&token)?;
+        let response = self
+            .send_with_connect_retry(|| {
+                Ok(self.http().post(&url).headers(headers.clone()).json(&body))
+            })
+            .await?;
+
+        match response.status().as_u16() {
+            200 | 204 => Ok(()),
+            403 => Err(SecretSpecError::ProviderOperationFailed(format!(
+                "{} authentication failed (403 Forbidden) writing version metadata. A value with \
+                 a maximum age needs write access to the path's metadata as well as its data.",
+                self.product.display_name()
+            ))),
+            status => {
+                let body = response.text().await.unwrap_or_default();
+                Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "{} returned HTTP {status} while setting version expiry: {body}",
+                    self.product.display_name()
+                )))
+            }
+        }
+    }
+
+    /// Removes a KV path outright: for v2 the metadata endpoint, which destroys
+    /// every version; for v1 the data path, which is all there is.
+    async fn delete_path_async(&self, secret_path: &str) -> Result<()> {
+        let url = match self.config.kv_version {
+            KvVersion::V2 => self.metadata_url(secret_path),
+            KvVersion::V1 => self.build_url(secret_path),
+        };
+        let token = self.resolve_token().await?;
+        let headers = self.build_headers(&token)?;
+        let response = self
+            .send_with_connect_retry(|| Ok(self.http().delete(&url).headers(headers.clone())))
+            .await?;
+
+        match response.status().as_u16() {
+            // 404 keeps deletion idempotent: the path may have gone between the
+            // existence check and this request.
+            200 | 204 | 404 => Ok(()),
+            403 => Err(SecretSpecError::ProviderOperationFailed(format!(
+                "{} authentication failed (403 Forbidden). Check {} and ensure it has delete \
+                 permissions.",
+                self.product.display_name(),
+                self.product.token_envs().join(" or ")
+            ))),
+            status => {
+                let body = response.text().await.unwrap_or_default();
+                Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "{} returned HTTP {status} while deleting secret: {body}",
+                    self.product.display_name()
+                )))
+            }
+        }
+    }
+
     /// Fetches one KV entry and extracts one string field.
     ///
     /// A missing path maps to `None`, while authorization and protocol failures
@@ -972,6 +1162,128 @@ mod tests {
                 "http://127.0.0.1:8200/v1/secret/data/app/config"
             );
         }
+    }
+
+    #[test]
+    fn version_policy_and_deletion_address_the_metadata_path() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _vault_addr = EnvVarGuard::set("VAULT_ADDR", "http://127.0.0.1:8200");
+        let config = KvConfig::parse(&provider_url("vault://"), Product::Vault).unwrap();
+        let provider = KvProvider::new(config, Product::Vault);
+
+        // A KV v2 path's version policy and its destroy-everything endpoint are
+        // both the metadata path, distinct from the data path a read or write
+        // uses.
+        assert_eq!(
+            provider.metadata_url("app/config"),
+            "http://127.0.0.1:8200/v1/secret/metadata/app/config"
+        );
+        assert_eq!(
+            provider.build_url("app/config"),
+            "http://127.0.0.1:8200/v1/secret/data/app/config"
+        );
+    }
+
+    #[test]
+    fn kv_v2_delete_destroys_metadata_when_the_current_version_is_unreadable() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let _lock = crate::tests::scrub_resolution_env();
+        let _token = EnvVarGuard::set("VAULT_TOKEN", "test-token");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut request_lines = Vec::new();
+            for status in ["200 OK", "204 No Content"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 8192];
+                let read = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..read]);
+                request_lines.push(request.lines().next().unwrap_or_default().to_string());
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+            }
+            request_lines
+        });
+
+        let config = KvConfig::parse(
+            &provider_url(&format!("vault://{endpoint}/secret?tls=false&kv=2")),
+            Product::Vault,
+        )
+        .unwrap();
+        let provider = KvProvider::new(config, Product::Vault);
+        let coords = NativeAddress {
+            item: "cache/API_KEY".to_string(),
+            field: Some("value".to_string()),
+            ..Default::default()
+        };
+
+        assert!(provider.delete(&coords).unwrap());
+        assert_eq!(
+            server.join().unwrap(),
+            [
+                "GET /v1/secret/metadata/cache/API_KEY HTTP/1.1",
+                "DELETE /v1/secret/metadata/cache/API_KEY HTTP/1.1",
+            ]
+        );
+    }
+
+    #[test]
+    fn kv_v1_refuses_to_hold_an_expiring_value() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _vault_addr = EnvVarGuard::remove("VAULT_ADDR");
+        let config = KvConfig::parse(
+            &provider_url("vault://127.0.0.1:8200/kv1?tls=false&kv=1"),
+            Product::Vault,
+        )
+        .unwrap();
+        let provider = KvProvider::new(config, Product::Vault);
+        let coords = NativeAddress {
+            item: "app/config".to_string(),
+            field: Some("value".to_string()),
+            ..Default::default()
+        };
+
+        // KV v1 has no expiry, and writing an unexpiring copy of another store's
+        // secret is not what a cached route asked for. No request is made.
+        let error = provider
+            .set_expiring(
+                &coords,
+                &SecretString::new("value".to_string().into()),
+                std::time::Duration::from_secs(3600),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("KV v1 cannot expire"), "{error}");
+    }
+
+    #[test]
+    fn a_reference_is_never_deleted() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _vault_addr = EnvVarGuard::set("VAULT_ADDR", "http://127.0.0.1:8200");
+        let config = KvConfig::parse(&provider_url("vault://"), Product::Vault).unwrap();
+        let provider = KvProvider::new(config, Product::Vault);
+        let reference = NativeAddress {
+            item: "team/shared".to_string(),
+            field: Some("db_password".to_string()),
+            ..Default::default()
+        };
+
+        // Deleting removes the whole KV path, so a `ref` — a path someone else
+        // manages, holding fields SecretSpec knows nothing about — is refused
+        // before any request is made.
+        let error = provider
+            .check_deletable(Address::Native(&reference))
+            .unwrap_err();
+        assert!(error.to_string().contains("cannot be deleted"), "{error}");
+        assert!(
+            provider
+                .check_deletable(Address::convention("proj", "default", "API_KEY"))
+                .is_ok()
+        );
     }
 
     #[test]

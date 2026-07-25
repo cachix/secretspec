@@ -437,6 +437,44 @@ $ secretspec import dotenv:/home/user/old-project/.env
 `import` skips composed secrets because they have no stored value to copy; their
 component secrets are imported normally. Available since SecretSpec 0.16.
 
+### cache clear (0.17+)
+
+:::caution[Version compatibility]
+`cache clear` is available starting with SecretSpec 0.17.
+:::
+
+Delete cached provider values for one secret, or for every cached secret in the
+active profile. Authoritative fallback providers are not modified.
+
+```bash
+secretspec cache clear [NAME] [--profile <PROFILE>]
+```
+
+**Arguments and options:**
+
+- `[NAME]` - Cached secret to clear. Omit it to clear all cached secrets in the
+  profile.
+- `-P, --profile <PROFILE>` - Profile whose logical cache entries are cleared.
+
+The reported count is the number of entries that were actually removed, so a
+profile with nothing cached reports `Cleared 0 cache entries`. `--provider` and
+`SECRETSPEC_PROVIDER` are ignored: clearing always addresses the cache of the
+route the manifest declares. When one cache store cannot be cleared, the
+remaining secrets are still cleared and the command then reports what failed.
+
+```bash
+# Force the next API_KEY read through its authoritative fallback route
+$ secretspec cache clear API_KEY
+Cleared 1 cache entry
+
+# Clear every cached secret in production
+$ secretspec cache clear --profile production
+Cleared 4 cache entries
+```
+
+See [Provider caching](/concepts/providers/caching/)
+for configuration and resolution behavior.
+
 ### audit
 
 Show the local [audit log](/concepts/audit/) of secret access.
@@ -447,7 +485,7 @@ secretspec audit [--project <NAME>] [--action <ACTION>] [-n <N>] [--json]
 
 **Options:**
 - `--project <NAME>` - Only show entries for this project
-- `--action <ACTION>` - Only show entries for this action (`get`, `set`, `check`, `run`, `import`, `export`)
+- `--action <ACTION>` - Only show entries for this action (`get`, `set`, `check`, `run`, `import`, `export`, or `cache_clear` and `cache_refresh` in 0.17+)
 - `-n, --tail <N>` - Show only the last N entries
 - `--json` - Output raw JSON Lines instead of the formatted summary
 

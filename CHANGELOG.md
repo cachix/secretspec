@@ -29,6 +29,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   convention secrets under the folder path `secretspec/{project}/{profile}` with
   the key as the secret name. Native `ref` references may select a JSON key with
   `field` and a revision with `version`, and are read-only.
+- Cached provider aliases with ordered authoritative `fallback` routes,
+  configurable local cache freshness, cache-first reads, automatic refresh
+  after reads and writes, and `secretspec cache clear` invalidation.
+
+  A cache must be a distinct store from the route's own authoritative providers
+  (compared by canonical provider URI, so equivalent spellings of one store
+  cannot disguise a cache as its own source), must be a store SecretSpec can
+  delete from (keyring, pass, gopass, dotenv, or a Vault/OpenBao KV v2 mount) so
+  its entries can be invalidated, and must be the only entry in a `providers`
+  list. All three are reported when the route is planned, and an unusable
+  `max_age` when the configuration loads.
+
+  Every entry records the project and profile that own it, and SecretSpec only
+  changes an entry it can show is its own: a value it did not write, or one
+  belonging to another project or profile, is left alone by reads and refreshes
+  and reported by `cache clear` rather than deleted, since an address alone is not
+  proof of ownership when a store is shared. An entry marked as SecretSpec's own
+  but unreadable is replaced.
+
+  A cached value never outlives the write that superseded it: a failed refresh, a
+  cache that could not be constructed, and a write that bypassed the cache with
+  `--provider` all invalidate the entry. An entry no read can serve — expired, or
+  written for a different route — is deleted when found rather than skipped, so an
+  expired value does not keep its plaintext in a store that cannot expire
+  anything. Where the store can expire a value itself, `max_age` is applied
+  server-side — Vault and OpenBao set the KV v2 path's `delete_version_after` — so
+  a cached copy stops existing at that age even if SecretSpec is never run again,
+  and clearing a KV v2 entry destroys its recoverable version history.
+
+  `cache clear` reports how many entries it actually removed, ignores provider
+  overrides, and clears what it can before reporting a cache store it could not.
+  Cache writes are audited as `cache_refresh` rather than `set`.
+  ([#199](https://github.com/cachix/secretspec/issues/199))
 - `secretspec config global init --provider <PROVIDER> --profile <PROFILE>`
   can save explicitly user-global defaults without interactive prompts,
   including `--profile none` to clear the default profile. The `global`

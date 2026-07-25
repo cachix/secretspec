@@ -51,6 +51,11 @@ impl Provider for MockProvider {
         Ok(())
     }
 
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        let item = super::flat_item(self, addr)?.into_owned();
+        Ok(self.storage.lock().unwrap().remove(&item).is_some())
+    }
+
     fn name(&self) -> &'static str {
         "mock"
     }
@@ -154,6 +159,7 @@ crate::register_provider! {
     schemes: ["memtest"],
     examples: ["memtest://"],
     credential_names: ["test_token"],
+    deletes: true,
 }
 
 impl Provider for MemTestProvider {
@@ -187,12 +193,234 @@ impl Provider for MemTestProvider {
         Ok(())
     }
 
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        let item = super::flat_item(self, addr)?.into_owned();
+        Ok(MEM_STORE.lock().unwrap().remove(&item).is_some())
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
 
     fn uri(&self) -> String {
         "memtest://".to_string()
+    }
+}
+
+/// Registered provider that reads and deletes [`MEM_STORE`] like `memtest://`
+/// but always fails to write (`failwrite://`).
+///
+/// Cache refreshes are best-effort, so tests need a store where a write can fail
+/// while the entry it was meant to replace is still readable and removable —
+/// exactly the situation a superseded cache entry must not survive.
+pub(crate) struct FailWriteProvider;
+pub(crate) struct FailWriteConfig;
+
+impl TryFrom<&super::ProviderUrl> for FailWriteConfig {
+    type Error = crate::SecretSpecError;
+    fn try_from(_url: &super::ProviderUrl) -> Result<Self> {
+        Ok(Self)
+    }
+}
+
+impl FailWriteProvider {
+    fn new(_config: FailWriteConfig) -> Self {
+        Self
+    }
+}
+
+crate::register_provider! {
+    struct: FailWriteProvider,
+    config: FailWriteConfig,
+    name: "failwrite",
+    description: "In-memory provider for tests whose writes always fail",
+    schemes: ["failwrite"],
+    examples: ["failwrite://"],
+    deletes: true,
+}
+
+impl Provider for FailWriteProvider {
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: format!("{}/{}/{}", project, profile, key),
+            ..Default::default()
+        })
+    }
+
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        MemTestProvider.get(addr)
+    }
+
+    fn set(&self, _addr: Address<'_>, _value: &SecretString) -> Result<()> {
+        Err(crate::SecretSpecError::ProviderOperationFailed(
+            "failwrite always fails to write".to_string(),
+        ))
+    }
+
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        MemTestProvider.delete(addr)
+    }
+
+    fn name(&self) -> &'static str {
+        Self::PROVIDER_NAME
+    }
+
+    fn uri(&self) -> String {
+        "failwrite://".to_string()
+    }
+}
+
+/// Registered provider that reads and writes [`MEM_STORE`] like `memtest://` but
+/// always fails to delete (`faildelete://`).
+///
+/// Declaring the delete capability and then failing at runtime is the case a
+/// declared capability cannot rule out — a locked keychain, an unreachable
+/// store — so cache invalidation still has to degrade sanely.
+pub(crate) struct FailDeleteProvider;
+pub(crate) struct FailDeleteConfig;
+
+impl TryFrom<&super::ProviderUrl> for FailDeleteConfig {
+    type Error = crate::SecretSpecError;
+    fn try_from(_url: &super::ProviderUrl) -> Result<Self> {
+        Ok(Self)
+    }
+}
+
+impl FailDeleteProvider {
+    fn new(_config: FailDeleteConfig) -> Self {
+        Self
+    }
+}
+
+crate::register_provider! {
+    struct: FailDeleteProvider,
+    config: FailDeleteConfig,
+    name: "faildelete",
+    description: "In-memory provider for tests whose deletes always fail",
+    schemes: ["faildelete"],
+    examples: ["faildelete://"],
+    deletes: true,
+}
+
+impl Provider for FailDeleteProvider {
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        MemTestProvider.convention_address(project, profile, key)
+    }
+
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        MemTestProvider.get(addr)
+    }
+
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        MemTestProvider.set(addr, value)
+    }
+
+    fn delete(&self, _addr: Address<'_>) -> Result<bool> {
+        Err(crate::SecretSpecError::ProviderOperationFailed(
+            "faildelete always fails to delete".to_string(),
+        ))
+    }
+
+    fn name(&self) -> &'static str {
+        Self::PROVIDER_NAME
+    }
+
+    fn uri(&self) -> String {
+        "faildelete://".to_string()
+    }
+}
+
+/// The freshness window each `expiring://` write was asked for, keyed by
+/// resolved item.
+static EXPIRING_TTLS: std::sync::LazyLock<Mutex<HashMap<String, std::time::Duration>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// What `set_expiring` was last asked to bound `item` to, if anything.
+pub(crate) fn recorded_expiry(item: &str) -> Option<std::time::Duration> {
+    EXPIRING_TTLS.lock().unwrap().get(item).copied()
+}
+
+/// Registered provider that stores into [`MEM_STORE`] like `memtest://` and
+/// records the expiry each write asked for (`expiring://`).
+///
+/// A store-side expiry is invisible from the outside — the value is simply
+/// written — so this is how a test proves the requested window reaches the
+/// provider instead of being dropped somewhere in the stack.
+pub(crate) struct ExpiringProvider;
+pub(crate) struct ExpiringConfig;
+
+impl TryFrom<&super::ProviderUrl> for ExpiringConfig {
+    type Error = crate::SecretSpecError;
+    fn try_from(_url: &super::ProviderUrl) -> Result<Self> {
+        Ok(Self)
+    }
+}
+
+impl ExpiringProvider {
+    fn new(_config: ExpiringConfig) -> Self {
+        Self
+    }
+}
+
+crate::register_provider! {
+    struct: ExpiringProvider,
+    config: ExpiringConfig,
+    name: "expiring",
+    description: "In-memory provider for tests that records requested expiries",
+    schemes: ["expiring"],
+    examples: ["expiring://"],
+    deletes: true,
+}
+
+impl Provider for ExpiringProvider {
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        MemTestProvider.convention_address(project, profile, key)
+    }
+
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        MemTestProvider.get(addr)
+    }
+
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        MemTestProvider.set(addr, value)
+    }
+
+    fn set_expiring(
+        &self,
+        addr: Address<'_>,
+        value: &SecretString,
+        max_age: std::time::Duration,
+    ) -> Result<()> {
+        let item = super::flat_item(self, addr)?.into_owned();
+        EXPIRING_TTLS.lock().unwrap().insert(item, max_age);
+        self.set(addr, value)
+    }
+
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        MemTestProvider.delete(addr)
+    }
+
+    fn name(&self) -> &'static str {
+        Self::PROVIDER_NAME
+    }
+
+    fn uri(&self) -> String {
+        "expiring://".to_string()
     }
 }
 
@@ -792,10 +1020,10 @@ mod integration_tests {
         // Test 2: Try to set a secret (may fail for read-only providers)
         let test_value = SecretString::new(format!("test_password_{}", provider_name).into());
 
-        if provider
+        let writable = provider
             .check_writable(Address::convention("proj", "default", "KEY"))
-            .is_ok()
-        {
+            .is_ok();
+        if writable {
             // Provider claims to support set, so it should work
             provider
                 .set(
@@ -855,6 +1083,36 @@ mod integration_tests {
                     );
                 }
             }
+        }
+
+        // Test 3: Deleting reports whether it removed anything and is
+        // idempotent. Cache invalidation runs over secrets that may never have
+        // been cached, so an absent entry is a no-op rather than an error — the
+        // one behavior a provider is easiest to get wrong by matching the
+        // not-found message of a different subcommand.
+        let addr = Address::convention(&project_name, "default", "TEST_PASSWORD");
+        match provider.delete(addr) {
+            Ok(removed) => {
+                assert_eq!(
+                    removed, writable,
+                    "[{provider_name}] delete must report whether an entry was removed"
+                );
+                assert!(
+                    provider.get(addr).unwrap_or(None).is_none(),
+                    "[{provider_name}] the secret must be gone after delete"
+                );
+                assert!(
+                    !provider.delete(addr).unwrap_or_else(|error| panic!(
+                        "[{provider_name}] deleting an absent entry must not fail: {error}"
+                    )),
+                    "[{provider_name}] deleting an absent entry removes nothing"
+                );
+            }
+            // Deletion is opt-in; a provider that has not opted in says so.
+            Err(error) => assert!(
+                error.to_string().contains("does not support deleting"),
+                "[{provider_name}] unexpected delete failure: {error}"
+            ),
         }
     }
 

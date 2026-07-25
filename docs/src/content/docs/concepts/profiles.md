@@ -85,7 +85,7 @@ Profile defaults apply to all secrets in that profile unless explicitly overridd
 3. **Profile inheritance** -- inherited from default profile
 4. **Global defaults** (lowest priority) -- from CLI, environment, or global config
 
-This is particularly useful for setting common [providers](/concepts/providers/#per-secret-provider-configuration), requirements, or defaults across all secrets in a profile.
+This is particularly useful for setting common [provider fallback routes](/concepts/providers/fallback/#ordered-fallback-routes), requirements, or defaults across all secrets in a profile.
 
 ## Practical Example
 

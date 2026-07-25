@@ -292,7 +292,7 @@ Export attempts are also recorded in the
 
 0.15 also tightens the behavior around profiles and fallback chains:
 
-- [Provider chains](/concepts/providers/#how-secretspec-selects-a-provider) are
+- [Provider chains](/concepts/providers/fallback/) are
   now walked strictly in order and resolved lazily. An
   undefined alias or unreachable fallback is skipped with a warning only when a
   read reaches it, so a later working provider can still answer.

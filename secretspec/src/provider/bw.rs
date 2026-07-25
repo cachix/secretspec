@@ -542,6 +542,63 @@ impl BitwardenProvider {
         }
     }
 
+    /// Validates that the configured self-hosted server matches the bw CLI's
+    /// current setting. The bw CLI ignores `BW_SERVER`; the only supported way
+    /// to point it at a self-hosted server is `bw config server <url>` (which
+    /// requires being logged out). If the configured server doesn't match, this
+    /// returns an error with clear remediation steps.
+    fn ensure_server_configured(&self) -> Result<()> {
+        let expected = match &self.config.server {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+
+        // Run `bw status` to check the currently configured server.
+        // We can't use execute_bw_command here (would recurse), so run directly.
+        let output = std::process::Command::new("bw")
+            .arg("--nointeraction")
+            .arg("status")
+            .output()
+            .map_err(|e| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to run `bw status` to validate server configuration: {}",
+                    e
+                ))
+            })?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // bw status includes a line like "Server URL: https://vault.bitwarden.com"
+        let current_server = stdout.lines().find_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("Server URL:")
+                .or_else(|| line.strip_prefix("Server URL"))
+                .map(|s| s.trim())
+        });
+
+        match current_server {
+            Some(current) if current == expected => Ok(()),
+            Some(current) => Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Server mismatch: the bw CLI is configured for '{}' but the provider expects '{}'.\n\n\
+                 To use a self-hosted server, you must configure the bw CLI first:\n\
+                   bw logout\n\
+                   bw config server {}\n\
+                   bw login\n\
+                   bw unlock\n\
+                 Then export BW_SESSION and retry.",
+                current, expected, expected
+            ))),
+            None => Err(SecretSpecError::ProviderOperationFailed(format!(
+                "The bw CLI is not logged in. To use a self-hosted server, configure it first:\n\
+                   bw config server {}\n\
+                   bw login\n\
+                   bw unlock\n\
+                 Then export BW_SESSION and retry.",
+                expected
+            ))),
+        }
+    }
+
     /// Executes a Bitwarden Password Manager CLI command with proper error handling.
     ///
     /// This method handles:
@@ -565,12 +622,9 @@ impl BitwardenProvider {
     /// - Authentication required (not logged in or unlocked)
     /// - Command execution failures
     fn execute_bw_command(&self, args: &[&str]) -> Result<String> {
-        let mut cmd = Command::new("bw");
+        self.ensure_server_configured()?;
 
-        // Configure server if specified
-        if let Some(server) = &self.config.server {
-            cmd.env("BW_SERVER", server);
-        }
+        let mut cmd = Command::new("bw");
 
         // Never allow bw to prompt on stdin; fail fast with a clear error
         // instead (e.g. when the session is missing or expired in CI).
@@ -1319,11 +1373,6 @@ impl BitwardenProvider {
 
         let mut cmd = std::process::Command::new("bw");
 
-        // Set server if specified
-        if let Some(server) = &self.config.server {
-            cmd.env("BW_SERVER", server);
-        }
-
         let mut args = vec!["--nointeraction", "edit", "item", item_id];
         let org_id = std::env::var("BITWARDEN_ORGANIZATION")
             .ok()
@@ -1610,11 +1659,6 @@ impl BitwardenProvider {
         let encoded_json = general_purpose::STANDARD.encode(&template_json);
 
         let mut cmd = std::process::Command::new("bw");
-
-        // Set server if specified
-        if let Some(server) = &self.config.server {
-            cmd.env("BW_SERVER", server);
-        }
 
         let mut args = vec!["--nointeraction", "create", "item"];
         let org_id = std::env::var("BITWARDEN_ORGANIZATION")

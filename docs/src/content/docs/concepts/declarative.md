@@ -58,7 +58,7 @@ SECRET_NAME = {
 ```toml
 [project]
 name = "web-api"
-revision = "2.1.0"
+revision = "1.0"
 extends = ["../shared/base", "../shared/auth"]
 
 [profiles.default]

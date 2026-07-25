@@ -586,26 +586,58 @@ mod tests {
         );
     }
 
+    /// Installs an executable fake `bws` in `dir`, returning its path.
+    ///
+    /// The script is written to a scratch file and copied into place by a
+    /// short-lived subprocess, so this process never holds a write descriptor to
+    /// the file it is about to execute.
+    ///
+    /// That indirection is the whole point. libtest runs this crate's tests as
+    /// threads of one process, and several of them spawn subprocesses. `fork`
+    /// copies the descriptor table, so a child forked by another thread while we
+    /// held a write descriptor to this script would keep that descriptor open
+    /// until its own `exec` — and the kernel refuses to `execve` a file that any
+    /// process has open for writing (`ETXTBSY`, "Text file busy"). Keeping the
+    /// descriptor out of our table means the window cannot exist, rather than
+    /// retrying until it closes. `chmod` needs no descriptor, and the scratch
+    /// file is never executed, so a descriptor to *it* is harmless.
     #[cfg(unix)]
-    #[test]
-    fn get_reads_json_from_bws_cli_and_caches_the_project_listing() {
+    fn install_fake_cli(dir: &std::path::Path, script: &str) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
 
-        let temp = tempfile::tempdir().unwrap();
-        let cli = temp.path().join("bws");
-        let count = temp.path().join("count");
-        let script = format!(
-            "#!/bin/sh\n\
-             test \"$BWS_ACCESS_TOKEN\" = token-from-provider || exit 41\n\
-             printf x >> '{}'\n\
-             printf '%s' '[{{\"id\":\"11111111-1111-1111-1111-111111111111\",\
-             \"key\":\"DATABASE_URL\",\"value\":\"postgres://db\"}}]'\n",
-            count.display()
-        );
-        std::fs::write(&cli, script).unwrap();
+        let scratch = dir.join("bws.script");
+        std::fs::write(&scratch, script).unwrap();
+
+        let cli = dir.join("bws");
+        let copied = Command::new("cp")
+            .arg(&scratch)
+            .arg(&cli)
+            .status()
+            .expect("cp is available to install the fake CLI");
+        assert!(copied.success(), "installing the fake bws failed");
+
         let mut permissions = std::fs::metadata(&cli).unwrap().permissions();
         permissions.set_mode(0o700);
         std::fs::set_permissions(&cli, permissions).unwrap();
+        cli
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn get_reads_json_from_bws_cli_and_caches_the_project_listing() {
+        let temp = tempfile::tempdir().unwrap();
+        let count = temp.path().join("count");
+        let cli = install_fake_cli(
+            temp.path(),
+            &format!(
+                "#!/bin/sh\n\
+                 test \"$BWS_ACCESS_TOKEN\" = token-from-provider || exit 41\n\
+                 printf x >> '{}'\n\
+                 printf '%s' '[{{\"id\":\"11111111-1111-1111-1111-111111111111\",\
+                 \"key\":\"DATABASE_URL\",\"value\":\"postgres://db\"}}]'\n",
+                count.display()
+            ),
+        );
 
         let mut provider = provider_with_credentials(None);
         provider.cli_binary_path = cli.to_string_lossy().into_owned();
@@ -627,28 +659,24 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn set_updates_an_existing_secret_through_bws_cli() {
-        use std::os::unix::fs::PermissionsExt;
-
         let temp = tempfile::tempdir().unwrap();
-        let cli = temp.path().join("bws");
         let args_log = temp.path().join("args");
-        let script = format!(
-            "#!/bin/sh\n\
-             case \" $* \" in\n\
-             *' secret list '*)\n\
-               printf '%s' '[{{\"id\":\"11111111-1111-1111-1111-111111111111\",\
-               \"key\":\"DATABASE_URL\",\"value\":\"old\"}}]'\n\
-               ;;\n\
-             *)\n\
-               for argument in \"$@\"; do printf '%s\\n' \"$argument\"; done > '{}'\n\
-               ;;\n\
-             esac\n",
-            args_log.display()
+        let cli = install_fake_cli(
+            temp.path(),
+            &format!(
+                "#!/bin/sh\n\
+                 case \" $* \" in\n\
+                 *' secret list '*)\n\
+                   printf '%s' '[{{\"id\":\"11111111-1111-1111-1111-111111111111\",\
+                   \"key\":\"DATABASE_URL\",\"value\":\"old\"}}]'\n\
+                   ;;\n\
+                 *)\n\
+                   for argument in \"$@\"; do printf '%s\\n' \"$argument\"; done > '{}'\n\
+                   ;;\n\
+                 esac\n",
+                args_log.display()
+            ),
         );
-        std::fs::write(&cli, script).unwrap();
-        let mut permissions = std::fs::metadata(&cli).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&cli, permissions).unwrap();
 
         let mut provider = provider_with_credentials(None);
         provider.cli_binary_path = cli.to_string_lossy().into_owned();
@@ -669,23 +697,19 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn set_creates_a_missing_secret_through_bws_cli() {
-        use std::os::unix::fs::PermissionsExt;
-
         let temp = tempfile::tempdir().unwrap();
-        let cli = temp.path().join("bws");
         let args_log = temp.path().join("args");
-        let script = format!(
-            "#!/bin/sh\n\
-             case \" $* \" in\n\
-             *' secret list '*) printf '%s' '[]' ;;\n\
-             *) for argument in \"$@\"; do printf '%s\\n' \"$argument\"; done > '{}' ;;\n\
-             esac\n",
-            args_log.display()
+        let cli = install_fake_cli(
+            temp.path(),
+            &format!(
+                "#!/bin/sh\n\
+                 case \" $* \" in\n\
+                 *' secret list '*) printf '%s' '[]' ;;\n\
+                 *) for argument in \"$@\"; do printf '%s\\n' \"$argument\"; done > '{}' ;;\n\
+                 esac\n",
+                args_log.display()
+            ),
         );
-        std::fs::write(&cli, script).unwrap();
-        let mut permissions = std::fs::metadata(&cli).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&cli, permissions).unwrap();
 
         let mut provider = provider_with_credentials(None);
         provider.cli_binary_path = cli.to_string_lossy().into_owned();
@@ -706,18 +730,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cli_errors_redact_the_access_token() {
-        use std::os::unix::fs::PermissionsExt;
-
         let temp = tempfile::tempdir().unwrap();
-        let cli = temp.path().join("bws");
-        std::fs::write(
-            &cli,
+        let cli = install_fake_cli(
+            temp.path(),
             "#!/bin/sh\nprintf 'rejected %s\\n' \"$BWS_ACCESS_TOKEN\" >&2\nexit 1\n",
-        )
-        .unwrap();
-        let mut permissions = std::fs::metadata(&cli).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&cli, permissions).unwrap();
+        );
 
         let mut provider = provider_with_credentials(None);
         provider.cli_binary_path = cli.to_string_lossy().into_owned();

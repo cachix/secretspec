@@ -11,6 +11,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use url::Url;
 
 pub(crate) const ROLE_ID: &str = "role_id";
@@ -340,6 +341,15 @@ pub(crate) struct KvProvider {
     config: KvConfig,
     credentials: ProviderCredentials,
     product: Product,
+    /// Shared HTTP client for this provider instance.
+    ///
+    /// Mirrors the Infisical provider (`OnceLock` + `get_or_init`). A fresh
+    /// reqwest client per request cannot reuse connections or h2 streams, so a
+    /// concurrent `get_many` of dozens of secrets opens one TCP(+TLS) handshake
+    /// each. Behind reverse proxies that has been observed to drop part of the
+    /// burst (`Failed to connect to Vault`). One client per provider keeps the
+    /// pool warm across those concurrent gets.
+    http: OnceLock<reqwest::Client>,
 }
 
 impl KvProvider {
@@ -350,7 +360,13 @@ impl KvProvider {
             config,
             credentials: ProviderCredentials::new(),
             product,
+            http: OnceLock::new(),
         }
+    }
+
+    /// The shared HTTP client.
+    fn http(&self) -> &reqwest::Client {
+        self.http.get_or_init(reqwest::Client::new)
     }
 
     /// Injects semantic credentials resolved from another SecretSpec provider.
@@ -668,8 +684,7 @@ impl KvProvider {
             }
         };
 
-        let client = reqwest::Client::new();
-        let mut request = client.get(&request_url).bearer_auth(&request_token);
+        let mut request = self.http().get(&request_url).bearer_auth(&request_token);
         if let Some(audience) = &self.config.audience {
             request = request.query(&[("audience", audience.as_str())]);
         }
@@ -708,7 +723,8 @@ impl KvProvider {
         url: &str,
         body: &serde_json::Value,
     ) -> Result<reqwest::RequestBuilder> {
-        Ok(reqwest::Client::new()
+        Ok(self
+            .http()
             .post(url)
             .headers(self.build_namespace_headers()?)
             .json(body))
@@ -759,6 +775,47 @@ impl KvProvider {
         }
     }
 
+    /// Sends a request, retrying a few times on connect/timeout errors only.
+    ///
+    /// Auth and HTTP status failures are not retried — those are not the
+    /// reverse-proxy connection storm this targets. The builder is reconstructed
+    /// each attempt because `RequestBuilder` is consumed by `send`.
+    async fn send_with_connect_retry(
+        &self,
+        mut build: impl FnMut() -> Result<reqwest::RequestBuilder>,
+    ) -> Result<reqwest::Response> {
+        const ATTEMPTS: usize = 3;
+        let mut last_error = None;
+        for attempt in 1..=ATTEMPTS {
+            let response = build()?.send().await;
+            match response {
+                Ok(response) => return Ok(response),
+                Err(error)
+                    if attempt < ATTEMPTS && (error.is_connect() || error.is_timeout()) =>
+                {
+                    last_error = Some(error);
+                    // get_each already runs each get on its own thread, so a
+                    // brief blocking backoff is fine and avoids a tokio/time
+                    // feature dependency on the vault build.
+                    std::thread::sleep(std::time::Duration::from_millis(25 * attempt as u64));
+                }
+                Err(error) => {
+                    return Err(SecretSpecError::ProviderOperationFailed(format!(
+                        "Failed to connect to {} at {}: {error}",
+                        self.product.display_name(),
+                        self.config.endpoint
+                    )));
+                }
+            }
+        }
+        Err(SecretSpecError::ProviderOperationFailed(format!(
+            "Failed to connect to {} at {}: {}",
+            self.product.display_name(),
+            self.config.endpoint,
+            last_error.expect("connect retry exhausted with an error")
+        )))
+    }
+
     /// Fetches one KV entry and extracts one string field.
     ///
     /// A missing path maps to `None`, while authorization and protocol failures
@@ -770,18 +827,10 @@ impl KvProvider {
     ) -> Result<Option<SecretString>> {
         let url = self.build_url(secret_path);
         let token = self.resolve_token().await?;
-        let response = reqwest::Client::new()
-            .get(&url)
-            .headers(self.build_headers(&token)?)
-            .send()
-            .await
-            .map_err(|error| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to connect to {} at {}: {error}",
-                    self.product.display_name(),
-                    self.config.endpoint
-                ))
-            })?;
+        let headers = self.build_headers(&token)?;
+        let response = self
+            .send_with_connect_retry(|| Ok(self.http().get(&url).headers(headers.clone())))
+            .await?;
 
         match response.status().as_u16() {
             200 => {
@@ -831,19 +880,12 @@ impl KvProvider {
             KvVersion::V2 => serde_json::json!({ "data": { "value": value.expose_secret() } }),
             KvVersion::V1 => serde_json::json!({ "value": value.expose_secret() }),
         };
-        let response = reqwest::Client::new()
-            .post(&url)
-            .headers(self.build_headers(&token)?)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to connect to {} at {}: {error}",
-                    self.product.display_name(),
-                    self.config.endpoint
-                ))
-            })?;
+        let headers = self.build_headers(&token)?;
+        let response = self
+            .send_with_connect_retry(|| {
+                Ok(self.http().post(&url).headers(headers.clone()).json(&body))
+            })
+            .await?;
 
         match response.status().as_u16() {
             200 | 204 => Ok(()),

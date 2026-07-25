@@ -369,6 +369,13 @@ impl Config {
     /// intersection with the selected profile). Scope names are validated in
     /// sorted order, and secrets within a scope in declaration order, so error
     /// attribution is deterministic.
+    ///
+    /// The list's own shape is checked first. An empty scope is rejected rather
+    /// than accepted as "resolves to nothing": it contacts no provider, so
+    /// `check --scope` reports a clean `0 found, 0 missing` and `run --scope`
+    /// launches the command with every manifest secret scrubbed and none
+    /// injected — a green result that guarantees nothing. A blank or repeated
+    /// entry is likewise a typo with no meaning, not a subset worth resolving.
     fn validate_scopes(&self, compiled: &CompiledManifest) -> Result<(), ParseError> {
         let Some(scopes) = &self.scopes else {
             return Ok(());
@@ -385,7 +392,34 @@ impl Config {
         scope_names.sort();
 
         for scope_name in scope_names {
-            for secret in &scopes[scope_name].secrets {
+            if scope_name.trim().is_empty() {
+                return Err(ParseError::Validation(
+                    "Scope names cannot be empty".to_string(),
+                ));
+            }
+
+            let secrets = &scopes[scope_name].secrets;
+            if secrets.is_empty() {
+                return Err(ParseError::Validation(format!(
+                    "Scope '{}' lists no secrets; a scope must name at least one",
+                    scope_name
+                )));
+            }
+
+            let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+            for secret in secrets {
+                if secret.trim().is_empty() {
+                    return Err(ParseError::Validation(format!(
+                        "Scope '{}' lists an empty secret name",
+                        scope_name
+                    )));
+                }
+                if !seen.insert(secret.as_str()) {
+                    return Err(ParseError::Validation(format!(
+                        "Scope '{}' lists secret '{}' more than once",
+                        scope_name, secret
+                    )));
+                }
                 if !declared.contains(secret.as_str()) {
                     return Err(ParseError::Validation(format!(
                         "Scope '{}' references secret '{}', which is not declared in any profile",
@@ -3289,6 +3323,111 @@ secrets = ["DATABASE_URL", "TYPO_KEY"]
             msg.contains("TYPO_KEY"),
             "names the undeclared secret: {msg}"
         );
+    }
+
+    /// An empty scope resolves to nothing: it contacts no provider, so `check
+    /// --scope` reports a clean `0 found, 0 missing` while `run --scope` starts
+    /// the command with every manifest secret scrubbed and none injected. That
+    /// green result guarantees nothing, so the manifest is rejected instead.
+    #[test]
+    fn scope_with_no_secrets_is_rejected() {
+        let err = parse(
+            r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.api]
+secrets = []
+"#,
+        )
+        .unwrap()
+        .validate()
+        .expect_err("an empty scope is a config error");
+        let ParseError::Validation(msg) = err else {
+            panic!("expected a validation error, got {err:?}");
+        };
+        assert!(msg.contains("api"), "names the offending scope: {msg}");
+        assert!(
+            msg.contains("at least one"),
+            "explains the requirement: {msg}"
+        );
+    }
+
+    #[test]
+    fn scope_listing_a_secret_twice_is_rejected() {
+        let err = parse(
+            r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+API_KEY = { description = "API key", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "API_KEY", "DATABASE_URL"]
+"#,
+        )
+        .unwrap()
+        .validate()
+        .expect_err("a repeated member is a config error");
+        let ParseError::Validation(msg) = err else {
+            panic!("expected a validation error, got {err:?}");
+        };
+        assert!(
+            msg.contains("api") && msg.contains("DATABASE_URL"),
+            "names the scope and the repeated secret: {msg}"
+        );
+    }
+
+    #[test]
+    fn scope_listing_a_blank_secret_name_is_rejected() {
+        let err = parse(
+            r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "  "]
+"#,
+        )
+        .unwrap()
+        .validate()
+        .expect_err("a blank member is a config error");
+        let ParseError::Validation(msg) = err else {
+            panic!("expected a validation error, got {err:?}");
+        };
+        assert!(msg.contains("api"), "names the offending scope: {msg}");
+    }
+
+    #[test]
+    fn blank_scope_name_is_rejected() {
+        let err = parse(
+            r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.""]
+secrets = ["DATABASE_URL"]
+"#,
+        )
+        .unwrap()
+        .validate()
+        .expect_err("a blank scope name is a config error");
+        assert!(matches!(err, ParseError::Validation(_)));
     }
 
     #[test]

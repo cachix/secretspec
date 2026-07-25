@@ -378,6 +378,11 @@ secretspec export [OPTIONS]
 
 Options are `-p, --provider <PROVIDER>`, `-P, --profile <PROFILE>`, `-S, --scope <SCOPE>` (a `[scopes]` subset of the profile, SecretSpec 0.17+), and `--format <FORMAT>` (default `shell`).
 
+Unlike [`run --scope`](#run), `export --scope` only emits the scoped subset; it
+unsets nothing, because no output format can express an unset. A shell that
+already holds a wider set keeps those values after a scoped `export`, so use
+`run --scope` when the point is to narrow an existing environment.
+
 | Format | Output |
 |--------|--------|
 | `shell` | `export KEY='value'` lines, ready for `eval "$(secretspec export)"` |

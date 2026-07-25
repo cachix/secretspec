@@ -13,7 +13,7 @@
       "const": 1
     },
     "provider": {
-      "description": "Credential-free URI of the provider the resolution is reported against.",
+      "description": "Credential-free URI of the provider the resolution is reported against. The empty string when the resolution contacted no provider, which happens when a scope's intersection with the selected profile is empty and there is nothing to resolve.",
       "type": "string"
     },
     "profile": {

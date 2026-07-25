@@ -69,6 +69,9 @@ pub struct ResolveResponse {
     /// Wire-format version; see [`RESOLVE_SCHEMA_VERSION`].
     pub schema_version: u32,
     /// Credential-free URI of the provider the resolution reported against.
+    /// Empty when no provider was contacted, which happens when a scope's
+    /// intersection with the selected profile is empty and there is nothing to
+    /// resolve.
     pub provider: String,
     /// The profile that was resolved.
     pub profile: String,

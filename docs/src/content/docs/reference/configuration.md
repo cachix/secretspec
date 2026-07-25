@@ -255,15 +255,34 @@ Behavior:
   `exactly_one` remains enforced whenever two visible members are both present:
   scoping narrows what is judged, never whether it is judged. A secret fetched
   only as a hidden composition input does not count as present, and a violation
-  message names only visible members.
-- `run --scope` removes **every** manifest-declared secret outside the visible
-  set from the launched command's environment — across *all* profiles, not just
-  the selected one — **even if the parent shell already exported them**, so a
-  value inherited from another profile cannot leak into the child. This is secret
-  minimization, not an authorization boundary: a process that still holds
+  message names only visible members. The reverse case cannot be detected,
+  because a secret the scope hides is never fetched: if `exactly_one = "token"`
+  is violated profile-wide by both `PRIMARY` and `FALLBACK` being present, a
+  scope showing only `PRIMARY` reports success. A scoped check validates the
+  scoped consumer, not the profile; run an unscoped `secretspec check` to
+  validate the profile as a whole.
+- `run --scope` removes **every** manifest-declared secret the scope does not
+  admit from the launched command's environment, across *all* profiles rather
+  than only the selected one, **even if the parent shell already exported
+  them**, so a value inherited from another profile cannot leak into the child.
+  Membership decides this, so a secret the scope lists survives even when the
+  selected profile does not declare it (see the admitted rule below). This is
+  secret minimization, not an authorization boundary: a process that still holds
   provider credentials could resolve another scope itself.
+- `export --scope` **emits** the visible set but unsets nothing, since its
+  output formats have no way to express an unset. Narrowing an environment that
+  already holds a wider set therefore needs `run --scope`: after
+  `eval "$(secretspec export)"`, a later
+  `eval "$(secretspec export --scope api)"` leaves the previously exported
+  values live in the shell.
 - An **empty** scope (or a scope whose intersection with the profile is empty)
   resolves to nothing and contacts no provider.
+- **Diagnostics do not name what the scope hides.** A provider warning about a
+  hidden composition input calls it `a hidden composition input` rather than
+  naming it, matching the way prompting is filtered, so a failing provider
+  cannot disclose the very name the output filter removed. A visible secret is
+  still named. This covers secretspec's own messages; a provider's error text is
+  written by that provider and may still mention the address it searched.
 - [Audit](#audit-logging) records what was **read**, not what was exposed: a
   scoped `check` logs the accessed set, including a composition input the scope
   hides, since the point of the log is to capture provider access. A `run` event
@@ -275,24 +294,41 @@ Behavior:
   the hidden secret, so the path resolves. The hidden input is still absent from
   the environment; only its content, in the form the composition derived, is
   reachable — the same contract as a composed DSN that embeds a password.
-- A secret the scope **admits** but that does not resolve (an optional secret
-  with no stored value) is not scrubbed from `run`. It is inside the visible
-  set, so a value the parent exported is inherited exactly as it would be
-  without a scope; scoping changes which secrets are in play, never the
-  semantics of one it admits.
+- A secret the scope **admits** is never scrubbed from `run`, whether it fails
+  to resolve (an optional secret with no stored value) or the selected profile
+  does not declare it at all. A value the parent exported is inherited exactly
+  as it would be without a scope; scoping changes which secrets are in play,
+  never the semantics of one it admits. This is what lets a single scope be
+  reused across profiles that declare different subsets.
 - Under project `extends`, a child `[scopes.<name>]` **replaces** the parent
   scope of the same name outright — the two `secrets` lists are not unioned (see
   [Configuration Inheritance](/concepts/inheritance/)).
 - Selecting an undefined scope, or a scope that lists a secret no profile
   declares, is a configuration error.
+- A scope's `secrets` list must name at least one secret, with no blank or
+  repeated entries. An empty scope is rejected rather than treated as "resolves
+  to nothing": it would contact no provider, so `check --scope` would report a
+  clean `0 found, 0 missing` while `run --scope` started the command with every
+  manifest secret scrubbed and none injected. An empty *intersection* between a
+  valid scope and the selected profile is still fine, since a scope is meant to
+  be reused across profiles that declare different subsets.
 
 The `--scope` flag (and the `SECRETSPEC_SCOPE` environment variable) apply to
 `check`, `run`, and `export`. Scopes are a resolution-time feature of these
-untyped paths. The untyped language SDK builders also accept an explicit scope
-and return its name in resolve/report results. The typed SDK loaders generated
-by `secretspec-derive` always resolve the **full** profile and deliberately
-**ignore** an ambient `SECRETSPEC_SCOPE`, since a generated struct expects every
-declared field.
+untyped paths. The write and copy commands are unaffected: `set` and `import`
+ignore an ambient `SECRETSPEC_SCOPE` entirely, so a scope neither restricts what
+they may write nor narrows the secrets they list. The untyped language SDK
+builders also accept an explicit scope and return its name in resolve/report
+results, and they honor `SECRETSPEC_SCOPE` when given none. The typed SDK
+loaders generated by `secretspec-derive` always resolve the **full** profile and
+deliberately **ignore** an ambient `SECRETSPEC_SCOPE`, since a generated struct
+expects every declared field.
+
+A **blank** `--scope` clears an inherited scope rather than being ignored:
+`SECRETSPEC_SCOPE=api secretspec run --scope "" -- ./job` resolves the whole
+profile and scrubs nothing. A blank `SECRETSPEC_SCOPE` with no flag means the
+same, so a CI template that materializes an unset variable as an empty string
+cannot silently narrow a job.
 
 ## Complete Example
 

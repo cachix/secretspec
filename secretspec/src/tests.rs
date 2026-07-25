@@ -7410,10 +7410,192 @@ secrets = ["DATABASE_URL"]
         );
     }
 
-    /// An empty scope (or an empty intersection) resolves to nothing and must not
-    /// initialize or contact any provider. Proven with a deliberately broken
-    /// provider: an unscoped resolve fails building it, while the empty scope
-    /// short-circuits before any provider is built and so succeeds.
+    /// Scrubbing is decided by scope *membership*, not by the visible set. A
+    /// secret the scope lists but the selected profile does not declare is
+    /// admitted, so an inherited parent value reaches the child untouched —
+    /// the same rule that already governs an admitted secret which does not
+    /// resolve. Narrowing by profile here would make a scope reused across
+    /// profiles unset a name the operator explicitly allowed.
+    #[cfg(unix)]
+    #[test]
+    fn run_scope_keeps_an_admitted_secret_the_profile_does_not_declare() {
+        let _env = scrub_resolution_env();
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "DATABASE_URL=postgres://localhost/db\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        // SENTRY_DSN is declared only under `production` but the `api` scope
+        // lists it; PROD_ONLY is declared there and not listed by any scope.
+        let manifest = r#"
+[project]
+name = "admitted-across-profiles"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[profiles.production]
+SENTRY_DSN = { description = "error reporting", required = true }
+PROD_ONLY = { description = "prod secret", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "SENTRY_DSN"]
+"#;
+        let _admitted = EnvVarGuard::set("SENTRY_DSN", "https://sentry.example/1");
+        let _leaked = EnvVarGuard::set("PROD_ONLY", "leaked-from-parent");
+
+        let mut spec = Secrets::new(config(manifest), None, Some(provider), None);
+        spec.set_scope("api");
+
+        let admitted_file = temp.path().join("sentry");
+        let leaked_file = temp.path().join("prod_only");
+        let exit = spec
+            .run_command(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "printf '%s' \"$SENTRY_DSN\" > {}; printf '%s' \"$PROD_ONLY\" > {}",
+                    admitted_file.display(),
+                    leaked_file.display()
+                ),
+            ])
+            .unwrap();
+        assert_eq!(exit, 0);
+        assert_eq!(
+            fs::read_to_string(&admitted_file).unwrap(),
+            "https://sentry.example/1",
+            "a secret the scope admits must not be scrubbed, even when the \
+             selected profile does not declare it"
+        );
+        assert_eq!(
+            fs::read_to_string(&leaked_file).unwrap(),
+            "",
+            "a secret no scope admits is still scrubbed"
+        );
+    }
+
+    /// Provider diagnostics obey the same name-hiding rule as prompting: a
+    /// warning about a fallback-chain failure must not name a secret the scope
+    /// hides, since that discloses exactly what the output filter removed. A
+    /// visible secret keeps its own name, and with no scope active nothing is
+    /// relabelled.
+    #[test]
+    fn provider_diagnostics_never_name_a_hidden_dependency() {
+        let visible: std::collections::HashSet<String> =
+            ["DATABASE_URL".to_string()].into_iter().collect();
+
+        assert_eq!(
+            Secrets::diagnostic_secret_name("DB_PASSWORD", Some(&visible)),
+            crate::secrets::HIDDEN_SECRET_LABEL,
+            "an out-of-scope composition input is never named"
+        );
+        assert_eq!(
+            Secrets::diagnostic_secret_name("DATABASE_URL", Some(&visible)),
+            "DATABASE_URL",
+            "a secret the scope exposes keeps its own name"
+        );
+        assert_eq!(
+            Secrets::diagnostic_secret_name("DB_PASSWORD", None),
+            "DB_PASSWORD",
+            "unscoped, every name is its own label"
+        );
+        assert!(
+            !crate::secrets::HIDDEN_SECRET_LABEL.contains('_'),
+            "the placeholder must not look like a secret name"
+        );
+    }
+
+    /// `get` reads one named secret and has no `--scope`, so an active scope must
+    /// not narrow it: the scope surface is `check`/`run`/`export`. It reaches its
+    /// secret through `plan_secret` rather than the scope-filtered worklist, and
+    /// this pins that. The equivalent guarantee for `set` regressed once by
+    /// routing a listing through a helper that quietly became scope-aware, so the
+    /// read path is worth holding down too.
+    #[test]
+    fn get_ignores_the_active_scope() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "QUEUE_TOKEN=tok\n").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut spec = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        // `api` is {DATABASE_URL, API_KEY}: QUEUE_TOKEN is outside it.
+        spec.set_scope("api");
+
+        assert!(
+            spec.get("QUEUE_TOKEN").is_ok(),
+            "an out-of-scope secret is still readable by name"
+        );
+        // The assertion has teeth: `get` does fail for a name the profile never
+        // declares, so succeeding above is about the scope, not a lenient path.
+        assert!(
+            spec.get("NOT_DECLARED").is_err(),
+            "an undeclared secret is still an error"
+        );
+    }
+
+    /// `set` has no `--scope`, and an active scope does not restrict what it may
+    /// write, so its "Available secrets" listing must stay unscoped — the same
+    /// rule `import` follows.
+    #[test]
+    fn set_lists_every_profile_secret_under_an_active_scope() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut spec = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        spec.set_scope("api");
+
+        let err = spec
+            .set("UNDEFINED", Some("v".to_string()))
+            .expect_err("an undeclared secret cannot be written");
+        let SecretSpecError::SecretNotFound(msg) = err else {
+            panic!("expected SecretNotFound, got {err:?}");
+        };
+        assert!(
+            msg.contains("QUEUE_TOKEN"),
+            "the listing must not hide the out-of-scope QUEUE_TOKEN: {msg}"
+        );
+    }
+
+    /// An undefined scope must not turn `set`'s undeclared-secret path into an
+    /// early `InvalidScope` return: that reports the wrong error and skips the
+    /// audit record for an attempted write.
+    #[test]
+    fn set_audits_an_undeclared_secret_even_under_an_undefined_scope() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        fs::write(&env_path, "").unwrap();
+        let provider = format!("dotenv://{}", env_path.display());
+
+        let mut spec = Secrets::new(config(MANIFEST), None, Some(provider), None);
+        spec.set_scope("nope");
+        let (logger, lines) = crate::audit::test_support::collecting_logger();
+        spec.set_audit_for_test(logger);
+
+        assert!(
+            matches!(
+                spec.set("UNDEFINED", Some("v".to_string())),
+                Err(SecretSpecError::SecretNotFound(_))
+            ),
+            "the undefined scope must not mask the real error"
+        );
+
+        let events = audit_events(&lines);
+        assert_eq!(events.len(), 1, "the attempted write is still audited");
+        assert_eq!(events[0]["action"], "set");
+        assert_eq!(events[0]["outcome"], "error");
+        assert_eq!(events[0]["error_kind"], "secret_not_found");
+    }
+
+    /// A scope whose intersection with the selected profile is empty resolves to
+    /// nothing and must not initialize or contact any provider. Proven with a
+    /// deliberately broken provider: an unscoped resolve fails building it, while
+    /// the empty intersection short-circuits before any provider is built and so
+    /// succeeds. (An empty `secrets` *list* cannot occur — validation rejects it —
+    /// so the intersection is the only way to reach this path.)
     #[test]
     fn empty_scope_contacts_no_provider() {
         let _env = scrub_resolution_env();
@@ -7425,8 +7607,11 @@ revision = "1.0"
 [profiles.default]
 DATABASE_URL = { description = "DB", required = true }
 
+[profiles.production]
+PROD_ONLY = { description = "prod only", required = true }
+
 [scopes.none]
-secrets = []
+secrets = ["PROD_ONLY"]
 "#;
         let mut spec = Secrets::new(config(manifest), None, Some("bogus://x".to_string()), None);
         spec.set_scope("none");
@@ -7439,6 +7624,15 @@ secrets = []
             "an empty scope resolves to nothing"
         );
         assert!(response.missing_required.is_empty());
+        // Nothing was resolved, so there is no provider to attribute the result
+        // to and none may be built to name one. The empty string is the
+        // documented value of this field in that case (see
+        // `schema/resolution-report.schema.json`), so consumers can rely on it.
+        assert_eq!(
+            response.provider, "",
+            "a resolution that contacted no provider reports none"
+        );
+        assert_eq!(spec.report().unwrap().provider, "");
 
         // Control: the same broken provider under no scope *does* fail, proving
         // the provider is skipped only because the scope is empty.

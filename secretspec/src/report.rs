@@ -69,7 +69,9 @@ pub struct SecretResolution {
 pub struct ResolutionReport {
     /// Wire-format version; see [`RESOLUTION_REPORT_SCHEMA_VERSION`].
     pub schema_version: u32,
-    /// Credential-free URI of the provider resolution reported against.
+    /// Credential-free URI of the provider resolution reported against. Empty
+    /// when no provider was contacted, which happens when a scope's intersection
+    /// with the selected profile is empty and there is nothing to resolve.
     pub provider: String,
     /// The profile that was resolved.
     pub profile: String,

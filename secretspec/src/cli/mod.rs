@@ -461,6 +461,28 @@ fn load_secrets(file: &Option<PathBuf>, reason: &Option<String>) -> miette::Resu
     })
 }
 
+/// Applies a `--scope` selection to `app`. Clap resolves the flag and its
+/// `SECRETSPEC_SCOPE` fallback into the same `Option`, so `None` here means
+/// neither was given.
+///
+/// A **blank** value is the caller opting out explicitly, not an absent one: it
+/// selects no scope *and* suppresses the library's ambient `SECRETSPEC_SCOPE`
+/// fallback, so `--scope ""` clears an inherited scope instead of silently
+/// deferring to it. Dropping the blank on its own would not be enough — the
+/// library would read the environment and narrow the operation anyway, which is
+/// the one direction a blank must never take (CI templates and workflow `env:`
+/// maps routinely materialize an unset value as an empty string).
+fn apply_scope(app: &mut Secrets, scope: Option<String>) {
+    let Some(scope) = scope else {
+        return;
+    };
+    if scope.trim().is_empty() {
+        app.set_ignore_ambient_scope(true);
+    } else {
+        app.set_scope(scope);
+    }
+}
+
 /// Resolves an explicitly supplied config-init provider or prompts for one.
 ///
 /// Explicit values are checked against the same provider registry used for
@@ -889,9 +911,7 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
-            if let Some(s) = scope {
-                app.set_scope(s);
-            }
+            apply_scope(&mut app, scope);
             app.run(command)
                 .into_diagnostic()
                 .wrap_err("Failed to run command")?;
@@ -911,9 +931,7 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
-            if let Some(s) = scope {
-                app.set_scope(s);
-            }
+            apply_scope(&mut app, scope);
             let mut out = std::io::stdout().lock();
             app.export(format, &mut out)
                 .into_diagnostic()
@@ -936,9 +954,7 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
-            if let Some(s) = scope {
-                app.set_scope(s);
-            }
+            apply_scope(&mut app, scope);
 
             // `--json`/`--explain` surface the value-free resolution report
             // instead of the interactive prompt-for-missing flow. They report
@@ -1204,6 +1220,37 @@ mod tests {
             providers: None,
             scopes: None,
         }
+    }
+
+    /// Clap folds `--scope` and its `SECRETSPEC_SCOPE` fallback into one
+    /// `Option`, so a blank value must mean "no scope" rather than "no opinion".
+    /// Dropping it and letting the library re-read the environment would narrow
+    /// the operation and scrub the excluded secrets, which is exactly what an
+    /// operator writing `--scope ""` is trying to prevent.
+    #[test]
+    fn a_blank_scope_clears_an_ambient_one() {
+        let _env = crate::tests::scrub_resolution_env();
+        let _ambient = crate::tests::EnvVarGuard::set("SECRETSPEC_SCOPE", "api");
+        let config = config_with_secret(Secret::default());
+
+        // Control: nothing applied, so the ambient scope is in force.
+        let inherited = Secrets::new(config.clone(), None, None, None);
+        assert_eq!(inherited.resolve_scope_name(None).as_deref(), Some("api"));
+
+        // A blank `--scope` (or a blank `SECRETSPEC_SCOPE`) selects nothing and
+        // suppresses the ambient fallback.
+        let mut blank = Secrets::new(config.clone(), None, None, None);
+        apply_scope(&mut blank, Some("   ".to_string()));
+        assert_eq!(blank.resolve_scope_name(None), None);
+
+        // An absent flag leaves the ambient scope alone, and an explicit one wins.
+        let mut absent = Secrets::new(config.clone(), None, None, None);
+        apply_scope(&mut absent, None);
+        assert_eq!(absent.resolve_scope_name(None).as_deref(), Some("api"));
+
+        let mut explicit = Secrets::new(config, None, None, None);
+        apply_scope(&mut explicit, Some("worker".to_string()));
+        assert_eq!(explicit.resolve_scope_name(None).as_deref(), Some("worker"));
     }
 
     #[test]

@@ -12,6 +12,7 @@
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use tempfile::TempDir;
 
 /// Set on the child so it runs the resolution branch instead of the parent
 /// orchestration; its value ("typed" or "untyped") selects the loader behavior.
@@ -94,15 +95,17 @@ fn typed_load_ignores_ambient_scope_while_untyped_honors_it() {
         return;
     }
 
-    let project =
-        std::env::temp_dir().join(format!("secretspec-typed-scope-{}", std::process::id()));
-    fs::create_dir_all(&project).unwrap();
+    // `TempDir` rather than a predictable `temp_dir()` path: the directory is
+    // unguessable in a shared `/tmp`, and it is removed on drop, so a failing
+    // assertion below does not leave the project (and its `.env`) behind.
+    let temp = TempDir::new().unwrap();
+    let project = temp.path();
     fs::write(project.join("secretspec.toml"), MANIFEST).unwrap();
     fs::write(project.join(".env"), ENV_FILE).unwrap();
 
     let exe = std::env::current_exe().expect("current test binary");
-    let untyped = resolved_names(&exe, &project, "untyped");
-    let typed = resolved_names(&exe, &project, "typed");
+    let untyped = resolved_names(&exe, project, "untyped");
+    let typed = resolved_names(&exe, project, "typed");
 
     // Untyped resolution honors the ambient scope: only the `api` subset resolves.
     assert_eq!(
@@ -114,6 +117,4 @@ fn typed_load_ignores_ambient_scope_while_untyped_honors_it() {
         typed, "API_KEY,DATABASE_URL,QUEUE_TOKEN",
         "a typed loader ignores an ambient SECRETSPEC_SCOPE and sees the full profile"
     );
-
-    let _ = fs::remove_dir_all(&project);
 }

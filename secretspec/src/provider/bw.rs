@@ -1162,12 +1162,23 @@ impl BitwardenProvider {
         target_field: Option<&str>,
         value: &str,
     ) -> Result<()> {
-        // Determine which field to update: explicit > env > config > smart default
+        // Determine which field to update: explicit > env > config > smart default.
+        // The fallback must match the getter's default for the item type so that
+        // a plain `set` is round-trippable.
         let field = target_field
             .map(|s| s.to_string())
             .or_else(|| std::env::var("BITWARDEN_DEFAULT_FIELD").ok())
             .or_else(|| self.config.default_field.clone())
-            .unwrap_or_else(|| "password".to_string());
+            .unwrap_or_else(|| {
+                match item.item_type {
+                    BitwardenItemType::Login => "password",
+                    BitwardenItemType::SecureNote => "notes",
+                    BitwardenItemType::Card => "number",
+                    BitwardenItemType::Identity => "email",
+                    BitwardenItemType::SshKey => "private_key",
+                }
+                .to_string()
+            });
 
         // Get the current item as JSON template
         let mut item_json = self.get_item_as_template(&item.id)?;

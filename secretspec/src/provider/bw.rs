@@ -348,9 +348,10 @@ struct BitwardenField {
     /// The type of field (Text, Hidden, Boolean).
     #[serde(rename = "type", deserialize_with = "deserialize_field_type")]
     field_type: BitwardenFieldType,
-    /// Linked field ID (null if not linked).
-    #[serde(rename = "linkedId")]
-    linked_id: Option<String>,
+    /// Linked field ID (null if not linked).  Accepts both string and integer
+    /// forms since the bw CLI may return either.
+    #[serde(rename = "linkedId", default)]
+    linked_id: Option<serde_json::Value>,
 }
 
 /// Custom deserializer for field type
@@ -1905,7 +1906,10 @@ mod tests {
         assert_eq!(fields[1].name.as_deref(), Some("Related Item"));
         // Linked field should have type Linked and carry the linkedId
         assert!(matches!(fields[1].field_type, BitwardenFieldType::Linked));
-        assert_eq!(fields[1].linked_id.as_deref(), Some("other-item-id"));
+        assert_eq!(
+            fields[1].linked_id.as_ref().and_then(|v| v.as_str()),
+            Some("other-item-id")
+        );
     }
 
     #[test]
@@ -1931,6 +1935,35 @@ mod tests {
         assert!(matches!(fields[1].field_type, BitwardenFieldType::Hidden));
         assert!(matches!(fields[2].field_type, BitwardenFieldType::Boolean));
         assert!(matches!(fields[3].field_type, BitwardenFieldType::Linked));
+    }
+
+    #[test]
+    fn test_deserialize_linked_field_integer_id() {
+        // The bw CLI may return linkedId as an integer (e.g. 100), not a string.
+        // The linked_id field must accept both.
+        let json = r#"{
+            "object": "item",
+            "id": "test-id",
+            "name": "Test Item",
+            "type": 1,
+            "fields": [
+                {
+                    "name": "linked_field",
+                    "value": null,
+                    "type": 3,
+                    "linkedId": 100
+                }
+            ]
+        }"#;
+
+        let item: BitwardenItem = serde_json::from_str(json).unwrap();
+        let fields = item.fields.unwrap();
+        assert_eq!(fields.len(), 1);
+        assert!(matches!(fields[0].field_type, BitwardenFieldType::Linked));
+        assert_eq!(
+            fields[0].linked_id.as_ref().and_then(|v| v.as_u64()),
+            Some(100)
+        );
     }
 
     #[test]

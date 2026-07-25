@@ -1473,10 +1473,21 @@ impl BitwardenProvider {
             "uris": []
         });
 
+        let mut fields = vec![];
+
         match field.to_lowercase().as_str() {
             "username" => login_data["username"] = serde_json::Value::String(value.to_string()),
             "totp" => login_data["totp"] = serde_json::Value::String(value.to_string()),
-            _ => login_data["password"] = serde_json::Value::String(value.to_string()),
+            "password" => login_data["password"] = serde_json::Value::String(value.to_string()),
+            _ => {
+                // Store unknown fields as custom fields so they can be read back
+                let field_type = BitwardenFieldType::for_field_name(field);
+                fields.push(serde_json::json!({
+                    "name": field,
+                    "value": value,
+                    "type": field_type.to_u8()
+                }));
+            }
         }
 
         let template = serde_json::json!({
@@ -1484,6 +1495,7 @@ impl BitwardenProvider {
             "name": item_name,
             "notes": format!("SecretSpec managed secret: {}", item_name),
             "login": login_data,
+            "fields": fields,
             "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
                 .or_else(|| self.config.organization_id.clone()),
             "collectionIds": std::env::var("BITWARDEN_COLLECTION").ok()
@@ -1505,6 +1517,8 @@ impl BitwardenProvider {
             "expYear": null
         });
 
+        let mut fields = vec![];
+
         match field.to_lowercase().as_str() {
             "code" | "cvv" | "cvc" => {
                 card_data["code"] = serde_json::Value::String(value.to_string())
@@ -1513,7 +1527,16 @@ impl BitwardenProvider {
                 card_data["cardholderName"] = serde_json::Value::String(value.to_string())
             }
             "brand" => card_data["brand"] = serde_json::Value::String(value.to_string()),
-            _ => card_data["number"] = serde_json::Value::String(value.to_string()),
+            "number" => card_data["number"] = serde_json::Value::String(value.to_string()),
+            _ => {
+                // Store unknown fields as custom fields so they can be read back
+                let field_type = BitwardenFieldType::for_field_name(field);
+                fields.push(serde_json::json!({
+                    "name": field,
+                    "value": value,
+                    "type": field_type.to_u8()
+                }));
+            }
         }
 
         let template = serde_json::json!({
@@ -1521,6 +1544,7 @@ impl BitwardenProvider {
             "name": item_name,
             "notes": format!("SecretSpec managed secret: {}", item_name),
             "card": card_data,
+            "fields": fields,
             "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
                 .or_else(|| self.config.organization_id.clone()),
             "collectionIds": std::env::var("BITWARDEN_COLLECTION").ok()
@@ -1544,11 +1568,22 @@ impl BitwardenProvider {
             "phone": null
         });
 
+        let mut fields = vec![];
+
         match field.to_lowercase().as_str() {
             "username" => identity_data["username"] = serde_json::Value::String(value.to_string()),
             "phone" => identity_data["phone"] = serde_json::Value::String(value.to_string()),
             "company" => identity_data["company"] = serde_json::Value::String(value.to_string()),
-            _ => identity_data["email"] = serde_json::Value::String(value.to_string()),
+            "email" => identity_data["email"] = serde_json::Value::String(value.to_string()),
+            _ => {
+                // Store unknown fields as custom fields so they can be read back
+                let field_type = BitwardenFieldType::for_field_name(field);
+                fields.push(serde_json::json!({
+                    "name": field,
+                    "value": value,
+                    "type": field_type.to_u8()
+                }));
+            }
         }
 
         let template = serde_json::json!({
@@ -1556,6 +1591,7 @@ impl BitwardenProvider {
             "name": item_name,
             "notes": format!("SecretSpec managed secret: {}", item_name),
             "identity": identity_data,
+            "fields": fields,
             "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
                 .or_else(|| self.config.organization_id.clone()),
             "collectionIds": std::env::var("BITWARDEN_COLLECTION").ok()

@@ -735,6 +735,14 @@ impl BitwardenProvider {
             list_args.extend_from_slice(&["--organizationid", org_id]);
         }
 
+        // Add collection filter if configured (from config or environment variable)
+        let coll_id = std::env::var("BITWARDEN_COLLECTION")
+            .ok()
+            .or_else(|| self.config.collection_id.clone());
+        if let Some(coll_id) = &coll_id {
+            list_args.extend_from_slice(&["--collectionid", coll_id]);
+        }
+
         let output = self.execute_bw_command(&list_args)?;
         let items: Vec<BitwardenItem> = serde_json::from_str(&output)?;
 
@@ -1110,6 +1118,14 @@ impl BitwardenProvider {
             .or_else(|| self.config.organization_id.clone());
         if let Some(org_id) = &org_id {
             list_args.extend_from_slice(&["--organizationid", org_id]);
+        }
+
+        // Add collection filter if configured (from config or environment variable)
+        let coll_id = std::env::var("BITWARDEN_COLLECTION")
+            .ok()
+            .or_else(|| self.config.collection_id.clone());
+        if let Some(coll_id) = &coll_id {
+            list_args.extend_from_slice(&["--collectionid", coll_id]);
         }
 
         let output = self.execute_bw_command(&list_args)?;
@@ -1866,5 +1882,33 @@ mod tests {
         assert!(matches!(fields[1].field_type, BitwardenFieldType::Hidden));
         assert!(matches!(fields[2].field_type, BitwardenFieldType::Boolean));
         assert!(matches!(fields[3].field_type, BitwardenFieldType::Linked));
+    }
+
+    #[test]
+    fn test_collection_id_from_uri() {
+        // C3: collection_id must be parsed from the URI so that list commands
+        // can filter by --collectionid.
+        let url = url::Url::parse("bw://my-collection").unwrap();
+        let purl = ProviderUrl::new(url);
+        let config = BitwardenConfig::try_from(&purl).unwrap();
+        assert_eq!(config.collection_id.as_deref(), Some("my-collection"));
+        assert!(config.organization_id.is_none());
+    }
+
+    #[test]
+    fn test_org_collection_from_uri() {
+        let url = url::Url::parse("bw://myorg@dev-secrets").unwrap();
+        let purl = ProviderUrl::new(url);
+        let config = BitwardenConfig::try_from(&purl).unwrap();
+        assert_eq!(config.organization_id.as_deref(), Some("myorg"));
+        assert_eq!(config.collection_id.as_deref(), Some("dev-secrets"));
+    }
+
+    #[test]
+    fn test_collection_from_query_param() {
+        let url = url::Url::parse("bw://?collection=prod-secrets").unwrap();
+        let purl = ProviderUrl::new(url);
+        let config = BitwardenConfig::try_from(&purl).unwrap();
+        assert_eq!(config.collection_id.as_deref(), Some("prod-secrets"));
     }
 }

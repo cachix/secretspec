@@ -128,6 +128,8 @@ pub enum BitwardenFieldType {
     Hidden = 1,
     /// Boolean field (type 2) - checkbox
     Boolean = 2,
+    /// Linked field (type 3) - references another item; skipped during read/write
+    Linked = 3,
 }
 
 impl BitwardenFieldType {
@@ -137,6 +139,7 @@ impl BitwardenFieldType {
             0 => Some(BitwardenFieldType::Text),
             1 => Some(BitwardenFieldType::Hidden),
             2 => Some(BitwardenFieldType::Boolean),
+            3 => Some(BitwardenFieldType::Linked),
             _ => None,
         }
     }
@@ -172,6 +175,7 @@ impl BitwardenFieldType {
             BitwardenFieldType::Text => "text",
             BitwardenFieldType::Hidden => "hidden",
             BitwardenFieldType::Boolean => "boolean",
+            BitwardenFieldType::Linked => "linked",
         }
     }
 }
@@ -1753,5 +1757,70 @@ impl Default for BitwardenProvider {
     /// Uses personal vault by default.
     fn default() -> Self {
         Self::new(BitwardenConfig::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deserialize_linked_field_type() {
+        // R1: Linked fields (type 3) should not cause deserialization to fail.
+        // An item with a linked field should parse successfully.
+        let json = r#"{
+            "object": "item",
+            "id": "test-id",
+            "name": "Test Item",
+            "type": 1,
+            "fields": [
+                {
+                    "name": "API Key",
+                    "value": "secret-123",
+                    "type": 0
+                },
+                {
+                    "name": "Related Item",
+                    "value": null,
+                    "type": 3,
+                    "linkedId": "other-item-id"
+                }
+            ]
+        }"#;
+
+        let item: BitwardenItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.name, "Test Item");
+        let fields = item.fields.unwrap();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name.as_deref(), Some("API Key"));
+        assert_eq!(fields[1].name.as_deref(), Some("Related Item"));
+        // Linked field should have type Linked and carry the linkedId
+        assert!(matches!(fields[1].field_type, BitwardenFieldType::Linked));
+        assert_eq!(fields[1].linked_id.as_deref(), Some("other-item-id"));
+    }
+
+    #[test]
+    fn test_deserialize_mixed_fields_including_linked() {
+        // An item with text, hidden, boolean, and linked fields should parse.
+        let json = r#"{
+            "object": "item",
+            "id": "mixed-id",
+            "name": "Mixed Fields",
+            "type": 1,
+            "fields": [
+                { "name": "username", "value": "alice", "type": 0 },
+                { "name": "password", "value": "s3cret", "type": 1 },
+                { "name": "active", "value": "true", "type": 2 },
+                { "name": "link", "value": null, "type": 3, "linkedId": "abc-123" }
+            ]
+        }"#;
+
+        let item: BitwardenItem = serde_json::from_str(json).unwrap();
+        let fields = item.fields.unwrap();
+        assert_eq!(fields.len(), 4);
+        assert!(matches!(fields[0].field_type, BitwardenFieldType::Text));
+        assert!(matches!(fields[1].field_type, BitwardenFieldType::Hidden));
+        assert!(matches!(fields[2].field_type, BitwardenFieldType::Boolean));
+        assert!(matches!(fields[3].field_type, BitwardenFieldType::Linked));
     }
 }

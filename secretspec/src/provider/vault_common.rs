@@ -11,6 +11,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use url::Url;
 
 pub(crate) const ROLE_ID: &str = "role_id";
@@ -340,6 +341,15 @@ pub(crate) struct KvProvider {
     config: KvConfig,
     credentials: ProviderCredentials,
     product: Product,
+    /// Shared HTTP client for this provider instance.
+    ///
+    /// Mirrors the Infisical provider (`OnceLock` + `get_or_init`). A fresh
+    /// reqwest client per request cannot reuse connections or h2 streams, so a
+    /// concurrent `get_many` of dozens of secrets opens one TCP(+TLS) handshake
+    /// each. Behind reverse proxies that has been observed to drop part of the
+    /// burst (`Failed to connect to Vault`). One client per provider keeps the
+    /// pool warm across those concurrent gets.
+    http: OnceLock<reqwest::Client>,
 }
 
 impl KvProvider {
@@ -350,7 +360,14 @@ impl KvProvider {
             config,
             credentials: ProviderCredentials::new(),
             product,
+            http: OnceLock::new(),
         }
+    }
+
+    /// Returns the shared HTTP client, creating it on first use.
+    fn http(&self) -> &reqwest::Client {
+        // Same construction Infisical uses: default client, lazy per instance.
+        self.http.get_or_init(reqwest::Client::new)
     }
 
     /// Injects semantic credentials resolved from another SecretSpec provider.
@@ -668,8 +685,7 @@ impl KvProvider {
             }
         };
 
-        let client = reqwest::Client::new();
-        let mut request = client.get(&request_url).bearer_auth(&request_token);
+        let mut request = self.http().get(&request_url).bearer_auth(&request_token);
         if let Some(audience) = &self.config.audience {
             request = request.query(&[("audience", audience.as_str())]);
         }
@@ -708,7 +724,8 @@ impl KvProvider {
         url: &str,
         body: &serde_json::Value,
     ) -> Result<reqwest::RequestBuilder> {
-        Ok(reqwest::Client::new()
+        Ok(self
+            .http()
             .post(url)
             .headers(self.build_namespace_headers()?)
             .json(body))
@@ -770,7 +787,8 @@ impl KvProvider {
     ) -> Result<Option<SecretString>> {
         let url = self.build_url(secret_path);
         let token = self.resolve_token().await?;
-        let response = reqwest::Client::new()
+        let response = self
+            .http()
             .get(&url)
             .headers(self.build_headers(&token)?)
             .send()
@@ -831,7 +849,8 @@ impl KvProvider {
             KvVersion::V2 => serde_json::json!({ "data": { "value": value.expose_secret() } }),
             KvVersion::V1 => serde_json::json!({ "value": value.expose_secret() }),
         };
-        let response = reqwest::Client::new()
+        let response = self
+            .http()
             .post(&url)
             .headers(self.build_headers(&token)?)
             .json(&body)

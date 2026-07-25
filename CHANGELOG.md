@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Vault and OpenBao providers reuse one `reqwest::Client` per provider
+  instance (same `OnceLock` pattern as Infisical) instead of building a fresh
+  client on every get/set/login. Concurrent `get_many` of many secrets no
+  longer opens one TCP(+TLS) handshake per secret against reverse-proxied
+  deployments, which was observed to drop part of the burst with
+  `Failed to connect to Vault`.
+- `get_each` (default `Provider::get_many`) caps concurrent unique-address
+  fetches at 12 by default, overridable with `SECRETSPEC_PROVIDER_CONCURRENCY`.
+  Waves replace a single unbounded `thread::scope` fan-out.
+
 ### Added
 - `secretspec config global init --provider <PROVIDER> --profile <PROFILE>`
   can save explicitly user-global defaults without interactive prompts,

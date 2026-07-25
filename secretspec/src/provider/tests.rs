@@ -3,7 +3,9 @@ use crate::provider::{Address, Provider};
 use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 #[cfg(test)]
 use tempfile::TempDir;
@@ -245,6 +247,134 @@ fn get_each_fetches_distinct_addresses_and_omits_missing() {
     assert_eq!(p.get_count("one"), 1);
     assert_eq!(p.get_count("two"), 1);
     assert_eq!(p.get_count("absent"), 1);
+}
+
+/// Provider that sleeps inside `get` so peak in-flight concurrency is observable.
+struct PeakConcurrencyProvider {
+    delay: Duration,
+    current: AtomicUsize,
+    peak: AtomicUsize,
+}
+
+impl PeakConcurrencyProvider {
+    fn new(delay: Duration) -> Self {
+        Self {
+            delay,
+            current: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
+        }
+    }
+
+    fn peak(&self) -> usize {
+        self.peak.load(Ordering::SeqCst)
+    }
+}
+
+impl Provider for PeakConcurrencyProvider {
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: format!("{project}/{profile}/{key}"),
+            ..Default::default()
+        })
+    }
+
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let item = super::flat_item(self, addr)?.into_owned();
+        let now = self.current.fetch_add(1, Ordering::SeqCst) + 1;
+        // Record peak without a CAS loop: sequential max under SeqCst is enough
+        // for this test's purpose (assert peak ≤ cap, not a tight race metric).
+        let mut peak = self.peak.load(Ordering::SeqCst);
+        while now > peak {
+            match self.peak.compare_exchange(peak, now, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => break,
+                Err(observed) => peak = observed,
+            }
+        }
+        std::thread::sleep(self.delay);
+        self.current.fetch_sub(1, Ordering::SeqCst);
+        Ok(Some(SecretString::new(item.into())))
+    }
+
+    fn set(&self, _addr: Address<'_>, _value: &SecretString) -> Result<()> {
+        Ok(())
+    }
+
+    fn name(&self) -> &'static str {
+        "peak"
+    }
+
+    fn uri(&self) -> String {
+        "peak://".to_string()
+    }
+}
+
+#[test]
+fn get_each_concurrency_defaults_and_parses_env() {
+    let _lock = crate::tests::scrub_resolution_env();
+
+    let _clear = crate::tests::EnvVarGuard::remove(super::GET_EACH_CONCURRENCY_ENV);
+    assert_eq!(super::get_each_concurrency(), 12);
+
+    let _set = crate::tests::EnvVarGuard::set(super::GET_EACH_CONCURRENCY_ENV, "4");
+    assert_eq!(super::get_each_concurrency(), 4);
+
+    drop(_set);
+    let _zero = crate::tests::EnvVarGuard::set(super::GET_EACH_CONCURRENCY_ENV, "0");
+    assert_eq!(
+        super::get_each_concurrency(),
+        12,
+        "zero is invalid and must fall back"
+    );
+
+    drop(_zero);
+    let _bad = crate::tests::EnvVarGuard::set(super::GET_EACH_CONCURRENCY_ENV, "nope");
+    assert_eq!(super::get_each_concurrency(), 12);
+}
+
+/// `SECRETSPEC_PROVIDER_CONCURRENCY` must cap in-flight unique-address fetches.
+/// Without the cap, `get_each` used to spawn one thread per address and open
+/// one connection each — the Vault/OpenBao reverse-proxy storm.
+#[test]
+fn get_each_respects_concurrency_cap() {
+    let _lock = crate::tests::scrub_resolution_env();
+    let _env = crate::tests::EnvVarGuard::set(super::GET_EACH_CONCURRENCY_ENV, "3");
+
+    let p = PeakConcurrencyProvider::new(Duration::from_millis(80));
+    // Keep NativeAddress values alive for the Address::Native borrows.
+    let coords: Vec<crate::config::NativeAddress> = (0..10)
+        .map(|i| crate::config::NativeAddress {
+            item: format!("item-{i}"),
+            ..Default::default()
+        })
+        .collect();
+    let requests: Vec<(&str, Address<'_>)> = coords
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            // Leak names into static-ish storage via coords item for simplicity:
+            // use a fixed name table.
+            (
+                // names only need to be unique keys in the result map
+                ["n0", "n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8", "n9"][i],
+                Address::Native(c),
+            )
+        })
+        .collect();
+
+    let out = super::get_each(&p, &requests).unwrap();
+    assert_eq!(out.len(), 10);
+    assert!(
+        p.peak() <= 3,
+        "peak in-flight gets {} exceeded concurrency cap 3",
+        p.peak()
+    );
+    // Sanity: with a real sleep and 10 items, we should have seen more than 1.
+    assert!(p.peak() >= 2, "expected some concurrency, peak={}", p.peak());
 }
 
 #[test]

@@ -24,6 +24,12 @@ require_reason = "agents"    # When to require a reason for secret access (optio
 | `extends` | array[string] | No | Paths to parent configuration files |
 | `require_reason` | `"agents"` \| boolean | No | When secret access must supply a reason (via `--reason`, `SECRETSPEC_REASON`, or the SDK's `with_reason()`). Defaults to `"agents"`. |
 
+The `1.0` revision is backward compatible: newer SecretSpec versions continue
+to support existing `revision = "1.0"` configurations, although they may add
+features to the revision before SecretSpec 1.0 is released. With the SecretSpec
+1.0 release, revision `1.0` will be finalized. Later configuration format
+changes may be introduced under new revision numbers.
+
 #### Requiring a reason for secret access
 
 `require_reason` controls when secretspec demands a reason for accessing secrets.

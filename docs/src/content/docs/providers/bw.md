@@ -6,8 +6,8 @@ description: Bitwarden Password Manager secrets management integration
 The `bw` provider integrates with Bitwarden Password Manager for secret management with vault-wide access to all item types.
 
 :::note[Version compatibility]
-The Bitwarden Password Manager provider is an upcoming SecretSpec 0.16 feature and is not
-available in SecretSpec 0.15.
+The Bitwarden Password Manager provider is an upcoming SecretSpec 0.18 feature and is not
+available in SecretSpec 0.17.
 :::
 
 ## Prerequisites
@@ -120,11 +120,11 @@ $ secretspec get 'Legacy Config' --provider 'bw://?type=securenote&field=config_
 
 ```toml
 # secretspec.toml
-[development]
-provider = "bw://dev-secrets"
+[profiles.development.defaults]
+providers = ["bw"]
 
-[production]  
-provider = "bw://prod-secrets"
+[profiles.production.defaults]
+providers = ["bw"]
 
 ```
 

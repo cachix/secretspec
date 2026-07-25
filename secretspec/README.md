@@ -31,7 +31,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [AWS Secrets Manager](https://secretspec.dev/providers/awssm)
   - [Vault](https://secretspec.dev/providers/vault)
   - [OpenBao](https://secretspec.dev/providers/openbao) (0.17+)
-  - [Bitwarden Password Manager](https://secretspec.dev/providers/bw) (0.16+)
+  - [Bitwarden Password Manager](https://secretspec.dev/providers/bw) (0.18+)
   - [Bitwarden Secrets Manager](https://secretspec.dev/providers/bws) (official `bws` CLI required in SecretSpec 0.17+)
   - [Azure Key Vault](https://secretspec.dev/providers/akv)
   - [Infisical](https://secretspec.dev/providers/infisical) (0.16+)
@@ -73,7 +73,7 @@ $ secretspec config global init  # 0.17+
   awssm: AWS Secrets Manager
   vault: HashiCorp Vault secret management
   openbao: OpenBao secret management (0.17+)
-  bw: Bitwarden Password Manager (0.16+)
+  bw: Bitwarden Password Manager (0.18+)
   bws: Bitwarden Secrets Manager
   akv: Azure Key Vault
   infisical: Infisical secret management (0.16+)
@@ -166,7 +166,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
 - **[Vault](https://secretspec.dev/providers/vault)** - HashiCorp Vault KV engine
 - **[OpenBao](https://secretspec.dev/providers/openbao)** (0.17+) - OpenBao KV integration; SecretSpec 0.16 accepts `openbao://` through the Vault provider
-- **[Bitwarden Password Manager](https://secretspec.dev/providers/bw)** (0.16+) - Bitwarden Password Manager vault via the `bw` CLI
+- **[Bitwarden Password Manager](https://secretspec.dev/providers/bw)** (0.18+) - Bitwarden Password Manager vault via the `bw` CLI
 - **[Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)** - Bitwarden Secrets Manager integration (official `bws` CLI required in SecretSpec 0.17+)
 - **[Azure Key Vault](https://secretspec.dev/providers/akv)** - Azure secret management
 - **[Infisical](https://secretspec.dev/providers/infisical)** (0.16+) - Infisical secret management

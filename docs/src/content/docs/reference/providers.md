@@ -235,7 +235,7 @@ openbao://127.0.0.1:8200/secret?kv=1&tls=false
 **Prerequisites**: OpenBao server, authentication credentials, build with `--features openbao` (0.17+)
 **Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
 
-## Bitwarden Password Manager Provider (0.16+)
+## Bitwarden Password Manager Provider (0.18+)
 
 **URI**: `bw://[COLLECTION_ID]` - Stores secrets in a Bitwarden Password Manager vault via the `bw` CLI
 
@@ -378,7 +378,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |
 | Vault | ✅ Vault encryption | Vault server | ✅ Yes |
 | OpenBao (0.17+) | ✅ OpenBao encryption | OpenBao server | ✅ Yes |
-| BW (0.16+) | ✅ End-to-end | Cloud (Bitwarden) or self-hosted | ✅ Yes |
+| BW (0.18+) | ✅ End-to-end | Cloud (Bitwarden) or self-hosted | ✅ Yes |
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
 | Infisical | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |

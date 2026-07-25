@@ -120,7 +120,7 @@ $ secretspec import dotenv://.env.production
 
 ## Providers
 
-Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files, environment variables, systemd service credentials (0.17+), 1Password, Gopass (0.15+), LastPass, Pass, Proton Pass, Google Cloud Secret Manager, AWS Secrets Manager, HashiCorp Vault, OpenBao (0.17+), Bitwarden Password Manager (0.16+), Bitwarden Secrets Manager, Azure Key Vault, Infisical (0.16+), or age (0.17+).`,
+Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files, environment variables, systemd service credentials (0.17+), 1Password, Gopass (0.15+), LastPass, Pass, Proton Pass, Google Cloud Secret Manager, AWS Secrets Manager, HashiCorp Vault, OpenBao (0.17+), Bitwarden Password Manager (0.18+), Bitwarden Secrets Manager, Azure Key Vault, Infisical (0.16+), or age (0.17+).`,
         }),
       ],
       title: "SecretSpec",
@@ -229,7 +229,7 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
               slug: "providers/vault",
             },
             {
-              label: "Bitwarden Password Manager (0.16+)",
+              label: "Bitwarden Password Manager (0.18+)",
               slug: "providers/bw",
             },
             {

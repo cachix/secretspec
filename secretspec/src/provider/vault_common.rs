@@ -790,9 +790,7 @@ impl KvProvider {
             let response = build()?.send().await;
             match response {
                 Ok(response) => return Ok(response),
-                Err(error)
-                    if attempt < ATTEMPTS && (error.is_connect() || error.is_timeout()) =>
-                {
+                Err(error) if attempt < ATTEMPTS && (error.is_connect() || error.is_timeout()) => {
                     last_error = Some(error);
                     // get_each already runs each get on its own thread, so a
                     // brief blocking backoff is fine and avoids a tokio/time

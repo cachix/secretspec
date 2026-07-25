@@ -290,7 +290,10 @@ impl Provider for PeakConcurrencyProvider {
         // for this test's purpose (assert peak ≤ cap, not a tight race metric).
         let mut peak = self.peak.load(Ordering::SeqCst);
         while now > peak {
-            match self.peak.compare_exchange(peak, now, Ordering::SeqCst, Ordering::SeqCst) {
+            match self
+                .peak
+                .compare_exchange(peak, now, Ordering::SeqCst, Ordering::SeqCst)
+            {
                 Ok(_) => break,
                 Err(observed) => peak = observed,
             }
@@ -374,7 +377,11 @@ fn get_each_respects_concurrency_cap() {
         p.peak()
     );
     // Sanity: with a real sleep and 10 items, we should have seen more than 1.
-    assert!(p.peak() >= 2, "expected some concurrency, peak={}", p.peak());
+    assert!(
+        p.peak() >= 2,
+        "expected some concurrency, peak={}",
+        p.peak()
+    );
 }
 
 #[test]

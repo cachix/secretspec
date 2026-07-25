@@ -257,17 +257,18 @@ env = "env://"
 Manage user-level aliases via CLI:
 
 ```bash
-# Add a provider alias to your user config
-$ secretspec config provider add prod_vault "onepassword://Production"
+# SecretSpec 0.17+: add a provider alias to your user config
+$ secretspec config global provider add prod_vault "onepassword://Production"
 
-# List all aliases known to your user config
-$ secretspec config provider list
+# SecretSpec 0.17+: list all aliases known to your user config
+$ secretspec config global provider list
 
-# Remove an alias from your user config
-$ secretspec config provider remove prod_vault
+# SecretSpec 0.17+: remove an alias from your user config
+$ secretspec config global provider remove prod_vault
 ```
 
-The CLI commands operate on the user-global config only — edit `secretspec.toml` by hand to change project-level aliases.
+These explicitly scoped CLI commands operate on the user-global config only —
+edit `secretspec.toml` by hand to change project-level aliases.
 
 #### SecretSpec 0.15 alias values
 
@@ -415,6 +416,7 @@ chain, and each provider is asked for the same coordinates.
 | [keyring](/providers/keyring/#use-existing-secrets) | Service | Account (defaults to the current system username) | Current user's entry | ✅ |
 | [dotenv](/providers/dotenv/#use-existing-secrets) | `.env` key | Rejected | Reads the key | ✅ |
 | [env](/providers/env/#use-existing-secrets) | Variable name | Rejected | Reads the variable | — (read-only) |
+| [systemd credentials (0.17+)](/providers/systemd-credential/#use-an-existing-credential-name) | Credential filename | Rejected | Reads the credential | — (read-only) |
 | [pass](/providers/pass/#use-existing-secrets) | Entry path | Rejected | Reads the entry | ✅ |
 | [Gopass (0.15+)](/providers/gopass/#use-existing-secrets) | Entry path, including any mount-point prefix | Rejected | Reads the entry | ✅ |
 | [LastPass](/providers/lastpass/#use-existing-secrets) | Item name | Rejected | Reads the item | ✅ |

@@ -16,10 +16,12 @@
 //! ## Available Providers
 //!
 //! - [`keyring::KeyringProvider`]: System keyring integration (default)
+//! - [`kdbx::KdbxProvider`]: KeePass KDBX database integration (0.17+)
 //! - [`dotenv::DotEnvProvider`]: `.env` file support
 //! - [`env::EnvProvider`]: Environment variables (read-only)
 //! - [`pass::PassProvider`]: Pass integration
 //! - [`gopass::GoPassProvider`]: Gopass integration
+//! - [`systemd_credential::SystemdCredentialProvider`]: systemd service credentials (0.17+)
 //! - [`protonpass::ProtonPassProvider`]: Proton Pass integration
 //! - [`onepassword::OnePasswordProvider`]: 1Password integration
 //! - [`lastpass::LastPassProvider`]: LastPass integration
@@ -206,6 +208,7 @@ impl ProviderUrl {
     #[cfg(any(
         feature = "awssm",
         feature = "infisical",
+        feature = "kdbx",
         feature = "openbao",
         feature = "vault",
         test
@@ -223,6 +226,12 @@ impl ProviderUrl {
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.into_owned())
             .filter(|v| !v.is_empty())
+    }
+
+    /// Whether the provider URI contains a query component, including an
+    /// explicitly empty one.
+    pub(crate) fn has_query(&self) -> bool {
+        self.0.query().is_some()
     }
 
     /// Percent-encode a value for use in a URI path or host component (e.g., in
@@ -257,6 +266,8 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
     }
 }
 
+#[cfg(feature = "age")]
+pub mod age;
 #[cfg(feature = "akv")]
 pub mod akv;
 #[cfg(feature = "awssm")]
@@ -272,6 +283,8 @@ pub mod gcsm;
 pub mod gopass;
 #[cfg(feature = "infisical")]
 pub mod infisical;
+#[cfg(feature = "kdbx")]
+pub mod kdbx;
 #[cfg(feature = "keyring")]
 pub mod keyring;
 pub mod lastpass;
@@ -280,6 +293,7 @@ pub mod onepassword;
 pub mod openbao;
 pub mod pass;
 pub mod protonpass;
+pub mod systemd_credential;
 #[cfg(feature = "vault")]
 pub mod vault;
 #[cfg(any(feature = "openbao", feature = "vault"))]

@@ -118,18 +118,15 @@ When adding a provider for an upcoming release:
 
    ```md
    :::note[Version compatibility]
-   The MyBackend provider is an upcoming SecretSpec 0.16 feature and is not
-   available in SecretSpec 0.15.
+   The MyBackend provider is added in SecretSpec 0.16.
    :::
    ```
 
 2. Mark the provider as `(0.16+)` anywhere it appears in a provider list,
    table, selector example, sidebar, landing page, README, or generated
    documentation description.
-3. If the provider changes authentication or configuration syntax, show the
-   latest released version's working form first, then label the upcoming form
-   explicitly. Include a practical fallback such as the environment variable
-   used by the released version.
+3. If the provider changes authentication or configuration syntax, label the
+   new form explicitly with its target version.
 4. Add the provider under the existing `Unreleased` section in `CHANGELOG.md`.
 
 Update every provider location; names otherwise drift out of sync:
@@ -144,10 +141,8 @@ Update every provider location; names otherwise drift out of sync:
 6. `docs/src/content/docs/quick-start.mdx` — provider selector example
 7. `README.md` — provider lists and provider selector example
 
-When the release is published, replace temporary wording such as “upcoming”
-and “not available in 0.15” with durable wording such as “Available since
-SecretSpec 0.16.” The `(0.16+)` labels may remain where knowing the minimum
-version is useful.
+Use durable wording such as “Added in SecretSpec 0.16.” The `(0.16+)` labels
+may remain where knowing the minimum version is useful.
 
 Apply the same rule to unreleased CLI commands and configuration fields:
 place a version notice beside the command or field, not only on a separate

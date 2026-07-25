@@ -53,8 +53,7 @@ platform and publishes on a version tag:
 ## Platform support
 
 Platforms each released artifact covers. Windows support for the Python wheel,
-the Ruby gem, and the PHP extension binaries targets SecretSpec 0.17 and is not
-available in the current release.
+the Ruby gem, and the PHP extension binaries is added in SecretSpec 0.17.
 
 | SDK | Linux x64 | Linux arm64 | macOS Intel | macOS Apple silicon | Windows x64 | Windows arm64 |
 | --- | --- | --- | --- | --- | --- | --- |

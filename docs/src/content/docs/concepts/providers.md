@@ -37,25 +37,43 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 
 ## Available providers
 
-| Provider | Storage backend | Read | Write | Encrypted at rest |
-|----------|-----------------|------|-------|-------------------|
-| [keyring](/providers/keyring/) | macOS Keychain, Windows Credential Manager, or Linux Secret Service | ✓ | ✓ | ✓ |
-| [dotenv](/providers/dotenv/) | A `.env` file | ✓ | ✓ | ✗ |
-| [env](/providers/env/) | Current process environment | ✓ | ✗ | ✗ |
-| [pass](/providers/pass/) | Unix `pass` password store | ✓ | ✓ | ✓ |
-| [gopass](/providers/gopass/) (0.15+) | `gopass` password store (git-synced, GPG-encrypted) | ✓ | ✓ | ✓ |
-| [protonpass](/providers/protonpass/) | Proton Pass | ✓ | ✓ | ✓ |
-| [onepassword](/providers/onepassword/) | 1Password | ✓ | ✓ | ✓ |
-| [lastpass](/providers/lastpass/) | LastPass | ✓ | ✓ | ✓ |
-| [gcsm](/providers/gcsm/) | Google Cloud Secret Manager (requires the `gcsm` build feature) | ✓ | ✓ | ✓ |
-| [awssm](/providers/awssm/) | AWS Secrets Manager (requires the `awssm` build feature) | ✓ | ✓ | ✓ |
-| [vault](/providers/vault/) | HashiCorp Vault (requires the `vault` build feature) | ✓ | ✓ | ✓ |
-| [openbao](/providers/openbao/) (0.17+) | OpenBao (requires the `openbao` build feature; 0.16 uses `openbao://` through `vault`) | ✓ | ✓ | ✓ |
-| [bw](/providers/bw/) (0.16+) | Bitwarden Password Manager via the `bw` CLI (requires the `bw` build feature) | ✓ | ✓ | ✓ |
-| [bws](/providers/bws/) | Bitwarden Secrets Manager (requires the `bws` build feature) | ✓ | ✓ | ✓ |
-| [akv](/providers/akv/) | Azure Key Vault (requires the `akv` build feature) | ✓ | ✓ | ✓ |
-| [infisical](/providers/infisical/) (0.16+) | Infisical (requires the `infisical` build feature) | ✓ | ✓ | ✓ |
+| Provider | Storage backend | Read | Write | Encrypted at rest | TPM-backed keys |
+|----------|-----------------|------|-------|-------------------|-----------------|
+| [keyring](/providers/keyring/) | [macOS Keychain](https://support.apple.com/guide/security/keychain-data-protection-secb0694df1a/web), [Windows Credential Manager](https://learn.microsoft.com/windows/win32/secauthn/credentials-management), or [Linux Secret Service](https://gnome.pages.gitlab.gnome.org/libsecret/) | ✓ | ✓ | ✓ | — |
+| [kdbx](/providers/kdbx/) (0.17+) | KeePass KDBX file (requires the `kdbx` build feature) | ✓ | KDBX 4 | ✓ | — |
+| [dotenv](/providers/dotenv/) | A `.env` file | ✓ | ✓ | ✗ | — |
+| [env](/providers/env/) | Current process environment | ✓ | ✗ | ✗ | — |
+| [systemd-credential](/providers/systemd-credential/) (0.17+) | Credentials passed to the current systemd service | ✓ | ✗ | Depends on the unit's credential source | [Via systemd-creds](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html) |
+| [pass](/providers/pass/) | Unix `pass` password store | ✓ | ✓ | ✓ | [Via GnuPG](https://gnupg.org/blog/20210315-using-tpm-with-gnupg-2.3.html) |
+| [gopass](/providers/gopass/) (0.15+) | `gopass` password store (git-synced, GPG-encrypted) | ✓ | ✓ | ✓ | [Via GnuPG](https://gnupg.org/blog/20210315-using-tpm-with-gnupg-2.3.html) |
+| [protonpass](/providers/protonpass/) | Proton Pass | ✓ | ✓ | ✓ | — |
+| [onepassword](/providers/onepassword/) | 1Password | ✓ | ✓ | ✓ | — |
+| [lastpass](/providers/lastpass/) | LastPass | ✓ | ✓ | ✓ | — |
+| [gcsm](/providers/gcsm/) | Google Cloud Secret Manager (requires the `gcsm` build feature) | ✓ | ✓ | ✓ | — |
+| [awssm](/providers/awssm/) | AWS Secrets Manager (requires the `awssm` build feature) | ✓ | ✓ | ✓ | — |
+| [vault](/providers/vault/) | HashiCorp Vault (requires the `vault` build feature) | ✓ | ✓ | ✓ | — |
+| [openbao](/providers/openbao/) (0.17+) | OpenBao (requires the `openbao` build feature; 0.16 uses `openbao://` through `vault`) | ✓ | ✓ | ✓ | — |
+| [bw](/providers/bw/) (0.16+) | Bitwarden Password Manager via the `bw` CLI (requires the `bw` build feature) | ✓ | ✓ | ✓ | — |
+| [bws](/providers/bws/) | Bitwarden Secrets Manager (official `bws` CLI in SecretSpec 0.17+; requires the `bws` build feature) | ✓ | ✓ | ✓ | — |
+| [akv](/providers/akv/) | Azure Key Vault (requires the `akv` build feature) | ✓ | ✓ | ✓ | — |
+| [infisical](/providers/infisical/) (0.16+) | Infisical (requires the `infisical` build feature) | ✓ | ✓ | ✓ | — |
+| [age](/providers/age/) (0.17+) | An age-encrypted file (requires the `age` build feature) | ✓ | ✓ | ✓ | — |
 
+“TPM-backed keys” means the local key used by the provider can be protected by
+a [TPM 2.0](https://trustedcomputinggroup.org/resource/tpm-library-specification/)
+through the provider path SecretSpec uses. Pass and Gopass inherit this
+capability from GnuPG when its encryption key is moved to the TPM. systemd
+credentials inherit it from
+[systemd-creds](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html),
+which seals encrypted credentials to the TPM2 by default when the host has one.
+[libsecret has an optional TPM2-enabled file backend](https://gnome.pages.gitlab.gnome.org/libsecret/libsecret-tpm2.html),
+but SecretSpec's Linux keyring transport uses the Secret Service D-Bus API
+rather than that file backend. macOS Keychain uses Apple's Secure Enclave
+rather than a TPM, and
+[Windows Vault credentials are not protected by Credential Guard](https://learn.microsoft.com/windows/security/identity-protection/credential-guard/how-it-works).
+An em dash means SecretSpec has no documented TPM integration for that
+provider; it does not describe other hardware security used internally by the
+provider service.
 Each provider page starts with a minimal working example, then covers setup,
 project configuration, storage conventions, existing provider-native secrets,
 and CI/CD where applicable.
@@ -107,11 +125,19 @@ convention-based secrets.
 
 ## Configure the default provider
 
-Run the interactive configuration command to select the provider SecretSpec
-uses when a secret has no provider-specific configuration:
+Run the interactive configuration command to select the user-global provider
+SecretSpec uses when a secret has no provider-specific configuration.
+SecretSpec 0.17+ provides an explicit `global` namespace; the legacy spelling
+without it remains supported:
 
 ```bash
-$ secretspec config init
+$ secretspec config global init # 0.17+
+```
+
+SecretSpec 0.17+ can persist the provider and profile non-interactively:
+
+```bash
+$ secretspec config global init --provider env --profile default
 ```
 
 The resulting user configuration contains a default provider:
@@ -178,9 +204,10 @@ DATABASE_URL = { description = "Production database", providers = ["onepassword:
 Use the CLI to manage user-level aliases:
 
 ```bash
-$ secretspec config provider add prod_vault "onepassword://Production"
-$ secretspec config provider list
-$ secretspec config provider remove prod_vault
+# SecretSpec 0.17+
+$ secretspec config global provider add prod_vault "onepassword://Production"
+$ secretspec config global provider list
+$ secretspec config global provider remove prod_vault
 ```
 
 These commands modify only `~/.config/secretspec/config.toml`. Edit the
@@ -250,7 +277,7 @@ You can also create a user-level alias with a convention-address credential
 source from the CLI:
 
 ```bash
-$ secretspec config provider add bws "bws://project-uuid" --credential access_token=keyring
+$ secretspec config global provider add bws "bws://project-uuid" --credential access_token=keyring # 0.17+
 $ secretspec config provider login bws
 ```
 

@@ -31,6 +31,27 @@ env://                       # Current process environment
 
 **Features**: Read-only, no setup required, no persistence
 
+## systemd Credential Provider (0.17+)
+
+:::caution[Version compatibility]
+The `systemd-credential` provider is added in SecretSpec 0.17.
+:::
+
+**URI**: `systemd-credential://` - Reads credentials passed to the current
+service by systemd
+
+```bash
+systemd-credential://          # $CREDENTIALS_DIRECTORY
+```
+
+**Features**: Read-only, flat credential names, immutable service-lifetime
+values, provider-credential source support
+**Prerequisites**: A process started by systemd with `LoadCredential=`,
+`LoadCredentialEncrypted=`, `SetCredential=`, or `SetCredentialEncrypted=`
+**Storage**: One runtime file per credential under `$CREDENTIALS_DIRECTORY`;
+convention addresses use the SecretSpec key as the filename, and `ref.item`
+selects a different credential name
+
 ## GoPass Provider
 
 Available starting with SecretSpec 0.15.
@@ -59,6 +80,33 @@ keyring://                   # System default keychain
 **Features**: Read/write, secure encryption, profiles, cross-platform
 **Storage**: Service `secretspec/{project}/{profile}/{key}`, with the current
 operating-system username as the account
+
+## KeePass KDBX Provider (0.17+)
+
+:::caution[Version compatibility]
+The `kdbx` provider is added in SecretSpec 0.17.
+:::
+
+**URI**: `kdbx:PATH[?keyfile=PATH][&prefix=TEMPLATE]` - Stores secrets in a
+KeePass-compatible encrypted database
+
+```bash
+kdbx:./secrets.kdbx
+kdbx:/var/lib/myapp/secrets.kdbx
+kdbx:./secrets.kdbx?keyfile=./secrets.key
+kdbx:./shared.kdbx?prefix=teams/{project}/{profile}/{key}
+```
+
+**Features**: KDBX 3 read, KDBX 4 read/write, password and key-file
+authentication, standard and custom entry fields, profiles
+**Prerequisites**: Master password, key file, or both; build with
+`--features kdbx` (0.17+)
+**Authentication**: `password` provider credential from a bootstrap provider
+(recommended), or the discouraged `SECRETSPEC_KDBX_PASSWORD` fallback; optional
+`?keyfile=PATH`
+**Storage**: Entry path `secretspec/{project}/{profile}/{key}`, field `Password`
+by default. A secret `ref` uses `item` for the complete group path and entry
+title, and optional `field` for a standard or custom field.
 
 ## LastPass Provider
 
@@ -170,9 +218,7 @@ vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
 ## OpenBao Provider (0.17+)
 
 :::caution[Version compatibility]
-The `openbao` provider is added in SecretSpec 0.17 and is unavailable in the
-current 0.16 release. With 0.16, use `openbao://` through the `vault` build
-feature and configure `VAULT_*` environment variables.
+The `openbao` provider is added in SecretSpec 0.17.
 :::
 
 **URI**: `openbao://[namespace@]host[:port][/mount][?options]` - Stores secrets in OpenBao's KV engine
@@ -215,13 +261,20 @@ bws://vault.bitwarden.eu@a9230ec4-5507-4870-b8b5-b3f500587e4c # EU cloud
 bws://bw.example.com@a9230ec4-5507-4870-b8b5-b3f500587e4c     # Self hosted
 ```
 
-`SERVER_BASE` is the bare hostname of the Bitwarden instance; the identity and
-API endpoints are derived as `https://SERVER_BASE/identity` and
-`https://SERVER_BASE/api`. Omit it to use the `bitwarden.com` US cloud.
+`SERVER_BASE` is the bare hostname of the Bitwarden instance. SecretSpec 0.17+
+passes `https://SERVER_BASE` to `bws --server-url`; SecretSpec 0.16 and earlier
+derive the `https://SERVER_BASE/identity` and `https://SERVER_BASE/api`
+endpoints through the SDK. Omit it to use the `bitwarden.com` US cloud.
 
 **Features**: Read/write, cloud sync, project-scoped, end-to-end encryption
 **Prerequisites**: BWS subscription, machine account access token, build with `--features bws`
 **Storage**: Flat key names in the specified BWS project
+
+SecretSpec 0.17 and later require the official `bws` CLI 0.3.0 or later on
+`PATH` and invoke it for all reads and writes; set `SECRETSPEC_BWS_CLI_PATH` to
+use another executable path. The access token is supplied through the child
+process environment. Secret values passed to the CLI for creation or editing
+may briefly be visible to same-user process-inspection tools.
 
 ## Azure Key Vault Provider
 
@@ -268,6 +321,23 @@ the `production` environment. Projects whose environments do not correspond to p
 Values are read with Infisical's secret references expanded, matching its own CLI, so a value of
 `postgres://${DB_USER}@host` arrives resolved.
 
+## age Provider (0.17+)
+
+> **Version compatibility:** The age provider is added in SecretSpec 0.17.
+
+**URI**: `age://PATH[?identity=FILE][&recipients-file=FILE][&armor=false]` - Stores secrets in a single age-encrypted file committed alongside code
+
+```bash
+age://secrets.age                                        # Encrypt to your own identity
+age://secrets.age?identity=/home/alice/.config/age/plugin-identity.txt
+age://secrets.age?recipients-file=secrets.age.recipients # Share with a roster
+```
+
+**Features**: Read/write, committed-file storage, X25519 and SSH keys, native tagged recipients, and non-interactive `age-plugin-*` recipients and identities
+**Prerequisites**: An age identity; hybrid ML-KEM-768 + X25519 keys from `age-keygen -pq` are recommended for new setups and currently require the non-interactive `age-plugin-pq` compatibility plugin. Build with `--features age`.
+**Authentication**: The `identity` credential, `AGE_IDENTITY`, or `?identity=`; recipients from `?recipients-file=` or derived from the identity
+**Storage**: One `KEY=value` entry per secret inside the encrypted blob at PATH
+
 ## Provider Selection
 
 ### Command Line
@@ -296,7 +366,9 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 |----------|------------|------------------|----------------|
 | DotEnv | ❌ Plain text | Local filesystem | ❌ No |
 | Environment | ❌ Plain text | Process memory | ❌ No |
+| systemd Credential (0.17+) | Depends on unit source | systemd-managed runtime memory | ❌ No |
 | Keyring | ✅ System encryption | System keychain | ❌ No |
+| KeePass KDBX (0.17+) | ✅ KDBX encryption | Local filesystem | ❌ No |
 | Pass | ✅ GPG encryption | Local filesystem | ❌ No |
 | GoPass | ✅ GPG encryption | Local filesystem | ❌ No |
 | Proton Pass | ✅ End-to-end | Cloud (Proton) | ✅ Yes |
@@ -310,3 +382,4 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
 | Infisical | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |
+| age (0.17+) | ✅ age encryption | Local filesystem | ❌ No |

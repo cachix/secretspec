@@ -37,6 +37,7 @@ export default defineConfig({
   site: "https://secretspec.dev/",
   redirects: {
     "/reference/adding-providers": "/development/adding-providers",
+    "/ci": "/ci/github-actions",
   },
   vite: {
     plugins: [devStarsApi],
@@ -119,7 +120,7 @@ $ secretspec import dotenv://.env.production
 
 ## Providers
 
-Secrets can be stored in: keyring (default), dotenv files, environment variables, 1Password, Gopass (0.15+), LastPass, Pass, Proton Pass, Google Cloud Secret Manager, AWS Secrets Manager, HashiCorp Vault, OpenBao (0.17+), Bitwarden Password Manager (0.16+), Bitwarden Secrets Manager, Azure Key Vault, or Infisical (0.16+).`,
+Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files, environment variables, systemd service credentials (0.17+), 1Password, Gopass (0.15+), LastPass, Pass, Proton Pass, Google Cloud Secret Manager, AWS Secrets Manager, HashiCorp Vault, OpenBao (0.17+), Bitwarden Password Manager (0.16+), Bitwarden Secrets Manager, Azure Key Vault, Infisical (0.16+), or age (0.17+).`,
         }),
       ],
       title: "SecretSpec",
@@ -149,7 +150,10 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
       sidebar: [
         {
           label: "Getting Started",
-          items: [{ label: "Quick Start", slug: "quick-start" }],
+          items: [
+            { label: "Quick Start", slug: "quick-start" },
+            { label: "Comparison", slug: "comparison" },
+          ],
         },
         {
           label: "Concepts",
@@ -191,8 +195,18 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
           label: "Providers",
           items: [
             { label: "Keyring", slug: "providers/keyring" },
+            {
+              label: "KeePass KDBX",
+              slug: "providers/kdbx",
+              badge: { text: "0.17+", variant: "note" },
+            },
             { label: "Dotenv", slug: "providers/dotenv" },
             { label: "Environment Variables", slug: "providers/env" },
+            {
+              label: "systemd Credentials",
+              slug: "providers/systemd-credential",
+              badge: { text: "0.17+", variant: "note" },
+            },
             { label: "Pass", slug: "providers/pass" },
             { label: "Proton Pass", slug: "providers/protonpass" },
             { label: "LastPass", slug: "providers/lastpass" },
@@ -237,6 +251,11 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
               slug: "providers/infisical",
               badge: { text: "0.16+", variant: "note" },
             },
+            {
+              label: "age",
+              slug: "providers/age",
+              badge: { text: "0.17+", variant: "note" },
+            },
           ],
         },
         {
@@ -245,7 +264,6 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
             {
               label: "Overview",
               slug: "sdk/overview",
-              badge: { text: "0.13+", variant: "note" },
             },
             { label: "Rust", slug: "sdk/rust" },
             {
@@ -286,6 +304,12 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
           ],
         },
         {
+          label: "CI",
+          items: [
+            { label: "GitHub Actions", slug: "ci/github-actions" },
+          ],
+        },
+        {
           label: "Reference",
           items: [
             { label: "Configuration", slug: "reference/configuration" },
@@ -297,11 +321,11 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
           label: "Development",
           items: [
             {
-              label: "Adding Providers",
+              label: "Adding a Provider",
               slug: "development/adding-providers",
             },
             {
-              label: "SDK Development",
+              label: "Adding an SDK",
               slug: "development/sdks",
             },
           ],

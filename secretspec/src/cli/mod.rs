@@ -1,4 +1,4 @@
-use crate::provider::{Provider, providers};
+use crate::provider::{Provider, providers, spec_names_known_provider};
 use crate::{Config, ExportFormat, GlobalConfig, GlobalDefaults, Profile, Project, Secrets};
 use clap::{Parser, Subcommand};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
@@ -132,7 +132,7 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// Init or show ~/.config/secretspec/config.toml
+    /// Manage SecretSpec configuration
     Config {
         #[command(subcommand)]
         action: ConfigAction,
@@ -161,24 +161,55 @@ enum Commands {
 
 /// Configuration-related subcommands.
 ///
-/// These actions handle the user's global configuration settings,
-/// including initialization, viewing current settings, and managing provider aliases.
+/// User-global configuration has an explicit `global` namespace. Legacy
+/// spellings remain hidden aliases for backwards compatibility.
 #[derive(Subcommand)]
 enum ConfigAction {
+    /// Manage user-global configuration (0.17+)
+    Global {
+        #[command(subcommand)]
+        action: GlobalConfigAction,
+    },
     /// Initialize user configuration
-    Init,
+    #[command(hide = true)]
+    Init {
+        /// Provider backend to save without prompting (0.17+)
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        provider: Option<String>,
+        /// Default profile to save without prompting; use "none" to clear it (0.17+)
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        profile: Option<String>,
+    },
     /// Show current configuration
+    #[command(hide = true)]
     Show,
-    /// Manage provider aliases
+    /// Store project-scoped provider credentials
     #[command(subcommand)]
     Provider(ProviderAction),
 }
 
-/// Provider alias management subcommands.
-///
-/// These actions allow managing named provider aliases in the global configuration.
+/// User-global configuration subcommands.
 #[derive(Subcommand)]
-enum ProviderAction {
+enum GlobalConfigAction {
+    /// Initialize user-global defaults
+    Init {
+        /// Provider backend to save without prompting
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        provider: Option<String>,
+        /// Default profile to save without prompting; use "none" to clear it
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        profile: Option<String>,
+    },
+    /// Show user-global configuration
+    Show,
+    /// Manage user-global provider aliases
+    #[command(subcommand)]
+    Provider(GlobalProviderAction),
+}
+
+/// User-global provider alias management subcommands.
+#[derive(Subcommand)]
+enum GlobalProviderAction {
     /// Add or update a provider alias
     Add {
         /// Name of the provider alias
@@ -199,11 +230,79 @@ enum ProviderAction {
     },
     /// List all configured provider aliases
     List,
+}
+
+/// Legacy provider alias commands plus project-scoped credential login.
+///
+/// Alias mutation commands remain hidden for backwards compatibility; new
+/// invocations should use `config global provider`.
+#[derive(Subcommand)]
+enum ProviderAction {
+    /// Add or update a provider alias
+    #[command(hide = true)]
+    Add {
+        /// Name of the provider alias
+        name: String,
+        /// Provider URI (e.g., "keyring://", "onepassword://Shared", "dotenv://.env.local")
+        uri: String,
+        /// Provider credential binding `NAME=PROVIDER` (repeatable). `NAME` is
+        /// semantic and provider-specific, such as `access_token` or `role_id`.
+        /// Only the bare-string source form is expressible here; add a `ref` by
+        /// editing the config.
+        #[arg(long = "credential", value_name = "NAME=PROVIDER")]
+        credential: Vec<String>,
+    },
+    /// Remove a provider alias
+    #[command(hide = true)]
+    Remove {
+        /// Name of the provider alias to remove
+        name: String,
+    },
+    /// List all configured provider aliases
+    #[command(hide = true)]
+    List,
     /// Store the credentials declared by a provider alias
     Login {
         /// Name of the provider alias to store credentials for
         name: String,
     },
+}
+
+impl From<GlobalConfigAction> for ConfigAction {
+    fn from(action: GlobalConfigAction) -> Self {
+        match action {
+            GlobalConfigAction::Init { provider, profile } => Self::Init { provider, profile },
+            GlobalConfigAction::Show => Self::Show,
+            GlobalConfigAction::Provider(action) => Self::Provider(action.into()),
+        }
+    }
+}
+
+impl From<GlobalProviderAction> for ProviderAction {
+    fn from(action: GlobalProviderAction) -> Self {
+        match action {
+            GlobalProviderAction::Add {
+                name,
+                uri,
+                credential,
+            } => Self::Add {
+                name,
+                uri,
+                credential,
+            },
+            GlobalProviderAction::Remove { name } => Self::Remove { name },
+            GlobalProviderAction::List => Self::List,
+        }
+    }
+}
+
+/// Maps the explicit `config global` namespace onto the legacy internal action
+/// variants so both CLI spellings share exactly one implementation.
+fn normalize_config_action(action: ConfigAction) -> ConfigAction {
+    match action {
+        ConfigAction::Global { action } => action.into(),
+        action => action,
+    }
 }
 
 /// Returns an example TOML configuration string
@@ -352,6 +451,68 @@ fn load_secrets(file: &Option<PathBuf>, reason: &Option<String>) -> miette::Resu
     })
 }
 
+/// Resolves an explicitly supplied config-init provider or prompts for one.
+///
+/// Explicit values are checked against the same provider registry used for
+/// runtime provider construction, without constructing a provider or doing I/O.
+fn select_config_init_provider(provider: Option<String>) -> Result<String> {
+    if let Some(provider) = provider {
+        let provider = provider.trim();
+        if provider.is_empty() {
+            return Err(miette!("Provider backend cannot be empty"));
+        }
+        if !spec_names_known_provider(provider).into_diagnostic()? {
+            let mut available: Vec<_> = providers().into_iter().map(|info| info.name).collect();
+            available.sort_unstable();
+            return Err(miette!(
+                "Provider backend '{}' not found. Available providers: {}",
+                provider,
+                available.join(", ")
+            ));
+        }
+        return Ok(provider.to_string());
+    }
+
+    use inquire::Select;
+
+    let provider_choices: Vec<String> = providers()
+        .into_iter()
+        .map(|info| info.display_with_examples())
+        .collect();
+    let selected_choice = Select::new("Select your preferred provider backend:", provider_choices)
+        .prompt()
+        .into_diagnostic()?;
+
+    Ok(selected_choice
+        .split(':')
+        .next()
+        .unwrap_or("keyring")
+        .to_string())
+}
+
+/// Resolves an explicitly supplied config-init profile or prompts for one.
+fn select_config_init_profile(profile: Option<String>) -> Result<Option<String>> {
+    if let Some(profile) = profile {
+        let profile = profile.trim();
+        if profile.is_empty() {
+            return Err(miette!(
+                "Default profile cannot be empty; use 'none' to clear it"
+            ));
+        }
+        return Ok((profile != "none").then(|| profile.to_string()));
+    }
+
+    use inquire::Select;
+
+    let profiles = vec!["development", "default", "none"];
+    let profile_choice = Select::new("Select your default profile:", profiles)
+        .with_help_message("'development' is recommended for local development environments")
+        .prompt()
+        .into_diagnostic()?;
+
+    Ok((profile_choice != "none").then(|| profile_choice.to_string()))
+}
+
 /// Main entry point for the secretspec CLI application.
 ///
 /// Parses command-line arguments and executes the appropriate command.
@@ -451,52 +612,26 @@ pub fn main() -> Result<()> {
             }
 
             println!("\nNext steps:");
-            println!("  1. secretspec config init    # Set up user configuration");
+            println!("  1. secretspec config global init    # Set up user defaults (0.17+)");
             println!("  2. secretspec check          # Verify all secrets and set them");
             println!("  3. secretspec run -- your-command  # Run with secrets");
 
             Ok(())
         }
         // Handle configuration management commands
-        Commands::Config { action } => match action {
-            // Initialize user configuration with interactive prompts
-            ConfigAction::Init => {
-                use inquire::Select;
-
-                // Get provider choices from the centralized registry
-                let provider_choices: Vec<String> = providers()
-                    .into_iter()
-                    .map(|info| info.display_with_examples())
-                    .collect();
-
-                let selected_choice =
-                    Select::new("Select your preferred provider backend:", provider_choices)
-                        .prompt()
-                        .into_diagnostic()?;
-
-                // Extract provider name from the selected choice
-                let provider = selected_choice.split(':').next().unwrap_or("keyring");
-
-                let profiles = vec!["development", "default", "none"];
-                let profile_choice = Select::new("Select your default profile:", profiles)
-                    .with_help_message(
-                        "'development' is recommended for local development environments",
-                    )
-                    .prompt()
-                    .into_diagnostic()?;
-
-                let profile = if profile_choice == "none" {
-                    None
-                } else {
-                    Some(profile_choice.to_string())
-                };
+        Commands::Config { action } => match normalize_config_action(action) {
+            ConfigAction::Global { .. } => unreachable!("global action was normalized"),
+            // Initialize user configuration, prompting only for omitted values.
+            ConfigAction::Init { provider, profile } => {
+                let provider = select_config_init_provider(provider)?;
+                let profile = select_config_init_profile(profile)?;
 
                 // Preserve any existing config (audit settings, provider aliases)
                 // rather than overwriting the whole file: re-running `config init`
                 // must not silently drop a user's `[audit]` table — which would
                 // re-enable disabled logging — or their saved provider aliases.
                 let mut config = GlobalConfig::load().into_diagnostic()?.unwrap_or_default();
-                config.defaults.provider = Some(provider.to_string());
+                config.defaults.provider = Some(provider);
                 config.defaults.profile = profile;
 
                 config.save().into_diagnostic()?;
@@ -535,7 +670,7 @@ pub fn main() -> Result<()> {
                     }
                     None => {
                         println!(
-                            "No configuration found. Run 'secretspec config init' to create one."
+                            "No configuration found. Run 'secretspec config global init' to create one."
                         );
                     }
                 }
@@ -623,7 +758,7 @@ pub fn main() -> Result<()> {
                             }
                             None => {
                                 println!(
-                                    "✗ No configuration found. Run 'secretspec config init' first."
+                                    "✗ No configuration found. Run 'secretspec config global init' first."
                                 );
                             }
                         }
@@ -649,7 +784,7 @@ pub fn main() -> Result<()> {
                             }
                             None => {
                                 println!(
-                                    "No configuration found. Run 'secretspec config init' first."
+                                    "No configuration found. Run 'secretspec config global init' first."
                                 );
                             }
                         }
@@ -1376,10 +1511,63 @@ mod tests {
     }
 
     #[test]
+    fn config_init_parses_non_interactive_defaults() {
+        let cli = Cli::try_parse_from([
+            "secretspec",
+            "config",
+            "global",
+            "init",
+            "--provider",
+            "env",
+            "--profile",
+            "default",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Config {
+                action:
+                    ConfigAction::Global {
+                        action: GlobalConfigAction::Init { provider, profile },
+                    },
+            } => {
+                assert_eq!(provider.as_deref(), Some("env"));
+                assert_eq!(profile.as_deref(), Some("default"));
+            }
+            _ => panic!("expected config init"),
+        }
+    }
+
+    #[test]
+    fn config_init_explicit_values_skip_selection_and_are_validated() {
+        assert_eq!(
+            select_config_init_provider(Some(" env:// ".to_string())).unwrap(),
+            "env://"
+        );
+        assert!(
+            select_config_init_provider(Some("unknown".to_string()))
+                .unwrap_err()
+                .to_string()
+                .contains("Provider backend 'unknown' not found")
+        );
+
+        assert_eq!(
+            select_config_init_profile(Some(" default ".to_string())).unwrap(),
+            Some("default".to_string())
+        );
+        assert_eq!(
+            select_config_init_profile(Some("none".to_string())).unwrap(),
+            None
+        );
+        assert!(select_config_init_profile(Some(" ".to_string())).is_err());
+    }
+
+    #[test]
     fn provider_add_parses_repeated_credential_bindings() {
         let cli = Cli::try_parse_from([
             "secretspec",
             "config",
+            "global",
             "provider",
             "add",
             "bws",
@@ -1393,11 +1581,14 @@ mod tests {
         match cli.command {
             Commands::Config {
                 action:
-                    ConfigAction::Provider(ProviderAction::Add {
-                        name,
-                        uri,
-                        credential,
-                    }),
+                    ConfigAction::Global {
+                        action:
+                            GlobalConfigAction::Provider(GlobalProviderAction::Add {
+                                name,
+                                uri,
+                                credential,
+                            }),
+                    },
             } => {
                 assert_eq!(name, "bws");
                 assert_eq!(uri, "bws://proj");
@@ -1412,10 +1603,17 @@ mod tests {
 
     #[test]
     fn provider_add_help_describes_semantic_credentials() {
-        let help = Cli::try_parse_from(["secretspec", "config", "provider", "add", "--help"])
-            .err()
-            .expect("--help should stop parsing")
-            .to_string();
+        let help = Cli::try_parse_from([
+            "secretspec",
+            "config",
+            "global",
+            "provider",
+            "add",
+            "--help",
+        ])
+        .err()
+        .expect("--help should stop parsing")
+        .to_string();
 
         assert!(help.contains("semantic and provider-specific"));
         assert!(help.contains("access_token"));
@@ -1426,6 +1624,7 @@ mod tests {
         let error = Cli::try_parse_from([
             "secretspec",
             "config",
+            "global",
             "provider",
             "add",
             "bws",
@@ -1451,5 +1650,51 @@ mod tests {
             }
             _ => panic!("expected config provider login"),
         }
+    }
+
+    #[test]
+    fn legacy_global_config_spellings_remain_supported() {
+        let commands: &[&[&str]] = &[
+            &[
+                "secretspec",
+                "config",
+                "init",
+                "--provider",
+                "env",
+                "--profile",
+                "default",
+            ],
+            &["secretspec", "config", "show"],
+            &[
+                "secretspec",
+                "config",
+                "provider",
+                "add",
+                "shared",
+                "keyring://",
+            ],
+            &["secretspec", "config", "provider", "list"],
+            &["secretspec", "config", "provider", "remove", "shared"],
+        ];
+
+        for command in commands {
+            assert!(
+                Cli::try_parse_from(*command).is_ok(),
+                "legacy command should remain accepted: {command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn global_provider_namespace_rejects_project_scoped_login() {
+        let error =
+            Cli::try_parse_from(["secretspec", "config", "global", "provider", "login", "bws"])
+                .err()
+                .expect("global provider namespace must not expose project-scoped login");
+        assert!(
+            error
+                .to_string()
+                .contains("unrecognized subcommand 'login'")
+        );
     }
 }

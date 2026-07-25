@@ -18,6 +18,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
 - **[Declarative Configuration](https://secretspec.dev/reference/configuration/)**: Define your secrets in `secretspec.toml` with descriptions and requirements
 - **[Multiple Provider Backends](https://secretspec.dev/concepts/providers/)**:
   - [Keyring](https://secretspec.dev/providers/keyring)
+  - [KeePass KDBX](https://secretspec.dev/providers/kdbx) (0.17+)
   - [.env](https://secretspec.dev/providers/dotenv)
   - [OnePassword](https://secretspec.dev/providers/onepassword)
   - [LastPass](https://secretspec.dev/providers/lastpass)
@@ -25,14 +26,16 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [Gopass](https://secretspec.dev/providers/gopass) (0.15+)
   - [Proton Pass](https://secretspec.dev/providers/protonpass)
   - [environment variables](https://secretspec.dev/providers/env)
+  - [systemd credentials](https://secretspec.dev/providers/systemd-credential) (0.17+)
   - [Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)
   - [AWS Secrets Manager](https://secretspec.dev/providers/awssm)
   - [Vault](https://secretspec.dev/providers/vault)
   - [OpenBao](https://secretspec.dev/providers/openbao) (0.17+)
   - [Bitwarden Password Manager](https://secretspec.dev/providers/bw) (0.16+)
-  - [Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)
+  - [Bitwarden Secrets Manager](https://secretspec.dev/providers/bws) (official `bws` CLI required in SecretSpec 0.17+)
   - [Azure Key Vault](https://secretspec.dev/providers/akv)
   - [Infisical](https://secretspec.dev/providers/infisical) (0.16+)
+  - [age](https://secretspec.dev/providers/age) (0.17+)
 - **[Type-Safe Rust SDK](https://secretspec.dev/sdk/rust/)**: Generate strongly-typed structs from your `secretspec.toml` for compile-time safety
 - **[Profile Support](https://secretspec.dev/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
 - **[Secret Generation](https://secretspec.dev/concepts/generation/)**: Auto-generate passwords, tokens, UUIDs, and more when secrets are missing — declarative "generate if absent"
@@ -49,17 +52,19 @@ $ secretspec init
 ✓ Created secretspec.toml with 0 secrets
 
 Next steps:
-  1. secretspec config init    # Set up user configuration
+  1. secretspec config global init    # Set up user defaults (0.17+)
   2. secretspec check          # Verify all secrets are set
   3. secretspec run -- your-command  # Run with secrets
 
 # 2. Set up provider backend
-$ secretspec config init
+$ secretspec config global init  # 0.17+
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
+  kdbx: KeePass KDBX databases (0.17+)
   onepassword: OnePassword password manager
   dotenv: Traditional .env files
   env: Read-only environment variables
+  systemd-credential: Read-only systemd service credentials (0.17+)
   pass: Unix password manager with GPG encryption
   gopass: Gopass CLI password manager with GPG encryption (0.15+)
   protonpass: Proton Pass via official pass-cli
@@ -72,6 +77,7 @@ $ secretspec config init
   bws: Bitwarden Secrets Manager
   akv: Azure Key Vault
   infisical: Infisical secret management (0.16+)
+  age: age-encrypted file (0.17+)
 ? Select your default profile:
 > development
   default
@@ -133,8 +139,11 @@ Profiles allow you to define different secret requirements for each environment 
 $ secretspec run --profile development -- npm start
 $ secretspec run --profile production -- npm start
 
-# Set default profile
-$ secretspec config init
+# Set a user-global default profile (0.17+)
+$ secretspec config global init
+
+# SecretSpec 0.17+: set provider and profile defaults without prompting
+$ secretspec config global init --provider env --profile default
 ```
 
 Learn more about [profiles](https://secretspec.dev/concepts/profiles) and [profile selection](https://secretspec.dev/concepts/profiles#profile-selection).
@@ -144,8 +153,10 @@ Learn more about [profiles](https://secretspec.dev/concepts/profiles) and [profi
 SecretSpec supports multiple storage backends for secrets:
 
 - **[Keyring](https://secretspec.dev/providers/keyring)** - System credential store (recommended)
+- **[KeePass KDBX](https://secretspec.dev/providers/kdbx)** (0.17+) - Local KeePass-compatible encrypted database
 - **[.env files](https://secretspec.dev/providers/dotenv)** - Traditional dotenv files
 - **[Environment variables](https://secretspec.dev/providers/env)** - Read-only for CI/CD
+- **[systemd credentials](https://secretspec.dev/providers/systemd-credential)** (0.17+) - Read-only credentials passed to the current service
 - **[Pass](https://secretspec.dev/providers/pass)** - Unix password manager with GPG encryption
 - **[Gopass](https://secretspec.dev/providers/gopass)** (0.15+) - GPG-based password manager with git-synced password store
 - **[Proton Pass](https://secretspec.dev/providers/protonpass)** - End-to-end encrypted via Proton's official pass-cli
@@ -156,16 +167,17 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Vault](https://secretspec.dev/providers/vault)** - HashiCorp Vault KV engine
 - **[OpenBao](https://secretspec.dev/providers/openbao)** (0.17+) - OpenBao KV integration; SecretSpec 0.16 accepts `openbao://` through the Vault provider
 - **[Bitwarden Password Manager](https://secretspec.dev/providers/bw)** (0.16+) - Bitwarden Password Manager vault via the `bw` CLI
-- **[Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)** - Bitwarden Secrets Manager integration
+- **[Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)** - Bitwarden Secrets Manager integration (official `bws` CLI required in SecretSpec 0.17+)
 - **[Azure Key Vault](https://secretspec.dev/providers/akv)** - Azure secret management
 - **[Infisical](https://secretspec.dev/providers/infisical)** (0.16+) - Infisical secret management
+- **[age](https://secretspec.dev/providers/age)** (0.17+) - age-encrypted file
 
 ```bash
 $ secretspec run --provider keyring -- npm start
 $ secretspec run --provider dotenv -- npm start
 
-# Configure default provider
-$ secretspec config init
+# Configure a user-global default provider (0.17+)
+$ secretspec config global init
 ```
 
 See [provider concepts](https://secretspec.dev/concepts/providers) and [provider reference](https://secretspec.dev/reference/providers) for details.
@@ -227,7 +239,7 @@ Common commands:
 ```bash
 # Initialize and configure
 secretspec init                    # Create secretspec.toml
-secretspec config init            # Set up user configuration
+secretspec config global init    # Set up user defaults (0.17+)
 
 # Manage secrets
 secretspec check                  # Verify all secrets are set

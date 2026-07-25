@@ -63,7 +63,7 @@ $ secretspec init
 ✓ Created secretspec.toml with 0 secrets
 
 Next steps:
-  1. secretspec config init    # Set up user configuration
+  1. secretspec config global init    # Set up user defaults (0.17+)
   2. secretspec check          # Verify all secrets are set
   3. secretspec run -- your-command  # Run with secrets
 ```
@@ -97,12 +97,14 @@ REDIS_URL = { required = true }
 Configure your preferred secrets storage backend:
 
 ```bash
-$ secretspec config init
+$ secretspec config global init  # 0.17+
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
+  kdbx: KeePass KDBX databases (0.17+)
   onepassword: OnePassword password manager
   dotenv: Traditional .env files
   env: Read-only environment variables
+  systemd-credential: Read-only systemd service credentials (0.17+)
   pass: Unix password manager with GPG encryption
   gopass: Gopass CLI password manager with GPG encryption (0.15+)
   protonpass: Proton Pass via official pass-cli
@@ -115,6 +117,7 @@ $ secretspec config init
   bws: Bitwarden Secrets Manager
   akv: Azure Key Vault
   infisical: Infisical secret management (0.16+)
+  age: age-encrypted file (0.17+)
 ? Select your default profile:
 > development
   default

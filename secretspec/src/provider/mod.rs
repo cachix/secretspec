@@ -290,6 +290,8 @@ pub mod onepassword;
 pub mod openbao;
 pub mod pass;
 pub mod protonpass;
+#[cfg(feature = "scaleway")]
+pub mod scaleway;
 pub mod systemd_credential;
 #[cfg(feature = "vault")]
 pub mod vault;

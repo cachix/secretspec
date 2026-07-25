@@ -43,6 +43,7 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'vault', slug: 'vault', label: 'Vault' },
   { slug: 'openbao', label: 'OpenBao (0.17+)' },
   { slug: 'awssm', label: 'AWS Secrets Manager' },
+  { slug: 'scaleway', label: 'Scaleway Secret Manager (0.17+)' },
   { icon: 'googlecloud', slug: 'gcsm', label: 'Google Cloud Secret Manager' },
   { icon: 'microsoftazure', slug: 'akv', label: 'Azure Key Vault' },
   { slug: 'infisical', label: 'Infisical' },
@@ -149,6 +150,7 @@ $ secretspec config global init
   openbao: OpenBao secret management (0.17+)
   age: age-encrypted file (0.17+)
   systemd-credential: Read-only systemd service credentials (0.17+)
+  scaleway: Scaleway Secret Manager (0.17+)
 <span class="tok-str">✓</span> Saved to ~/.config/secretspec/config.toml
 
 <span class="tok-com"># 3. Run your app with secrets injected</span>
@@ -219,7 +221,8 @@ $ secretspec run --profile production -- npm start
   infisical: Infisical secret management
   openbao: OpenBao secret management (0.17+)
   age: age-encrypted file (0.17+)
-  systemd-credential: Read-only systemd service credentials (0.17+)</code></pre>
+  systemd-credential: Read-only systemd service credentials (0.17+)
+  scaleway: Scaleway Secret Manager (0.17+)</code></pre>
       </div>
 
       <div class="landing-step">

@@ -1367,9 +1367,11 @@ impl BitwardenProvider {
             SecretSpecError::ProviderOperationFailed("Invalid fields array".to_string())
         })?;
 
-        // Look for existing field
+        // Look for existing field (case-insensitive, matching the read path)
         for field_obj in fields.iter_mut() {
-            if field_obj["name"].as_str() == Some(field) {
+            if let Some(name) = field_obj["name"].as_str()
+                && name.eq_ignore_ascii_case(field)
+            {
                 field_obj["value"] = serde_json::Value::String(value.to_string());
                 return Ok(());
             }
@@ -1957,5 +1959,31 @@ mod tests {
         let purl = ProviderUrl::new(url);
         let config = BitwardenConfig::try_from(&purl).unwrap();
         assert_eq!(config.collection_id.as_deref(), Some("prod-secrets"));
+    }
+
+    #[test]
+    fn test_update_custom_field_case_insensitive() {
+        // R4: Update should match existing fields case-insensitively.
+        // If an item has field "API_KEY" and we update "api_key", it should
+        // update the existing field, not create a duplicate.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let mut item_json = serde_json::json!({
+            "fields": [
+                { "name": "API_KEY", "value": "old-value", "type": 0 }
+            ]
+        });
+
+        provider
+            .update_custom_field_in_json(&mut item_json, "api_key", "new-value")
+            .unwrap();
+
+        let fields = item_json["fields"].as_array().unwrap();
+        assert_eq!(
+            fields.len(),
+            1,
+            "should update existing field, not add duplicate"
+        );
+        assert_eq!(fields[0]["name"].as_str(), Some("API_KEY"));
+        assert_eq!(fields[0]["value"].as_str(), Some("new-value"));
     }
 }

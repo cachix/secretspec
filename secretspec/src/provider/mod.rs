@@ -207,6 +207,7 @@ impl ProviderUrl {
 
     #[cfg(any(
         feature = "awssm",
+        feature = "bw",
         feature = "infisical",
         feature = "kdbx",
         feature = "openbao",

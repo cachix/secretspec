@@ -5,7 +5,8 @@ description: A local, append-only record of every secret access for after-the-fa
 
 secretspec records every secret access to a local audit log so you can review,
 after the fact, **what** secret was accessed, **when**, by **whom**, with what
-**reason**, and what the **outcome** was. Auditing is **on by default**.
+**reason, if supplied**, and what the **outcome** was. Auditing is **on by
+default**.
 
 Secret values are never written to the log. Only metadata is recorded, and any
 credentials embedded in a provider URI are redacted.
@@ -71,8 +72,8 @@ and how to turn it off.
 | `actor` | The OS user, the detected coding agent (if any), and whether this is an agent session |
 
 This pairs naturally with the [`require_reason`](/reference/configuration/#requiring-a-reason-for-secret-access)
-policy: the policy makes callers state *why* they need a secret, and the audit
-log records that reason alongside the access.
+policy: when that policy applies, SecretSpec requires the caller to state *why*
+before proceeding and records the supplied reason alongside the access.
 
 ## Reading the log
 

@@ -571,7 +571,7 @@ $ secretspec run --provider bws -- ./deploy
       <span class="landing-showcase-eyebrow">Audit &amp; AI agents</span>
       <h2 class="landing-section-title">See which secrets were accessed, by whom, and why.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        SecretSpec records access metadata in a local append-only log without recording secret values. You can also require AI agents to provide a reason before they access secrets. <a href="/concepts/audit/" class="landing-link">How auditing works →</a>
+        SecretSpec records access metadata in a local append-only log without recording secret values. You can require sessions SecretSpec detects as AI agents—or every caller—to provide a reason before SecretSpec proceeds. <a href="/concepts/audit/" class="landing-link">How auditing works →</a>
       </p>
     </div>
 
@@ -579,14 +579,14 @@ $ secretspec run --provider bws -- ./deploy
       <div class="landing-terminal">
         <div class="landing-terminal-header">
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">agent session</span>
+          <span class="landing-terminal-title">detected agent session</span>
         </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># An AI agent runs your app without a reason</span>
+        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># A detected AI agent runs your app without a reason</span>
 $ secretspec run -- ./deploy.sh
 Error: accessing secrets requires a reason.
        Provide one with --reason <span class="tok-str">"&lt;why...&gt;"</span>
 
-<span class="tok-com"># State why; required for agents by default</span>
+<span class="tok-com"># State why; required for detected agents by default</span>
 $ secretspec run --reason <span class="tok-str">"Deploy web frontend"</span> \
     -- ./deploy.sh
 <span class="tok-str">✓</span> Loaded DATABASE_URL from keyring
@@ -607,7 +607,7 @@ $ secretspec audit -n 1
     </div>
 
     <p class="landing-chain-result" style="margin-top: 1.5rem;">
-      Commit <code class="inline-code">require_reason = "agents"</code> with the manifest to apply the same policy in every clone while leaving interactive human use unchanged. <a href="/reference/configuration/#requiring-a-reason-for-secret-access" class="landing-link">Configure the policy →</a>
+      Commit <code class="inline-code">require_reason = "agents"</code> to require reasons in sessions SecretSpec detects as agents. Detection is heuristic; use <code class="inline-code">require_reason = true</code> to require every SecretSpec caller to supply one. <a href="/reference/configuration/#requiring-a-reason-for-secret-access" class="landing-link">Configure the policy →</a>
     </p>
   </div>
 </section>

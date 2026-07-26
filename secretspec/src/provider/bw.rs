@@ -486,9 +486,10 @@ impl TryFrom<&ProviderUrl> for BitwardenConfig {
 /// # Authentication
 ///
 /// The provider requires users to be logged in and unlocked via the Bitwarden CLI:
-/// 1. Login: `bw login` (interactive or with API key)
-/// 2. Unlock: `bw unlock` (generates session key)
-/// 3. Export session: `export BW_SESSION="session-key"`
+/// 1. Self-hosted only: `bw config server <url>` (must run while logged out)
+/// 2. Login: `bw login` (interactive or with API key)
+/// 3. Unlock: `bw unlock` (generates session key)
+/// 4. Export session: `export BW_SESSION="session-key"`
 ///
 /// # Storage Structure
 ///
@@ -507,7 +508,8 @@ impl TryFrom<&ProviderUrl> for BitwardenConfig {
 /// # Organization collection
 /// secretspec get MY_SECRET --provider bw://myorg@collection-id
 ///
-/// # Self-hosted with custom server
+/// # Self-hosted: `?server=` asserts which server the CLI must already be
+/// # configured for (via `bw config server`); it does not configure the CLI.
 /// secretspec set API_KEY --provider bw://?server=https://vault.company.com
 /// ```
 pub struct BitwardenProvider {

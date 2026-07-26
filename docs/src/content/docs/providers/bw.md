@@ -14,6 +14,7 @@ available in SecretSpec 0.17.
 
 - Bitwarden CLI (`bw`)
 - Bitwarden account
+- For self-hosted servers: the CLI pointed at your server with `bw config server` **before** logging in (see [Self-hosted servers](#self-hosted-servers))
 - Signed in via `bw login` and unlocked with `bw unlock`
 - `BW_SESSION` environment variable set
 
@@ -33,6 +34,9 @@ bw://?type=login&field=password
 - `org@collection`: Organization and collection specification
 - `type`: Item type (login, card, identity, sshkey, securenote)
 - `field`: Specific field to extract
+- `server`: The self-hosted server this configuration expects. This does **not**
+  configure the CLI — it is a guard that fails with remediation steps when the
+  `bw` CLI is pointed somewhere else. See [Self-hosted servers](#self-hosted-servers).
 
 ### Examples
 
@@ -43,12 +47,43 @@ $ secretspec set API_KEY --provider bw://
 # Password Manager - Organization collection
 $ secretspec set DATABASE_URL --provider "bw://myorg@dev-secrets"
 
-# Password Manager - Self-hosted instance
+# Password Manager - Self-hosted instance (CLI must already be configured
+# for this server; see Self-hosted servers below)
 $ secretspec set TOKEN --provider "bw://?server=https://vault.company.com"
 
 # Password Manager - Specific item type and field
 $ secretspec get 'MyApp Database' --provider 'bw://?type=login&field=username'
 ```
+
+### Self-hosted servers
+
+The `bw` CLI reads its server address from its own configuration file, written by
+`bw config server`. It does not accept a server through an environment variable
+or a per-command flag, and it refuses to change servers while a session is
+active. SecretSpec therefore cannot switch servers for you.
+
+Configure the CLI once, before logging in:
+
+```bash
+$ bw logout                                    # if already logged in
+$ bw config server https://vault.company.com
+$ bw login
+$ bw unlock
+$ export BW_SESSION="session-key-from-unlock"
+```
+
+With the CLI configured, `?server=` records which server the project expects.
+SecretSpec compares it against the CLI's current setting before each operation
+and fails with the commands above when they disagree, instead of silently
+reading or writing secrets on the wrong server:
+
+```toml
+# secretspec.toml — documents the expected server for the whole team
+[providers]
+company_vault = "bw://?server=https://vault.company.com"
+```
+
+Omit `?server=` to accept whatever server the CLI is configured for.
 
 ## Usage
 
@@ -193,6 +228,12 @@ To install it:
 - Clear distinction between "not logged in" vs "vault locked"
 - Step-by-step guidance for `bw login` and `bw unlock`
 - Session key setup instructions
+
+### Server Mismatch
+When `?server=` names a different server than the one the `bw` CLI is configured
+for, the operation stops before touching the vault and reports both addresses
+alongside the `bw logout` / `bw config server` / `bw login` / `bw unlock`
+sequence needed to correct it.
 
 ### Item Access
 - Graceful handling of missing items

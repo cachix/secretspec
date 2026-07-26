@@ -9,7 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Bitwarden Password Manager provider. `bw://` uses the `bw` CLI for
-  vault-wide secret storage across all Bitwarden item types.
+  vault-wide secret storage across all Bitwarden item types. Self-hosted
+  servers are configured with `bw config server` before logging in, since the
+  `bw` CLI accepts a server only from its own configuration; `bw://?server=`
+  records the expected address and fails with remediation steps when the CLI
+  points elsewhere.
 - `secretspec config global init --provider <PROVIDER> --profile <PROFILE>`
   can save explicitly user-global defaults without interactive prompts,
   including `--profile none` to clear the default profile. The `global`

@@ -243,12 +243,17 @@ openbao://127.0.0.1:8200/secret?kv=1&tls=false
 bw://                                   # Personal vault
 bw://collection-id                      # Specific collection
 bw://myorg@dev-secrets                  # Organization collection
-bw://?server=https://vault.company.com  # Self-hosted server
+bw://?server=https://vault.company.com  # Expected self-hosted server (guard)
 bw://?type=login&field=username         # Default item type and field
 ```
 
+`?server=` does not configure the CLI. The `bw` CLI takes its server only from
+`bw config server`, which must be run while logged out, so self-hosted users
+configure the CLI themselves and SecretSpec verifies the setting matches before
+each operation. See the [provider guide](/providers/bw/#self-hosted-servers).
+
 **Features**: Read/write, all vault item types (logins, cards, identities, SSH keys, secure notes), field selection, `ref = { item, field }` mapping in `secretspec.toml`
-**Prerequisites**: Bitwarden CLI (`bw`), signed in and unlocked (`BW_SESSION` env var), build with `--features bw`
+**Prerequisites**: Bitwarden CLI (`bw`), signed in and unlocked (`BW_SESSION` env var), self-hosted servers set with `bw config server` before login, build with `--features bw`
 **Storage**: One vault item per secret; reads use per-type default fields unless `?field=` or a `ref` mapping selects one
 
 ## Bitwarden Secrets Manager Provider

@@ -3,6 +3,7 @@ use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+use std::sync::OnceLock;
 
 /// Bitwarden item type enum for different vault item types
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -517,6 +518,63 @@ pub struct BitwardenProvider {
     config: BitwardenConfig,
     /// Credentials supplied by the provider alias.
     credentials: ProviderCredentials,
+    /// Memoized outcome of the self-hosted server check, so `bw status` is
+    /// spawned at most once per process instead of once per CLI invocation.
+    /// The error is carried as a `String` because [`SecretSpecError`] is not
+    /// `Clone`; it is re-wrapped on each read.
+    server_check: OnceLock<std::result::Result<(), String>>,
+}
+
+/// Server the `bw` CLI targets when no self-hosted server is configured. `bw
+/// status` reports `"serverUrl": null` in that state rather than naming it.
+const BITWARDEN_CLOUD_SERVER: &str = "https://vault.bitwarden.com";
+
+/// Extracts `serverUrl` from `bw status` JSON.
+///
+/// Returns `Ok(None)` when the CLI targets the public cloud, which it reports as
+/// `null` (older builds may omit the key entirely).
+fn parse_status_server(stdout: &str) -> std::result::Result<Option<String>, String> {
+    let status: serde_json::Value = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("could not parse `bw status` output as JSON: {e}"))?;
+
+    match status.get("serverUrl") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(s)) if s.trim().is_empty() => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(s.trim().to_string())),
+        Some(other) => Err(format!(
+            "unexpected `serverUrl` type in `bw status` output: {other}"
+        )),
+    }
+}
+
+/// Canonicalizes a server address for comparison.
+///
+/// Only differences that cannot change which server is addressed are erased:
+/// surrounding whitespace, a trailing slash, a port that is the scheme default,
+/// and the case of the scheme and host. Path case is preserved, since a guard
+/// that compares too loosely would wave through a genuinely different server.
+fn normalize_server(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+
+    match url::Url::parse(trimmed) {
+        // `Url::parse` already lowercases the scheme and host for us.
+        Ok(url) => {
+            let mut out = format!("{}://{}", url.scheme(), url.host_str().unwrap_or_default());
+            // `port()` is `None` for the scheme's default port, so `:443` on an
+            // https URL collapses into the same form as omitting it.
+            if let Some(port) = url.port() {
+                out.push_str(&format!(":{port}"));
+            }
+            out.push_str(url.path().trim_end_matches('/'));
+            out
+        }
+        Err(_) => trimmed.to_ascii_lowercase(),
+    }
+}
+
+/// Whether two server addresses name the same server.
+fn servers_match(expected: &str, current: &str) -> bool {
+    normalize_server(expected) == normalize_server(current)
 }
 
 crate::register_provider! {
@@ -542,64 +600,89 @@ impl BitwardenProvider {
         Self {
             config,
             credentials: ProviderCredentials::new(),
+            server_check: OnceLock::new(),
         }
     }
 
-    /// Validates that the configured self-hosted server matches the bw CLI's
-    /// current setting. The bw CLI ignores `BW_SERVER`; the only supported way
-    /// to point it at a self-hosted server is `bw config server <url>` (which
-    /// requires being logged out). If the configured server doesn't match, this
-    /// returns an error with clear remediation steps.
+    /// Verifies that the `bw` CLI targets the server this provider expects.
+    ///
+    /// The CLI takes its server address only from its own configuration file,
+    /// written by `bw config server` while logged out. It honours neither an
+    /// environment variable nor a per-command flag, so SecretSpec cannot select
+    /// a server per invocation and instead fails closed when the CLI points
+    /// somewhere else. A no-op unless `?server=` was given.
+    ///
+    /// The result is memoized: the check runs `bw status` once per process.
     fn ensure_server_configured(&self) -> Result<()> {
-        let expected = match &self.config.server {
-            Some(s) => s,
-            None => return Ok(()),
+        let Some(expected) = self.config.server.as_deref() else {
+            return Ok(());
         };
 
-        // Run `bw status` to check the currently configured server.
-        // We can't use execute_bw_command here (would recurse), so run directly.
-        let output = std::process::Command::new("bw")
-            .arg("--nointeraction")
-            .arg("status")
-            .output()
-            .map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to run `bw status` to validate server configuration: {}",
-                    e
-                ))
-            })?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        // bw status includes a line like "Server URL: https://vault.bitwarden.com"
-        let current_server = stdout.lines().find_map(|line| {
-            let line = line.trim();
-            line.strip_prefix("Server URL:")
-                .or_else(|| line.strip_prefix("Server URL"))
-                .map(|s| s.trim())
-        });
-
-        match current_server {
-            Some(current) if current == expected => Ok(()),
-            Some(current) => Err(SecretSpecError::ProviderOperationFailed(format!(
-                "Server mismatch: the bw CLI is configured for '{}' but the provider expects '{}'.\n\n\
-                 To use a self-hosted server, you must configure the bw CLI first:\n\
-                   bw logout\n\
-                   bw config server {}\n\
-                   bw login\n\
-                   bw unlock\n\
-                 Then export BW_SESSION and retry.",
-                current, expected, expected
-            ))),
-            None => Err(SecretSpecError::ProviderOperationFailed(format!(
-                "The bw CLI is not logged in. To use a self-hosted server, configure it first:\n\
-                   bw config server {}\n\
-                   bw login\n\
-                   bw unlock\n\
-                 Then export BW_SESSION and retry.",
-                expected
-            ))),
+        match self
+            .server_check
+            .get_or_init(|| self.check_server(expected))
+        {
+            Ok(()) => Ok(()),
+            Err(message) => Err(SecretSpecError::ProviderOperationFailed(message.clone())),
         }
+    }
+
+    /// Runs `bw status` and compares its `serverUrl` against `expected`.
+    ///
+    /// Separate from [`Self::ensure_server_configured`] so the memoization stays
+    /// readable; the parsing and comparison it relies on are pure functions that
+    /// are unit-tested directly.
+    fn check_server(&self, expected: &str) -> std::result::Result<(), String> {
+        // `execute_bw_command` calls this method, so invoke the CLI directly to
+        // avoid recursing.
+        let output = match Command::new("bw")
+            .args(["--nointeraction", "status"])
+            .output()
+        {
+            Ok(output) => output,
+            // Say nothing about a missing CLI here: `execute_bw_command` reports
+            // that with installation instructions, and it runs immediately after.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                return Err(format!(
+                    "could not run `bw status` to verify the configured server: {e}"
+                ));
+            }
+        };
+
+        if !output.status.success() {
+            return Err(format!(
+                "`bw status` failed while verifying the configured server ({}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        let reported = parse_status_server(&String::from_utf8_lossy(&output.stdout))?;
+        let current = reported.as_deref().unwrap_or(BITWARDEN_CLOUD_SERVER);
+
+        if servers_match(expected, current) {
+            return Ok(());
+        }
+
+        // Name the public cloud explicitly; `bw status` only reports it as null,
+        // which would otherwise surface as a bare URL the user never configured.
+        let current_description = match reported.as_deref() {
+            Some(server) => server.to_string(),
+            None => format!("the public Bitwarden cloud ({BITWARDEN_CLOUD_SERVER})"),
+        };
+
+        Err(format!(
+            "The bw CLI is configured for {current_description}, but this provider \
+             expects {expected}.\n\n\
+             The bw CLI reads its server only from its own configuration, so point \
+             it at the expected server before retrying:\n\
+             \n  bw logout\
+             \n  bw config server {expected}\
+             \n  bw login\
+             \n  bw unlock\
+             \n\nThen export BW_SESSION from the unlock output."
+        ))
     }
 
     /// Executes a Bitwarden Password Manager CLI command with proper error handling.
@@ -1394,6 +1477,11 @@ impl BitwardenProvider {
 
     /// Updates an item using the JSON template.
     fn update_item_with_json(&self, item_id: &str, item_json: &serde_json::Value) -> Result<()> {
+        // This path drives the CLI directly rather than through
+        // `execute_bw_command`, so the server guard has to be applied here too;
+        // it is memoized, so this costs nothing after the first call.
+        self.ensure_server_configured()?;
+
         let item_json_str = serde_json::to_string(item_json)?;
 
         // Bitwarden CLI expects base64-encoded JSON via stdin
@@ -1717,6 +1805,10 @@ impl BitwardenProvider {
     /// Future optimization: investigate if simpler creation methods exist for
     /// basic Login/Card/Identity items that don't require complex JSON encoding.
     fn create_item_from_template(&self, template: &serde_json::Value) -> Result<()> {
+        // As in `update_item_with_json`: this bypasses `execute_bw_command`, so
+        // the memoized server guard is applied here as well.
+        self.ensure_server_configured()?;
+
         let template_json = serde_json::to_string(template)?;
 
         // Bitwarden CLI expects base64-encoded JSON via stdin
@@ -1966,6 +2058,114 @@ mod tests {
             fields[0].linked_id.as_ref().and_then(|v| v.as_u64()),
             Some(100)
         );
+    }
+
+    /// Verbatim `bw status` output from bitwarden-cli 2025.11.0, which is JSON
+    /// rather than the line-oriented text an earlier revision of the server
+    /// guard tried to parse. Kept literal so a change in the CLI's shape shows
+    /// up here as a test failure.
+    const REAL_STATUS_CLOUD: &str = r#"{"serverUrl":null,"lastSync":"2026-07-17T21:52:42.940Z","userEmail":"user@example.com","userId":"183fb6e7-a07f-400c-ad76-b27000074032","status":"locked"}"#;
+
+    #[test]
+    fn status_reports_the_public_cloud_as_null() {
+        // The guard must read `serverUrl` out of JSON. Parsing this as text and
+        // looking for a "Server URL:" line yields nothing, which previously made
+        // every `?server=` operation fail.
+        assert_eq!(parse_status_server(REAL_STATUS_CLOUD).unwrap(), None);
+    }
+
+    #[test]
+    fn null_server_url_matches_the_cloud_address() {
+        // A null `serverUrl` means the public cloud, so naming that cloud
+        // explicitly in the URI must not be reported as a mismatch.
+        let reported = parse_status_server(REAL_STATUS_CLOUD).unwrap();
+        let current = reported.as_deref().unwrap_or(BITWARDEN_CLOUD_SERVER);
+        assert!(servers_match("https://vault.bitwarden.com", current));
+        assert!(!servers_match("https://vault.company.com", current));
+    }
+
+    #[test]
+    fn status_reports_a_self_hosted_server() {
+        let json = r#"{"serverUrl":"https://vault.company.com","status":"unlocked"}"#;
+        assert_eq!(
+            parse_status_server(json).unwrap().as_deref(),
+            Some("https://vault.company.com")
+        );
+    }
+
+    #[test]
+    fn status_treats_missing_and_empty_server_url_as_the_cloud() {
+        let missing = r#"{"status":"unlocked"}"#;
+        let empty = r#"{"serverUrl":"   ","status":"unlocked"}"#;
+        assert_eq!(parse_status_server(missing).unwrap(), None);
+        assert_eq!(parse_status_server(empty).unwrap(), None);
+    }
+
+    #[test]
+    fn status_rejects_unparseable_output() {
+        // A hard error beats silently treating an unreadable response as a match.
+        assert!(parse_status_server("Server URL: https://vault.company.com").is_err());
+        assert!(parse_status_server("").is_err());
+        assert!(parse_status_server(r#"{"serverUrl":42}"#).is_err());
+    }
+
+    #[test]
+    fn server_comparison_ignores_only_insignificant_differences() {
+        // Same server, written differently.
+        assert!(servers_match(
+            "https://vault.company.com",
+            "https://vault.company.com/"
+        ));
+        assert!(servers_match(
+            "https://vault.company.com",
+            "  https://vault.company.com  "
+        ));
+        assert!(servers_match(
+            "HTTPS://Vault.Company.COM",
+            "https://vault.company.com"
+        ));
+        // :443 is the https default, so it addresses the same server.
+        assert!(servers_match(
+            "https://vault.company.com:443",
+            "https://vault.company.com"
+        ));
+        assert!(servers_match(
+            "https://vault.company.com/bitwarden",
+            "https://vault.company.com/bitwarden/"
+        ));
+    }
+
+    #[test]
+    fn server_comparison_distinguishes_different_servers() {
+        assert!(!servers_match(
+            "https://vault.company.com",
+            "https://vault.other.com"
+        ));
+        // A non-default port is significant.
+        assert!(!servers_match(
+            "https://vault.company.com:8443",
+            "https://vault.company.com"
+        ));
+        // So is the scheme.
+        assert!(!servers_match(
+            "http://vault.company.com",
+            "https://vault.company.com"
+        ));
+        // And so is a base path.
+        assert!(!servers_match(
+            "https://vault.company.com/bitwarden",
+            "https://vault.company.com"
+        ));
+    }
+
+    #[test]
+    fn server_guard_is_skipped_without_a_configured_server() {
+        // `bw://` must not consult the CLI at all: with no expected server there
+        // is nothing to compare, and spawning `bw status` here would make the
+        // guard cost apply to every user.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        assert!(provider.config.server.is_none());
+        assert!(provider.ensure_server_configured().is_ok());
     }
 
     #[test]

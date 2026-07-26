@@ -17,6 +17,10 @@
 # Requirements: docker, python3 (+`cryptography`, auto-installed in a venv),
 # bw CLI, jq, cargo. Fixture credentials are committable constants, not secrets.
 #
+# The devenv shell provides the docker *client*; the container runtime itself is
+# yours to supply and start (Docker Desktop, colima, or `podman machine start`
+# with /var/run/docker.sock symlinked to the podman socket).
+#
 # Usage: tests/vaultwarden_harness.sh [--keep]   # --keep: leave containers up
 set -euo pipefail
 

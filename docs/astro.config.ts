@@ -164,7 +164,21 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
               slug: "concepts/declarative",
             },
             { label: "Profiles", slug: "concepts/profiles" },
-            { label: "Providers", slug: "concepts/providers" },
+            {
+              label: "Providers",
+              items: [
+                { label: "Providers", slug: "concepts/providers" },
+                {
+                  label: "Provider fallback",
+                  slug: "concepts/providers/fallback",
+                },
+                {
+                  label: "Provider caching",
+                  slug: "concepts/providers/caching",
+                  badge: { text: "0.17+", variant: "note" },
+                },
+              ],
+            },
             {
               label: "Configuration Inheritance",
               slug: "concepts/inheritance",

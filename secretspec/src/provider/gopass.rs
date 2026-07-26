@@ -49,6 +49,17 @@ pub struct GoPassProvider {
     config: GoPassConfig,
 }
 
+/// Whether a failed `gopass` invocation failed only because the entry is not in
+/// the store.
+///
+/// The wording depends on which subcommand ran: `gopass show` reports a lookup
+/// through the store layer ("... is not in the password store"), while `gopass
+/// rm` checks existence itself and reports `Secret "..." does not exist`.
+/// Matching only the first message made deleting an absent entry an error.
+fn is_missing_entry(stderr: &str) -> bool {
+    stderr.contains("is not in the password store") || stderr.contains("does not exist")
+}
+
 crate::register_provider! {
     struct: GoPassProvider,
     config: GoPassConfig,
@@ -56,6 +67,7 @@ crate::register_provider! {
     description: "Multi-user and multi-store abstraction layer over pass",
     schemes: ["gopass"],
     examples: ["gopass://", "gopass://secretspec/shared/{profile}/{key}"],
+    deletes: true,
 }
 
 impl GoPassProvider {
@@ -152,7 +164,7 @@ impl Provider for GoPassProvider {
 
             // Entry doesn't exist. gopass exits 11 here; the message is
             // "is not in the password store" when piped.
-            if output.status.code() == Some(11) && stderr.contains("is not in the password store") {
+            if output.status.code() == Some(11) && is_missing_entry(&stderr) {
                 Ok(None)
             } else {
                 Err(SecretSpecError::ProviderOperationFailed(format!(
@@ -230,6 +242,34 @@ impl Provider for GoPassProvider {
         Ok(())
     }
 
+    fn delete(&self, addr: Address<'_>) -> crate::Result<bool> {
+        let entry_name = super::flat_item(self, addr)?;
+        let output = self
+            .command()
+            .args(["rm", "-f", &entry_name])
+            .output()
+            .map_err(|error| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to execute 'gopass' command: {error}. Is gopass installed?"
+                ))
+            })?;
+        if output.status.success() {
+            return Ok(true);
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Deleting what is already gone is a no-op, not a failure — cache
+        // invalidation runs over secrets that may never have been cached. The
+        // exit code is not checked here: `rm` reports a missing entry with a
+        // different code than `show` does, and the codes have moved between
+        // gopass releases, so the message is the reliable signal.
+        if is_missing_entry(&stderr) {
+            return Ok(false);
+        }
+        Err(SecretSpecError::ProviderOperationFailed(format!(
+            "gopass command failed: {stderr}"
+        )))
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
@@ -294,6 +334,27 @@ mod tests {
     fn try_from_bare_url_leaves_prefix_unset() {
         let config = GoPassConfig::try_from(&provider_url("gopass://")).unwrap();
         assert_eq!(config.folder_prefix, None);
+    }
+
+    #[test]
+    fn missing_entry_is_recognized_from_show_and_rm() {
+        // Both subcommands report an absent entry, in their own words. Deleting
+        // an entry that is already gone has to be a no-op for either.
+        for stderr in [
+            "Error: failed to retrieve secret \"secretspec/p/default/API_KEY\": \
+             entry is not in the password store\n",
+            "Error: Secret \"secretspec/p/default/API_KEY\" does not exist\n",
+        ] {
+            assert!(is_missing_entry(stderr), "{stderr}");
+        }
+
+        for stderr in [
+            "Error: failed to decrypt: gpg: decryption failed: No secret key\n",
+            "Error: Store not initialized. Run gopass init.\n",
+            "",
+        ] {
+            assert!(!is_missing_entry(stderr), "{stderr}");
+        }
     }
 
     #[test]

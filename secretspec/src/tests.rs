@@ -1,6 +1,6 @@
 use crate::config::{
     Config, CredentialSource, GlobalConfig, GlobalDefaults, NativeAddress, ParseError, Profile,
-    Project, ProviderAlias, RequireReason, Resolved, Secret,
+    Project, ProviderAlias, ProviderCache, RequireReason, Resolved, Secret,
 };
 use crate::error::{Result, SecretSpecError};
 use crate::secrets::Secrets;
@@ -6626,6 +6626,7 @@ fn secrets_with_credential_alias(
         ProviderAlias {
             uri: target_uri.to_string(),
             credentials,
+            ..Default::default()
         },
     )]));
     Secrets::new(config, None, None, None)
@@ -6890,6 +6891,7 @@ fn credential_chain_is_limited_to_one_hop() {
                     "access_token".to_string(),
                     CredentialSource::from("keyring"),
                 )]),
+                ..Default::default()
             },
         ),
         (
@@ -6900,6 +6902,7 @@ fn credential_chain_is_limited_to_one_hop() {
                     "access_token".to_string(),
                     CredentialSource::from("chained"),
                 )]),
+                ..Default::default()
             },
         ),
     ]));
@@ -8240,4 +8243,745 @@ secrets = ["DERIVED"]
         let resolved = validated.unwrap();
         assert!(!resolved.resolved.secrets.contains_key("AWS_KEY"));
     }
+}
+/// A `myprovider` cached route over dotenv-backed sources, cached in
+/// `cache_uri`. Sources are named `source0`, `source1`, ... in order.
+fn cached_providers(
+    source_paths: &[&Path],
+    cache_uri: &str,
+    max_age: &str,
+) -> HashMap<String, ProviderAlias> {
+    let mut providers = HashMap::new();
+    let mut fallback = Vec::new();
+    for (index, path) in source_paths.iter().enumerate() {
+        let alias = format!("source{index}");
+        fallback.push(alias.clone());
+        providers.insert(
+            alias,
+            ProviderAlias::from(format!("dotenv://{}", path.display())),
+        );
+    }
+    providers.insert("local".to_string(), ProviderAlias::from(cache_uri));
+    providers.insert(
+        "myprovider".to_string(),
+        ProviderAlias::cached(fallback, ProviderCache::new("local", max_age).unwrap()).unwrap(),
+    );
+    providers
+}
+
+/// [`cached_providers`] with the cache in a dotenv file of its own.
+fn cached_dotenv_providers(
+    source_paths: &[&Path],
+    cache_path: &Path,
+    max_age: &str,
+) -> HashMap<String, ProviderAlias> {
+    cached_providers(
+        source_paths,
+        &format!("dotenv://{}", cache_path.display()),
+        max_age,
+    )
+}
+
+/// A `Secrets` over one `API_KEY` on the `myprovider` cached route.
+///
+/// `project` names the project the secret is addressed under, so a test using
+/// the process-global `memtest`/`failwrite` store can keep its entries to itself.
+fn cached_secrets_with(project: &str, providers: HashMap<String, ProviderAlias>) -> Secrets {
+    let mut config = resolve_test_config(HashMap::from([(
+        "API_KEY".to_string(),
+        Secret {
+            providers: Some(vec!["myprovider".to_string()]),
+            ..Default::default()
+        },
+    )]));
+    config.project.name = project.to_string();
+    config.providers = Some(providers);
+    Secrets::new(config, None, None, None)
+}
+
+fn cached_dotenv_secrets(source_paths: &[&Path], cache_path: &Path, max_age: &str) -> Secrets {
+    cached_secrets_with(
+        "resolve-test",
+        cached_dotenv_providers(source_paths, cache_path, max_age),
+    )
+}
+
+/// A profile-aware in-memory authoritative store with a shared flat dotenv
+/// cache. This combination exercises the namespace the cache envelope itself
+/// must preserve.
+fn cached_memtest_providers(cache_path: &Path) -> HashMap<String, ProviderAlias> {
+    HashMap::from([
+        ("source".to_string(), ProviderAlias::from("memtest://")),
+        (
+            "local".to_string(),
+            ProviderAlias::from(format!("dotenv://{}", cache_path.display())),
+        ),
+        (
+            "myprovider".to_string(),
+            ProviderAlias::cached(
+                vec!["source".to_string()],
+                ProviderCache::new("local", "8h").unwrap(),
+            )
+            .unwrap(),
+        ),
+    ])
+}
+
+fn resolved_value(secrets: &Secrets, name: &str) -> String {
+    secrets.resolve().unwrap().secrets[name]
+        .value
+        .clone()
+        .expect("inline resolved value")
+}
+
+#[test]
+fn a_cached_default_provider_reports_the_store_it_reads_first() {
+    let _env = scrub_resolution_env();
+    // The report names the user-global default provider when no secret picked a
+    // store of its own. A cached alias is a route and cannot be constructed, so
+    // reporting has to name the store it reads first instead of failing a
+    // report that needed no provider at all.
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    let mut config =
+        resolve_test_config(HashMap::from([("API_KEY".to_string(), Secret::default())]));
+    config.providers = Some(cached_dotenv_providers(&[&source], &cache, "1h"));
+    let mut global = global_config_with_aliases(&[]);
+    global.defaults.provider = Some("myprovider".to_string());
+    let secrets = Secrets::new(config, Some(global), None, None);
+
+    let report = secrets.report().unwrap();
+    assert_eq!(report.provider, format!("dotenv://{}", source.display()));
+}
+
+#[test]
+fn cached_route_hits_cache_refreshes_after_clear_and_survives_source_loss() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote-1\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "8h");
+
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-1");
+    assert!(cache.exists(), "the first source hit should populate cache");
+
+    fs::write(&source, "API_KEY=remote-2\n").unwrap();
+    assert_eq!(
+        resolved_value(&secrets, "API_KEY"),
+        "remote-1",
+        "a fresh cache hit wins over the changed source"
+    );
+
+    assert_eq!(secrets.clear_cache(Some("API_KEY")).unwrap(), 1);
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-2");
+
+    fs::remove_file(&source).unwrap();
+    fs::create_dir(&source).unwrap();
+    assert_eq!(
+        resolved_value(&secrets, "API_KEY"),
+        "remote-2",
+        "a fresh hit must not contact the now-broken authoritative provider"
+    );
+}
+
+#[test]
+fn cached_route_walks_fallback_in_order_and_caches_the_answer() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let missing = temp.path().join("missing.env");
+    let fallback = temp.path().join("fallback.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&fallback, "API_KEY=from-fallback\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&missing, &fallback], &cache, "1h");
+
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "from-fallback");
+    fs::remove_file(&fallback).unwrap();
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "from-fallback");
+}
+
+#[test]
+fn expired_cache_entry_falls_back_and_refreshes() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote-1\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "8h");
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-1");
+
+    backdate_cache_entry(&cache, "resolve-test", "API_KEY");
+
+    fs::write(&source, "API_KEY=remote-2\n").unwrap();
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-2");
+}
+
+#[test]
+fn value_free_report_does_not_populate_cache() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "1h");
+
+    let report = secrets.report().unwrap();
+    assert!(report.all_required_present());
+    assert!(
+        !cache.exists(),
+        "value-free resolution must not create a cache entry"
+    );
+}
+
+#[test]
+fn set_writes_authoritative_provider_then_refreshes_cache() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "1h");
+
+    secrets.set("API_KEY", Some("written".to_string())).unwrap();
+    let source_value = dotenvy::from_path_iter(&source)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    assert_eq!(source_value, ("API_KEY".to_string(), "written".to_string()));
+    fs::remove_file(&source).unwrap();
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "written");
+}
+
+#[test]
+fn a_damaged_entry_of_our_own_is_replaced() {
+    let _env = scrub_resolution_env();
+    // An entry carrying the ownership marker but no readable payload — a
+    // truncated write — is unmistakably SecretSpec's, so it is safe to replace.
+    // That is the whole reason the marker exists: without it this case is
+    // indistinguishable from a value someone else stored, and recovering from
+    // corruption would mean risking their data.
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote-1\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "1h");
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-1");
+
+    let marker = crate::secrets::CACHE_ENVELOPE_MARKER;
+    write_cache_entry(
+        &cache,
+        "resolve-test",
+        "API_KEY",
+        &format!("{marker}{{trunc"),
+    );
+    fs::write(&source, "API_KEY=remote-2\n").unwrap();
+
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-2");
+    let refreshed = stored_cache_entry(&cache).expect("a replacement entry");
+    assert!(
+        refreshed
+            .strip_prefix(marker)
+            .is_some_and(|payload| { serde_json::from_str::<serde_json::Value>(payload).is_ok() }),
+        "{refreshed}"
+    );
+}
+
+#[test]
+fn changed_authoritative_route_invalidates_existing_cache() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source_a = temp.path().join("source-a.env");
+    let source_b = temp.path().join("source-b.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source_a, "API_KEY=from-a\n").unwrap();
+    fs::write(&source_b, "API_KEY=from-b\n").unwrap();
+
+    let first = cached_dotenv_secrets(&[&source_a], &cache, "1h");
+    assert_eq!(resolved_value(&first, "API_KEY"), "from-a");
+
+    let changed = cached_dotenv_secrets(&[&source_b], &cache, "1h");
+    assert_eq!(
+        resolved_value(&changed, "API_KEY"),
+        "from-b",
+        "the cache must not survive a change to its authoritative provider route"
+    );
+}
+
+#[test]
+fn shared_flat_cache_does_not_cross_projects() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let cache = temp.path().join("cache.env");
+    let providers = cached_memtest_providers(&cache);
+    let project_a = cached_secrets_with("cache-project-a", providers.clone());
+    let project_b = cached_secrets_with("cache-project-b", providers);
+
+    project_a
+        .set("API_KEY", Some("from-project-a".to_string()))
+        .unwrap();
+    project_b
+        .set("API_KEY", Some("from-project-b".to_string()))
+        .unwrap();
+
+    assert_eq!(
+        resolved_value(&project_a, "API_KEY"),
+        "from-project-a",
+        "a shared flat cache must reject another project's envelope"
+    );
+}
+
+#[test]
+fn shared_flat_cache_does_not_cross_profiles() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let cache = temp.path().join("cache.env");
+    let mut config = resolve_test_config(HashMap::from([(
+        "API_KEY".to_string(),
+        Secret {
+            providers: Some(vec!["myprovider".to_string()]),
+            ..Default::default()
+        },
+    )]));
+    config.project.name = "cache-profile-test".to_string();
+    config
+        .profiles
+        .insert("production".to_string(), config.profiles["default"].clone());
+    config.providers = Some(cached_memtest_providers(&cache));
+    let mut secrets = Secrets::new(config, None, None, None);
+
+    secrets
+        .set("API_KEY", Some("from-default".to_string()))
+        .unwrap();
+    secrets.set_profile("production");
+    secrets
+        .set("API_KEY", Some("from-production".to_string()))
+        .unwrap();
+    secrets.set_profile("default");
+
+    assert_eq!(
+        resolved_value(&secrets, "API_KEY"),
+        "from-default",
+        "a shared flat cache must reject another profile's envelope"
+    );
+}
+
+#[test]
+fn cache_write_failure_does_not_hide_authoritative_value() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+    // A cache whose writes always fail: the value still resolves from the
+    // authoritative source, the failure is only a warning.
+    let secrets = cached_secrets_with(
+        "cache-unwritable-test",
+        cached_providers(&[&source], "failwrite://", "1h"),
+    );
+
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote");
+}
+
+/// Rewrite a dotenv-backed cache entry's write time, so it reads as expired.
+fn backdate_cache_entry(cache: &Path, project: &str, name: &str) {
+    let marker = crate::secrets::CACHE_ENVELOPE_MARKER;
+    let (_, stored) = dotenvy::from_path_iter(cache)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    let payload = stored
+        .strip_prefix(marker)
+        .expect("a cache entry carries the ownership marker");
+    let mut envelope: serde_json::Value = serde_json::from_str(payload).unwrap();
+    envelope["cached_at"] = serde_json::json!(0);
+    write_cache_entry(
+        cache,
+        project,
+        name,
+        &format!("{marker}{}", serde_json::to_string(&envelope).unwrap()),
+    );
+}
+
+/// Store `value` verbatim at a dotenv-backed cache's address for `name`.
+fn write_cache_entry(cache: &Path, project: &str, name: &str, value: &str) {
+    let provider = crate::provider::provider_from_spec(
+        &format!("dotenv://{}", cache.display()),
+        crate::provider::ProviderCredentials::new(),
+    )
+    .unwrap();
+    provider
+        .set(
+            crate::provider::Address::convention(project, "default", name),
+            &secrecy::SecretString::new(value.into()),
+        )
+        .unwrap();
+}
+
+#[test]
+fn an_expired_entry_is_dropped_even_when_nothing_replaces_it() {
+    let _env = scrub_resolution_env();
+    // A store that cannot expire values leaves that to SecretSpec, and a refresh
+    // only overwrites an entry when the authoritative read succeeds on a pass
+    // that materializes values. Neither holds here — the source is gone and the
+    // pass is value-free — so without eviction the expired plaintext would sit
+    // in the cache until some later command happened to overwrite it.
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "8h");
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote");
+
+    backdate_cache_entry(&cache, "resolve-test", "API_KEY");
+    fs::remove_file(&source).unwrap();
+    secrets.report().unwrap();
+
+    assert!(
+        !fs::read_to_string(&cache).unwrap().contains("API_KEY"),
+        "an entry no read can serve must not keep its plaintext"
+    );
+}
+
+#[test]
+fn a_cache_asks_its_store_to_expire_the_entry() {
+    let _env = scrub_resolution_env();
+    // A store that can expire a value on its own bounds how long a copy of
+    // another store's secret exists even if secretspec never runs again, so the
+    // window the alias declares has to reach the provider.
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+    let secrets = cached_secrets_with(
+        "cache-expiry-test",
+        cached_providers(&[&source], "expiring://", "8h"),
+    );
+
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote");
+    assert_eq!(
+        crate::provider::tests::recorded_expiry("cache-expiry-test/default/API_KEY"),
+        Some(std::time::Duration::from_secs(8 * 60 * 60))
+    );
+}
+
+#[test]
+fn a_cache_that_cannot_delete_is_refused() {
+    let _env = scrub_resolution_env();
+    // Reads would work, so nothing would surface the problem until an entry
+    // needed dropping — by which point a stale value has already been served.
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+    let secrets = cached_secrets_with(
+        "cache-undeletable-test",
+        cached_providers(&[&source], "env://", "1h"),
+    );
+
+    let message = secrets.resolve().unwrap_err().to_string();
+    assert!(message.contains("cannot delete secrets"), "{message}");
+}
+
+#[test]
+fn a_write_that_bypasses_the_cache_invalidates_it() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote-1\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "8h");
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-1");
+
+    // The documented escape hatch: name the leaf to skip the cached route. The
+    // authoritative value it writes supersedes the cache entry, which must not
+    // outlive it for the rest of the freshness window.
+    let mut direct = cached_dotenv_secrets(&[&source], &cache, "8h");
+    direct.set_provider("source0");
+    direct.set("API_KEY", Some("remote-2".to_string())).unwrap();
+
+    assert_eq!(
+        resolved_value(&secrets, "API_KEY"),
+        "remote-2",
+        "a write that bypassed the cache must invalidate what it superseded"
+    );
+}
+
+#[test]
+fn a_failed_cache_refresh_drops_the_superseded_entry() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    fs::write(&source, "API_KEY=remote-1\n").unwrap();
+    // `memtest` and `failwrite` share one in-memory store, and the second always
+    // refuses writes: a refresh through it fails while the entry it should have
+    // replaced is still readable through the first.
+    let project = "cache-refresh-failure-test";
+    let cached = cached_secrets_with(project, cached_providers(&[&source], "memtest://", "8h"));
+    let unwritable_cache =
+        cached_secrets_with(project, cached_providers(&[&source], "failwrite://", "8h"));
+    assert_eq!(resolved_value(&cached, "API_KEY"), "remote-1");
+
+    unwritable_cache
+        .set("API_KEY", Some("remote-2".to_string()))
+        .unwrap();
+
+    assert_eq!(
+        resolved_value(&cached, "API_KEY"),
+        "remote-2",
+        "an entry the refresh could not replace must be dropped, not served"
+    );
+}
+
+#[test]
+fn cache_construction_failure_drops_the_superseded_entry() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let credential = temp.path().join("cache-credential.env");
+    fs::write(&source, "API_KEY=remote-1\n").unwrap();
+    fs::write(&credential, "test_token=available\n").unwrap();
+
+    let project = "cache-construction-failure-test";
+    let providers = || {
+        let mut providers = cached_providers(&[&source], "memtest://", "8h");
+        providers.insert(
+            "local".to_string(),
+            ProviderAlias {
+                uri: "memtest://".to_string(),
+                credentials: HashMap::from([(
+                    "test_token".to_string(),
+                    CredentialSource::from(format!("dotenv://{}", credential.display())),
+                )]),
+                ..Default::default()
+            },
+        );
+        providers
+    };
+
+    // Populate a fresh envelope while the cache credential is available.
+    let populated = cached_secrets_with(project, providers());
+    assert_eq!(resolved_value(&populated, "API_KEY"), "remote-1");
+
+    // A new session cannot construct the credential-backed cache, but can read
+    // the newer authoritative value. The failed refresh must remediate the old
+    // envelope instead of silently leaving it fresh and serveable.
+    fs::write(&source, "API_KEY=remote-2\n").unwrap();
+    fs::remove_file(&credential).unwrap();
+    fs::create_dir(&credential).unwrap();
+    let unavailable = cached_secrets_with(project, providers());
+    assert_eq!(resolved_value(&unavailable, "API_KEY"), "remote-2");
+
+    fs::remove_dir(&credential).unwrap();
+    fs::write(&credential, "test_token=available-again\n").unwrap();
+    let recovered = cached_secrets_with(project, providers());
+    assert_eq!(
+        resolved_value(&recovered, "API_KEY"),
+        "remote-2",
+        "credential recovery must not revive the superseded cache value"
+    );
+}
+
+/// The value a cache store holds at `API_KEY`'s cache address, or `None`.
+fn stored_cache_entry(cache: &Path) -> Option<String> {
+    dotenvy::from_path_iter(cache).unwrap().find_map(|item| {
+        let (key, value) = item.unwrap();
+        (key == "API_KEY").then_some(value)
+    })
+}
+
+#[test]
+fn a_value_secretspec_did_not_write_is_never_deleted() {
+    let _env = scrub_resolution_env();
+    // A cache pointed at a store holding other things — a misconfiguration, or a
+    // dotenv file someone keeps by hand — must not have those values treated as
+    // cache entries. Reading skips them and clearing refuses them, because
+    // deleting on the strength of the address alone is data loss.
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+    fs::write(&cache, "API_KEY=someone-elses-value\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "8h");
+
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote");
+    let error = secrets
+        .clear_cache(Some("API_KEY"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("not a SecretSpec cache entry"), "{error}");
+    assert_eq!(
+        stored_cache_entry(&cache).as_deref(),
+        Some("someone-elses-value"),
+        "a value SecretSpec did not write must survive both the read and the clear"
+    );
+}
+
+#[test]
+fn another_projects_cache_entry_is_never_deleted() {
+    let _env = scrub_resolution_env();
+    // A flat store gives every project the same key for a given secret name, so
+    // an entry found there may be another project's. Clearing must say so rather
+    // than delete it.
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+
+    let providers = cached_dotenv_providers(&[&source], &cache, "8h");
+    let theirs = cached_secrets_with("their-project", providers.clone());
+    assert_eq!(resolved_value(&theirs, "API_KEY"), "remote");
+    let entry = stored_cache_entry(&cache).expect("their cache entry");
+
+    let ours = cached_secrets_with("our-project", providers);
+    let error = ours.clear_cache(Some("API_KEY")).unwrap_err().to_string();
+    assert!(error.contains("their-project/default"), "{error}");
+    assert_eq!(
+        stored_cache_entry(&cache).as_deref(),
+        Some(entry.as_str()),
+        "another project's entry must survive our clear"
+    );
+}
+
+#[test]
+fn cached_reads_serve_every_secret_across_cache_stores() {
+    let _env = scrub_resolution_env();
+    // Caches are read one store at a time rather than one secret at a time, so
+    // two secrets sharing a cache and a third in its own store all have to come
+    // back from the batched read, each matched to the entry it planned.
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let shared_cache = temp.path().join("shared-cache.env");
+    let other_cache = temp.path().join("other-cache.env");
+    fs::write(&source, "A_KEY=a\nB_KEY=b\nC_KEY=c\n").unwrap();
+
+    let cached_secret = |alias: &str| Secret {
+        providers: Some(vec![alias.to_string()]),
+        ..Default::default()
+    };
+    let mut config = resolve_test_config(HashMap::from([
+        ("A_KEY".to_string(), cached_secret("myprovider")),
+        ("B_KEY".to_string(), cached_secret("myprovider")),
+        ("C_KEY".to_string(), cached_secret("otherprovider")),
+    ]));
+    let mut providers = cached_dotenv_providers(&[&source], &shared_cache, "1h");
+    providers.insert(
+        "other_local".to_string(),
+        ProviderAlias::from(format!("dotenv://{}", other_cache.display())),
+    );
+    providers.insert(
+        "otherprovider".to_string(),
+        ProviderAlias::cached(
+            vec!["source0".to_string()],
+            ProviderCache::new("other_local", "1h").unwrap(),
+        )
+        .unwrap(),
+    );
+    config.providers = Some(providers);
+    let secrets = Secrets::new(config, None, None, None);
+
+    for (name, value) in [("A_KEY", "a"), ("B_KEY", "b"), ("C_KEY", "c")] {
+        assert_eq!(resolved_value(&secrets, name), value);
+    }
+
+    // With the source gone, only the caches can answer.
+    fs::remove_file(&source).unwrap();
+    for (name, value) in [("A_KEY", "a"), ("B_KEY", "b"), ("C_KEY", "c")] {
+        assert_eq!(resolved_value(&secrets, name), value, "{name} from cache");
+    }
+}
+
+#[test]
+fn cache_clear_counts_only_the_entries_it_removed() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "1h");
+
+    assert_eq!(
+        secrets.clear_cache(None).unwrap(),
+        0,
+        "nothing is cached yet, so nothing was cleared"
+    );
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote");
+    assert_eq!(secrets.clear_cache(None).unwrap(), 1);
+    assert_eq!(
+        secrets.clear_cache(None).unwrap(),
+        0,
+        "clearing an already-cleared cache removes nothing"
+    );
+}
+
+#[test]
+fn cache_clear_ignores_a_provider_override() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote-1\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "8h");
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-1");
+
+    // An exported `SECRETSPEC_PROVIDER` (or `--provider`) collapses the route and
+    // drops its cache. Cache maintenance has to look past that, or clearing would
+    // silently do nothing in exactly the shells where it is most often run.
+    let mut overridden = cached_dotenv_secrets(&[&source], &cache, "8h");
+    overridden.set_provider("source0");
+    assert_eq!(overridden.clear_cache(Some("API_KEY")).unwrap(), 1);
+
+    fs::write(&source, "API_KEY=remote-2\n").unwrap();
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-2");
+}
+
+#[test]
+fn cache_clear_clears_what_it_can_before_reporting_a_failure() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "A_KEY=a\nB_KEY=b\n").unwrap();
+    let mut config = resolve_test_config(HashMap::from([
+        (
+            "A_KEY".to_string(),
+            Secret {
+                providers: Some(vec!["unclearable".to_string()]),
+                ..Default::default()
+            },
+        ),
+        (
+            "B_KEY".to_string(),
+            Secret {
+                providers: Some(vec!["myprovider".to_string()]),
+                ..Default::default()
+            },
+        ),
+    ]));
+    let mut providers = cached_dotenv_providers(&[&source], &cache, "1h");
+    // A store that claims deletion but fails at it — a locked keychain, an
+    // unreachable store — is what a declared capability cannot rule out. A_KEY
+    // is swept first, being first alphabetically, so its failure comes before
+    // B_KEY's entry has been cleared.
+    providers.insert(
+        "unreachable".to_string(),
+        ProviderAlias::from("faildelete://"),
+    );
+    providers.insert(
+        "unclearable".to_string(),
+        ProviderAlias::cached(
+            vec!["source0".to_string()],
+            ProviderCache::new("unreachable", "1h").unwrap(),
+        )
+        .unwrap(),
+    );
+    config.providers = Some(providers);
+    let secrets = Secrets::new(config, None, None, None);
+    assert_eq!(resolved_value(&secrets, "B_KEY"), "b");
+
+    let message = secrets.clear_cache(None).unwrap_err().to_string();
+    assert!(message.contains("cleared 1 cache entry"), "{message}");
+    assert!(message.contains("A_KEY"), "{message}");
+    assert!(
+        !fs::read_to_string(&cache).unwrap().contains("B_KEY"),
+        "one unclearable cache must not leave the rest of the profile cached"
+    );
 }

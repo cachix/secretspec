@@ -83,6 +83,7 @@ crate::register_provider! {
     description: "Unix password manager with GPG encryption",
     schemes: ["pass"],
     examples: ["pass://", "pass://secretspec/shared/{profile}/{key}", "pass://?store_dir=/path/to/store"],
+    deletes: true,
 }
 
 impl PassProvider {
@@ -277,6 +278,29 @@ impl Provider for PassProvider {
         }
 
         Ok(())
+    }
+
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        let entry_name = super::flat_item(self, addr)?;
+        let output = self
+            .command()
+            .args(["rm", "-f", &entry_name])
+            .output()
+            .map_err(|error| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to execute 'pass' command: {error}. Is pass installed?"
+                ))
+            })?;
+        if output.status.success() {
+            return Ok(true);
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if output.status.code() == Some(1) && stderr.contains("is not in the password store") {
+            return Ok(false);
+        }
+        Err(SecretSpecError::ProviderOperationFailed(format!(
+            "pass command failed: {stderr}"
+        )))
     }
 }
 

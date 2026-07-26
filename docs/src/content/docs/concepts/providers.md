@@ -78,51 +78,6 @@ Each provider page starts with a minimal working example, then covers setup,
 project configuration, storage conventions, existing provider-native secrets,
 and CI/CD where applicable.
 
-## How SecretSpec selects a provider
-
-SecretSpec resolves the provider for each secret in the following order:
-
-1. The `--provider` command-line option.
-2. The `SECRETSPEC_PROVIDER` environment variable.
-3. The secret's effective `providers` list after profile inheritance and
-   `[profiles.<name>.defaults]` are applied.
-4. The default provider in the user configuration.
-
-The first two options are explicit overrides. They route every secret to one
-provider and disable any configured fallback chain for that command.
-
-If no override is set, SecretSpec tries the effective `providers` list from
-left to right until a provider returns the secret. If the secret has no
-`providers` list, SecretSpec uses the user-level default provider.
-
-```toml title="secretspec.toml"
-[providers]
-prod_vault = "onepassword://Production"
-local = "keyring://"
-
-[profiles.production.defaults]
-providers = ["prod_vault", "local"]
-
-[profiles.production]
-# Uses the profile default: prod_vault, then local.
-DATABASE_URL = { description = "Production database" }
-
-# Overrides the profile default and reads only from the environment.
-DEPLOY_TOKEN = { description = "Deployment token", providers = ["env"] }
-```
-
-The fallback order applies to reads. Writes go only to the first provider in
-the effective list. In the example above, SecretSpec reads `DATABASE_URL` from
-`prod_vault` first and falls back to `local` only when the secret is not found;
-it writes `DATABASE_URL` only to `prod_vault`.
-
-:::note
-A secret's [`ref`](/reference/configuration/#secret-references) changes the
-address looked up inside a provider, not the provider selection rules. Explicit
-overrides and fallback chains work the same way for referenced secrets and
-convention-based secrets.
-:::
-
 ## Configure the default provider
 
 Run the interactive configuration command to select the user-global provider
@@ -303,6 +258,10 @@ Provider credentials follow these rules:
 
 ## Next steps
 
+- Learn how [Provider fallback](/concepts/providers/fallback/) selects and
+  orders sources.
+- Cache slow remote routes with [Provider caching](/concepts/providers/caching/)
+  (0.17+).
 - Review the URI and authentication details for an individual provider in the
   [Providers](/providers/keyring/) section.
 - Learn how [Profiles](/concepts/profiles/) apply provider defaults to an

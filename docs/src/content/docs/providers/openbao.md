@@ -16,7 +16,7 @@ The `openbao` provider is added in SecretSpec 0.17.
 | --- | --- |
 | Provider | `openbao` (0.17+) |
 | URI | `openbao://[namespace@]host[:port][/mount][?options]` |
-| Access | Read and write; secret references are read-only |
+| Access | Read, write, and delete; secret references are read-only |
 | Best for | Open-source, policy-controlled secret infrastructure |
 | Authentication | Token, AppRole, or JWT/OIDC |
 | Build feature | `openbao` (0.17+) |
@@ -148,6 +148,20 @@ configured mount, with its value in a field named `value`.
 
 For KV v2, `DATABASE_URL` for project `myapp` and profile `production` is read
 from `GET /v1/secret/data/secretspec/myapp/production/DATABASE_URL`.
+
+## Provider caching
+
+A KV v2 mount can hold a [cached provider route's](/concepts/providers/caching/)
+entries. OpenBao expires them itself: the cache's `max_age` is written to the
+path's `delete_version_after` metadata, so a cached copy of another store's
+secret stops existing at that age even if SecretSpec never runs again. This
+needs write access to the path's metadata as well as its data, and KV v1 is
+refused as a cache because it has no expiry.
+
+Deleting — [`cache clear`](/reference/cli/#cache-clear-017) and automatic
+invalidation — removes the KV path's metadata and every version, and is confined
+to entries SecretSpec owns: a secret reference is never deleted, since the path
+it names is managed outside SecretSpec.
 
 ## Use existing secrets
 

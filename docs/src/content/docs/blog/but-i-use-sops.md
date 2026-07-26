@@ -69,7 +69,7 @@ calls and secret names stay the same.
 
 The same resolver provides [profiles](/concepts/profiles/),
 [required-secret checks](/reference/configuration/#secret-variable-options),
-[per-secret provider routing and fallback](/concepts/providers/#how-secretspec-selects-a-provider),
+[per-secret provider routing and fallback](/concepts/providers/fallback/),
 [provider-native references](/concepts/references/),
 [temporary files](/reference/configuration/#as_path-option), and
 [metadata-only audit logs](/concepts/audit/). You build the integration once,

@@ -246,6 +246,7 @@ secretspec check                  # Verify all secrets are set
 secretspec set KEY               # Set a secret interactively
 secretspec get KEY               # Retrieve a secret
 secretspec import PROVIDER       # Import secrets from another provider
+secretspec cache clear [KEY]     # Clear cached provider values (0.17+)
 
 # Run with secrets
 secretspec run -- command        # Run command with secrets as env vars

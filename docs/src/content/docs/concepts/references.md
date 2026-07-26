@@ -59,7 +59,7 @@ exactly how each provider maps the coordinates.
 
 A `ref` supplies naming only. It does not pin the secret to a particular store.
 Which provider actually resolves the coordinates follows the ordinary
-[provider resolution order](/concepts/providers/): a `--provider` override, then
+[provider resolution order](/concepts/providers/fallback/): a `--provider` override, then
 the secret's `providers` chain, then the profile and global defaults.
 
 This is the difference from pasting a store URL into your config. Because the

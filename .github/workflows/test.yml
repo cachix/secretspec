@@ -75,18 +75,18 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v5
-    - name: Download SOPS 3.13.1
+    - name: Download SOPS 3.13.2
       uses: robinraju/release-downloader@28fc21f50d76778e7023361aa1f863e717d3d56f
       with:
         repository: getsops/sops
-        tag: v3.13.1
-        fileName: sops-v3.13.1.amd64.exe
+        tag: v3.13.2
+        fileName: sops-v3.13.2.amd64.exe
         out-file-path: sops-bin
 
     - name: Add SOPS to PATH
       shell: pwsh
       run: |
-        Rename-Item -Path "sops-bin/sops-v3.13.1.amd64.exe" -NewName "sops.exe"
+        Rename-Item -Path "sops-bin/sops-v3.13.2.amd64.exe" -NewName "sops.exe"
         (Resolve-Path "sops-bin").Path |
           Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
     - name: Install Rust

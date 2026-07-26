@@ -1,6 +1,7 @@
 //! Core secrets management functionality
 
 use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
+use crate::cache::{self, CacheEntryStatus, CacheOwnership};
 use crate::config::{
     Config, CredentialSource, GlobalConfig, NativeAddress, Profile, ProviderAlias, RequireReason,
     Resolved,
@@ -13,7 +14,6 @@ use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
 use crate::resolve::{RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource};
 use crate::validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
 use colored::Colorize;
-use secrecy::zeroize::Zeroizing;
 use secrecy::{ExposeSecret, SecretString};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
@@ -22,7 +22,7 @@ use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 /// Format the human-facing name and optional description used by status output.
 ///
@@ -99,62 +99,6 @@ fn sorted_credential_entries(
     entries
 }
 
-/// Marker every cache entry starts with, identifying the value as SecretSpec's
-/// own and naming the format version — without parsing it.
-///
-/// Ownership has to be decidable even when the payload is not readable. A
-/// truncated write leaves something only SecretSpec could have put there, which
-/// is safe to replace; a value with no marker belongs to someone else and must
-/// never be touched. Parsing alone cannot tell those two apart, and guessing
-/// wrong either wedges the cache or destroys another program's data.
-pub(crate) const CACHE_ENVELOPE_MARKER: &str = "secretspec-cache-v2:";
-
-/// Value stored inside the configured cache provider. The provider remains
-/// responsible for encryption; the envelope adds freshness, route invalidation,
-/// and ownership metadata.
-///
-/// The entry says who owns it. A cache store may be shared — several projects
-/// and profiles can address the same flat dotenv file, and a store may hold
-/// values SecretSpec never wrote — so nothing may be deleted on the strength of
-/// its address alone. `project` and `profile` are plaintext because they are what
-/// makes ownership decidable without the manifest that created the entry, which
-/// is exactly the case orphan discovery has to handle.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct CacheEnvelope {
-    /// Project the cached secret belongs to.
-    project: String,
-    /// Profile the cached secret was resolved under.
-    profile: String,
-    cached_at: u64,
-    route_fingerprint: String,
-    /// The cached plaintext. Held in a zeroizing buffer so the cache path leaves
-    /// no copy of the secret behind in freed heap, like every other value buffer
-    /// in the resolver.
-    #[serde(with = "zeroizing_string")]
-    value: Zeroizing<String>,
-}
-
-/// Serde for the envelope's plaintext, keeping it in a zeroizing buffer on both
-/// directions. Serialization borrows the buffer, and deserialization *moves*
-/// serde's `String` into one, so no unprotected allocation ever holds the value.
-mod zeroizing_string {
-    use secrecy::zeroize::Zeroizing;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub(super) fn serialize<S: Serializer>(
-        value: &Zeroizing<String>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(value)
-    }
-
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Zeroizing<String>, D::Error> {
-        String::deserialize(deserializer).map(Zeroizing::new)
-    }
-}
-
 /// Warn that a cache operation failed. A cache only accelerates a route, so its
 /// failures are reported and never turn a successful operation into an error.
 fn cache_warning(secret_name: &str, message: impl std::fmt::Display) {
@@ -186,43 +130,6 @@ fn group_names(group: &[&PlannedSecret]) -> String {
         .join(", ")
 }
 
-/// Who wrote the value sitting at a cache address.
-///
-/// A cache store can be shared: a flat dotenv file gives every project and
-/// profile the same key for a given secret name, and a store may hold values
-/// SecretSpec never wrote at all. So an address is not evidence of ownership, and
-/// this is the one place that decides it.
-enum EntryOwnership {
-    /// A cache entry this project and profile wrote.
-    Ours(CacheEnvelope),
-    /// A cache entry, but another project's or profile's. Never ours to change.
-    Foreign { project: String, profile: String },
-    /// Marked as SecretSpec's own, but not readable as this version's envelope:
-    /// a partially written entry, or one from another release. Ours to replace or
-    /// drop, never to serve.
-    OursUnreadable,
-    /// No marker, so SecretSpec did not write it. Never ours to change.
-    Unrecognized,
-}
-
-/// Classify the value at a cache address, trusting the marker rather than the
-/// address: an address says only where we would have put something.
-fn entry_ownership(stored: &SecretString, project: &str, profile: &str) -> EntryOwnership {
-    let Some(payload) = stored.expose_secret().strip_prefix(CACHE_ENVELOPE_MARKER) else {
-        return EntryOwnership::Unrecognized;
-    };
-    match serde_json::from_str::<CacheEnvelope>(payload) {
-        Ok(envelope) if envelope.project == project && envelope.profile == profile => {
-            EntryOwnership::Ours(envelope)
-        }
-        Ok(envelope) => EntryOwnership::Foreign {
-            project: envelope.project,
-            profile: envelope.profile,
-        },
-        Err(_) => EntryOwnership::OursUnreadable,
-    }
-}
-
 /// What a stored cache entry can do for the read that found it.
 enum CachedEntry {
     /// Fresh, and written for this route: serve it.
@@ -249,45 +156,39 @@ fn cached_entry(
     project: &str,
     profile: &str,
 ) -> CachedEntry {
-    let envelope = match entry_ownership(stored, project, profile) {
-        EntryOwnership::Ours(envelope) => envelope,
-        EntryOwnership::OursUnreadable => {
+    let route_fingerprint = planned.cache_fingerprint(cache, project, profile);
+    match cache::inspect_entry(
+        stored,
+        project,
+        profile,
+        &route_fingerprint,
+        cache.max_age_secs,
+    ) {
+        Ok(CacheEntryStatus::Fresh(value)) => CachedEntry::Fresh(value),
+        Ok(CacheEntryStatus::Stale) => CachedEntry::Stale,
+        Ok(CacheEntryStatus::OursUnreadable) => {
             cache_read_warning(&planned.name, "the cache entry could not be read");
-            return CachedEntry::Stale;
+            CachedEntry::Stale
         }
-        EntryOwnership::Foreign {
-            project, profile, ..
-        } => {
+        Ok(CacheEntryStatus::Foreign { project, profile }) => {
             cache_read_warning(
                 &planned.name,
                 format!("the cache holds {project}/{profile}'s entry at this address"),
             );
-            return CachedEntry::Foreign;
+            CachedEntry::Foreign
         }
-        EntryOwnership::Unrecognized => {
+        Ok(CacheEntryStatus::Unrecognized) => {
             cache_read_warning(
                 &planned.name,
                 "the cache holds a value SecretSpec did not write",
             );
-            return CachedEntry::Foreign;
+            CachedEntry::Foreign
         }
-    };
-    if envelope.route_fingerprint != planned.cache_fingerprint(cache, project, profile) {
-        return CachedEntry::Stale;
-    }
-    let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs(),
         Err(error) => {
             cache_read_warning(&planned.name, error);
-            return CachedEntry::Stale;
+            CachedEntry::Stale
         }
-    };
-    // A `cached_at` in the future means a clock moved: treat it as unusable
-    // rather than valid until it happens to fall inside the window.
-    if envelope.cached_at > now || now.saturating_sub(envelope.cached_at) > cache.max_age_secs {
-        return CachedEntry::Stale;
     }
-    CachedEntry::Fresh(SecretString::new(envelope.value.as_str().into()))
 }
 
 /// Convention-path profile segment for provider credentials. A provider's
@@ -1975,32 +1876,13 @@ impl Secrets {
             cache_warning(&planned.name, format!("not caching: {error}"));
             return;
         }
-        let cached_at = match SystemTime::now().duration_since(UNIX_EPOCH) {
-            Ok(duration) => duration.as_secs(),
-            Err(error) => {
-                self.remediate_failed_cache_refresh(
-                    planned,
-                    cache,
-                    profile,
-                    error,
-                    Some(provider.as_ref()),
-                );
-                return;
-            }
-        };
-        let envelope = CacheEnvelope {
-            project: self.config.project.name.clone(),
-            profile: profile.to_string(),
-            cached_at,
-            route_fingerprint: planned.cache_fingerprint(cache, &self.config.project.name, profile),
-            value: Zeroizing::new(value.expose_secret().to_string()),
-        };
-        // Both plaintext renderings of the envelope are held in buffers that
-        // zeroize on drop, matching how the rest of the resolver handles values.
-        let serialized = match serde_json::to_string(&envelope)
-            .map(|json| Zeroizing::new(format!("{CACHE_ENVELOPE_MARKER}{json}")))
-        {
-            Ok(serialized) => SecretString::new(serialized.as_str().into()),
+        let serialized = match cache::encode_entry(
+            &self.config.project.name,
+            profile,
+            planned.cache_fingerprint(cache, &self.config.project.name, profile),
+            value,
+        ) {
+            Ok(serialized) => serialized,
             Err(error) => {
                 self.remediate_failed_cache_refresh(
                     planned,
@@ -2127,15 +2009,15 @@ impl Secrets {
         let Ok(Some(stored)) = provider.get(self.cache_address(profile, name)) else {
             return Ok(());
         };
-        match entry_ownership(&stored, &self.config.project.name, profile) {
-            EntryOwnership::Ours(_) | EntryOwnership::OursUnreadable => Ok(()),
-            EntryOwnership::Foreign { project, profile } => {
+        match cache::ownership(&stored, &self.config.project.name, profile) {
+            CacheOwnership::Ours | CacheOwnership::OursUnreadable => Ok(()),
+            CacheOwnership::Foreign { project, profile } => {
                 Err(SecretSpecError::ProviderOperationFailed(format!(
                     "the cache holds {project}/{profile}'s entry for '{name}' at this address, so \
                      it is not ours to change. Give this project's cache a store or path of its own."
                 )))
             }
-            EntryOwnership::Unrecognized => Err(SecretSpecError::ProviderOperationFailed(format!(
+            CacheOwnership::Unrecognized => Err(SecretSpecError::ProviderOperationFailed(format!(
                 "the value stored for '{name}' is not a SecretSpec cache entry, so it is not ours \
                  to change. Check that the cache provider addresses a store only SecretSpec writes \
                  to."

@@ -8468,7 +8468,7 @@ fn a_damaged_entry_of_our_own_is_replaced() {
     let secrets = cached_dotenv_secrets(&[&source], &cache, "1h");
     assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-1");
 
-    let marker = crate::secrets::CACHE_ENVELOPE_MARKER;
+    let marker = crate::cache::CACHE_ENVELOPE_MARKER;
     write_cache_entry(
         &cache,
         "resolve-test",
@@ -8584,7 +8584,7 @@ fn cache_write_failure_does_not_hide_authoritative_value() {
 
 /// Rewrite a dotenv-backed cache entry's write time, so it reads as expired.
 fn backdate_cache_entry(cache: &Path, project: &str, name: &str) {
-    let marker = crate::secrets::CACHE_ENVELOPE_MARKER;
+    let marker = crate::cache::CACHE_ENVELOPE_MARKER;
     let (_, stored) = dotenvy::from_path_iter(cache)
         .unwrap()
         .next()

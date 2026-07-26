@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Cache reads, refreshes, and clears now share one ownership and freshness
+  policy, consistently handling expiration boundaries, clock rollback,
+  corrupted SecretSpec entries, and values owned by another project or profile.
 - Vault and OpenBao providers reuse one `reqwest::Client` per provider
   instance (same `OnceLock` pattern as Infisical) instead of building a fresh
   client on every get/set/login. Concurrent `get_many` of many secrets no

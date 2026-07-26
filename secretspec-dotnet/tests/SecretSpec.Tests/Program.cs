@@ -14,12 +14,16 @@ internal static class Program
         DATABASE_URL = { description = "DB", required = true }
         LOG_LEVEL = { description = "log", required = false, default = "info" }
         SENTRY_DSN = { description = "sentry", required = false }
+
+        [scopes.database]
+        secrets = ["DATABASE_URL"]
         """;
 
     private static readonly List<(string Name, Action Test)> Tests =
     [
         ("ABI version", TestAbiVersion),
         ("load values and provenance", TestLoad),
+        ("scoped resolution", TestScope),
         ("missing required exception", TestMissingRequired),
         ("invalid manifest exception", TestInvalidManifest),
         ("as_path cleanup", TestAsPathCleanup),
@@ -75,6 +79,22 @@ internal static class Program
 
         var fields = JsonNode.Parse(resolved.FieldsJson());
         Equal("postgres://db", fields?["DATABASE_URL"]?.GetValue<string>());
+    }
+
+    private static void TestScope()
+    {
+        using var project = Project.Create(
+            Manifest,
+            "DATABASE_URL=postgres://db\nSENTRY_DSN=https://sentry\n");
+        var builder = project.Builder().WithScope("database");
+
+        using var resolved = builder.Load();
+        Equal("database", resolved.Scope);
+        SequenceEqual(["DATABASE_URL"], resolved.Secrets.Keys);
+
+        var report = builder.Report();
+        Equal("database", report.Scope);
+        SequenceEqual(["DATABASE_URL"], report.Secrets.Select(secret => secret.Name));
     }
 
     private static void TestMissingRequired()

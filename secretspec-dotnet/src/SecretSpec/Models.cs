@@ -39,17 +39,21 @@ public sealed class Resolved : IDisposable
     internal Resolved(
         string provider,
         string profile,
+        string? scope,
         Dictionary<string, ResolvedSecret> secrets,
         IEnumerable<string> missingOptional)
     {
         Provider = provider;
         Profile = profile;
+        Scope = scope;
         Secrets = new ReadOnlyDictionary<string, ResolvedSecret>(secrets);
         MissingOptional = Array.AsReadOnly(missingOptional.ToArray());
     }
 
     public string Provider { get; }
     public string Profile { get; }
+    /// <summary>Selected manifest scope, or null for a full-profile resolve (0.17+).</summary>
+    public string? Scope { get; }
     public IReadOnlyDictionary<string, ResolvedSecret> Secrets { get; }
     public IReadOnlyList<string> MissingOptional { get; }
 
@@ -144,14 +148,21 @@ public sealed class SecretReport
 /// <summary>A value-free inventory/preflight snapshot.</summary>
 public sealed class ResolutionReport
 {
-    internal ResolutionReport(string provider, string profile, IEnumerable<SecretReport> secrets)
+    internal ResolutionReport(
+        string provider,
+        string profile,
+        string? scope,
+        IEnumerable<SecretReport> secrets)
     {
         Provider = provider;
         Profile = profile;
+        Scope = scope;
         Secrets = Array.AsReadOnly(secrets.ToArray());
     }
 
     public string Provider { get; }
     public string Profile { get; }
+    /// <summary>Selected manifest scope, or null for a full-profile report (0.17+).</summary>
+    public string? Scope { get; }
     public IReadOnlyList<SecretReport> Secrets { get; }
 }

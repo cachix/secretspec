@@ -61,4 +61,9 @@ extends = ["../../shared/base", "../../shared/database", "../../shared/auth"]
 - Shared ancestors are applied once, so diamond-shaped inheritance is supported
 - Each profile is merged independently
 - Profile `[defaults]` inherit field by field across source files
+- A child `[scopes.<name>]` completely replaces the parent scope of the same
+  name — its `secrets` list wins outright; the two lists are **not** unioned.
+  Scopes defined only in a parent are inherited. (Whole-value replacement is the
+  safe default for an allowlist: extending a config cannot silently widen a scope
+  the parent narrowed.) Available from SecretSpec 0.17.
 - Paths are relative to the containing `secretspec.toml` file

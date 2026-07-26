@@ -285,6 +285,14 @@ pub struct Config {
     /// into version control instead of replicating them on every machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub providers: Option<HashMap<String, ProviderAlias>>,
+    /// Named secret scopes: membership-only subsets of a profile's secrets, used
+    /// to resolve only what one service/task needs (`--scope api`) rather than the
+    /// whole profile. A scope never changes a secret's `required`/`default`/
+    /// providers or its storage address — it only narrows which secrets
+    /// participate in a resolution. Orthogonal to profiles: the resolved set is
+    /// the intersection of the merged profile and the scope's secret list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<HashMap<String, Scope>>,
 }
 
 impl Config {
@@ -348,7 +356,80 @@ impl Config {
             validate_compiled_profile(&compiled, profile_name)?;
         }
 
+        self.validate_scopes(&compiled)?;
+
         Ok(compiled)
+    }
+
+    /// Every secret named by a scope must be declared by at least one profile.
+    /// A scope is membership-only, so listing a name no profile declares can
+    /// never resolve to anything and is a configuration error (mirroring the
+    /// per-profile intersection: a scope's own list is validated against the
+    /// union of all profiles, while the *effective* set at runtime is the
+    /// intersection with the selected profile). Scope names are validated in
+    /// sorted order, and secrets within a scope in declaration order, so error
+    /// attribution is deterministic.
+    ///
+    /// The list's own shape is checked first. An empty scope is rejected rather
+    /// than accepted as "resolves to nothing": it contacts no provider, so
+    /// `check --scope` reports a clean `0 found, 0 missing` and `run --scope`
+    /// launches the command with every manifest secret scrubbed and none
+    /// injected — a green result that guarantees nothing. A blank or repeated
+    /// entry is likewise a typo with no meaning, not a subset worth resolving.
+    fn validate_scopes(&self, compiled: &CompiledManifest) -> Result<(), ParseError> {
+        let Some(scopes) = &self.scopes else {
+            return Ok(());
+        };
+
+        let declared: std::collections::BTreeSet<&str> = compiled
+            .profiles
+            .values()
+            .flat_map(|profile| profile.secrets.keys())
+            .map(String::as_str)
+            .collect();
+
+        let mut scope_names: Vec<&String> = scopes.keys().collect();
+        scope_names.sort();
+
+        for scope_name in scope_names {
+            if scope_name.trim().is_empty() {
+                return Err(ParseError::Validation(
+                    "Scope names cannot be empty".to_string(),
+                ));
+            }
+
+            let secrets = &scopes[scope_name].secrets;
+            if secrets.is_empty() {
+                return Err(ParseError::Validation(format!(
+                    "Scope '{}' lists no secrets; a scope must name at least one",
+                    scope_name
+                )));
+            }
+
+            let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+            for secret in secrets {
+                if secret.trim().is_empty() {
+                    return Err(ParseError::Validation(format!(
+                        "Scope '{}' lists an empty secret name",
+                        scope_name
+                    )));
+                }
+                if !seen.insert(secret.as_str()) {
+                    return Err(ParseError::Validation(format!(
+                        "Scope '{}' lists secret '{}' more than once",
+                        scope_name, secret
+                    )));
+                }
+                if !declared.contains(secret.as_str()) {
+                    return Err(ParseError::Validation(format!(
+                        "Scope '{}' references secret '{}', which is not declared in any profile",
+                        scope_name, secret
+                    )));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Get a profile by name.
@@ -386,6 +467,12 @@ impl Config {
             self.providers
                 .get_or_insert_with(HashMap::new)
                 .extend(later_providers);
+        }
+
+        if let Some(later_scopes) = later.scopes {
+            self.scopes
+                .get_or_insert_with(HashMap::new)
+                .extend(later_scopes);
         }
     }
 
@@ -859,6 +946,21 @@ pub struct Profile {
     /// Map of secret names to their configurations, flattened in TOML for cleaner syntax
     #[serde(flatten)]
     pub secrets: HashMap<String, Secret>,
+}
+
+/// A named, membership-only subset of a profile's secrets.
+///
+/// Scopes are orthogonal to profiles. A profile decides how a secret resolves
+/// (`required`, `default`, providers, references, generation, `as_path`, and the
+/// storage namespace); a scope only decides *which* secrets take part in a given
+/// resolution. Selecting `--scope api` resolves exactly the intersection of the
+/// merged profile and this scope's `secrets` list, so a single service loads only
+/// what it declares instead of the entire profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Scope {
+    /// The secret names that belong to this scope. Every name must be declared by
+    /// at least one profile; an unknown name is a configuration error.
+    pub secrets: Vec<String>,
 }
 
 /// Default configuration for a profile.
@@ -2046,6 +2148,7 @@ mod require_reason_tests {
             },
             profiles: HashMap::new(),
             providers: None,
+            scopes: None,
         };
 
         // `extends` folds least-specific (parent) into most-specific (child) via
@@ -2248,6 +2351,7 @@ mod validation_tests {
             },
             profiles,
             providers: None,
+            scopes: None,
         }
     }
 
@@ -3130,5 +3234,253 @@ API_KEY = { description = "key", required = true }
         assert_eq!(providers["keyring"], ProviderAlias::from("keyring://"));
         assert_eq!(providers["bws"].uri, "bws://proj");
         assert!(providers["bws"].credentials.contains_key("access_token"));
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    fn parse(toml: &str) -> Result<Config, ParseError> {
+        Config::parse_document(toml)
+    }
+
+    const WITH_SCOPES: &str = r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+API_KEY = { description = "API key", required = true }
+QUEUE_TOKEN = { description = "Queue token", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "API_KEY"]
+
+[scopes.worker]
+secrets = ["DATABASE_URL", "QUEUE_TOKEN"]
+"#;
+
+    #[test]
+    fn scopes_parse_as_named_membership_lists() {
+        let config = parse(WITH_SCOPES).unwrap();
+        let scopes = config.scopes.as_ref().expect("[scopes] present");
+        assert_eq!(scopes["api"].secrets, vec!["DATABASE_URL", "API_KEY"]);
+        assert_eq!(
+            scopes["worker"].secrets,
+            vec!["DATABASE_URL", "QUEUE_TOKEN"]
+        );
+    }
+
+    #[test]
+    fn scopes_validate_against_the_union_of_all_profiles() {
+        // A scope may name a secret declared in a *different* profile than
+        // `default`; validation is against the union, not one profile.
+        let config = parse(
+            r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[profiles.production]
+SENTRY_DSN = { description = "Sentry", required = true }
+
+[scopes.observability]
+secrets = ["SENTRY_DSN"]
+"#,
+        )
+        .unwrap();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn scope_referencing_an_undeclared_secret_is_rejected() {
+        let err = parse(
+            r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "TYPO_KEY"]
+"#,
+        )
+        .unwrap()
+        .validate()
+        .expect_err("undeclared secret in a scope is a config error");
+        let ParseError::Validation(msg) = err else {
+            panic!("expected a validation error, got {err:?}");
+        };
+        assert!(msg.contains("api"), "names the offending scope: {msg}");
+        assert!(
+            msg.contains("TYPO_KEY"),
+            "names the undeclared secret: {msg}"
+        );
+    }
+
+    /// An empty scope resolves to nothing: it contacts no provider, so `check
+    /// --scope` reports a clean `0 found, 0 missing` while `run --scope` starts
+    /// the command with every manifest secret scrubbed and none injected. That
+    /// green result guarantees nothing, so the manifest is rejected instead.
+    #[test]
+    fn scope_with_no_secrets_is_rejected() {
+        let err = parse(
+            r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.api]
+secrets = []
+"#,
+        )
+        .unwrap()
+        .validate()
+        .expect_err("an empty scope is a config error");
+        let ParseError::Validation(msg) = err else {
+            panic!("expected a validation error, got {err:?}");
+        };
+        assert!(msg.contains("api"), "names the offending scope: {msg}");
+        assert!(
+            msg.contains("at least one"),
+            "explains the requirement: {msg}"
+        );
+    }
+
+    #[test]
+    fn scope_listing_a_secret_twice_is_rejected() {
+        let err = parse(
+            r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+API_KEY = { description = "API key", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "API_KEY", "DATABASE_URL"]
+"#,
+        )
+        .unwrap()
+        .validate()
+        .expect_err("a repeated member is a config error");
+        let ParseError::Validation(msg) = err else {
+            panic!("expected a validation error, got {err:?}");
+        };
+        assert!(
+            msg.contains("api") && msg.contains("DATABASE_URL"),
+            "names the scope and the repeated secret: {msg}"
+        );
+    }
+
+    #[test]
+    fn scope_listing_a_blank_secret_name_is_rejected() {
+        let err = parse(
+            r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "  "]
+"#,
+        )
+        .unwrap()
+        .validate()
+        .expect_err("a blank member is a config error");
+        let ParseError::Validation(msg) = err else {
+            panic!("expected a validation error, got {err:?}");
+        };
+        assert!(msg.contains("api"), "names the offending scope: {msg}");
+    }
+
+    #[test]
+    fn blank_scope_name_is_rejected() {
+        let err = parse(
+            r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.""]
+secrets = ["DATABASE_URL"]
+"#,
+        )
+        .unwrap()
+        .validate()
+        .expect_err("a blank scope name is a config error");
+        assert!(matches!(err, ParseError::Validation(_)));
+    }
+
+    #[test]
+    fn valid_scopes_pass_validation() {
+        assert!(parse(WITH_SCOPES).unwrap().validate().is_ok());
+    }
+
+    #[test]
+    fn a_manifest_without_scopes_stays_valid_and_scope_free() {
+        let config = parse(
+            r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+"#,
+        )
+        .unwrap();
+        assert!(config.scopes.is_none());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn later_documents_merge_scopes_like_providers() {
+        let mut base = parse(WITH_SCOPES).unwrap();
+        let overlay = parse(
+            r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL"]
+
+[scopes.migration]
+secrets = ["DATABASE_URL"]
+"#,
+        )
+        .unwrap();
+        base.overlay_with(overlay);
+        let scopes = base.scopes.expect("scopes present after overlay");
+        // Later document wins on conflict; new scopes are added; untouched
+        // scopes are preserved.
+        assert_eq!(scopes["api"].secrets, vec!["DATABASE_URL"]);
+        assert_eq!(
+            scopes["worker"].secrets,
+            vec!["DATABASE_URL", "QUEUE_TOKEN"]
+        );
+        assert_eq!(scopes["migration"].secrets, vec!["DATABASE_URL"]);
     }
 }

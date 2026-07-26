@@ -88,6 +88,7 @@ class Resolved {
   constructor(response) {
     this.provider = response.provider;
     this.profile = response.profile;
+    this.scope = response.scope ?? null;
     this.secrets = {};
     for (const [name, entry] of Object.entries(response.secrets || {})) {
       this.secrets[name] = new ResolvedSecret(entry);
@@ -166,6 +167,7 @@ class Report {
   constructor(response) {
     this.provider = response.provider;
     this.profile = response.profile;
+    this.scope = response.scope ?? null;
     this.secrets = (response.secrets || []).map((s) => new SecretReport(s));
   }
 }
@@ -178,6 +180,8 @@ class Builder {
   withPath(p) { if (p != null) this._request.path = p; return this; }
   withProvider(p) { if (p != null) this._request.provider = p; return this; }
   withProfile(p) { if (p != null) this._request.profile = p; return this; }
+  /** Limit resolution to a named manifest scope (SecretSpec 0.17+). */
+  withScope(s) { if (s != null) this._request.scope = s; return this; }
   withReason(r) { if (r != null) this._request.reason = r; return this; }
   withNoValues(v = true) { this._request.no_values = v; return this; }
 

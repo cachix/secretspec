@@ -35,6 +35,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   namespace also supports config inspection and provider-alias commands;
   existing invocations without the namespace remain compatible.
   ([#171](https://github.com/cachix/secretspec/issues/171))
+- Secret **scopes**: a `[scopes]` table names membership-only subsets of a
+  profile's secrets, so a single service or task resolves only what it declares
+  instead of the whole profile. `check`, `run`, and `export` take `--scope`
+  (`SECRETSPEC_SCOPE`); the consumer-visible set is the intersection of the
+  selected profile and the scope's secret list. Scopes are orthogonal to
+  profiles and never change a secret's `required`/`default`/providers or its
+  storage address. A composed secret in a scope still resolves its dependencies
+  — even ones the scope leaves out — to build its value, but those dependencies
+  are never exposed to the scope, and a provider warning about one calls it "a
+  hidden composition input" rather than naming it; a secret that is neither in the scope nor a
+  dependency of one is never fetched, and a scope whose intersection with the
+  selected profile is empty contacts no provider at all (resolve and report
+  results then carry an empty `provider`). A scope's own list must name at least
+  one secret, with no blank or repeated entries.
+  `run --scope` removes every manifest-declared secret the scope does not
+  admit from the child environment — across all profiles, even one the parent
+  already exported — so no value can leak into the launched process; a secret
+  the scope lists is kept even when the selected profile does not declare it.
+  `export --scope` emits the scoped subset but unsets nothing, since no output
+  format can express an unset. `set`, like `import`, ignores an ambient
+  `SECRETSPEC_SCOPE` entirely, and a blank `--scope` (or a blank
+  `SECRETSPEC_SCOPE`) clears an inherited scope instead of deferring to it. Under
+  project `extends`, a child scope replaces the parent scope of the same name
+  outright rather than unioning their secret lists. Typed SDK loaders ignore an
+  ambient `SECRETSPEC_SCOPE`, since a generated struct always expects the full
+  profile; `import` likewise ignores scope and always copies the whole profile.
+  Untyped SDK/FFI builders expose explicit scope selection and return the active
+  scope in resolve/report results. Audit events for scoped `check`, `run`, and
+  `export` operations record the scope name as well as the keys accessed or
+  exposed.
 - age provider (`age://`) for storing dotenv-style secret sets in an
   age-encrypted file, with ASCII armor by default, team recipient rosters,
   direct X25519 and SSH key support, native tagged recipients, and

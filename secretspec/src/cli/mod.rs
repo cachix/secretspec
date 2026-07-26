@@ -79,6 +79,10 @@ enum Commands {
         /// Profile to use
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
         profile: Option<String>,
+        /// Scope to resolve (a `[scopes]` subset of the profile). Excluded
+        /// secrets are removed from the child environment even if inherited.
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE")]
+        scope: Option<String>,
         /// Command and arguments to run
         #[arg(trailing_var_arg = true)]
         command: Vec<String>,
@@ -91,6 +95,9 @@ enum Commands {
         /// Profile to use
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
         profile: Option<String>,
+        /// Scope to resolve (a `[scopes]` subset of the profile)
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE")]
+        scope: Option<String>,
         /// Output format
         #[arg(long, value_enum, default_value = "shell")]
         format: ExportFormat,
@@ -103,6 +110,9 @@ enum Commands {
         /// Profile to use
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
         profile: Option<String>,
+        /// Scope to check (a `[scopes]` subset of the profile)
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE")]
+        scope: Option<String>,
         /// Don't prompt for missing secrets (exit with error if any are missing)
         #[arg(short = 'n', long)]
         no_prompt: bool,
@@ -451,6 +461,28 @@ fn load_secrets(file: &Option<PathBuf>, reason: &Option<String>) -> miette::Resu
     })
 }
 
+/// Applies a `--scope` selection to `app`. Clap resolves the flag and its
+/// `SECRETSPEC_SCOPE` fallback into the same `Option`, so `None` here means
+/// neither was given.
+///
+/// A **blank** value is the caller opting out explicitly, not an absent one: it
+/// selects no scope *and* suppresses the library's ambient `SECRETSPEC_SCOPE`
+/// fallback, so `--scope ""` clears an inherited scope instead of silently
+/// deferring to it. Dropping the blank on its own would not be enough — the
+/// library would read the environment and narrow the operation anyway, which is
+/// the one direction a blank must never take (CI templates and workflow `env:`
+/// maps routinely materialize an unset value as an empty string).
+fn apply_scope(app: &mut Secrets, scope: Option<String>) {
+    let Some(scope) = scope else {
+        return;
+    };
+    if scope.trim().is_empty() {
+        app.set_ignore_ambient_scope(true);
+    } else {
+        app.set_scope(scope);
+    }
+}
+
 /// Resolves an explicitly supplied config-init provider or prompts for one.
 ///
 /// Explicit values are checked against the same provider registry used for
@@ -580,6 +612,7 @@ pub fn main() -> Result<()> {
                 },
                 profiles,
                 providers: None,
+                scopes: None,
             };
             let mut content = generate_toml_with_comments(&project_config).into_diagnostic()?;
 
@@ -869,6 +902,7 @@ pub fn main() -> Result<()> {
             command,
             provider,
             profile,
+            scope,
         } => {
             let mut app = load_secrets(&cli.file, &cli.reason)?;
             if let Some(p) = provider {
@@ -877,6 +911,7 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
+            apply_scope(&mut app, scope);
             app.run(command)
                 .into_diagnostic()
                 .wrap_err("Failed to run command")?;
@@ -886,6 +921,7 @@ pub fn main() -> Result<()> {
         Commands::Export {
             provider,
             profile,
+            scope,
             format,
         } => {
             let mut app = load_secrets(&cli.file, &cli.reason)?;
@@ -895,6 +931,7 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
+            apply_scope(&mut app, scope);
             let mut out = std::io::stdout().lock();
             app.export(format, &mut out)
                 .into_diagnostic()
@@ -905,6 +942,7 @@ pub fn main() -> Result<()> {
         Commands::Check {
             provider,
             profile,
+            scope,
             no_prompt,
             json,
             explain,
@@ -916,6 +954,7 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
+            apply_scope(&mut app, scope);
 
             // `--json`/`--explain` surface the value-free resolution report
             // instead of the interactive prompt-for-missing flow. They report
@@ -1109,6 +1148,7 @@ fn format_audit_line(v: &serde_json::Value) -> String {
     let outcome = sanitize_field(str_field("outcome").unwrap_or("?"));
     let project = sanitize_field(str_field("project").unwrap_or(""));
     let profile = sanitize_field(str_field("profile").unwrap_or(""));
+    let scope = str_field("scope").map(sanitize_field);
 
     let target = if let Some(key) = str_field("key") {
         sanitize_field(key)
@@ -1136,6 +1176,9 @@ fn format_audit_line(v: &serde_json::Value) -> String {
         s += &format!("  {target}");
     }
     s += &format!("  ({project}/{profile}");
+    if let Some(scope) = scope {
+        s += &format!(" scope:{scope}");
+    }
     if let Some(provider) = str_field("provider") {
         s += &format!(" via {}", sanitize_field(provider));
     }
@@ -1175,7 +1218,39 @@ mod tests {
                 },
             )]),
             providers: None,
+            scopes: None,
         }
+    }
+
+    /// Clap folds `--scope` and its `SECRETSPEC_SCOPE` fallback into one
+    /// `Option`, so a blank value must mean "no scope" rather than "no opinion".
+    /// Dropping it and letting the library re-read the environment would narrow
+    /// the operation and scrub the excluded secrets, which is exactly what an
+    /// operator writing `--scope ""` is trying to prevent.
+    #[test]
+    fn a_blank_scope_clears_an_ambient_one() {
+        let _env = crate::tests::scrub_resolution_env();
+        let _ambient = crate::tests::EnvVarGuard::set("SECRETSPEC_SCOPE", "api");
+        let config = config_with_secret(Secret::default());
+
+        // Control: nothing applied, so the ambient scope is in force.
+        let inherited = Secrets::new(config.clone(), None, None, None);
+        assert_eq!(inherited.resolve_scope_name(None).as_deref(), Some("api"));
+
+        // A blank `--scope` (or a blank `SECRETSPEC_SCOPE`) selects nothing and
+        // suppresses the ambient fallback.
+        let mut blank = Secrets::new(config.clone(), None, None, None);
+        apply_scope(&mut blank, Some("   ".to_string()));
+        assert_eq!(blank.resolve_scope_name(None), None);
+
+        // An absent flag leaves the ambient scope alone, and an explicit one wins.
+        let mut absent = Secrets::new(config.clone(), None, None, None);
+        apply_scope(&mut absent, None);
+        assert_eq!(absent.resolve_scope_name(None).as_deref(), Some("api"));
+
+        let mut explicit = Secrets::new(config, None, None, None);
+        apply_scope(&mut explicit, Some("worker".to_string()));
+        assert_eq!(explicit.resolve_scope_name(None).as_deref(), Some("worker"));
     }
 
     #[test]
@@ -1290,12 +1365,13 @@ mod tests {
         // A bulk entry joins `keys[]` and shows the executed command.
         let bulk: serde_json::Value = serde_json::from_str(
             r#"{"ts":"t","action":"run","outcome":"started","project":"demo",
-                "profile":"prod","keys":["A","B"],"command":"./deploy.sh"}"#,
+                "profile":"prod","scope":"api","keys":["A","B"],"command":"./deploy.sh"}"#,
         )
         .unwrap();
         let line = format_audit_line(&bulk);
         assert!(line.contains("./deploy.sh"));
         assert!(line.contains("A,B"));
+        assert!(line.contains("(demo/prod scope:api)"));
 
         colored::control::unset_override();
     }
@@ -1384,6 +1460,7 @@ mod tests {
                 },
             )]),
             providers: None,
+            scopes: None,
         };
 
         let generated = generate_toml_with_comments(&config).unwrap();

@@ -37,6 +37,15 @@ func main() {
 A missing required secret returns `*MissingRequiredError`; any other failure
 returns `*Error` (with a stable `.Kind`).
 
+## Scopes (0.17+)
+
+Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. Both
+`Resolved.Scope` and `Report.Scope` return the selected scope:
+
+```go
+resolved, err := secretspec.New().WithScope("api").Load()
+```
+
 ## Cleanup
 
 `as_path` secrets are materialized to temp files that outlive the call. Call

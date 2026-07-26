@@ -46,8 +46,9 @@ final class SecretSpec
         ?string $provider = null,
         ?string $profile = null,
         ?string $reason = null,
+        ?string $scope = null,
     ): Resolved {
-        return self::configured($path, $provider, $profile, $reason)->load();
+        return self::configured($path, $provider, $profile, $scope, $reason)->load();
     }
 
     /**
@@ -61,8 +62,9 @@ final class SecretSpec
         ?string $provider = null,
         ?string $profile = null,
         ?string $reason = null,
+        ?string $scope = null,
     ): Report {
-        return self::configured($path, $provider, $profile, $reason)->report();
+        return self::configured($path, $provider, $profile, $scope, $reason)->report();
     }
 
     /** Build a {@see Builder} from the shared one-shot options. */
@@ -70,12 +72,14 @@ final class SecretSpec
         ?string $path,
         ?string $provider,
         ?string $profile,
+        ?string $scope,
         ?string $reason,
     ): Builder {
         return self::builder()
             ->withPath($path)
             ->withProvider($provider)
             ->withProfile($profile)
+            ->withScope($scope)
             ->withReason($reason);
     }
 

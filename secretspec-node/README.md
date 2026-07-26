@@ -25,6 +25,15 @@ A missing required secret throws `MissingRequiredError`; any other failure
 throws `SecretSpecError` (with a stable `.kind`). TypeScript declarations ship
 in `index.d.ts`.
 
+## Scopes (0.17+)
+
+Use `.withScope('api')` to resolve only a named `[scopes.api]` subset. Both
+`resolved.scope` and `report.scope` return the selected scope:
+
+```js
+const resolved = SecretSpec.builder().withScope('api').load();
+```
+
 ## Cleanup
 
 `as_path` secrets are materialized to temp files that outlive the call. Call

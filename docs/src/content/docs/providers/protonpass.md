@@ -145,7 +145,8 @@ The reason recorded in the Proton Pass audit log is resolved in this order:
 
 To force a meaningful reason instead of falling back to the default, use the
 [`require_reason`](/reference/configuration/#requiring-a-reason-for-secret-access)
-policy in `secretspec.toml`. It defaults to `"agents"`, so AI agents must always
-explain why they read a secret (humans are unaffected); set it to `true` to require
-a reason from every caller. secretspec then refuses any access that does not supply
-an explicit reason.
+policy in `secretspec.toml`. It defaults to `"agents"`, so sessions SecretSpec
+detects as AI agents must explain why they read a secret. Detection is
+heuristic; set it to `true` to require a reason from every SecretSpec caller.
+secretspec then refuses operations through SecretSpec that do not supply an
+explicit reason.

@@ -37,22 +37,29 @@ It accepts three values:
 
 | Value | Behavior |
 |-------|----------|
-| `"agents"` (default) | Require a reason **only when an AI agent is detected**. Humans running interactively are unaffected. |
-| `true` | Require a reason from **every** caller (humans, CI, agents). |
+| `"agents"` (default) | Require a reason only when SecretSpec heuristically classifies the current process as an AI agent. Sessions not classified as agents are unaffected. |
+| `true` | Require a reason from every caller using SecretSpec (humans, CI, and agents). |
 | `false` | Never require a reason. |
 
-Because the rule is enforced inside secretspec and checked into `secretspec.toml`,
-every clone, CI runner, and AI agent is held to it — there is no per-tool opt-out:
+The policy is enforced at SecretSpec's secret-access entry points and travels
+with the checked-in `secretspec.toml`. With `true`, every caller using the
+manifest must supply a reason before SecretSpec proceeds:
 
 ```bash
-# Under an AI agent, with the default "agents" policy:
+# In a session SecretSpec detects as an agent, with the default "agents" policy:
 $ secretspec run -- ./deploy.sh
 Error: Accessing secrets requires a reason. Provide one with --reason "<why...>" ...
 
 $ secretspec run --reason "Deploy web frontend" -- ./deploy.sh   # ok
 ```
 
-**Agent detection.** secretspec delegates detection of known agents to the
+:::caution[Agent detection is heuristic]
+The default `"agents"` policy depends on detection. It can miss an unknown or
+changed agent and can classify a session incorrectly. Use
+`require_reason = true` when every SecretSpec caller must supply a reason.
+:::
+
+**Agent detection.** secretspec delegates heuristic detection of known agents to the
 [`detect-coding-agent`](https://crates.io/crates/detect-coding-agent) crate, which
 maintains the per-tool signal list (Claude Code, Cursor, Codex, Gemini CLI,
 Copilot, and more). It treats **autonomous and hybrid** environments as agents but
@@ -64,11 +71,12 @@ not human-driven interactive editors. In addition, secretspec checks its own
 $ export SECRETSPEC_AGENT=1
 ```
 
-If your agent isn't auto-detected, set `SECRETSPEC_AGENT=1` (or use
-`require_reason = true` to require a reason from everyone).
+Cooperative harnesses that are not auto-detected can set `SECRETSPEC_AGENT=1`.
+Do not rely on a caller to identify itself when a reason is mandatory; use
+`require_reason = true` instead.
 
-The reason is recorded in secretspec's own [audit log](/concepts/audit/) and is also
-forwarded to providers that support auditing (e.g. the
+The reason is recorded in secretspec's own [audit log](/concepts/audit/) and is
+also forwarded to providers that support auditing (e.g. the
 [Proton Pass](/providers/protonpass/) provider records it in the agent audit log).
 
 ### [profiles.*] Section

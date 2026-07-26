@@ -200,15 +200,32 @@ $ export BW_SESSION="session-key-from-unlock"
 $ secretspec run --provider bw://Production -- deploy
 ```
 
-### Field Requirements by Item Type
+### Default Field by Item Type
 
-| Item Type    | Default Field  | Field Required? | Notes                    |
-|--------------|----------------|-----------------|--------------------------|
-| Login        | `password`     | No              | Falls back to username   |
-| SSH Key      | `private_key`  | No              | Standard SSH key field   |
-| Card         | None           | **YES**         | Must specify field       |
-| Identity     | None           | **YES**         | Must specify field       |
-| Secure Note  | Smart detect   | No              | Uses note content/fields |
+When no field is named, each item type uses the default below. The same default
+applies to reads and writes, so `secretspec set` followed by `secretspec get`
+returns what was written.
+
+| Item Type   | Default field         | Read also falls back to      |
+|-------------|-----------------------|------------------------------|
+| Login       | `password`            | `username`, then a custom `value` field |
+| Secure Note | custom `value` field  | the note body                |
+| Card        | `number`              | a custom `value` field       |
+| Identity    | `email`               | `username`, then a custom `value` field |
+| SSH Key     | `private_key`         | a custom `value` field       |
+
+The default depends only on the item type, never on the secret or item name.
+The extra read fallbacks exist to make existing, hand-created vault items
+resolve; writes always target the default field itself.
+
+To address anything else, name the field explicitly with `?field=` or a `ref`
+mapping:
+
+```toml
+[profiles.default]
+STRIPE_KEY = { description = "Card custom field", ref = { item = "Stripe Test Card", field = "api_key" } }
+DEPLOY_PUBKEY = { description = "SSH public key", ref = { item = "Deploy SSH Key", field = "public_key" } }
+```
 
 ## Error Handling
 

@@ -38,60 +38,29 @@ impl BitwardenItemType {
         *self as u8
     }
 
-    /// Get the default field name for this item type
-    pub fn default_field_for_hint(&self, hint: &str) -> String {
-        let hint_lower = hint.to_lowercase();
-
+    /// The field this item type uses when the caller does not name one.
+    ///
+    /// This is the single default shared by creation, update, and unqualified
+    /// reads, and each entry is the field the corresponding `extract_from_*`
+    /// method looks at first. Keeping one table is what makes a plain `set`
+    /// followed by a plain `get` round-trip: when the write and read defaults
+    /// disagree, `set` reports success while `get` keeps returning the old
+    /// value, because it is reading a different field than the one written.
+    ///
+    /// Deliberately not derived from the item or secret name. Reads resolve a
+    /// field from the address, `BITWARDEN_DEFAULT_FIELD`, or the provider URI
+    /// and never consult the name, so a name-derived write target cannot be
+    /// mirrored by a read. Name a field explicitly with `?field=` or
+    /// `ref = { item, field }` to address anything other than these.
+    pub fn default_field(&self) -> &'static str {
         match self {
-            BitwardenItemType::Login => {
-                if hint_lower.contains("user") || hint_lower.contains("login") {
-                    "username".to_string()
-                } else if hint_lower.contains("totp")
-                    || hint_lower.contains("2fa")
-                    || hint_lower.contains("mfa")
-                {
-                    "totp".to_string()
-                } else {
-                    "password".to_string() // Default for Login items
-                }
-            }
-            BitwardenItemType::SecureNote => "value".to_string(), // Use custom field "value"
-            BitwardenItemType::Card => {
-                if hint_lower.contains("code")
-                    || hint_lower.contains("cvv")
-                    || hint_lower.contains("cvc")
-                {
-                    "code".to_string()
-                } else if hint_lower.contains("name") || hint_lower.contains("cardholder") {
-                    "cardholder".to_string()
-                } else if hint_lower.contains("number") || hint_lower.contains("card") {
-                    "number".to_string()
-                } else {
-                    hint.to_string() // Use the hint as custom field name for Card items
-                }
-            }
-            BitwardenItemType::Identity => {
-                if hint_lower.contains("phone") || hint_lower.contains("tel") {
-                    "phone".to_string()
-                } else if hint_lower.contains("user") || hint_lower.contains("login") {
-                    "username".to_string()
-                } else if hint_lower.contains("email") || hint_lower.contains("mail") {
-                    "email".to_string()
-                } else {
-                    hint.to_string() // Use the hint as custom field name for Identity items
-                }
-            }
-            BitwardenItemType::SshKey => {
-                if hint_lower.contains("public") || hint_lower.contains("pub") {
-                    "public_key".to_string()
-                } else if hint_lower.contains("passphrase") || hint_lower.contains("password") {
-                    "passphrase".to_string()
-                } else if hint_lower.contains("private") || hint_lower.contains("key") {
-                    "private_key".to_string()
-                } else {
-                    "private_key".to_string() // Default for SSH Key items
-                }
-            }
+            BitwardenItemType::Login => "password",
+            // A custom field rather than the note body: this is where creation
+            // has always written, and where reads look before the body.
+            BitwardenItemType::SecureNote => "value",
+            BitwardenItemType::Card => "number",
+            BitwardenItemType::Identity => "email",
+            BitwardenItemType::SshKey => "private_key",
         }
     }
 
@@ -1248,23 +1217,14 @@ impl BitwardenProvider {
         target_field: Option<&str>,
         value: &str,
     ) -> Result<()> {
-        // Determine which field to update: explicit > env > config > smart default.
-        // The fallback must match the getter's default for the item type so that
-        // a plain `set` is round-trippable.
+        // Which field to update: explicit > env > config > the item type's
+        // default. Shared with creation and unqualified reads via
+        // `default_field` so that a plain `set` is round-trippable.
         let field = target_field
             .map(|s| s.to_string())
             .or_else(|| std::env::var("BITWARDEN_DEFAULT_FIELD").ok())
             .or_else(|| self.config.default_field.clone())
-            .unwrap_or_else(|| {
-                match item.item_type {
-                    BitwardenItemType::Login => "password",
-                    BitwardenItemType::SecureNote => "notes",
-                    BitwardenItemType::Card => "number",
-                    BitwardenItemType::Identity => "email",
-                    BitwardenItemType::SshKey => "private_key",
-                }
-                .to_string()
-            });
+            .unwrap_or_else(|| item.item_type.default_field().to_string());
 
         // Get the current item as JSON template
         let mut item_json = self.get_item_as_template(&item.id)?;
@@ -1552,24 +1512,27 @@ impl BitwardenProvider {
             .or(self.config.default_item_type)
             .unwrap_or(BitwardenItemType::Login);
 
-        // Determine target field: explicit > env > config > smart default
+        // Which field to write: explicit > env > config > the item type's
+        // default. Shared with update and unqualified reads via `default_field`.
         let field = target_field
             .map(|s| s.to_string())
             .or_else(|| std::env::var("BITWARDEN_DEFAULT_FIELD").ok())
             .or_else(|| self.config.default_field.clone())
-            .unwrap_or_else(|| item_type.default_field_for_hint(item_name));
+            .unwrap_or_else(|| item_type.default_field().to_string());
 
-        match item_type {
-            BitwardenItemType::Login => self.create_login_item(item_name, value, &field),
-            BitwardenItemType::Card => self.create_card_item(item_name, value, &field),
-            BitwardenItemType::Identity => self.create_identity_item(item_name, value, &field),
-            BitwardenItemType::SecureNote => self.create_secure_note_item(item_name, value, &field),
-            BitwardenItemType::SshKey => self.create_ssh_key_item(item_name, value, &field),
-        }
+        let template = match item_type {
+            BitwardenItemType::Login => self.login_template(item_name, value, &field),
+            BitwardenItemType::Card => self.card_template(item_name, value, &field),
+            BitwardenItemType::Identity => self.identity_template(item_name, value, &field),
+            BitwardenItemType::SecureNote => self.secure_note_template(item_name, value, &field),
+            BitwardenItemType::SshKey => self.ssh_key_template(item_name, value, &field),
+        };
+
+        self.create_item_from_template(&template)
     }
 
-    /// Creates a new Login item.
-    fn create_login_item(&self, item_name: &str, value: &str, field: &str) -> Result<()> {
+    /// Builds the creation template for a Login item.
+    fn login_template(&self, item_name: &str, value: &str, field: &str) -> serde_json::Value {
         let mut login_data = serde_json::json!({
             "username": null,
             "password": null,
@@ -1594,7 +1557,7 @@ impl BitwardenProvider {
             }
         }
 
-        let template = serde_json::json!({
+        serde_json::json!({
             "type": BitwardenItemType::Login.to_u8(),
             "name": item_name,
             "notes": format!("SecretSpec managed secret: {}", item_name),
@@ -1605,13 +1568,11 @@ impl BitwardenProvider {
             "collectionIds": std::env::var("BITWARDEN_COLLECTION").ok()
                 .or_else(|| self.config.collection_id.clone())
                 .map(|id| vec![id])
-        });
-
-        self.create_item_from_template(&template)
+        })
     }
 
-    /// Creates a new Card item.
-    fn create_card_item(&self, item_name: &str, value: &str, field: &str) -> Result<()> {
+    /// Builds the creation template for a Card item.
+    fn card_template(&self, item_name: &str, value: &str, field: &str) -> serde_json::Value {
         let mut card_data = serde_json::json!({
             "number": null,
             "code": null,
@@ -1643,7 +1604,7 @@ impl BitwardenProvider {
             }
         }
 
-        let template = serde_json::json!({
+        serde_json::json!({
             "type": BitwardenItemType::Card.to_u8(),
             "name": item_name,
             "notes": format!("SecretSpec managed secret: {}", item_name),
@@ -1654,13 +1615,11 @@ impl BitwardenProvider {
             "collectionIds": std::env::var("BITWARDEN_COLLECTION").ok()
                 .or_else(|| self.config.collection_id.clone())
                 .map(|id| vec![id])
-        });
-
-        self.create_item_from_template(&template)
+        })
     }
 
-    /// Creates a new Identity item.
-    fn create_identity_item(&self, item_name: &str, value: &str, field: &str) -> Result<()> {
+    /// Builds the creation template for an Identity item.
+    fn identity_template(&self, item_name: &str, value: &str, field: &str) -> serde_json::Value {
         let mut identity_data = serde_json::json!({
             "title": null,
             "firstName": null,
@@ -1690,7 +1649,7 @@ impl BitwardenProvider {
             }
         }
 
-        let template = serde_json::json!({
+        serde_json::json!({
             "type": BitwardenItemType::Identity.to_u8(),
             "name": item_name,
             "notes": format!("SecretSpec managed secret: {}", item_name),
@@ -1701,13 +1660,11 @@ impl BitwardenProvider {
             "collectionIds": std::env::var("BITWARDEN_COLLECTION").ok()
                 .or_else(|| self.config.collection_id.clone())
                 .map(|id| vec![id])
-        });
-
-        self.create_item_from_template(&template)
+        })
     }
 
-    /// Creates a new Secure Note item.
-    fn create_secure_note_item(&self, item_name: &str, value: &str, field: &str) -> Result<()> {
+    /// Builds the creation template for a Secure Note item.
+    fn secure_note_template(&self, item_name: &str, value: &str, field: &str) -> serde_json::Value {
         let mut fields = vec![];
 
         if field != "notes" {
@@ -1720,7 +1677,7 @@ impl BitwardenProvider {
             }));
         }
 
-        let template = serde_json::json!({
+        serde_json::json!({
             "type": BitwardenItemType::SecureNote.to_u8(),
             "name": item_name,
             "notes": if field == "notes" { value.to_string() } else { format!("SecretSpec managed secret: {}", item_name) },
@@ -1733,18 +1690,18 @@ impl BitwardenProvider {
             "collectionIds": std::env::var("BITWARDEN_COLLECTION").ok()
                 .or_else(|| self.config.collection_id.clone())
                 .map(|id| vec![id])
-        });
-
-        self.create_item_from_template(&template)
+        })
     }
 
-    /// Creates a new SSH Key item.
-    fn create_ssh_key_item(&self, item_name: &str, value: &str, field: &str) -> Result<()> {
+    /// Builds the creation template for an SSH Key item.
+    fn ssh_key_template(&self, item_name: &str, value: &str, field: &str) -> serde_json::Value {
         let mut ssh_key_data = serde_json::json!({
             "privateKey": null,
             "publicKey": null,
             "keyFingerprint": null
         });
+
+        let mut fields = vec![];
 
         match field.to_lowercase().as_str() {
             "private_key" | "privatekey" | "private" => {
@@ -1757,45 +1714,28 @@ impl BitwardenProvider {
                 ssh_key_data["keyFingerprint"] = serde_json::Value::String(value.to_string())
             }
             _ => {
-                // For other field names, store as custom field
-                let mut fields = vec![];
+                // Store unknown fields as custom fields so they can be read back
                 let field_type = BitwardenFieldType::for_field_name(field);
                 fields.push(serde_json::json!({
                     "name": field,
                     "value": value,
                     "type": field_type.to_u8()
                 }));
-
-                let template = serde_json::json!({
-                    "type": BitwardenItemType::SshKey.to_u8(),
-                    "name": item_name,
-                    "notes": format!("SecretSpec managed secret: {}", item_name),
-                    "sshKey": ssh_key_data,
-                    "fields": fields,
-                    "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
-                        .or_else(|| self.config.organization_id.clone()),
-                    "collectionIds": std::env::var("BITWARDEN_COLLECTION").ok()
-                        .or_else(|| self.config.collection_id.clone())
-                        .map(|id| vec![id])
-                });
-
-                return self.create_item_from_template(&template);
             }
         }
 
-        let template = serde_json::json!({
+        serde_json::json!({
             "type": BitwardenItemType::SshKey.to_u8(),
             "name": item_name,
             "notes": format!("SecretSpec managed secret: {}", item_name),
             "sshKey": ssh_key_data,
+            "fields": fields,
             "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
                 .or_else(|| self.config.organization_id.clone()),
             "collectionIds": std::env::var("BITWARDEN_COLLECTION").ok()
                 .or_else(|| self.config.collection_id.clone())
                 .map(|id| vec![id])
-        });
-
-        self.create_item_from_template(&template)
+        })
     }
 
     /// Creates an item from a JSON template.
@@ -2166,6 +2106,253 @@ mod tests {
         let provider = BitwardenProvider::new(BitwardenConfig::default());
         assert!(provider.config.server.is_none());
         assert!(provider.ensure_server_configured().is_ok());
+    }
+
+    /// Every item type, so the round-trip test below cannot silently skip one.
+    const ALL_ITEM_TYPES: [BitwardenItemType; 5] = [
+        BitwardenItemType::Login,
+        BitwardenItemType::SecureNote,
+        BitwardenItemType::Card,
+        BitwardenItemType::Identity,
+        BitwardenItemType::SshKey,
+    ];
+
+    /// Turns a creation template into the item `bw` would hand back for it.
+    ///
+    /// The only addition is an `id`, which the server assigns on creation and
+    /// which `BitwardenItem` requires. This is what lets a write be checked
+    /// against a read without a vault.
+    fn item_from_template(mut template: serde_json::Value) -> BitwardenItem {
+        template["id"] = serde_json::Value::String("test-id".to_string());
+        serde_json::from_value(template)
+            .expect("a creation template must deserialize as a vault item")
+    }
+
+    fn template_for(
+        provider: &BitwardenProvider,
+        item_type: BitwardenItemType,
+        name: &str,
+        value: &str,
+        field: &str,
+    ) -> serde_json::Value {
+        match item_type {
+            BitwardenItemType::Login => provider.login_template(name, value, field),
+            BitwardenItemType::SecureNote => provider.secure_note_template(name, value, field),
+            BitwardenItemType::Card => provider.card_template(name, value, field),
+            BitwardenItemType::Identity => provider.identity_template(name, value, field),
+            BitwardenItemType::SshKey => provider.ssh_key_template(name, value, field),
+        }
+    }
+
+    /// Reads an item the way `get` does when no field is named.
+    ///
+    /// Mirrors `extract_value_from_item`'s dispatch but passes no resolved
+    /// field, which both models the unqualified case and keeps the test
+    /// independent of a `BITWARDEN_DEFAULT_FIELD` in the developer's shell.
+    fn read_without_naming_a_field(
+        provider: &BitwardenProvider,
+        item: &BitwardenItem,
+    ) -> Option<String> {
+        let extracted = match item.item_type {
+            BitwardenItemType::Login => provider.extract_from_login_item(item, None),
+            BitwardenItemType::SecureNote => provider.extract_from_secure_note_item(item, None),
+            BitwardenItemType::Card => provider.extract_from_card_item(item, None),
+            BitwardenItemType::Identity => provider.extract_from_identity_item(item, None),
+            BitwardenItemType::SshKey => provider.extract_from_ssh_key_item(item, None),
+        };
+        extracted
+            .expect("extraction must not fail")
+            .map(|secret| secret.expose_secret().to_string())
+    }
+
+    #[test]
+    fn default_field_table_is_pinned() {
+        // Each entry is also the field the matching extract_from_* method looks
+        // at first; changing one side without the other reintroduces the
+        // write-here/read-there class of bug.
+        assert_eq!(BitwardenItemType::Login.default_field(), "password");
+        assert_eq!(BitwardenItemType::SecureNote.default_field(), "value");
+        assert_eq!(BitwardenItemType::Card.default_field(), "number");
+        assert_eq!(BitwardenItemType::Identity.default_field(), "email");
+        assert_eq!(BitwardenItemType::SshKey.default_field(), "private_key");
+    }
+
+    #[test]
+    fn plain_set_round_trips_for_every_item_type() {
+        // A `set` with no field named, followed by a `get` with no field named,
+        // must return what was written. This failed for Card and Identity, whose
+        // creation default resolved to the item name and so wrote a custom field
+        // that an unqualified read never looks at, and for Secure Notes, whose
+        // update default wrote the note body while reads prefer the `value`
+        // custom field.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+
+        for item_type in ALL_ITEM_TYPES {
+            let template = template_for(
+                &provider,
+                item_type,
+                "Round Trip",
+                "secret-value",
+                item_type.default_field(),
+            );
+            let item = item_from_template(template);
+
+            assert_eq!(
+                read_without_naming_a_field(&provider, &item).as_deref(),
+                Some("secret-value"),
+                "{item_type:?}: value written to the default field was not readable without naming a field"
+            );
+        }
+    }
+
+    #[test]
+    fn named_custom_field_round_trips_for_every_item_type() {
+        // The original R2 case: an explicitly named field that matches none of a
+        // type's built-ins has to be stored as that named custom field, not
+        // folded into the type's primary field.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+
+        for item_type in ALL_ITEM_TYPES {
+            let template = template_for(
+                &provider,
+                item_type,
+                "Named Field",
+                "sk_test_123",
+                "api_key",
+            );
+            let item = item_from_template(template);
+
+            let by_name = provider
+                .extract_from_custom_fields(&item, "api_key")
+                .expect("extraction must not fail");
+
+            assert_eq!(
+                by_name.as_deref(),
+                Some("sk_test_123"),
+                "{item_type:?}: value written to field=api_key was not stored as that custom field"
+            );
+        }
+    }
+
+    /// Applies the update path's JSON mutation for `item_type`.
+    ///
+    /// `update_existing_item` fetches the item and writes it back through the
+    /// CLI; the mutation in between is pure, and is the part that decides which
+    /// field a fieldless `set` lands in.
+    fn apply_update(
+        provider: &BitwardenProvider,
+        item_type: BitwardenItemType,
+        item_json: &mut serde_json::Value,
+        field: &str,
+        value: &str,
+    ) {
+        let result = match item_type {
+            BitwardenItemType::Login => provider.update_login_item_json(item_json, field, value),
+            BitwardenItemType::SecureNote => {
+                provider.update_secure_note_item_json(item_json, field, value)
+            }
+            BitwardenItemType::Card => provider.update_card_item_json(item_json, field, value),
+            BitwardenItemType::Identity => {
+                provider.update_identity_item_json(item_json, field, value)
+            }
+            BitwardenItemType::SshKey => provider.update_ssh_key_item_json(item_json, field, value),
+        };
+        result.expect("update must not fail");
+    }
+
+    #[test]
+    fn update_after_create_round_trips_for_every_item_type() {
+        // R3's shape: create with no field named, `set` again with no field
+        // named, then read with no field named. Creation and update have to
+        // choose the same field, or `set` reports success while `get` keeps
+        // returning the value from before it.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+
+        for item_type in ALL_ITEM_TYPES {
+            let mut item_json = template_for(
+                &provider,
+                item_type,
+                "Update Round Trip",
+                "first-value",
+                item_type.default_field(),
+            );
+
+            apply_update(
+                &provider,
+                item_type,
+                &mut item_json,
+                item_type.default_field(),
+                "second-value",
+            );
+
+            let item = item_from_template(item_json);
+            assert_eq!(
+                read_without_naming_a_field(&provider, &item).as_deref(),
+                Some("second-value"),
+                "{item_type:?}: update wrote somewhere an unqualified read does not look"
+            );
+        }
+    }
+
+    #[test]
+    fn update_reaches_the_field_reads_prefer_on_a_legacy_secure_note() {
+        // A Secure Note carrying both a `value` custom field and a note body,
+        // which is the shape earlier versions produced. Reads prefer the custom
+        // field, so an update that writes the body instead leaves `get`
+        // returning the stale value. This is what pins the Secure Note default
+        // to `value` rather than `notes`: with no legacy data present both
+        // choices round-trip, so only this case distinguishes them.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let mut item_json = serde_json::json!({
+            "type": BitwardenItemType::SecureNote.to_u8(),
+            "name": "Legacy Note",
+            "notes": "stale-body",
+            "secureNote": { "type": 0 },
+            "fields": [
+                { "name": "value", "value": "stale-custom-field", "type": 1 }
+            ]
+        });
+
+        apply_update(
+            &provider,
+            BitwardenItemType::SecureNote,
+            &mut item_json,
+            BitwardenItemType::SecureNote.default_field(),
+            "fresh-value",
+        );
+
+        let item = item_from_template(item_json);
+        assert_eq!(
+            read_without_naming_a_field(&provider, &item).as_deref(),
+            Some("fresh-value"),
+            "update must write the field an unqualified read consults first"
+        );
+    }
+
+    #[test]
+    fn default_field_does_not_depend_on_the_item_name() {
+        // The default is per type, never derived from the name. Reads resolve a
+        // field from the address, env, or URI and never look at the name, so a
+        // name-derived write target could not be mirrored by a read.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+
+        for name in [
+            "MY_TOTP_SECRET",
+            "cardholder name",
+            "user login",
+            "public key",
+        ] {
+            for item_type in ALL_ITEM_TYPES {
+                let template =
+                    template_for(&provider, item_type, name, "v", item_type.default_field());
+                let item = item_from_template(template);
+                assert_eq!(
+                    read_without_naming_a_field(&provider, &item).as_deref(),
+                    Some("v"),
+                    "{item_type:?} named {name:?}: the name must not change where the value lands"
+                );
+            }
+        }
     }
 
     #[test]

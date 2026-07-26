@@ -13,7 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   servers are configured with `bw config server` before logging in, since the
   `bw` CLI accepts a server only from its own configuration; `bw://?server=`
   records the expected address and fails with remediation steps when the CLI
-  points elsewhere.
+  points elsewhere. When no field is named, the field used depends only on the
+  item type (`password`, `number`, `email`, `private_key`, or a `value` custom
+  field for secure notes) and is the same for reads and writes, so a plain
+  `set` followed by a plain `get` returns what was written; address any other
+  field with `?field=` or `ref = { item, field }`.
 - `secretspec config global init --provider <PROVIDER> --profile <PROFILE>`
   can save explicitly user-global defaults without interactive prompts,
   including `--profile none` to clear the default profile. The `global`

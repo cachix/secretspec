@@ -106,21 +106,17 @@ impl Default for SopsConfig {
 }
 
 fn split_template_path(path: &str) -> (PathBuf, String) {
-    let bytes = path.as_bytes();
-    let mut first_placeholder = None;
-
-    for i in 0..bytes.len() {
-        if bytes[i] == b'{' {
-            first_placeholder = Some(i);
-            break;
-        }
-    }
-
-    match first_placeholder {
+    match path.find('{') {
         None => (PathBuf::from(path), String::new()),
         Some(idx) => {
-            let (dir, pat) = path.split_at(idx);
-            (PathBuf::from(dir.trim_end_matches('/')), pat.to_string())
+            let prefix = &path[..idx];
+            match prefix.rfind(['/', '\\']) {
+                Some(separator) => (
+                    PathBuf::from(&path[..separator]),
+                    path[separator + 1..].to_string(),
+                ),
+                None => (PathBuf::new(), path.to_string()),
+            }
         }
     }
 }
@@ -249,6 +245,12 @@ impl SopsConfig {
                 cmd.env(spec.env_key, self.rebase_path(v.to_path_buf()));
             }
         }
+
+        if self.sops_config.is_none()
+            && let Some(path) = self.discover_sops_config()
+        {
+            cmd.env("SOPS_CONFIG", path);
+        }
     }
 
     pub fn apply_query_parameter(&mut self, key: &str, value: &str) -> Result<()> {
@@ -287,12 +289,22 @@ impl SopsConfig {
 
         return path;
     }
+
+    fn discover_sops_config(&self) -> Option<PathBuf> {
+        self.base_dir.as_deref().and_then(|base_dir| {
+            base_dir
+                .ancestors()
+                .map(|directory| directory.join(".sops.yaml"))
+                .find(|candidate| candidate.is_file())
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Provider;
+    use std::fs;
     use url::Url;
 
     #[test]
@@ -363,5 +375,38 @@ mod tests {
         let url = Url::parse("sops://secrets.enc?format=ini").unwrap();
         let result: std::result::Result<Box<dyn Provider>, _> = (&url).try_into();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn template_literal_prefix_stays_in_the_pattern() {
+        let url =
+            Url::parse("sops://secrets-{project}/{profile}.enc.json").expect("valid SOPS URL");
+        let provider_url = ProviderUrl::new(url);
+        let config = SopsConfig::try_from(&provider_url).expect("valid SOPS config");
+
+        match config.mode {
+            SopsMode::Directory { path, pattern, .. } => {
+                assert!(path.as_os_str().is_empty());
+                assert_eq!(
+                    pattern.render("myapp", "production"),
+                    PathBuf::from("secrets-myapp/production.enc.json")
+                );
+            }
+            mode => panic!("expected directory mode, got {mode:?}"),
+        }
+    }
+
+    #[test]
+    fn project_sops_config_is_discovered_from_the_manifest_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let nested = root.path().join("services/api");
+        fs::create_dir_all(&nested).unwrap();
+        let expected = root.path().join(".sops.yaml");
+        fs::write(&expected, "creation_rules: []\n").unwrap();
+
+        let mut config = SopsConfig::default();
+        config.with_base_dir(&nested);
+
+        assert_eq!(config.discover_sops_config(), Some(expected));
     }
 }

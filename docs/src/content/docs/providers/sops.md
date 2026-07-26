@@ -150,11 +150,11 @@ For example, this alias loads an age identity from the system keyring and
 passes it only to the SOPS child process:
 
 ```toml title="secretspec.toml"
-[providers]
-sops_age = {
-  uri = "sops://secrets.enc.yaml?age_recipients=age1example",
-  credentials = { age_key = "keyring" }
-}
+[providers.sops_age]
+uri = "sops://secrets.enc.yaml?age_recipients=age1example"
+
+[providers.sops_age.credentials]
+age_key = "keyring"
 
 [profiles.production.defaults]
 providers = ["sops_age"]
@@ -179,21 +179,22 @@ extension is reported as a configuration error.
 YAML and JSON single-file layouts can nest values by project and profile. INI
 uses profile sections, while dotenv is always flat; in a single dotenv file,
 the same key therefore cannot hold different values for different profiles.
-Use a templated path such as `.env.{profile}.enc?format=dotenv` when profiles
-need separate dotenv values.
+Use a templated path such as
+`secrets/{project}/.env.{profile}.enc?format=dotenv` when profiles need
+separate dotenv values.
 
 ## Usage
 
 ### Set a secret with age
 
 ```bash
-$ secretspec set DATABASE_URL --provider sops://secrets.enc.json?age_key_file=key.txt&age_recipients=age1jpa8rf5qmrg6pw444fcgpkaxg8x4neueszrexzagdjpunjlgeyzq304w34
-
+$ secretspec set DATABASE_URL --provider 'sops://secrets.enc.json?age_key_file=key.txt&age_recipients=age1jpa8rf5qmrg6pw444fcgpkaxg8x4neueszrexzagdjpunjlgeyzq304w34'
 ```
 
-Or, if `keys.txt` exists in a place discoverable by SOPS, and `.sops.yaml` exists in the project and has been configured e.g.
+Or, if `keys.txt` exists in a place discoverable by SOPS and `.sops.yaml`
+exists next to the project's `secretspec.toml`, configure a creation rule:
 
-```yaml sops.yaml
+```yaml title=".sops.yaml"
 creation_rules:
   - path_regex: secrets.enc.json$
     age: "age1jpa8rf5qmrg6pw444fcgpkaxg8x4neueszrexzagdjpunjlgeyzq304w34"
@@ -203,5 +204,4 @@ then:
 
 ```bash
 $ secretspec set DATABASE_URL --provider sops://secrets.enc.json
-
 ```

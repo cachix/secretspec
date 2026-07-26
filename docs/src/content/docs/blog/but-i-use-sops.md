@@ -96,11 +96,11 @@ grow without touching them. Three open proposals point where it is heading:
 - [Lease-aware refresh](https://github.com/cachix/secretspec/issues/11) would
   let running applications follow key rotation and short-lived credentials
   instead of restarting for a new value.
-- A [native SOPS provider](https://github.com/cachix/secretspec/pull/58) would
-  bring SOPS itself behind the same SDK interface, making your encrypted files
-  one more place secrets can come from.
+- The [SOPS provider](/providers/sops/) (0.17+) brings SOPS itself behind the
+  same SDK interface, making your encrypted files one more place secrets can
+  come from.
 
-Once that provider lands, perhaps “But I use SOPS” just needs two more words:
+With that provider, perhaps “But I use SOPS” just needs two more words:
 
 > But I use SOPS with SecretSpec.
 

@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (not on HTTP 4xx/5xx), with a short backoff between attempts.
 
 ### Added
+- SOPS provider (`sops://`, `sops` build feature) for reading and writing
+  YAML, JSON, dotenv, and INI files through the SOPS CLI, including templated
+  per-project/profile paths and provider-credential injection for encryption
+  keys and cloud authentication. Writes are serialized and atomically replace
+  encrypted files, with secret values passed to SOPS over standard input.
 - Scaleway Secret Manager provider (`scaleway://`, `scaleway` build feature) for
   storing secrets in Scaleway's Secret Manager over its v1beta1 REST API.
   Authenticates with an API secret key (`secret_key` credential or

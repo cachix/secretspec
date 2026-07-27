@@ -78,6 +78,7 @@ $ secretspec config global init  # 0.17+
   akv: Azure Key Vault
   infisical: Infisical secret management (0.16+)
   age: age-encrypted file (0.17+)
+  sops: SOPS encrypted files (0.17+)
 ? Select your default profile:
 > development
   default
@@ -171,6 +172,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Azure Key Vault](https://secretspec.dev/providers/akv)** - Azure secret management
 - **[Infisical](https://secretspec.dev/providers/infisical)** (0.16+) - Infisical secret management
 - **[age](https://secretspec.dev/providers/age)** (0.17+) - age-encrypted file
+- **[SOPS](https://secretspec.dev/providers/sops)** (0.17+) - SOPS-encrypted files
 
 ```bash
 $ secretspec run --provider keyring -- npm start

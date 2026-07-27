@@ -67,6 +67,21 @@ jobs:
           echo "::endgroup::"
         done
 
+  package:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - name: Install Rust
+      run: rustup toolchain install stable --profile minimal
+    - name: Verify the published crate contains its schema fixture
+      shell: bash
+      run: |
+        set -euo pipefail
+        fixture="secretspec/src/fixtures/resolution-report.schema.json"
+        cmp schema/resolution-report.schema.json "$fixture"
+        cargo package --package secretspec --list |
+          grep -Fx 'src/fixtures/resolution-report.schema.json'
+
   # Windows runners can't run Nix/devenv, so the suite runs here natively via
   # rustup + cargo. This exists specifically to catch Windows-only path handling
   # regressions (e.g. config discovery and relative `-f` paths, issue #59), which

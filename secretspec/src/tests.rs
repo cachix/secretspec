@@ -7920,8 +7920,7 @@ secrets = ["UNRELATED"]
 
         let instance = serde_json::to_value(&report).unwrap();
         let schema: serde_json::Value =
-            serde_json::from_str(include_str!("../../schema/resolution-report.schema.json"))
-                .unwrap();
+            serde_json::from_str(include_str!("fixtures/resolution-report.schema.json")).unwrap();
         let validator = jsonschema::validator_for(&schema).expect("the committed schema compiles");
         let errors: Vec<String> = validator
             .iter_errors(&instance)

@@ -9,7 +9,19 @@ name: "Go embedded lib"
 
 on:
   workflow_call:
+    inputs:
+      release_tag:
+        description: Existing GitHub Release tag to upload artifacts to
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub Release tag to upload artifacts to
+        required: false
+        type: string
+        default: ""
   push:
     tags:
       - v**
@@ -91,3 +103,60 @@ jobs:
         with:
           name: go-embed-${{ matrix.target }}
           path: secretspec-go/lib/*
+
+  release:
+    name: Publish Go release
+    needs: embed
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: go-embed-*
+          path: staged
+          merge-multiple: true
+
+      - name: Attach embedded libraries to the GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find staged -type f -name 'secretspec_ffi_*' -print | sort)
+          if [[ "${#assets[@]}" -ne 4 ]]; then
+            printf 'expected 4 embedded libraries, found %s\n' "${#assets[@]}" >&2
+            printf '%s\n' "${assets[@]}" >&2
+            exit 1
+          fi
+          bash scripts/upload-release-asset.sh \
+            "${{ inputs.release_tag || github.ref_name }}" "${assets[@]}"
+
+      - name: Publish the Go module tag
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          module_tag="secretspec-go/${GITHUB_REF_NAME}"
+          if git fetch origin "refs/tags/${module_tag}:refs/tags/${module_tag}"; then
+            existing_commit="$(git rev-list -n 1 "$module_tag")"
+            if [[ "$existing_commit" != "$GITHUB_SHA" ]]; then
+              echo "${module_tag} already points to ${existing_commit}, expected ${GITHUB_SHA}" >&2
+              exit 1
+            fi
+            echo "${module_tag} already points to ${GITHUB_SHA}"
+            exit 0
+          fi
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git tag -a "$module_tag" "$GITHUB_SHA" \
+            -m "Release Go SDK ${GITHUB_REF_NAME#v}"
+          git push origin "refs/tags/${module_tag}"

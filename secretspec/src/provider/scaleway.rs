@@ -38,7 +38,7 @@
 //! ```
 
 use super::{
-    Address, Provider, ProviderCredentials, ProviderUrl, credential_or_envs, preferred_env,
+    Address, Layout, Provider, ProviderCredentials, ProviderUrl, credential_or_envs, preferred_env,
 };
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
@@ -70,6 +70,9 @@ pub struct ScalewayConfig {
     /// Base folder prepended to the convention hierarchy. Normalized to a
     /// leading slash with no trailing slash; `/` (root) is the default.
     pub path: String,
+    /// How the `{project}/{profile}/{key}` convention maps onto the folder
+    /// hierarchy. The shared, cross-provider `?layout=` setting.
+    pub layout: Layout,
 }
 
 impl TryFrom<&ProviderUrl> for ScalewayConfig {
@@ -106,10 +109,15 @@ impl TryFrom<&ProviderUrl> for ScalewayConfig {
 
         let path = normalize_path(url.query_value("path").as_deref().unwrap_or("/"));
 
+        // `layout` is the shared, cross-provider setting, parsed the same way
+        // for every provider rather than reinterpreted here.
+        let layout = url.layout()?;
+
         Ok(Self {
             region,
             project_id,
             path,
+            layout,
         })
     }
 }
@@ -174,11 +182,25 @@ impl ScalewayProvider {
         }
     }
 
-    /// Builds the convention item as an absolute Scaleway path
-    /// `[{base}/]secretspec/{project}/{profile}/{key}`. The folder is
-    /// everything up to the last segment; the name is `{key}`.
-    fn format_item(base: &str, project: &str, profile: &str, key: &str) -> Result<String> {
-        for (label, value) in [("project", project), ("profile", profile), ("key", key)] {
+    /// Builds the convention item as an absolute Scaleway path. Under the
+    /// nested layout that is `[{base}/]secretspec/{project}/{profile}/{key}`;
+    /// under the flat layout the scaffolding is dropped and the secret is
+    /// `[{base}/]{key}`. The folder is everything up to the last segment; the
+    /// name is `{key}`.
+    fn format_item(
+        base: &str,
+        layout: Layout,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<String> {
+        // Under flat, project and profile name no path segment, so they are
+        // not required to be present.
+        let required: &[(&str, &str)] = match layout {
+            Layout::Nested => &[("project", project), ("profile", profile), ("key", key)],
+            Layout::Flat => &[("key", key)],
+        };
+        for (label, value) in required {
             if value.is_empty() {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
                     "{label} cannot be empty"
@@ -188,7 +210,10 @@ impl ScalewayProvider {
         // `base` is already normalized ("/" or "/prefix"); trim its slash so we
         // never emit a double slash when composing the hierarchy.
         let base = base.trim_end_matches('/');
-        Ok(format!("{base}/secretspec/{project}/{profile}/{key}"))
+        Ok(match layout {
+            Layout::Nested => format!("{base}/secretspec/{project}/{profile}/{key}"),
+            Layout::Flat => format!("{base}/{key}"),
+        })
     }
 
     /// Splits an absolute item path into `(secret_path, secret_name)`. The path
@@ -475,7 +500,7 @@ impl Provider for ScalewayProvider {
     /// Convention secrets live at `[{base}/]secretspec/{project}/{profile}/{key}`.
     fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
         Ok(NativeAddress {
-            item: Self::format_item(&self.config.path, project, profile, key)?,
+            item: Self::format_item(&self.config.path, self.config.layout, project, profile, key)?,
             ..Default::default()
         })
     }
@@ -501,6 +526,9 @@ impl Provider for ScalewayProvider {
                 "path={}",
                 ProviderUrl::encode_query(&self.config.path)
             ));
+        }
+        if self.config.layout == Layout::Flat {
+            params.push("layout=flat".to_string());
         }
         if params.is_empty() {
             format!("scaleway://{}", self.config.region)
@@ -592,20 +620,21 @@ mod tests {
     #[test]
     fn format_item_root_and_prefix() {
         assert_eq!(
-            ScalewayProvider::format_item("/", "app", "prod", "DB_URL").unwrap(),
+            ScalewayProvider::format_item("/", Layout::Nested, "app", "prod", "DB_URL").unwrap(),
             "/secretspec/app/prod/DB_URL"
         );
         assert_eq!(
-            ScalewayProvider::format_item("/myteam", "app", "prod", "DB_URL").unwrap(),
+            ScalewayProvider::format_item("/myteam", Layout::Nested, "app", "prod", "DB_URL")
+                .unwrap(),
             "/myteam/secretspec/app/prod/DB_URL"
         );
     }
 
     #[test]
     fn format_item_rejects_empty_components() {
-        assert!(ScalewayProvider::format_item("/", "", "prod", "K").is_err());
-        assert!(ScalewayProvider::format_item("/", "app", "", "K").is_err());
-        assert!(ScalewayProvider::format_item("/", "app", "prod", "").is_err());
+        assert!(ScalewayProvider::format_item("/", Layout::Nested, "", "prod", "K").is_err());
+        assert!(ScalewayProvider::format_item("/", Layout::Nested, "app", "", "K").is_err());
+        assert!(ScalewayProvider::format_item("/", Layout::Nested, "app", "prod", "").is_err());
     }
 
     #[test]
@@ -636,6 +665,33 @@ mod tests {
     }
 
     #[test]
+    fn flat_layout_addresses_by_key_alone() {
+        // At the root, the key is the whole path.
+        let p = ScalewayProvider::new(config("scaleway://fr-par?layout=flat"));
+        assert_eq!(
+            p.convention_address("app", "default", "A").unwrap().item,
+            "/A"
+        );
+
+        // A `?path=` prefix still applies -- flat drops the SecretSpec
+        // scaffolding, not the user's own folder.
+        let p = ScalewayProvider::new(config("scaleway://fr-par?path=/myteam&layout=flat"));
+        assert_eq!(
+            p.convention_address("app", "default", "A").unwrap().item,
+            "/myteam/A"
+        );
+    }
+
+    #[test]
+    fn flat_layout_does_not_require_project_or_profile() {
+        // Neither names a path segment under flat, so neither is required.
+        let p = ScalewayProvider::new(config("scaleway://fr-par?layout=flat"));
+        assert_eq!(p.convention_address("", "", "A").unwrap().item, "/A");
+        // The key still is.
+        assert!(p.convention_address("app", "default", "").is_err());
+    }
+
+    #[test]
     fn uri_round_trips() {
         let p = ScalewayProvider::new(config(
             "scaleway://nl-ams?project_id=11111111-2222-3333-4444-555555555555&path=/myteam",
@@ -647,6 +703,15 @@ mod tests {
         // Bare region, default path: no query string.
         assert_eq!(
             ScalewayProvider::new(config("scaleway://fr-par")).uri(),
+            "scaleway://fr-par"
+        );
+        // The non-default layout is rendered; the default one stays implicit.
+        assert_eq!(
+            ScalewayProvider::new(config("scaleway://fr-par?layout=flat")).uri(),
+            "scaleway://fr-par?layout=flat"
+        );
+        assert_eq!(
+            ScalewayProvider::new(config("scaleway://fr-par?layout=nested")).uri(),
             "scaleway://fr-par"
         );
     }

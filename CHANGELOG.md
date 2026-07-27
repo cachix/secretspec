@@ -157,8 +157,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `secretspec/{project}/{profile}` scaffolding — the natural shape for a
   single-project store, such as one migrated from another secret manager.
   Supported by every hierarchical provider (Infisical, Vault, OpenBao, AWS
-  Secrets Manager, Google Cloud Secret Manager and Azure Key Vault); providers with no
-  hierarchy (`dotenv`, `env`, `bws`) are already flat and ignore it. Any
+  Secrets Manager, Google Cloud Secret Manager, Azure Key Vault and Scaleway
+  Secret Manager); providers with no hierarchy (`dotenv`, `env`, `bws`) are
+  already flat and ignore it. Any
   provider-native container (a Vault mount) or user-supplied prefix (an AWS
   `?prefix=`, an Infisical `?path=`) still applies. The default nested layout is
   unchanged. Dropping the profile gives up profile separation, so a provider

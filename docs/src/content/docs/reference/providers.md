@@ -378,8 +378,8 @@ Added in SecretSpec 0.17. `?layout=flat` is not available in SecretSpec 0.16 or 
 :::
 
 `?layout=` is a **general provider setting**, spelled the same way across every provider whose
-store has a hierarchy: Infisical, Vault, OpenBao, AWS Secrets Manager, Google Cloud Secret Manager
-and Azure Key Vault. It controls how SecretSpec's `{project}/{profile}/{key}` naming convention maps onto the
+store has a hierarchy: Infisical, Vault, OpenBao, AWS Secrets Manager, Google Cloud Secret Manager,
+Azure Key Vault and Scaleway Secret Manager. It controls how SecretSpec's `{project}/{profile}/{key}` naming convention maps onto the
 store:
 
 - **`nested`** (the default) keeps the `secretspec/{project}/{profile}` scaffolding, so many

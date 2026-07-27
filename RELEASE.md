@@ -9,7 +9,9 @@ build + install) has been verified running end to end in CI, but the actual
 publish steps below have not (they need the one-time external Trusted
 Publisher / secret setup described per language first).
 
-Version tags are `vX.Y.Z`; the publish jobs trigger on them.
+Version tags are `vX.Y.Z`; the publish jobs trigger on them. After the Go
+release build succeeds, CI also creates the submodule tag
+`secretspec-go/vX.Y.Z`, which is the version the Go module proxy resolves.
 
 ## After every release
 
@@ -87,9 +89,10 @@ do — the first `vX.Y.Z` tag's `haskell-build.yml` publish job uploads with it.
 
 ### Go — nothing to set up
 
-No registry involved. `go get` reads the tag directly from git; `go-embed.yml`
-just attaches per-platform cdylibs to the GitHub Release for the optional
-self-contained build.
+No registry involved. `go get` reads the `secretspec-go/vX.Y.Z` submodule tag
+directly from git. `go-embed.yml` creates that tag after its full platform
+matrix succeeds and attaches the per-platform cdylibs to the GitHub Release for
+the optional self-contained build.
 
 ### Packagist (PHP) — not yet set up
 
@@ -170,9 +173,11 @@ self-contained, vendored build — not a module-proxy install).
 
 - **Build:** `go-embed.yml` builds the per-platform libs, uploads them as
   artifacts, and smoke-tests an `-tags embed_lib` build with a staged lib.
-- **Release:** nothing to publish to a registry. Attach the per-platform cdylibs
-  to the GitHub release so users who want a self-contained build can download and
-  stage them. Do **not** commit binaries to the repo (plain git or LFS).
+- **Release:** nothing is pushed to a registry. On a `vX.Y.Z` release,
+  `go-embed.yml` attaches the per-platform cdylibs to the GitHub Release and
+  creates `secretspec-go/vX.Y.Z` at the same commit for `go get`.
+  `go-static.yml` attaches its musl static SDK bundle separately. Do **not**
+  commit binaries to the repo (plain git or LFS).
 
 > The loader rejects an embedded git-LFS pointer with a clear error, so a botched
 > LFS-based build fails loudly instead of feeding pointer text to `dlopen`.

@@ -11,6 +11,19 @@ Publisher / secret setup described per language first).
 
 Version tags are `vX.Y.Z`; the publish jobs trigger on them.
 
+## After every release
+
+Once the release artifacts are available, update the `secretspec` package in
+Nixpkgs. From a Nixpkgs checkout, let `nix-update` update the crate source and
+Cargo dependency hashes and verify that the package builds:
+
+```bash
+nix-update --version=X.Y.Z --build secretspec
+```
+
+Commit the generated package change as `secretspec: OLD -> X.Y.Z`, include the
+GitHub release URL in the commit body, and submit it to Nixpkgs.
+
 ## Before your first release
 
 Trusted Publishing works differently per registry. PyPI and RubyGems let you

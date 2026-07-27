@@ -206,6 +206,10 @@ release. With 0.16, give each service its own profile, or its own
 `secretspec.toml`.
 :::
 
+See [Scopes](/concepts/scopes/) for the conceptual model and a focused
+guide to narrowing services and tasks. This section specifies the complete
+configuration and resolution behavior.
+
 Scopes name membership-only subsets of a profile's secrets, so a single service
 or task resolves only what it declares instead of the entire profile. They are
 **orthogonal to profiles**: a profile decides how each secret resolves

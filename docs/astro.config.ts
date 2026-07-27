@@ -165,6 +165,11 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
             },
             { label: "Profiles", slug: "concepts/profiles" },
             {
+              label: "Scopes",
+              slug: "concepts/scopes",
+              badge: { text: "0.17+", variant: "note" },
+            },
+            {
               label: "Providers",
               items: [
                 { label: "Providers", slug: "concepts/providers" },

@@ -1,5 +1,5 @@
 ---
-title: "SecretSpec 0.17: Scopes, secrets caching, age, and systemd credentials"
+title: "SecretSpec 0.17: Scopes, secrets caching, SOPS, age, and systemd credentials"
 description: Resolve only the secrets a service needs, cache remote secrets safely, and use age-encrypted files or native systemd credentials alongside new providers.
 date: 2026-07-27
 authors:

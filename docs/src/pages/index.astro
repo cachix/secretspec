@@ -262,7 +262,7 @@ $ secretspec run --profile production -- npm start
     <div class="landing-section-centered">
       <h2 class="landing-section-title">Make the declaration your source of truth.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        The manifest describes <strong>what</strong> your application needs. Profiles describe <strong>when</strong> it is required. Providers decide <strong>where</strong> each value comes from.
+        The manifest describes <strong>what</strong> your application needs. Profiles describe <strong>when</strong> it is required. Providers decide <strong>where</strong> each value comes from. Scopes (0.17+) decide <strong>which consumer receives it</strong>.
       </p>
     </div>
 
@@ -286,6 +286,33 @@ $ secretspec run --profile production -- npm start
         <p class="landing-bento-title">Auto-generation</p>
         <p class="landing-bento-desc">Create a password, token, or key automatically when a required value does not exist yet.</p>
         <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">DB_PASSWORD</span> <span class="tok-pun">= {</span> <span class="tok-key">type</span> <span class="tok-pun">=</span> <span class="tok-str">"password"</span><span class="tok-pun">,</span> <span class="tok-key">generate</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span></code></pre>
+      </a>
+
+      <a href="/concepts/scopes/" class="landing-bento-card is-link landing-bento-2">
+        <p class="landing-bento-title">Scopes (0.17+)</p>
+        <p class="landing-bento-desc">Resolve and expose only the declared subset of secrets that each service, command, or task needs.</p>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-sec">[scopes.api]</span>
+<span class="tok-key">secrets</span> <span class="tok-pun">= [</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">,</span> <span class="tok-str">"API_KEY"</span><span class="tok-pun">]</span></code></pre>
+      </a>
+
+      <a href="/concepts/providers/caching/" class="landing-bento-card is-link landing-bento-2">
+        <p class="landing-bento-title">Provider caching (0.17+)</p>
+        <p class="landing-bento-desc">Reuse a fresh local copy of a slow provider route for a configured window, with explicit invalidation.</p>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">fast_vault</span> <span class="tok-pun">= {</span>
+  <span class="tok-key">fallback</span> <span class="tok-pun">= [</span><span class="tok-str">"vault"</span><span class="tok-pun">],</span>
+  <span class="tok-key">cache</span> <span class="tok-pun">= {</span> <span class="tok-key">provider</span> <span class="tok-pun">=</span> <span class="tok-str">"local"</span><span class="tok-pun">,</span> <span class="tok-key">max_age</span> <span class="tok-pun">=</span> <span class="tok-str">"8h"</span> <span class="tok-pun">}</span>
+<span class="tok-pun">}</span></code></pre>
+      </a>
+
+      <a href="/reference/configuration/#cross-secret-presence-constraints-017" class="landing-bento-card is-link landing-bento-2">
+        <p class="landing-bento-title">Credential alternatives (0.17+)</p>
+        <p class="landing-bento-desc">Require at least one credential—or exactly one—without treating every alternative as independently required.</p>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">PASSWORD</span> <span class="tok-pun">= {</span>
+  <span class="tok-key">required</span> <span class="tok-pun">= {</span> <span class="tok-key">at_least_one</span> <span class="tok-pun">=</span> <span class="tok-str">"auth"</span> <span class="tok-pun">}</span>
+<span class="tok-pun">}</span>
+<span class="tok-key">ACCESS_TOKEN</span> <span class="tok-pun">= {</span>
+  <span class="tok-key">required</span> <span class="tok-pun">= {</span> <span class="tok-key">at_least_one</span> <span class="tok-pun">=</span> <span class="tok-str">"auth"</span> <span class="tok-pun">}</span>
+<span class="tok-pun">}</span></code></pre>
       </a>
 
       <a href="/concepts/composed-secrets/" class="landing-bento-card is-link landing-bento-3">
@@ -440,6 +467,60 @@ println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span cla
         </div>
       </div>
     </div>
+  </div>
+</section>
+
+<!-- ============ SHOWCASE: scopes ============ -->
+<section class="landing-showcase">
+  <div class="landing-container">
+    <div class="landing-showcase-head">
+      <span class="landing-showcase-eyebrow">Scopes · 0.17+</span>
+      <h2 class="landing-section-title">Give each service only the secrets it needs.</h2>
+      <p class="landing-section-lead landing-section-lead-narrow">
+        Keep one profile for an environment, then select an allowlist for each service, command, or task. Secrets outside the selected scope are not exposed to the child process. <a href="/concepts/scopes/" class="landing-link">How scopes work →</a>
+      </p>
+    </div>
+
+    <div class="landing-fallback">
+      <div class="landing-terminal">
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">secretspec.toml</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[profiles.default]</span>
+<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"Database"</span> <span class="tok-pun">}</span>
+<span class="tok-key">API_KEY</span>      <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"API key"</span> <span class="tok-pun">}</span>
+<span class="tok-key">QUEUE_TOKEN</span>  <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"Queue token"</span> <span class="tok-pun">}</span>
+
+<span class="tok-sec">[scopes.api]</span>
+<span class="tok-key">secrets</span> <span class="tok-pun">= [</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">,</span> <span class="tok-str">"API_KEY"</span><span class="tok-pun">]</span>
+
+<span class="tok-sec">[scopes.worker]</span>
+<span class="tok-key">secrets</span> <span class="tok-pun">= [</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">,</span> <span class="tok-str">"QUEUE_TOKEN"</span><span class="tok-pun">]</span></code></pre>
+      </div>
+
+      <div class="landing-terminal">
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">terminal</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># The API receives its database and API credentials</span>
+$ secretspec run --profile production --scope api -- ./api
+<span class="tok-str">✓</span> Loaded DATABASE_URL
+<span class="tok-str">✓</span> Loaded API_KEY
+<span class="tok-pun">›</span> ./api
+
+<span class="tok-com"># The worker receives its database and queue credentials</span>
+$ secretspec run --profile production --scope worker -- ./worker
+<span class="tok-str">✓</span> Loaded DATABASE_URL
+<span class="tok-str">✓</span> Loaded QUEUE_TOKEN
+<span class="tok-pun">›</span> ./worker</code></pre>
+      </div>
+    </div>
+
+    <p class="landing-chain-result" style="margin-top: 1.5rem;">
+      Scopes minimize secret delivery; they are not an authorization boundary when the child process can access provider credentials.
+    </p>
   </div>
 </section>
 
@@ -631,14 +712,14 @@ $ secretspec audit -n 1
   </div>
 </section>
 
-<!-- ============ SHOWCASE: export ============ -->
+<!-- ============ SHOWCASE: export and Actions ============ -->
 <section class="landing-showcase">
   <div class="landing-container">
     <div class="landing-showcase-head">
-      <span class="landing-showcase-eyebrow">Export</span>
-      <h2 class="landing-section-title">Export secrets to shells, tools, and CI.</h2>
+      <span class="landing-showcase-eyebrow">Export &amp; Actions</span>
+      <h2 class="landing-section-title">Send secrets to shells, tools, and CI.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Export the active profile for a shell, another tool, or a CI workflow. Required secrets are still validated before any output is produced. <a href="/reference/cli/#export" class="landing-link">Export command reference →</a>
+        Export the active profile for a shell or another tool, or resolve it in GitHub and Forgejo Actions with one workflow step. Required secrets are validated before any output is produced. <a href="/reference/cli/#export" class="landing-link">Export command reference →</a>
       </p>
     </div>
 
@@ -660,21 +741,22 @@ $ secretspec export --format json
       <div class="landing-terminal">
         <div class="landing-terminal-header">
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">GitHub Actions</span>
+          <span class="landing-terminal-title">GitHub &amp; Forgejo Actions (0.17+)</span>
         </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Make secrets available to later workflow steps</span>
-- <span class="tok-key">name</span><span class="tok-pun">:</span> Export secrets
-  <span class="tok-key">run</span><span class="tok-pun">:</span> secretspec export --format gha
+        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Resolve only the API deployment scope</span>
+- <span class="tok-key">uses</span><span class="tok-pun">:</span> actions/checkout@v7
+- <span class="tok-key">uses</span><span class="tok-pun">:</span> cachix/secretspec-action@main
+  <span class="tok-key">with</span><span class="tok-pun">:</span>
+    <span class="tok-key">profile</span><span class="tok-pun">:</span> production
+    <span class="tok-key">scope</span><span class="tok-pun">:</span> api
+- <span class="tok-key">run</span><span class="tok-pun">:</span> ./deploy.sh
 
-- <span class="tok-key">name</span><span class="tok-pun">:</span> Deploy
-  <span class="tok-key">run</span><span class="tok-pun">:</span> ./deploy
-
-<span class="tok-com"># Values are added to $GITHUB_ENV and masked in logs</span></code></pre>
+<span class="tok-com"># Later steps receive masked, validated secrets</span></code></pre>
       </div>
     </div>
 
     <p class="landing-chain-result" style="margin-top: 1.5rem;">
-      Choose shell, dotenv, JSON, or GitHub Actions output without maintaining a separate secret list for each tool.
+      The 0.17+ action masks every value, fails when a required secret is missing, and exposes the selected scope to later steps. Vault and OpenBao can use the runner's OIDC identity instead of a stored provider credential. <a href="/ci/github-actions/" class="landing-link">Configure Actions →</a>
     </p>
   </div>
 </section>

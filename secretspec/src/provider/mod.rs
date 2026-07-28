@@ -29,6 +29,7 @@
 //! - [`dashlane::DashlaneProvider`]: Dashlane integration, read-only (0.18+)
 //! - [`gcsm::GcsmProvider`]: Google Cloud Secret Manager integration
 //! - [`awssm::AwssmProvider`]: AWS Secrets Manager integration
+//! - [`awsps::AwspsProvider`]: AWS Systems Manager Parameter Store integration (0.18+)
 //! - [`vault::VaultProvider`]: HashiCorp Vault integration
 //! - [`openbao::OpenBaoProvider`]: OpenBao integration (0.17+)
 //! - [`bws::BwsProvider`]: Bitwarden Secrets Manager integration
@@ -280,6 +281,8 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
 pub mod age;
 #[cfg(feature = "akv")]
 pub mod akv;
+#[cfg(feature = "awsps")]
+pub mod awsps;
 #[cfg(feature = "awssm")]
 pub mod awssm;
 #[cfg(feature = "bws")]

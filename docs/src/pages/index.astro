@@ -51,6 +51,7 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'vault', slug: 'vault', label: 'Vault' },
   { slug: 'openbao', label: 'OpenBao (0.17+)' },
   { slug: 'awssm', label: 'AWS Secrets Manager' },
+  { slug: 'awsps', label: 'AWS Parameter Store (0.18+)' },
   { slug: 'scaleway', label: 'Scaleway Secret Manager (0.17+)' },
   { icon: 'googlecloud', slug: 'gcsm', label: 'Google Cloud Secret Manager' },
   { icon: 'microsoftazure', slug: 'akv', label: 'Azure Key Vault' },
@@ -161,6 +162,7 @@ $ secretspec config global init
   age: age-encrypted file (0.17+)
   sops: SOPS encrypted files (0.17+)
   systemd-credential: Read-only systemd service credentials (0.17+)
+  awsps: AWS Systems Manager Parameter Store (0.18+)
   scaleway: Scaleway Secret Manager (0.17+)
   dashlane: Dashlane password manager, read-only (0.18+)
 <span class="tok-str">✓</span> Saved to ~/.config/secretspec/config.toml
@@ -246,6 +248,7 @@ $ secretspec run --profile production -- npm start
   age: age-encrypted file (0.17+)
   sops: SOPS encrypted files (0.17+)
   systemd-credential: Read-only systemd service credentials (0.17+)
+  awsps: AWS Systems Manager Parameter Store (0.18+)
   scaleway: Scaleway Secret Manager (0.17+)</code></pre>
       </div>
 
@@ -386,6 +389,7 @@ println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span cla
           <button type="button" class="landing-provider-tab" data-provider="vault">Vault</button>
           <button type="button" class="landing-provider-tab" data-provider="openbao">OpenBao (0.17+)</button>
           <button type="button" class="landing-provider-tab" data-provider="awssm">AWS</button>
+          <button type="button" class="landing-provider-tab" data-provider="awsps">AWS PS (0.18+)</button>
           <button type="button" class="landing-provider-tab" data-provider="gcsm">GCP</button>
           <button type="button" class="landing-provider-tab" data-provider="akv">Azure</button>
           <button type="button" class="landing-provider-tab" data-provider="dotenv">.env</button>
@@ -1042,6 +1046,7 @@ REDIS_URL=redis://…</code></pre>
       vault:       'HashiCorp Vault',
       openbao:     'OpenBao (0.17+)',
       awssm:       'AWS Secrets Manager',
+      awsps:        'AWS Parameter Store (0.18+)',
       gcsm:        'Google Cloud Secret Manager',
       akv:         'Azure Key Vault',
       dotenv:      '.env file',

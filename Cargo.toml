@@ -46,6 +46,7 @@ secrecy = { version = "0.10.3", features = ["serde"] }
 google-cloud-secretmanager-v1 = "1.2"
 aws-config = "1"
 aws-sdk-secretsmanager = "1"
+aws-sdk-ssm = "1"
 azure_core = "1.0.0"
 azure_identity = "1.0.0"
 azure_security_keyvault_secrets = "1.0.0"

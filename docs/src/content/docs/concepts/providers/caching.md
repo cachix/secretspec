@@ -8,9 +8,13 @@ Provider caching and `secretspec cache clear` are available starting with
 SecretSpec 0.17.
 :::
 
-A cached alias is a complete provider route: `fallback` contains the
-authoritative providers in read order, while `cache.provider` names the local
-leaf provider used to accelerate reads.
+Remote providers add network, authentication, or external-CLI latency to every
+read, even when values rarely change. Provider caching stores a time-limited
+copy in a faster local store. Fresh entries return immediately; misses and
+expired entries use the authoritative providers and refill the cache.
+
+Configure caching with a cached alias. `fallback` lists the authoritative
+providers in read order, and `cache.provider` selects the local leaf provider:
 
 ```toml title="secretspec.toml"
 [providers]
@@ -29,65 +33,55 @@ providers = ["myprovider"]
 
 ## Read behavior
 
-On a read, SecretSpec:
+SecretSpec reads a cached route in this order:
 
 1. returns a fresh cache entry without constructing or contacting `azure` or
    `env`;
-2. on a miss, expired entry, malformed entry, or cache error, tries `azure` and
-   then `env`;
+2. on a miss, unusable entry, or cache error, tries `azure` and then `env`;
 3. caches the value returned by whichever fallback answers.
 
-Expired values are not returned when every fallback fails. A cache read or
-write failure produces a warning but does not prevent the authoritative route
-from answering.
+Cache failures produce warnings but never block the authoritative route.
+SecretSpec never returns an expired value when all fallbacks fail. It deletes
+expired, malformed, and route-mismatched entries when found so stale copies do
+not remain indefinitely in stores without native expiry.
 
-An entry no read can serve — expired, malformed, or written for a different
-authoritative route — is deleted when it is found, not merely skipped. Most cache
-stores cannot expire a value themselves, and a refresh only overwrites an entry
-when the authoritative read succeeds, so without this an expired value would keep
-its plaintext in the store indefinitely: a `secretspec run` that resolves once
-and then runs for a week leaves an entry nothing revisits until the next command.
-
-Value-free resolution such as `check --json`, `check --explain`, and SDK
-`no_values` requests may read an existing cache and drop an unusable entry, but
-never populate or refresh one.
+Value-free resolutions such as `check --json`, `check --explain`, and SDK
+`no_values` requests may read or discard an existing entry, but never populate
+or refresh one.
 
 ## Writes
 
 Writes and generated values go to the first fallback (`azure` above), then
-refresh the cache. A cache write failure does not hide a successful
-authoritative write.
+refresh the cache. If the refresh fails, the authoritative write still
+succeeds and SecretSpec deletes the old cache entry. If deletion also fails,
+the warning identifies the `cache clear` command to run.
 
-A cached value never outlives the write that superseded it. If the refresh
-fails, the entry is dropped rather than left to be served until it expires, and
-if it cannot even be dropped the warning names the `cache clear` to run.
-
-Select a leaf directly to bypass the cached route for one command:
+Select a leaf provider to bypass the cache for one command:
 
 ```bash
 $ secretspec check --provider azure
 ```
 
-A write through such a bypass (`secretspec set API_KEY --provider azure`) also
-invalidates the cache entry, so the next read sees the value that was just
-written rather than the one it replaced.
+A direct write, such as `secretspec set API_KEY --provider azure`, invalidates
+the corresponding cache entry.
 
 ## Freshness and invalidation
 
 `max_age` requires a unit: `s`, `m`, `h`, `d`, or `w`; compound durations such
 as `1h30m` are accepted.
 
-The cache entry is stored at SecretSpec's logical
-`{project}/{profile}/{secret}` address even when the authoritative secret uses
-a provider-native `ref`. It contains the value, write time, format version, and
-a fingerprint of the fallback route and secret reference. Changing the route
-or reference therefore invalidates an existing entry.
+Entries use SecretSpec's logical `{project}/{profile}/{secret}` address, even
+when the authoritative secret has a provider-native `ref`. Each entry contains
+the value, write time, format version, and a fingerprint of the fallback route
+and secret reference. Changing the route or reference invalidates it.
 
-Because the entry is stored at that same logical address, the cache must be a
-*distinct* store from every provider in `fallback`. A cache that resolves to one
-of its own authoritative sources is rejected when the route is planned: refreshing
-it would overwrite the secret with the cache entry. The `local` alias above keeps
-the cache in its own keyring namespace for exactly this reason.
+The cache must use a distinct store from every provider in `fallback`;
+otherwise, a refresh could overwrite the authoritative secret. SecretSpec
+rejects such routes during planning. The example uses a separate keyring
+namespace for `local`.
+
+The cache provider must also support deletion: keyring, pass, gopass, dotenv,
+or a Vault/OpenBao KV v2 mount. Other providers are rejected during planning.
 
 Clear one entry or every cached entry in the active profile:
 
@@ -96,48 +90,34 @@ $ secretspec cache clear API_KEY          # SecretSpec 0.17+
 $ secretspec cache clear --profile production
 ```
 
-Invalidation is what keeps a cached value from outliving its authoritative one,
-so the cache provider must be a store SecretSpec can delete from: keyring, pass,
-gopass, dotenv, or a Vault/OpenBao KV v2 mount. A cache pointed at any other
-provider is rejected when the route is planned, rather than leaving entries
-nothing could ever clear.
-
 ## Store-side expiry
 
-Where the store can expire a value on its own, SecretSpec asks it to, using the
-same `max_age`. [Vault](/providers/vault/#provider-caching-017) and
-[OpenBao](/providers/openbao/#provider-caching) do this through the KV v2 path's
-`delete_version_after` metadata. The cached copy then stops existing at that age
-even if SecretSpec is never run again, which matters because the entry is a copy
-of a secret another store owns.
+SecretSpec requests native expiry where supported, using `max_age`.
+[Vault](/providers/vault/#provider-caching-017) and
+[OpenBao](/providers/openbao/#provider-caching) set KV v2
+`delete_version_after` metadata. This removes the copy on time even if
+SecretSpec never runs again.
 
-The envelope's own write time stays the authority on freshness: it is what makes
-`max_age` hold for stores that cannot expire anything, and a read that finds an
-entry past that age drops it. What store-side expiry adds is a bound that does not
-need SecretSpec to run at all — the difference between "removed the next time a
-command touches this secret" and "gone at 8h". A provider that
-*can* expire but cannot arrange it — a token without access to Vault's metadata
-path, a KV v1 mount — refuses the write instead of storing a copy that would
-never expire; the read falls through to the authoritative route as with any
-other cache failure.
+The entry's write time remains the source of truth for freshness on every
+store; a read deletes an entry older than `max_age`. If native expiry cannot be
+configured, for example because a Vault token lacks metadata access or the
+mount uses KV v1, SecretSpec refuses the cache write and uses the authoritative
+route.
 
 ## Ownership
 
-Every entry SecretSpec writes carries a marker, the owning project, and the
-profile it was resolved under. A cache address is not proof of ownership: a flat
-store such as dotenv gives every project the same key for a given secret name,
-and a store may hold values SecretSpec never wrote.
+Each cache entry records a marker, project, and profile. Because addresses can
+collide in flat stores such as dotenv, SecretSpec changes only entries whose
+ownership it can verify.
 
-So SecretSpec changes only what it can show is its own. A value with no marker,
-or an entry naming another project or profile, is left alone — reads fall through
-to the authoritative route, refreshes decline to overwrite it, and
-[`cache clear`](/reference/cli/#cache-clear-017) reports it instead of deleting
-it. An entry that carries the marker but cannot be read, such as a partially
-written one, is unmistakably SecretSpec's own and is replaced.
+Unmarked entries and entries owned by another project or profile are bypassed,
+not overwritten or deleted. [`cache clear`](/reference/cli/#cache-clear-017)
+reports them. A marked but unreadable entry, such as a partial write, can be
+identified as SecretSpec's and replaced.
 
 If clearing reports a foreign entry, two configurations are addressing the same
-place. Give each project's cache a store or path of its own — the `local` alias
-above uses a `{project}/{profile}/{key}` path for exactly this reason.
+place. Give each project a separate store or path, such as the
+`{project}/{profile}/{key}` path used by `local` above.
 
 ## Where cached aliases can be used
 
@@ -148,22 +128,20 @@ A cached alias works anywhere a complete route is selected:
 - `SECRETSPEC_PROVIDER`;
 - `--provider`.
 
-It must be the only entry in a `providers` list because its own `fallback`
-already defines the complete route; a cached alias listed alongside other
-entries, in any position, is rejected. Its fallback entries and cache provider
-may be aliases, provider names, or URIs, but must resolve to leaf providers;
-cached aliases cannot be nested.
+Because a cached alias defines a complete route, it must be the only entry in a
+`providers` list. Its fallback entries and cache provider may be aliases,
+provider names, or URIs, but must resolve to leaf providers; cached aliases
+cannot be nested.
 
 Credentials belong on leaf aliases, such as `azure` above, rather than on
 `myprovider`.
 
 ## Security
 
-The cache provider stores the secret value, not merely metadata. Choose an
-encrypted provider such as keyring, pass, or gopass when cached values must be
-encrypted at rest. Dotenv is useful for testing but stores cache entries as
-plaintext. A store with server-side expiry additionally bounds how long the copy
-exists without SecretSpec's involvement.
+The cache contains the secret value, not just metadata. Use an encrypted
+provider such as keyring, pass, or gopass when values must be encrypted at rest.
+Dotenv stores entries as plaintext. Native expiry limits how long a copy exists
+without another SecretSpec run.
 
 ## Next steps
 

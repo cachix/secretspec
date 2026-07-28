@@ -160,33 +160,18 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
           items: [
             { label: "Overview", slug: "concepts/overview" },
             {
-              label: "Declarative Configuration",
+              label: "secretspec.toml",
               slug: "concepts/declarative",
+            },
+            {
+              label: "secretspec.toml Inheritance",
+              slug: "concepts/inheritance",
             },
             { label: "Profiles", slug: "concepts/profiles" },
             {
               label: "Scopes",
               slug: "concepts/scopes",
               badge: { text: "0.17+", variant: "note" },
-            },
-            {
-              label: "Providers",
-              items: [
-                { label: "Providers", slug: "concepts/providers" },
-                {
-                  label: "Provider fallback",
-                  slug: "concepts/providers/fallback",
-                },
-                {
-                  label: "Provider caching",
-                  slug: "concepts/providers/caching",
-                  badge: { text: "0.17+", variant: "note" },
-                },
-              ],
-            },
-            {
-              label: "Configuration Inheritance",
-              slug: "concepts/inheritance",
             },
             {
               label: "Secret Generation",
@@ -207,6 +192,21 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
               label: "Audit Logging",
               slug: "concepts/audit",
               badge: { text: "0.12+", variant: "note" },
+            },
+            {
+              label: "Providers",
+              items: [
+                { label: "Providers", slug: "concepts/providers" },
+                {
+                  label: "Provider fallback",
+                  slug: "concepts/providers/fallback",
+                },
+                {
+                  label: "Provider caching",
+                  slug: "concepts/providers/caching",
+                  badge: { text: "0.17+", variant: "note" },
+                },
+              ],
             },
           ],
         },

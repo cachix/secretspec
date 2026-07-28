@@ -492,6 +492,11 @@ pub struct BitwardenProvider {
     /// The error is carried as a `String` because [`SecretSpecError`] is not
     /// `Clone`; it is re-wrapped on each read.
     server_check: OnceLock<std::result::Result<(), String>>,
+    /// Memoized organization/collection resolution, so the two `bw list` calls
+    /// that turn names into UUIDs run once per process rather than once per
+    /// CLI invocation. Empty addresses resolve without spawning anything.
+    /// Carries its error as a `String` for the same reason as `server_check`.
+    vault_scope: OnceLock<std::result::Result<VaultScope, String>>,
 }
 
 /// Server the `bw` CLI targets when no self-hosted server is configured. `bw
@@ -546,6 +551,301 @@ fn servers_match(expected: &str, current: &str) -> bool {
     normalize_server(expected) == normalize_server(current)
 }
 
+/// An organization or collection as listed by the `bw` CLI.
+///
+/// `bw list organizations` and `bw list collections` share the `id`/`name`
+/// shape; collections additionally name the organization they belong to.
+#[derive(Debug, Deserialize)]
+struct BitwardenNamedObject {
+    id: String,
+    name: String,
+    #[serde(rename = "organizationId", default)]
+    organization_id: Option<String>,
+}
+
+/// The organization and collection this provider addresses, as the UUIDs the
+/// `bw` CLI requires.
+///
+/// The CLI's `--organizationid` and `--collectionid` accept ids only — every
+/// example in its help output is a UUID — while `bw://myorg@dev-secrets` reads
+/// as a pair of names. [`resolve_scope`] closes that gap.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct VaultScope {
+    organization_id: Option<String>,
+    collection_id: Option<String>,
+}
+
+/// Where a newly created item is filed.
+///
+/// Unlike a search filter this is not a query but the item's home, so creation
+/// needs the organization *and* the collection together: an item filed into a
+/// collection without naming its organization is rejected, and one created with
+/// neither lands in the personal vault where no collection-scoped read reaches
+/// it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ItemPlacement {
+    organization_id: Option<String>,
+    collection_ids: Option<Vec<String>>,
+}
+
+impl From<&VaultScope> for ItemPlacement {
+    fn from(scope: &VaultScope) -> Self {
+        Self {
+            organization_id: scope.organization_id.clone(),
+            collection_ids: scope.collection_id.clone().map(|id| vec![id]),
+        }
+    }
+}
+
+/// Parses one of the `bw list` outputs.
+fn parse_named_objects(
+    json: &str,
+    kind: &str,
+) -> std::result::Result<Vec<BitwardenNamedObject>, String> {
+    serde_json::from_str(json.trim())
+        .map_err(|e| format!("could not parse `bw list {kind}` output as JSON: {e}"))
+}
+
+/// Names an organization for an error message, preferring its human-readable
+/// name and falling back to the bare id when the CLI never listed it.
+fn describe_org(id: Option<&str>, organizations: &[BitwardenNamedObject]) -> String {
+    match id {
+        None => "your personal vault".to_string(),
+        Some(id) => match organizations.iter().find(|o| o.id == id) {
+            Some(org) => format!("'{}' ({id})", org.name),
+            None => format!("'{id}'"),
+        },
+    }
+}
+
+/// Renders the addressable organizations for an error message.
+fn list_organizations(organizations: &[BitwardenNamedObject]) -> String {
+    if organizations.is_empty() {
+        return "The bw CLI reports no organizations for this account.".to_string();
+    }
+
+    let mut out = String::from("Available organizations:");
+    for org in organizations {
+        out.push_str(&format!("\n  - {} ({})", org.name, org.id));
+    }
+    out
+}
+
+/// Renders the addressable collections for an error message, each with the
+/// organization it lives in.
+fn list_collections(
+    collections: &[&BitwardenNamedObject],
+    organizations: &[BitwardenNamedObject],
+) -> String {
+    if collections.is_empty() {
+        return "The bw CLI reports no collections here; collections exist only \
+                inside an organization."
+            .to_string();
+    }
+
+    let mut out = String::from("Available collections:");
+    for collection in collections {
+        out.push_str(&format!(
+            "\n  - {} ({}) — organization {}",
+            collection.name,
+            collection.id,
+            describe_org(collection.organization_id.as_deref(), organizations)
+        ));
+    }
+    out
+}
+
+/// Resolves the organization named in the address, by id or by name.
+fn resolve_organization<'a>(
+    organizations: &'a [BitwardenNamedObject],
+    requested: &str,
+) -> std::result::Result<&'a BitwardenNamedObject, String> {
+    if let Some(hit) = organizations.iter().find(|o| o.id == requested) {
+        return Ok(hit);
+    }
+
+    let matches: Vec<&BitwardenNamedObject> = organizations
+        .iter()
+        .filter(|o| o.name.eq_ignore_ascii_case(requested))
+        .collect();
+
+    match matches.as_slice() {
+        [only] => Ok(only),
+        [] => Err(format!(
+            "No organization matching '{requested}' is visible to the bw CLI.\n\n{}\n\n\
+             An organization is addressed by name or by UUID. Run `bw sync` if it was \
+             created or shared with you recently.",
+            list_organizations(organizations)
+        )),
+        multiple => Err(format!(
+            "Organization name '{requested}' is ambiguous: {} organizations share it. \
+             Use the organization's UUID instead.\n\n{}",
+            multiple.len(),
+            list_organizations(organizations)
+        )),
+    }
+}
+
+/// Verifies that a collection found by id lives in the organization the address
+/// named.
+fn check_collection_org<'a>(
+    collection: &'a BitwardenNamedObject,
+    organizations: &[BitwardenNamedObject],
+    org: Option<&BitwardenNamedObject>,
+) -> std::result::Result<&'a BitwardenNamedObject, String> {
+    let Some(org) = org else {
+        return Ok(collection);
+    };
+
+    if collection.organization_id.as_deref() == Some(org.id.as_str()) {
+        return Ok(collection);
+    }
+
+    Err(format!(
+        "Collection '{}' ({}) belongs to organization {}, but the address names {}.\n\n\
+         A collection id already identifies its organization, so drop the organization \
+         from the address or correct it.",
+        collection.name,
+        collection.id,
+        describe_org(collection.organization_id.as_deref(), organizations),
+        describe_org(Some(org.id.as_str()), organizations),
+    ))
+}
+
+/// Resolves the collection named in the address, by id or by name.
+///
+/// An id is matched against the whole vault rather than the addressed
+/// organization, so a collection that exists but sits elsewhere is reported as
+/// a mismatch instead of the much vaguer "not found".
+fn resolve_collection<'a>(
+    collections: &'a [BitwardenNamedObject],
+    organizations: &[BitwardenNamedObject],
+    requested: &str,
+    org: Option<&BitwardenNamedObject>,
+) -> std::result::Result<&'a BitwardenNamedObject, String> {
+    if let Some(hit) = collections.iter().find(|c| c.id == requested) {
+        return check_collection_org(hit, organizations, org);
+    }
+
+    let by_name: Vec<&BitwardenNamedObject> = collections
+        .iter()
+        .filter(|c| c.name.eq_ignore_ascii_case(requested))
+        .collect();
+
+    // Narrow by organization only when the address gave one: an unqualified
+    // name that occurs exactly once in the vault is unambiguous by itself.
+    let scoped: Vec<&BitwardenNamedObject> = match org {
+        Some(org) => by_name
+            .iter()
+            .copied()
+            .filter(|c| c.organization_id.as_deref() == Some(org.id.as_str()))
+            .collect(),
+        None => by_name.clone(),
+    };
+
+    match scoped.as_slice() {
+        [only] => Ok(only),
+        // The name exists, just not where the address said to look. Report the
+        // disagreement rather than claiming the collection does not exist.
+        [] if !by_name.is_empty() => {
+            let org = org.expect("names are only narrowed when the address gave an organization");
+            Err(format!(
+                "Collection '{requested}' is not in organization {}. It exists in {}.\n\n\
+                 Correct the organization in the address, or drop it and address the \
+                 collection on its own.",
+                describe_org(Some(org.id.as_str()), organizations),
+                by_name
+                    .iter()
+                    .map(|c| describe_org(c.organization_id.as_deref(), organizations))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        }
+        [] => {
+            let visible: Vec<&BitwardenNamedObject> = match org {
+                Some(org) => collections
+                    .iter()
+                    .filter(|c| c.organization_id.as_deref() == Some(org.id.as_str()))
+                    .collect(),
+                None => collections.iter().collect(),
+            };
+            let scope_note = match org {
+                Some(org) => format!(" in organization '{}'", org.name),
+                None => String::new(),
+            };
+            Err(format!(
+                "No collection matching '{requested}' is visible to the bw CLI{scope_note}.\n\n{}\n\n\
+                 A collection is addressed by name or by UUID. Run `bw sync` if it was \
+                 created or shared with you recently.",
+                list_collections(&visible, organizations)
+            ))
+        }
+        multiple => Err(format!(
+            "Collection name '{requested}' is ambiguous: {} collections share it.\n\n{}\n\n\
+             Qualify it with an organization, for example bw://{}@{requested}, or use \
+             the collection's UUID.",
+            multiple.len(),
+            list_collections(multiple, organizations),
+            multiple
+                .first()
+                .and_then(|c| c.organization_id.as_deref())
+                .and_then(|id| organizations.iter().find(|o| o.id == id))
+                .map(|o| o.name.as_str())
+                .unwrap_or("myorg")
+        )),
+    }
+}
+
+/// Resolves the addressed organization and collection to the UUIDs the CLI needs.
+///
+/// Names and ids are both accepted, and an id is validated rather than trusted:
+/// a value that looks like a UUID but names nothing in the vault is a typo, and
+/// failing here beats a silent empty result later. Resolution is skipped
+/// entirely when the address configures neither, so a plain `bw://` spawns no
+/// extra CLI calls.
+///
+/// When both are given the organization acts as scope and assertion — it
+/// disambiguates the collection name and must agree with the collection's real
+/// organization — but it is deliberately not returned as a second search
+/// filter. See [`BitwardenProvider::search_filter_args`].
+fn resolve_scope(
+    organizations_json: &str,
+    collections_json: &str,
+    requested_org: Option<&str>,
+    requested_collection: Option<&str>,
+) -> std::result::Result<VaultScope, String> {
+    if requested_org.is_none() && requested_collection.is_none() {
+        return Ok(VaultScope::default());
+    }
+
+    let organizations = parse_named_objects(organizations_json, "organizations")?;
+    let collections = parse_named_objects(collections_json, "collections")?;
+
+    let org = requested_org
+        .map(|requested| resolve_organization(&organizations, requested))
+        .transpose()?;
+
+    let Some(requested_collection) = requested_collection else {
+        return Ok(VaultScope {
+            organization_id: org.map(|o| o.id.clone()),
+            collection_id: None,
+        });
+    };
+
+    let collection = resolve_collection(&collections, &organizations, requested_collection, org)?;
+
+    Ok(VaultScope {
+        // A collection uniquely determines its organization, so record the one
+        // it actually belongs to. This is what lets `bw://dev-secrets` work
+        // without naming the organization at all.
+        organization_id: collection
+            .organization_id
+            .clone()
+            .or_else(|| org.map(|o| o.id.clone())),
+        collection_id: Some(collection.id.clone()),
+    })
+}
+
 crate::register_provider! {
     struct: BitwardenProvider,
     config: BitwardenConfig,
@@ -570,7 +870,109 @@ impl BitwardenProvider {
             config,
             credentials: ProviderCredentials::new(),
             server_check: OnceLock::new(),
+            vault_scope: OnceLock::new(),
         }
+    }
+
+    /// The organization the address asks for, before resolution.
+    ///
+    /// `BITWARDEN_ORGANIZATION` wins over the provider URI, matching the
+    /// precedence every call site used before resolution was centralized here.
+    fn requested_org(&self) -> Option<String> {
+        std::env::var("BITWARDEN_ORGANIZATION")
+            .ok()
+            .or_else(|| self.config.organization_id.clone())
+    }
+
+    /// The collection the address asks for, before resolution.
+    fn requested_collection(&self) -> Option<String> {
+        std::env::var("BITWARDEN_COLLECTION")
+            .ok()
+            .or_else(|| self.config.collection_id.clone())
+    }
+
+    /// Resolves the addressed organization and collection to UUIDs, once.
+    fn resolved_scope(&self) -> Result<&VaultScope> {
+        match self.vault_scope.get_or_init(|| self.look_up_scope()) {
+            Ok(scope) => Ok(scope),
+            Err(message) => Err(SecretSpecError::ProviderOperationFailed(message.clone())),
+        }
+    }
+
+    /// The resolved organization UUID, if the address names one (or if the
+    /// addressed collection implies one).
+    fn resolved_org_id(&self) -> Result<Option<&str>> {
+        Ok(self.resolved_scope()?.organization_id.as_deref())
+    }
+
+    /// Runs the `bw list` calls behind [`Self::resolved_scope`].
+    ///
+    /// Split out so the memoization stays readable and so [`resolve_scope`],
+    /// which holds all the matching rules, can be unit-tested against pinned
+    /// CLI output without spawning anything.
+    fn look_up_scope(&self) -> std::result::Result<VaultScope, String> {
+        let requested_org = self.requested_org();
+        let requested_collection = self.requested_collection();
+
+        // Skip both CLI calls when the address scopes nothing, which is the
+        // common `bw://` case.
+        if requested_org.is_none() && requested_collection.is_none() {
+            return Ok(VaultScope::default());
+        }
+
+        let organizations = self
+            .execute_bw_command(&["list", "organizations"])
+            .map_err(|e| format!("could not list Bitwarden organizations: {e}"))?;
+        let collections = self
+            .execute_bw_command(&["list", "collections"])
+            .map_err(|e| format!("could not list Bitwarden collections: {e}"))?;
+
+        resolve_scope(
+            &organizations,
+            &collections,
+            requested_org.as_deref(),
+            requested_collection.as_deref(),
+        )
+    }
+
+    /// The filter flags for an item **search**, of which there is at most one.
+    ///
+    /// `bw list` combines multiple filters with a logical OR — its own help
+    /// output says so — so passing `--organizationid` alongside `--collectionid`
+    /// widens the search to the whole organization instead of narrowing it to
+    /// the collection. That makes every collection in an organization address
+    /// the same set of items, which is the very bug this resolution exists to
+    /// fix, and on the write path it lets `set` overwrite a same-named item in
+    /// a sibling collection.
+    ///
+    /// A collection id already identifies its organization, so sending the
+    /// collection alone loses nothing. The organization is still resolved and
+    /// checked against the collection; it just is not re-sent as a filter.
+    ///
+    /// This is only for searches. `bw get`/`create`/`edit item` take
+    /// `--organizationid` as the organization to act in rather than as a
+    /// filter, and the creation templates need both ids because that is what
+    /// places the new item.
+    fn search_filter_args(&self) -> Result<Vec<String>> {
+        let scope = self.resolved_scope()?;
+
+        if let Some(collection_id) = scope.collection_id.as_deref() {
+            return Ok(vec![
+                "--collectionid".to_string(),
+                collection_id.to_string(),
+            ]);
+        }
+
+        if let Some(org_id) = scope.organization_id.as_deref() {
+            return Ok(vec!["--organizationid".to_string(), org_id.to_string()]);
+        }
+
+        Ok(Vec::new())
+    }
+
+    /// Where newly created items are filed, with names already resolved.
+    fn item_placement(&self) -> Result<ItemPlacement> {
+        Ok(ItemPlacement::from(self.resolved_scope()?))
     }
 
     /// Verifies that the `bw` CLI targets the server this provider expects.
@@ -767,21 +1169,10 @@ impl BitwardenProvider {
         // Use Bitwarden's built-in search to find items matching the key
         let mut list_args = vec!["list", "items", "--search", item_name];
 
-        // Add organization filter if configured (from config or environment variable)
-        let org_id = std::env::var("BITWARDEN_ORGANIZATION")
-            .ok()
-            .or_else(|| self.config.organization_id.clone());
-        if let Some(org_id) = &org_id {
-            list_args.extend_from_slice(&["--organizationid", org_id]);
-        }
-
-        // Add collection filter if configured (from config or environment variable)
-        let coll_id = std::env::var("BITWARDEN_COLLECTION")
-            .ok()
-            .or_else(|| self.config.collection_id.clone());
-        if let Some(coll_id) = &coll_id {
-            list_args.extend_from_slice(&["--collectionid", coll_id]);
-        }
+        // At most one scope filter; see `search_filter_args` for why both would
+        // widen the search rather than narrow it.
+        let filter = self.search_filter_args()?;
+        list_args.extend(filter.iter().map(String::as_str));
 
         let output = self.execute_bw_command(&list_args)?;
         let items: Vec<BitwardenItem> = serde_json::from_str(&output)?;
@@ -1152,21 +1543,12 @@ impl BitwardenProvider {
         // First, search for existing items using the same strategy as get()
         let mut list_args = vec!["list", "items"];
 
-        // Add organization filter if configured (from config or environment variable)
-        let org_id = std::env::var("BITWARDEN_ORGANIZATION")
-            .ok()
-            .or_else(|| self.config.organization_id.clone());
-        if let Some(org_id) = &org_id {
-            list_args.extend_from_slice(&["--organizationid", org_id]);
-        }
-
-        // Add collection filter if configured (from config or environment variable)
-        let coll_id = std::env::var("BITWARDEN_COLLECTION")
-            .ok()
-            .or_else(|| self.config.collection_id.clone());
-        if let Some(coll_id) = &coll_id {
-            list_args.extend_from_slice(&["--collectionid", coll_id]);
-        }
+        // At most one scope filter. This matters most here: under the CLI's OR
+        // semantics a second filter would widen the candidate set to the whole
+        // organization, and the name matching below would then happily update a
+        // same-named item sitting in a sibling collection.
+        let filter = self.search_filter_args()?;
+        list_args.extend(filter.iter().map(String::as_str));
 
         let output = self.execute_bw_command(&list_args)?;
         let items: Vec<BitwardenItem> = serde_json::from_str(&output)?;
@@ -1370,9 +1752,9 @@ impl BitwardenProvider {
     fn get_item_as_template(&self, item_id: &str) -> Result<serde_json::Value> {
         let mut args = vec!["get", "item", item_id];
 
-        let org_id = std::env::var("BITWARDEN_ORGANIZATION")
-            .ok()
-            .or_else(|| self.config.organization_id.clone());
+        // Not a search filter: this names the organization to act in, so the
+        // resolved id is passed even when a collection was also addressed.
+        let org_id = self.resolved_org_id()?.map(str::to_string);
         if let Some(org_id) = &org_id {
             args.extend_from_slice(&["--organizationid", org_id]);
         }
@@ -1439,9 +1821,8 @@ impl BitwardenProvider {
         let mut cmd = std::process::Command::new("bw");
 
         let mut args = vec!["--nointeraction", "edit", "item", item_id];
-        let org_id = std::env::var("BITWARDEN_ORGANIZATION")
-            .ok()
-            .or_else(|| self.config.organization_id.clone());
+        // The organization to act in, not a filter — see `search_filter_args`.
+        let org_id = self.resolved_org_id()?.map(str::to_string);
         if let Some(org_id) = &org_id {
             args.extend_from_slice(&["--organizationid", org_id]);
         }
@@ -1505,19 +1886,35 @@ impl BitwardenProvider {
             .or_else(|| self.config.default_field.clone())
             .unwrap_or_else(|| item_type.default_field().to_string());
 
+        // Resolved once here rather than inside each template, so a name that
+        // cannot be resolved fails before anything is written.
+        let placement = self.item_placement()?;
+
         let template = match item_type {
-            BitwardenItemType::Login => self.login_template(item_name, value, &field),
-            BitwardenItemType::Card => self.card_template(item_name, value, &field),
-            BitwardenItemType::Identity => self.identity_template(item_name, value, &field),
-            BitwardenItemType::SecureNote => self.secure_note_template(item_name, value, &field),
-            BitwardenItemType::SshKey => self.ssh_key_template(item_name, value, &field),
+            BitwardenItemType::Login => self.login_template(item_name, value, &field, &placement),
+            BitwardenItemType::Card => self.card_template(item_name, value, &field, &placement),
+            BitwardenItemType::Identity => {
+                self.identity_template(item_name, value, &field, &placement)
+            }
+            BitwardenItemType::SecureNote => {
+                self.secure_note_template(item_name, value, &field, &placement)
+            }
+            BitwardenItemType::SshKey => {
+                self.ssh_key_template(item_name, value, &field, &placement)
+            }
         };
 
         self.create_item_from_template(&template)
     }
 
     /// Builds the creation template for a Login item.
-    fn login_template(&self, item_name: &str, value: &str, field: &str) -> serde_json::Value {
+    fn login_template(
+        &self,
+        item_name: &str,
+        value: &str,
+        field: &str,
+        placement: &ItemPlacement,
+    ) -> serde_json::Value {
         let mut login_data = serde_json::json!({
             "username": null,
             "password": null,
@@ -1548,16 +1945,19 @@ impl BitwardenProvider {
             "notes": format!("SecretSpec managed secret: {}", item_name),
             "login": login_data,
             "fields": fields,
-            "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
-                .or_else(|| self.config.organization_id.clone()),
-            "collectionIds": std::env::var("BITWARDEN_COLLECTION").ok()
-                .or_else(|| self.config.collection_id.clone())
-                .map(|id| vec![id])
+            "organizationId": placement.organization_id.clone(),
+            "collectionIds": placement.collection_ids.clone()
         })
     }
 
     /// Builds the creation template for a Card item.
-    fn card_template(&self, item_name: &str, value: &str, field: &str) -> serde_json::Value {
+    fn card_template(
+        &self,
+        item_name: &str,
+        value: &str,
+        field: &str,
+        placement: &ItemPlacement,
+    ) -> serde_json::Value {
         let mut card_data = serde_json::json!({
             "number": null,
             "code": null,
@@ -1595,16 +1995,19 @@ impl BitwardenProvider {
             "notes": format!("SecretSpec managed secret: {}", item_name),
             "card": card_data,
             "fields": fields,
-            "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
-                .or_else(|| self.config.organization_id.clone()),
-            "collectionIds": std::env::var("BITWARDEN_COLLECTION").ok()
-                .or_else(|| self.config.collection_id.clone())
-                .map(|id| vec![id])
+            "organizationId": placement.organization_id.clone(),
+            "collectionIds": placement.collection_ids.clone()
         })
     }
 
     /// Builds the creation template for an Identity item.
-    fn identity_template(&self, item_name: &str, value: &str, field: &str) -> serde_json::Value {
+    fn identity_template(
+        &self,
+        item_name: &str,
+        value: &str,
+        field: &str,
+        placement: &ItemPlacement,
+    ) -> serde_json::Value {
         let mut identity_data = serde_json::json!({
             "title": null,
             "firstName": null,
@@ -1640,16 +2043,19 @@ impl BitwardenProvider {
             "notes": format!("SecretSpec managed secret: {}", item_name),
             "identity": identity_data,
             "fields": fields,
-            "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
-                .or_else(|| self.config.organization_id.clone()),
-            "collectionIds": std::env::var("BITWARDEN_COLLECTION").ok()
-                .or_else(|| self.config.collection_id.clone())
-                .map(|id| vec![id])
+            "organizationId": placement.organization_id.clone(),
+            "collectionIds": placement.collection_ids.clone()
         })
     }
 
     /// Builds the creation template for a Secure Note item.
-    fn secure_note_template(&self, item_name: &str, value: &str, field: &str) -> serde_json::Value {
+    fn secure_note_template(
+        &self,
+        item_name: &str,
+        value: &str,
+        field: &str,
+        placement: &ItemPlacement,
+    ) -> serde_json::Value {
         let mut fields = vec![];
 
         if field != "notes" {
@@ -1670,16 +2076,19 @@ impl BitwardenProvider {
                 "type": 0
             },
             "fields": fields,
-            "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
-                .or_else(|| self.config.organization_id.clone()),
-            "collectionIds": std::env::var("BITWARDEN_COLLECTION").ok()
-                .or_else(|| self.config.collection_id.clone())
-                .map(|id| vec![id])
+            "organizationId": placement.organization_id.clone(),
+            "collectionIds": placement.collection_ids.clone()
         })
     }
 
     /// Builds the creation template for an SSH Key item.
-    fn ssh_key_template(&self, item_name: &str, value: &str, field: &str) -> serde_json::Value {
+    fn ssh_key_template(
+        &self,
+        item_name: &str,
+        value: &str,
+        field: &str,
+        placement: &ItemPlacement,
+    ) -> serde_json::Value {
         let mut ssh_key_data = serde_json::json!({
             "privateKey": null,
             "publicKey": null,
@@ -1715,11 +2124,8 @@ impl BitwardenProvider {
             "notes": format!("SecretSpec managed secret: {}", item_name),
             "sshKey": ssh_key_data,
             "fields": fields,
-            "organizationId": std::env::var("BITWARDEN_ORGANIZATION").ok()
-                .or_else(|| self.config.organization_id.clone()),
-            "collectionIds": std::env::var("BITWARDEN_COLLECTION").ok()
-                .or_else(|| self.config.collection_id.clone())
-                .map(|id| vec![id])
+            "organizationId": placement.organization_id.clone(),
+            "collectionIds": placement.collection_ids.clone()
         })
     }
 
@@ -1746,9 +2152,8 @@ impl BitwardenProvider {
         let mut cmd = std::process::Command::new("bw");
 
         let mut args = vec!["--nointeraction", "create", "item"];
-        let org_id = std::env::var("BITWARDEN_ORGANIZATION")
-            .ok()
-            .or_else(|| self.config.organization_id.clone());
+        // The organization to create in, not a filter — see `search_filter_args`.
+        let org_id = self.resolved_org_id()?.map(str::to_string);
         if let Some(org_id) = &org_id {
             args.extend_from_slice(&["--organizationid", org_id]);
         }
@@ -2120,12 +2525,21 @@ mod tests {
         value: &str,
         field: &str,
     ) -> serde_json::Value {
+        // An unscoped address, i.e. the personal vault: the same `null`
+        // organization and collection these templates emitted before placement
+        // was resolved up front.
+        let placement = ItemPlacement::default();
+
         match item_type {
-            BitwardenItemType::Login => provider.login_template(name, value, field),
-            BitwardenItemType::SecureNote => provider.secure_note_template(name, value, field),
-            BitwardenItemType::Card => provider.card_template(name, value, field),
-            BitwardenItemType::Identity => provider.identity_template(name, value, field),
-            BitwardenItemType::SshKey => provider.ssh_key_template(name, value, field),
+            BitwardenItemType::Login => provider.login_template(name, value, field, &placement),
+            BitwardenItemType::SecureNote => {
+                provider.secure_note_template(name, value, field, &placement)
+            }
+            BitwardenItemType::Card => provider.card_template(name, value, field, &placement),
+            BitwardenItemType::Identity => {
+                provider.identity_template(name, value, field, &placement)
+            }
+            BitwardenItemType::SshKey => provider.ssh_key_template(name, value, field, &placement),
         }
     }
 
@@ -2392,5 +2806,251 @@ mod tests {
         );
         assert_eq!(fields[0]["name"].as_str(), Some("API_KEY"));
         assert_eq!(fields[0]["value"].as_str(), Some("new-value"));
+    }
+
+    // ---------------------------------------------------------------------
+    // C3: organization and collection name resolution.
+    //
+    // `--collectionid` and `--organizationid` take UUIDs, but `bw://myorg@dev`
+    // reads as names, so the provider resolves one to the other. These fixtures
+    // mirror `bw list organizations` / `bw list collections` output: two
+    // organizations, and a collection name deliberately duplicated across them
+    // so ambiguity and cross-organization mismatches are exercised.
+    // ---------------------------------------------------------------------
+
+    const ACME_ID: &str = "11111111-1111-4111-8111-111111111111";
+    const GLOBEX_ID: &str = "22222222-2222-4222-8222-222222222222";
+    const ACME_DEV_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const ACME_PROD_ID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const GLOBEX_DEV_ID: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+    const ORGANIZATIONS_JSON: &str = r#"[
+        {"object":"organization","id":"11111111-1111-4111-8111-111111111111","name":"Acme Inc","status":2,"type":0,"enabled":true},
+        {"object":"organization","id":"22222222-2222-4222-8222-222222222222","name":"Globex","status":2,"type":0,"enabled":true}
+    ]"#;
+
+    const COLLECTIONS_JSON: &str = r#"[
+        {"object":"collection","id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","organizationId":"11111111-1111-4111-8111-111111111111","name":"dev-secrets","externalId":null},
+        {"object":"collection","id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","organizationId":"11111111-1111-4111-8111-111111111111","name":"prod-secrets","externalId":null},
+        {"object":"collection","id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","organizationId":"22222222-2222-4222-8222-222222222222","name":"dev-secrets","externalId":null}
+    ]"#;
+
+    fn resolve(
+        org: Option<&str>,
+        collection: Option<&str>,
+    ) -> std::result::Result<VaultScope, String> {
+        resolve_scope(ORGANIZATIONS_JSON, COLLECTIONS_JSON, org, collection)
+    }
+
+    #[test]
+    fn an_unscoped_address_resolves_to_nothing() {
+        // The `bw://` case. Must not require the CLI listings at all, since
+        // `look_up_scope` skips both `bw list` calls when nothing is addressed.
+        assert_eq!(resolve(None, None).unwrap(), VaultScope::default());
+        assert_eq!(
+            resolve_scope("not json", "not json", None, None).unwrap(),
+            VaultScope::default(),
+            "an unscoped address must not even parse the listings"
+        );
+    }
+
+    #[test]
+    fn names_resolve_to_ids() {
+        // The headline fix: `bw://Acme Inc@dev-secrets` addressed nothing before,
+        // because the names went straight to flags that accept only UUIDs.
+        let scope = resolve(Some("Acme Inc"), Some("dev-secrets")).unwrap();
+        assert_eq!(scope.organization_id.as_deref(), Some(ACME_ID));
+        assert_eq!(scope.collection_id.as_deref(), Some(ACME_DEV_ID));
+    }
+
+    #[test]
+    fn names_match_case_insensitively() {
+        // Matches how the read path already compares custom field names.
+        let scope = resolve(Some("acme inc"), Some("DEV-SECRETS")).unwrap();
+        assert_eq!(scope.organization_id.as_deref(), Some(ACME_ID));
+        assert_eq!(scope.collection_id.as_deref(), Some(ACME_DEV_ID));
+    }
+
+    #[test]
+    fn ids_still_resolve_and_are_validated() {
+        let scope = resolve(Some(ACME_ID), Some(ACME_PROD_ID)).unwrap();
+        assert_eq!(scope.organization_id.as_deref(), Some(ACME_ID));
+        assert_eq!(scope.collection_id.as_deref(), Some(ACME_PROD_ID));
+
+        // A UUID that names nothing is a typo, and saying so beats letting the
+        // search return zero items and reporting the secret as missing.
+        let err = resolve(None, Some("dddddddd-dddd-4ddd-8ddd-dddddddddddd")).unwrap_err();
+        assert!(err.contains("No collection matching"), "{err}");
+        assert!(err.contains("bw sync"), "{err}");
+    }
+
+    #[test]
+    fn a_collection_addressed_alone_supplies_its_organization() {
+        // `bw://prod-secrets` has to reach an organization item, and the
+        // collection is the only thing that can say which organization.
+        let scope = resolve(None, Some("prod-secrets")).unwrap();
+        assert_eq!(scope.collection_id.as_deref(), Some(ACME_PROD_ID));
+        assert_eq!(
+            scope.organization_id.as_deref(),
+            Some(ACME_ID),
+            "the organization must be derived from the collection"
+        );
+    }
+
+    #[test]
+    fn an_organization_addressed_alone_resolves_without_a_collection() {
+        let scope = resolve(Some("Globex"), None).unwrap();
+        assert_eq!(scope.organization_id.as_deref(), Some(GLOBEX_ID));
+        assert_eq!(scope.collection_id, None);
+    }
+
+    #[test]
+    fn an_organization_disambiguates_a_duplicated_collection_name() {
+        // `dev-secrets` exists in both organizations. Naming the organization is
+        // what makes each address point at exactly one of them.
+        let acme = resolve(Some("Acme Inc"), Some("dev-secrets")).unwrap();
+        let globex = resolve(Some("Globex"), Some("dev-secrets")).unwrap();
+
+        assert_eq!(acme.collection_id.as_deref(), Some(ACME_DEV_ID));
+        assert_eq!(globex.collection_id.as_deref(), Some(GLOBEX_DEV_ID));
+        assert_ne!(
+            acme.collection_id, globex.collection_id,
+            "the same collection name in two organizations must resolve apart"
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_collection_name_is_rejected() {
+        // Without an organization, `dev-secrets` could be either. Guessing would
+        // mean reading or overwriting a secret in the wrong organization.
+        let err = resolve(None, Some("dev-secrets")).unwrap_err();
+        assert!(err.contains("ambiguous"), "{err}");
+        assert!(err.contains("Acme Inc"), "{err}");
+        assert!(err.contains("Globex"), "{err}");
+    }
+
+    #[test]
+    fn a_collection_in_another_organization_is_rejected_by_name() {
+        // `prod-secrets` exists, but only in Acme.
+        let err = resolve(Some("Globex"), Some("prod-secrets")).unwrap_err();
+        assert!(err.contains("not in organization"), "{err}");
+        assert!(err.contains("Globex"), "{err}");
+        assert!(err.contains("Acme Inc"), "{err}");
+    }
+
+    #[test]
+    fn a_collection_id_from_another_organization_is_rejected() {
+        // The mismatch has to be caught for ids too. Resolving by id and then
+        // trusting it would silently search Acme while the address said Globex.
+        let err = resolve(Some("Globex"), Some(ACME_DEV_ID)).unwrap_err();
+        assert!(err.contains("belongs to organization"), "{err}");
+        assert!(err.contains("Acme Inc"), "{err}");
+        assert!(err.contains("Globex"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_organization_lists_the_ones_that_exist() {
+        let err = resolve(Some("Initech"), None).unwrap_err();
+        assert!(err.contains("No organization matching 'Initech'"), "{err}");
+        assert!(err.contains("Acme Inc"), "{err}");
+        assert!(err.contains("Globex"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_collection_lists_only_the_addressed_organization() {
+        // Listing Globex's collections here would be noise: the address already
+        // said Acme, so those are the only ones the user can pick from.
+        let err = resolve(Some("Acme Inc"), Some("staging")).unwrap_err();
+        assert!(err.contains("No collection matching 'staging'"), "{err}");
+        assert!(err.contains("prod-secrets"), "{err}");
+        assert!(
+            !err.contains(GLOBEX_DEV_ID),
+            "collections outside the addressed organization must not be offered: {err}"
+        );
+    }
+
+    #[test]
+    fn search_sends_at_most_one_filter() {
+        // The invariant that keeps this fix working. `bw list` combines multiple
+        // filters with OR, so emitting both would widen the search back to the
+        // whole organization and make every collection address equivalent —
+        // exactly the bug the resolution above exists to fix.
+        let collection_scope = VaultScope {
+            organization_id: Some(ACME_ID.to_string()),
+            collection_id: Some(ACME_DEV_ID.to_string()),
+        };
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        provider
+            .vault_scope
+            .set(Ok(collection_scope))
+            .expect("scope is set once");
+
+        let args = provider.search_filter_args().unwrap();
+        assert_eq!(
+            args,
+            vec!["--collectionid".to_string(), ACME_DEV_ID.to_string()]
+        );
+        assert!(
+            !args.iter().any(|a| a == "--organizationid"),
+            "a resolved collection already implies its organization: {args:?}"
+        );
+    }
+
+    #[test]
+    fn search_falls_back_to_the_organization_filter() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        provider
+            .vault_scope
+            .set(Ok(VaultScope {
+                organization_id: Some(GLOBEX_ID.to_string()),
+                collection_id: None,
+            }))
+            .expect("scope is set once");
+
+        assert_eq!(
+            provider.search_filter_args().unwrap(),
+            vec!["--organizationid".to_string(), GLOBEX_ID.to_string()]
+        );
+    }
+
+    #[test]
+    fn an_unscoped_search_sends_no_filter() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        provider
+            .vault_scope
+            .set(Ok(VaultScope::default()))
+            .expect("scope is set once");
+
+        assert!(provider.search_filter_args().unwrap().is_empty());
+    }
+
+    #[test]
+    fn creation_places_the_item_in_the_resolved_collection() {
+        // Placement is not a filter: an item created without its organization
+        // and collection lands in the personal vault, where no collection-scoped
+        // read can reach it. Both ids have to survive into the template.
+        let placement = ItemPlacement::from(&VaultScope {
+            organization_id: Some(ACME_ID.to_string()),
+            collection_id: Some(ACME_DEV_ID.to_string()),
+        });
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let template = provider.login_template("Shared Secret", "v", "password", &placement);
+
+        assert_eq!(template["organizationId"].as_str(), Some(ACME_ID));
+        assert_eq!(
+            template["collectionIds"].as_array().map(Vec::as_slice),
+            Some([serde_json::Value::String(ACME_DEV_ID.to_string())].as_slice())
+        );
+    }
+
+    #[test]
+    fn an_unscoped_creation_names_no_organization() {
+        // The personal-vault case must keep emitting nulls rather than, say, an
+        // empty array, which the CLI rejects.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let template = provider.login_template("x", "v", "password", &ItemPlacement::default());
+
+        assert!(template["organizationId"].is_null());
+        assert!(template["collectionIds"].is_null());
     }
 }

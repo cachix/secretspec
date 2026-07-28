@@ -17,7 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   item type (`password`, `number`, `email`, `private_key`, or a `value` custom
   field for secure notes) and is the same for reads and writes, so a plain
   `set` followed by a plain `get` returns what was written; address any other
-  field with `?field=` or `ref = { item, field }`.
+  field with `?field=` or `ref = { item, field }`. Organizations and
+  collections are addressed by name or by ID — `bw://myorg@dev-secrets` and
+  `bw://dev-secrets` both work, matching case-insensitively — and an address
+  that resolves to nothing fails with the organizations or collections that do
+  exist rather than silently reporting the secret as missing. The organization
+  scopes and validates the collection: it picks out which `dev-secrets` is
+  meant when several organizations have one, and must agree with the
+  collection's actual organization. Reads and writes are confined to the
+  collection addressed, so `set` cannot overwrite a same-named item in a
+  sibling collection.
 - `secretspec config global init --provider <PROVIDER> --profile <PROFILE>`
   can save explicitly user-global defaults without interactive prompts,
   including `--profile none` to clear the default profile. The `global`

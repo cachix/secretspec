@@ -53,7 +53,7 @@ for dep in docker python3 bw jq cargo; do
   command -v "$dep" >/dev/null || { echo "Missing dependency: $dep" >&2; exit 1; }
 done
 
-echo "── 1/4 disposable vaultwarden + TLS proxy ──"
+echo "── 1/5 disposable vaultwarden + TLS proxy ──"
 docker network create "$NET_NAME" >/dev/null
 docker run -d --rm --name "$VW_NAME" --network "$NET_NAME" \
   -e SIGNUPS_ALLOWED=true -e I_REALLY_WANT_VOLATILE_STORAGE=true \
@@ -70,7 +70,7 @@ curl -sk -o /dev/null "https://localhost:$TLS_PORT/alive" \
   || { echo "vaultwarden did not come up" >&2; exit 1; }
 echo "✓ vaultwarden alive on https://localhost:$TLS_PORT"
 
-echo "── 2/4 fixture account ──"
+echo "── 2/5 fixture account ──"
 if ! python3 -c "import cryptography" 2>/dev/null; then
   python3 -m venv "$HARNESS_DIR/venv"
   "$HARNESS_DIR/venv/bin/pip" install -q cryptography
@@ -82,7 +82,7 @@ fi
   --server "https://localhost:$TLS_PORT" --email "$FIXTURE_EMAIL" \
   --password "$FIXTURE_PASSWORD"
 
-echo "── 3/4 bw login (isolated appdata) ──"
+echo "── 3/5 bw login (isolated appdata) ──"
 export BITWARDENCLI_APPDATA_DIR="$HARNESS_DIR/bw-appdata"
 export NODE_TLS_REJECT_UNAUTHORIZED=0   # self-signed internal cert, local only
 mkdir -p "$BITWARDENCLI_APPDATA_DIR"
@@ -91,7 +91,40 @@ BW_SESSION=$(bw login "$FIXTURE_EMAIL" "$FIXTURE_PASSWORD" --raw)
 export BW_SESSION
 echo "✓ logged in as $FIXTURE_EMAIL"
 
-echo "── 4/4 integration suite ──"
+echo "── 4/5 organization + collections fixture ──"
+# The `bw` CLI cannot create an organization, so the bootstrap does it through
+# the API; collections it *can* create, so those go through the CLI. Two of
+# them, because a collection name duplicated across collections is what proves
+# an address resolves to one specific collection rather than to the whole
+# organization.
+if [ "${SKIP_ORG_FIXTURE:-0}" = "1" ]; then
+  echo "SKIP_ORG_FIXTURE=1 — collection addressing tests will be skipped"
+else
+  BW_TEST_ORG_NAME="SecretSpec CI"
+  BW_TEST_ORG_ID=$("$PYTHON" "$REPO_ROOT/tests/vaultwarden_bootstrap.py" \
+    --server "https://localhost:$TLS_PORT" --email "$FIXTURE_EMAIL" \
+    --password "$FIXTURE_PASSWORD" --create-org "$BW_TEST_ORG_NAME" \
+    --collection-name "default")
+  bw sync >/dev/null
+
+  mk_collection() { # mk_collection <name> -> echoes the new collection's id
+    jq -nc --arg o "$BW_TEST_ORG_ID" --arg n "$1" \
+      '{organizationId:$o,name:$n,externalId:null,groups:[]}' \
+      | bw encode \
+      | bw create org-collection --organizationid "$BW_TEST_ORG_ID" \
+      | jq -r '.id'
+  }
+  BW_TEST_COLL_DEV_ID=$(mk_collection "dev-secrets")
+  BW_TEST_COLL_PROD_ID=$(mk_collection "prod-secrets")
+  bw sync >/dev/null
+
+  export BW_TEST_ORG_ID BW_TEST_ORG_NAME BW_TEST_COLL_DEV_ID BW_TEST_COLL_PROD_ID
+  echo "✓ org '$BW_TEST_ORG_NAME' ($BW_TEST_ORG_ID)"
+  echo "  dev-secrets  $BW_TEST_COLL_DEV_ID"
+  echo "  prod-secrets $BW_TEST_COLL_PROD_ID"
+fi
+
+echo "── 5/5 integration suite ──"
 cd "$REPO_ROOT"
 bash tests/bitwarden_integration.sh "$BW_SESSION" </dev/null
 
@@ -102,3 +135,8 @@ if [ "${RUN_REGRESSIONS:-0}" = "1" ]; then
   echo "── regressions: review findings ──"
   bash tests/bitwarden_regression_findings.sh </dev/null
 fi
+
+# C3: organization and collection name resolution. Skips itself when the
+# fixture above did not run.
+echo "── collection addressing ──"
+bash tests/bitwarden_collection_addressing.sh </dev/null

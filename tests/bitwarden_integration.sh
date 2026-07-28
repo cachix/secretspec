@@ -30,6 +30,57 @@
 # vaultwarden is not the official server, an occasional manual run against
 # real Bitwarden cloud would still be worth keeping.
 #
+# FUTURE WORK: absorbing the sibling bw scripts
+# ---------------------------------------------
+# There are now three bw test scripts, and vaultwarden_harness.sh invokes each
+# of them separately:
+#
+#   bitwarden_integration.sh            this file — the broad behavioral suite
+#   bitwarden_regression_findings.sh    the PR #166 review findings (R1-R4)
+#   bitwarden_collection_addressing.sh  organization/collection addressing (C3)
+#
+# Folding the latter two in here would give one entry point and one summary.
+# They should be *invoked*, never copied: each owns fixtures the others do not,
+# and duplicating assertions is how the two of them would drift apart. What it
+# would take:
+#
+#   - Reconcile the shell contracts. This script uses `set -e`; both siblings
+#     use `set -uo pipefail` and deliberately exit non-zero to report failures.
+#     Called directly, that designed exit would kill this script mid-suite, so
+#     the call has to run with `set +e` and capture the status.
+#   - Fold the counters rather than merge them. This script counts
+#     TESTS_RUN/TESTS_PASSED/TESTS_FAILED through run_test; the regression
+#     script counts FIXED/REPRODUCED through its own `report`. The practical
+#     conversion is one parent-level pass/fail per child, with the child's own
+#     output echoed through for detail.
+#   - Contain the working directory. Each sibling mktemps a directory, cd's
+#     into it, and writes its own secretspec.toml; this script writes
+#     secretspec.toml into the current directory. Running a child in a subshell
+#     keeps its `cd` from leaking into the tests that follow.
+#   - Keep the EXIT traps apart. All three install `trap cleanup EXIT`. In a
+#     subshell the child's trap fires on its own exit, which is correct, but
+#     this script's cleanup_test_data must not delete items the child is still
+#     using — so children run to completion between parent test groups, never
+#     alongside them.
+#   - Respect the preconditions. Both siblings need target/debug/secretspec,
+#     which this script builds, so they can only run after that step.
+#     bitwarden_collection_addressing.sh additionally needs the organization
+#     fixture (BW_TEST_ORG_ID and friends) and skips itself without it.
+#
+# Sketch:
+#
+#   run_subscript() {   # run_subscript <name> <script-path>
+#       TESTS_RUN=$((TESTS_RUN + 1))
+#       echo -e "\n${BLUE}Test $TESTS_RUN: $1${NC}"
+#       if ( set +e; bash "$2" </dev/null ); then
+#           TESTS_PASSED=$((TESTS_PASSED + 1))
+#       else
+#           TESTS_FAILED=$((TESTS_FAILED + 1))
+#       fi
+#   }
+#
+# with RUN_REGRESSIONS and BW_TEST_ORG_ID gating which children are called.
+#
 set -e  # Exit on any error
 
 # Get BW_SESSION from command line or environment

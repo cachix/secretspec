@@ -24,19 +24,40 @@ available in SecretSpec 0.17.
 
 #### Password Manager URIs
 ```
-bw://[collection-id]
+bw://[collection]
 bw://[org@collection]
 bw://?server=https://vault.company.com
 bw://?type=login&field=password
 ```
 
-- `collection-id`: Target collection ID
-- `org@collection`: Organization and collection specification
+- `collection`: Target collection, by name or by ID
+- `org@collection`: Organization and collection, each by name or by ID
 - `type`: Item type (login, card, identity, sshkey, securenote)
 - `field`: Specific field to extract
 - `server`: The self-hosted server this configuration expects. This does **not**
   configure the CLI — it is a guard that fails with remediation steps when the
   `bw` CLI is pointed somewhere else. See [Self-hosted servers](#self-hosted-servers).
+
+##### Addressing organizations and collections (0.18+)
+
+Names and IDs are interchangeable: SecretSpec resolves a name to the ID the
+`bw` CLI requires. Names match case-insensitively, and one containing a space
+must be percent-encoded (`bw://Acme%20Inc@dev-secrets`).
+
+The organization is a scope and an assertion rather than a filter. It selects
+which `dev-secrets` you mean when several organizations have one, and it must
+agree with the collection you named — addressing a collection that lives
+somewhere else is an error rather than a silent search of the wrong place. A
+collection identifies its own organization, so naming the organization is
+optional whenever the collection name is unambiguous:
+
+```bash
+$ secretspec get DATABASE_URL --provider "bw://dev-secrets"
+```
+
+An address that cannot be resolved fails immediately and lists the
+organizations or collections that do exist. If a collection was created or
+shared with you recently, run `bw sync` so the CLI can see it.
 
 ### Examples
 
@@ -177,7 +198,7 @@ $ export BW_SESSION="your-session-key"
 $ export BITWARDEN_DEFAULT_TYPE=login
 $ export BITWARDEN_DEFAULT_FIELD=password
 
-# Organization settings
+# Organization settings (names or IDs, resolved the same way as in the URI)
 $ export BITWARDEN_ORGANIZATION=myorg
 $ export BITWARDEN_COLLECTION=dev-secrets
 

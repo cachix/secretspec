@@ -237,22 +237,30 @@ openbao://127.0.0.1:8200/secret?kv=1&tls=false
 
 ## Bitwarden Password Manager Provider (0.18+)
 
-**URI**: `bw://[COLLECTION_ID]` - Stores secrets in a Bitwarden Password Manager vault via the `bw` CLI
+**URI**: `bw://[COLLECTION]` - Stores secrets in a Bitwarden Password Manager vault via the `bw` CLI
 
 ```bash
 bw://                                   # Personal vault
-bw://collection-id                      # Specific collection
-bw://myorg@dev-secrets                  # Organization collection
+bw://dev-secrets                        # Collection, by name or ID
+bw://myorg@dev-secrets                  # Organization and collection
 bw://?server=https://vault.company.com  # Expected self-hosted server (guard)
 bw://?type=login&field=username         # Default item type and field
 ```
+
+Organizations and collections may be named or given as IDs; SecretSpec resolves
+a name to the ID the CLI requires, matching case-insensitively. The organization
+scopes and validates the collection rather than filtering alongside it: it
+selects which `dev-secrets` is meant when more than one exists, and must match
+the collection's actual organization. Naming it is optional when the collection
+name is unambiguous. Addresses that resolve to nothing fail with the
+organizations or collections that do exist.
 
 `?server=` does not configure the CLI. The `bw` CLI takes its server only from
 `bw config server`, which must be run while logged out, so self-hosted users
 configure the CLI themselves and SecretSpec verifies the setting matches before
 each operation. See the [provider guide](/providers/bw/#self-hosted-servers).
 
-**Features**: Read/write, all vault item types (logins, cards, identities, SSH keys, secure notes), field selection, `ref = { item, field }` mapping in `secretspec.toml`
+**Features**: Read/write, all vault item types (logins, cards, identities, SSH keys, secure notes), organization/collection addressing by name or ID, field selection, `ref = { item, field }` mapping in `secretspec.toml`
 **Prerequisites**: Bitwarden CLI (`bw`), signed in and unlocked (`BW_SESSION` env var), self-hosted servers set with `bw config server` before login, build with `--features bw`
 **Storage**: One vault item per secret; reads use per-type default fields unless `?field=` or a `ref` mapping selects one
 

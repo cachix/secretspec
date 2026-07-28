@@ -367,7 +367,10 @@ fn test_resolution_report_provenance() {
 
     let mut secrets = HashMap::new();
     secrets.insert("DATABASE_URL".to_string(), secret(true, None));
-    secrets.insert("LOG_LEVEL".to_string(), secret(false, Some("info")));
+    secrets.insert(
+        "DEV_SESSION_SECRET".to_string(),
+        secret(false, Some("development-only-secret")),
+    );
     secrets.insert("SENTRY_DSN".to_string(), secret(false, None));
     secrets.insert("STRIPE_KEY".to_string(), secret(true, None));
 
@@ -408,7 +411,12 @@ fn test_resolution_report_provenance() {
     let names: Vec<&str> = report.secrets.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(
         names,
-        vec!["DATABASE_URL", "LOG_LEVEL", "SENTRY_DSN", "STRIPE_KEY"]
+        vec![
+            "DATABASE_URL",
+            "DEV_SESSION_SECRET",
+            "SENTRY_DSN",
+            "STRIPE_KEY"
+        ]
     );
 
     let by_name = |name: &str| {
@@ -426,10 +434,13 @@ fn test_resolution_report_provenance() {
     assert!(!db.default_applied);
     assert!(!db.generated);
 
-    let log = by_name("LOG_LEVEL");
-    assert_eq!(log.status, ResolutionStatus::Resolved);
-    assert!(log.default_applied);
-    assert!(log.source_provider.is_none(), "a default has no provider");
+    let session = by_name("DEV_SESSION_SECRET");
+    assert_eq!(session.status, ResolutionStatus::Resolved);
+    assert!(session.default_applied);
+    assert!(
+        session.source_provider.is_none(),
+        "a default has no provider"
+    );
 
     let sentry = by_name("SENTRY_DSN");
     assert_eq!(sentry.status, ResolutionStatus::MissingOptional);
@@ -669,7 +680,10 @@ fn test_resolve_carries_values_and_provenance() {
 
     let mut secrets = HashMap::new();
     secrets.insert("DATABASE_URL".to_string(), secret(true, None));
-    secrets.insert("LOG_LEVEL".to_string(), secret(false, Some("info")));
+    secrets.insert(
+        "DEV_SESSION_SECRET".to_string(),
+        secret(false, Some("development-only-secret")),
+    );
     secrets.insert("SENTRY_DSN".to_string(), secret(false, None));
 
     let provider = format!("dotenv://{}", env_path.display());
@@ -690,10 +704,10 @@ fn test_resolve_carries_values_and_provenance() {
     assert!(db.source_provider.is_some());
 
     // Default value is exposed and attributed to the default source.
-    let log = &response.secrets["LOG_LEVEL"];
-    assert_eq!(log.value.as_deref(), Some("info"));
-    assert_eq!(log.source, ResolvedSource::Default);
-    assert!(log.source_provider.is_none());
+    let session = &response.secrets["DEV_SESSION_SECRET"];
+    assert_eq!(session.value.as_deref(), Some("development-only-secret"));
+    assert_eq!(session.source, ResolvedSource::Default);
+    assert!(session.source_provider.is_none());
 
     // Optional-missing does not appear in secrets.
     assert!(!response.secrets.contains_key("SENTRY_DSN"));

@@ -12,7 +12,7 @@ internal static class Program
 
         [profiles.default]
         DATABASE_URL = { description = "DB", required = true }
-        LOG_LEVEL = { description = "log", required = false, default = "info" }
+        DEV_SESSION_SECRET = { description = "Development-only session secret", required = false, default = "development-only-secret" }
         SENTRY_DSN = { description = "sentry", required = false }
 
         [scopes.database]
@@ -72,8 +72,8 @@ internal static class Program
         Equal("postgres://db", resolved.Secrets["DATABASE_URL"].Get());
         Equal("provider", resolved.Secrets["DATABASE_URL"].Source);
         Assert(resolved.Secrets["DATABASE_URL"].SourceProvider is not null, "provider provenance missing");
-        Equal("info", resolved.Secrets["LOG_LEVEL"].Get());
-        Equal("default", resolved.Secrets["LOG_LEVEL"].Source);
+        Equal("development-only-secret", resolved.Secrets["DEV_SESSION_SECRET"].Get());
+        Equal("default", resolved.Secrets["DEV_SESSION_SECRET"].Source);
         SequenceEqual(["SENTRY_DSN"], resolved.MissingOptional);
         Assert(!resolved.Secrets.ContainsKey("SENTRY_DSN"), "missing optional secret was returned");
 
@@ -148,8 +148,8 @@ internal static class Program
         var database = report.Secrets.Single(secret => secret.Name == "DATABASE_URL");
         Equal("missing_required", database.Status);
         Assert(database.Required, "DATABASE_URL was not reported as required");
-        var logLevel = report.Secrets.Single(secret => secret.Name == "LOG_LEVEL");
-        Assert(logLevel.DefaultApplied, "LOG_LEVEL default was not reported");
+        var sessionSecret = report.Secrets.Single(secret => secret.Name == "DEV_SESSION_SECRET");
+        Assert(sessionSecret.DefaultApplied, "DEV_SESSION_SECRET default was not reported");
     }
 
     private static void TestSetAsEnv()

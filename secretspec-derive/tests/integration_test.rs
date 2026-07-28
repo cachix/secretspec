@@ -178,7 +178,7 @@ mod profile_inheritance {
         fn _test_field_types(s: SecretSpec) {
             let _: String = s.database_url;
             let _: String = s.api_key;
-            let _: String = s.log_level;
+            let _: String = s.session_secret;
             let _: String = s.cache_ttl;
             let _: Option<String> = s.debug_mode;
             let _: Option<String> = s.enable_profiling;
@@ -193,12 +193,12 @@ mod profile_inheritance {
                 SecretSpecProfile::Default {
                     database_url,
                     api_key,
-                    log_level,
+                    session_secret,
                     cache_ttl,
                 } => {
                     let _: String = database_url; // Required
                     let _: String = api_key; // Required
-                    let _: String = log_level; // Guaranteed by default
+                    let _: String = session_secret; // Required
                     let _: String = cache_ttl; // Guaranteed by default
                 }
                 _ => panic!("Expected Default variant"),
@@ -209,15 +209,15 @@ mod profile_inheritance {
             match profile {
                 SecretSpecProfile::Development {
                     database_url,
+                    session_secret,
                     debug_mode,
                     api_key,
-                    log_level,
                     cache_ttl,
                 } => {
                     let _: String = database_url; // Guaranteed by override default
+                    let _: String = session_secret; // Guaranteed by development-only default
                     let _: String = debug_mode; // Guaranteed by its default
                     let _: String = api_key; // Inherited from default
-                    let _: String = log_level; // Inherited from default
                     let _: String = cache_ttl; // Inherited from default
                 }
                 _ => panic!("Expected Development variant"),
@@ -229,12 +229,12 @@ mod profile_inheritance {
                 SecretSpecProfile::Production {
                     database_url,
                     api_key,
-                    log_level,
+                    session_secret,
                     cache_ttl,
                 } => {
                     let _: String = database_url; // Override: required
                     let _: String = api_key; // Override: required
-                    let _: String = log_level; // Guaranteed by override default
+                    let _: String = session_secret; // Override: required
                     let _: String = cache_ttl; // Inherited from default
                 }
                 _ => panic!("Expected Production variant"),
@@ -245,13 +245,13 @@ mod profile_inheritance {
             match profile {
                 SecretSpecProfile::Staging {
                     database_url,
-                    log_level,
+                    session_secret,
                     enable_profiling,
                     api_key,
                     cache_ttl,
                 } => {
                     let _: String = database_url; // Override: required
-                    let _: String = log_level; // Guaranteed by override default
+                    let _: String = session_secret; // Override: required
                     let _: String = enable_profiling; // Guaranteed by its default
                     let _: String = api_key; // Inherited from default
                     let _: String = cache_ttl; // Inherited from default

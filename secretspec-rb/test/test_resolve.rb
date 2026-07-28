@@ -23,7 +23,7 @@ MANIFEST = <<~TOML
 
   [profiles.default]
   DATABASE_URL = { description = "DB", required = true }
-  LOG_LEVEL = { description = "log", required = false, default = "info" }
+  DEV_SESSION_SECRET = { description = "Development-only session secret", required = false, default = "development-only-secret" }
   SENTRY_DSN = { description = "sentry", required = false }
 
   [scopes.database]
@@ -59,9 +59,9 @@ class ResolveTest < Minitest::Test
       assert_equal "provider", db.source
       refute_nil db.source_provider
 
-      log = resolved.secrets["LOG_LEVEL"]
-      assert_equal "info", log.get
-      assert_equal "default", log.source
+      session = resolved.secrets["DEV_SESSION_SECRET"]
+      assert_equal "development-only-secret", session.get
+      assert_equal "default", session.source
 
       assert_equal ["SENTRY_DSN"], resolved.missing_optional
       refute resolved.secrets.key?("SENTRY_DSN")

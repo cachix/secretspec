@@ -16,7 +16,7 @@ extends = ["../shared/common"]  # Optional: inherit from other configs
 [profiles.default]
 DATABASE_URL = { description = "PostgreSQL connection string", required = true }
 API_KEY = { description = "External API key", required = true }
-LOG_LEVEL = { description = "Logging verbosity", required = false, default = "info" }
+SESSION_SECRET = { description = "Session signing secret", required = true, type = "password", generate = true }
 ```
 
 ## Secret Declarations
@@ -62,7 +62,7 @@ revision = "1.0"
 extends = ["../shared/base", "../shared/auth"]
 
 [profiles.default]
-# Inherits DATABASE_URL, LOG_LEVEL from base
+# Inherits DATABASE_URL, INTERNAL_API_KEY from base
 # Inherits JWT_SECRET, SESSION_SECRET from auth
 # Service-specific additions:
 STRIPE_API_KEY = { description = "Stripe payment API", required = true }

@@ -209,14 +209,14 @@ exit non-zero when a required secret is missing, so they work as a CI gate.
 `--explain` prints a human-readable trace:
 
 ```bash
-$ secretspec check --profile production --explain
-profile:  production
+$ secretspec check --profile development --explain
+profile:  development
 provider: keyring://
-  DATABASE_URL  ok        source keyring://
-  JWT_SECRET    ok        generated
-  LOG_LEVEL     ok        default value
-  SENTRY_DSN    missing   optional
-  STRIPE_KEY    MISSING   required
+  DATABASE_URL        ok        source keyring://
+  DEV_SESSION_SECRET  ok        default value
+  JWT_SECRET          ok        generated
+  SENTRY_DSN          missing   optional
+  STRIPE_KEY          MISSING   required
 ```
 
 `--json` emits a versioned, machine-readable object for tooling and CI. Each

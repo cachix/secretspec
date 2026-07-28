@@ -71,7 +71,7 @@ revision = "1.0"
 
 [profiles.default]
 DATABASE_URL = { description = "Database connection URL", required = true }
-LOG_LEVEL = { description = "Log verbosity", required = false, default = "info" }
+DEV_SESSION_SECRET = { description = "Development-only session secret", required = false, default = "development-only-secret" }
 `), 0o600)
 	os.WriteFile(env, []byte("DATABASE_URL=postgres://db\n"), 0o600)
 
@@ -128,7 +128,7 @@ func main() {
 		t.Fatal(err)
 	}
 	got := string(out)
-	if !strings.Contains(got, "postgres://db") || !strings.Contains(got, "info") {
+	if !strings.Contains(got, "postgres://db") || !strings.Contains(got, "development-only-secret") {
 		t.Fatalf("unexpected generated-code output: %s", got)
 	}
 }

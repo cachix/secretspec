@@ -361,7 +361,7 @@ env = "env://"
 # Default profile - always loaded first
 [profiles.default]
 APP_NAME = { description = "Application name", required = false, default = "MyApp" }
-LOG_LEVEL = { description = "Log verbosity", required = false, default = "info" }
+SESSION_SECRET = { description = "Session signing secret", required = true, providers = ["shared_vault"] }
 GITHUB_TOKEN = { description = "GitHub token", required = true, providers = ["env"] }
 
 # Development profile - extends default

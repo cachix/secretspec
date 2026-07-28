@@ -159,7 +159,7 @@ runCodegen bin = do
       , ""
       , "[profiles.default]"
       , "DATABASE_URL = { description = \"DB\", required = true }"
-      , "LOG_LEVEL = { description = \"log\", required = false, default = \"info\" }"
+      , "DEV_SESSION_SECRET = { description = \"Development-only session secret\", required = false, default = \"development-only-secret\" }"
       ]
   writeFile (dir </> ".env") "DATABASE_URL=postgres://db\n"
 

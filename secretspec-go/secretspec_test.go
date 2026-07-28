@@ -17,7 +17,7 @@ revision = "1.0"
 
 [profiles.default]
 DATABASE_URL = { description = "DB", required = true }
-LOG_LEVEL = { description = "log", required = false, default = "info" }
+DEV_SESSION_SECRET = { description = "Development-only session secret", required = false, default = "development-only-secret" }
 SENTRY_DSN = { description = "sentry", required = false }
 
 [scopes.database]
@@ -116,9 +116,9 @@ func TestLoadValuesAndProvenance(t *testing.T) {
 		t.Fatalf("DATABASE_URL provenance: source=%q provider=%v", db.Source, db.SourceProvider)
 	}
 
-	log := resolved.Secrets["LOG_LEVEL"]
-	if log.Get() != "info" || log.Source != "default" {
-		t.Fatalf("LOG_LEVEL = %q source=%q", log.Get(), log.Source)
+	session := resolved.Secrets["DEV_SESSION_SECRET"]
+	if session.Get() != "development-only-secret" || session.Source != "default" {
+		t.Fatalf("DEV_SESSION_SECRET = %q source=%q", session.Get(), session.Source)
 	}
 
 	if len(resolved.MissingOptional) != 1 || resolved.MissingOptional[0] != "SENTRY_DSN" {

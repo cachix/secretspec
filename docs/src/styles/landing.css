@@ -1,28 +1,5 @@
 /* ── Landing page styles for SecretSpec ── */
 
-/* SecretSpec slate-blue palette anchored to the brand color #223041 */
-:root {
-  --color-accent-50:  #f1f4f8;
-  --color-accent-100: #dce3ed;
-  --color-accent-200: #b9c7da;
-  --color-accent-300: #8ea3c0;
-  --color-accent-400: #607ea3;
-  --color-accent-500: #41608a;
-  --color-accent-600: #2d4566;
-  --color-accent-700: #223041;
-  --color-accent-800: #1a2533;
-  --color-accent-900: #111a25;
-
-  --color-gray-100: #f5f6f8;
-  --color-gray-200: #eceef2;
-  --color-gray-300: #c0c2c7;
-  --color-gray-400: #888b96;
-  --color-gray-500: #555860;
-  --color-gray-700: #353841;
-  --color-gray-800: #24272f;
-  --color-gray-900: #17191e;
-}
-
 /* Remove Starlight's content panel constraints on the landing page only.
    The DOM nests as `.content-panel > .sl-container`, so we anchor on the
    content panel (which contains the hero) and clear its padding/border too —

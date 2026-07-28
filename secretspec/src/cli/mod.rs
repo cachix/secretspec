@@ -14,7 +14,7 @@ use std::path::PathBuf;
 /// and delegating to the appropriate subcommands for secrets management.
 #[derive(Parser)]
 #[command(name = "secretspec")]
-#[command(about = "Declarative secrets, every environment, any provider - https://secretspec.dev", long_about = None)]
+#[command(about = "A declarative interface for every secret provider. https://secretspec.dev", long_about = None)]
 #[command(version)]
 struct Cli {
     /// Path to secretspec.toml (default: auto-detect by walking up from current directory)

@@ -133,7 +133,7 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
         dark: "./src/assets/logo-dark.png",
         replacesTitle: true,
       },
-      tagline: "Declarative secrets for development workflows",
+      tagline: "A declarative interface for every secret provider.",
       social: [
         {
           icon: "github",

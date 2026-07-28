@@ -8,7 +8,7 @@
   "files": [
     "secretspec.darwin-arm64.node"
   ],
-  "description": "Declarative secrets, every environment, any provider (Node.js SDK)",
+  "description": "A declarative interface for every secret provider. Node.js SDK.",
   "homepage": "https://secretspec.dev/",
   "license": "Apache-2.0",
   "os": [

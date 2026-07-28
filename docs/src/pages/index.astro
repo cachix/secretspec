@@ -71,7 +71,7 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
 
 <StarlightPage
   frontmatter={{
-    title: 'Declare secrets once. Store them anywhere.',
+    title: 'A declarative interface for every secret provider.',
     description: `Replace shared .env files with a manifest of what your application expects. Keep values out of git and resolve them from any of ${providerCount} providers.`,
     template: 'splash',
     hero: { tagline: '' },
@@ -101,7 +101,7 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
     )}
 
     <div class="landing-hero-head">
-      <h1 id="_top" class="landing-hero-title">Declare secrets once.<br>Store them anywhere.</h1>
+      <h1 id="_top" class="landing-hero-title">A declarative interface<br>for every secret provider.</h1>
       <p class="landing-hero-subtitle">
         Stop leaking <code class="inline-code">.env</code> files. Commit what your application expects in <code class="inline-code">secretspec.toml</code>, never the values. Developers, CI, and production can each resolve the same declaration from any of {providerCount} providers.
       </p>

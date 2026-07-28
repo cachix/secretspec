@@ -3,7 +3,7 @@ name = "secretspec"
 version.workspace = true
 edition.workspace = true
 repository = "https://github.com/cachix/secretspec"
-description = "Declarative secrets, every environment, any provider"
+description = "A declarative interface for every secret provider."
 license = "Apache-2.0"
 
 [lib]

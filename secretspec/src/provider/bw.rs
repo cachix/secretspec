@@ -34,8 +34,8 @@ impl BitwardenItemType {
     }
 
     /// Convert to integer for JSON serialization
-    pub fn to_u8(&self) -> u8 {
-        *self as u8
+    pub fn to_u8(self) -> u8 {
+        self as u8
     }
 
     /// The field this item type uses when the caller does not name one.
@@ -115,8 +115,8 @@ impl BitwardenFieldType {
     }
 
     /// Convert to integer for JSON serialization
-    pub fn to_u8(&self) -> u8 {
-        *self as u8
+    pub fn to_u8(self) -> u8 {
+        self as u8
     }
 
     /// Get the appropriate field type for a field name
@@ -746,21 +746,6 @@ impl BitwardenProvider {
             Err(e) => Err(e),
         }
     }
-
-    /// Formats the item name for storage in Bitwarden.
-    ///
-    /// Creates a hierarchical name using the folder_prefix format string.
-    /// Supports placeholders: {project} and {profile}.
-    /// Defaults to "secretspec/{project}/{profile}" if not configured.
-    ///
-    /// # Arguments
-    ///
-    /// * `project` - The project name
-    /// * `profile` - The profile name
-    ///
-    /// # Returns
-    ///
-    /// A formatted string based on the configured pattern
 
     /// Retrieves a secret from Bitwarden Password Manager.
     ///

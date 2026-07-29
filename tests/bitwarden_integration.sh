@@ -83,6 +83,13 @@
 #
 set -e  # Exit on any error
 
+# `[project].require_reason` defaults to "agents", so every get/set below is
+# policy-denied when this script runs under a coding agent — turning the whole
+# suite red for a reason that has nothing to do with the provider. Declaring
+# the reason is the intended way through the gate (as opposed to disabling the
+# policy); an explicit SECRETSPEC_REASON from the caller still wins.
+export SECRETSPEC_REASON="${SECRETSPEC_REASON:-bw provider integration test suite}"
+
 # Get BW_SESSION from command line or environment
 KEEP_TEST_DATA=false
 if [ $# -gt 0 ]; then
@@ -277,7 +284,27 @@ setup_test_data
 trap cleanup_test_data EXIT
 
 # Create a test secretspec.toml
+#
+# This lands in the *current* directory, and vaultwarden_harness.sh runs this
+# script from the repository root — where the project's own secretspec.toml
+# lives. Writing it unconditionally, then `rm -f`ing it on the way out, has
+# already deleted that tracked file once (restored in 859ef5e). Move any
+# existing file aside first and put it back on exit, so a harness run cannot
+# destroy the caller's config no matter which directory it starts from.
 echo -e "\n${YELLOW}Setting up test configuration${NC}"
+SAVED_CONFIG=""
+if [ -e secretspec.toml ]; then
+    SAVED_CONFIG=$(mktemp)
+    cp secretspec.toml "$SAVED_CONFIG"
+    echo "   Preserving existing secretspec.toml for the duration of the run"
+fi
+restore_config() {
+    rm -f secretspec.toml
+    if [ -n "$SAVED_CONFIG" ]; then
+        mv "$SAVED_CONFIG" secretspec.toml
+    fi
+}
+trap 'cleanup_test_data; restore_config' EXIT
 cat > secretspec.toml << 'EOF'
 [project]
 name = "bitwarden-test"
@@ -430,7 +457,7 @@ else
     echo "Please review the failed tests above."
 fi
 
-# Cleanup test config file (items cleaned up by EXIT trap)
-rm -f secretspec.toml
+# Test items and the test config are both cleaned up by the EXIT trap, which
+# also restores any secretspec.toml that was here before the run.
 
 echo -e "\n${BLUE}Testing complete!${NC}"

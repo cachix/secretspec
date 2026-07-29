@@ -139,7 +139,29 @@ else
   }
   BW_TEST_COLL_DEV_ID=$(mk_collection "dev-secrets")
   BW_TEST_COLL_PROD_ID=$(mk_collection "prod-secrets")
-  bw sync --nointeraction >/dev/null
+
+  # The organization race above, one level down. `bw create org-collection`
+  # returns the id the server assigned, but `bw list collections` answers from
+  # the locally-synced vault, which may not carry the new collection yet. A
+  # single blind `bw sync` was enough most of the time; when it wasn't, the
+  # fixture still printed both ids and `collection addressing` then failed 9 of
+  # 11 with "No collection matching 'prod-secrets' is visible", naming only the
+  # org's `default` collection. Wait for both to actually be listable.
+  collections_visible() {
+    bw list collections --nointeraction 2>/dev/null \
+      | jq -e --arg d "$BW_TEST_COLL_DEV_ID" --arg p "$BW_TEST_COLL_PROD_ID" \
+        'any(.[]; .id == $d) and any(.[]; .id == $p)' >/dev/null
+  }
+  for _ in $(seq 1 10); do
+    bw sync --nointeraction >/dev/null 2>&1 || true
+    if collections_visible; then break; fi
+    sleep 1
+  done
+  collections_visible || {
+    echo "collections dev-secrets ($BW_TEST_COLL_DEV_ID) and prod-secrets" \
+      "($BW_TEST_COLL_PROD_ID) never reached the bw CLI" >&2
+    exit 1
+  }
 
   export BW_TEST_ORG_ID BW_TEST_ORG_NAME BW_TEST_COLL_DEV_ID BW_TEST_COLL_PROD_ID
   echo "✓ org '$BW_TEST_ORG_NAME' ($BW_TEST_ORG_ID)"

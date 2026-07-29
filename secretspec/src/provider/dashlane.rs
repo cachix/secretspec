@@ -806,3 +806,157 @@ mod tests {
         assert!(provider.set(addr, &SecretString::new("v".into())).is_err());
     }
 }
+
+/// Smoke tests against a real Dashlane vault.
+///
+/// Ignored by default: they need `dcli` installed, registered and unlocked, so
+/// CI cannot run them. That is permanent rather than a gap to close — `dcli`
+/// offers no way to register a device without a real Dashlane account, and the
+/// vault is read-only, so a test cannot create the item it would then read.
+/// Someone with a vault runs these by hand when touching this provider:
+///
+/// ```console
+/// cargo test -p secretspec provider::dashlane::live -- --ignored --nocapture
+/// ```
+///
+/// The tests above prove the parsing and matching against *fabricated*
+/// fixtures. These prove the same code survives a real vault, which is a
+/// different claim: the JSON shape, the `dcli status` wording, and the fields a
+/// live item actually carries are all outside this repository's control.
+///
+/// **No secret value is ever printed.** Lengths and counts only.
+#[cfg(test)]
+mod live {
+    use super::*;
+
+    /// A name no vault will hold, used to drive a full miss.
+    const ABSENT: &str = "secretspec-live-test-item-that-does-not-exist";
+
+    /// The preflight parses real `dcli status` output.
+    ///
+    /// `dcli status` prints prose, not JSON, so the `Logged in:` / `Locked:`
+    /// contract this provider relies on is the one thing no fixture can pin
+    /// down: a reworded release breaks it silently, and every read would then
+    /// report the vault as logged out.
+    #[test]
+    #[ignore = "needs an authenticated dcli and a real vault"]
+    fn preflight_accepts_a_registered_unlocked_cli() {
+        DashlaneProvider::default()
+            .check_auth()
+            .unwrap_or_else(|e| {
+                panic!("`dcli status` did not read as registered and unlocked: {e}")
+            });
+    }
+
+    /// Every live item deserializes, one content type at a time.
+    ///
+    /// Each lister is run on its own so a failure names the content type. On a
+    /// personal account `dcli secret` has no items at all, which is worth
+    /// seeing distinctly from a parse failure — hence the counts.
+    #[test]
+    #[ignore = "needs an authenticated dcli and a real vault"]
+    fn every_lister_parses_the_live_vault() {
+        let provider = DashlaneProvider::default();
+        for &item_type in ItemType::search_order() {
+            let items = provider.list(item_type).unwrap_or_else(|e| {
+                panic!("`dcli {} -o json` did not parse: {e}", item_type.as_str())
+            });
+
+            // Counts and presence flags only; no title or value is printed,
+            // since a title can itself be sensitive.
+            println!(
+                "{}: {} items ({} titled, {} with a default field)",
+                item_type.as_str(),
+                items.len(),
+                items.iter().filter(|i| i.title.is_some()).count(),
+                items
+                    .iter()
+                    .filter(|i| i.field(item_type.default_field()).is_some())
+                    .count(),
+            );
+
+            for item in &items {
+                assert!(!item.id.is_empty(), "every live item carries an id");
+                assert!(
+                    !item.bare_id().contains(['{', '}']),
+                    "bare_id should strip the braces dcli wraps an id in"
+                );
+            }
+        }
+    }
+
+    /// A miss returns `Ok(None)`, leaving the fallback chain its turn.
+    #[test]
+    #[ignore = "needs an authenticated dcli and a real vault"]
+    fn an_absent_item_reads_as_unset() {
+        let provider = DashlaneProvider::default();
+        let addr = crate::config::NativeAddress {
+            item: ABSENT.into(),
+            ..Default::default()
+        };
+        match provider.get(Address::Native(&addr)) {
+            Ok(None) => {}
+            Ok(Some(_)) => panic!("no vault should hold an item named {ABSENT}"),
+            Err(e) => panic!("an absent item must read as unset, not as an error: {e}"),
+        }
+    }
+
+    /// Reads one item the operator names, since the provider cannot create it.
+    ///
+    /// Point this at any item in your vault:
+    ///
+    /// ```console
+    /// SECRETSPEC_DASHLANE_TEST_ITEM="My API token" \
+    ///   cargo test -p secretspec provider::dashlane::live -- --ignored --nocapture
+    /// ```
+    ///
+    /// `SECRETSPEC_DASHLANE_TEST_FIELD` exercises the `field` coordinate, and
+    /// `SECRETSPEC_DASHLANE_TEST_TYPE` pins the content type.
+    #[test]
+    #[ignore = "needs an authenticated dcli and a real vault"]
+    fn reads_an_item_named_by_the_operator() {
+        let Ok(item) = std::env::var("SECRETSPEC_DASHLANE_TEST_ITEM") else {
+            println!("SECRETSPEC_DASHLANE_TEST_ITEM is unset; skipping");
+            return;
+        };
+        let field = std::env::var("SECRETSPEC_DASHLANE_TEST_FIELD").ok();
+        let config = DashlaneConfig {
+            item_type: std::env::var("SECRETSPEC_DASHLANE_TEST_TYPE")
+                .ok()
+                .map(|t| {
+                    ItemType::parse(&t)
+                        .expect("SECRETSPEC_DASHLANE_TEST_TYPE is not a Dashlane item type")
+                }),
+        };
+
+        let addr = crate::config::NativeAddress {
+            item: item.clone(),
+            field: field.clone(),
+            ..Default::default()
+        };
+        let value = DashlaneProvider::new(config)
+            .get(Address::Native(&addr))
+            .unwrap_or_else(|e| panic!("reading the named item failed: {e}"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "the named item resolved to nothing. Check the title matches \
+                     exactly, that its content type is being searched, and that \
+                     `dcli sync` has run."
+                )
+            });
+
+        use secrecy::ExposeSecret;
+        let len = value.expose_secret().len();
+        assert!(len > 0, "the named item resolved to an empty value");
+        println!(
+            "read the named item{}: {len} bytes",
+            field.map(|f| format!(" (field '{f}')")).unwrap_or_default(),
+        );
+
+        // The value must not survive into a Debug rendering of the wrapper.
+        assert!(
+            !format!("{value:?}").contains(value.expose_secret()),
+            "the secret leaked through Debug"
+        );
+    }
+}

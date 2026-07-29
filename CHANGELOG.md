@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   creates or edits a vault item; `secretspec set` fails with that reason.
   Non-interactive use is supported through `DASHLANE_SERVICE_DEVICE_KEYS`,
   which can also be injected as the `service_device_keys` provider credential.
+  Injected credentials read through a private, owner-only `dcli` state
+  directory of their own, because `dcli` otherwise prefers a device already
+  registered on the machine and reads that identity's vault instead.
 
 ## [0.17.0] - 2026-07-26
 

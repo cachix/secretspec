@@ -182,8 +182,21 @@ you need to set values from SecretSpec.
 the vault. SecretSpec never asks it to sync, but `dcli` syncs itself whenever
 its last sync is over an hour old, so a read is usually local and occasionally
 a network round-trip. Run `dcli sync` after adding an item rather than waiting
-for that, and `dcli configure disable-auto-sync true` to keep reads strictly
-offline.
+for that. On a device you logged in yourself,
+`dcli configure disable-auto-sync true` keeps reads offline; with
+`DASHLANE_SERVICE_DEVICE_KEYS` it does not, for the reason below.
+
+**Injected credentials read from their own `dcli` state.** `dcli` prefers a
+device it has already registered over `DASHLANE_SERVICE_DEVICE_KEYS`, so with
+credentials set SecretSpec points it at a private state directory of its own,
+under the SecretSpec cache and named after a hash of the credentials. Without
+that, a machine already logged in — or a second alias carrying different
+credentials — would silently read the wrong vault. Two consequences: that state
+starts empty, so its first read syncs; and `dcli configure disable-auto-sync
+true`, which records the setting against the device in whichever state
+directory it is run from, does not carry over to it. Reads for injected
+credentials therefore sync on `dcli`'s hourly schedule, and there is no
+supported way to hold them offline.
 
 **Only three content types are readable.** `dcli` exposes listers for secrets,
 secure notes, and logins. Passkeys, personal info, payments, and IDs have no
@@ -199,6 +212,12 @@ over a pipe; SecretSpec never writes it to disk or to a log. A read can reach
 the network, because `dcli` re-syncs when its copy is over an hour stale. `dcli password`
 copies a password to the system clipboard when it is run without an output
 format, so SecretSpec always requests JSON explicitly.
+
+The private state directory those credentials get is created owner-only
+(`0700` on Unix) before `dcli` runs, because the database inside it holds the
+registered device and the synced vault, and `dcli` would otherwise leave both
+readable by every user on the machine. If SecretSpec cannot create it, the read
+fails rather than falling back to the shared `dcli` state.
 
 `DASHLANE_SERVICE_DEVICE_KEYS` grants full read access to the vault. Treat it
 as highly sensitive; Dashlane prefixes it with `dls_` so secret scanners can

@@ -39,6 +39,13 @@ const LOCKED_HELP: &str = "\
 The Dashlane vault is locked. Run any 'dcli' command to unlock it with your \
 master password, or re-enable 'dcli configure save-master-password true'.";
 
+/// Injected credentials need somewhere private to keep `dcli`'s state, and
+/// there is nowhere safe to fall back to.
+const NO_CACHE_DIR_HELP: &str = "\
+Cannot locate a cache directory to hold the private Dashlane CLI state that \
+DASHLANE_SERVICE_DEVICE_KEYS requires. Set XDG_CACHE_HOME (or HOME) to a \
+writable directory, or log in with 'dcli sync' and drop the credential.";
+
 /// The environment variable holding non-interactive device credentials, as
 /// printed by `dcli devices register`.
 const DEVICE_KEYS_ENV: &str = "DASHLANE_SERVICE_DEVICE_KEYS";
@@ -160,7 +167,10 @@ impl TryFrom<&ProviderUrl> for DashlaneConfig {
 /// syncs itself: every lister enters `connectAndPrepare`, which contacts
 /// Dashlane when the last sync is over an hour old. A read is therefore usually
 /// local and occasionally a network round-trip, unless the user has run
-/// `dcli configure disable-auto-sync true`.
+/// `dcli configure disable-auto-sync true`. That setting is recorded against
+/// the device in the state directory it was run from, so it does not reach the
+/// per-credential state directory injected keys are read in; those reads sync
+/// on `dcli`'s own schedule.
 ///
 /// Installation and authentication are covered at
 /// <https://secretspec.dev/providers/dashlane/>.
@@ -249,15 +259,65 @@ enum Found {
 /// Named after a hash of the keys, never the keys themselves: a directory name
 /// is visible to anyone who can list the cache or read the process's
 /// environment.
-fn scoped_state_dir(keys: &str) -> Option<PathBuf> {
+fn scoped_state_dir(keys: &str) -> Result<PathBuf> {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     keys.hash(&mut hasher);
-    Some(
-        crate::config::cache_dir()?
-            .join("dashlane")
-            .join(format!("{:016x}", hasher.finish())),
-    )
+    let cache = crate::config::cache_dir()
+        .ok_or_else(|| SecretSpecError::ProviderOperationFailed(NO_CACHE_DIR_HELP.to_string()))?;
+    Ok(cache
+        .join("dashlane")
+        .join(format!("{:016x}", hasher.finish())))
+}
+
+/// Creates a state directory only its owner can enter.
+///
+/// Left to `dcli`, the tree is world-readable: its recursive `mkdir` asks for
+/// mode `0777` and SQLite creates the database `0666`, both merely masked by
+/// the umask. Observed with dcli 6.2628.1 on Linux under a `022` umask, a run
+/// against an empty `HOME` leaves `dashlane-cli/` at `0755` and its
+/// `userdata.db` at `0644` -- a database holding the service device row and
+/// the synced vault. An owner-only directory above them is what keeps both out
+/// of reach, so it is created here rather than by `dcli`.
+#[cfg(unix)]
+fn create_private_dir(dir: &std::path::Path) -> Result<()> {
+    use std::fs::{DirBuilder, Permissions, metadata, set_permissions};
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    let private = |e: std::io::Error| {
+        SecretSpecError::ProviderOperationFailed(format!(
+            "could not prepare a private dcli state directory at {}: {e}",
+            dir.display()
+        ))
+    };
+
+    DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(private)?;
+    // `mode` governs only the directories that call created. One left by an
+    // earlier SecretSpec, or by a `dcli` that got there first, keeps whatever
+    // mode it already has, so tighten it.
+    let mode = metadata(dir).map_err(private)?.permissions().mode();
+    if mode & 0o077 != 0 {
+        set_permissions(dir, Permissions::from_mode(0o700)).map_err(private)?;
+    }
+    Ok(())
+}
+
+/// Creates the state directory on platforms without Unix permission bits.
+///
+/// Windows inherits the ACL of the parent, and the cache directory lives under
+/// the user's profile, which grants no access to other users by default.
+#[cfg(not(unix))]
+fn create_private_dir(dir: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(dir).map_err(|e| {
+        SecretSpecError::ProviderOperationFailed(format!(
+            "could not prepare a private dcli state directory at {}: {e}",
+            dir.display()
+        ))
+    })
 }
 
 /// Whether a `dcli` failure means the subcommand does not exist.
@@ -313,12 +373,15 @@ impl DashlaneProvider {
             // logged in interactively, or across two aliases carrying different
             // keys, that silently reads the wrong identity's vault. Giving each
             // credential its own state directory keeps the identities apart.
-            if let Some(dir) = scoped_state_dir(&keys) {
-                // `dcli` derives the directory from APPDATA, else HOME, and
-                // creates it recursively itself.
-                cmd.env("HOME", &dir);
-                cmd.env("APPDATA", &dir);
-            }
+            //
+            // Failing to prepare that directory has to abort the read: running
+            // anyway would hand the keys to a `dcli` pointed at the inherited
+            // HOME, which is the very state this isolates against.
+            let dir = scoped_state_dir(&keys)?;
+            create_private_dir(&dir)?;
+            // `dcli` derives its state path from APPDATA, else HOME.
+            cmd.env("HOME", &dir);
+            cmd.env("APPDATA", &dir);
             cmd.env(DEVICE_KEYS_ENV, keys);
         }
         cmd.args(args);
@@ -942,6 +1005,27 @@ mod tests {
         // Stable across calls, so a synced vault is reused rather than refetched.
         assert_eq!(dir, scoped_state_dir(keys).unwrap());
         assert_ne!(dir, scoped_state_dir("dls_OTHER_IDENTITY").unwrap());
+    }
+
+    /// The state directory holds a device row and a decrypted-on-demand vault,
+    /// so no other user may enter it -- including when `dcli`, or an earlier
+    /// SecretSpec, created it world-traversable first.
+    #[cfg(unix)]
+    #[test]
+    fn the_scoped_state_dir_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("dashlane").join("0123456789abcdef");
+        let mode =
+            |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+        create_private_dir(&dir).unwrap();
+        assert_eq!(mode(&dir), 0o700, "a newly created state directory");
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        create_private_dir(&dir).unwrap();
+        assert_eq!(mode(&dir), 0o700, "a state directory that already existed");
     }
 
     #[test]

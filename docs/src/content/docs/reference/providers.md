@@ -130,11 +130,11 @@ item template replaces the default and supports `{project}`, `{profile}`, and
 ```bash
 dashlane://          # Search secrets, then notes, then logins
 dashlane://note      # Secure notes only
-dashlane://secret    # Dashlane Secrets only (business accounts)
+dashlane://secret    # Dashlane Secrets only (Business plans)
 dashlane://password  # Logins only
 ```
 
-**Features**: Read-only, cloud sync, profiles via item titles
+**Features**: Read-only, reads a locally synced vault, profiles via item titles
 **Prerequisites**: `dcli` CLI, device registered with `dcli sync`, or
 `DASHLANE_SERVICE_DEVICE_KEYS` for a non-interactive device
 **Storage**: Item titled `secretspec/{project}/{profile}/{key}`. The value is

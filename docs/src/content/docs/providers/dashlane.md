@@ -65,10 +65,10 @@ By default the master password is saved in the OS keychain. `dcli lock` locks
 the vault again, and `dcli logout` clears both the local database and the
 keychain entry.
 
-SecretSpec checks `dcli status` before reading and fails with instructions if
-the device is unregistered or the vault is locked. It never answers a `dcli`
-prompt: reads run with stdin closed, so an unauthenticated CLI fails
-immediately instead of hanging a `secretspec run`.
+SecretSpec checks `dcli status` before reading and reports an unregistered
+device or a locked vault. It never answers a `dcli` prompt — reads run with
+stdin closed, so an unauthenticated CLI fails immediately rather than leaving
+`secretspec run` waiting on a password.
 
 ## Configuration
 
@@ -126,22 +126,21 @@ To read an item you already have, name it with a `ref`:
 ```toml title="secretspec.toml"
 [profiles.default]
 # By title
-GITHUB_TOKEN = { ref = { item = "GitHub personal access token" } }
+GITHUB_TOKEN = { description = "GitHub token", ref = { item = "GitHub personal access token" }, providers = ["dashlane"] }
 
-# By identifier — stable across renames, and unambiguous
-STRIPE_KEY = { ref = { item = "D47734C4-0ABE-423A-8633-6B9F10A38905" } }
+# By identifier — stable across renames, and never ambiguous
+STRIPE_KEY = { description = "Stripe key", ref = { item = "D47734C4-0ABE-423A-8633-6B9F10A38905" }, providers = ["dashlane"] }
 
 # A named field of a login
-DB_USER = { ref = { item = "Production database", field = "login" } }
+DB_USER = { description = "Database user", ref = { item = "Production database", field = "login" }, providers = ["dashlane://password"] }
 ```
 
-Find an item's identifier with `dcli password <title> -o json`; the `id` field
-is emitted wrapped in braces, and either form works here.
+Find an item's identifier by listing its content type — `dcli secret`,
+`dcli note`, or `dcli password` with `-o json`. The `id` is emitted wrapped in
+braces; both forms work here.
 
 `ref` supports the `item` and `field` coordinates. Dashlane has no vaults or
 sections, so those coordinates are rejected rather than ignored.
-
-Referenced items are read-only like everything else in this provider.
 
 ## CI/CD
 
@@ -172,10 +171,9 @@ every login and SSO are not supported for them.
 
 ## Troubleshooting and limitations
 
-**Writes are not supported.** `dcli` has no `create`, `add`, `set`, `update`,
-or `delete` subcommand for vault items, so `secretspec set` fails with that
-reason. Add or edit the item in a Dashlane app, run `dcli sync`, then read it
-here. Pair Dashlane with a writable provider if you need `secretspec set`.
+**`secretspec set` fails.** Add or edit the item in a Dashlane app, run
+`dcli sync`, then read it here. Give the secret a writable provider as well if
+you need to set values from SecretSpec.
 
 **A new item is invisible until the CLI syncs.** `dcli` reads a locally
 synced copy of the vault and re-syncs hourly. SecretSpec never syncs on your
@@ -186,9 +184,8 @@ become one. Run `dcli sync` after adding an item.
 secure notes, and logins. Passkeys, personal info, payments, and IDs have no
 CLI surface and cannot be read.
 
-**Dashlane Secrets are a business feature.** The `secret` content type does not
-exist on a personal account, where `dashlane://secret` simply finds nothing.
-Use secure notes there.
+**Secrets need a Business plan.** The `secret` content type is not available on
+personal plans, where `dashlane://secret` finds nothing. Use secure notes there.
 
 ## Security considerations
 

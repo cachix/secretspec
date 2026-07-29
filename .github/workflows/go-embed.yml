@@ -2,10 +2,12 @@ name: "Go embedded lib"
 
 # Builds the per-platform cdylib the Go SDK embeds (go:embed, behind the
 # `embed_lib` build tag) and verifies the embedded build works with no
-# SECRETSPEC_FFI_LIB set. The libraries are uploaded as artifacts and attached to
-# GitHub releases for users who want a self-contained `-tags embed_lib` build;
-# they are never committed to the repo (the Go module proxy does not carry binary
-# assets — see RELEASE.md).
+# SECRETSPEC_FFI_LIB set. Linux builds use a manylinux_2_28 baseline and compile
+# libdbus into the cdylib, so the release assets work without distro-specific
+# runtime libraries (including on NixOS). The libraries are uploaded as
+# artifacts and attached to GitHub releases for users who want a self-contained
+# `-tags embed_lib` build; they are never committed to the repo (the Go module
+# proxy does not carry binary assets — see RELEASE.md).
 
 on:
   workflow_call:
@@ -32,27 +34,37 @@ on:
   pull_request:
     paths:
       - "secretspec-go/**"
+      - "secretspec-ffi/**"
       - ".github/workflows/go-embed.yml"
+      - "scripts/check-linux-portability.sh"
 
 jobs:
   embed:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container || null }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { target: linux_amd64, runner: ubuntu-latest }
-          - { target: linux_arm64, runner: ubuntu-24.04-arm }
+          - target: linux_amd64
+            runner: ubuntu-latest
+            container: quay.io/pypa/manylinux_2_28_x86_64
+          - target: linux_arm64
+            runner: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
           - { target: darwin_arm64, runner: macos-latest }
           - { target: windows_amd64, runner: windows-latest }
 
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Linux system dependencies (dbus for keyring)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Install rustup (the manylinux container ships none)
+        if: matrix.container
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+            sh -s -- -y --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
@@ -63,6 +75,13 @@ jobs:
       - name: Stage the embedded cdylib
         shell: bash
         run: bash secretspec-go/scripts/stage-cdylib.sh
+
+      - name: Verify Linux portability (glibc <= 2.28, no dynamic libdbus)
+        if: matrix.container
+        shell: bash
+        run: >-
+          bash scripts/check-linux-portability.sh
+          "secretspec-go/lib/secretspec_ffi_${{ matrix.target }}.so"
 
       - name: Build and smoke test the embedded SDK (no SECRETSPEC_FFI_LIB)
         shell: bash

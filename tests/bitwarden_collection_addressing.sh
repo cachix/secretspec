@@ -16,6 +16,10 @@
 # cleanly when it is absent, so this stays runnable against a personal vault.
 set -uo pipefail
 
+# See bitwarden_integration.sh: without a reason, `[project].require_reason`
+# ("agents" by default) denies every get/set under a coding agent.
+export SECRETSPEC_REASON="${SECRETSPEC_REASON:-bw provider collection addressing checks}"
+
 if [ -z "${BW_TEST_ORG_ID:-}" ]; then
   echo "── collection addressing: SKIPPED (no BW_TEST_ORG_ID fixture) ──"
   echo "   Run via tests/vaultwarden_harness.sh, which creates the organization."

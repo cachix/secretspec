@@ -16,6 +16,11 @@
 #           case-insensitive (duplicate field, stale reads)
 set -uo pipefail
 
+# See bitwarden_integration.sh: without a reason, `[project].require_reason`
+# ("agents" by default) denies every get/set under a coding agent, and each
+# finding below reports itself REPRODUCED on the strength of the denial alone.
+export SECRETSPEC_REASON="${SECRETSPEC_REASON:-bw provider regression checks}"
+
 : "${BW_SESSION:?BW_SESSION required (unlocked vault)}"
 export BW_SESSION
 

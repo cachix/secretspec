@@ -331,6 +331,15 @@ bw_test_nonexistent_item = { required = false, description = "Item that definite
 bw_integration_test_new_login = { required = false, description = "Login item for creation test" }
 bw_integration_test_new_card = { required = false, description = "Card item for creation test" }
 
+# One per item type for the create -> update -> read-back sweep. Deliberately
+# no `ref`: the item is named after the key, so the provider both creates and
+# later finds it on its own terms rather than against a hand-built fixture.
+bw_integration_test_roundtrip_login = { required = false, description = "Round-trip: login" }
+bw_integration_test_roundtrip_note = { required = false, description = "Round-trip: secure note" }
+bw_integration_test_roundtrip_card = { required = false, description = "Round-trip: card" }
+bw_integration_test_roundtrip_identity = { required = false, description = "Round-trip: identity" }
+bw_integration_test_roundtrip_ssh = { required = false, description = "Round-trip: SSH key" }
+
 EOF
 
 echo -e "${GREEN}✓ Created test secretspec.toml${NC}"
@@ -448,6 +457,48 @@ run_test "Create new Card item with custom field" \
 run_test "Update existing Login item" \
     "./target/debug/secretspec set bw_integration_test_database 'updated-password' --provider bw://" \
     "Secret.*saved"
+
+echo -e "\n${YELLOW}=== CREATE → UPDATE → READ-BACK SWEEP ===${NC}"
+# Every other fixture in this file is built with raw `bw`, so nothing above
+# reads an item that secretspec itself created. That is the gap R2 lived in:
+# `set` reported success while writing the value somewhere `get` would never
+# look, and an assertion on "Secret ... saved" cannot tell the difference.
+#
+# For each item type: create through the provider, read it back, update the
+# item the provider just made, and read it back again. The update leg matters
+# as much as the create -- test 19 above updates an item `ensure_item` built,
+# so the writer has never been pointed at its own output.
+roundtrip_type() {
+    local label="$1"
+    local type="$2"
+    local secret="bw_integration_test_roundtrip_${label}"
+    local created="created-${label}-value"
+    local updated="updated-${label}-value"
+
+    run_test "Round-trip ${label}: set creates the item" \
+        "./target/debug/secretspec set $secret '$created' --provider 'bw://?type=$type'" \
+        "Secret.*saved"
+
+    run_test "Round-trip ${label}: get returns what set wrote" \
+        "./target/debug/secretspec get $secret --provider 'bw://?type=$type'" \
+        "$created"
+
+    run_test "Round-trip ${label}: set updates its own item" \
+        "./target/debug/secretspec set $secret '$updated' --provider 'bw://?type=$type'" \
+        "Secret.*saved"
+
+    # Fails if the update landed in a different field than the getter reads,
+    # or created a duplicate item alongside the original.
+    run_test "Round-trip ${label}: get reflects the update" \
+        "./target/debug/secretspec get $secret --provider 'bw://?type=$type'" \
+        "$updated"
+}
+
+roundtrip_type login login
+roundtrip_type note note
+roundtrip_type card card
+roundtrip_type identity identity
+roundtrip_type ssh ssh
 
 if [ $TESTS_FAILED -eq 0 ]; then
     echo -e "\n${GREEN}🎉 ALL TESTS PASSED!${NC}"

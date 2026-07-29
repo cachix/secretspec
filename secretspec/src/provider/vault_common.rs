@@ -148,7 +148,7 @@ pub(crate) struct KvConfig {
     pub(crate) role: Option<String>,
     /// Audience requested when SecretSpec mints a CI OIDC token.
     pub(crate) audience: Option<String>,
-    /// How convention secrets map onto KV paths (SecretSpec 0.17+).
+    /// How convention secrets map onto KV paths (SecretSpec 0.18+).
     #[serde(default)]
     pub(crate) layout: Layout,
 }

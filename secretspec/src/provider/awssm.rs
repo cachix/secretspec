@@ -76,7 +76,7 @@ pub struct AwssmConfig {
     /// iteration (and thus `uri()`) is deterministic for the audit log.
     #[serde(default)]
     pub tags: BTreeMap<String, String>,
-    /// How convention secrets map onto secret names (SecretSpec 0.17+).
+    /// How convention secrets map onto secret names (SecretSpec 0.18+).
     #[serde(default)]
     pub layout: Layout,
 }

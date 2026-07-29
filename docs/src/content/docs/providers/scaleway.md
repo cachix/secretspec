@@ -74,7 +74,7 @@ scaleway://[REGION][?project_id=UUID][&path=/folder]
 - `path`: Optional base folder prepended to the convention hierarchy. Defaults
   to `/` (root).
 - `layout=flat`: address secrets by key alone at the store root, with no
-  `secretspec/{project}/{profile}` scaffolding — see [Layout](#layout-017)
+  `secretspec/{project}/{profile}` scaffolding — see [Layout](#layout-018)
 
 ### URI examples
 
@@ -115,12 +115,12 @@ stored at folder `/secretspec/myapp/production` with name `DATABASE_URL`. With
 Each write appends a new secret version; reads return the latest enabled
 version.
 
-### Layout (0.17+)
+### Layout (0.18+)
 
-Added in SecretSpec 0.17; `?layout=flat` is not available in SecretSpec 0.16 or
+Added in SecretSpec 0.18; `?layout=flat` is not available in SecretSpec 0.17 or
 earlier.
 
-`?layout=` is a [general provider setting](/reference/providers/#layout-flat-017),
+`?layout=` is a [general provider setting](/reference/providers/#layout-flat-018),
 spelled the same way across every hierarchical backend. The default **nested**
 layout stores each secret in `[{base}/]secretspec/{project}/{profile}`, as above.
 

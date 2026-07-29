@@ -102,7 +102,7 @@ infisical://[host]/{project-id}[?env=slug&path=/prefix&layout=flat&tls=false]
 - `?env=`: environment slug. Without it, the SecretSpec profile names the environment
 - `?path=`: folder prefix holding SecretSpec's secrets. Defaults to `/secretspec` under the
   nested layout and to the environment root (`/`) under the flat one
-- `?layout=` (0.17+): `nested` (default) or `flat` — see [Layout](#layout-017)
+- `?layout=` (0.18+): `nested` (default) or `flat` — see [Layout](#layout-018)
 - `?tls=false`: disable TLS, for self-hosted instances served over plain HTTP
 
 Infisical's API addresses a project by UUID, not by the slug shown in its UI.
@@ -174,9 +174,9 @@ renamed.
 
 Folders are created as needed when writing a secret.
 
-### Layout (0.17+)
+### Layout (0.18+)
 
-Added in SecretSpec 0.17; the flat layout is not available in SecretSpec 0.16.
+Added in SecretSpec 0.18; the flat layout is not available in SecretSpec 0.17.
 
 The default **nested** layout stores secrets under `{path}/{project}/{profile}`, so many projects
 and profiles can share one Infisical store without colliding.

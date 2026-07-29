@@ -20,6 +20,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Injected credentials read through a private, owner-only `dcli` state
   directory of their own, because `dcli` otherwise prefers a device already
   registered on the machine and reads that identity's vault instead.
+- Flat layout (`?layout=flat`), a general provider setting that resolves and
+  writes convention secrets by key alone at the store root, dropping the
+  `secretspec/{project}/{profile}` scaffolding — the natural shape for a
+  single-project store, such as one migrated from another secret manager.
+  Supported by Infisical, Vault, OpenBao, AWS Secrets Manager, Google Cloud
+  Secret Manager, Azure Key Vault and Scaleway Secret Manager; providers that
+  address by key alone (`dotenv`, `env`, `bws`, `sops`) are already flat and
+  ignore it. Any
+  provider-native container (a Vault mount) or user-supplied prefix (an AWS
+  `?prefix=`, an Infisical `?path=`) still applies. The default nested layout is
+  unchanged. Dropping the profile gives up profile separation, so a provider
+  that pins its environment another way (an Infisical `?env=`) combined with
+  `?layout=flat` collapses every profile onto one key deliberately; and because
+  the key is used as the backend name directly, it must be a legal name there
+  (Azure Key Vault, which uses it verbatim, refuses a key it cannot store).
 
 ## [0.17.0] - 2026-07-26
 
@@ -152,21 +167,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exchanges now honor the configured namespace. Reported provider URIs strip
   endpoint credentials while retaining non-secret store and authentication
   attribution.
-- Flat layout (`?layout=flat`), a general provider setting that resolves and
-  writes convention secrets by key alone at the store root, dropping the
-  `secretspec/{project}/{profile}` scaffolding — the natural shape for a
-  single-project store, such as one migrated from another secret manager.
-  Supported by every hierarchical provider (Infisical, Vault, OpenBao, AWS
-  Secrets Manager, Google Cloud Secret Manager, Azure Key Vault and Scaleway
-  Secret Manager); providers with no hierarchy (`dotenv`, `env`, `bws`) are
-  already flat and ignore it. Any
-  provider-native container (a Vault mount) or user-supplied prefix (an AWS
-  `?prefix=`, an Infisical `?path=`) still applies. The default nested layout is
-  unchanged. Dropping the profile gives up profile separation, so a provider
-  that pins its environment another way (an Infisical `?env=`) combined with
-  `?layout=flat` collapses every profile onto one key deliberately; and because
-  the key is used as the backend name directly, it must be a legal name there
-  (Azure Key Vault, which uses it verbatim, refuses a key it cannot store).
 - Vault / OpenBao JWT/OIDC authentication (`?auth=jwt`) logs in through a
   configured Vault role using `VAULT_JWT`, or requests a short-lived OIDC token
   automatically in GitHub Actions and Forgejo Actions jobs with `id-token:

@@ -136,7 +136,7 @@ pub struct AkvConfig {
     /// (contains a dot) or the default public suffix was used, so `uri()`
     /// only emits `suffix` when it was actually given.
     pub suffix: Option<String>,
-    /// How convention secrets map onto secret names (SecretSpec 0.17+).
+    /// How convention secrets map onto secret names (SecretSpec 0.18+).
     #[serde(default)]
     pub layout: Layout,
 }

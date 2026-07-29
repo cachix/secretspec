@@ -201,12 +201,12 @@ protonpass://Work/{project}/{profile}/{key}        # Custom vault and title temp
 
 ```bash
 gcsm://my-gcp-project              # GCP project ID
-gcsm://my-gcp-project?layout=flat  # (0.17+) Secret id is the key alone
+gcsm://my-gcp-project?layout=flat  # (0.18+) Secret id is the key alone
 ```
 
 **Features**: Read/write, cloud sync, profiles, service account support
 **Prerequisites**: `gcloud` CLI, authenticated, Secret Manager API enabled, build with `--features gcsm`
-**Storage**: Secret name `secretspec-{project}-{profile}-{key}`, or the `{key}` alone under [`?layout=flat`](#layout-flat-017)
+**Storage**: Secret name `secretspec-{project}-{profile}-{key}`, or the `{key}` alone under [`?layout=flat`](#layout-flat-018)
 
 ## AWS Secrets Manager Provider
 
@@ -215,13 +215,13 @@ gcsm://my-gcp-project?layout=flat  # (0.17+) Secret id is the key alone
 ```bash
 awssm://us-east-1             # Specific AWS region
 awssm://production@us-east-1  # Specific AWS profile and region
-awssm://us-east-1?layout=flat # (0.17+) Secret name is [prefix/]key
+awssm://us-east-1?layout=flat # (0.18+) Secret name is [prefix/]key
 awssm://                      # SDK default region and credentials
 ```
 
 **Features**: Read/write, cloud sync, profiles, IAM/SSO authentication
 **Prerequisites**: AWS credentials configured, build with `--features awssm`
-**Storage**: Secret name `[prefix/]secretspec/{project}/{profile}/{key}`, or `[prefix/]{key}` under [`?layout=flat`](#layout-flat-017)
+**Storage**: Secret name `[prefix/]secretspec/{project}/{profile}/{key}`, or `[prefix/]{key}` under [`?layout=flat`](#layout-flat-018)
 
 ## Scaleway Secret Manager Provider (0.17+)
 
@@ -255,7 +255,7 @@ vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
 
 **Features**: Read/write, KV v1 and v2, namespaces; token and AppRole authentication; JWT/OIDC authentication (0.17+)
 **Prerequisites**: Vault server, authentication credentials, build with `--features vault`
-**Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field, or the `{key}` alone at the mount root under [`?layout=flat`](#layout-flat-017)
+**Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field, or the `{key}` alone at the mount root under [`?layout=flat`](#layout-flat-018)
 
 ## OpenBao Provider (0.17+)
 
@@ -276,7 +276,7 @@ openbao://bao.example.com:8200/secret?layout=flat
 
 **Features**: Read/write, KV v1 and v2, namespaces; token, AppRole, and JWT/OIDC authentication; documented OpenBao CLI variables plus SecretSpec-defined `BAO_*` AppRole/JWT inputs, all with `VAULT_*` compatibility fallbacks
 **Prerequisites**: OpenBao server, authentication credentials, build with `--features openbao` (0.17+)
-**Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field, or the `{key}` alone at the mount root under [`?layout=flat`](#layout-flat-017)
+**Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field, or the `{key}` alone at the mount root under [`?layout=flat`](#layout-flat-018)
 
 ## Bitwarden Secrets Manager Provider
 
@@ -317,7 +317,7 @@ akv://myvault?suffix=vault.azure.cn      # Sovereign cloud (explicit suffix, bar
 
 **Features**: Read/write, cloud sync, profiles, service principal/managed identity/workload identity auth
 **Prerequisites**: An Azure Key Vault instance, authenticated via one of the methods above, build with `--features akv`
-**Storage**: Secret name `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}` (lowercase, unpadded Base32 preserves case and punctuation distinctions within Azure's case-insensitive secret-name namespace), or the `{key}` used verbatim as the secret name under [`?layout=flat`](#layout-flat-017)
+**Storage**: Secret name `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}` (lowercase, unpadded Base32 preserves case and punctuation distinctions within Azure's case-insensitive secret-name namespace), or the `{key}` used verbatim as the secret name under [`?layout=flat`](#layout-flat-018)
 
 ## Infisical Provider
 
@@ -329,7 +329,7 @@ Available since SecretSpec 0.16.
 infisical://app.infisical.com/7e2f1a4c-...            # Infisical Cloud (US)
 infisical://eu.infisical.com/7e2f1a4c-...             # Infisical Cloud (EU)
 infisical://vault.example.com/7e2f1a4c-...?env=prod   # Read every profile from one environment
-infisical://app.infisical.com/7e2f1a4c-...?layout=flat  # (0.17+) Read from the environment root, no folders
+infisical://app.infisical.com/7e2f1a4c-...?layout=flat  # (0.18+) Read from the environment root, no folders
 infisical://localhost:8080/7e2f1a4c-...?tls=false     # Self-hosted over plain HTTP
 ```
 
@@ -346,7 +346,7 @@ By default the SecretSpec profile names the Infisical environment, so a `product
 the `production` environment. Projects whose environments do not correspond to profiles pin one with
 `?env=`; the profile still names the folder, so profiles never share a secret.
 
-`?layout=flat` (0.17+) drops the `{project}/{profile}` folders so secrets resolve at the environment
+`?layout=flat` (0.18+) drops the `{project}/{profile}` folders so secrets resolve at the environment
 root (or at `?path=` when given) — the natural shape for a single-project store, e.g. one migrated
 from another manager. The profile still names the environment, so profiles stay apart; combining
 `?layout=flat` with a pinned `?env=` collapses them onto one root and is only safe when a single
@@ -371,10 +371,10 @@ age://secrets.age?recipients-file=secrets.age.recipients # Share with a roster
 **Prerequisites**: An age identity; hybrid ML-KEM-768 + X25519 keys from `age-keygen -pq` are recommended for new setups and currently require the non-interactive `age-plugin-pq` compatibility plugin. Build with `--features age`.
 **Authentication**: The `identity` credential, `AGE_IDENTITY`, or `?identity=`; recipients from `?recipients-file=` or derived from the identity
 **Storage**: One `KEY=value` entry per secret inside the encrypted blob at PATH
-## Layout: `flat` (0.17+)
+## Layout: `flat` (0.18+)
 
 :::note[Version compatibility]
-Added in SecretSpec 0.17. `?layout=flat` is not available in SecretSpec 0.16 or earlier.
+Added in SecretSpec 0.18. `?layout=flat` is not available in SecretSpec 0.17 or earlier.
 :::
 
 `?layout=` is a **general provider setting**, spelled the same way across every provider whose
@@ -403,7 +403,7 @@ unconstrained under it. Two caveats follow from addressing by key alone:
   as the secret name verbatim, so it must match `^[0-9a-zA-Z-]+$` (an underscore, which the nested
   layout would have Base32-encoded away, is refused).
 
-Providers with no hierarchy (`dotenv`, `env`, `bws`) are already flat and ignore the setting.
+Providers that address by key alone (`dotenv`, `env`, `bws`, `sops`) are already flat and ignore the setting. A hierarchical store that does not read the setting keeps the nested layout: `dashlane` is one, so `?layout=` has no effect there.
 
 An unreadable value (anything but `nested` or `flat`) is refused rather than guessed.
 

@@ -276,11 +276,14 @@ impl ProviderUrl {
 ///
 /// This is a **general provider setting**, not one backend's quirk: every
 /// hierarchical store faces the same question, so it is spelled the same way --
-/// `?layout=flat` -- across Infisical, Vault, AWS Secrets Manager, Google Cloud
-/// Secret Manager and Azure Key Vault. Providers whose store has no hierarchy
-/// (`dotenv`, `env`, `bws`) are already flat and ignore the setting.
+/// `?layout=flat` -- across Infisical, Vault, OpenBao, AWS Secrets Manager,
+/// Google Cloud Secret Manager, Azure Key Vault and Scaleway Secret Manager.
+/// Providers that address by key alone (`dotenv`, `env`, `bws`, `sops`) are
+/// already flat and ignore the setting. A hierarchical store that does not read
+/// this setting yet keeps the nested layout; `dashlane` is one, so it is not
+/// listed above.
 ///
-/// Available since SecretSpec 0.17.
+/// Available since SecretSpec 0.18.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Layout {

@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 pub struct GcsmConfig {
     /// The GCP project ID (e.g., "my-gcp-project")
     pub project_id: String,
-    /// How convention secrets map onto secret IDs (SecretSpec 0.17+).
+    /// How convention secrets map onto secret IDs (SecretSpec 0.18+).
     #[serde(default)]
     pub layout: Layout,
 }

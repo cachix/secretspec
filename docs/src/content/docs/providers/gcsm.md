@@ -58,7 +58,7 @@ gcsm://PROJECT_ID[?layout=flat]
 ```
 
 - `PROJECT_ID`: Your GCP project ID
-- `?layout=flat` (0.17+): use the key alone as the secret id, with no `secretspec-{project}-{profile}-` prefix — see [Layout](#layout-017)
+- `?layout=flat` (0.18+): use the key alone as the secret id, with no `secretspec-{project}-{profile}-` prefix — see [Layout](#layout-018)
 
 ### URI examples
 
@@ -82,11 +82,11 @@ Secrets are stored as `secretspec-{project}-{profile}-{key}`. For example,
 project `myapp`, profile `production`, and key `DATABASE_URL` map to
 `secretspec-myapp-production-DATABASE_URL`.
 
-### Layout (0.17+)
+### Layout (0.18+)
 
-Added in SecretSpec 0.17; `?layout=flat` is not available in SecretSpec 0.16 or earlier.
+Added in SecretSpec 0.18; `?layout=flat` is not available in SecretSpec 0.17 or earlier.
 
-`?layout=` is a [general provider setting](/reference/providers/#layout-flat-017), spelled the same
+`?layout=` is a [general provider setting](/reference/providers/#layout-flat-018), spelled the same
 way across every hierarchical backend. The default **nested** layout builds the secret id
 `secretspec-{project}-{profile}-{key}`, as above.
 

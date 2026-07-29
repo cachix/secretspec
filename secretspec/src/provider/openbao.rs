@@ -36,7 +36,7 @@
 //! - `kv` -- KV engine version: `1` or `2` (default)
 //! - `tls` -- `true` (default) or `false`; the latter is intended for dev mode
 //! - `layout` -- `nested` (default) or `flat`; flat addresses a convention
-//!   secret by its key alone at the mount root (0.17+)
+//!   secret by its key alone at the mount root (0.18+)
 //! - `role` -- role for JWT auth, falling back through `BAO_JWT_ROLE` and
 //!   `VAULT_JWT_ROLE`
 //! - `audience` -- audience requested from the CI OIDC issuer, falling back
@@ -58,7 +58,7 @@
 //!
 //! Convention-addressed secrets live at
 //! `secretspec/{project}/{profile}/{key}` under the configured KV mount, or --
-//! under `?layout=flat` (0.17+) -- at the `{key}` alone at the mount root. Each
+//! under `?layout=flat` (0.18+) -- at the `{key}` alone at the mount root. Each
 //! entry is a map whose `value` field contains the SecretSpec value. Native
 //! references name a KV path with `item` and select a map entry with `field`;
 //! they are read-only so changing one field cannot overwrite its siblings.

@@ -113,7 +113,7 @@ openbao://[namespace@]host[:port][/mount][?key=value&...]
 - `?role=`: OpenBao role for JWT auth
 - `?audience=`: Audience requested from the CI OIDC issuer
 - `?kv=1`: Use KV v1 (default: v2)
-- `?layout=flat`: address secrets by key alone at the mount root, with no `secretspec/{project}/{profile}` scaffolding — see [Layout](#layout)
+- `?layout=flat` (0.18+): address secrets by key alone at the mount root, with no `secretspec/{project}/{profile}` scaffolding — see [Layout](#layout-018)
 - `?tls=false`: Disable TLS for development servers
 
 ### Concurrent resolution
@@ -150,9 +150,9 @@ configured mount, with its value in a field named `value`.
 For KV v2, `DATABASE_URL` for project `myapp` and profile `production` is read
 from `GET /v1/secret/data/secretspec/myapp/production/DATABASE_URL`.
 
-### Layout
+### Layout (0.18+)
 
-`?layout=` is a [general provider setting](/reference/providers/#layout-flat-017), spelled the same
+`?layout=` is a [general provider setting](/reference/providers/#layout-flat-018), spelled the same
 way across every hierarchical backend. The default **nested** layout stores each secret at
 `secretspec/{project}/{profile}/{key}` under the mount, as above.
 

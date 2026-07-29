@@ -503,6 +503,14 @@ pub struct BitwardenProvider {
 /// status` reports `"serverUrl": null` in that state rather than naming it.
 const BITWARDEN_CLOUD_SERVER: &str = "https://vault.bitwarden.com";
 
+/// Placeholder for the `sshKey` members a write does not address.
+///
+/// SSH key items must carry a non-empty string in all three of `privateKey`,
+/// `publicKey` and `keyFingerprint`; a null loses the whole object. Chosen to
+/// read as obviously synthetic in the Bitwarden UI, so it is not mistaken for
+/// key material a user should try to use.
+const SSH_KEY_FIELD_UNSET: &str = "(not set by SecretSpec)";
+
 /// Extracts `serverUrl` from `bw status` JSON.
 ///
 /// Returns `Ok(None)` when the CLI targets the public cloud, which it reports as
@@ -2118,10 +2126,21 @@ impl BitwardenProvider {
         field: &str,
         placement: &ItemPlacement,
     ) -> serde_json::Value {
+        // Every member has to be a non-empty string. A null (serde reports it
+        // as "invalid type: unit value, expected a valid string") is refused
+        // outright by Bitwarden cloud, and Vaultwarden 1.37.0 is worse about
+        // it: the upload succeeds, the server stores `sshKey: null`, and the
+        // secret is silently discarded -- `set` reports success and `get` then
+        // returns "[error: cannot decrypt]". Measured against both servers;
+        // arbitrary non-empty strings are accepted, so this is about presence
+        // and not about parseable key material.
+        //
+        // Only the addressed field carries the secret; the other two exist to
+        // keep the item well-formed. See ashebanow/secretspec#3.
         let mut ssh_key_data = serde_json::json!({
-            "privateKey": null,
-            "publicKey": null,
-            "keyFingerprint": null
+            "privateKey": SSH_KEY_FIELD_UNSET,
+            "publicKey": SSH_KEY_FIELD_UNSET,
+            "keyFingerprint": SSH_KEY_FIELD_UNSET
         });
 
         let mut fields = vec![];
@@ -2591,6 +2610,75 @@ mod tests {
         extracted
             .expect("extraction must not fail")
             .map(|secret| secret.expose_secret().to_string())
+    }
+
+    #[test]
+    fn ssh_key_template_never_emits_a_null_member() {
+        // A null in any sshKey member costs the entire object: Bitwarden cloud
+        // rejects the create ("invalid type: unit value, expected a valid
+        // string") and Vaultwarden 1.37.0 accepts it, stores `sshKey: null`,
+        // and silently drops the secret. Every field a caller can address has
+        // to leave the other two populated. See ashebanow/secretspec#3.
+        let provider = BitwardenProvider::default();
+
+        for field in [
+            "private_key",
+            "privatekey",
+            "private",
+            "public_key",
+            "publickey",
+            "public",
+            "fingerprint",
+            "key_fingerprint",
+            // An unrecognised field goes to `fields[]`, but the sshKey object
+            // still has to be well-formed or the item is lost the same way.
+            "something_custom",
+        ] {
+            let template = template_for(
+                &provider,
+                BitwardenItemType::SshKey,
+                "item",
+                "the-secret",
+                field,
+            );
+            let ssh_key = &template["sshKey"];
+
+            for member in ["privateKey", "publicKey", "keyFingerprint"] {
+                let value = &ssh_key[member];
+                assert!(
+                    value.is_string(),
+                    "sshKey.{member} must be a string when writing field '{field}', got {value}"
+                );
+                assert!(
+                    !value.as_str().unwrap().is_empty(),
+                    "sshKey.{member} must be non-empty when writing field '{field}'"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ssh_key_template_puts_the_secret_in_the_addressed_member() {
+        // The placeholders must not displace the value itself.
+        let provider = BitwardenProvider::default();
+
+        for (field, member) in [
+            ("private_key", "privateKey"),
+            ("public_key", "publicKey"),
+            ("key_fingerprint", "keyFingerprint"),
+        ] {
+            let template = template_for(
+                &provider,
+                BitwardenItemType::SshKey,
+                "item",
+                "the-secret",
+                field,
+            );
+            assert_eq!(
+                template["sshKey"][member], "the-secret",
+                "field '{field}' must land in sshKey.{member}"
+            );
+        }
     }
 
     #[test]

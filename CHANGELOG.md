@@ -26,7 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   meant when several organizations have one, and must agree with the
   collection's actual organization. Reads and writes are confined to the
   collection addressed, so `set` cannot overwrite a same-named item in a
-  sibling collection.
+  sibling collection. Creating an SSH key item fills the two key fields the
+  write does not address with `(not set by SecretSpec)`: Bitwarden requires
+  all three of the private key, public key and fingerprint to be present, and
+  rejects or discards an item that leaves any of them empty.
 - `secretspec config global init --provider <PROVIDER> --profile <PROFILE>`
   can save explicitly user-global defaults without interactive prompts,
   including `--profile none` to clear the default profile. The `global`

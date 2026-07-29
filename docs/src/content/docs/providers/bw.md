@@ -157,6 +157,13 @@ $ secretspec get 'Deploy Key' --provider 'bw://?type=sshkey'
 $ secretspec get 'Deploy Key' --provider 'bw://?type=sshkey&field=passphrase'
 ```
 
+Bitwarden requires an SSH key item to carry all three of the private key,
+public key and fingerprint — it rejects or discards an item that leaves any of
+them empty. When `set` creates one, the two fields it is not writing are
+therefore filled with `(not set by SecretSpec)`. Replace them in Bitwarden if
+you need the real values, or write them yourself with `?field=public_key` and
+`?field=key_fingerprint`.
+
 #### Identity Items
 ```bash
 # Get custom field (field required)

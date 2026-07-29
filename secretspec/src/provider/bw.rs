@@ -952,13 +952,27 @@ impl BitwardenProvider {
 
     /// The filter flags for an item **search**, of which there is at most one.
     ///
-    /// `bw list` combines multiple filters with a logical OR — its own help
-    /// output says so — so passing `--organizationid` alongside `--collectionid`
-    /// widens the search to the whole organization instead of narrowing it to
-    /// the collection. That makes every collection in an organization address
-    /// the same set of items, which is the very bug this resolution exists to
-    /// fix, and on the write path it lets `set` overwrite a same-named item in
-    /// a sibling collection.
+    /// `bw list` combines multiple filters with a logical **OR**, so passing
+    /// `--organizationid` alongside `--collectionid` widens the search to the
+    /// whole organization instead of narrowing it to the collection. That makes
+    /// every collection in an organization address the same set of items, which
+    /// is the very bug this resolution exists to fix, and on the write path it
+    /// lets `set` overwrite a same-named item in a sibling collection.
+    ///
+    /// Measured against bitwarden-cli 2025.11.0, in an organization holding a
+    /// single item that belongs to one collection and not the other:
+    ///
+    /// ```text
+    /// bw list items --organizationid $ORG                        -> 1
+    /// bw list items --collectionid $EMPTY_COLLECTION             -> 0
+    /// bw list items --organizationid $ORG --collectionid $EMPTY_COLLECTION -> 1
+    /// ```
+    ///
+    /// The last line returns an item the named collection does not contain.
+    /// Under AND it would return none. The CLI's own help says the same
+    /// ("Combining multiple filters performs a logical OR operation"), but this
+    /// is the observation the rule rests on — do not restore the second flag on
+    /// the assumption that two filters narrow.
     ///
     /// A collection id already identifies its organization, so sending the
     /// collection alone loses nothing. The organization is still resolved and
@@ -3021,10 +3035,11 @@ mod tests {
 
     #[test]
     fn search_sends_at_most_one_filter() {
-        // The invariant that keeps this fix working. `bw list` combines multiple
-        // filters with OR, so emitting both would widen the search back to the
-        // whole organization and make every collection address equivalent —
-        // exactly the bug the resolution above exists to fix.
+        // The invariant that keeps this fix working. `bw list` was measured to
+        // combine multiple filters with OR (see `search_filter_args`), so
+        // emitting both would widen the search back to the whole organization
+        // and make every collection address equivalent — exactly the bug the
+        // resolution above exists to fix.
         let collection_scope = VaultScope {
             organization_id: Some(ACME_ID.to_string()),
             collection_id: Some(ACME_DEV_ID.to_string()),

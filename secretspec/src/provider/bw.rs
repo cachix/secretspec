@@ -598,11 +598,22 @@ impl From<&VaultScope> for ItemPlacement {
 }
 
 /// Parses one of the `bw list` outputs.
+///
+/// Empty output counts as an empty list rather than a parse failure. The CLI
+/// prints nothing at all when it holds no decryptable copy of the data — a
+/// stale session, or a vault that has never been synced, both surface that way
+/// — and "no collection matching 'dev-secrets'; run `bw sync`" points at the
+/// problem far better than a JSON error would.
 fn parse_named_objects(
     json: &str,
     kind: &str,
 ) -> std::result::Result<Vec<BitwardenNamedObject>, String> {
-    serde_json::from_str(json.trim())
+    let trimmed = json.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    serde_json::from_str(trimmed)
         .map_err(|e| format!("could not parse `bw list {kind}` output as JSON: {e}"))
 }
 
@@ -621,7 +632,10 @@ fn describe_org(id: Option<&str>, organizations: &[BitwardenNamedObject]) -> Str
 /// Renders the addressable organizations for an error message.
 fn list_organizations(organizations: &[BitwardenNamedObject]) -> String {
     if organizations.is_empty() {
-        return "The bw CLI reports no organizations for this account.".to_string();
+        return "The bw CLI listed no organizations. If you do belong to one, the \
+                CLI cannot currently read it: check that BW_SESSION is exported \
+                and current, then run `bw sync --force`."
+            .to_string();
     }
 
     let mut out = String::from("Available organizations:");
@@ -638,8 +652,9 @@ fn list_collections(
     organizations: &[BitwardenNamedObject],
 ) -> String {
     if collections.is_empty() {
-        return "The bw CLI reports no collections here; collections exist only \
-                inside an organization."
+        return "The bw CLI listed no collections. If you expected some, the CLI \
+                cannot currently read them: check that BW_SESSION is exported and \
+                current, then run `bw sync --force`."
             .to_string();
     }
 
@@ -2851,6 +2866,41 @@ mod tests {
             resolve_scope("not json", "not json", None, None).unwrap(),
             VaultScope::default(),
             "an unscoped address must not even parse the listings"
+        );
+    }
+
+    #[test]
+    fn empty_cli_output_is_an_empty_list_not_a_parse_error() {
+        // The CLI prints nothing at all when it cannot decrypt what it holds —
+        // a stale BW_SESSION does this, and so does a vault that was never
+        // synced. Surfacing that as a JSON parse error would point at the
+        // wrong thing entirely.
+        let err = resolve_scope("", "", None, Some("dev-secrets")).unwrap_err();
+        assert!(
+            !err.contains("could not parse"),
+            "empty output must not read as malformed output: {err}"
+        );
+        assert!(
+            err.contains("No collection matching 'dev-secrets'"),
+            "{err}"
+        );
+        assert!(err.contains("BW_SESSION"), "{err}");
+        assert!(err.contains("bw sync"), "{err}");
+
+        // Whitespace-only output is the same case.
+        assert!(
+            resolve_scope("\n", "  \n", None, Some("x"))
+                .unwrap_err()
+                .contains("No collection matching"),
+        );
+    }
+
+    #[test]
+    fn genuinely_malformed_output_is_still_reported_as_such() {
+        let err = resolve_scope("not json", COLLECTIONS_JSON, Some("Acme Inc"), None).unwrap_err();
+        assert!(
+            err.contains("could not parse `bw list organizations`"),
+            "{err}"
         );
     }
 

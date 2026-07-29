@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 
-/// Install and authentication guidance, shown when `dcli` is missing.
 const DCLI_NOT_INSTALLED_HELP: &str = "\
 Dashlane CLI (dcli) is not installed.
 
@@ -23,13 +22,11 @@ To install it:
 
 After installation, run 'dcli sync' to register this device and log in.";
 
-/// Shown when the local vault exists but is not usable yet.
 const AUTH_REQUIRED_HELP: &str = "\
 Dashlane authentication required. Run 'dcli sync' to register this device and \
 log in, or set DASHLANE_SERVICE_DEVICE_KEYS for a non-interactive device \
 registered with 'dcli devices register'.";
 
-/// Shown when the device is registered but the vault is locked.
 const LOCKED_HELP: &str = "\
 The Dashlane vault is locked. Run any 'dcli' command to unlock it with your \
 master password, or re-enable 'dcli configure save-master-password true'.";
@@ -59,8 +56,8 @@ pub enum ItemType {
 }
 
 impl ItemType {
-    /// The `dcli` subcommand that lists this content type.
-    fn subcommand(self) -> &'static str {
+    /// The type's name, which is also the `dcli` subcommand that lists it.
+    fn as_str(self) -> &'static str {
         match self {
             Self::Secret => "secret",
             Self::Note => "note",
@@ -71,8 +68,6 @@ impl ItemType {
     /// The JSON field holding the secret value when a `ref` names no `field`.
     fn default_field(self) -> &'static str {
         match self {
-            // Secrets and notes carry their payload in `content`; a login's
-            // payload is its password.
             Self::Secret | Self::Note => "content",
             Self::Password => "password",
         }
@@ -88,14 +83,10 @@ impl ItemType {
         match value.to_ascii_lowercase().as_str() {
             "secret" | "secrets" => Some(Self::Secret),
             "note" | "notes" => Some(Self::Note),
-            // `p` and `login` are what Dashlane's own UI and CLI alias call it.
+            // Dashlane's UI calls a password item a login.
             "password" | "passwords" | "login" | "logins" => Some(Self::Password),
             _ => None,
         }
-    }
-
-    fn as_str(self) -> &'static str {
-        self.subcommand()
     }
 }
 
@@ -148,29 +139,13 @@ impl TryFrom<&ProviderUrl> for DashlaneConfig {
 
 /// Reads secrets from a Dashlane vault through the `dcli` CLI.
 ///
-/// # Read-only
+/// Reads are served from the local vault `dcli` syncs hourly, so an item added
+/// moments ago stays invisible until `dcli sync` runs. This provider never
+/// syncs on its own: a sync is a network round-trip, and a secret read should
+/// not silently become one.
 ///
-/// `dcli` can list and read vault items but cannot create or modify them, so
-/// [`set`](Provider::set) always fails. Add the item in a Dashlane app, then
-/// read it here.
-///
-/// # Requirements
-///
-/// The Dashlane CLI must be installed and the device registered:
-///
-/// - macOS: `brew install dashlane/tap/dashlane-cli`
-/// - Linux: the `dcli-linux-x64` release binary
-///
-/// Then run `dcli sync` once to register the device and log in. For CI, run
-/// `dcli devices register "<name>"` on a workstation and set the resulting
-/// `DASHLANE_SERVICE_DEVICE_KEYS` on the runner.
-///
-/// # Staleness
-///
-/// `dcli` reads a locally synced copy of the vault and re-syncs hourly, so an
-/// item added moments ago may not be visible until `dcli sync` runs. This
-/// provider never syncs on its own: a sync is a network round-trip, and a
-/// secret read should not silently become one.
+/// Installation and authentication are covered at
+/// <https://secretspec.dev/providers/dashlane/>.
 pub struct DashlaneProvider {
     config: DashlaneConfig,
     credentials: crate::provider::ProviderCredentials,
@@ -268,9 +243,8 @@ impl DashlaneProvider {
     /// message.
     fn run(&self, args: &[&str]) -> Result<Vec<u8>> {
         let mut cmd = Command::new("dcli");
-        // Device credentials sourced from another provider reach `dcli` the
-        // only way it reads them, without touching this process's own
-        // environment.
+        // Injected credentials reach `dcli` the only way it reads them,
+        // without touching this process's own environment.
         if let Some(keys) = self.device_keys() {
             cmd.env(DEVICE_KEYS_ENV, keys);
         }
@@ -314,14 +288,14 @@ impl DashlaneProvider {
     /// The read is local — `dcli` decrypts an already-synced SQLite vault — so
     /// this is one decrypt, not one network call per secret.
     fn list(&self, item_type: ItemType) -> Result<Vec<VaultItem>> {
-        let stdout = self.run(&[item_type.subcommand(), "-o", "json"])?;
+        let stdout = self.run(&[item_type.as_str(), "-o", "json"])?;
 
         // serde's parse errors quote the offending value, which here would be
         // vault contents. Only the position is reported.
         serde_json::from_slice(&stdout).map_err(|e| {
             SecretSpecError::ProviderOperationFailed(format!(
                 "could not parse the output of 'dcli {} -o json' (line {}, column {})",
-                item_type.subcommand(),
+                item_type.as_str(),
                 e.line(),
                 e.column()
             ))
@@ -422,10 +396,9 @@ impl DashlaneProvider {
         };
         match item.field(field.unwrap_or_else(|| item_type.default_field())) {
             Some(value) => Ok(Some(SecretString::new(value.into()))),
-            // A `ref` that names a field the item does not carry is a typo in
-            // `secretspec.toml`, not a missing secret, so it is surfaced rather
-            // than reported as unset — the same distinction `dcli read` draws.
-            // An empty default field just means the item holds nothing.
+            // A `ref` naming a field the item lacks is a typo, not a missing
+            // secret, so it is surfaced; an empty default field just means the
+            // item holds nothing. The same distinction `dcli read` draws.
             None => match field {
                 Some(field) => Err(SecretSpecError::ProviderOperationFailed(format!(
                     "the Dashlane {} item '{name}' has no '{field}' field",
@@ -438,8 +411,8 @@ impl DashlaneProvider {
 }
 
 impl Provider for DashlaneProvider {
-    /// Convention items are titled `secretspec/{project}/{profile}/{key}`, the
-    /// same layout the other item-based providers use.
+    /// The same `secretspec/{project}/{profile}/{key}` layout the other
+    /// item-based providers use, carried by the item's title.
     fn convention_address(
         &self,
         project: &str,
@@ -498,9 +471,8 @@ impl Provider for DashlaneProvider {
 
     /// Reads every requested secret from one listing per content type.
     ///
-    /// The default implementation would shell out once per secret, and each
-    /// call decrypts the whole local vault; a `secretspec run` over twenty
-    /// secrets pays that once instead of twenty times.
+    /// The default shells out once per secret, and each call decrypts the whole
+    /// local vault; a `secretspec run` over twenty secrets pays that once.
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
         let mut resolved = Vec::with_capacity(requests.len());
         for (name, addr) in requests {
@@ -531,9 +503,8 @@ impl Provider for DashlaneProvider {
         self.check_writable(addr)
     }
 
-    /// Always read-only: `dcli` has no subcommand that creates or edits a
-    /// vault item. Stating the reason here lets the CLI refuse the write
-    /// before prompting for a value, with the message `set` would return.
+    /// Stating the refusal here, not only in `set`, lets the CLI decline the
+    /// write before prompting for a value it cannot store.
     fn check_writable(&self, _addr: Address<'_>) -> Result<()> {
         Err(SecretSpecError::ProviderOperationFailed(
             "The Dashlane provider is read-only: dcli cannot create or edit vault \
@@ -807,24 +778,22 @@ mod tests {
     }
 }
 
-/// Smoke tests against a real Dashlane vault.
-///
-/// Ignored by default: they need `dcli` installed, registered and unlocked, so
-/// CI cannot run them. That is permanent rather than a gap to close — `dcli`
-/// offers no way to register a device without a real Dashlane account, and the
-/// vault is read-only, so a test cannot create the item it would then read.
-/// Someone with a vault runs these by hand when touching this provider:
+/// Smoke tests against a real Dashlane vault, run by hand:
 ///
 /// ```console
 /// cargo test -p secretspec provider::dashlane::live -- --ignored --nocapture
 /// ```
 ///
-/// The tests above prove the parsing and matching against *fabricated*
-/// fixtures. These prove the same code survives a real vault, which is a
-/// different claim: the JSON shape, the `dcli status` wording, and the fields a
-/// live item actually carries are all outside this repository's control.
+/// The tests above prove this code against *fabricated* fixtures. These prove
+/// it against a real vault, which is a different claim: the JSON shape, the
+/// `dcli status` wording, and the fields a live item carries are outside this
+/// repository's control.
 ///
-/// **No secret value is ever printed.** Lengths and counts only.
+/// They stay ignored permanently, not until CI can run them: `dcli` cannot
+/// register a device without a real Dashlane account, and the read-only vault
+/// means a test cannot create the item it would then read.
+///
+/// No secret value is ever printed — lengths and counts only.
 #[cfg(test)]
 mod live {
     use super::*;
@@ -832,12 +801,9 @@ mod live {
     /// A name no vault will hold, used to drive a full miss.
     const ABSENT: &str = "secretspec-live-test-item-that-does-not-exist";
 
-    /// The preflight parses real `dcli status` output.
-    ///
     /// `dcli status` prints prose, not JSON, so the `Logged in:` / `Locked:`
-    /// contract this provider relies on is the one thing no fixture can pin
-    /// down: a reworded release breaks it silently, and every read would then
-    /// report the vault as logged out.
+    /// contract is the one thing no fixture can pin down: a reworded release
+    /// breaks it silently and every read then reports the vault as logged out.
     #[test]
     #[ignore = "needs an authenticated dcli and a real vault"]
     fn preflight_accepts_a_registered_unlocked_cli() {
@@ -848,11 +814,9 @@ mod live {
             });
     }
 
-    /// Every live item deserializes, one content type at a time.
-    ///
-    /// Each lister is run on its own so a failure names the content type. On a
-    /// personal account `dcli secret` has no items at all, which is worth
-    /// seeing distinctly from a parse failure — hence the counts.
+    /// Every live item deserializes, one lister at a time so a failure names
+    /// the content type. A personal account has no `secret` items at all, which
+    /// the counts distinguish from a parse failure.
     #[test]
     #[ignore = "needs an authenticated dcli and a real vault"]
     fn every_lister_parses_the_live_vault() {
@@ -901,13 +865,10 @@ mod live {
         }
     }
 
-    /// Reads one item the operator names, since the provider cannot create it.
-    ///
-    /// Point this at any item in your vault:
+    /// Reads one item the operator names, since the provider cannot create it:
     ///
     /// ```console
-    /// SECRETSPEC_DASHLANE_TEST_ITEM="My API token" \
-    ///   cargo test -p secretspec provider::dashlane::live -- --ignored --nocapture
+    /// SECRETSPEC_DASHLANE_TEST_ITEM="My API token" cargo test ...
     /// ```
     ///
     /// `SECRETSPEC_DASHLANE_TEST_FIELD` exercises the `field` coordinate, and

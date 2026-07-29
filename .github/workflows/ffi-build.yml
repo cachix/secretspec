@@ -37,10 +37,8 @@ jobs:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container || null }}
-    # Needed by the tag-only "Publish cdylib to the release" step below, which
-    # attaches the library to the GitHub Release cargo-dist creates for the tag.
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -98,25 +96,59 @@ jobs:
           DYLD_LIBRARY_PATH=target/${{ matrix.target }}/release \
           ./smoke
 
+      - name: Stage release asset
+        id: stage
+        shell: bash
+        run: |
+          ext="${{ matrix.artifact }}"; ext="${ext##*.}"
+          asset="secretspec-ffi-${{ matrix.target }}.${ext}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "$asset"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: secretspec-ffi-${{ matrix.target }}
           path: |
-            target/${{ matrix.target }}/release/${{ matrix.artifact }}
+            ${{ steps.stage.outputs.asset }}
             secretspec-ffi/include/secretspec.h
 
-      # On a version tag, attach the cdylib (named for its target, with a sha256
-      # sidecar) to the GitHub Release so the PHP SDK's `secretspec-install-lib`
-      # command can fetch the right one for a plain `composer require` install.
-      - name: Publish cdylib to the release
-        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.release_tag != ''
+  release:
+    name: Publish FFI release
+    needs: build
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: secretspec-ffi-*
+          path: staged
+          merge-multiple: true
+
+      # Attach each cdylib (named for its target, with a sha256 sidecar) to the
+      # GitHub Release so the PHP SDK's `secretspec-install-lib` command can
+      # fetch the right one for a plain `composer require` install. Publication
+      # runs outside the manylinux build containers, which do not include `gh`.
+      - name: Publish cdylibs to the release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          ext="${{ matrix.artifact }}"; ext="${ext##*.}"
-          asset="secretspec-ffi-${{ matrix.target }}.${ext}"
-          cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "$asset"
-          bash scripts/upload-release-asset.sh "${{ inputs.release_tag || github.ref_name }}" "$asset"
+          mapfile -t assets < <(
+            find staged -maxdepth 1 -type f -name 'secretspec-ffi-*' -print |
+              sort
+          )
+          if [[ "${#assets[@]}" -ne 4 ]]; then
+            printf 'expected 4 FFI libraries, found %s\n' "${#assets[@]}" >&2
+            printf '%s\n' "${assets[@]}" >&2
+            exit 1
+          fi
+          bash scripts/upload-release-asset.sh \
+            "${{ inputs.release_tag || github.ref_name }}" "${assets[@]}"

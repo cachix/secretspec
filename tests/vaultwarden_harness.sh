@@ -105,18 +105,41 @@ else
     --server "https://localhost:$TLS_PORT" --email "$FIXTURE_EMAIL" \
     --password "$FIXTURE_PASSWORD" --create-org "$BW_TEST_ORG_NAME" \
     --collection-name "default")
-  bw sync >/dev/null
+
+  # The organization is created through the API behind the CLI's back, so the
+  # CLI only learns about it — and about the key it needs to decrypt anything
+  # inside it — on the next sync. A single sync is not reliably enough: this
+  # step failed intermittently (2 runs in 4) with `bw` falling back to an
+  # interactive master-password prompt, which then swallowed the piped
+  # base64 payload and reported the misleading "Invalid master password."
+  # Wait for the organization to actually appear before creating collections.
+  #
+  # --nointeraction everywhere below is what keeps a future variant of that
+  # failure honest: `bw` errors out instead of prompting, so the message names
+  # the real problem rather than whatever landed on stdin.
+  for _ in $(seq 1 10); do
+    bw sync --nointeraction >/dev/null 2>&1 || true
+    if bw list organizations --nointeraction 2>/dev/null \
+      | jq -e --arg o "$BW_TEST_ORG_ID" 'any(.[]; .id == $o)' >/dev/null; then
+      break
+    fi
+    sleep 1
+  done
+  bw list organizations --nointeraction 2>/dev/null \
+    | jq -e --arg o "$BW_TEST_ORG_ID" 'any(.[]; .id == $o)' >/dev/null \
+    || { echo "organization $BW_TEST_ORG_ID never reached the bw CLI" >&2; exit 1; }
 
   mk_collection() { # mk_collection <name> -> echoes the new collection's id
     jq -nc --arg o "$BW_TEST_ORG_ID" --arg n "$1" \
       '{organizationId:$o,name:$n,externalId:null,groups:[]}' \
       | bw encode \
-      | bw create org-collection --organizationid "$BW_TEST_ORG_ID" \
+      | bw create org-collection --nointeraction \
+          --organizationid "$BW_TEST_ORG_ID" \
       | jq -r '.id'
   }
   BW_TEST_COLL_DEV_ID=$(mk_collection "dev-secrets")
   BW_TEST_COLL_PROD_ID=$(mk_collection "prod-secrets")
-  bw sync >/dev/null
+  bw sync --nointeraction >/dev/null
 
   export BW_TEST_ORG_ID BW_TEST_ORG_NAME BW_TEST_COLL_DEV_ID BW_TEST_COLL_PROD_ID
   echo "✓ org '$BW_TEST_ORG_NAME' ($BW_TEST_ORG_ID)"

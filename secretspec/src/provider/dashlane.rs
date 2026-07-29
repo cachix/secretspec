@@ -74,6 +74,10 @@ impl ItemType {
     }
 
     /// The JSON field holding the secret value when a `ref` names no `field`.
+    ///
+    /// `content` for a secret comes from `VaultSecret` in `dcli`'s own types
+    /// rather than from an observed vault: Dashlane Secrets are a Business-plan
+    /// feature, so the shape is unverifiable without one.
     fn default_field(self) -> &'static str {
         match self {
             Self::Secret | Self::Note => "content",
@@ -256,6 +260,14 @@ fn scoped_state_dir(keys: &str) -> Option<PathBuf> {
     )
 }
 
+/// Whether a `dcli` failure means the subcommand does not exist.
+///
+/// Verified against 6.2628.1: an unknown subcommand exits 1 with an empty
+/// stdout and `error: unknown command '<name>'` on stderr.
+fn is_unknown_command(message: &str) -> bool {
+    message.contains("unknown command")
+}
+
 /// Strips ANSI escape sequences from `dcli`'s coloured stderr.
 fn strip_ansi(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
@@ -354,7 +366,21 @@ impl DashlaneProvider {
     /// The read is local — `dcli` decrypts an already-synced SQLite vault — so
     /// this is one decrypt, not one network call per secret.
     fn list(&self, item_type: ItemType) -> Result<Vec<VaultItem>> {
-        let stdout = self.run(&[item_type.as_str(), "-o", "json"])?;
+        let stdout = match self.run(&[item_type.as_str(), "-o", "json"]) {
+            Ok(stdout) => stdout,
+            // A `dcli` predating this content type has none of it to list, so
+            // the remaining listers still get their turn instead of the whole
+            // read failing. `secret` is the one that bites: it arrived in
+            // October 2023, and Dashlane Secrets are a Business-plan feature,
+            // so it is both the newest lister and the one most users have
+            // nothing in.
+            Err(SecretSpecError::ProviderOperationFailed(message))
+                if is_unknown_command(&message) =>
+            {
+                return Ok(Vec::new());
+            }
+            Err(e) => return Err(e),
+        };
 
         // serde's parse errors quote the offending value, which here would be
         // vault contents. Only the position is reported.
@@ -932,6 +958,16 @@ mod tests {
     fn an_unregistered_cli_is_reported_as_needing_setup() {
         let stderr = "\u{1b}[31merror: User force closed the prompt with 0 null\u{1b}[0m";
         assert!(strip_ansi(stderr).contains("force closed the prompt"));
+    }
+
+    /// A `dcli` without the `secret` subcommand must not fail the whole read:
+    /// the message is verbatim from 6.2628.1.
+    #[test]
+    fn an_unknown_lister_is_not_a_failure() {
+        assert!(is_unknown_command(&strip_ansi(
+            "\u{1b}[31merror: unknown command 'secret'\u{1b}[0m"
+        )));
+        assert!(!is_unknown_command("error: User force closed the prompt"));
     }
 
     /// `dcli` colours its errors; the escapes must not reach the user.

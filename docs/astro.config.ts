@@ -234,8 +234,9 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
               slug: "providers/vault",
             },
             {
-              label: "Bitwarden Password Manager (0.18+)",
+              label: "Bitwarden Password Manager",
               slug: "providers/bw",
+              badge: { text: "0.18+", variant: "note" },
             },
             {
               label: "OpenBao",

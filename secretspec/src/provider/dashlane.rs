@@ -209,6 +209,20 @@ impl VaultItem {
     }
 }
 
+/// What one content type's listing had to say about an address.
+///
+/// Separating the two misses matters when no single type is pinned: an item
+/// titled the same as the one wanted, in a type searched earlier, must not
+/// abort the search before the type that actually holds the field.
+enum Found {
+    Value(SecretString),
+    /// Nothing to read here: no item of this content type is named that, or
+    /// the one that is holds nothing in its default field.
+    NoItem,
+    /// An item is, but it carries no such field.
+    NoField,
+}
+
 /// Strips ANSI escape sequences from `dcli`'s coloured stderr.
 fn strip_ansi(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
@@ -390,23 +404,28 @@ impl DashlaneProvider {
         item_type: ItemType,
         name: &str,
         field: Option<&str>,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Found> {
         let Some(item) = Self::find_unique(items, name, item_type)? else {
-            return Ok(None);
+            return Ok(Found::NoItem);
         };
         match item.field(field.unwrap_or_else(|| item_type.default_field())) {
-            Some(value) => Ok(Some(SecretString::new(value.into()))),
-            // A `ref` naming a field the item lacks is a typo, not a missing
-            // secret, so it is surfaced; an empty default field just means the
-            // item holds nothing. The same distinction `dcli read` draws.
-            None => match field {
-                Some(field) => Err(SecretSpecError::ProviderOperationFailed(format!(
-                    "the Dashlane {} item '{name}' has no '{field}' field",
-                    item_type.as_str(),
-                ))),
-                None => Ok(None),
-            },
+            Some(value) => Ok(Found::Value(SecretString::new(value.into()))),
+            // An empty default field just means the item holds nothing. A `ref`
+            // naming a field is different: no other item can satisfy it, so the
+            // caller reports it once every content type has been searched.
+            None if field.is_some() => Ok(Found::NoField),
+            None => Ok(Found::NoItem),
         }
+    }
+
+    /// The error for a `ref` whose `field` no matching item carries.
+    ///
+    /// A typo in `secretspec.toml`, not a missing secret, so it is surfaced
+    /// rather than reported as unset — the distinction `dcli read` draws.
+    fn missing_field(name: &str, field: &str) -> SecretSpecError {
+        SecretSpecError::ProviderOperationFailed(format!(
+            "no Dashlane item named '{name}' has a '{field}' field"
+        ))
     }
 }
 
@@ -458,15 +477,19 @@ impl Provider for DashlaneProvider {
 
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
         let coords = self.resolve_coords(addr)?;
+        let mut lacked_field = false;
         for &item_type in self.types_to_search() {
             let items = self.list(item_type)?;
-            if let Some(value) =
-                self.lookup(&items, item_type, &coords.item, coords.field.as_deref())?
-            {
-                return Ok(Some(value));
+            match self.lookup(&items, item_type, &coords.item, coords.field.as_deref())? {
+                Found::Value(value) => return Ok(Some(value)),
+                Found::NoField => lacked_field = true,
+                Found::NoItem => {}
             }
         }
-        Ok(None)
+        match (lacked_field, coords.field.as_deref()) {
+            (true, Some(field)) => Err(Self::missing_field(&coords.item, field)),
+            _ => Ok(None),
+        }
     }
 
     /// Reads every requested secret from one listing per content type.
@@ -480,6 +503,7 @@ impl Provider for DashlaneProvider {
         }
 
         let mut found = HashMap::new();
+        let mut lacked_field: Vec<&str> = Vec::new();
         for &item_type in self.types_to_search() {
             if resolved.len() == found.len() {
                 break;
@@ -489,11 +513,21 @@ impl Provider for DashlaneProvider {
                 if found.contains_key(*name) {
                     continue;
                 }
-                if let Some(value) =
-                    self.lookup(&items, item_type, &coords.item, coords.field.as_deref())?
-                {
-                    found.insert((*name).to_string(), value);
+                match self.lookup(&items, item_type, &coords.item, coords.field.as_deref())? {
+                    Found::Value(value) => {
+                        found.insert((*name).to_string(), value);
+                    }
+                    Found::NoField => lacked_field.push(name),
+                    Found::NoItem => {}
                 }
+            }
+        }
+
+        // A field miss only counts once no content type has produced the value.
+        for (name, coords) in &resolved {
+            if !found.contains_key(*name) && lacked_field.contains(name) {
+                let field = coords.field.as_deref().unwrap_or_default();
+                return Err(Self::missing_field(&coords.item, field));
             }
         }
         Ok(found)
@@ -726,16 +760,58 @@ mod tests {
         );
     }
 
-    /// A `ref` naming a field the matched item lacks is a typo, not an unset
-    /// secret, so it is surfaced instead of reported as missing.
+    /// A `ref` naming a field the matched item lacks is reported as such, not
+    /// conflated with the item being absent.
     #[test]
-    fn a_missing_referenced_field_is_an_error() {
+    fn a_missing_referenced_field_is_distinguished() {
         let provider = DashlaneProvider::default();
         let items = vec![item("{A}", "GitHub", "password", "v")];
-        let err = provider
-            .lookup(&items, ItemType::Password, "GitHub", Some("otpSecret"))
-            .unwrap_err();
-        assert!(err.to_string().contains("no 'otpSecret' field"), "{err}");
+        assert!(matches!(
+            provider
+                .lookup(&items, ItemType::Password, "GitHub", Some("otpSecret"))
+                .unwrap(),
+            Found::NoField
+        ));
+        assert!(
+            DashlaneProvider::missing_field("GitHub", "otpSecret")
+                .to_string()
+                .contains("has a 'otpSecret' field")
+        );
+    }
+
+    /// When no content type is pinned, a same-titled item in an earlier-searched
+    /// type must not abort the search.
+    ///
+    /// A note and a login are easily given the same title — both named after the
+    /// service. Searching secrets, then notes, then logins, the note matches the
+    /// title but has no `login` field; the login that does must still be found.
+    #[test]
+    fn an_earlier_type_lacking_the_field_does_not_end_the_search() {
+        let provider = DashlaneProvider::default();
+        let notes = vec![item("{N}", "Production database", "content", "notes")];
+        let logins = vec![item("{L}", "Production database", "login", "app_user")];
+
+        assert!(matches!(
+            provider
+                .lookup(&notes, ItemType::Note, "Production database", Some("login"))
+                .unwrap(),
+            Found::NoField
+        ));
+        let found = provider
+            .lookup(
+                &logins,
+                ItemType::Password,
+                "Production database",
+                Some("login"),
+            )
+            .unwrap();
+        match found {
+            Found::Value(value) => {
+                use secrecy::ExposeSecret;
+                assert_eq!(value.expose_secret(), "app_user");
+            }
+            _ => panic!("the login carries the field and must resolve"),
+        }
     }
 
     /// An item with nothing in its default field is simply unset, so the
@@ -744,12 +820,12 @@ mod tests {
     fn an_empty_default_field_reads_as_unset() {
         let provider = DashlaneProvider::default();
         let items = vec![item("{A}", "GitHub", "content", "")];
-        assert!(
+        assert!(matches!(
             provider
                 .lookup(&items, ItemType::Note, "GitHub", None)
-                .unwrap()
-                .is_none()
-        );
+                .unwrap(),
+            Found::NoItem
+        ));
     }
 
     #[test]

@@ -10,6 +10,7 @@ use crate::{Result, SecretSpecError};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 const DCLI_NOT_INSTALLED_HELP: &str = "\
@@ -80,10 +81,14 @@ impl ItemType {
         }
     }
 
-    /// The search order used when the URI pins no single type, matching the
-    /// precedence `dcli read` applies across the vault.
+    /// The search order used when the URI pins no single type.
+    ///
+    /// `dcli read` resolves a name as `secrets[0] ?? credentials[0] ??
+    /// notes[0]`, so a login outranks a note of the same title. Matching that
+    /// keeps a title that resolves one way through `dcli` from resolving
+    /// another way here.
     fn search_order() -> &'static [Self] {
-        &[Self::Secret, Self::Note, Self::Password]
+        &[Self::Secret, Self::Password, Self::Note]
     }
 
     fn parse(value: &str) -> Option<Self> {
@@ -101,7 +106,7 @@ impl ItemType {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DashlaneConfig {
     /// The single content type to search, or `None` to search secrets, then
-    /// notes, then logins.
+    /// logins, then notes.
     pub item_type: Option<ItemType>,
 }
 
@@ -146,10 +151,12 @@ impl TryFrom<&ProviderUrl> for DashlaneConfig {
 
 /// Reads secrets from a Dashlane vault through the `dcli` CLI.
 ///
-/// Reads are served from the local vault `dcli` syncs hourly, so an item added
-/// moments ago stays invisible until `dcli sync` runs. This provider never
-/// syncs on its own: a sync is a network round-trip, and a secret read should
-/// not silently become one.
+/// Reads are served from a local vault copy, so an item added moments ago
+/// stays invisible until `dcli` syncs. SecretSpec never asks it to, but `dcli`
+/// syncs itself: every lister enters `connectAndPrepare`, which contacts
+/// Dashlane when the last sync is over an hour old. A read is therefore usually
+/// local and occasionally a network round-trip, unless the user has run
+/// `dcli configure disable-auto-sync true`.
 ///
 /// Installation and authentication are covered at
 /// <https://secretspec.dev/providers/dashlane/>.
@@ -192,16 +199,19 @@ impl VaultItem {
     /// Whether this item is the one `name` addresses.
     ///
     /// A name matches either the identifier — in braced or bare form, since
-    /// `dcli` emits one and accepts the other — or the title, compared
-    /// case-insensitively as `dcli read` compares it.
+    /// `dcli` emits one and accepts the other — or the title. Titles fold with
+    /// `to_lowercase`, not `eq_ignore_ascii_case`, because `dcli` compares them
+    /// with JavaScript's `toLowerCase`: an ASCII-only fold would leave
+    /// `Überblick` unreachable as `überblick`.
     fn matches(&self, name: &str) -> bool {
         let bare = name.trim_start_matches('{').trim_end_matches('}');
+        // Identifiers are UUIDs, so ASCII folding is exact for them.
         if !bare.is_empty() && self.bare_id().eq_ignore_ascii_case(bare) {
             return true;
         }
         self.title
             .as_deref()
-            .is_some_and(|title| title.eq_ignore_ascii_case(name))
+            .is_some_and(|title| title.to_lowercase() == name.to_lowercase())
     }
 
     /// Reads one field, treating an absent or empty value as no value.
@@ -228,6 +238,22 @@ enum Found {
     NoItem,
     /// An item is, but it carries no such field.
     NoField,
+}
+
+/// A private `dcli` state directory for one set of device keys.
+///
+/// Named after a hash of the keys, never the keys themselves: a directory name
+/// is visible to anyone who can list the cache or read the process's
+/// environment.
+fn scoped_state_dir(keys: &str) -> Option<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    keys.hash(&mut hasher);
+    Some(
+        crate::config::cache_dir()?
+            .join("dashlane")
+            .join(format!("{:016x}", hasher.finish())),
+    )
 }
 
 /// Strips ANSI escape sequences from `dcli`'s coloured stderr.
@@ -267,6 +293,20 @@ impl DashlaneProvider {
         // Injected credentials reach `dcli` the only way it reads them,
         // without touching this process's own environment.
         if let Some(keys) = self.device_keys() {
+            // ...but only where no device is already registered. `dcli` reads
+            // DASHLANE_SERVICE_DEVICE_KEYS inside `getLocalConfigurationWithoutDB`,
+            // which upstream calls only when its state directory holds no device
+            // row; with one present, `getLocalConfiguration` takes that row's
+            // login instead and the variable is ignored. On a machine already
+            // logged in interactively, or across two aliases carrying different
+            // keys, that silently reads the wrong identity's vault. Giving each
+            // credential its own state directory keeps the identities apart.
+            if let Some(dir) = scoped_state_dir(&keys) {
+                // `dcli` derives the directory from APPDATA, else HOME, and
+                // creates it recursively itself.
+                cmd.env("HOME", &dir);
+                cmd.env("APPDATA", &dir);
+            }
             cmd.env(DEVICE_KEYS_ENV, keys);
         }
         cmd.args(args);
@@ -838,6 +878,44 @@ mod tests {
                 .unwrap(),
             Found::NoItem
         ));
+    }
+
+    /// `dcli read` resolves `secrets[0] ?? credentials[0] ?? notes[0]`, so a
+    /// login must outrank a note of the same title. Getting this backwards
+    /// silently returns a different value than `dcli` would for the same name.
+    #[test]
+    fn logins_outrank_notes_in_the_search_order() {
+        let order = ItemType::search_order();
+        let pos = |t: ItemType| order.iter().position(|&o| o == t).unwrap();
+        assert!(pos(ItemType::Secret) < pos(ItemType::Password));
+        assert!(pos(ItemType::Password) < pos(ItemType::Note));
+    }
+
+    /// `dcli` folds titles with JavaScript's `toLowerCase`, which is Unicode
+    /// aware. An ASCII-only fold leaves a non-ASCII title unreachable in any
+    /// case but the one it was stored in.
+    #[test]
+    fn titles_fold_beyond_ascii() {
+        let items = vec![item("{A}", "Überblick", "content", "v")];
+        assert!(
+            DashlaneProvider::find_unique(&items, "überblick", ItemType::Note)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// The state directory is named after a hash, never the keys: a directory
+    /// name is readable by anyone who can list the cache.
+    #[test]
+    fn the_scoped_state_dir_never_contains_the_keys() {
+        let keys = "dls_ACCESS_SECRETPAYLOAD";
+        let dir = scoped_state_dir(keys).expect("a cache dir should resolve");
+        let shown = dir.display().to_string();
+        assert!(!shown.contains("SECRETPAYLOAD"), "{shown}");
+        assert!(shown.contains("dashlane"), "{shown}");
+        // Stable across calls, so a synced vault is reused rather than refetched.
+        assert_eq!(dir, scoped_state_dir(keys).unwrap());
+        assert_ne!(dir, scoped_state_dir("dls_OTHER_IDENTITY").unwrap());
     }
 
     #[test]

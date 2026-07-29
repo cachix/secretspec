@@ -22,6 +22,7 @@ here.
 | Access | Read-only |
 | Best for | Teams already keeping developer secrets in Dashlane |
 | Authentication | `dcli` device registration, or `DASHLANE_SERVICE_DEVICE_KEYS` |
+| Network | Local reads; `dcli` re-syncs when its copy is over an hour old |
 | Default storage | Item titled `secretspec/{project}/{profile}/{key}` |
 
 ## Quick start
@@ -80,7 +81,9 @@ dashlane://[ITEM_TYPE]
 
 `ITEM_TYPE` restricts the search to one Dashlane content type: `secret`,
 `note`, or `password` (`login` is accepted as an alias for `password`). Omit it
-to search secrets, then notes, then logins — the same order `dcli read` uses.
+to search secrets, then logins, then notes — the order `dcli read` resolves a
+name in, so a title held by both a login and a note resolves the same way here
+as it does through `dcli`.
 
 Pinning the type is worth doing when you know where your secrets live: each
 content type searched costs one `dcli` invocation.
@@ -175,10 +178,12 @@ every login and SSO are not supported for them.
 `dcli sync`, then read it here. Give the secret a writable provider as well if
 you need to set values from SecretSpec.
 
-**A new item is invisible until the CLI syncs.** `dcli` reads a locally
-synced copy of the vault and re-syncs hourly. SecretSpec never syncs on your
-behalf — a sync is a network round-trip, and a secret read should not silently
-become one. Run `dcli sync` after adding an item.
+**A new item is invisible until the CLI syncs.** `dcli` reads a local copy of
+the vault. SecretSpec never asks it to sync, but `dcli` syncs itself whenever
+its last sync is over an hour old, so a read is usually local and occasionally
+a network round-trip. Run `dcli sync` after adding an item rather than waiting
+for that, and `dcli configure disable-auto-sync true` to keep reads strictly
+offline.
 
 **Only three content types are readable.** `dcli` exposes listers for secrets,
 secure notes, and logins. Passkeys, personal info, payments, and IDs have no
@@ -190,7 +195,8 @@ personal plans, where `dashlane://secret` finds nothing. Use secure notes there.
 ## Security considerations
 
 Reads decrypt the local vault in a `dcli` subprocess and pass the value back
-over a pipe; SecretSpec never writes it to disk or to a log. `dcli password`
+over a pipe; SecretSpec never writes it to disk or to a log. A read can reach
+the network, because `dcli` re-syncs when its copy is over an hour stale. `dcli password`
 copies a password to the system clipboard when it is run without an output
 format, so SecretSpec always requests JSON explicitly.
 

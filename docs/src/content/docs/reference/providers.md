@@ -128,7 +128,7 @@ item template replaces the default and supports `{project}`, `{profile}`, and
 **URI**: `dashlane://[item_type]` - Integrates with Dashlane via the `dcli` CLI
 
 ```bash
-dashlane://          # Search secrets, then notes, then logins
+dashlane://          # Search secrets, then logins, then notes
 dashlane://note      # Secure notes only
 dashlane://secret    # Dashlane Secrets only (Business plans)
 dashlane://password  # Logins only
@@ -416,7 +416,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | GoPass | ✅ GPG encryption | Local filesystem | ❌ No |
 | Proton Pass | ✅ End-to-end | Cloud (Proton) | ✅ Yes |
 | LastPass | ✅ End-to-end | Cloud (LastPass) | ✅ Yes |
-| Dashlane (0.18+) | ✅ End-to-end | Cloud (Dashlane), synced locally | Only on `dcli sync` |
+| Dashlane (0.18+) | ✅ End-to-end | Cloud (Dashlane), synced locally | Yes — `dcli` auto-syncs hourly |
 | OnePassword | ✅ End-to-end | Cloud (OnePassword) | ✅ Yes |
 | GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |

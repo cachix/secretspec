@@ -204,6 +204,28 @@ def access_token(server: str, email: str, password: str) -> str:
     return json.loads(body)["access_token"]
 
 
+def key_paths(node, prefix: str = ""):
+    """Every dotted path in a decoded JSON object, for diagnostics."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            path = f"{prefix}.{key}" if prefix else key
+            yield path
+            yield from key_paths(value, path)
+
+
+def find_key(node, wanted: str, prefix: str = ""):
+    """First (path, value) whose key matches `wanted`, case-insensitively."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            path = f"{prefix}.{key}" if prefix else key
+            if key.lower() == wanted.lower() and isinstance(value, str) and value:
+                return path, value
+            hit = find_key(value, wanted, path)
+            if hit:
+                return hit
+    return None
+
+
 def user_public_key(server: str, token: str) -> bytes:
     """The account's RSA public key, which wraps the new organization's key.
 
@@ -216,17 +238,40 @@ def user_public_key(server: str, token: str) -> bytes:
     if not 200 <= status < 300:
         raise SystemExit(f"profile request failed: HTTP {status}\n{body[:500]}")
     profile = json.loads(body)
-    # Vaultwarden has moved this between the top level and a nested "keys"
-    # object across versions, and casing has varied too.
-    public_key = (
-        profile.get("publicKey")
-        or profile.get("PublicKey")
-        or (profile.get("keys") or profile.get("Keys") or {}).get("publicKey")
-        or (profile.get("keys") or profile.get("Keys") or {}).get("PublicKey")
+    # Vaultwarden has moved this key around across versions, and casing has
+    # varied too. Measured on 1.37.0 (web-vault 2026.6.4): it lives at
+    # accountKeys.publicKeyEncryptionKeyPair.publicKey, and the top level
+    # carries only "key" and "privateKey". Older builds put it at the top
+    # level or under "keys". Try the known paths, then fall back to a scan so
+    # the next relocation is a warning in the output rather than a hard stop.
+    known_paths = (
+        ("accountKeys", "publicKeyEncryptionKeyPair", "publicKey"),
+        ("publicKey",),
+        ("PublicKey",),
+        ("keys", "publicKey"),
+        ("keys", "PublicKey"),
+        ("Keys", "publicKey"),
+        ("Keys", "PublicKey"),
     )
-    if not public_key:
-        raise SystemExit(f"no publicKey in profile response: {body[:500]}")
-    return base64.b64decode(public_key)
+    for path in known_paths:
+        node = profile
+        for segment in path:
+            node = node.get(segment) if isinstance(node, dict) else None
+            if node is None:
+                break
+        if isinstance(node, str) and node:
+            return base64.b64decode(node)
+
+    found = find_key(profile, "publicKey")
+    if found:
+        where, value = found
+        print(f"note: publicKey moved to {where}", file=sys.stderr)
+        return base64.b64decode(value)
+
+    raise SystemExit(
+        "no publicKey in profile response; keys present: "
+        + ", ".join(sorted(key_paths(profile)))
+    )
 
 
 def create_org(

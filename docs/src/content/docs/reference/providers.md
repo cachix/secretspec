@@ -123,6 +123,31 @@ lastpass://Work/SecretSpec/{project}/{profile}/{key} # Custom item template
 item template replaces the default and supports `{project}`, `{profile}`, and
 `{key}` placeholders.
 
+## Dashlane Provider (0.18+)
+
+**URI**: `dashlane://[item_type]` - Integrates with Dashlane via the `dcli` CLI
+
+```bash
+dashlane://          # Search secrets, then logins, then notes
+dashlane://note      # Secure notes only
+dashlane://secret    # Dashlane Secrets only (Business plans)
+dashlane://password  # Logins only
+```
+
+**Features**: Read-only, reads a locally synced vault, profiles via item titles
+**Prerequisites**: `dcli` CLI, device registered with `dcli sync`, or
+`DASHLANE_SERVICE_DEVICE_KEYS` for a non-interactive device
+**Storage**: Item titled `secretspec/{project}/{profile}/{key}`. The value is
+the item's default field: `content` for a secret or note, `password` for a
+login. `dcli` cannot create or edit vault items, so `secretspec set` fails;
+author items in a Dashlane app and run `dcli sync`.
+
+With `DASHLANE_SERVICE_DEVICE_KEYS` set, `dcli` runs against a private,
+owner-only state directory per credential, since it otherwise prefers an
+already-registered device and reads that identity's vault instead. That state
+is separate from your own, so `dcli configure disable-auto-sync true` does not
+apply to it and those reads sync hourly.
+
 ## OnePassword Provider
 
 **URI**: `onepassword://[account@]vault` or `onepassword+token://user:token@vault`
@@ -397,6 +422,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | GoPass | ✅ GPG encryption | Local filesystem | ❌ No |
 | Proton Pass | ✅ End-to-end | Cloud (Proton) | ✅ Yes |
 | LastPass | ✅ End-to-end | Cloud (LastPass) | ✅ Yes |
+| Dashlane (0.18+) | ✅ End-to-end | Cloud (Dashlane), synced locally | Yes — `dcli` auto-syncs hourly |
 | OnePassword | ✅ End-to-end | Cloud (OnePassword) | ✅ Yes |
 | GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |

@@ -22,6 +22,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [.env](https://secretspec.dev/providers/dotenv)
   - [OnePassword](https://secretspec.dev/providers/onepassword)
   - [LastPass](https://secretspec.dev/providers/lastpass)
+  - [Dashlane](https://secretspec.dev/providers/dashlane) (0.18+)
   - [Pass](https://secretspec.dev/providers/pass)
   - [Gopass](https://secretspec.dev/providers/gopass) (0.15+)
   - [Proton Pass](https://secretspec.dev/providers/protonpass)
@@ -69,6 +70,7 @@ $ secretspec config global init  # 0.17+
   gopass: Gopass CLI password manager with GPG encryption (0.15+)
   protonpass: Proton Pass via official pass-cli
   lastpass: LastPass password manager
+  dashlane: Dashlane password manager, read-only (0.18+)
   gcsm: Google Cloud Secret Manager
   awssm: AWS Secrets Manager
   scaleway: Scaleway Secret Manager (0.17+)
@@ -163,6 +165,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Proton Pass](https://secretspec.dev/providers/protonpass)** - End-to-end encrypted via Proton's official pass-cli
 - **[OnePassword](https://secretspec.dev/providers/onepassword)** - Team secret management
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager
+- **[Dashlane](https://secretspec.dev/providers/dashlane)** (0.18+) - Read-only access to a Dashlane vault via the `dcli` CLI
 - **[Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)** - GCP secret management
 - **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
 - **[Scaleway Secret Manager](https://secretspec.dev/providers/scaleway)** (0.17+) - Scaleway secret management

@@ -45,6 +45,7 @@ const providerMetadata: ProviderMetadata[] = [
   { slug: 'kdbx', label: 'KeePass KDBX (0.17+)' },
   { icon: '1password', slug: 'onepassword', label: '1Password' },
   { icon: 'lastpass', slug: 'lastpass', label: 'LastPass' },
+  { slug: 'dashlane', label: 'Dashlane (0.18+)' },
   { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden' },
   { icon: 'vault', slug: 'vault', label: 'Vault' },
   { slug: 'openbao', label: 'OpenBao (0.17+)' },
@@ -159,6 +160,7 @@ $ secretspec config global init
   sops: SOPS encrypted files (0.17+)
   systemd-credential: Read-only systemd service credentials (0.17+)
   scaleway: Scaleway Secret Manager (0.17+)
+  dashlane: Dashlane password manager, read-only (0.18+)
 <span class="tok-str">✓</span> Saved to ~/.config/secretspec/config.toml
 
 <span class="tok-com"># 3. Run your app with secrets injected</span>

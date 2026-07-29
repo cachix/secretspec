@@ -1162,6 +1162,13 @@ fn default_audit_path() -> Option<PathBuf> {
     Some(dir.join("audit.log"))
 }
 
+/// Per-user cache directory chosen by `choose_app_strategy`: state a provider
+/// can rebuild from its source of truth, unlike the config and state dirs.
+pub(crate) fn cache_dir() -> Option<PathBuf> {
+    use etcetera::app_strategy::{AppStrategy, choose_app_strategy};
+    Some(choose_app_strategy(app_strategy_args()).ok()?.cache_dir())
+}
+
 /// Expands a leading `~` (or `~/`) in a configured path to the user's home
 /// directory. A documented `path = "~/.local/state/..."` would otherwise become
 /// a literal `./~` directory. Paths without a leading `~`, or paths that cannot

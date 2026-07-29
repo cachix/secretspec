@@ -25,6 +25,7 @@
 //! - [`protonpass::ProtonPassProvider`]: Proton Pass integration
 //! - [`onepassword::OnePasswordProvider`]: 1Password integration
 //! - [`lastpass::LastPassProvider`]: LastPass integration
+//! - [`dashlane::DashlaneProvider`]: Dashlane integration, read-only (0.18+)
 //! - [`gcsm::GcsmProvider`]: Google Cloud Secret Manager integration
 //! - [`awssm::AwssmProvider`]: AWS Secrets Manager integration
 //! - [`vault::VaultProvider`]: HashiCorp Vault integration
@@ -281,6 +282,7 @@ pub mod akv;
 pub mod awssm;
 #[cfg(feature = "bws")]
 pub mod bws;
+pub mod dashlane;
 pub mod dotenv;
 pub mod env;
 #[cfg(feature = "gcsm")]

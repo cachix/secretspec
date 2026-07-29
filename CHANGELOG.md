@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Dashlane provider (`dashlane://`) for reading secrets from a Dashlane vault
+  through the `dcli` CLI. Convention secrets read the item titled
+  `secretspec/{project}/{profile}/{key}`, and a `ref` names an existing item by
+  title or identifier with an optional `field`. `dashlane://note`,
+  `dashlane://secret`, or `dashlane://password` restrict the search to one
+  content type. The provider is read-only, because `dcli` has no command that
+  creates or edits a vault item; `secretspec set` fails with that reason.
+  Non-interactive use is supported through `DASHLANE_SERVICE_DEVICE_KEYS`,
+  which can also be injected as the `service_device_keys` provider credential.
+  Injected credentials read through a private, owner-only `dcli` state
+  directory of their own, because `dcli` otherwise prefers a device already
+  registered on the machine and reads that identity's vault instead.
+
 ## [0.17.0] - 2026-07-26
 
 ### Fixed

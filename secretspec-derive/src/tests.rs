@@ -226,6 +226,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
             },
             profiles: valid_profiles,
             providers: None,
+            scopes: None,
         };
 
         validate_rust_identifiers(&valid_config, &mut errors);
@@ -273,6 +274,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
             },
             profiles: invalid_profiles,
             providers: None,
+            scopes: None,
         };
 
         errors.clear();
@@ -353,6 +355,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
             },
             profiles: keyword_profiles,
             providers: None,
+            scopes: None,
         };
 
         validate_rust_identifiers(&keyword_config, &mut errors);
@@ -432,6 +435,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
             },
             profiles: duplicate_profiles,
             providers: None,
+            scopes: None,
         };
 
         validate_rust_identifiers(&duplicate_config, &mut errors);
@@ -486,6 +490,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
             },
             profiles: valid_profiles,
             providers: None,
+            scopes: None,
         };
 
         validate_profile_identifiers(&valid_config, &mut errors);
@@ -518,6 +523,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
             },
             profiles: invalid_profiles,
             providers: None,
+            scopes: None,
         };
 
         errors.clear();
@@ -648,6 +654,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
             },
             profiles: valid_profiles,
             providers: None,
+            scopes: None,
         };
 
         let result = validate_config_for_codegen(&valid_config);
@@ -692,6 +699,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
             },
             profiles: invalid_profiles,
             providers: None,
+            scopes: None,
         };
 
         let result = validate_config_for_codegen(&invalid_config);

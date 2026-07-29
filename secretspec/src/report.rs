@@ -69,10 +69,17 @@ pub struct SecretResolution {
 pub struct ResolutionReport {
     /// Wire-format version; see [`RESOLUTION_REPORT_SCHEMA_VERSION`].
     pub schema_version: u32,
-    /// Credential-free URI of the provider resolution reported against.
+    /// Credential-free URI of the provider resolution reported against. Empty
+    /// when no provider was contacted, which happens when a scope's intersection
+    /// with the selected profile is empty and there is nothing to resolve.
     pub provider: String,
     /// The profile that was resolved.
     pub profile: String,
+    /// The active secret scope, when resolution was scoped (`--scope`,
+    /// `SECRETSPEC_SCOPE`, or the SDK builder). `None` — the whole profile
+    /// resolved — is omitted from JSON, so unscoped output is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
     /// One entry per declared secret, sorted by name for deterministic output.
     pub secrets: Vec<SecretResolution>,
     /// Cross-secret presence constraints that failed.
@@ -92,6 +99,8 @@ impl ResolutionReport {
             schema_version: RESOLUTION_REPORT_SCHEMA_VERSION,
             provider,
             profile,
+            // Set by `Secrets::report` for a scoped resolution; unscoped stays None.
+            scope: None,
             secrets,
             constraint_violations: Vec::new(),
         }
@@ -120,6 +129,9 @@ impl ResolutionReport {
         let mut out = String::new();
         out.push_str(&format!("profile:  {}\n", self.profile));
         out.push_str(&format!("provider: {}\n", self.provider));
+        if let Some(scope) = &self.scope {
+            out.push_str(&format!("scope:    {}\n", scope));
+        }
 
         let width = self.secrets.iter().map(|s| s.name.len()).max().unwrap_or(0);
 

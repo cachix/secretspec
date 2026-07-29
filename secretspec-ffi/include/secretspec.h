@@ -7,8 +7,10 @@
  *
  * Request JSON (all fields optional):
  *   { "path": ".../secretspec.toml", "provider": "keyring://",
- *     "profile": "production", "reason": "boot", "no_values": false,
- *     "mode": "resolve" }
+ *     "profile": "production", "scope": "api", "reason": "boot",
+ *     "no_values": false, "mode": "resolve" }
+ *
+ * "scope" selects a named [scopes] subset of the active profile (0.17+).
  *
  * "mode" selects the response shape and defaults to "resolve":
  *

@@ -60,6 +60,12 @@ See each language's page for the idiomatic spelling: [Rust](/sdk/rust),
 [Node.js](/sdk/nodejs), [Haskell](/sdk/haskell), [PHP](/sdk/php), and
 [C# (0.16+)](/sdk/csharp).
 
+Every builder also takes a [scope (0.17+)](/reference/configuration/#scopes-section),
+resolving only a named subset of the profile and returning the selected name on
+the result. The one exception is Rust's typed loader, which always resolves the
+full profile because a generated struct has a field per declared secret; see
+[Rust](/sdk/rust#scopes-017).
+
 ## Typed access
 
 Beyond the Rust derive macro, typed accessors for the other languages are

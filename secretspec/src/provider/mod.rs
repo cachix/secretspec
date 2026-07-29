@@ -294,6 +294,8 @@ pub mod onepassword;
 pub mod openbao;
 pub mod pass;
 pub mod protonpass;
+#[cfg(feature = "scaleway")]
+pub mod scaleway;
 pub mod systemd_credential;
 #[cfg(feature = "vault")]
 pub mod vault;
@@ -774,10 +776,33 @@ pub trait Provider: Send + Sync {
     }
 }
 
+/// Default max concurrent unique-address fetches in [`get_each`].
+///
+/// Providers that open one TCP connection per concurrent `get` (cold HTTP
+/// clients, reverse proxies in front of Vault/OpenBao, rate-limited APIs) can
+/// drop part of an unbounded burst. A modest default keeps resolution fast
+/// without stampeding the store. Override with [`get_each_concurrency`].
+const DEFAULT_GET_EACH_CONCURRENCY: usize = 8;
+
+/// Env var that caps concurrent unique-address fetches in [`get_each`].
+///
+/// Must parse as an integer ≥ 1; invalid or missing values fall back to
+/// [`DEFAULT_GET_EACH_CONCURRENCY`].
+pub(crate) const GET_EACH_CONCURRENCY_ENV: &str = "SECRETSPEC_PROVIDER_CONCURRENCY";
+
+/// Resolved concurrency limit for [`get_each`].
+pub(crate) fn get_each_concurrency() -> usize {
+    std::env::var(GET_EACH_CONCURRENCY_ENV)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(DEFAULT_GET_EACH_CONCURRENCY)
+}
+
 /// Shared fallback used by the default [`Provider::get_many`] and by batch
 /// overrides for the part of a request set their bulk surface cannot serve:
 /// deduplicates identical addresses and fetches each unique address once,
-/// concurrently, mirroring the per-item threading batch overrides do.
+/// concurrently (capped), mirroring the per-item threading batch overrides do.
 pub(crate) fn get_each<P: Provider + ?Sized>(
     provider: &P,
     requests: &[(&str, Address<'_>)],
@@ -787,6 +812,10 @@ pub(crate) fn get_each<P: Provider + ?Sized>(
         groups.entry(*addr).or_default().push(name);
     }
 
+    // Stable vec so we can process in concurrency-sized waves. HashMap
+    // iteration order is irrelevant: each address is independent.
+    let groups: Vec<(Address<'_>, Vec<&str>)> = groups.into_iter().collect();
+
     // One address is the common case (a single secret, or several sharing a
     // `ref`); fetching it on this thread skips the scope and the spawn.
     let fetched: Vec<(Vec<&str>, Result<Option<SecretString>>)> = if groups.len() <= 1 {
@@ -795,21 +824,30 @@ pub(crate) fn get_each<P: Provider + ?Sized>(
             .map(|(addr, names)| (names, provider.get(addr)))
             .collect()
     } else {
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = groups
-                .into_iter()
-                .map(|(addr, names)| (names, scope.spawn(move || provider.get(addr))))
-                .collect();
-            handles
-                .into_iter()
-                .map(|(names, handle)| {
-                    (
-                        names,
+        let concurrency = get_each_concurrency();
+        let mut fetched = Vec::with_capacity(groups.len());
+        // Wave-based fan-out: never more than `concurrency` in-flight gets.
+        // A single unbounded `thread::scope` over dozens of addresses has been
+        // observed to open one TCP(+TLS) handshake per secret against a
+        // reverse-proxied Vault/OpenBao and lose part of the burst.
+        for chunk in groups.chunks(concurrency) {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = chunk
+                    .iter()
+                    .map(|(addr, names)| {
+                        let addr = *addr;
+                        (names, scope.spawn(move || provider.get(addr)))
+                    })
+                    .collect();
+                for (names, handle) in handles {
+                    fetched.push((
+                        names.clone(),
                         handle.join().expect("get_many fetch thread panicked"),
-                    )
-                })
-                .collect()
-        })
+                    ));
+                }
+            });
+        }
+        fetched
     };
 
     let mut results = HashMap::new();

@@ -85,8 +85,10 @@ func (s ResolvedSecret) Get() string {
 
 // Resolved is a successful resolution, mirroring the Rust Resolved wrapper.
 type Resolved struct {
-	Provider        string
-	Profile         string
+	Provider string
+	Profile  string
+	// Scope is the selected manifest scope, or nil for a full-profile resolve (0.17+).
+	Scope           *string
 	Secrets         map[string]ResolvedSecret
 	MissingOptional []string
 }
@@ -176,9 +178,12 @@ func (b *Builder) set(key string, value any) *Builder {
 	return b
 }
 
-func (b *Builder) WithPath(path string) *Builder     { return b.set("path", path) }
-func (b *Builder) WithProvider(p string) *Builder    { return b.set("provider", p) }
-func (b *Builder) WithProfile(p string) *Builder     { return b.set("profile", p) }
+func (b *Builder) WithPath(path string) *Builder  { return b.set("path", path) }
+func (b *Builder) WithProvider(p string) *Builder { return b.set("provider", p) }
+func (b *Builder) WithProfile(p string) *Builder  { return b.set("profile", p) }
+
+// WithScope limits resolution to a named manifest scope (SecretSpec 0.17+).
+func (b *Builder) WithScope(scope string) *Builder   { return b.set("scope", scope) }
 func (b *Builder) WithReason(reason string) *Builder { return b.set("reason", reason) }
 func (b *Builder) WithNoValues(v bool) *Builder      { return b.set("no_values", v) }
 
@@ -207,6 +212,7 @@ type responseJSON struct {
 	SchemaVersion   int                   `json:"schema_version"`
 	Provider        string                `json:"provider"`
 	Profile         string                `json:"profile"`
+	Scope           *string               `json:"scope"`
 	Secrets         map[string]secretJSON `json:"secrets"`
 	MissingRequired []string              `json:"missing_required"`
 	MissingOptional []string              `json:"missing_optional"`
@@ -283,6 +289,7 @@ func (b *Builder) Load() (*Resolved, error) {
 	return &Resolved{
 		Provider:        resp.Provider,
 		Profile:         resp.Profile,
+		Scope:           resp.Scope,
 		Secrets:         secrets,
 		MissingOptional: resp.MissingOptional,
 	}, nil
@@ -311,7 +318,9 @@ type SecretReport struct {
 type Report struct {
 	Provider string
 	Profile  string
-	Secrets  []SecretReport
+	// Scope is the selected manifest scope, or nil for a full-profile report (0.17+).
+	Scope   *string
+	Secrets []SecretReport
 }
 
 type secretReportJSON struct {
@@ -328,6 +337,7 @@ type reportResponseJSON struct {
 	SchemaVersion int                `json:"schema_version"`
 	Provider      string             `json:"provider"`
 	Profile       string             `json:"profile"`
+	Scope         *string            `json:"scope"`
 	Secrets       []secretReportJSON `json:"secrets"`
 }
 
@@ -363,5 +373,10 @@ func (b *Builder) Report() (*Report, error) {
 	for i, s := range resp.Secrets {
 		secrets[i] = SecretReport(s)
 	}
-	return &Report{Provider: resp.Provider, Profile: resp.Profile, Secrets: secrets}, nil
+	return &Report{
+		Provider: resp.Provider,
+		Profile:  resp.Profile,
+		Scope:    resp.Scope,
+		Secrets:  secrets,
+	}, nil
 }

@@ -28,6 +28,15 @@ resolved.set_as_env!    # export everything into ENV
 A missing required secret raises `Secretspec::MissingRequiredError`; any other
 failure raises `Secretspec::Error` (with a stable `#kind`).
 
+## Scopes (0.17+)
+
+Use `.with_scope("api")` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `resolved.scope` and `report.scope`:
+
+```ruby
+resolved = Secretspec::SecretSpec.builder.with_scope("api").load
+```
+
 ## Typed access (codegen)
 
 Generate typed classes with `secretspec schema` plus

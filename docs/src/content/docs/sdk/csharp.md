@@ -62,6 +62,15 @@ using var resolved = SecretSpec.Resolve(
     reason: "boot web app");
 ```
 
+## Scopes (0.17+)
+
+Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `Resolved.Scope` and `ResolutionReport.Scope`:
+
+```csharp
+using var resolved = SecretSpec.Builder().WithScope("api").Load();
+```
+
 ## ASP.NET Core
 
 Resolve and export secrets before creating the application builder, so normal

@@ -115,6 +115,13 @@ openbao://[namespace@]host[:port][/mount][?key=value&...]
 - `?kv=1`: Use KV v1 (default: v2)
 - `?tls=false`: Disable TLS for development servers
 
+### Concurrent resolution
+
+- One HTTP client is reused per provider instance (connection pool / h2 reuse).
+- Concurrent unique-address fetches are capped at 8 by default.
+- Override the cap with `SECRETSPEC_PROVIDER_CONCURRENCY` (integer ≥ 1) when your
+  OpenBao proxy tolerates more or less parallel load.
+
 ### URI examples
 
 ```text

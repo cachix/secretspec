@@ -904,11 +904,20 @@ mod live {
     #[test]
     #[ignore = "needs an authenticated dcli and a real vault"]
     fn preflight_accepts_a_registered_unlocked_cli() {
-        DashlaneProvider::default()
-            .check_auth()
-            .unwrap_or_else(|e| {
-                panic!("`dcli status` did not read as registered and unlocked: {e}")
-            });
+        let provider = DashlaneProvider::default();
+        // `check_auth` short-circuits on device keys by design, so on a service
+        // device this would pass without reading `dcli status` at all. Say so
+        // rather than report a vacuous success.
+        if provider.device_keys().is_some() {
+            println!(
+                "{DEVICE_KEYS_ENV} is set, so the status probe is skipped; \
+                 unset it to exercise the `dcli status` parser"
+            );
+            return;
+        }
+        provider.check_auth().unwrap_or_else(|e| {
+            panic!("`dcli status` did not read as registered and unlocked: {e}")
+        });
     }
 
     /// Every live item deserializes, one lister at a time so a failure names

@@ -14,13 +14,25 @@ set -euo pipefail
 pkg_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo_root="$(cd "$pkg_dir/.." && pwd)"
 
-cargo build -p secretspec-ffi --release --manifest-path "$repo_root/Cargo.toml"
+goos="$(go env GOOS)"
+goarch="$(go env GOARCH)"
+
+build_args=(
+  -p secretspec-ffi
+  --release
+  --manifest-path "$repo_root/Cargo.toml"
+)
+# The staged library is a distributable artifact, not a development build.
+# Linux consumers cannot be expected to provide the exact libdbus soname from
+# the build host (notably on NixOS), so compile libdbus into the cdylib.
+if [[ "$goos" == "linux" ]]; then
+  build_args+=(--features vendored-dbus)
+fi
+cargo build "${build_args[@]}"
 
 target_dir="$(cargo metadata --no-deps --format-version 1 --manifest-path "$repo_root/Cargo.toml" \
   | grep -o '"target_directory":"[^"]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/')"
 
-goos="$(go env GOOS)"
-goarch="$(go env GOARCH)"
 case "$goos" in
   darwin)  src="libsecretspec_ffi.dylib"; ext="dylib" ;;
   windows) src="secretspec_ffi.dll";      ext="dll" ;;

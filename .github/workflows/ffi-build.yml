@@ -1,14 +1,9 @@
 name: "FFI cdylib"
 
 # Builds the secretspec-ffi C ABI library for each platform the language SDKs
-# bundle. Builds NATIVELY on a per-platform runner rather than cross-compiling,
-# because the crate links system libraries (e.g. dbus/keyring on Linux) that
-# make cross toolchains painful.
-#
-# NOTE: This produces development-grade artifacts. Production packaging
-# (manylinux compliance for Python wheels, macOS code signing/notarization,
-# Windows runtime considerations) is follow-up work tracked with the SDK
-# distribution effort.
+# bundle. Linux builds use a manylinux_2_28 baseline and compile libdbus into
+# the library so consumers do not need a matching system soname. Other targets
+# build natively on per-platform runners rather than cross-compiling.
 
 on:
   workflow_call:
@@ -35,25 +30,29 @@ on:
     paths:
       - "secretspec-ffi/**"
       - ".github/workflows/ffi-build.yml"
+      - "scripts/check-linux-portability.sh"
 
 jobs:
   build:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    # Needed by the tag-only "Publish cdylib to the release" step below, which
-    # attaches the library to the GitHub Release cargo-dist creates for the tag.
+    container: ${{ matrix.container || null }}
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
+            container: quay.io/pypa/manylinux_2_28_x86_64
             artifact: libsecretspec_ffi.so
+            cargo_features: --features vendored-dbus
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
             artifact: libsecretspec_ffi.so
+            cargo_features: --features vendored-dbus
           - target: aarch64-apple-darwin
             runner: macos-latest
             artifact: libsecretspec_ffi.dylib
@@ -64,15 +63,27 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Install rustup (the manylinux container ships none)
+        if: matrix.container
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+            sh -s -- -y --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
 
       - name: Build cdylib
-        run: cargo build -p secretspec-ffi --release --target ${{ matrix.target }}
+        run: >-
+          cargo build -p secretspec-ffi --release
+          --target ${{ matrix.target }} ${{ matrix.cargo_features }}
+
+      - name: Verify Linux portability (glibc <= 2.28, no dynamic libdbus)
+        if: matrix.container
+        shell: bash
+        run: >-
+          bash scripts/check-linux-portability.sh
+          "target/${{ matrix.target }}/release/${{ matrix.artifact }}"
 
       - name: Smoke test the C ABI (Unix)
         if: runner.os != 'Windows'
@@ -85,25 +96,59 @@ jobs:
           DYLD_LIBRARY_PATH=target/${{ matrix.target }}/release \
           ./smoke
 
+      - name: Stage release asset
+        id: stage
+        shell: bash
+        run: |
+          ext="${{ matrix.artifact }}"; ext="${ext##*.}"
+          asset="secretspec-ffi-${{ matrix.target }}.${ext}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "$asset"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: secretspec-ffi-${{ matrix.target }}
           path: |
-            target/${{ matrix.target }}/release/${{ matrix.artifact }}
+            ${{ steps.stage.outputs.asset }}
             secretspec-ffi/include/secretspec.h
 
-      # On a version tag, attach the cdylib (named for its target, with a sha256
-      # sidecar) to the GitHub Release so the PHP SDK's `secretspec-install-lib`
-      # command can fetch the right one for a plain `composer require` install.
-      - name: Publish cdylib to the release
-        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.release_tag != ''
+  release:
+    name: Publish FFI release
+    needs: build
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: secretspec-ffi-*
+          path: staged
+          merge-multiple: true
+
+      # Attach each cdylib (named for its target, with a sha256 sidecar) to the
+      # GitHub Release so the PHP SDK's `secretspec-install-lib` command can
+      # fetch the right one for a plain `composer require` install. Publication
+      # runs outside the manylinux build containers, which do not include `gh`.
+      - name: Publish cdylibs to the release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          ext="${{ matrix.artifact }}"; ext="${ext##*.}"
-          asset="secretspec-ffi-${{ matrix.target }}.${ext}"
-          cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "$asset"
-          bash scripts/upload-release-asset.sh "${{ inputs.release_tag || github.ref_name }}" "$asset"
+          mapfile -t assets < <(
+            find staged -maxdepth 1 -type f -name 'secretspec-ffi-*' -print |
+              sort
+          )
+          if [[ "${#assets[@]}" -ne 4 ]]; then
+            printf 'expected 4 FFI libraries, found %s\n' "${#assets[@]}" >&2
+            printf '%s\n' "${assets[@]}" >&2
+            exit 1
+          fi
+          bash scripts/upload-release-asset.sh \
+            "${{ inputs.release_tag || github.ref_name }}" "${assets[@]}"

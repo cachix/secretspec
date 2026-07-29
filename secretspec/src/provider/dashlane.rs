@@ -27,6 +27,13 @@ Dashlane authentication required. Run 'dcli sync' to register this device and \
 log in, or set DASHLANE_SERVICE_DEVICE_KEYS for a non-interactive device \
 registered with 'dcli devices register'.";
 
+/// `dcli` asked for something interactive and the closed stdin refused it.
+const INPUT_REQUIRED_HELP: &str = "\
+Dashlane CLI asked for input SecretSpec cannot supply: this device is not \
+registered, or the vault is locked. Run 'dcli sync' to register and unlock it, \
+or set DASHLANE_SERVICE_DEVICE_KEYS for a non-interactive device registered \
+with 'dcli devices register'.";
+
 const LOCKED_HELP: &str = "\
 The Dashlane vault is locked. Run any 'dcli' command to unlock it with your \
 master password, or re-enable 'dcli configure save-master-password true'.";
@@ -281,9 +288,14 @@ impl DashlaneProvider {
         if !output.status.success() {
             let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
             let stderr = stderr.trim();
-            if stderr.contains("not logged in") || stderr.contains("No device configuration") {
+            // Verified against dcli 6.2628.1: an unregistered CLI prompts for
+            // an email, and the closed stdin turns that into
+            // `error: User force closed the prompt with 0 null`. Every other
+            // interactive step -- a second factor, the master password of a
+            // locked vault -- fails the same way.
+            if stderr.contains("force closed the prompt") {
                 return Err(SecretSpecError::ProviderOperationFailed(
-                    AUTH_REQUIRED_HELP.to_string(),
+                    INPUT_REQUIRED_HELP.to_string(),
                 ));
             }
             return Err(SecretSpecError::ProviderOperationFailed(format!(
@@ -833,6 +845,15 @@ mod tests {
         assert_eq!(ItemType::Secret.default_field(), "content");
         assert_eq!(ItemType::Note.default_field(), "content");
         assert_eq!(ItemType::Password.default_field(), "password");
+    }
+
+    /// The message a closed stdin produces, verbatim from dcli 6.2628.1 with
+    /// no device registered. Without this match a user sees only
+    /// "User force closed the prompt with 0 null".
+    #[test]
+    fn an_unregistered_cli_is_reported_as_needing_setup() {
+        let stderr = "\u{1b}[31merror: User force closed the prompt with 0 null\u{1b}[0m";
+        assert!(strip_ansi(stderr).contains("force closed the prompt"));
     }
 
     /// `dcli` colours its errors; the escapes must not reach the user.

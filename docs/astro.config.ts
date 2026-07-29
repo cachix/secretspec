@@ -120,7 +120,7 @@ $ secretspec import dotenv://.env.production
 
 ## Providers
 
-Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files, environment variables, systemd service credentials (0.17+), 1Password, Gopass (0.15+), LastPass, Pass, Proton Pass, Google Cloud Secret Manager, AWS Secrets Manager, Scaleway Secret Manager (0.17+), HashiCorp Vault, OpenBao (0.17+), Bitwarden Password Manager (0.18+), Bitwarden Secrets Manager, Azure Key Vault, Infisical (0.16+), or age (0.17+).`,
+Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files, environment variables, systemd service credentials (0.17+), 1Password, Gopass (0.15+), LastPass, Dashlane (0.18+, read-only), Pass, Proton Pass, Google Cloud Secret Manager, AWS Secrets Manager, Scaleway Secret Manager (0.17+), HashiCorp Vault, OpenBao (0.17+), Bitwarden Password Manager (0.18+), Bitwarden Secrets Manager, Azure Key Vault, Infisical (0.16+), age (0.17+), or SOPS (0.17+).`,
         }),
       ],
       title: "SecretSpec",
@@ -133,7 +133,7 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
         dark: "./src/assets/logo-dark.png",
         replacesTitle: true,
       },
-      tagline: "Declarative secrets for development workflows",
+      tagline: "A declarative interface for every secret provider.",
       social: [
         {
           icon: "github",
@@ -160,14 +160,18 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
           items: [
             { label: "Overview", slug: "concepts/overview" },
             {
-              label: "Declarative Configuration",
+              label: "secretspec.toml",
               slug: "concepts/declarative",
             },
-            { label: "Profiles", slug: "concepts/profiles" },
-            { label: "Providers", slug: "concepts/providers" },
             {
-              label: "Configuration Inheritance",
+              label: "secretspec.toml Inheritance",
               slug: "concepts/inheritance",
+            },
+            { label: "Profiles", slug: "concepts/profiles" },
+            {
+              label: "Scopes",
+              slug: "concepts/scopes",
+              badge: { text: "0.17+", variant: "note" },
             },
             {
               label: "Secret Generation",
@@ -188,6 +192,21 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
               label: "Audit Logging",
               slug: "concepts/audit",
               badge: { text: "0.12+", variant: "note" },
+            },
+            {
+              label: "Providers",
+              items: [
+                { label: "Providers", slug: "concepts/providers" },
+                {
+                  label: "Provider fallback",
+                  slug: "concepts/providers/fallback",
+                },
+                {
+                  label: "Provider caching",
+                  slug: "concepts/providers/caching",
+                  badge: { text: "0.17+", variant: "note" },
+                },
+              ],
             },
           ],
         },
@@ -210,6 +229,11 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
             { label: "Pass", slug: "providers/pass" },
             { label: "Proton Pass", slug: "providers/protonpass" },
             { label: "LastPass", slug: "providers/lastpass" },
+            {
+              label: "Dashlane",
+              slug: "providers/dashlane",
+              badge: { text: "0.18+", variant: "note" },
+            },
             { label: "1Password", slug: "providers/onepassword" },
             {
               label: "Gopass",
@@ -260,6 +284,11 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
             {
               label: "age",
               slug: "providers/age",
+              badge: { text: "0.17+", variant: "note" },
+            },
+            {
+              label: "SOPS (0.17+)",
+              slug: "providers/sops",
               badge: { text: "0.17+", variant: "note" },
             },
           ],

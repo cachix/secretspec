@@ -31,7 +31,7 @@ revision = "1.0"
 
 [profiles.default]
 DATABASE_URL = { description = "DB", required = true }
-LOG_LEVEL = { description = "log", required = false, default = "info" }
+DEV_SESSION_SECRET = { description = "Development-only session secret", required = false, default = "development-only-secret" }
 SENTRY_DSN = { description = "sentry", required = false }
 
 [scopes.database]
@@ -66,9 +66,9 @@ test('load returns values and provenance', () => {
   assert.equal(db.source, 'provider');
   assert.ok(db.sourceProvider);
 
-  const log = resolved.secrets.LOG_LEVEL;
-  assert.equal(log.get(), 'info');
-  assert.equal(log.source, 'default');
+  const session = resolved.secrets.DEV_SESSION_SECRET;
+  assert.equal(session.get(), 'development-only-secret');
+  assert.equal(session.source, 'default');
 
   assert.deepEqual(resolved.missingOptional, ['SENTRY_DSN']);
   assert.ok(!('SENTRY_DSN' in resolved.secrets));

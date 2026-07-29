@@ -180,6 +180,7 @@ crate::register_provider! {
     description: "Traditional .env files",
     schemes: ["dotenv"],
     examples: ["dotenv://.env", "dotenv://.env.production"],
+    deletes: true,
 }
 
 impl DotEnvProvider {
@@ -339,6 +340,26 @@ impl Provider for DotEnvProvider {
         let content = serialize_dotenv(&vars);
         fs::write(&self.config.path, content)?;
         Ok(())
+    }
+
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        let target = super::flat_item(self, addr)?;
+        validate_env_key(&target)?;
+        if !self.config.path.exists() {
+            return Ok(false);
+        }
+        let mut vars = HashMap::new();
+        for item in dotenvy::from_path_iter(&self.config.path)? {
+            let (key, value) = item?;
+            vars.insert(key, value);
+        }
+        if vars.remove(target.as_ref()).is_none() {
+            // Nothing to remove, so leave the file — and its comments and
+            // formatting — exactly as it is.
+            return Ok(false);
+        }
+        fs::write(&self.config.path, serialize_dotenv(&vars))?;
+        Ok(true)
     }
 
     fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {

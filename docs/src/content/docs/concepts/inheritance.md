@@ -16,7 +16,7 @@ name = "common"
 
 [profiles.default]
 DATABASE_URL = { description = "Main database", required = true }
-LOG_LEVEL = { description = "Log verbosity", required = false, default = "info" }
+INTERNAL_API_KEY = { description = "Internal service API key", required = true }
 ```
 
 A project that extends it:

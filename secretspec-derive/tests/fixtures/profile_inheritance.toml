@@ -6,28 +6,28 @@ revision = "1.0"
 [profiles.default]
 DATABASE_URL = { description = "Database URL", required = true }
 API_KEY = { description = "API Key", required = true }
-LOG_LEVEL = { description = "Logging level", required = false, default = "info" }
+SESSION_SECRET = { description = "Session signing secret", required = true }
 CACHE_TTL = { description = "Cache TTL in seconds", required = false, default = "3600" }
 
 # Development profile overrides some defaults
 [profiles.development]
 DATABASE_URL = { required = false, default = "sqlite:///dev.db" }
+SESSION_SECRET = { required = false, default = "development-only-session-secret" }
 DEBUG_MODE = { description = "Enable debug mode", required = false, default = "true" }
 # API_KEY is inherited from default
-# LOG_LEVEL is inherited from default
 # CACHE_TTL is inherited from default
 
 # Production profile has strict requirements
 [profiles.production]
 DATABASE_URL = { required = true }
 API_KEY = { required = true }
-LOG_LEVEL = { required = false, default = "error" }
+SESSION_SECRET = { required = true }
 # CACHE_TTL is inherited from default
 
 # Staging profile is similar to production but with some overrides
 [profiles.staging]
 DATABASE_URL = { required = true }
-LOG_LEVEL = { required = false, default = "warn" }
+SESSION_SECRET = { required = true }
 ENABLE_PROFILING = { description = "Enable performance profiling", required = false, default = "true" }
 # API_KEY is inherited from default
 # CACHE_TTL is inherited from default

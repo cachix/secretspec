@@ -42,6 +42,7 @@
 
 // Internal modules
 mod audit;
+mod cache;
 pub mod codegen;
 mod composition;
 mod config;

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "provider": "keyring://",
-  "profile": "production",
+  "profile": "development",
   "secrets": [
     {
       "name": "DATABASE_URL",
@@ -13,19 +13,19 @@
       "as_path": false
     },
     {
+      "name": "DEV_SESSION_SECRET",
+      "status": "resolved",
+      "required": false,
+      "default_applied": true,
+      "generated": false,
+      "as_path": false
+    },
+    {
       "name": "JWT_SECRET",
       "status": "resolved",
       "required": true,
       "default_applied": false,
       "generated": true,
-      "as_path": false
-    },
-    {
-      "name": "LOG_LEVEL",
-      "status": "resolved",
-      "required": false,
-      "default_applied": true,
-      "generated": false,
       "as_path": false
     },
     {

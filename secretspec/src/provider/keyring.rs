@@ -68,6 +68,7 @@ crate::register_provider! {
     description: "Uses system keychain (Recommended)",
     schemes: ["keyring"],
     examples: ["keyring://", "keyring://secretspec/shared/{profile}/{key}"],
+    deletes: true,
 }
 
 impl KeyringProvider {
@@ -180,6 +181,16 @@ impl Provider for KeyringProvider {
         let entry = Entry::new(&service, &username)?;
         entry.set_password(value.expose_secret())?;
         Ok(())
+    }
+
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        let (service, username) = self.entry_target(addr)?;
+        let entry = Entry::new(&service, &username)?;
+        match entry.delete_credential() {
+            Ok(()) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(error) => Err(error.into()),
+        }
     }
 }
 

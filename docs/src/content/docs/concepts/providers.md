@@ -49,6 +49,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [protonpass](/providers/protonpass/) | Proton Pass | ✓ | ✓ | ✓ | — |
 | [onepassword](/providers/onepassword/) | 1Password | ✓ | ✓ | ✓ | — |
 | [lastpass](/providers/lastpass/) | LastPass | ✓ | ✓ | ✓ | — |
+| [dashlane](/providers/dashlane/) (0.18+) | Dashlane, through the `dcli` CLI | ✓ | ✗ | ✓ | — |
 | [gcsm](/providers/gcsm/) | Google Cloud Secret Manager (requires the `gcsm` build feature) | ✓ | ✓ | ✓ | — |
 | [awssm](/providers/awssm/) | AWS Secrets Manager (requires the `awssm` build feature) | ✓ | ✓ | ✓ | — |
 | [scaleway](/providers/scaleway/) (0.17+) | Scaleway Secret Manager (requires the `scaleway` build feature) | ✓ | ✓ | ✓ | — |
@@ -59,6 +60,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [akv](/providers/akv/) | Azure Key Vault (requires the `akv` build feature) | ✓ | ✓ | ✓ | — |
 | [infisical](/providers/infisical/) (0.16+) | Infisical (requires the `infisical` build feature) | ✓ | ✓ | ✓ | — |
 | [age](/providers/age/) (0.17+) | An age-encrypted file (requires the `age` build feature) | ✓ | ✓ | ✓ | — |
+| [sops](/providers/sops/) (0.17+) | SOPS-encrypted files (requires the `sops` build feature and SOPS CLI) | ✓ | ✓ | ✓ | Depends on the configured SOPS key service |
 
 “TPM-backed keys” means the local key used by the provider can be protected by
 a [TPM 2.0](https://trustedcomputinggroup.org/resource/tpm-library-specification/)
@@ -78,51 +80,6 @@ provider service.
 Each provider page starts with a minimal working example, then covers setup,
 project configuration, storage conventions, existing provider-native secrets,
 and CI/CD where applicable.
-
-## How SecretSpec selects a provider
-
-SecretSpec resolves the provider for each secret in the following order:
-
-1. The `--provider` command-line option.
-2. The `SECRETSPEC_PROVIDER` environment variable.
-3. The secret's effective `providers` list after profile inheritance and
-   `[profiles.<name>.defaults]` are applied.
-4. The default provider in the user configuration.
-
-The first two options are explicit overrides. They route every secret to one
-provider and disable any configured fallback chain for that command.
-
-If no override is set, SecretSpec tries the effective `providers` list from
-left to right until a provider returns the secret. If the secret has no
-`providers` list, SecretSpec uses the user-level default provider.
-
-```toml title="secretspec.toml"
-[providers]
-prod_vault = "onepassword://Production"
-local = "keyring://"
-
-[profiles.production.defaults]
-providers = ["prod_vault", "local"]
-
-[profiles.production]
-# Uses the profile default: prod_vault, then local.
-DATABASE_URL = { description = "Production database" }
-
-# Overrides the profile default and reads only from the environment.
-DEPLOY_TOKEN = { description = "Deployment token", providers = ["env"] }
-```
-
-The fallback order applies to reads. Writes go only to the first provider in
-the effective list. In the example above, SecretSpec reads `DATABASE_URL` from
-`prod_vault` first and falls back to `local` only when the secret is not found;
-it writes `DATABASE_URL` only to `prod_vault`.
-
-:::note
-A secret's [`ref`](/reference/configuration/#secret-references) changes the
-address looked up inside a provider, not the provider selection rules. Explicit
-overrides and fallback chains work the same way for referenced secrets and
-convention-based secrets.
-:::
 
 ## Configure the default provider
 
@@ -300,10 +257,17 @@ Provider credentials follow these rules:
 - **Names are provider-specific.** Bitwarden accepts `access_token`; Vault
   accepts `token`, `role_id`, and `secret_id`; 1Password accepts
   `service_account_token`; Azure Key Vault accepts `tenant_id`, `client_id`, and
-  `client_secret`. Unsupported names are rejected before any source is read.
+  `client_secret`; SOPS (0.17+) accepts `age_key`, `aws_secret_access_key`,
+  `azure_client_secret`, `google_oauth_access_token`, `hc_vault_token`,
+  `huawei_sdk_ak`, and `huawei_sdk_sk`. Unsupported names are rejected before
+  any source is read.
 
 ## Next steps
 
+- Learn how [Provider fallback](/concepts/providers/fallback/) selects and
+  orders sources.
+- Cache slow remote routes with [Provider caching](/concepts/providers/caching/)
+  (0.17+).
 - Review the URI and authentication details for an individual provider in the
   [Providers](/providers/keyring/) section.
 - Learn how [Profiles](/concepts/profiles/) apply provider defaults to an

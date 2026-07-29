@@ -90,7 +90,7 @@ returned when that profile resolves.
 
 ## Scopes (0.17+)
 
-A [scope](/reference/configuration/#scopes-section) resolves only a named subset
+A [scope](/concepts/scopes/) resolves only a named subset
 of a profile. In Rust it is available on the untyped `Secrets` API, through
 `set_scope`:
 

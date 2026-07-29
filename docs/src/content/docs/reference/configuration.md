@@ -37,22 +37,29 @@ It accepts three values:
 
 | Value | Behavior |
 |-------|----------|
-| `"agents"` (default) | Require a reason **only when an AI agent is detected**. Humans running interactively are unaffected. |
-| `true` | Require a reason from **every** caller (humans, CI, agents). |
+| `"agents"` (default) | Require a reason only when SecretSpec heuristically classifies the current process as an AI agent. Sessions not classified as agents are unaffected. |
+| `true` | Require a reason from every caller using SecretSpec (humans, CI, and agents). |
 | `false` | Never require a reason. |
 
-Because the rule is enforced inside secretspec and checked into `secretspec.toml`,
-every clone, CI runner, and AI agent is held to it — there is no per-tool opt-out:
+The policy is enforced at SecretSpec's secret-access entry points and travels
+with the checked-in `secretspec.toml`. With `true`, every caller using the
+manifest must supply a reason before SecretSpec proceeds:
 
 ```bash
-# Under an AI agent, with the default "agents" policy:
+# In a session SecretSpec detects as an agent, with the default "agents" policy:
 $ secretspec run -- ./deploy.sh
 Error: Accessing secrets requires a reason. Provide one with --reason "<why...>" ...
 
 $ secretspec run --reason "Deploy web frontend" -- ./deploy.sh   # ok
 ```
 
-**Agent detection.** secretspec delegates detection of known agents to the
+:::caution[Agent detection is heuristic]
+The default `"agents"` policy depends on detection. It can miss an unknown or
+changed agent and can classify a session incorrectly. Use
+`require_reason = true` when every SecretSpec caller must supply a reason.
+:::
+
+**Agent detection.** secretspec delegates heuristic detection of known agents to the
 [`detect-coding-agent`](https://crates.io/crates/detect-coding-agent) crate, which
 maintains the per-tool signal list (Claude Code, Cursor, Codex, Gemini CLI,
 Copilot, and more). It treats **autonomous and hybrid** environments as agents but
@@ -64,11 +71,12 @@ not human-driven interactive editors. In addition, secretspec checks its own
 $ export SECRETSPEC_AGENT=1
 ```
 
-If your agent isn't auto-detected, set `SECRETSPEC_AGENT=1` (or use
-`require_reason = true` to require a reason from everyone).
+Cooperative harnesses that are not auto-detected can set `SECRETSPEC_AGENT=1`.
+Do not rely on a caller to identify itself when a reason is mandatory; use
+`require_reason = true` instead.
 
-The reason is recorded in secretspec's own [audit log](/concepts/audit/) and is also
-forwarded to providers that support auditing (e.g. the
+The reason is recorded in secretspec's own [audit log](/concepts/audit/) and is
+also forwarded to providers that support auditing (e.g. the
 [Proton Pass](/providers/protonpass/) provider records it in the agent audit log).
 
 ### [profiles.*] Section
@@ -197,6 +205,10 @@ Scopes are added in **SecretSpec 0.17** and are unavailable in the current 0.16
 release. With 0.16, give each service its own profile, or its own
 `secretspec.toml`.
 :::
+
+See [Scopes](/concepts/scopes/) for the conceptual model and a focused
+guide to narrowing services and tasks. This section specifies the complete
+configuration and resolution behavior.
 
 Scopes name membership-only subsets of a profile's secrets, so a single service
 or task resolves only what it declares instead of the entire profile. They are
@@ -349,7 +361,7 @@ env = "env://"
 # Default profile - always loaded first
 [profiles.default]
 APP_NAME = { description = "Application name", required = false, default = "MyApp" }
-LOG_LEVEL = { description = "Log verbosity", required = false, default = "info" }
+SESSION_SECRET = { description = "Session signing secret", required = true, providers = ["shared_vault"] }
 GITHUB_TOKEN = { description = "GitHub token", required = true, providers = ["env"] }
 
 # Development profile - extends default
@@ -380,6 +392,8 @@ Provider alias tables with `uri` and `credentials` are available since
 SecretSpec 0.15. SecretSpec 0.14 accepts only bare URI strings; when using
 0.14, configure provider credentials through the provider's existing
 environment variables, such as `BWS_ACCESS_TOKEN`.
+Cached alias tables with `fallback` and `cache` are available since SecretSpec
+0.17.
 :::
 
 ```toml title="secretspec.toml"
@@ -447,6 +461,44 @@ credentials = { role_id   = { provider = "onepassword", ref = { vault = "Infra",
 ```
 
 Configured credentials take precedence over provider environment fallbacks, credential chains are limited to one hop, and a fetched credential is never written to the environment. Store the credentials with [`secretspec config provider login`](/reference/cli/#config-provider-login). See [Provider Credentials](/concepts/providers/#provider-credentials) for the full behavior.
+
+#### SecretSpec 0.17 cached alias values
+
+:::caution[Version compatibility]
+Cached provider aliases are available starting with SecretSpec 0.17.
+:::
+
+A cached alias uses `fallback` and `cache` instead of `uri` and `credentials`:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `fallback` | array[string] | Yes | Non-empty authoritative provider route. Reads try entries in order; writes use the first entry. |
+| `cache` | table | Yes | Local cache policy containing `provider` and `max_age`. |
+| `cache.provider` | string | Yes | Leaf provider spec used to store cache entries. Must support deletion (keyring, pass, gopass, dotenv, Vault/OpenBao KV v2) and be a different store from every `fallback` entry. |
+| `cache.max_age` | string | Yes | Positive duration with `s`, `m`, `h`, `d`, or `w` units, such as `30m`, `8h`, or `1d`. |
+
+```toml title="secretspec.toml"
+[providers]
+azure = { uri = "akv://team-vault", credentials = { client_secret = "keyring" } }
+env = "env://"
+local = "keyring://secretspec/cache/{project}/{profile}/{key}"
+myprovider = { fallback = ["azure", "env"], cache = { provider = "local", max_age = "8h" } }
+
+[profiles.development.defaults]
+providers = ["myprovider"]
+```
+
+The cached alias is a complete route and must be the only entry when selected
+through `providers`, in any position. Its fallback entries and cache provider
+accept aliases, provider names, and URIs, but must resolve to leaf providers;
+cached aliases cannot be nested, and the cache must resolve to a different store
+than the route's own authoritative providers, since it holds its entries at the
+same logical address. The cache provider must also be one SecretSpec can delete
+from — keyring, pass, gopass, dotenv, or a Vault/OpenBao KV v2 mount — since
+every form of invalidation is a delete. Put credentials on leaf aliases rather
+than the cached alias.
+See [Provider caching](/concepts/providers/caching/)
+for freshness, failure, invalidation, and clearing behavior.
 
 #### SecretSpec 0.14 alias values
 
@@ -555,7 +607,7 @@ TOKEN = { description = "Token", ref = { vault = "Production", item = "infra", f
 ```
 
 Which provider resolves a `ref` follows the ordinary [provider resolution
-order](/concepts/providers/); a `ref` composes with the `providers` fallback
+order](/concepts/providers/fallback/); a `ref` composes with the `providers` fallback
 chain, and each provider is asked for the same coordinates.
 
 #### How providers interpret the coordinates
@@ -570,6 +622,7 @@ chain, and each provider is asked for the same coordinates.
 | [pass](/providers/pass/#use-existing-secrets) | Entry path | Rejected | Reads the entry | ✅ |
 | [Gopass (0.15+)](/providers/gopass/#use-existing-secrets) | Entry path, including any mount-point prefix | Rejected | Reads the entry | ✅ |
 | [LastPass](/providers/lastpass/#use-existing-secrets) | Item name | Rejected | Reads the item | ✅ |
+| [Dashlane (0.18+)](/providers/dashlane/#use-existing-secrets) | Item title or identifier | Field name on the item | Reads the type's default field (`content`, or `password` for a login) | — (read-only) |
 | [Proton Pass](/providers/protonpass/#use-existing-secrets) | Item title | Rejected | Reads the note | ✅ |
 | [Vault](/providers/vault/#use-existing-secrets) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
 | [OpenBao](/providers/openbao/#use-existing-secrets) (0.17+) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |

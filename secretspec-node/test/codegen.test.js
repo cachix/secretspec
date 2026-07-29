@@ -45,7 +45,7 @@ revision = "1.0"
 
 [profiles.default]
 DATABASE_URL = { description = "DB", required = true }
-LOG_LEVEL = { description = "log", required = false, default = "info" }
+DEV_SESSION_SECRET = { description = "Development-only session secret", required = false, default = "development-only-secret" }
 SENTRY_DSN = { description = "sentry", required = false }
 `;
 
@@ -80,5 +80,5 @@ test('quicktype-generated converter consumes fieldsJson()', { skip: !hasNpx() },
 
   const typed = toSecretSpec(resolved.fieldsJson());
   assert.equal(typed.DATABASE_URL, 'postgres://db');
-  assert.equal(typed.LOG_LEVEL, 'info'); // from default
+  assert.equal(typed.DEV_SESSION_SECRET, 'development-only-secret'); // from default
 });

@@ -15,9 +15,15 @@ shift
 
 files=()
 for asset in "$@"; do
-  # sha256 sidecar (BSD shasum on macOS, GNU sha256sum on Linux; both here).
-  if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"
-  else shasum -a 256 "$asset" > "$asset.sha256"; fi
+  # Record only the basename so `sha256sum -c` works after users download the
+  # asset and sidecar into the same directory, regardless of the runner path.
+  asset_name="$(basename "$asset")"
+  if command -v sha256sum >/dev/null; then
+    digest="$(sha256sum "$asset" | awk '{ print $1 }')"
+  else
+    digest="$(shasum -a 256 "$asset" | awk '{ print $1 }')"
+  fi
+  printf '%s  %s\n' "$digest" "$asset_name" > "$asset.sha256"
   files+=("$asset" "$asset.sha256")
 done
 
@@ -25,7 +31,10 @@ done
 # full five-platform CLI matrix can take well over ten minutes on uncached
 # runners, so allow an hour before treating the release as missing.
 for _ in $(seq 1 180); do
-  gh release view "$tag" >/dev/null 2>&1 && break || sleep 20
+  if gh release view "$tag" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 20
 done
 if ! gh release view "$tag" >/dev/null 2>&1; then
   echo "GitHub Release $tag was not created within one hour" >&2

@@ -123,6 +123,31 @@ lastpass://Work/SecretSpec/{project}/{profile}/{key} # Custom item template
 item template replaces the default and supports `{project}`, `{profile}`, and
 `{key}` placeholders.
 
+## Dashlane Provider (0.18+)
+
+**URI**: `dashlane://[item_type]` - Integrates with Dashlane via the `dcli` CLI
+
+```bash
+dashlane://          # Search secrets, then logins, then notes
+dashlane://note      # Secure notes only
+dashlane://secret    # Dashlane Secrets only (Business plans)
+dashlane://password  # Logins only
+```
+
+**Features**: Read-only, reads a locally synced vault, profiles via item titles
+**Prerequisites**: `dcli` CLI, device registered with `dcli sync`, or
+`DASHLANE_SERVICE_DEVICE_KEYS` for a non-interactive device
+**Storage**: Item titled `secretspec/{project}/{profile}/{key}`. The value is
+the item's default field: `content` for a secret or note, `password` for a
+login. `dcli` cannot create or edit vault items, so `secretspec set` fails;
+author items in a Dashlane app and run `dcli sync`.
+
+With `DASHLANE_SERVICE_DEVICE_KEYS` set, `dcli` runs against a private,
+owner-only state directory per credential, since it otherwise prefers an
+already-registered device and reads that identity's vault instead. That state
+is separate from your own, so `dcli configure disable-auto-sync true` does not
+apply to it and those reads sync hourly.
+
 ## OnePassword Provider
 
 **URI**: `onepassword://[account@]vault` or `onepassword+token://user:token@vault`
@@ -366,6 +391,31 @@ age://secrets.age?recipients-file=secrets.age.recipients # Share with a roster
 **Authentication**: The `identity` credential, `AGE_IDENTITY`, or `?identity=`; recipients from `?recipients-file=` or derived from the identity
 **Storage**: One `KEY=value` entry per secret inside the encrypted blob at PATH
 
+## SOPS Provider (0.17+)
+
+:::caution[Version compatibility]
+The `sops` provider is added in SecretSpec 0.17.
+:::
+
+**URI**: `sops://PATH[?format=yaml|json|dotenv|ini]` - Stores secrets in a
+SOPS-encrypted file or a templated set of files
+
+```bash
+sops://secrets.enc.yaml
+sops://secrets/{project}/{profile}.enc.json
+sops://secrets/{project}/.env.{profile}.enc?format=dotenv
+```
+
+**Features**: Read/write, YAML, JSON, dotenv, and INI files, SOPS key-service
+support, and profile-aware templated paths
+**Prerequisites**: The `sops` CLI and the required SOPS key configuration;
+build with `--features sops` (0.17+)
+**Authentication**: SOPS environment variables or provider credentials such as
+`age_key`, `aws_secret_access_key`, `azure_client_secret`, and `hc_vault_token`
+**Storage**: Single-file YAML and JSON can namespace convention secrets by
+project and profile; INI uses profile sections and dotenv is flat. Templated
+paths contain flat keys in one file per project/profile.
+
 ## Provider Selection
 
 ### Command Line
@@ -401,6 +451,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | GoPass | ✅ GPG encryption | Local filesystem | ❌ No |
 | Proton Pass | ✅ End-to-end | Cloud (Proton) | ✅ Yes |
 | LastPass | ✅ End-to-end | Cloud (LastPass) | ✅ Yes |
+| Dashlane (0.18+) | ✅ End-to-end | Cloud (Dashlane), synced locally | Yes — `dcli` auto-syncs hourly |
 | OnePassword | ✅ End-to-end | Cloud (OnePassword) | ✅ Yes |
 | GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |
@@ -412,3 +463,4 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
 | Infisical | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |
 | age (0.17+) | ✅ age encryption | Local filesystem | ❌ No |
+| SOPS (0.17+) | ✅ Configured SOPS encryption | Local filesystem | Depends on configured key service |

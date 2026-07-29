@@ -46,7 +46,7 @@ revision = "1.0"
 
 [profiles.default]
 DATABASE_URL = { description = "DB", required = true }
-LOG_LEVEL = { description = "log", required = false, default = "info" }
+DEV_SESSION_SECRET = { description = "Development-only session secret", required = false, default = "development-only-secret" }
 SENTRY_DSN = { description = "sentry", required = false }
 
 [scopes.database]
@@ -84,8 +84,14 @@ fn resolve_returns_values_and_provenance() {
         "postgres://db"
     );
     assert_eq!(response["secrets"]["DATABASE_URL"]["source"], "provider");
-    assert_eq!(response["secrets"]["LOG_LEVEL"]["value"], "info");
-    assert_eq!(response["secrets"]["LOG_LEVEL"]["source"], "default");
+    assert_eq!(
+        response["secrets"]["DEV_SESSION_SECRET"]["value"],
+        "development-only-secret"
+    );
+    assert_eq!(
+        response["secrets"]["DEV_SESSION_SECRET"]["source"],
+        "default"
+    );
     assert_eq!(response["missing_optional"][0], "SENTRY_DSN");
     assert!(response["missing_required"].as_array().unwrap().is_empty());
 }
@@ -112,7 +118,7 @@ fn explicit_scope_is_honored_and_returned() {
     let response = &env["response"];
     assert_eq!(response["scope"], "database");
     assert!(response["secrets"].get("DATABASE_URL").is_some());
-    assert!(response["secrets"].get("LOG_LEVEL").is_none());
+    assert!(response["secrets"].get("DEV_SESSION_SECRET").is_none());
     assert!(response["secrets"].get("SENTRY_DSN").is_none());
 }
 
@@ -209,9 +215,9 @@ fn report_mode_returns_requiredness_and_status() {
     assert_eq!(db["status"], "resolved");
     assert!(db.get("value").is_none(), "report must not carry a value");
 
-    let log = secret(secrets, "LOG_LEVEL");
-    assert_eq!(log["required"], false);
-    assert_eq!(log["default_applied"], true);
+    let session = secret(secrets, "DEV_SESSION_SECRET");
+    assert_eq!(session["required"], false);
+    assert_eq!(session["default_applied"], true);
 
     let sentry = secret(secrets, "SENTRY_DSN");
     assert_eq!(sentry["status"], "missing_optional");
@@ -243,8 +249,8 @@ fn report_mode_keeps_the_inventory_when_a_required_secret_is_missing() {
     let db = secret(secrets, "DATABASE_URL");
     assert_eq!(db["status"], "missing_required");
     assert_eq!(db["required"], true);
-    let log = secret(secrets, "LOG_LEVEL");
-    assert_eq!(log["status"], "resolved");
+    let session = secret(secrets, "DEV_SESSION_SECRET");
+    assert_eq!(session["status"], "resolved");
 }
 
 #[test]

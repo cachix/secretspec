@@ -179,7 +179,7 @@ mod tests {
         // Deliberately unsorted input to exercise the sort in `new`.
         ResolutionReport::new(
             "keyring://".to_string(),
-            "production".to_string(),
+            "development".to_string(),
             vec![
                 SecretResolution {
                     name: "STRIPE_KEY".to_string(),
@@ -212,7 +212,7 @@ mod tests {
                     as_path: false,
                 },
                 SecretResolution {
-                    name: "LOG_LEVEL".to_string(),
+                    name: "DEV_SESSION_SECRET".to_string(),
                     status: ResolutionStatus::Resolved,
                     required: false,
                     source_provider: None,
@@ -243,8 +243,8 @@ mod tests {
             names,
             vec![
                 "DATABASE_URL",
+                "DEV_SESSION_SECRET",
                 "JWT_SECRET",
-                "LOG_LEVEL",
                 "SENTRY_DSN",
                 "STRIPE_KEY"
             ]
@@ -266,13 +266,13 @@ mod tests {
         assert_eq!(
             sample().to_explain_string(),
             concat!(
-                "profile:  production\n",
+                "profile:  development\n",
                 "provider: keyring://\n",
-                "  DATABASE_URL  ok        source keyring://\n",
-                "  JWT_SECRET    ok        generated\n",
-                "  LOG_LEVEL     ok        default value\n",
-                "  SENTRY_DSN    missing   optional\n",
-                "  STRIPE_KEY    MISSING   required\n",
+                "  DATABASE_URL        ok        source keyring://\n",
+                "  DEV_SESSION_SECRET  ok        default value\n",
+                "  JWT_SECRET          ok        generated\n",
+                "  SENTRY_DSN          missing   optional\n",
+                "  STRIPE_KEY          MISSING   required\n",
             )
         );
     }

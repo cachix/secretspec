@@ -15,7 +15,19 @@ name: "Go static lib"
 
 on:
   workflow_call:
+    inputs:
+      release_tag:
+        description: Existing GitHub Release tag to upload artifacts to
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub Release tag to upload artifacts to
+        required: false
+        type: string
+        default: ""
   push:
     tags:
       - v**
@@ -49,6 +61,9 @@ jobs:
 
       - name: Build and smoke test the fully-static binary
         run: |
+          # Variables in this single-quoted script intentionally expand inside
+          # the devenv shell, not in the outer workflow shell.
+          # shellcheck disable=SC2016
           devenv shell -- bash -c '
             set -euo pipefail
             # Stage the release musl archive + header + generated cgo LDFLAGS
@@ -99,3 +114,31 @@ jobs:
             secretspec-go/lib/*.a
             secretspec-go/include/secretspec.h
             secretspec-go/cgo_ldflags_*.go
+
+  release:
+    name: Publish Go static release
+    needs: static
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: go-static-x86_64-linux-musl
+          path: staged
+
+      - name: Attach the static SDK bundle to the GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          asset="secretspec-go-static-x86_64-linux-musl.tar.gz"
+          tar -czf "$asset" -C staged .
+          bash scripts/upload-release-asset.sh \
+            "${{ inputs.release_tag || github.ref_name }}" "$asset"

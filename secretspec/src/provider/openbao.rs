@@ -103,6 +103,7 @@ crate::register_provider! {
     schemes: ["openbao"],
     examples: ["openbao://bao.example.com:8200/secret"],
     credential_names: [ROLE_ID, SECRET_ID, TOKEN],
+    deletes: true,
 }
 
 impl OpenBaoProvider {
@@ -147,6 +148,28 @@ impl Provider for OpenBaoProvider {
         self.check_writable(addr)?;
         let coords = self.resolve_coords(addr)?;
         self.core.set(&coords, value)
+    }
+
+    /// KV v2 expires the written version through the path's
+    /// `delete_version_after` metadata, so a cached copy of another store's
+    /// secret disappears on its own.
+    fn set_expiring(
+        &self,
+        addr: Address<'_>,
+        value: &SecretString,
+        max_age: std::time::Duration,
+    ) -> Result<()> {
+        self.check_writable(addr)?;
+        let coords = self.resolve_coords(addr)?;
+        self.core.set_expiring(&coords, value, max_age)
+    }
+
+    /// Deletes the whole KV path, so it is confined to entries SecretSpec owns;
+    /// see [`Self::check_writable`] for the same reasoning about `ref`s.
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        self.core.check_deletable(addr)?;
+        let coords = self.resolve_coords(addr)?;
+        self.core.delete(&coords)
     }
 
     /// Refuses native writes because replacing a KV entry to change one field

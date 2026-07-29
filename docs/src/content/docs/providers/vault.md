@@ -12,7 +12,7 @@ management using the KV (Key-Value) secrets engine.
 | --- | --- |
 | Provider | `vault` |
 | URI | `vault://[namespace@]host[:port][/mount][?options]` |
-| Access | Read and write; secret references are read-only |
+| Access | Read, write, and delete (0.17+); secret references are read-only |
 | Best for | Self-managed, policy-controlled secret infrastructure |
 | Authentication | Token or AppRole; JWT/OIDC (0.17+) |
 | Build feature | `vault` |
@@ -139,6 +139,35 @@ configured mount, with its value in a field named `value`.
 
 For KV v2, `DATABASE_URL` for project `myapp` and profile `production` is read
 from `GET /v1/secret/data/secretspec/myapp/production/DATABASE_URL`.
+
+## Provider caching (0.17+)
+
+:::caution[Version compatibility]
+Deletion and expiring writes are available starting with SecretSpec 0.17.
+:::
+
+A KV v2 mount can hold a [cached provider route's](/concepts/providers/caching/)
+entries. Vault expires them itself: the cache's `max_age` is written to the
+path's `delete_version_after` metadata, so a cached copy of another store's
+secret stops existing at that age even if SecretSpec never runs again.
+
+```toml title="secretspec.toml"
+[providers]
+slow = "onepassword://Production"
+shared_cache = "vault://vault.example.com:8200/secret"
+
+myprovider = { fallback = ["slow"], cache = { provider = "shared_cache", max_age = "8h" } }
+```
+
+This needs write access to the path's metadata as well as its data. KV v1 has no
+expiry and is refused as a cache, rather than storing a copy that would never
+expire.
+
+Deleting — [`cache clear`](/reference/cli/#cache-clear-017) and automatic
+invalidation — removes the KV path's metadata and every version, so no
+soft-deleted version keeps the value recoverable. It is confined to entries
+SecretSpec owns: a secret reference is never deleted, since the path it names is
+managed outside SecretSpec.
 
 ## Use existing secrets
 

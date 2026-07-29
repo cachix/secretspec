@@ -3,7 +3,7 @@ name = "secretspec"
 version.workspace = true
 edition.workspace = true
 repository = "https://github.com/cachix/secretspec"
-description = "Declarative secrets, every environment, any provider"
+description = "A declarative interface for every secret provider."
 license = "Apache-2.0"
 
 [lib]
@@ -53,7 +53,7 @@ detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
 
 [features]
-default = ["cli", "keyring", "kdbx", "gcsm", "awssm", "vault", "openbao", "bws", "akv", "infisical", "bw", "age", "scaleway"]
+default = ["cli", "keyring", "kdbx", "gcsm", "awssm", "vault", "openbao", "bws", "akv", "infisical", "bw", "age", "scaleway", "sops"]
 cli = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
@@ -76,6 +76,7 @@ bws = []
 bw = ["dep:base64"]
 akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secrets"]
 age = ["dep:age"]
+sops = []
 
 [dev-dependencies]
 # Validates serialized resolution reports against the committed JSON Schema.

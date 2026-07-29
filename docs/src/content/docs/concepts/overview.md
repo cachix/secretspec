@@ -33,6 +33,8 @@ Each concern is independent: you can change your storage backend without touchin
 ## Additional concepts
 
 - [Configuration Inheritance](/concepts/inheritance/) lets projects share common secret definitions via `extends`
+- [Scopes (0.17+)](/concepts/scopes/) let each service or task resolve
+  only its declared subset of a profile
 - [Secret Generation](/concepts/generation/) auto-creates passwords, tokens, and keys when secrets are missing
 - [Composed Secrets (0.16+)](/concepts/composed-secrets/) derive read-only
   values from other declared secrets

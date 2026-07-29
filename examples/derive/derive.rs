@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a .env file for testing
     std::fs::write(
         ".env",
-        "DATABASE_URL=postgres://localhost/testdb\nAPI_KEY=test-key-123\nREDIS_URL=redis://localhost:6379\n",
+        "DATABASE_URL=postgres://localhost/testdb\nAPI_KEY=test-key-123\nREDIS_URL=redis://localhost:6379\nSESSION_SECRET=example-session-secret\n",
     )?;
 
     // Example 1: Load with builder pattern
@@ -21,9 +21,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             let secrets = &result.secrets;
             println!("   - Database URL: {}", secrets.database_url);
-            println!("   - API Key: {} (found)", secrets.api_key);
+            println!("   - API Key: (found)");
             println!("   - Redis URL: {}", secrets.redis_url);
-            println!("   - Log Level: {}", secrets.log_level);
+            println!("   - Session secret: (found)");
         }
         Err(e) => {
             println!("   ✗ Failed to load secrets: {}", e);
@@ -44,9 +44,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             let secrets = &result.secrets;
             println!("   - Database URL: {}", secrets.database_url);
-            println!("   - API Key: {} (found)", secrets.api_key);
+            println!("   - API Key: (found)");
             println!("   - Redis URL: {}", secrets.redis_url);
-            println!("   - Log Level: {}", secrets.log_level);
+            println!("   - Session secret: (found)");
         }
         Err(e) => {
             println!("   ✗ Failed to load development profile: {}", e);

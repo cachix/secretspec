@@ -5,7 +5,8 @@ description: A local, append-only record of every secret access for after-the-fa
 
 secretspec records every secret access to a local audit log so you can review,
 after the fact, **what** secret was accessed, **when**, by **whom**, with what
-**reason**, and what the **outcome** was. Auditing is **on by default**.
+**reason, if supplied**, and what the **outcome** was. Auditing is **on by
+default**.
 
 Secret values are never written to the log. Only metadata is recorded, and any
 credentials embedded in a provider URI are redacted.
@@ -57,21 +58,22 @@ and how to turn it off.
 | `ts` | RFC 3339 UTC timestamp |
 | `session_id` | Shared by every event from one `secretspec` invocation |
 | `seq` | Monotonic sequence within that invocation |
-| `action` | The operation: `get`, `set`, `check`, `run`, `import`, or `export` |
+| `action` | The operation: `get`, `set`, `check`, `run`, `import`, `export`, or `cache_clear` / `cache_refresh` (0.17+) |
 | `project` / `profile` | The project and profile in effect |
 | `scope` | The named scope for a scoped `check`, `run`, or `export`; omitted otherwise (SecretSpec 0.17+) |
 | `key` | The secret name for single-secret actions (`get`/`set`); never its value |
 | `keys` | The set of secret names for bulk actions (`check`/`run`/`import`/`export`) |
 | `command` | For `run`, the executed program (argv[0] only — never its arguments, which may contain secrets) |
 | `provider` | The provider URI that served the access, with credentials redacted |
-| `outcome` | `found`, `missing`, `default`, `written`, `started` (a `run` launched its command), or `error` |
+| `outcome` | `found`, `missing`, `default`, `written`, `deleted` (0.17+ cache clear), `started` (a `run` launched its command), or `error` |
+| | A cached route writing its local entry is recorded as `cache_refresh`/`written`, never as `set`: no authoritative store was written. Dropping an entry — `cache clear`, or an entry a write superseded — is `cache_clear`/`deleted`. |
 | `error_kind` | A non-sensitive tag when `outcome` is `error` |
 | `reason` | The reason supplied via `--reason` / `SECRETSPEC_REASON` / the SDK, if any |
 | `actor` | The OS user, the detected coding agent (if any), and whether this is an agent session |
 
 This pairs naturally with the [`require_reason`](/reference/configuration/#requiring-a-reason-for-secret-access)
-policy: the policy makes callers state *why* they need a secret, and the audit
-log records that reason alongside the access.
+policy: when that policy applies, SecretSpec requires the caller to state *why*
+before proceeding and records the supplied reason alongside the access.
 
 ## Reading the log
 

@@ -9,7 +9,20 @@ pub struct ProviderRegistration {
     /// Semantic credential names accepted by the provider. Empty for providers
     /// that accept no injected credentials; used to reject unsupported names.
     pub credential_names: &'static [&'static str],
+    /// Whether the provider implements [`Provider::delete`](super::Provider::delete).
+    ///
+    /// Declared here rather than probed on an instance, so routing that needs an
+    /// invalidatable store can be checked while planning — which never
+    /// constructs a provider, because construction fetches credentials.
+    pub deletes: bool,
     pub factory: fn(&ProviderUrl, ProviderCredentials) -> Result<ProviderWithPreflight>,
+}
+
+/// Folds an optional macro flag into a plain `bool`: `register_provider!` passes
+/// an empty slice when the field is omitted and a one-element slice otherwise.
+#[doc(hidden)]
+pub const fn declared_flag(values: &[bool]) -> bool {
+    matches!(values, [true, ..])
 }
 
 /// Distributed slice that collects all provider registrations.
@@ -50,6 +63,22 @@ pub static PROVIDER_REGISTRY: [ProviderRegistration];
 /// }
 /// ```
 ///
+/// Providers that implement [`Provider::delete`](super::Provider::delete)
+/// declare it, so routing that requires an invalidatable store — a cached
+/// alias's `cache.provider` — can be validated while planning:
+///
+/// ```ignore
+/// register_provider! {
+///     struct: DotEnvProvider,
+///     config: DotEnvConfig,
+///     name: "dotenv",
+///     description: "Traditional .env files",
+///     schemes: ["dotenv"],
+///     examples: ["dotenv://.env"],
+///     deletes: true,
+/// }
+/// ```
+///
 /// Providers that need an authentication check before use can add a `preflight` field.
 /// The value must be a method name on the provider struct that returns `Result<()>`:
 ///
@@ -75,12 +104,14 @@ macro_rules! register_provider {
         description: $description:expr,
         schemes: [$($scheme:expr),* $(,)?],
         examples: [$($example:expr),* $(,)?]
-        $(, credential_names: [$($credential_name:expr),* $(,)?])? $(,)?
+        $(, credential_names: [$($credential_name:expr),* $(,)?])?
+        $(, deletes: $deletes:literal)? $(,)?
     ) => {
         $crate::register_provider!(@register
             $struct_name, $config_type, $name, $description,
             [$($scheme,)*], [$($example,)*],
             [$($($credential_name,)*)?],
+            [$($deletes,)?],
             |provider| {
                 Ok($crate::provider::ProviderWithPreflight {
                     provider: Box::new(provider),
@@ -99,12 +130,14 @@ macro_rules! register_provider {
         schemes: [$($scheme:expr),* $(,)?],
         examples: [$($example:expr),* $(,)?],
         $(credential_names: [$($credential_name:expr),* $(,)?],)?
+        $(deletes: $deletes:literal,)?
         preflight: $preflight:ident $(,)?
     ) => {
         $crate::register_provider!(@register
             $struct_name, $config_type, $name, $description,
             [$($scheme,)*], [$($example,)*],
             [$($($credential_name,)*)?],
+            [$($deletes,)?],
             |provider| {
                 let provider = std::sync::Arc::new(provider);
                 let preflight_provider = std::sync::Arc::clone(&provider);
@@ -121,6 +154,7 @@ macro_rules! register_provider {
         $struct_name:ident, $config_type:ty, $name:expr, $description:expr,
         [$($scheme:expr,)*], [$($example:expr,)*],
         [$($credential_name:expr,)*],
+        [$($deletes:literal,)?],
         $wrap:expr
     ) => {
         impl $struct_name {
@@ -138,6 +172,7 @@ macro_rules! register_provider {
                 },
                 schemes: &[$($scheme,)*],
                 credential_names: &[$($credential_name,)*],
+                deletes: $crate::provider::declared_flag(&[$($deletes,)?]),
                 factory: |url, credentials| {
                     let config = <$config_type>::try_from(url)?;
                     let mut provider = <$struct_name>::new(config);

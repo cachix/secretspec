@@ -18,7 +18,7 @@ revision = "1.0"
 
 [profiles.default]
 DATABASE_URL = { description = "DB", required = true }
-LOG_LEVEL = { description = "log", required = false, default = "info" }
+DEV_SESSION_SECRET = { description = "Development-only session secret", required = false, default = "development-only-secret" }
 SENTRY_DSN = { description = "sentry", required = false }
 
 [scopes.database]
@@ -55,9 +55,9 @@ def test_load_returns_values_and_provenance(tmp_path):
     assert db.source == "provider"
     assert db.source_provider is not None
 
-    log = resolved.secrets["LOG_LEVEL"]
-    assert log.get == "info"
-    assert log.source == "default"
+    session = resolved.secrets["DEV_SESSION_SECRET"]
+    assert session.get == "development-only-secret"
+    assert session.source == "default"
 
     assert resolved.missing_optional == ["SENTRY_DSN"]
     assert "SENTRY_DSN" not in resolved.secrets

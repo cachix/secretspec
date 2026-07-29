@@ -7,28 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- Vault and OpenBao providers reuse one `reqwest::Client` per provider
-  instance (same `OnceLock` pattern as Infisical) instead of building a fresh
-  client on every get/set/login. Concurrent `get_many` of many secrets no
-  longer opens one TCP(+TLS) handshake per secret against reverse-proxied
-  deployments, which was observed to drop part of the burst with
-  `Failed to connect to Vault`.
-- `get_each` (default `Provider::get_many`) caps concurrent unique-address
-  fetches at 8 by default, overridable with `SECRETSPEC_PROVIDER_CONCURRENCY`.
-  Waves replace a single unbounded `thread::scope` fan-out.
-- Vault/OpenBao HTTP sends retry up to 3 times on connect/timeout errors only
-  (not on HTTP 4xx/5xx), with a short backoff between attempts.
-
 ### Added
-- Scaleway Secret Manager provider (`scaleway://`, `scaleway` build feature) for
-  storing secrets in Scaleway's Secret Manager over its v1beta1 REST API.
-  Authenticates with an API secret key (`secret_key` credential or
-  `SCW_SECRET_KEY`), targets a region (URI host or `SCW_DEFAULT_REGION`, default
-  `fr-par`) and project (`?project_id=` or `SCW_DEFAULT_PROJECT_ID`), and stores
-  convention secrets under the folder path `secretspec/{project}/{profile}` with
-  the key as the secret name. Native `ref` references may select a JSON key with
-  `field` and a revision with `version`, and are read-only.
+- Dashlane provider (`dashlane://`) for reading secrets from a Dashlane vault
+  through the `dcli` CLI. Convention secrets read the item titled
+  `secretspec/{project}/{profile}/{key}`, and a `ref` names an existing item by
+  title or identifier with an optional `field`. `dashlane://note`,
+  `dashlane://secret`, or `dashlane://password` restrict the search to one
+  content type. The provider is read-only, because `dcli` has no command that
+  creates or edits a vault item; `secretspec set` fails with that reason.
+  Non-interactive use is supported through `DASHLANE_SERVICE_DEVICE_KEYS`,
+  which can also be injected as the `service_device_keys` provider credential.
+  Injected credentials read through a private, owner-only `dcli` state
+  directory of their own, because `dcli` otherwise prefers a device already
+  registered on the machine and reads that identity's vault instead.
 - Bitwarden Password Manager provider. `bw://` uses the `bw` CLI for
   vault-wide secret storage across all Bitwarden item types. Self-hosted
   servers are configured with `bw config server` before logging in, since the
@@ -51,6 +42,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   write does not address with `(not set by SecretSpec)`: Bitwarden requires
   all three of the private key, public key and fingerprint to be present, and
   rejects or discards an item that leaves any of them empty.
+
+## [0.17.0] - 2026-07-26
+
+### Fixed
+- Prebuilt Linux Go SDK and `secretspec-ffi` libraries now include libdbus
+  instead of requiring the build host's `libdbus-1.so.3`, so they load on
+  NixOS and other systems without a matching system library.
+  ([#214](https://github.com/cachix/secretspec/issues/214))
+- Cache reads, refreshes, and clears now share one ownership and freshness
+  policy, consistently handling expiration boundaries, clock rollback,
+  corrupted SecretSpec entries, and values owned by another project or profile.
+- Vault and OpenBao providers reuse one `reqwest::Client` per provider
+  instance (same `OnceLock` pattern as Infisical) instead of building a fresh
+  client on every get/set/login. Concurrent `get_many` of many secrets no
+  longer opens one TCP(+TLS) handshake per secret against reverse-proxied
+  deployments, which was observed to drop part of the burst with
+  `Failed to connect to Vault`.
+- `get_each` (default `Provider::get_many`) caps concurrent unique-address
+  fetches at 8 by default, overridable with `SECRETSPEC_PROVIDER_CONCURRENCY`.
+  Waves replace a single unbounded `thread::scope` fan-out.
+- Vault/OpenBao HTTP sends retry up to 3 times on connect/timeout errors only
+  (not on HTTP 4xx/5xx), with a short backoff between attempts.
+
+### Added
+- SOPS provider (`sops://`, `sops` build feature) for reading and writing
+  YAML, JSON, dotenv, and INI files through the SOPS CLI, including templated
+  per-project/profile paths and provider-credential injection for encryption
+  keys and cloud authentication. Writes are serialized and atomically replace
+  encrypted files, with secret values passed to SOPS over standard input.
+- Scaleway Secret Manager provider (`scaleway://`, `scaleway` build feature) for
+  storing secrets in Scaleway's Secret Manager over its v1beta1 REST API.
+  Authenticates with an API secret key (`secret_key` credential or
+  `SCW_SECRET_KEY`), targets a region (URI host or `SCW_DEFAULT_REGION`, default
+  `fr-par`) and project (`?project_id=` or `SCW_DEFAULT_PROJECT_ID`), and stores
+  convention secrets under the folder path `secretspec/{project}/{profile}` with
+  the key as the secret name. Native `ref` references may select a JSON key with
+  `field` and a revision with `version`, and are read-only.
+- Cached provider aliases with ordered authoritative `fallback` routes,
+  configurable local cache freshness, cache-first reads, automatic refresh
+  after reads and writes, and `secretspec cache clear` invalidation.
+
+  A cache must be a distinct store from the route's own authoritative providers
+  (compared by canonical provider URI, so equivalent spellings of one store
+  cannot disguise a cache as its own source), must be a store SecretSpec can
+  delete from (keyring, pass, gopass, dotenv, or a Vault/OpenBao KV v2 mount) so
+  its entries can be invalidated, and must be the only entry in a `providers`
+  list. All three are reported when the route is planned, and an unusable
+  `max_age` when the configuration loads.
+
+  Every entry records the project and profile that own it, and SecretSpec only
+  changes an entry it can show is its own: a value it did not write, or one
+  belonging to another project or profile, is left alone by reads and refreshes
+  and reported by `cache clear` rather than deleted, since an address alone is not
+  proof of ownership when a store is shared. An entry marked as SecretSpec's own
+  but unreadable is replaced.
+
+  A cached value never outlives the write that superseded it: a failed refresh, a
+  cache that could not be constructed, and a write that bypassed the cache with
+  `--provider` all invalidate the entry. An entry no read can serve — expired, or
+  written for a different route — is deleted when found rather than skipped, so an
+  expired value does not keep its plaintext in a store that cannot expire
+  anything. Where the store can expire a value itself, `max_age` is applied
+  server-side — Vault and OpenBao set the KV v2 path's `delete_version_after` — so
+  a cached copy stops existing at that age even if SecretSpec is never run again,
+  and clearing a KV v2 entry destroys its recoverable version history.
+
+  `cache clear` reports how many entries it actually removed, ignores provider
+  overrides, and clears what it can before reporting a cache store it could not.
+  Cache writes are audited as `cache_refresh` rather than `set`.
+  ([#199](https://github.com/cachix/secretspec/issues/199))
 - `secretspec config global init --provider <PROVIDER> --profile <PROFILE>`
   can save explicitly user-global defaults without interactive prompts,
   including `--profile none` to clear the default profile. The `global`
@@ -186,7 +247,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.15.0] - 2026-07-16
 
 ### Added
-
 - Gopass provider (`gopass://`) for GPG-based password manager with git-synced password store.
 - `secretspec export` command that resolves every secret for the active profile
   and writes them to stdout without running a command, in a chosen `--format`:

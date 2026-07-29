@@ -19,7 +19,7 @@ final class ResolveTest extends TestCase
 
         [profiles.default]
         DATABASE_URL = { description = "DB", required = true }
-        LOG_LEVEL = { description = "log", required = false, default = "info" }
+        DEV_SESSION_SECRET = { description = "Development-only session secret", required = false, default = "development-only-secret" }
         SENTRY_DSN = { description = "sentry", required = false }
 
         [scopes.database]
@@ -78,9 +78,9 @@ final class ResolveTest extends TestCase
         self::assertSame('provider', $db->source);
         self::assertNotNull($db->sourceProvider);
 
-        $log = $resolved->secrets['LOG_LEVEL'];
-        self::assertSame('info', $log->get());
-        self::assertSame('default', $log->source);
+        $session = $resolved->secrets['DEV_SESSION_SECRET'];
+        self::assertSame('development-only-secret', $session->get());
+        self::assertSame('default', $session->source);
 
         self::assertSame(['SENTRY_DSN'], $resolved->missingOptional);
         self::assertArrayNotHasKey('SENTRY_DSN', $resolved->secrets);

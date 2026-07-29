@@ -25,6 +25,7 @@
 //! - [`protonpass::ProtonPassProvider`]: Proton Pass integration
 //! - [`onepassword::OnePasswordProvider`]: 1Password integration
 //! - [`lastpass::LastPassProvider`]: LastPass integration
+//! - [`dashlane::DashlaneProvider`]: Dashlane integration, read-only (0.18+)
 //! - [`gcsm::GcsmProvider`]: Google Cloud Secret Manager integration
 //! - [`awssm::AwssmProvider`]: AWS Secrets Manager integration
 //! - [`vault::VaultProvider`]: HashiCorp Vault integration
@@ -33,6 +34,7 @@
 //! - [`akv::AkvProvider`]: Azure Key Vault integration
 //! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
 //! - [`bw::BitwardenProvider`]: Bitwarden Password Manager (0.18+)
+//! - [`sops::SopsProvider`]: SOPS-encrypted file integration (0.17+)
 //!
 //! ## URI-Based Configuration
 //!
@@ -211,6 +213,7 @@ impl ProviderUrl {
         feature = "infisical",
         feature = "kdbx",
         feature = "openbao",
+        feature = "sops",
         feature = "vault",
         test
     ))]
@@ -251,6 +254,12 @@ impl ProviderUrl {
     }
 }
 
+impl std::fmt::Display for ProviderUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Executes an async future in a blocking context.
 ///
 /// If already inside a tokio runtime, uses `block_in_place` with the
@@ -277,6 +286,7 @@ pub mod awssm;
 pub mod bw;
 #[cfg(feature = "bws")]
 pub mod bws;
+pub mod dashlane;
 pub mod dotenv;
 pub mod env;
 #[cfg(feature = "gcsm")]
@@ -296,6 +306,8 @@ pub mod pass;
 pub mod protonpass;
 #[cfg(feature = "scaleway")]
 pub mod scaleway;
+#[cfg(feature = "sops")]
+pub mod sops;
 pub mod systemd_credential;
 #[cfg(feature = "vault")]
 pub mod vault;
@@ -444,7 +456,7 @@ pub(crate) fn flat_item<'a, P: Provider + ?Sized>(
 }
 
 /// Macro support types
-pub use macros::{PROVIDER_REGISTRY, ProviderRegistration};
+pub use macros::{PROVIDER_REGISTRY, ProviderRegistration, declared_flag};
 
 /// Returns a list of all available providers with their metadata.
 ///
@@ -509,6 +521,30 @@ pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
 pub(crate) fn credential_names_for_spec(spec: &str) -> &'static [&'static str] {
     let (scheme, _) = split_spec(spec);
     registration_for_scheme(scheme).map_or(&[], |reg| reg.credential_names)
+}
+
+/// Whether the provider `spec` names implements [`Provider::delete`].
+///
+/// Read from the registration, so routing that requires an invalidatable store
+/// can be rejected while planning rather than discovered the first time an
+/// invalidation is attempted. An unknown scheme is `false`; callers reach here
+/// only after the spec resolved to a registered provider.
+pub(crate) fn spec_provider_deletes(spec: &str) -> bool {
+    let (scheme, _) = split_spec(spec);
+    registration_for_scheme(scheme).is_some_and(|reg| reg.deletes)
+}
+
+/// The names of every provider that implements deletion, sorted. Used to say
+/// which providers a cache can live in without hardcoding a list that would
+/// drift as providers gain the capability.
+pub(crate) fn deleting_provider_names() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = PROVIDER_REGISTRY
+        .iter()
+        .filter(|reg| reg.deletes)
+        .map(|reg| reg.info.name)
+        .collect();
+    names.sort_unstable();
+    names
 }
 
 /// The registered display name for the provider `spec` names, falling back to
@@ -626,6 +662,49 @@ pub trait Provider: Send + Sync {
     /// This method should return an error whenever
     /// [`check_writable`](Provider::check_writable) does, for the same address.
     fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()>;
+
+    /// Writes a secret at `addr` that need not outlive `max_age`. Available
+    /// since SecretSpec 0.17.
+    ///
+    /// The default ignores the hint and writes a plain value, which is always
+    /// correct: SecretSpec's own cache envelope carries the write time and
+    /// remains the freshness authority. A provider whose store can drop a value
+    /// on its own overrides this, so a cached secret stops existing even if
+    /// SecretSpec never runs again — a store-side bound on how long a copy of
+    /// someone else's secret sits there.
+    ///
+    /// A provider that cannot apply the expiry it was asked for must return an
+    /// error rather than write an unexpiring value: the caller asked for a
+    /// bounded copy, and silently storing an unbounded one is worse than not
+    /// caching at all.
+    fn set_expiring(
+        &self,
+        addr: Address<'_>,
+        value: &SecretString,
+        max_age: std::time::Duration,
+    ) -> Result<()> {
+        let _ = max_age;
+        self.set(addr, value)
+    }
+
+    /// Deletes a secret at `addr`. Available since SecretSpec 0.17.
+    ///
+    /// Providers opt into deletion explicitly. This is used by cache
+    /// invalidation and defaults to a clear unsupported-operation error so
+    /// adding the method does not silently make destructive behavior available
+    /// to every provider.
+    ///
+    /// Deleting is idempotent: an address that holds nothing is `Ok(false)`,
+    /// not an error. The `bool` reports whether an entry was actually removed,
+    /// so callers can tell a real invalidation from a no-op instead of counting
+    /// addresses they merely asked about.
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        let _ = addr;
+        Err(SecretSpecError::ProviderOperationFailed(format!(
+            "provider '{}' does not support deleting secrets",
+            self.name()
+        )))
+    }
 
     /// Reports whether this provider can write to `addr`, and why not when it
     /// cannot.
@@ -877,6 +956,17 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
         (**self).set(addr, value)
     }
+    fn set_expiring(
+        &self,
+        addr: Address<'_>,
+        value: &SecretString,
+        max_age: std::time::Duration,
+    ) -> Result<()> {
+        (**self).set_expiring(addr, value, max_age)
+    }
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        (**self).delete(addr)
+    }
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         (**self).check_writable(addr)
     }
@@ -1031,6 +1121,23 @@ impl Provider for PreflightGuard {
     fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
         self.check()?;
         self.inner.set(addr, value)
+    }
+
+    /// Forwarded rather than left to the trait default, which would call
+    /// `self.set` and drop the expiry the inner provider can honor.
+    fn set_expiring(
+        &self,
+        addr: Address<'_>,
+        value: &SecretString,
+        max_age: std::time::Duration,
+    ) -> Result<()> {
+        self.check()?;
+        self.inner.set_expiring(addr, value, max_age)
+    }
+
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        self.check()?;
+        self.inner.delete(addr)
     }
 
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {

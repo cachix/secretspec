@@ -22,6 +22,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [.env](https://secretspec.dev/providers/dotenv)
   - [OnePassword](https://secretspec.dev/providers/onepassword)
   - [LastPass](https://secretspec.dev/providers/lastpass)
+  - [Dashlane](https://secretspec.dev/providers/dashlane) (0.18+)
   - [Pass](https://secretspec.dev/providers/pass)
   - [Gopass](https://secretspec.dev/providers/gopass) (0.15+)
   - [Proton Pass](https://secretspec.dev/providers/protonpass)
@@ -70,6 +71,7 @@ $ secretspec config global init  # 0.17+
   gopass: Gopass CLI password manager with GPG encryption (0.15+)
   protonpass: Proton Pass via official pass-cli
   lastpass: LastPass password manager
+  dashlane: Dashlane password manager, read-only (0.18+)
   gcsm: Google Cloud Secret Manager
   awssm: AWS Secrets Manager
   scaleway: Scaleway Secret Manager (0.17+)
@@ -80,6 +82,7 @@ $ secretspec config global init  # 0.17+
   akv: Azure Key Vault
   infisical: Infisical secret management (0.16+)
   age: age-encrypted file (0.17+)
+  sops: SOPS encrypted files (0.17+)
 ? Select your default profile:
 > development
   default
@@ -164,6 +167,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Proton Pass](https://secretspec.dev/providers/protonpass)** - End-to-end encrypted via Proton's official pass-cli
 - **[OnePassword](https://secretspec.dev/providers/onepassword)** - Team secret management
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager
+- **[Dashlane](https://secretspec.dev/providers/dashlane)** (0.18+) - Read-only access to a Dashlane vault via the `dcli` CLI
 - **[Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)** - GCP secret management
 - **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
 - **[Scaleway Secret Manager](https://secretspec.dev/providers/scaleway)** (0.17+) - Scaleway secret management
@@ -174,6 +178,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Azure Key Vault](https://secretspec.dev/providers/akv)** - Azure secret management
 - **[Infisical](https://secretspec.dev/providers/infisical)** (0.16+) - Infisical secret management
 - **[age](https://secretspec.dev/providers/age)** (0.17+) - age-encrypted file
+- **[SOPS](https://secretspec.dev/providers/sops)** (0.17+) - SOPS-encrypted files
 
 ```bash
 $ secretspec run --provider keyring -- npm start
@@ -249,6 +254,7 @@ secretspec check                  # Verify all secrets are set
 secretspec set KEY               # Set a secret interactively
 secretspec get KEY               # Retrieve a secret
 secretspec import PROVIDER       # Import secrets from another provider
+secretspec cache clear [KEY]     # Clear cached provider values (0.17+)
 
 # Run with secrets
 secretspec run -- command        # Run command with secrets as env vars

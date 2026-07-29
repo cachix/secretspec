@@ -14,7 +14,7 @@ use std::path::PathBuf;
 /// and delegating to the appropriate subcommands for secrets management.
 #[derive(Parser)]
 #[command(name = "secretspec")]
-#[command(about = "Declarative secrets, every environment, any provider - https://secretspec.dev", long_about = None)]
+#[command(about = "A declarative interface for every secret provider. https://secretspec.dev", long_about = None)]
 #[command(version)]
 struct Cli {
     /// Path to secretspec.toml (default: auto-detect by walking up from current directory)
@@ -152,12 +152,17 @@ enum Commands {
         /// Provider backend to import from (secrets will be imported to the default provider)
         from_provider: String,
     },
+    /// Manage cached provider values (0.17+)
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
     /// Show the local audit log of secret access
     Audit {
         /// Only show entries for this project
         #[arg(long)]
         project: Option<String>,
-        /// Only show entries for this action (get, set, check, run, import, export)
+        /// Only show entries for this action (get, set, check, run, import, export, cache_clear)
         #[arg(long)]
         action: Option<String>,
         /// Show only the last N entries
@@ -166,6 +171,19 @@ enum Commands {
         /// Output raw JSON Lines instead of a formatted summary
         #[arg(long)]
         json: bool,
+    },
+}
+
+/// Cached provider maintenance commands (0.17+).
+#[derive(Subcommand)]
+enum CacheAction {
+    /// Delete cached values for one secret, or all cached secrets (0.17+)
+    Clear {
+        /// Secret to clear; omit to clear every cached secret in the profile
+        name: Option<String>,
+        /// Profile whose cache entries should be cleared
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        profile: Option<String>,
     },
 }
 
@@ -738,6 +756,7 @@ pub fn main() -> Result<()> {
                         let alias_value = crate::config::ProviderAlias {
                             uri: uri.clone(),
                             credentials,
+                            ..Default::default()
                         };
 
                         // Load or create config
@@ -1017,6 +1036,23 @@ pub fn main() -> Result<()> {
                 .wrap_err("Failed to import secrets")?;
             Ok(())
         }
+        Commands::Cache { action } => match action {
+            CacheAction::Clear { name, profile } => {
+                let mut app = load_secrets(&cli.file, &cli.reason)?;
+                if let Some(profile) = profile {
+                    app.set_profile(profile);
+                }
+                let cleared = app
+                    .clear_cache(name.as_deref())
+                    .into_diagnostic()
+                    .wrap_err("Failed to clear cache")?;
+                println!(
+                    "Cleared {cleared} cache {}",
+                    if cleared == 1 { "entry" } else { "entries" }
+                );
+                Ok(())
+            }
+        },
         // Show the local audit log
         Commands::Audit {
             project,
@@ -1585,6 +1621,39 @@ mod tests {
             Commands::Check { no_prompt, .. } => assert!(no_prompt),
             _ => panic!("expected Check command"),
         }
+    }
+
+    #[test]
+    fn cache_clear_parses_optional_name_and_profile() {
+        let cli = Cli::try_parse_from([
+            "secretspec",
+            "cache",
+            "clear",
+            "API_KEY",
+            "--profile",
+            "production",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Cache {
+                action: CacheAction::Clear { name, profile },
+            } => {
+                assert_eq!(name.as_deref(), Some("API_KEY"));
+                assert_eq!(profile.as_deref(), Some("production"));
+            }
+            _ => panic!("expected cache clear"),
+        }
+
+        let cli = Cli::try_parse_from(["secretspec", "cache", "clear"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Cache {
+                action: CacheAction::Clear {
+                    name: None,
+                    profile: None
+                }
+            }
+        ));
     }
 
     #[test]

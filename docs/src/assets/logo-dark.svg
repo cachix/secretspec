@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 240" role="img" aria-labelledby="title desc">
+  <title id="title">SecretSpec</title>
+  <desc id="desc">A padlock with an S-shaped keyhole beside the SecretSpec wordmark.</desc>
+  <defs>
+    <mask id="s-keyhole-cutout">
+      <rect width="900" height="240" fill="#fff"/>
+      <text x="76" y="190" fill="#000" font-family="Arial, Helvetica, 'Liberation Sans', sans-serif" font-size="116" font-weight="600">S</text>
+    </mask>
+  </defs>
+  <g fill="#fff">
+    <g transform="translate(29 30) scale(.75)">
+      <path fill-rule="evenodd" d="M68 92V70c0-32 21-54 48-54s48 22 48 54v22h-24V70c0-20-10-32-24-32S92 50 92 70v22H68Z"/>
+      <rect x="26" y="82" width="180" height="142" rx="42" mask="url(#s-keyhole-cutout)"/>
+    </g>
+    <text x="205" y="180" font-family="Arial, Helvetica, 'Liberation Sans', sans-serif" font-size="108" font-weight="600" letter-spacing="-5">SecretSpec</text>
+  </g>
+</svg>

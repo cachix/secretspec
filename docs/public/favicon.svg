@@ -1,1 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><path fill-rule="evenodd" d="M81 36 64 0 47 36l-1 2-9-10a6 6 0 0 0-9 9l10 10h-2L0 64l36 17h2L28 91a6 6 0 1 0 9 9l9-10 1 2 17 36 17-36v-2l9 10a6 6 0 1 0 9-9l-9-9 2-1 36-17-36-17-2-1 9-9a6 6 0 1 0-9-9l-9 10v-2Zm-17 2-2 5c-4 8-11 15-19 19l-5 2 5 2c8 4 15 11 19 19l2 5 2-5c4-8 11-15 19-19l5-2-5-2c-8-4-15-11-19-19l-2-5Z" clip-rule="evenodd"/><path d="M118 19a6 6 0 0 0-9-9l-3 3a6 6 0 1 0 9 9l3-3Zm-96 4c-2 2-6 2-9 0l-3-3a6 6 0 1 1 9-9l3 3c3 2 3 6 0 9Zm0 82c-2-2-6-2-9 0l-3 3a6 6 0 1 0 9 9l3-3c3-2 3-6 0-9Zm96 4a6 6 0 0 1-9 9l-3-3a6 6 0 1 1 9-9l3 3Z"/><style>path{fill:#000}@media (prefers-color-scheme:dark){path{fill:#fff}}</style></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">SecretSpec</title>
+  <defs>
+    <mask id="s-cutout">
+      <rect width="240" height="240" fill="#fff"/>
+      <text x="76" y="190" fill="#000" font-family="Arial, Helvetica, 'Liberation Sans', sans-serif" font-size="116" font-weight="600">S</text>
+    </mask>
+  </defs>
+  <g class="mark" transform="translate(1 -5) scale(.54)">
+    <path fill-rule="evenodd" d="M68 92V70c0-32 21-54 48-54s48 22 48 54v22h-24V70c0-20-10-32-24-32S92 50 92 70v22H68Z"/>
+    <rect x="26" y="82" width="180" height="142" rx="42" mask="url(#s-cutout)"/>
+  </g>
+  <style>
+    .mark { fill: #000; }
+    @media (prefers-color-scheme: dark) { .mark { fill: #fff; } }
+  </style>
+</svg>

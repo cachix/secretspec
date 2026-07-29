@@ -286,11 +286,16 @@ trap cleanup_test_data EXIT
 # Create a test secretspec.toml
 #
 # This lands in the *current* directory, and vaultwarden_harness.sh runs this
-# script from the repository root — where the project's own secretspec.toml
-# lives. Writing it unconditionally, then `rm -f`ing it on the way out, has
-# already deleted that tracked file once (restored in 859ef5e). Move any
-# existing file aside first and put it back on exit, so a harness run cannot
-# destroy the caller's config no matter which directory it starts from.
+# script from the repository root. Writing it unconditionally and then `rm -f`ing
+# it on the way out already destroyed one config that way: the repository used to
+# check a secretspec.toml in at the root (deleted here, restored in 859ef5e;
+# upstream has since removed it for good in a479b4f).
+#
+# That file being gone does not make the unconditional write safe. Anyone
+# dogfooding secretspec inside its own checkout can have an untracked
+# secretspec.toml in exactly that spot, and upstream's own tests/cli-integration.sh
+# writes one there too. So move any existing file aside first and put it back on
+# exit, and let the guard stay a no-op when there is nothing to protect.
 echo -e "\n${YELLOW}Setting up test configuration${NC}"
 SAVED_CONFIG=""
 if [ -e secretspec.toml ]; then

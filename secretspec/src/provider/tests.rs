@@ -682,6 +682,9 @@ fn test_create_from_string_with_plain_names() {
     let provider = Box::<dyn Provider>::try_from("lastpass").unwrap();
     assert_eq!(provider.name(), "lastpass");
 
+    let provider = Box::<dyn Provider>::try_from("dashlane").unwrap();
+    assert_eq!(provider.name(), "dashlane");
+
     let provider = Box::<dyn Provider>::try_from("gopass").unwrap();
     assert_eq!(provider.name(), "gopass");
 
@@ -777,6 +780,11 @@ fn test_documentation_examples() {
     // Test pass examples
     let provider = Box::<dyn Provider>::try_from("pass://").unwrap();
     assert_eq!(provider.name(), "pass");
+
+    // dashlane://note pins the Dashlane content type searched
+    let provider = Box::<dyn Provider>::try_from("dashlane://note").unwrap();
+    assert_eq!(provider.name(), "dashlane");
+    assert_eq!(provider.uri(), "dashlane://note");
 }
 
 #[test]

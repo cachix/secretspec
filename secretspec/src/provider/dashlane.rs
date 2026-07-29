@@ -1,0 +1,808 @@
+//! Dashlane provider backed by the Dashlane CLI (`dcli`).
+//!
+//! Dashlane's vault is **read-only** through `dcli`: it has no `create`,
+//! `add`, `set`, `update` or `delete` subcommand for any item type. Items are
+//! authored in a Dashlane app and read from here, so this provider implements
+//! [`Provider::get`] and refuses every write.
+
+use crate::provider::{Address, Provider, ProviderUrl};
+use crate::{Result, SecretSpecError};
+use secrecy::SecretString;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::process::{Command, Stdio};
+
+/// Install and authentication guidance, shown when `dcli` is missing.
+const DCLI_NOT_INSTALLED_HELP: &str = "\
+Dashlane CLI (dcli) is not installed.
+
+To install it:
+  - macOS:  brew install dashlane/tap/dashlane-cli
+  - Linux:  download the dcli-linux-x64 binary from
+            https://github.com/Dashlane/dashlane-cli/releases
+
+After installation, run 'dcli sync' to register this device and log in.";
+
+/// Shown when the local vault exists but is not usable yet.
+const AUTH_REQUIRED_HELP: &str = "\
+Dashlane authentication required. Run 'dcli sync' to register this device and \
+log in, or set DASHLANE_SERVICE_DEVICE_KEYS for a non-interactive device \
+registered with 'dcli devices register'.";
+
+/// Shown when the device is registered but the vault is locked.
+const LOCKED_HELP: &str = "\
+The Dashlane vault is locked. Run any 'dcli' command to unlock it with your \
+master password, or re-enable 'dcli configure save-master-password true'.";
+
+/// The environment variable holding non-interactive device credentials, as
+/// printed by `dcli devices register`.
+const DEVICE_KEYS_ENV: &str = "DASHLANE_SERVICE_DEVICE_KEYS";
+
+/// The semantic credential name for [`DEVICE_KEYS_ENV`].
+const SERVICE_DEVICE_KEYS: &str = "service_device_keys";
+
+/// A Dashlane content type, each with its own `dcli` lister subcommand.
+///
+/// `dcli` exposes exactly three listers, and they are not interchangeable:
+/// `password` defaults to writing the secret to the system clipboard, while
+/// `note` and `secret` default to unparseable prose. Every invocation passes
+/// `-o json` explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ItemType {
+    /// Dashlane's developer "Secret" content type (`dcli secret`).
+    Secret,
+    /// A secure note (`dcli note`).
+    Note,
+    /// A login (`dcli password`).
+    Password,
+}
+
+impl ItemType {
+    /// The `dcli` subcommand that lists this content type.
+    fn subcommand(self) -> &'static str {
+        match self {
+            Self::Secret => "secret",
+            Self::Note => "note",
+            Self::Password => "password",
+        }
+    }
+
+    /// The JSON field holding the secret value when a `ref` names no `field`.
+    fn default_field(self) -> &'static str {
+        match self {
+            // Secrets and notes carry their payload in `content`; a login's
+            // payload is its password.
+            Self::Secret | Self::Note => "content",
+            Self::Password => "password",
+        }
+    }
+
+    /// The search order used when the URI pins no single type, matching the
+    /// precedence `dcli read` applies across the vault.
+    fn search_order() -> &'static [Self] {
+        &[Self::Secret, Self::Note, Self::Password]
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "secret" | "secrets" => Some(Self::Secret),
+            "note" | "notes" => Some(Self::Note),
+            // `p` and `login` are what Dashlane's own UI and CLI alias call it.
+            "password" | "passwords" | "login" | "logins" => Some(Self::Password),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        self.subcommand()
+    }
+}
+
+/// Configuration for the Dashlane provider.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DashlaneConfig {
+    /// The single content type to search, or `None` to search secrets, then
+    /// notes, then logins.
+    pub item_type: Option<ItemType>,
+}
+
+impl TryFrom<&ProviderUrl> for DashlaneConfig {
+    type Error = SecretSpecError;
+
+    /// Parses `dashlane://[item-type]`, where the optional authority pins the
+    /// content type to `secret`, `note` or `password`.
+    fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
+        if url.scheme() != "dashlane" {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Invalid scheme '{}' for dashlane provider",
+                url.scheme()
+            )));
+        }
+
+        let item_type = match url.host().filter(|h| !h.is_empty()) {
+            Some(host) => Some(ItemType::parse(&host).ok_or_else(|| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "unknown Dashlane item type '{host}'. Use dashlane://secret, \
+                     dashlane://note or dashlane://password, or plain dashlane:// \
+                     to search all three."
+                ))
+            })?),
+            None => None,
+        };
+
+        let path = url.path();
+        if !path.is_empty() && path != "/" {
+            let trimmed = path.trim_start_matches('/');
+            let hint = crate::config::ref_table_hint(None, trimmed, None, None);
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "dashlane:// takes no path: the authority selects the item type, \
+                 not an item. To name one specific item, use {hint} on the secret \
+                 instead"
+            )));
+        }
+
+        Ok(Self { item_type })
+    }
+}
+
+/// Reads secrets from a Dashlane vault through the `dcli` CLI.
+///
+/// # Read-only
+///
+/// `dcli` can list and read vault items but cannot create or modify them, so
+/// [`set`](Provider::set) always fails. Add the item in a Dashlane app, then
+/// read it here.
+///
+/// # Requirements
+///
+/// The Dashlane CLI must be installed and the device registered:
+///
+/// - macOS: `brew install dashlane/tap/dashlane-cli`
+/// - Linux: the `dcli-linux-x64` release binary
+///
+/// Then run `dcli sync` once to register the device and log in. For CI, run
+/// `dcli devices register "<name>"` on a workstation and set the resulting
+/// `DASHLANE_SERVICE_DEVICE_KEYS` on the runner.
+///
+/// # Staleness
+///
+/// `dcli` reads a locally synced copy of the vault and re-syncs hourly, so an
+/// item added moments ago may not be visible until `dcli sync` runs. This
+/// provider never syncs on its own: a sync is a network round-trip, and a
+/// secret read should not silently become one.
+pub struct DashlaneProvider {
+    config: DashlaneConfig,
+    credentials: crate::provider::ProviderCredentials,
+}
+
+crate::register_provider! {
+    struct: DashlaneProvider,
+    config: DashlaneConfig,
+    name: "dashlane",
+    description: "Dashlane password manager, read-only (0.18+)",
+    schemes: ["dashlane"],
+    examples: ["dashlane://", "dashlane://note", "dashlane://password"],
+    credential_names: [SERVICE_DEVICE_KEYS],
+    preflight: check_auth,
+}
+
+/// One vault item, as `dcli`'s `-o json` listers emit it.
+///
+/// Every value in that JSON is a string — booleans, counters and epoch
+/// timestamps included — so fields stay untyped here and are read by name.
+/// Only `id` is reliably present; `title` is missing on a small share of real
+/// items.
+#[derive(Debug, Deserialize)]
+struct VaultItem {
+    id: String,
+    title: Option<String>,
+    #[serde(flatten)]
+    fields: HashMap<String, serde_json::Value>,
+}
+
+impl VaultItem {
+    /// The item's identifier without the braces `dcli` wraps it in.
+    fn bare_id(&self) -> &str {
+        self.id.trim_start_matches('{').trim_end_matches('}')
+    }
+
+    /// Whether this item is the one `name` addresses.
+    ///
+    /// A name matches either the identifier — in braced or bare form, since
+    /// `dcli` emits one and accepts the other — or the title, compared
+    /// case-insensitively as `dcli read` compares it.
+    fn matches(&self, name: &str) -> bool {
+        let bare = name.trim_start_matches('{').trim_end_matches('}');
+        if !bare.is_empty() && self.bare_id().eq_ignore_ascii_case(bare) {
+            return true;
+        }
+        self.title
+            .as_deref()
+            .is_some_and(|title| title.eq_ignore_ascii_case(name))
+    }
+
+    /// Reads one field, treating an absent or empty value as no value.
+    fn field(&self, field: &str) -> Option<String> {
+        let raw = self.fields.get(field)?;
+        let value = match raw {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Null => return None,
+            other => other.to_string(),
+        };
+        (!value.is_empty()).then_some(value)
+    }
+}
+
+/// Strips ANSI escape sequences from `dcli`'s coloured stderr.
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        // Consume through the final byte of the escape sequence.
+        for c in chars.by_ref() {
+            if c.is_ascii_alphabetic() {
+                break;
+            }
+        }
+    }
+    out
+}
+
+impl DashlaneProvider {
+    pub fn new(config: DashlaneConfig) -> Self {
+        Self {
+            config,
+            credentials: Default::default(),
+        }
+    }
+
+    /// Runs a `dcli` subcommand and returns its raw stdout.
+    ///
+    /// Returns bytes rather than a `String`: on the lister path stdout is a
+    /// plaintext dump of vault items, so it must never reach a log or an error
+    /// message.
+    fn run(&self, args: &[&str]) -> Result<Vec<u8>> {
+        let mut cmd = Command::new("dcli");
+        // Device credentials sourced from another provider reach `dcli` the
+        // only way it reads them, without touching this process's own
+        // environment.
+        if let Some(keys) = self.device_keys() {
+            cmd.env(DEVICE_KEYS_ENV, keys);
+        }
+        cmd.args(args);
+        // An unauthenticated `dcli` starts device registration and prompts for
+        // an email and a second factor. With stdin closed it fails immediately
+        // instead of hanging a `secretspec run`.
+        cmd.stdin(Stdio::null());
+
+        let output = match cmd.output() {
+            Ok(output) => output,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(SecretSpecError::ProviderOperationFailed(
+                    DCLI_NOT_INSTALLED_HELP.to_string(),
+                ));
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        if !output.status.success() {
+            let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+            let stderr = stderr.trim();
+            if stderr.contains("not logged in") || stderr.contains("No device configuration") {
+                return Err(SecretSpecError::ProviderOperationFailed(
+                    AUTH_REQUIRED_HELP.to_string(),
+                ));
+            }
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "dcli {} failed: {stderr}",
+                args.join(" ")
+            )));
+        }
+
+        Ok(output.stdout)
+    }
+
+    /// Lists every item of one content type.
+    ///
+    /// The listers filter by case-insensitive substring, which cannot express
+    /// "this exact item", so no filter is passed and matching happens here.
+    /// The read is local — `dcli` decrypts an already-synced SQLite vault — so
+    /// this is one decrypt, not one network call per secret.
+    fn list(&self, item_type: ItemType) -> Result<Vec<VaultItem>> {
+        let stdout = self.run(&[item_type.subcommand(), "-o", "json"])?;
+
+        // serde's parse errors quote the offending value, which here would be
+        // vault contents. Only the position is reported.
+        serde_json::from_slice(&stdout).map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "could not parse the output of 'dcli {} -o json' (line {}, column {})",
+                item_type.subcommand(),
+                e.line(),
+                e.column()
+            ))
+        })
+    }
+
+    /// Finds the one item named `name` among `items`.
+    ///
+    /// Refuses an ambiguous name rather than picking one: Dashlane titles are
+    /// not unique, and `dcli read` resolves a collision by silently returning
+    /// an arbitrary item.
+    fn find_unique<'a>(
+        items: &'a [VaultItem],
+        name: &str,
+        item_type: ItemType,
+    ) -> Result<Option<&'a VaultItem>> {
+        let mut matches = items.iter().filter(|item| item.matches(name));
+        let Some(first) = matches.next() else {
+            return Ok(None);
+        };
+        let extra = matches.count();
+        if extra > 0 {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "{} Dashlane {} items are titled '{name}'. Rename them, or point \
+                 the secret at one identifier with ref = {{ item = \"{}\" }}.",
+                extra + 1,
+                item_type.as_str(),
+                first.bare_id(),
+            )));
+        }
+        Ok(Some(first))
+    }
+
+    /// The content types to search, in order.
+    fn types_to_search(&self) -> &'static [ItemType] {
+        match self.config.item_type {
+            Some(ItemType::Secret) => &[ItemType::Secret],
+            Some(ItemType::Note) => &[ItemType::Note],
+            Some(ItemType::Password) => &[ItemType::Password],
+            None => ItemType::search_order(),
+        }
+    }
+
+    /// Non-interactive device credentials, from an injected credential or the
+    /// environment.
+    fn device_keys(&self) -> Option<String> {
+        crate::provider::credential_or_env(&self.credentials, SERVICE_DEVICE_KEYS, DEVICE_KEYS_ENV)
+    }
+
+    /// Verifies the local `dcli` is registered and unlocked, before any read.
+    ///
+    /// `dcli status` is a purely local check: it reads the device row and the
+    /// OS keychain without decrypting the vault or touching the network.
+    pub(crate) fn check_auth(&self) -> Result<()> {
+        // A registered service device authenticates from the environment and
+        // has no local device row until its first sync, so `dcli status` would
+        // report it as logged out. The credential is the check.
+        if self.device_keys().is_some() {
+            return Ok(());
+        }
+
+        let stdout = self.run(&["status"])?;
+        let status = String::from_utf8_lossy(&stdout);
+
+        let mut logged_in = false;
+        let mut locked = false;
+        for line in status.lines() {
+            match line.split_once(':').map(|(k, v)| (k.trim(), v.trim())) {
+                Some(("Logged in", value)) => logged_in = value == "yes",
+                Some(("Locked", value)) => locked = value == "yes",
+                _ => {}
+            }
+        }
+
+        if !logged_in {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                AUTH_REQUIRED_HELP.to_string(),
+            ));
+        }
+        if locked {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                LOCKED_HELP.to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Resolves one address against an already-listed content type.
+    fn lookup(
+        &self,
+        items: &[VaultItem],
+        item_type: ItemType,
+        name: &str,
+        field: Option<&str>,
+    ) -> Result<Option<SecretString>> {
+        let Some(item) = Self::find_unique(items, name, item_type)? else {
+            return Ok(None);
+        };
+        match item.field(field.unwrap_or_else(|| item_type.default_field())) {
+            Some(value) => Ok(Some(SecretString::new(value.into()))),
+            // A `ref` that names a field the item does not carry is a typo in
+            // `secretspec.toml`, not a missing secret, so it is surfaced rather
+            // than reported as unset — the same distinction `dcli read` draws.
+            // An empty default field just means the item holds nothing.
+            None => match field {
+                Some(field) => Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "the Dashlane {} item '{name}' has no '{field}' field",
+                    item_type.as_str(),
+                ))),
+                None => Ok(None),
+            },
+        }
+    }
+}
+
+impl Provider for DashlaneProvider {
+    /// Convention items are titled `secretspec/{project}/{profile}/{key}`, the
+    /// same layout the other item-based providers use.
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: format!("secretspec/{project}/{profile}/{key}"),
+            ..Default::default()
+        })
+    }
+
+    fn name(&self) -> &'static str {
+        Self::PROVIDER_NAME
+    }
+
+    /// Dashlane items carry named fields, so a `ref` can read a login's
+    /// `login` or a note's `content` instead of the type's default field.
+    fn supported_coords(&self) -> &'static [&'static str] {
+        &["field"]
+    }
+
+    fn with_credentials(&mut self, credentials: crate::provider::ProviderCredentials) {
+        self.credentials = credentials;
+    }
+
+    /// `dcli` holds one device registration per machine, so instances reading
+    /// the same one share a single preflight probe. Injected device keys
+    /// select a different identity, so they scope the probe.
+    fn auth_scope_key(&self) -> Option<String> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.device_keys().hash(&mut hasher);
+        Some(format!("{:x}", hasher.finish()))
+    }
+
+    fn uri(&self) -> String {
+        match self.config.item_type {
+            Some(item_type) => format!("dashlane://{}", item_type.as_str()),
+            None => "dashlane".to_string(),
+        }
+    }
+
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let coords = self.resolve_coords(addr)?;
+        for &item_type in self.types_to_search() {
+            let items = self.list(item_type)?;
+            if let Some(value) =
+                self.lookup(&items, item_type, &coords.item, coords.field.as_deref())?
+            {
+                return Ok(Some(value));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Reads every requested secret from one listing per content type.
+    ///
+    /// The default implementation would shell out once per secret, and each
+    /// call decrypts the whole local vault; a `secretspec run` over twenty
+    /// secrets pays that once instead of twenty times.
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+        let mut resolved = Vec::with_capacity(requests.len());
+        for (name, addr) in requests {
+            resolved.push((*name, self.resolve_coords(*addr)?));
+        }
+
+        let mut found = HashMap::new();
+        for &item_type in self.types_to_search() {
+            if resolved.len() == found.len() {
+                break;
+            }
+            let items = self.list(item_type)?;
+            for (name, coords) in &resolved {
+                if found.contains_key(*name) {
+                    continue;
+                }
+                if let Some(value) =
+                    self.lookup(&items, item_type, &coords.item, coords.field.as_deref())?
+                {
+                    found.insert((*name).to_string(), value);
+                }
+            }
+        }
+        Ok(found)
+    }
+
+    fn set(&self, addr: Address<'_>, _value: &SecretString) -> Result<()> {
+        self.check_writable(addr)
+    }
+
+    /// Always read-only: `dcli` has no subcommand that creates or edits a
+    /// vault item. Stating the reason here lets the CLI refuse the write
+    /// before prompting for a value, with the message `set` would return.
+    fn check_writable(&self, _addr: Address<'_>) -> Result<()> {
+        Err(SecretSpecError::ProviderOperationFailed(
+            "The Dashlane provider is read-only: dcli cannot create or edit vault \
+             items. Add the item in a Dashlane app, run 'dcli sync', then read it \
+             here."
+                .to_string(),
+        ))
+    }
+}
+
+impl Default for DashlaneProvider {
+    fn default() -> Self {
+        Self::new(DashlaneConfig::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use url::Url;
+
+    fn config(spec: &str) -> Result<DashlaneConfig> {
+        DashlaneConfig::try_from(&ProviderUrl::new(Url::parse(spec).unwrap()))
+    }
+
+    fn item(id: &str, title: &str, field: &str, value: &str) -> VaultItem {
+        VaultItem {
+            id: id.to_string(),
+            title: Some(title.to_string()),
+            fields: HashMap::from([(
+                field.to_string(),
+                serde_json::Value::String(value.to_string()),
+            )]),
+        }
+    }
+
+    #[test]
+    fn plain_uri_searches_every_type() {
+        let provider = DashlaneProvider::new(config("dashlane://").unwrap());
+        assert_eq!(provider.types_to_search(), ItemType::search_order());
+        assert_eq!(provider.uri(), "dashlane");
+    }
+
+    #[test]
+    fn authority_pins_the_item_type() {
+        let provider = DashlaneProvider::new(config("dashlane://note").unwrap());
+        assert_eq!(provider.types_to_search(), &[ItemType::Note]);
+        assert_eq!(provider.uri(), "dashlane://note");
+    }
+
+    /// `login` is what Dashlane's UI calls a password item.
+    #[test]
+    fn login_is_an_alias_for_password() {
+        let provider = DashlaneProvider::new(config("dashlane://login").unwrap());
+        assert_eq!(provider.types_to_search(), &[ItemType::Password]);
+        assert_eq!(provider.uri(), "dashlane://password");
+    }
+
+    #[test]
+    fn unknown_item_type_is_rejected() {
+        let err = config("dashlane://passkey").unwrap_err();
+        assert!(
+            err.to_string().contains("unknown Dashlane item type"),
+            "{err}"
+        );
+    }
+
+    /// A path looks like it names an item; it does not, so it is rejected with
+    /// a pointer at the `ref` table rather than silently ignored.
+    #[test]
+    fn path_is_rejected_with_ref_hint() {
+        let err = config("dashlane://note/my-item").unwrap_err();
+        assert!(
+            err.to_string().contains("ref = { item = \"my-item\" }"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn foreign_scheme_is_rejected() {
+        let err = config("keyring://").unwrap_err();
+        assert!(err.to_string().contains("Invalid scheme"), "{err}");
+    }
+
+    #[test]
+    fn convention_items_use_the_shared_layout() {
+        let provider = DashlaneProvider::default();
+        let addr = provider
+            .convention_address("myproject", "production", "API_KEY")
+            .unwrap();
+        assert_eq!(addr.item, "secretspec/myproject/production/API_KEY");
+    }
+
+    /// A native address names the item directly, bypassing the convention
+    /// layout.
+    #[test]
+    fn native_address_names_the_item() {
+        let provider = DashlaneProvider::default();
+        let addr = crate::config::NativeAddress {
+            item: "GitHub token".into(),
+            ..Default::default()
+        };
+        let coords = provider.resolve_coords(Address::Native(&addr)).unwrap();
+        assert_eq!(coords.item, "GitHub token");
+    }
+
+    /// Dashlane items have named fields, so a `field` coordinate resolves
+    /// instead of being rejected.
+    #[test]
+    fn native_address_accepts_field() {
+        let provider = DashlaneProvider::default();
+        let addr = crate::config::NativeAddress {
+            item: "GitHub".into(),
+            field: Some("login".into()),
+            ..Default::default()
+        };
+        let coords = provider.resolve_coords(Address::Native(&addr)).unwrap();
+        assert_eq!(coords.field.as_deref(), Some("login"));
+    }
+
+    /// Dashlane has no vaults, so a `vault` coordinate written for another
+    /// store fails loudly.
+    #[test]
+    fn native_address_rejects_vault() {
+        let provider = DashlaneProvider::default();
+        let addr = crate::config::NativeAddress {
+            item: "GitHub".into(),
+            vault: Some("Private".into()),
+            ..Default::default()
+        };
+        let err = provider.resolve_coords(Address::Native(&addr)).unwrap_err();
+        assert!(err.to_string().contains("`vault`"), "{err}");
+    }
+
+    #[test]
+    fn titles_match_case_insensitively() {
+        let items = vec![item("{ABC}", "My Token", "content", "v")];
+        assert!(
+            DashlaneProvider::find_unique(&items, "my token", ItemType::Secret)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// `dcli` emits identifiers braced but accepts them bare, so both forms
+    /// address the same item.
+    #[test]
+    fn identifiers_match_braced_or_bare() {
+        let items = vec![item(
+            "{D47734C4-0ABE-423A-8633-6B9F10A38905}",
+            "My Token",
+            "content",
+            "v",
+        )];
+        for name in [
+            "D47734C4-0ABE-423A-8633-6B9F10A38905",
+            "{D47734C4-0ABE-423A-8633-6B9F10A38905}",
+        ] {
+            assert!(
+                DashlaneProvider::find_unique(&items, name, ItemType::Secret)
+                    .unwrap()
+                    .is_some(),
+                "{name}"
+            );
+        }
+    }
+
+    /// A partial identifier must not match: `dcli`'s own filters are substring
+    /// matches, which is exactly the behaviour this provider replaces.
+    #[test]
+    fn partial_names_do_not_match() {
+        let items = vec![item("{ABC}", "production-token", "content", "v")];
+        assert!(
+            DashlaneProvider::find_unique(&items, "production", ItemType::Secret)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// Dashlane titles are not unique. `dcli read` would return one of them
+    /// arbitrarily; an ambiguous name is refused instead.
+    #[test]
+    fn duplicate_titles_are_refused() {
+        let items = vec![
+            item("{ONE}", "shared", "content", "a"),
+            item("{TWO}", "shared", "content", "b"),
+        ];
+        let err = DashlaneProvider::find_unique(&items, "shared", ItemType::Note).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("2 Dashlane note items"), "{msg}");
+        assert!(msg.contains("ONE"), "{msg}");
+    }
+
+    /// Every value in `dcli`'s JSON is a string, timestamps and booleans
+    /// included, so a field is read without assuming its type.
+    #[test]
+    fn fields_are_read_as_strings() {
+        let json = r#"[{"id":"{A}","title":"t","content":"v","numberUse":"7"}]"#;
+        let items: Vec<VaultItem> = serde_json::from_str(json).unwrap();
+        assert_eq!(items[0].field("content").as_deref(), Some("v"));
+        assert_eq!(items[0].field("numberUse").as_deref(), Some("7"));
+        assert_eq!(items[0].field("missing"), None);
+    }
+
+    /// A real vault has items with no title; they must not crash a lookup.
+    #[test]
+    fn untitled_items_are_tolerated() {
+        let json = r#"[{"id":"{A}","password":"v"}]"#;
+        let items: Vec<VaultItem> = serde_json::from_str(json).unwrap();
+        assert!(
+            DashlaneProvider::find_unique(&items, "anything", ItemType::Password)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            DashlaneProvider::find_unique(&items, "A", ItemType::Password)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// A `ref` naming a field the matched item lacks is a typo, not an unset
+    /// secret, so it is surfaced instead of reported as missing.
+    #[test]
+    fn a_missing_referenced_field_is_an_error() {
+        let provider = DashlaneProvider::default();
+        let items = vec![item("{A}", "GitHub", "password", "v")];
+        let err = provider
+            .lookup(&items, ItemType::Password, "GitHub", Some("otpSecret"))
+            .unwrap_err();
+        assert!(err.to_string().contains("no 'otpSecret' field"), "{err}");
+    }
+
+    /// An item with nothing in its default field is simply unset, so the
+    /// fallback chain gets a chance.
+    #[test]
+    fn an_empty_default_field_reads_as_unset() {
+        let provider = DashlaneProvider::default();
+        let items = vec![item("{A}", "GitHub", "content", "")];
+        assert!(
+            provider
+                .lookup(&items, ItemType::Note, "GitHub", None)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn each_type_reads_its_own_default_field() {
+        assert_eq!(ItemType::Secret.default_field(), "content");
+        assert_eq!(ItemType::Note.default_field(), "content");
+        assert_eq!(ItemType::Password.default_field(), "password");
+    }
+
+    /// `dcli` colours its errors; the escapes must not reach the user.
+    #[test]
+    fn ansi_escapes_are_stripped() {
+        assert_eq!(
+            strip_ansi("\u{1b}[31merror: No matching item found\u{1b}[0m"),
+            "error: No matching item found"
+        );
+    }
+
+    #[test]
+    fn writes_are_refused_with_the_reason() {
+        let provider = DashlaneProvider::default();
+        let addr = Address::convention("p", "default", "K");
+        let err = provider.check_writable(addr).unwrap_err();
+        assert!(err.to_string().contains("read-only"), "{err}");
+        assert!(provider.set(addr, &SecretString::new("v".into())).is_err());
+    }
+}

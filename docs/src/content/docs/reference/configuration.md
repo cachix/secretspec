@@ -622,6 +622,7 @@ chain, and each provider is asked for the same coordinates.
 | [pass](/providers/pass/#use-existing-secrets) | Entry path | Rejected | Reads the entry | ✅ |
 | [Gopass (0.15+)](/providers/gopass/#use-existing-secrets) | Entry path, including any mount-point prefix | Rejected | Reads the entry | ✅ |
 | [LastPass](/providers/lastpass/#use-existing-secrets) | Item name | Rejected | Reads the item | ✅ |
+| [Dashlane (0.18+)](/providers/dashlane/#use-existing-secrets) | Item title or identifier | Field name on the item | Reads the type's default field (`content`, or `password` for a login) | — (read-only) |
 | [Proton Pass](/providers/protonpass/#use-existing-secrets) | Item title | Rejected | Reads the note | ✅ |
 | [Vault](/providers/vault/#use-existing-secrets) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
 | [OpenBao](/providers/openbao/#use-existing-secrets) (0.17+) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |

@@ -327,7 +327,12 @@ API_KEY = { description = "API key for external service", required = false, defa
 fn test_validation_result_structure() {
     // Test ValidatedSecrets structure
     let valid_result = ValidatedSecrets {
-        resolved: Resolved::new(HashMap::new(), "keyring".to_string(), "default".to_string()),
+        resolved: Resolved::new(
+            HashMap::new(),
+            "keyring".to_string(),
+            "default".to_string(),
+            None,
+        ),
         missing_optional: vec!["optional_secret".to_string()],
         with_defaults: Vec::new(),
         resolution: Vec::new(),

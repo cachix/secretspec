@@ -3933,7 +3933,7 @@ impl Secrets {
         // resolution attributed to no provider.
         if plan.secrets.is_empty() {
             return Ok(Ok(ValidatedSecrets {
-                resolved: Resolved::new(HashMap::new(), String::new(), profile.to_string()),
+                resolved: Resolved::new(HashMap::new(), String::new(), profile.to_string(), None),
                 missing_optional: Vec::new(),
                 with_defaults: Vec::new(),
                 resolution: Vec::new(),
@@ -4443,7 +4443,7 @@ impl Secrets {
             Ok(Err(errors))
         } else {
             Ok(Ok(ValidatedSecrets {
-                resolved: Resolved::new(secrets, report_provider_uri, profile.to_string()),
+                resolved: Resolved::new(secrets, report_provider_uri, profile.to_string(), None),
                 missing_optional,
                 with_defaults,
                 resolution,

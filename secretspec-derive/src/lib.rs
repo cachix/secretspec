@@ -1029,7 +1029,7 @@ mod secret_spec_generation {
                     let validation_result = load_internal(provider_str, profile_str, None)?;
                     let provider_name = validation_result.resolved.provider.clone();
                     let profile = validation_result.resolved.profile.clone();
-                    let secrets = validation_result.resolved.secrets;
+                    let secrets = validation_result.resolved.secrets.clone();
 
                     let data = Self {
                         #(#load_assignments,)*
@@ -1038,7 +1038,8 @@ mod secret_spec_generation {
                     Ok(secretspec::Resolved::new(
                         data,
                         provider_name,
-                        profile
+                        profile,
+                        Some(validation_result)
                     ))
                 }
 
@@ -1260,7 +1261,7 @@ mod builder_generation {
                     let validation_result = load_internal(provider_str, profile_str, reason_str)?;
                     let provider_name = validation_result.resolved.provider.clone();
                     let profile = validation_result.resolved.profile.clone();
-                    let secrets = validation_result.resolved.secrets;
+                    let secrets = validation_result.resolved.secrets.clone();
 
                     let data = SecretSpec {
                         #(#load_assignments,)*
@@ -1269,7 +1270,8 @@ mod builder_generation {
                     Ok(secretspec::Resolved::new(
                         data,
                         provider_name,
-                        profile
+                        profile,
+                        Some(validation_result)
                     ))
                 }
 
@@ -1302,7 +1304,7 @@ mod builder_generation {
                     let validation_result = load_internal(provider_str, profile_str, reason_str)?;
                     let provider_name = validation_result.resolved.provider.clone();
                     let profile = validation_result.resolved.profile.clone();
-                    let secrets = validation_result.resolved.secrets;
+                    let secrets = validation_result.resolved.secrets.clone();
 
                     let data_result: LoadResult<SecretSpecProfile> = match selected_profile {
                         #(#load_profile_arms,)*
@@ -1312,7 +1314,8 @@ mod builder_generation {
                     Ok(secretspec::Resolved::new(
                         data,
                         provider_name,
-                        profile
+                        profile,
+                        Some(validation_result)
                     ))
                 }
             }

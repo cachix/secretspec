@@ -135,7 +135,8 @@ mod json_serialization {
             optional_secret: "optional".to_string(),
         };
 
-        let secrets_wrapper = Resolved::new(spec, "dotenv".to_string(), "production".to_string());
+        let secrets_wrapper =
+            Resolved::new(spec, "dotenv".to_string(), "production".to_string(), None);
 
         // Test serialization to JSON
         let json = serde_json::to_string(&secrets_wrapper).expect("Failed to serialize Resolved");

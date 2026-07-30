@@ -51,10 +51,16 @@ pub(crate) fn serialize_dotenv_pairs<'a>(
 /// write of an unparseable name (e.g. one with a dash) poisons the whole
 /// file: every later read or write of any secret in the store fails at that
 /// line. Rejecting the name up front keeps `set` the mirror of `get` (what
-/// one accepts, the other can read back). Convention names come from
-/// validated manifest declarations, so in practice this bites
-/// `ref = { item = ... }` coordinates, which name store entries freely.
-fn validate_env_key(key: &str) -> Result<()> {
+/// one accepts, the other can read back). `ref = { item = ... }` coordinates
+/// reach this most often, since they name store entries freely, but a
+/// convention name can too: manifest validation accepts any Unicode
+/// identifier, so a secret declared as `café` is legal there and unstorable
+/// here.
+///
+/// `addr` decides which of those the advice names, because telling someone to
+/// rename a `ref` they never wrote sends them looking for something that is
+/// not in their manifest.
+fn validate_env_key(key: &str, addr: Address<'_>) -> Result<()> {
     let mut chars = key.chars();
     let valid = match chars.next() {
         Some(c) if c.is_ascii_alphabetic() || c == '_' => {
@@ -65,9 +71,13 @@ fn validate_env_key(key: &str) -> Result<()> {
     if valid {
         Ok(())
     } else {
+        let rename = match addr {
+            Address::Convention { .. } => "Rename the secret in secretspec.toml",
+            Address::Native(_) => "Rename the `ref` item",
+        };
         Err(SecretSpecError::ProviderOperationFailed(format!(
             "the dotenv provider cannot store `{key}`: .env variable names must \
-             match [A-Za-z_][A-Za-z0-9_.]*. Rename the `ref` item to a valid name."
+             match [A-Za-z_][A-Za-z0-9_.]*. {rename} to a valid name."
         )))
     }
 }
@@ -274,7 +284,7 @@ impl Provider for DotEnvProvider {
         let lookup = super::flat_item(self, addr)?;
         // A name the format cannot represent can never be read back; reject it
         // like any other coordinate this store has no equivalent for.
-        validate_env_key(&lookup)?;
+        validate_env_key(&lookup, addr)?;
         if !self.config.path.exists() {
             return Ok(None);
         }
@@ -295,7 +305,7 @@ impl Provider for DotEnvProvider {
     /// Refuses an unrepresentable name before the CLI prompts for a value,
     /// with the same error `set` would return.
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
-        validate_env_key(&super::flat_item(self, addr)?)
+        validate_env_key(&super::flat_item(self, addr)?, addr)
     }
 
     /// Sets a secret value in the .env file.
@@ -324,7 +334,7 @@ impl Provider for DotEnvProvider {
         let target = super::flat_item(self, addr)?;
         // Refuse before touching the file: writing this name would produce a
         // store no later read can parse.
-        validate_env_key(&target)?;
+        validate_env_key(&target, addr)?;
         // Load existing vars using dotenvy
         let mut vars = HashMap::new();
         if self.config.path.exists() {
@@ -344,7 +354,7 @@ impl Provider for DotEnvProvider {
 
     fn delete(&self, addr: Address<'_>) -> Result<bool> {
         let target = super::flat_item(self, addr)?;
-        validate_env_key(&target)?;
+        validate_env_key(&target, addr)?;
         if !self.config.path.exists() {
             return Ok(false);
         }
@@ -751,5 +761,53 @@ mod tests {
         };
         let err = provider.get(Address::Native(&addr)).unwrap_err();
         assert!(err.to_string().contains("`field`"), "{err}");
+    }
+
+    /// A convention secret has no `ref`, so the advice names the manifest
+    /// entry the user actually wrote. Manifest validation accepts any Unicode
+    /// identifier, which is how a name this store cannot spell gets here.
+    #[test]
+    fn a_rejected_convention_name_points_at_the_manifest() {
+        let provider = DotEnvProvider::new(DotEnvConfig::default());
+        let err = provider
+            .get(Address::convention("proj", "default", "café"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Rename the secret in secretspec.toml"),
+            "{err}"
+        );
+        assert!(!err.contains("`ref`"), "{err}");
+    }
+
+    /// A native address does come from a `ref` table, so that advice is right.
+    #[test]
+    fn a_rejected_ref_item_points_at_the_ref() {
+        let provider = DotEnvProvider::new(DotEnvConfig::default());
+        let addr = crate::config::NativeAddress {
+            item: "not-a-legal-env-name".into(),
+            ..Default::default()
+        };
+        let err = provider
+            .get(Address::Native(&addr))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Rename the `ref` item"), "{err}");
+    }
+
+    /// The rejection names the key, never the value being written -- the same
+    /// guarantee `bws`'s `cli_errors_redact_the_access_token` pins for its CLI.
+    #[test]
+    fn a_rejected_write_never_names_the_value() {
+        let provider = DotEnvProvider::new(DotEnvConfig::default());
+        let err = provider
+            .set(
+                Address::convention("proj", "default", "café"),
+                &SecretString::from("s3cr3t-plaintext"),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("café"), "{err}");
+        assert!(!err.contains("s3cr3t-plaintext"), "{err}");
     }
 }

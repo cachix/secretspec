@@ -861,3 +861,124 @@ mod tests {
         assert!(err.to_string().contains("ref"), "{err}");
     }
 }
+
+/// Property tests for the invariants `format_secret_name` is built on.
+///
+/// The example-based tests above pin the counterexamples already found --
+/// `b__c`/`c__d`, `b-`/`_C`, `API_KEY`/`api_key`. These quantify over the whole
+/// component domain, so the *next* collision fails a test rather than a user's
+/// `get`.
+#[cfg(test)]
+mod name_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// A component Azure will accept: non-empty, alphanumeric/`_`/`-` only --
+    /// exactly the domain `validate_name_component` admits. Kept short so a
+    /// failure shrinks to a minimal, readable counterexample.
+    ///
+    /// The second arm is deliberate. Every collision this scheme has ever had
+    /// lived in `_`/`-` against the `--` delimiter, and a uniform alphanumeric
+    /// generator reaches that region far too rarely to find one: sampled against
+    /// the old `_`->`-` mapping, an unbiased generator reports no collision at
+    /// all. Weighting short delimiter-only components finds one immediately.
+    fn component() -> impl Strategy<Value = String> {
+        prop_oneof!["[A-Za-z0-9_-]{1,8}", "[_-]{1,3}"]
+    }
+
+    fn triple() -> impl Strategy<Value = (String, String, String)> {
+        (component(), component(), component())
+    }
+
+    /// Recovers the triple a name was built from.
+    ///
+    /// Injectivity is stated over pairs, but sampling pairs is a poor way to
+    /// look for a collision: two independently generated triples almost never
+    /// collide by chance, so such a test passes happily against a scheme that is
+    /// provably not injective. A left inverse is the stronger and cheaper claim
+    /// -- if every name decodes back to exactly one triple, no two triples can
+    /// share a name -- and every generated case exercises it.
+    fn decode_secret_name(name: &str) -> Option<(String, String, String)> {
+        let body = name.strip_prefix("secretspec--")?;
+        let parts: Vec<&str> = body.split("--").collect();
+        let [project, profile, key] = parts.as_slice() else {
+            return None;
+        };
+        let decode = |part: &str| {
+            let bytes = BASE32_NOPAD
+                .decode(part.to_ascii_uppercase().as_bytes())
+                .ok()?;
+            String::from_utf8(bytes).ok()
+        };
+        Some((decode(project)?, decode(profile)?, decode(key)?))
+    }
+
+    proptest! {
+        /// A name decodes back to the exact triple that built it.
+        ///
+        /// This is injectivity with teeth: it fails on the first generated case
+        /// under a lossy scheme. The `_`->`-` mapping this replaced fails here
+        /// immediately -- `-` and `_` both encode to `-`, so the original is
+        /// unrecoverable and two triples can reach one name.
+        #[test]
+        fn a_name_decodes_to_the_triple_that_built_it((project, profile, key) in triple()) {
+            let name = AkvProvider::format_secret_name(&project, &profile, &key)
+                .expect("a valid component must format");
+            prop_assert_eq!(
+                decode_secret_name(&name),
+                Some((project, profile, key)),
+                "name {:?} did not decode back to its triple",
+                name,
+            );
+        }
+
+        /// No two triples in a batch share a name.
+        ///
+        /// Weaker than the left inverse above and kept deliberately: it states
+        /// the guarantee in the form the module claims it ("injective"), and it
+        /// would catch a collision introduced somewhere other than the encoding
+        /// -- a changed delimiter, say, which decoding alone would not notice.
+        #[test]
+        fn distinct_triples_never_collide(triples in prop::collection::vec(triple(), 2..24)) {
+            let mut seen: std::collections::HashMap<String, (String, String, String)> =
+                std::collections::HashMap::new();
+            for triple in triples {
+                let name = AkvProvider::format_secret_name(&triple.0, &triple.1, &triple.2)
+                    .expect("a valid component must format");
+                if let Some(previous) = seen.insert(name.clone(), triple.clone()) {
+                    prop_assert_eq!(
+                        &previous,
+                        &triple,
+                        "distinct triples {:?} and {:?} both produced {:?}",
+                        previous,
+                        triple,
+                        name,
+                    );
+                }
+            }
+        }
+
+        /// Every formatted name is one Azure will accept: Key Vault permits
+        /// alphanumerics and hyphens only.
+        #[test]
+        fn formatted_names_are_azure_legal((project, profile, key) in triple()) {
+            let name = AkvProvider::format_secret_name(&project, &profile, &key)
+                .expect("a valid component must format");
+            prop_assert!(
+                name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+                "name {name:?} contains a character Azure rejects",
+            );
+        }
+
+        /// Names are already lowercase, so Azure's case-insensitive comparison
+        /// changes nothing. Case distinctions survive in the encoded bytes
+        /// rather than in the name's case, which is what lets `API_KEY` and
+        /// `api_key` coexist.
+        #[test]
+        fn formatted_names_are_lowercase((project, profile, key) in triple()) {
+            let name = AkvProvider::format_secret_name(&project, &profile, &key)
+                .expect("a valid component must format");
+            prop_assert_eq!(name.clone(), name.to_ascii_lowercase());
+        }
+    }
+}

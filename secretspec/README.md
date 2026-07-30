@@ -21,6 +21,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [KeePass KDBX](https://secretspec.dev/providers/kdbx) (0.17+)
   - [.env](https://secretspec.dev/providers/dotenv)
   - [OnePassword](https://secretspec.dev/providers/onepassword)
+  - [Keeper Secrets Manager](https://secretspec.dev/providers/keeper) (0.18+)
   - [LastPass](https://secretspec.dev/providers/lastpass)
   - [Dashlane](https://secretspec.dev/providers/dashlane) (0.18+)
   - [Pass](https://secretspec.dev/providers/pass)
@@ -63,6 +64,7 @@ $ secretspec config global init  # 0.17+
 > keyring: Uses system keychain (Recommended)
   kdbx: KeePass KDBX databases (0.17+)
   onepassword: OnePassword password manager
+  keeper: Keeper Secrets Manager (0.18+) via official Rust SDK
   dotenv: Traditional .env files
   env: Read-only environment variables
   systemd-credential: Read-only systemd service credentials (0.17+)
@@ -164,6 +166,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Gopass](https://secretspec.dev/providers/gopass)** (0.15+) - GPG-based password manager with git-synced password store
 - **[Proton Pass](https://secretspec.dev/providers/protonpass)** - End-to-end encrypted via Proton's official pass-cli
 - **[OnePassword](https://secretspec.dev/providers/onepassword)** - Team secret management
+- **[Keeper Secrets Manager](https://secretspec.dev/providers/keeper)** (0.18+) - Machine secrets through Keeper's official Rust SDK
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager
 - **[Dashlane](https://secretspec.dev/providers/dashlane)** (0.18+) - Read-only access to a Dashlane vault via the `dcli` CLI
 - **[Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)** - GCP secret management

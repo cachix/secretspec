@@ -19,6 +19,7 @@ required-features = ["cli"]
 clap.workspace = true
 keyring = { workspace = true, optional = true }
 keepass = { workspace = true, optional = true }
+keeper-secrets-manager-core = { workspace = true, optional = true }
 serde.workspace = true
 toml.workspace = true
 toml_edit = { workspace = true, optional = true }
@@ -52,10 +53,11 @@ detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
 
 [features]
-default = ["cli", "keyring", "kdbx", "gcsm", "awssm", "vault", "openbao", "bws", "akv", "infisical", "age", "scaleway", "sops"]
+default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "vault", "openbao", "bws", "akv", "infisical", "age", "scaleway", "sops"]
 cli = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
+keeper = ["dep:keeper-secrets-manager-core"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]
 awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "aws-config/credentials-login"]
 vault = ["dep:reqwest"]

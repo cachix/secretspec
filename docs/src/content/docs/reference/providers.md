@@ -169,6 +169,30 @@ write an existing item's field in place, name it with the `ref` field
 (`SECRET = { description = "…", ref = { item = "…", field = "…" } }`); see
 [Secret References](/reference/configuration/#secret-references).
 
+## Keeper Secrets Manager Provider (0.18+)
+
+:::caution[Version compatibility]
+The `keeper` provider is added in SecretSpec 0.18.
+:::
+
+**URI**: `keeper://FOLDER_UID[?config_file=PATH]` - Stores records in
+Keeper Secrets Manager through Keeper's official Rust SDK
+
+```bash
+keeper://SHARED_FOLDER_UID
+keeper://SHARED_FOLDER_UID?config_file=.keeper/client-config.json
+```
+
+**Features**: Read/write/delete, end-to-end encryption, profile-aware record
+titles, standard and custom field references, batched retrieval
+**Prerequisites**: A Keeper Secrets Manager application with access to the
+selected folder; build with `--features keeper` (0.18+)
+**Authentication**: `config` provider credential or `KSM_CONFIG`; alternatively
+a bound `config_file`. `token`/`KSM_TOKEN` can initialize a file configuration.
+**Storage**: Login record titled `secretspec/{project}/{profile}/{key}`, field
+`password`. A `ref` selects an existing record by UID or exact title and an
+optional standard/custom `field`.
+
 ## Pass Provider
 
 **URI**: `pass://` - Uses Unix password manager with GPG encryption
@@ -424,6 +448,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | LastPass | ✅ End-to-end | Cloud (LastPass) | ✅ Yes |
 | Dashlane (0.18+) | ✅ End-to-end | Cloud (Dashlane), synced locally | Yes — `dcli` auto-syncs hourly |
 | OnePassword | ✅ End-to-end | Cloud (OnePassword) | ✅ Yes |
+| Keeper (0.18+) | ✅ End-to-end | Cloud (Keeper) | ✅ Yes |
 | GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |
 | Scaleway (0.17+) | ✅ Scaleway-managed | Cloud (Scaleway) | ✅ Yes |

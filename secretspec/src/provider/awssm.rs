@@ -297,7 +297,7 @@ impl AwssmProvider {
 
             let response = request.send().await.map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
-                    "BatchGetSecretValue failed: {}",
+                    "BatchGetSecretValue failed: {:?}",
                     e.into_service_error()
                 ))
             })?;

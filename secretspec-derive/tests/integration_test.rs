@@ -119,6 +119,76 @@ mod empty_generation {
     }
 }
 
+mod as_path_lifetime {
+    use super::*;
+    use std::fs;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    declare_secrets!("tests/fixtures/as_path.toml");
+
+    const CHILD_PROCESS: &str = "SECRETSPEC_DERIVE_AS_PATH_LIFETIME_CHILD";
+
+    #[test]
+    fn typed_as_path_lifetime_child() {
+        if std::env::var_os(CHILD_PROCESS).is_none() {
+            return;
+        }
+
+        let resolved =
+            SecretSpec::load(Some("dotenv://.env"), None).expect("load the typed as_path secret");
+        let path = resolved.secrets.cert_data.clone();
+
+        assert!(
+            path.exists(),
+            "the generated loader must keep an as_path file alive while Resolved is alive"
+        );
+
+        drop(resolved);
+
+        assert!(
+            !path.exists(),
+            "dropping Resolved must remove its as_path temporary file"
+        );
+    }
+
+    #[test]
+    fn typed_as_path_file_lives_as_long_as_resolved() {
+        if std::env::var_os(CHILD_PROCESS).is_some() {
+            return;
+        }
+
+        let project = TempDir::new().expect("create isolated project");
+        fs::write(
+            project.path().join("secretspec.toml"),
+            include_str!("fixtures/as_path.toml"),
+        )
+        .expect("write project manifest");
+        fs::write(
+            project.path().join(".env"),
+            "CERT_DATA=certificate-content\n",
+        )
+        .expect("write dotenv provider");
+
+        let status = Command::new(std::env::current_exe().expect("locate integration test binary"))
+            .args([
+                "as_path_lifetime::typed_as_path_lifetime_child",
+                "--exact",
+                "--nocapture",
+            ])
+            .current_dir(project.path())
+            .env(CHILD_PROCESS, "1")
+            .env("HOME", project.path())
+            .env("XDG_CONFIG_HOME", project.path())
+            .env_remove("SECRETSPEC_PROFILE")
+            .env_remove("SECRETSPEC_PROVIDER")
+            .status()
+            .expect("run isolated child test");
+
+        assert!(status.success(), "child lifetime assertion failed");
+    }
+}
+
 mod json_serialization {
     use super::*;
 

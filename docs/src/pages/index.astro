@@ -770,7 +770,7 @@ $ secretspec export --format json
       <span class="landing-showcase-eyebrow">Language SDKs</span>
       <h2 class="landing-section-title">Resolve secrets directly from your language.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        All {sdkCount} SDKs—Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, and C#—use the same resolver as the CLI, so provider and profile behavior stays consistent. <a href="/sdk/overview/" class="landing-link">Explore the SDKs →</a>
+        All {sdkCount} SDKs—Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, C#, and Swift (0.18+)—use the same resolver as the CLI, so provider and profile behavior stays consistent. <a href="/sdk/overview/" class="landing-link">Explore the SDKs →</a>
       </p>
     </div>
 
@@ -885,6 +885,21 @@ print (S.get <span class="tok-pun">=&lt;&lt;</span> Map.lookup <span class="tok-
     .WithProvider(<span class="tok-str">"keyring://"</span>)
     .WithReason(<span class="tok-str">"boot"</span>).Load();
 Console.WriteLine(s.Secrets[<span class="tok-str">"DATABASE_URL"</span>].Get());</code></pre>
+      </div>
+    </div>
+
+    <div class="landing-fallback" style="margin-top: 1.5rem;">
+      <!-- Swift -->
+      <div class="landing-terminal">
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">Swift · macOS (0.18+)</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code><span class="tok-key">let</span> s <span class="tok-pun">=</span> <span class="tok-key">try</span> SecretSpec<span class="tok-pun">.</span>builder<span class="tok-pun">()</span>
+    <span class="tok-pun">.</span>withProvider<span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
+    <span class="tok-pun">.</span>withReason<span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span>load<span class="tok-pun">()</span>
+<span class="tok-key">defer</span> <span class="tok-pun">{</span> <span class="tok-key">try</span><span class="tok-pun">?</span> s<span class="tok-pun">.</span>close<span class="tok-pun">()</span> <span class="tok-pun">}</span>
+print<span class="tok-pun">(</span>s<span class="tok-pun">.</span>secrets<span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">]?.</span>get<span class="tok-pun">()</span> <span class="tok-pun">??</span> <span class="tok-str">""</span><span class="tok-pun">)</span></code></pre>
       </div>
     </div>
 

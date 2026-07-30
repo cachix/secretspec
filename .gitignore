@@ -12,4 +12,8 @@ target
 /secretspec-dotnet/**/bin/
 /secretspec-dotnet/**/obj/
 
+# Swift SDK local native artifact and build output
+/.build/
+/secretspec-swift/Artifacts/
+
 .idea/

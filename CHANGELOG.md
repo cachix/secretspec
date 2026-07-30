@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of always pointing at a `ref` item the config may not contain.
 
 ### Added
+- Swift SDK (available in 0.18) for resolving SecretSpec manifests from macOS
+  12+ on Intel and Apple silicon. The SwiftPM package provides fluent and
+  one-shot resolution, typed failures, scopes, value-free reports, provenance,
+  environment export, codegen input, and deterministic `as_path` cleanup. Its
+  checksummed XCFramework includes the shared Rust resolver, so applications do
+  not need a Rust toolchain or separately installed native library.
 - Dashlane provider (`dashlane://`) for reading secrets from a Dashlane vault
   through the `dcli` CLI. Convention secrets read the item titled
   `secretspec/{project}/{profile}/{key}`, and a `ref` names an existing item by

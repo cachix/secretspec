@@ -2,7 +2,7 @@ name: "SDKs"
 
 # Runs every language SDK's full test suite (unit + cross-language conformance +
 # the schema/quicktype codegen pipeline) against a freshly built cdylib, so the
-# Python/Go/Ruby/Node/Haskell/C#/PHP bindings cannot silently rot.
+# Python/Go/Ruby/Node/Haskell/C#/PHP/Swift bindings cannot silently rot.
 
 on:
   workflow_call:
@@ -34,3 +34,22 @@ jobs:
         run: nix profile install nixpkgs#devenv
       - name: Build cdylib and run all SDK suites
         run: devenv shell -- bash scripts/ci-sdks.sh
+
+  swift:
+    name: Swift SDK
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Build the native resolver
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+        run: cargo build -p secretspec-ffi
+      - name: Build the local XCFramework
+        run: >-
+          bash scripts/build-swift-xcframework.sh
+          secretspec-swift/Artifacts/CSecretSpec.xcframework
+          target/debug/libsecretspec_ffi.dylib
+      - name: Run the Swift SDK and conformance tests
+        run: swift test --parallel

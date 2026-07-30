@@ -137,8 +137,8 @@ secretspec run -- ./myapp
 
 Applications can also resolve them directly through the
 [SecretSpec SDKs](/sdk/overview/) for Rust, Python, Go, Ruby,
-Node.js/TypeScript, Haskell, PHP, and C#, all sharing the same resolver
-so behavior stays consistent across languages.
+Node.js/TypeScript, Haskell, PHP, C#, and Swift (0.18+), all sharing the same
+resolver so behavior stays consistent across languages.
 
 Providers own where secret values come from. SDKs give applications an
 idiomatic way to consume them. Configuration remains a shareable declaration of

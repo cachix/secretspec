@@ -1,13 +1,10 @@
 # Releasing the language SDKs
 
-Each SDK is a thin client over the Rust core (the `secretspec-ffi` cdylib, a
-pyo3 extension for Python, or the napi-rs addon for Node). A release builds
-the native artifact per platform and publishes it through that ecosystem's
-registry, so users install with no native build. The per-platform build
-workflows are drafted under `.github/workflows/`; the Python build (wheel
-build + install) has been verified running end to end in CI, but the actual
-publish steps below have not (they need the one-time external Trusted
-Publisher / secret setup described per language first).
+Each SDK is a thin client over the Rust core (the `secretspec-ffi` C ABI, a
+pyo3 extension for Python, or the napi-rs addon for Node). A release builds the
+native artifact per platform and publishes it through that ecosystem's
+registry or as a checksummed SwiftPM binary, so users install with no native
+build.
 
 Version tags are `vX.Y.Z`; the publish jobs trigger on them. After the Go
 release build succeeds, CI also creates the submodule tag
@@ -125,6 +122,32 @@ one `.nupkg`, run clean-package and NativeAOT consumers on every RID, and
 publish with a short-lived OIDC-issued API key (`--skip-duplicate` makes
 re-runs of an already-published version harmless).
 
+### SwiftPM (0.18+) — no registry setup
+
+The root `Package.swift` makes this repository a Swift package and downloads
+`CSecretSpec.xcframework.zip` from the matching GitHub Release. SwiftPM requires
+that remote binary's SHA-256 checksum to already be present in `Package.swift`,
+so Swift has one required release-preparation step after the workspace version
+is bumped and before the version tag is created:
+
+1. Run `swift-package.yml` on the release branch with `publish: false`.
+2. Download its `swift-xcframework` artifact and run:
+
+   ```bash
+   swift package compute-checksum CSecretSpec.xcframework.zip
+   ```
+
+3. Replace `secretSpecBinaryChecksum` in `/Package.swift` with that value,
+   commit it, and rerun the workflow.
+4. Create the version tag only after the rerun passes. The tag workflow rebuilds
+   the deterministic archive, refuses to publish if its checksum differs, and
+   attaches the ZIP to the existing GitHub Release.
+
+`scripts/sync-sdk-versions.sh` updates the version in the XCFramework URL but
+intentionally leaves the checksum alone, making a missing checksum refresh
+visible during release review. There is no Swift registry credential or
+separate repository.
+
 ## Python (PyPI) — `python-wheels.yml`
 
 - **Build:** the Rust resolver is statically linked into a pyo3 extension
@@ -194,6 +217,24 @@ self-contained, vendored build — not a module-proxy install).
   links a Rust archive Hackage doesn't build); the upload still succeeds, it
   just won't show as "buildable" in Hackage's UI. The README documents the
   link requirement for anyone installing from source.
+
+## Swift (0.18+, SwiftPM + XCFramework) — `swift-package.yml`
+
+- **Build:** native Intel and Apple-silicon macOS runners build the
+  `secretspec-ffi` cdylib with a macOS 12 deployment target.
+  `scripts/build-swift-xcframework.sh` gives each dylib an `@rpath` install
+  name, adds the public header and Clang module map, and combines both slices
+  with `xcodebuild -create-xcframework`.
+- **Test:** the Swift package selects the local XCFramework when staged under
+  `secretspec-swift/Artifacts/`; its unit and cross-language conformance tests
+  run against the final two-architecture artifact.
+- **Publish:** the workflow normalizes archive metadata, verifies the
+  precommitted SwiftPM checksum, and attaches
+  `CSecretSpec.xcframework.zip` to the version's GitHub Release. Follow the
+  pre-tag checksum procedure above.
+- **Platforms:** macOS 12+ on Intel and Apple silicon. Mobile Apple platforms
+  are intentionally unsupported because SecretSpec's development-workflow
+  providers rely on desktop files, processes, CLIs, and credential stores.
 
 ## Node.js (npm) — `node-addon.yml`
 

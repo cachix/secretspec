@@ -4,10 +4,10 @@ description: How the language SDKs are built, packaged, and released, and which 
 ---
 
 SecretSpec ships SDKs for Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell,
-PHP, and C#. This page is for contributors: how the SDKs are put together, how
-each one is packaged and released, which platforms each artifact covers, and
-what to update when adding a platform or a new SDK. For the user-facing
-architecture and API, see the [SDK overview](/sdk/overview).
+PHP, C#, and Swift (0.18+). This page is for contributors: how the SDKs are put
+together, how each one is packaged and released, which platforms each artifact
+covers, and what to update when adding a platform or a new SDK. For the
+user-facing architecture and API, see the [SDK overview](/sdk/overview).
 
 ## One resolver, many packages
 
@@ -18,8 +18,9 @@ two ways:
   loading and a `staticlib` for embedding): Ruby (mkmf extension statically
   links the archive), Go (purego `dlopen` of the cdylib, or cgo against the
   archive with `-tags static`), Haskell (GHC FFI against the archive), C#
-  (P/Invoke against per-runtime cdylibs in the NuGet package), and PHP's
-  `ext-ffi` fallback (runtime `dlopen` of the cdylib).
+  (P/Invoke against per-runtime cdylibs in the NuGet package), Swift (0.18+;
+  Clang C import from an XCFramework), and PHP's `ext-ffi` fallback (runtime
+  `dlopen` of the cdylib).
 - **As an embedded extension**: Python ([pyo3](https://pyo3.rs/)), Node.js
   ([napi-rs](https://napi.rs/)), and PHP's preferred backend
   ([ext-php-rs](https://github.com/davidcole1340/ext-php-rs)) compile the
@@ -47,6 +48,7 @@ platform and publishes on a version tag:
 | Go | Go module (source) + `secretspec-ffi` release assets | `go-embed.yml`, `go-static.yml`, `ffi-build.yml` |
 | Ruby | `secretspec` platform gems on RubyGems | `ruby-gems.yml` |
 | C# | `Cachix.SecretSpec` on NuGet | `dotnet-package.yml` |
+| Swift (0.18+) | SwiftPM source package + XCFramework release asset | `swift-package.yml` |
 | PHP | Composer package (source) + prebuilt extension binaries and `secretspec-ffi` release assets | `php-ext.yml`, `ffi-build.yml` |
 | Haskell | `secretspec` on Hackage (source) | `haskell-build.yml` |
 
@@ -63,6 +65,7 @@ the Ruby gem, and the PHP extension binaries is added in SecretSpec 0.17.
 | Go | ✓ | ✓ | — | ✓ | ✓ | — |
 | Ruby | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
 | C# | ✓ (glibc and musl) | ✓ (glibc and musl) | ✓ | ✓ | ✓ | ✓ |
+| Swift (0.18+) | — | — | ✓ | ✓ | — | — |
 | PHP | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
 | Haskell (source) | ✓ (CI-covered) | — | — | — | ✓ (CI-covered, 0.17+) | — |
 
@@ -75,7 +78,33 @@ Notes:
   require system libdbus.
 - Hackage distributes source only; the Haskell column records which platforms
   CI builds and tests, since users link `secretspec-ffi` themselves.
+- The Swift package targets macOS 12+ only. Its XCFramework contains native
+  Intel and Apple-silicon slices; mobile Apple platforms are intentionally out
+  of scope for a development-workflow resolver that launches provider CLIs and
+  reads desktop files and credential stores.
 - The fully-static Go binary (`-tags static`, musl) is Linux x64 only.
+
+## Why Swift uses the C ABI
+
+Swift interoperates with C directly through Clang modules, and SwiftPM
+distributes native Apple binaries as XCFramework binary targets. That fits the
+existing `secretspec-ffi` boundary exactly: three ownership-audited C functions
+carry one already-versioned JSON contract.
+
+[UniFFI](https://mozilla.github.io/uniffi-rs/latest/) is a good default for a
+new object-rich Rust API that needs generated Swift and Kotlin bindings. It
+would be the wrong layer here: SecretSpec already has a deliberately narrow ABI
+shared by several SDKs, and introducing UniFFI would create a second exported
+ABI, generated Rust scaffolding, and another schema to version. The hand-written
+Swift layer is limited to `Codable` request/response models and idiomatic errors;
+resolution remains entirely in Rust.
+
+`scripts/build-swift-xcframework.sh` changes Cargo's target-local dylib install
+name to `@rpath`, adds the C header and module map, and invokes
+`xcodebuild -create-xcframework`. `swift-package.yml` builds each architecture
+natively, tests the final two-slice artifact, computes SwiftPM's SHA-256
+checksum, and attaches the ZIP to the GitHub release. See `RELEASE.md` for the
+required pre-tag checksum step.
 
 ## Windows toolchains
 

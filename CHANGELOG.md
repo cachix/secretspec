@@ -5,13 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.17.0] - 2026-07-26
+## [Unreleased]
 
 ### Fixed
 - Prebuilt Linux Go SDK and `secretspec-ffi` libraries now include libdbus
   instead of requiring the build host's `libdbus-1.so.3`, so they load on
   NixOS and other systems without a matching system library.
   ([#214](https://github.com/cachix/secretspec/issues/214))
+- The dotenv provider's "cannot store" error now tells you to rename the secret
+  in `secretspec.toml` when the name came from a manifest declaration, instead
+  of always pointing at a `ref` item the config may not contain.
+
+## [0.17.0] - 2026-07-26
+
+### Fixed
 - Cache reads, refreshes, and clears now share one ownership and freshness
   policy, consistently handling expiration boundaries, clock rollback,
   corrupted SecretSpec entries, and values owned by another project or profile.

@@ -61,7 +61,7 @@ kdbx = ["dep:keepass"]
 # prebuilt release artifacts that must run on distros we don't build on.
 vendored-dbus = ["keyring?/vendored"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]
-awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
+awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "aws-config/credentials-login"]
 vault = ["dep:reqwest"]
 # Scaleway Secret Manager talks to the v1beta1 REST API directly; base64
 # payloads use data-encoding, which is already a non-optional dependency.

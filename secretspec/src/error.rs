@@ -8,6 +8,28 @@ use thiserror::Error;
 use crate::config::ParseError;
 use crate::validation::ValidationErrors;
 
+/// Renders an error and each distinct source in its cause chain.
+///
+/// Most error types intentionally keep [`std::fmt::Display`] short. That is
+/// useful while the error remains structured, but providers and the JSON SDK
+/// boundary ultimately have to turn errors into strings. Walking `source()`
+/// here preserves transport, TLS, DNS, parsing, and other underlying causes
+/// without dumping verbose `Debug` representations or repeating a cause an
+/// outer error already included in its own display.
+pub(crate) fn display_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let cause_message = cause.to_string();
+        if !cause_message.is_empty() && !message.ends_with(&cause_message) {
+            message.push_str(": ");
+            message.push_str(&cause_message);
+        }
+        source = cause.source();
+    }
+    message
+}
+
 /// The main error type for secretspec operations
 ///
 /// This enum represents all possible errors that can occur when working with
@@ -142,6 +164,27 @@ impl From<ParseError> for SecretSpecError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_error_chain_includes_distinct_causes_without_repeating_them() {
+        #[derive(Debug, Error)]
+        #[error("request failed")]
+        struct RequestError {
+            #[source]
+            source: io::Error,
+        }
+
+        let error = RequestError {
+            source: io::Error::other("DNS lookup failed"),
+        };
+        assert_eq!(
+            display_error_chain(&error),
+            "request failed: DNS lookup failed"
+        );
+
+        let error: SecretSpecError = io::Error::other("disk failed").into();
+        assert_eq!(display_error_chain(&error), "IO error: disk failed");
+    }
 
     /// `kind()` returns a stable token per variant and never the (possibly
     /// secret-bearing) error message.

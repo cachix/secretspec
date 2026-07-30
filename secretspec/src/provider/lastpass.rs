@@ -169,8 +169,12 @@ impl LastPassProvider {
             ));
         }
 
-        String::from_utf8(output.stdout)
-            .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))
+        String::from_utf8(output.stdout).map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "LastPass CLI returned non-UTF-8 output: {}",
+                crate::error::display_error_chain(&e)
+            ))
+        })
     }
 
     /// Formats the item name for storage in LastPass.

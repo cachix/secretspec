@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Provider and SDK errors now retain underlying causes such as authentication,
+  timeout, DNS, TLS, connection, and response-parsing failures. AWS Secrets
+  Manager errors also report AWS error codes and messages instead of only
+  `unhandled error`.
 - The dotenv provider's "cannot store" error now tells you to rename the secret
   in `secretspec.toml` when the name came from a manifest declaration, instead
   of always pointing at a `ref` item the config may not contain.

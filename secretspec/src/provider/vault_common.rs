@@ -659,14 +659,15 @@ impl KvProvider {
             .await
             .map_err(|error| {
                 SecretSpecError::ProviderOperationFailed(format!(
-                    "{} AppRole login failed: {error}",
-                    self.product.display_name()
+                    "{} AppRole login failed: {}",
+                    self.product.display_name(),
+                    crate::error::display_error_chain(&error)
                 ))
             })?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = self.response_body(response).await?;
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "{} AppRole login returned HTTP {status}: {body}",
                 self.product.display_name()
@@ -675,8 +676,9 @@ impl KvProvider {
 
         let response: serde_json::Value = response.json().await.map_err(|error| {
             SecretSpecError::ProviderOperationFailed(format!(
-                "Failed to parse {} AppRole login response: {error}",
-                self.product.display_name()
+                "Failed to parse {} AppRole login response: {}",
+                self.product.display_name(),
+                crate::error::display_error_chain(&error)
             ))
         })?;
         let token = response["auth"]["client_token"].as_str().ok_or_else(|| {
@@ -711,14 +713,15 @@ impl KvProvider {
             .await
             .map_err(|error| {
                 SecretSpecError::ProviderOperationFailed(format!(
-                    "{} JWT login failed: {error}",
-                    self.product.display_name()
+                    "{} JWT login failed: {}",
+                    self.product.display_name(),
+                    crate::error::display_error_chain(&error)
                 ))
             })?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = self.response_body(response).await?;
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "{} JWT login returned HTTP {status}: {body}",
                 self.product.display_name()
@@ -727,8 +730,9 @@ impl KvProvider {
 
         let response: serde_json::Value = response.json().await.map_err(|error| {
             SecretSpecError::ProviderOperationFailed(format!(
-                "Failed to parse {} JWT login response: {error}",
-                self.product.display_name()
+                "Failed to parse {} JWT login response: {}",
+                self.product.display_name(),
+                crate::error::display_error_chain(&error)
             ))
         })?;
         let token = response["auth"]["client_token"].as_str().ok_or_else(|| {
@@ -772,7 +776,8 @@ impl KvProvider {
         }
         let response = request.send().await.map_err(|error| {
             SecretSpecError::ProviderOperationFailed(format!(
-                "Failed to request CI OIDC token: {error}"
+                "Failed to request CI OIDC token: {}",
+                crate::error::display_error_chain(&error)
             ))
         })?;
         if !response.status().is_success() {
@@ -784,7 +789,8 @@ impl KvProvider {
 
         let response: serde_json::Value = response.json().await.map_err(|error| {
             SecretSpecError::ProviderOperationFailed(format!(
-                "Failed to parse CI OIDC token response: {error}"
+                "Failed to parse CI OIDC token response: {}",
+                crate::error::display_error_chain(&error)
             ))
         })?;
         let jwt = response["value"].as_str().ok_or_else(|| {
@@ -881,9 +887,10 @@ impl KvProvider {
                 }
                 Err(error) => {
                     return Err(SecretSpecError::ProviderOperationFailed(format!(
-                        "Failed to connect to {} at {}: {error}",
+                        "Failed to connect to {} at {}: {}",
                         self.product.display_name(),
-                        self.config.endpoint
+                        self.config.endpoint,
+                        crate::error::display_error_chain(&error)
                     )));
                 }
             }
@@ -892,8 +899,23 @@ impl KvProvider {
             "Failed to connect to {} at {}: {}",
             self.product.display_name(),
             self.config.endpoint,
-            last_error.expect("connect retry exhausted with an error")
+            crate::error::display_error_chain(
+                &last_error.expect("connect retry exhausted with an error")
+            )
         )))
+    }
+
+    /// Reads an HTTP body without turning a transport/decompression failure
+    /// into an empty service error.
+    async fn response_body(&self, response: reqwest::Response) -> Result<String> {
+        let status = response.status();
+        response.text().await.map_err(|error| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to read {} HTTP {status} response body: {}",
+                self.product.display_name(),
+                crate::error::display_error_chain(&error)
+            ))
+        })
     }
 
     /// Builds the KV v2 metadata path, which carries a path's version policy and
@@ -926,7 +948,7 @@ impl KvProvider {
                 self.product.token_envs().join(" or ")
             ))),
             status => {
-                let body = response.text().await.unwrap_or_default();
+                let body = self.response_body(response).await?;
                 Err(SecretSpecError::ProviderOperationFailed(format!(
                     "{} returned HTTP {status} while reading version metadata: {body}",
                     self.product.display_name()
@@ -962,7 +984,7 @@ impl KvProvider {
                 self.product.display_name()
             ))),
             status => {
-                let body = response.text().await.unwrap_or_default();
+                let body = self.response_body(response).await?;
                 Err(SecretSpecError::ProviderOperationFailed(format!(
                     "{} returned HTTP {status} while setting version expiry: {body}",
                     self.product.display_name()
@@ -995,7 +1017,7 @@ impl KvProvider {
                 self.product.token_envs().join(" or ")
             ))),
             status => {
-                let body = response.text().await.unwrap_or_default();
+                let body = self.response_body(response).await?;
                 Err(SecretSpecError::ProviderOperationFailed(format!(
                     "{} returned HTTP {status} while deleting secret: {body}",
                     self.product.display_name()
@@ -1024,8 +1046,9 @@ impl KvProvider {
             200 => {
                 let body: serde_json::Value = response.json().await.map_err(|error| {
                     SecretSpecError::ProviderOperationFailed(format!(
-                        "Failed to parse {} response: {error}",
-                        self.product.display_name()
+                        "Failed to parse {} response: {}",
+                        self.product.display_name(),
+                        crate::error::display_error_chain(&error)
                     ))
                 })?;
                 let value = match self.config.kv_version {
@@ -1049,7 +1072,7 @@ impl KvProvider {
                 self.product.token_envs().join(" or ")
             ))),
             status => {
-                let body = response.text().await.unwrap_or_default();
+                let body = self.response_body(response).await?;
                 Err(SecretSpecError::ProviderOperationFailed(format!(
                     "{} returned HTTP {status}: {body}",
                     self.product.display_name()
@@ -1084,7 +1107,7 @@ impl KvProvider {
                 self.product.token_envs().join(" or ")
             ))),
             status => {
-                let body = response.text().await.unwrap_or_default();
+                let body = self.response_body(response).await?;
                 Err(SecretSpecError::ProviderOperationFailed(format!(
                     "{} returned HTTP {status} while writing secret: {body}",
                     self.product.display_name()

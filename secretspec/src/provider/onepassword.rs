@@ -463,8 +463,12 @@ impl OnePasswordProvider {
             ));
         }
 
-        String::from_utf8(output.stdout)
-            .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))
+        String::from_utf8(output.stdout).map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "1Password CLI returned non-UTF-8 output: {}",
+                crate::error::display_error_chain(&e)
+            ))
+        })
     }
 
     /// Checks if the user is authenticated with OnePassword (uncached).

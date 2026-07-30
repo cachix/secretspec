@@ -196,7 +196,7 @@ exists next to the project's `secretspec.toml`, configure a creation rule:
 
 ```yaml title=".sops.yaml"
 creation_rules:
-  - path_regex: secrets.enc.json$
+  - path_regex: secrets\.enc\.json$
     age: "age1jpa8rf5qmrg6pw444fcgpkaxg8x4neueszrexzagdjpunjlgeyzq304w34"
 ```
 

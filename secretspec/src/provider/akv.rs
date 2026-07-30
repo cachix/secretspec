@@ -376,13 +376,13 @@ impl AkvProvider {
             AuthMethod::Cli => Ok(DeveloperToolsCredential::new(None).map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
                     "Failed to create Azure CLI / azd credential: {}",
-                    e
+                    crate::error::display_error_chain(&e)
                 ))
             })? as Arc<dyn TokenCredential>),
             AuthMethod::ManagedIdentity => Ok(ManagedIdentityCredential::new(None).map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
                     "Failed to create managed identity credential: {}",
-                    e
+                    crate::error::display_error_chain(&e)
                 ))
             })? as Arc<dyn TokenCredential>),
             AuthMethod::WorkloadIdentity => {
@@ -392,7 +392,7 @@ impl AkvProvider {
                         Requires the AZURE_TENANT_ID, AZURE_CLIENT_ID, and \
                         AZURE_FEDERATED_TOKEN_FILE environment variables that AKS \
                         injects automatically for workload-identity-enabled pods.",
-                        e
+                        crate::error::display_error_chain(&e)
                     ))
                 })? as Arc<dyn TokenCredential>)
             }
@@ -410,7 +410,7 @@ impl AkvProvider {
                         SecretSpecError::ProviderOperationFailed(format!(
                             "Failed to create service principal credential from \
                                 AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET: {}",
-                            e
+                            crate::error::display_error_chain(&e)
                         ))
                     })?
                         as Arc<dyn TokenCredential>),
@@ -423,7 +423,7 @@ impl AkvProvider {
                                 "No AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET set, and \
                                 failed to fall back to the Azure CLI / azd session: {}\n\n\
                                 Either set those three environment variables, or run `az login`.",
-                                e
+                                crate::error::display_error_chain(&e)
                             ))
                         })? as Arc<dyn TokenCredential>)
                     }
@@ -438,7 +438,8 @@ impl AkvProvider {
         SecretClient::new(&self.config.vault_url, credential, None).map_err(|e| {
             SecretSpecError::ProviderOperationFailed(format!(
                 "Failed to create Azure Key Vault client for {}: {}",
-                self.config.vault_url, e
+                self.config.vault_url,
+                crate::error::display_error_chain(&e)
             ))
         })
     }
@@ -461,7 +462,8 @@ impl AkvProvider {
                 let secret = response.into_model().map_err(|e| {
                     SecretSpecError::ProviderOperationFailed(format!(
                         "Failed to read secret '{}' from Azure Key Vault: {}",
-                        name, e
+                        name,
+                        crate::error::display_error_chain(&e)
                     ))
                 })?;
                 Ok(secret.value.map(|v| SecretString::new(v.into())))
@@ -472,7 +474,8 @@ impl AkvProvider {
                 } else {
                     Err(SecretSpecError::ProviderOperationFailed(format!(
                         "Failed to get secret '{}' from Azure Key Vault: {}",
-                        name, e
+                        name,
+                        crate::error::display_error_chain(&e)
                     )))
                 }
             }
@@ -494,7 +497,8 @@ impl AkvProvider {
                 params.try_into().map_err(|e| {
                     SecretSpecError::ProviderOperationFailed(format!(
                         "Failed to build set-secret request for '{}': {}",
-                        name, e
+                        name,
+                        crate::error::display_error_chain(&e)
                     ))
                 })?,
                 None,
@@ -503,7 +507,8 @@ impl AkvProvider {
             .map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
                     "Failed to set secret '{}' in Azure Key Vault: {}",
-                    name, e
+                    name,
+                    crate::error::display_error_chain(&e)
                 ))
             })?;
         Ok(())

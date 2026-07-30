@@ -438,14 +438,15 @@ impl InfisicalProvider {
             .await
             .map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to connect to Infisical at {}: {e}",
-                    self.config.endpoint
+                    "Failed to connect to Infisical at {}: {}",
+                    self.config.endpoint,
+                    crate::error::display_error_chain(&e)
                 ))
             })?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = Self::response_body(response).await?;
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "Infisical login returned HTTP {status}: {}",
                 Self::error_message(&body)
@@ -454,7 +455,8 @@ impl InfisicalProvider {
 
         let parsed: serde_json::Value = response.json().await.map_err(|e| {
             SecretSpecError::ProviderOperationFailed(format!(
-                "Failed to parse Infisical login response: {e}"
+                "Failed to parse Infisical login response: {}",
+                crate::error::display_error_chain(&e)
             ))
         })?;
 
@@ -474,6 +476,18 @@ impl InfisicalProvider {
             .ok()
             .and_then(|v| v["message"].as_str().map(str::to_string))
             .unwrap_or_else(|| body.to_string())
+    }
+
+    /// Reads a response body without hiding transport/decompression failures
+    /// behind an empty string and a later, misleading JSON parse error.
+    async fn response_body(response: reqwest::Response) -> Result<String> {
+        let status = response.status();
+        response.text().await.map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to read Infisical HTTP {status} response body: {}",
+                crate::error::display_error_chain(&e)
+            ))
+        })
     }
 
     /// The query shared by every read: which project, environment and folder.
@@ -556,7 +570,7 @@ impl InfisicalProvider {
 
         let response = self.send(reqwest::Method::GET, &url, &query, None).await?;
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = Self::response_body(response).await?;
 
         match status {
             StatusCode::OK => {
@@ -639,7 +653,7 @@ impl InfisicalProvider {
 
         let response = self.send(reqwest::Method::GET, &url, &query, None).await?;
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = Self::response_body(response).await?;
 
         match status {
             StatusCode::OK => {
@@ -741,7 +755,7 @@ impl InfisicalProvider {
         if status == StatusCode::NOT_FOUND {
             return Ok(false);
         }
-        let body = response.text().await.unwrap_or_default();
+        let body = Self::response_body(response).await?;
         if status.is_success() {
             Self::written(&body, &loc.key)?;
             return Ok(true);
@@ -810,7 +824,7 @@ impl InfisicalProvider {
         if status.is_success() {
             return Ok(None);
         }
-        let body = response.text().await.unwrap_or_default();
+        let body = Self::response_body(response).await?;
         // A folder that already exists answers 400, and so does a folder a
         // concurrent SecretSpec run created. Telling those apart would mean
         // reading the message, so the write that follows decides instead: it
@@ -842,8 +856,9 @@ impl InfisicalProvider {
         }
         request.send().await.map_err(|e| {
             SecretSpecError::ProviderOperationFailed(format!(
-                "Failed to connect to Infisical at {}: {e}",
-                self.config.endpoint
+                "Failed to connect to Infisical at {}: {}",
+                self.config.endpoint,
+                crate::error::display_error_chain(&e)
             ))
         })
     }

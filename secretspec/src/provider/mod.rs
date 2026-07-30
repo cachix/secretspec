@@ -1080,11 +1080,13 @@ impl PreflightGuard {
         if let Some(scope) = self.inner.auth_scope_key() {
             return PREFLIGHT_AUTH_CACHE
                 .check((self.inner.name(), scope), || {
-                    f().map_err(|e| e.to_string())
+                    f().map_err(|e| crate::error::display_error_chain(&e))
                 })
                 .map_err(SecretSpecError::ProviderOperationFailed);
         }
-        let result = self.result.get_or_init(|| f().map_err(|e| e.to_string()));
+        let result = self
+            .result
+            .get_or_init(|| f().map_err(|e| crate::error::display_error_chain(&e)));
         match result {
             Ok(()) => Ok(()),
             Err(msg) => Err(SecretSpecError::ProviderOperationFailed(msg.clone())),

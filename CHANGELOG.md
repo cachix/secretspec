@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Provider and SDK errors now retain underlying causes such as authentication,
+  timeout, DNS, TLS, connection, and response-parsing failures. AWS Secrets
+  Manager errors also report AWS error codes and messages instead of only
+  `unhandled error`.
 - Prebuilt Linux Go SDK and `secretspec-ffi` libraries now include libdbus
   instead of requiring the build host's `libdbus-1.so.3`, so they load on
   NixOS and other systems without a matching system library.

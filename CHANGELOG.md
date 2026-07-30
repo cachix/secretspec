@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Injected credentials read through a private, owner-only `dcli` state
   directory of their own, because `dcli` otherwise prefers a device already
   registered on the machine and reads that identity's vault instead.
+- Keeper Secrets Manager provider (`keeper://FOLDER_UID`, `keeper` build feature) using
+  Keeper's official Rust SDK, with convention-based records, references to
+  existing records and fields, provider credentials, batch reads, writes, and
+  cache-compatible deletion. SDK calls are safe from async Rust applications,
+  and updates preserve the JSON types of Keeper fields such as dates,
+  checkboxes, hosts, and names.
 
 ### Fixed
 

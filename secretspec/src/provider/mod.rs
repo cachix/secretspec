@@ -17,6 +17,7 @@
 //!
 //! - [`keyring::KeyringProvider`]: System keyring integration (default)
 //! - [`kdbx::KdbxProvider`]: KeePass KDBX database integration (0.17+)
+//! - [`keeper::KeeperProvider`]: Keeper Secrets Manager integration (0.18+)
 //! - [`dotenv::DotEnvProvider`]: `.env` file support
 //! - [`env::EnvProvider`]: Environment variables (read-only)
 //! - [`pass::PassProvider`]: Pass integration
@@ -44,6 +45,7 @@
 //! dotenv://.env.production
 //! onepassword://vault
 //! lastpass://folder
+//! keeper://SHARED_FOLDER_UID  # Keeper, 0.18+
 //! ```
 //!
 //! ## Example
@@ -292,6 +294,8 @@ pub mod gopass;
 pub mod infisical;
 #[cfg(feature = "kdbx")]
 pub mod kdbx;
+#[cfg(feature = "keeper")]
+pub mod keeper;
 #[cfg(feature = "keyring")]
 pub mod keyring;
 pub mod lastpass;

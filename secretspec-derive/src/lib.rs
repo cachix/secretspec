@@ -1027,19 +1027,15 @@ mod secret_spec_generation {
                     // via the SECRETSPEC_REASON env var (honored by `Secrets::load`)
                     // or through `SecretSpec::builder().with_reason(...)`.
                     let validation_result = load_internal(provider_str, profile_str, None)?;
-                    let provider_name = validation_result.resolved.provider.clone();
-                    let profile = validation_result.resolved.profile.clone();
-                    let secrets = validation_result.resolved.secrets;
 
-                    let data = Self {
-                        #(#load_assignments,)*
+                    let data = {
+                        let secrets = &validation_result.resolved.secrets;
+                        Self {
+                            #(#load_assignments,)*
+                        }
                     };
 
-                    Ok(secretspec::Resolved::new(
-                        data,
-                        provider_name,
-                        profile
-                    ))
+                    Ok(validation_result.into_resolved(data))
                 }
 
                 pub fn set_as_env_vars(&self) {
@@ -1258,19 +1254,15 @@ mod builder_generation {
                     let reason_str = self.reason.take();
 
                     let validation_result = load_internal(provider_str, profile_str, reason_str)?;
-                    let provider_name = validation_result.resolved.provider.clone();
-                    let profile = validation_result.resolved.profile.clone();
-                    let secrets = validation_result.resolved.secrets;
 
-                    let data = SecretSpec {
-                        #(#load_assignments,)*
+                    let data = {
+                        let secrets = &validation_result.resolved.secrets;
+                        SecretSpec {
+                            #(#load_assignments,)*
+                        }
                     };
 
-                    Ok(secretspec::Resolved::new(
-                        data,
-                        provider_name,
-                        profile
-                    ))
+                    Ok(validation_result.into_resolved(data))
                 }
 
                 pub fn load_profile(mut self) -> Result<secretspec::Resolved<SecretSpecProfile>, secretspec::SecretSpecError> {
@@ -1300,20 +1292,16 @@ mod builder_generation {
                     };
 
                     let validation_result = load_internal(provider_str, profile_str, reason_str)?;
-                    let provider_name = validation_result.resolved.provider.clone();
-                    let profile = validation_result.resolved.profile.clone();
-                    let secrets = validation_result.resolved.secrets;
 
-                    let data_result: LoadResult<SecretSpecProfile> = match selected_profile {
-                        #(#load_profile_arms,)*
+                    let data_result: LoadResult<SecretSpecProfile> = {
+                        let secrets = &validation_result.resolved.secrets;
+                        match selected_profile {
+                            #(#load_profile_arms,)*
+                        }
                     };
                     let data = data_result?;
 
-                    Ok(secretspec::Resolved::new(
-                        data,
-                        provider_name,
-                        profile
-                    ))
+                    Ok(validation_result.into_resolved(data))
                 }
             }
         }

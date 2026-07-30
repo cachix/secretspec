@@ -1,0 +1,7 @@
+[project]
+name = "derive-as-path-lifetime"
+revision = "1.0"
+require_reason = false
+
+[profiles.default]
+CERT_DATA = { description = "Certificate data", as_path = true }

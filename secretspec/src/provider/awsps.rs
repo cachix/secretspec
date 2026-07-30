@@ -23,13 +23,35 @@
 use super::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use aws_sdk_ssm::Client;
+use aws_sdk_ssm::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_ssm::types::{ParameterTier, ParameterType};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::error::Error;
+use std::fmt::Debug;
 
 /// Maximum number of names accepted by one `GetParameters` request.
 const AWS_GET_PARAMETERS_MAX_NAMES: usize = 10;
+
+/// Formats an AWS SDK error without collapsing non-service failures into a
+/// generated operation error's opaque `unhandled error` variant.
+fn format_aws_error<E, R>(error: &SdkError<E, R>) -> String
+where
+    E: Error + ProvideErrorMetadata + 'static,
+    R: Debug + 'static,
+{
+    if let Some(service_error) = error.as_service_error() {
+        return match (service_error.code(), service_error.message()) {
+            (Some(code), Some(message)) => format!("{code}: {message}"),
+            (Some(code), None) => code.to_string(),
+            (None, Some(message)) => message.to_string(),
+            (None, None) => crate::error::display_error_chain(service_error),
+        };
+    }
+
+    crate::error::display_error_chain(error)
+}
 
 /// Parameter Store tier requested for writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,12 +282,15 @@ impl AwspsProvider {
         {
             Ok(output) => output,
             Err(error) => {
-                let service_error = error.into_service_error();
-                return if service_error.is_parameter_not_found() {
+                return if error
+                    .as_service_error()
+                    .is_some_and(|service_error| service_error.is_parameter_not_found())
+                {
                     Ok(None)
                 } else {
                     Err(SecretSpecError::ProviderOperationFailed(format!(
-                        "Failed to get Parameter Store parameter '{name}': {service_error}"
+                        "Failed to get Parameter Store parameter '{name}': {}",
+                        format_aws_error(&error)
                     )))
                 };
             }
@@ -323,7 +348,7 @@ impl AwspsProvider {
                 .map_err(|error| {
                     SecretSpecError::ProviderOperationFailed(format!(
                         "GetParameters failed: {}",
-                        error.into_service_error()
+                        format_aws_error(&error)
                     ))
                 })?;
             for parameter in output.parameters() {
@@ -363,7 +388,7 @@ impl AwspsProvider {
         request.send().await.map_err(|error| {
             SecretSpecError::ProviderOperationFailed(format!(
                 "Failed to write Parameter Store parameter '{name}': {}",
-                error.into_service_error()
+                format_aws_error(&error)
             ))
         })?;
         Ok(())
@@ -472,6 +497,7 @@ impl Provider for AwspsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_sdk_ssm::operation::get_parameters::GetParametersError;
 
     fn config(uri: &str) -> AwspsConfig {
         let url = url::Url::parse(uri).unwrap();
@@ -640,6 +666,33 @@ mod tests {
         assert_eq!(
             chunks.iter().map(|chunk| chunk.len()).collect::<Vec<_>>(),
             [10, 10, 3]
+        );
+    }
+
+    #[test]
+    fn aws_error_includes_unmodeled_service_code_and_message() {
+        let service_error = GetParametersError::generic(
+            aws_sdk_ssm::error::ErrorMetadata::builder()
+                .code("AccessDeniedException")
+                .message("not authorized to read these parameters")
+                .build(),
+        );
+        let sdk_error = SdkError::service_error(service_error, ());
+
+        assert_eq!(
+            format_aws_error(&sdk_error),
+            "AccessDeniedException: not authorized to read these parameters"
+        );
+    }
+
+    #[test]
+    fn aws_error_includes_non_service_cause() {
+        let sdk_error: SdkError<GetParametersError, ()> =
+            SdkError::construction_failure(std::io::Error::other("invalid AWS endpoint"));
+
+        assert_eq!(
+            format_aws_error(&sdk_error),
+            "failed to construct request: invalid AWS endpoint"
         );
     }
 }

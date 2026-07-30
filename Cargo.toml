@@ -16,11 +16,7 @@ edition = "2024"
 
 [workspace.dependencies]
 clap = { version = "4.0", features = ["derive", "env"] }
-keyring = { version = "3.6.2", features = [
-  "sync-secret-service",
-  "windows-native",
-  "apple-native",
-] }
+keyring = "4"
 keepass = { version = "0.13.17", features = ["save_kdbx4"] }
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.9"

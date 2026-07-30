@@ -4,7 +4,7 @@ name: "Go static lib"
 # links libsecretspec_ffi.a directly into the executable, so the Rust resolver is
 # embedded and the binary has no dynamic dependencies at all. Built via devenv,
 # which provides the musl C cross-toolchain (for the sqlite3/aws-lc-sys build
-# scripts and the cgo link) and static libdbus/libunwind.
+# scripts and the cgo link) and static libunwind.
 #
 # The default `go get` path stays purego/dlopen (no cgo); this artifact is for
 # users who want a self-contained static binary. The staticlib + header are

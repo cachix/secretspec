@@ -7,15 +7,12 @@ name: "Python wheels"
 # one cp39-abi3 wheel per platform serves all CPython >= 3.9.
 #
 # Linux wheels are built via PyO3/maturin-action inside a manylinux container
-# (old glibc); maturin repairs the wheel itself (vendoring the extension's
-# dynamic system deps, notably libdbus from the keyring provider), so no
-# separate auditwheel step is needed. macOS builds natively.
+# (old glibc); maturin repairs the wheel itself, so no separate auditwheel step
+# is needed. macOS builds natively.
 #
-# Windows builds natively on the MSVC toolchain; the keyring provider uses
-# Windows Credential Manager (keyring's windows-native feature), so unlike
-# Linux there are no system deps to vendor into the wheel. The SDK itself is
-# exercised on every PR by the devenv-based sdks.yml; this workflow only
-# builds the distributable wheels.
+# Windows builds natively on the MSVC toolchain and uses Windows Credential
+# Manager. The SDK itself is exercised on every PR by the devenv-based sdks.yml;
+# this workflow only builds the distributable wheels.
 #
 # The build/repair pipeline is validated in CI; the publish job additionally
 # needs PyPI Trusted Publishing configured for this repo's "pypi" environment
@@ -58,7 +55,6 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: 2_28
           rust-toolchain: "1.92.0" # matches rust-toolchain.toml
-          before-script-linux: yum install -y dbus-devel
           # Compiler cache backed by the GitHub Actions cache; works inside
           # the manylinux container, where a host-level cargo cache cannot.
           sccache: true

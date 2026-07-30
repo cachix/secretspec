@@ -24,12 +24,6 @@ install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = true
 
-[dist.dependencies.apt]
-libdbus-1-dev = { version = "*", targets = [
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
-] }
-
 # https://github.com/axodotdev/cargo-dist/issues/74
 [dist.github-custom-runners]
 aarch64-unknown-linux-gnu = "ubuntu-24.04-arm"

@@ -2,12 +2,11 @@ name: "Go embedded lib"
 
 # Builds the per-platform cdylib the Go SDK embeds (go:embed, behind the
 # `embed_lib` build tag) and verifies the embedded build works with no
-# SECRETSPEC_FFI_LIB set. Linux builds use a manylinux_2_28 baseline and compile
-# libdbus into the cdylib, so the release assets work without distro-specific
-# runtime libraries (including on NixOS). The libraries are uploaded as
-# artifacts and attached to GitHub releases for users who want a self-contained
-# `-tags embed_lib` build; they are never committed to the repo (the Go module
-# proxy does not carry binary assets — see RELEASE.md).
+# SECRETSPEC_FFI_LIB set. Linux builds use a manylinux_2_28 baseline, so the
+# release assets work on older glibc distributions. The libraries are uploaded
+# as artifacts and attached to GitHub releases for users who want a
+# self-contained `-tags embed_lib` build; they are never committed to the repo
+# (the Go module proxy does not carry binary assets — see RELEASE.md).
 
 on:
   workflow_call:

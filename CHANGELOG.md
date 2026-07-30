@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The keyring provider now uses keyring 4's Rust-native Secret Service
+  transport on Linux, so source builds and binaries no longer require system
+  libdbus.
+
 ### Fixed
 - Provider and SDK errors now retain underlying causes such as authentication,
   timeout, DNS, TLS, connection, and response-parsing failures. AWS Secrets

@@ -25,7 +25,7 @@ if [ -n "$too_new" ]; then
   exit 1
 fi
 if grep NEEDED <<<"$headers" | grep -q dbus; then
-  echo "$library links libdbus dynamically; vendored-dbus regressed:" >&2
+  echo "$library unexpectedly links libdbus dynamically:" >&2
   grep NEEDED <<<"$headers" >&2
   exit 1
 fi

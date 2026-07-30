@@ -2,7 +2,7 @@
 #
 # Build the napi-rs addon (release) via `napi build` and place it as
 # secretspec.node next to index.js. Extra arguments are forwarded to
-# `napi build` (e.g. `--features vendored-dbus` for the Linux release CI).
+# `napi build`.
 set -euo pipefail
 
 pkg_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

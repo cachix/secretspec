@@ -79,3 +79,4 @@ sops = []
 [dev-dependencies]
 # Validates serialized resolution reports against the committed JSON Schema.
 jsonschema = { version = "0.48.5", default-features = false }
+proptest.workspace = true

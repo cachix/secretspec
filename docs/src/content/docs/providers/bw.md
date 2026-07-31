@@ -255,6 +255,36 @@ STRIPE_KEY = { description = "Card custom field", ref = { item = "Stripe Test Ca
 DEPLOY_PUBKEY = { description = "SSH public key", ref = { item = "Deploy SSH Key", field = "public_key" } }
 ```
 
+A named field resolves to that field or to nothing. If it is absent the secret
+is reported missing rather than answered from some other field, so a typo in
+`field` surfaces as a missing secret instead of the wrong value. `field =
+"notes"` addresses a Secure Note's body.
+
+### How items are matched (0.18+)
+
+Item names are matched **in full, case-insensitively** — `test database` finds
+`Test Database`, but `API_KEY` never matches `API_KEY_OLD`. The `bw` CLI itself
+accepts a substring here, which works well interactively because it prints the
+candidates and lets you choose; a name in `secretspec.toml` is resolved with
+nobody watching, so a partial match would quietly read — or overwrite — a
+neighbouring item.
+
+Bitwarden does not require names to be unique. When more than one item matches,
+SecretSpec refuses the address and lists the colliding ids rather than picking
+one; point the secret at a single item by using its id as the `item`:
+
+```toml
+[profiles.default]
+API_KEY = { description = "Disambiguated by id", ref = { item = "5a1b2c3d-...." } }
+```
+
+Adding `?type=` narrows the match to that item type, on both reads and writes.
+That is how a Card and a Login of the same name stay separately addressable:
+
+```bash
+$ secretspec get API_KEY --provider "bw://?type=card"
+```
+
 ## Error Handling
 
 The provider includes comprehensive error handling with helpful guidance:

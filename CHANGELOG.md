@@ -38,7 +38,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   meant when several organizations have one, and must agree with the
   collection's actual organization. Reads and writes are confined to the
   collection addressed, so `set` cannot overwrite a same-named item in a
-  sibling collection. Creating an SSH key item fills the two key fields the
+  sibling collection. Item names are matched in full and case-insensitively:
+  `test database` finds `Test Database`, while `API_KEY` never resolves
+  `API_KEY_OLD` on a read or adopts it as an update target on a write. Because
+  Bitwarden does not require names to be unique, a name matching several items
+  is refused with their ids instead of resolved to an arbitrary one; address a
+  single item by using its id as the `item`. `?type=` narrows reads, writes and
+  creation alike, so a Card and a same-named Login stay separately addressable,
+  and an unsupported `?type=` or an unknown query parameter is rejected when
+  the address is parsed rather than silently ignored. A named field resolves to
+  that field or to nothing, so a missing one reports the secret as missing
+  rather than answering from another field, and `field = "notes"` addresses a
+  Secure Note's body. Fields a type knows natively — a card's `exp_month` and
+  `exp_year`, an identity's `first_name` and `last_name` — are stored as that
+  built-in when an item is created, so an immediate `get` returns what `set`
+  wrote. Creating an SSH key item fills the two key fields the
   write does not address with `(not set by SecretSpec)`: Bitwarden requires
   all three of the private key, public key and fingerprint to be present, and
   rejects or discards an item that leaves any of them empty.

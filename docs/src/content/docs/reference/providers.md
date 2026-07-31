@@ -295,6 +295,14 @@ the collection's actual organization. Naming it is optional when the collection
 name is unambiguous. Addresses that resolve to nothing fail with the
 organizations or collections that do exist.
 
+Item names match the same way — **in full and case-insensitively** (0.18+), so
+`API_KEY` never resolves `API_KEY_OLD`. Names are not unique in Bitwarden, and a
+name matching several items is refused with their ids rather than resolved to an
+arbitrary one; address a single item by using its id as the `item`. `?type=`
+narrows both reads and writes to that item type, keeping a Card and a same-named
+Login separately addressable. An unsupported `?type=`, or an unknown query
+parameter, is rejected when the address is parsed rather than ignored.
+
 `?server=` does not configure the CLI. The `bw` CLI takes its server only from
 `bw config server`, which must be run while logged out, so self-hosted users
 configure the CLI themselves and SecretSpec verifies the setting matches before

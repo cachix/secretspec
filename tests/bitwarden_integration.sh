@@ -126,8 +126,27 @@ TESTS_FAILED=0
 # Items created by this script (for cleanup)
 CREATED_ITEM_IDS=()
 
-# Ensure a BW item exists with the given JSON template. If it already
-# exists, returns its ID. Otherwise creates it and records the ID.
+# Every fixture name starts with this, so nothing here can collide with an
+# ordinary vault entry. The names used to be things like "Test Database" and
+# "GitHub API" -- plausible enough in a real vault that this suite, which the
+# header above advertises running against one, could pick a user's own item up
+# as a fixture and then overwrite its password.
+FIXTURE_PREFIX="${BW_FIXTURE_PREFIX:-secretspec-it}"
+
+FX_DATABASE="$FIXTURE_PREFIX Test Database"
+FX_GITHUB="$FIXTURE_PREFIX GitHub API"
+FX_STRIPE="$FIXTURE_PREFIX Stripe Test Card"
+FX_GATEWAY="$FIXTURE_PREFIX Payment Gateway"
+FX_SSH="$FIXTURE_PREFIX Deploy SSH Key"
+FX_EMPLOYEE="$FIXTURE_PREFIX Employee Record"
+FX_NOTE="$FIXTURE_PREFIX Note to Self"
+
+# Create a BW item from the given JSON template and record its ID.
+#
+# Refuses to run if the name is already taken. Adopting a pre-existing item was
+# the actual data-loss path: the id never reached CREATED_ITEM_IDS, so cleanup
+# neither deleted nor restored it, while the tests below happily wrote to it.
+# The prefix makes a collision unlikely; this makes it harmless.
 ensure_item() {
     local name="$1"
     local template_json="$2"
@@ -138,9 +157,19 @@ ensure_item() {
         python3 -c "import sys,json; items=[i for i in json.load(sys.stdin) if i.get('name','')=='$name']; print(items[0]['id'] if items else '')" 2>/dev/null || true)
 
     if [ -n "$existing_id" ]; then
-        echo "   Using existing item: $name ($existing_id)"
-        echo "$existing_id"
-        return
+        # Disarm cleanup before leaving. Today the EXIT trap is installed after
+        # setup_test_data, so aborting here happens to touch nothing -- but the
+        # sweep matches on the fixture prefix, which is exactly what this item
+        # is named. Moving that trap earlier would turn this safety check into
+        # a delete of the very item it is refusing to modify, so do not depend
+        # on the ordering.
+        ABORTED_ON_COLLISION=true
+        echo "" >&2
+        echo "ERROR: a vault item is already named '$name' ($existing_id)." >&2
+        echo "This suite mutates its fixtures, so it will not touch an item it" >&2
+        echo "did not create. Delete or rename that item, or set" >&2
+        echo "BW_FIXTURE_PREFIX to something unused, then re-run." >&2
+        exit 1
     fi
 
     # Create the item via base64-encoded JSON
@@ -164,31 +193,40 @@ setup_test_data() {
     echo -e "\n${YELLOW}Setting up test data...${NC}"
 
     # 1. Login Item: "Test Database"
-    ensure_item "Test Database" '{"type":1,"name":"Test Database","login":{"username":"testuser","password":"test-db-password","totp":null,"uris":[]},"fields":[{"name":"api_key","value":"sk_test_db_12345","type":1}],"notes":"SecretSpec test item"}' > /dev/null
+    ensure_item "$FX_DATABASE" "{\"type\":1,\"name\":\"${FX_DATABASE}\",\"login\":{\"username\":\"testuser\",\"password\":\"test-db-password\",\"totp\":null,\"uris\":[]},\"fields\":[{\"name\":\"api_key\",\"value\":\"sk_test_db_12345\",\"type\":1}],\"notes\":\"SecretSpec test item\"}" > /dev/null
 
     # 2. Login Item: "GitHub API"
-    ensure_item "GitHub API" '{"type":1,"name":"GitHub API","login":{"username":"testuser","password":"ghp_fake_token_for_testing","totp":null,"uris":[]},"notes":"SecretSpec test item"}' > /dev/null
+    ensure_item "$FX_GITHUB" "{\"type\":1,\"name\":\"${FX_GITHUB}\",\"login\":{\"username\":\"testuser\",\"password\":\"ghp_fake_token_for_testing\",\"totp\":null,\"uris\":[]},\"notes\":\"SecretSpec test item\"}" > /dev/null
 
     # 3. Card Item: "Stripe Test Card"
-    ensure_item "Stripe Test Card" '{"type":3,"name":"Stripe Test Card","card":{"cardholderName":"Test User","number":"4242424242424242","brand":"Visa","expMonth":"12","expYear":"2030","code":"123"},"fields":[{"name":"api_key","value":"sk_test_stripe_12345","type":1}],"notes":"SecretSpec test item"}' > /dev/null
+    ensure_item "$FX_STRIPE" "{\"type\":3,\"name\":\"${FX_STRIPE}\",\"card\":{\"cardholderName\":\"Test User\",\"number\":\"4242424242424242\",\"brand\":\"Visa\",\"expMonth\":\"12\",\"expYear\":\"2030\",\"code\":\"123\"},\"fields\":[{\"name\":\"api_key\",\"value\":\"sk_test_stripe_12345\",\"type\":1}],\"notes\":\"SecretSpec test item\"}" > /dev/null
 
     # 4. Card Item: "Payment Gateway"
-    ensure_item "Payment Gateway" '{"type":3,"name":"Payment Gateway","card":{"cardholderName":"Test User","number":"5555555555554444","brand":"Mastercard","expMonth":"12","expYear":"2030","code":"456"},"notes":"SecretSpec test item"}' > /dev/null
+    ensure_item "$FX_GATEWAY" "{\"type\":3,\"name\":\"${FX_GATEWAY}\",\"card\":{\"cardholderName\":\"Test User\",\"number\":\"5555555555554444\",\"brand\":\"Mastercard\",\"expMonth\":\"12\",\"expYear\":\"2030\",\"code\":\"456\"},\"notes\":\"SecretSpec test item\"}" > /dev/null
 
     # 5. SSH Key Item: "Deploy SSH Key"
-    ensure_item "Deploy SSH Key" '{"type":5,"name":"Deploy SSH Key","sshKey":{"privateKey":"-----BEGIN OPENSSH PRIVATE KEY-----\nfake_key_for_testing\n-----END OPENSSH PRIVATE KEY-----","publicKey":"ssh-rsa AAAAfake","keyFingerprint":"SHA256:fak3f1ng3rpr1nt"},"fields":[{"name":"passphrase","value":"ssh_passphrase_123","type":1}],"notes":"SecretSpec test item"}' > /dev/null
+    ensure_item "$FX_SSH" "{\"type\":5,\"name\":\"${FX_SSH}\",\"sshKey\":{\"privateKey\":\"-----BEGIN OPENSSH PRIVATE KEY-----\\nfake_key_for_testing\\n-----END OPENSSH PRIVATE KEY-----\",\"publicKey\":\"ssh-rsa AAAAfake\",\"keyFingerprint\":\"SHA256:fak3f1ng3rpr1nt\"},\"fields\":[{\"name\":\"passphrase\",\"value\":\"ssh_passphrase_123\",\"type\":1}],\"notes\":\"SecretSpec test item\"}" > /dev/null
 
     # 6. Identity Item: "Employee Record"
-    ensure_item "Employee Record" '{"type":4,"name":"Employee Record","identity":{"title":null,"firstName":"Test","middleName":null,"lastName":"Employee","username":null,"company":null,"email":"test.employee@example.com","phone":null},"fields":[{"name":"employee_id","value":"EMP001","type":1}],"notes":"SecretSpec test item"}' > /dev/null
+    ensure_item "$FX_EMPLOYEE" "{\"type\":4,\"name\":\"${FX_EMPLOYEE}\",\"identity\":{\"title\":null,\"firstName\":\"Test\",\"middleName\":null,\"lastName\":\"Employee\",\"username\":null,\"company\":null,\"email\":\"test.employee@example.com\",\"phone\":null},\"fields\":[{\"name\":\"employee_id\",\"value\":\"EMP001\",\"type\":1}],\"notes\":\"SecretSpec test item\"}" > /dev/null
 
     # 7. Secure Note Item: "Note to Self"
-    ensure_item "Note to Self" '{"type":2,"name":"Note to Self","notes":"this is a note.","secureNote":{"type":0},"fields":[{"name":"value","value":"this is a note.","type":1}]}' > /dev/null
+    ensure_item "$FX_NOTE" "{\"type\":2,\"name\":\"${FX_NOTE}\",\"notes\":\"this is a note.\",\"secureNote\":{\"type\":0},\"fields\":[{\"name\":\"value\",\"value\":\"this is a note.\",\"type\":1}]}" > /dev/null
 
     echo -e "${GREEN}✓ Test data ready (${#CREATED_ITEM_IDS[@]} items created)${NC}"
 }
 
+# Set when ensure_item refuses to adopt a pre-existing item. Cleanup is a no-op
+# afterwards: the run owns nothing, and the thing that stopped it is a vault
+# item belonging to someone else.
+ABORTED_ON_COLLISION=false
+
 # Clean up test data
 cleanup_test_data() {
+    if [ "$ABORTED_ON_COLLISION" = true ]; then
+        echo -e "\n${YELLOW}Aborted on a name collision; leaving the vault untouched${NC}" >&2
+        return
+    fi
     if [ "$KEEP_TEST_DATA" = true ]; then
         echo -e "\n${YELLOW}--keep-test-data set, skipping cleanup${NC}"
         return
@@ -197,12 +235,26 @@ cleanup_test_data() {
     for id in "${CREATED_ITEM_IDS[@]}"; do
         BW_SESSION="$BW_SESSION" bw delete item "$id" 2>/dev/null && echo "   Deleted $id" || true
     done
-    # Also clean up any items we created during set tests
-    local set_items
-    set_items=$(BW_SESSION="$BW_SESSION" bw list items --search "bw_integration_test_" 2>/dev/null | \
-        python3 -c "import sys,json; [print(i['id']) for i in json.load(sys.stdin)]" 2>/dev/null || true)
-    for id in $set_items; do
-        BW_SESSION="$BW_SESSION" bw delete item "$id" 2>/dev/null && echo "   Deleted $id (set test)" || true
+    # Also clean up items the `set` tests created, which are named after the
+    # secret rather than through ensure_item, plus any fixture left behind by a
+    # run that died before its trap fired.
+    #
+    # The name has to *start with* one of the prefixes. `bw list --search` is a
+    # substring match over names, usernames, URIs and notes, so filtering on its
+    # results alone would delete any vault item that merely mentions the prefix
+    # somewhere -- an unpleasant thing for a cleanup routine to do to a real
+    # vault.
+    local sweepable
+    sweepable=$(BW_SESSION="$BW_SESSION" bw list items 2>/dev/null | \
+        python3 -c "
+import sys, json
+prefixes = ('bw_integration_test_', $(printf '%s' "\"$FIXTURE_PREFIX\""))
+for item in json.load(sys.stdin):
+    if item.get('name', '').startswith(prefixes):
+        print(item['id'])
+" 2>/dev/null || true)
+    for id in $sweepable; do
+        BW_SESSION="$BW_SESSION" bw delete item "$id" 2>/dev/null && echo "   Deleted $id (swept)" || true
     done
     echo -e "${GREEN}✓ Cleanup complete${NC}"
 }
@@ -310,25 +362,25 @@ restore_config() {
     fi
 }
 trap 'cleanup_test_data; restore_config' EXIT
-cat > secretspec.toml << 'EOF'
+cat > secretspec.toml << EOF
 [project]
 name = "bitwarden-test"
 revision = "1.0"
 
 [profiles.default]
 # Keys use valid identifiers with ref mapping to Bitwarden item names
-bw_integration_test_database = { required = true, description = "Login item password", ref = { item = "Test Database" } }
-bw_integration_test_database_api_key = { required = true, description = "Login item custom field", ref = { item = "Test Database", field = "api_key" } }
-bw_integration_test_database_username = { required = true, description = "Login item username", ref = { item = "Test Database", field = "username" } }
-bw_integration_test_github_api = { required = true, description = "GitHub token", ref = { item = "GitHub API" } }
-bw_integration_test_stripe_card_api_key = { required = true, description = "Card custom field", ref = { item = "Stripe Test Card", field = "api_key" } }
-bw_integration_test_stripe_card_number = { required = true, description = "Card number field", ref = { item = "Stripe Test Card", field = "number" } }
-bw_integration_test_payment_gateway = { required = true, description = "Card default field", ref = { item = "Payment Gateway" } }
-bw_integration_test_employee_id = { required = true, description = "Identity custom field", ref = { item = "Employee Record", field = "employee_id" } }
-bw_integration_test_employee_email = { required = true, description = "Identity email field", ref = { item = "Employee Record", field = "email" } }
-bw_integration_test_deploy_ssh_key = { required = true, description = "SSH private key", ref = { item = "Deploy SSH Key" } }
-bw_integration_test_ssh_passphrase = { required = true, description = "SSH passphrase", ref = { item = "Deploy SSH Key", field = "passphrase" } }
-bw_integration_test_note_to_self = { required = true, description = "Secure note value", ref = { item = "Note to Self" } }
+bw_integration_test_database = { required = true, description = "Login item password", ref = { item = "${FX_DATABASE}" } }
+bw_integration_test_database_api_key = { required = true, description = "Login item custom field", ref = { item = "${FX_DATABASE}", field = "api_key" } }
+bw_integration_test_database_username = { required = true, description = "Login item username", ref = { item = "${FX_DATABASE}", field = "username" } }
+bw_integration_test_github_api = { required = true, description = "GitHub token", ref = { item = "${FX_GITHUB}" } }
+bw_integration_test_stripe_card_api_key = { required = true, description = "Card custom field", ref = { item = "${FX_STRIPE}", field = "api_key" } }
+bw_integration_test_stripe_card_number = { required = true, description = "Card number field", ref = { item = "${FX_STRIPE}", field = "number" } }
+bw_integration_test_payment_gateway = { required = true, description = "Card default field", ref = { item = "${FX_GATEWAY}" } }
+bw_integration_test_employee_id = { required = true, description = "Identity custom field", ref = { item = "${FX_EMPLOYEE}", field = "employee_id" } }
+bw_integration_test_employee_email = { required = true, description = "Identity email field", ref = { item = "${FX_EMPLOYEE}", field = "email" } }
+bw_integration_test_deploy_ssh_key = { required = true, description = "SSH private key", ref = { item = "${FX_SSH}" } }
+bw_integration_test_ssh_passphrase = { required = true, description = "SSH passphrase", ref = { item = "${FX_SSH}", field = "passphrase" } }
+bw_integration_test_note_to_self = { required = true, description = "Secure note value", ref = { item = "${FX_NOTE}" } }
 
 # Additional test secrets (optional)
 bw_integration_test_nonexistent = { required = false, description = "Key that should not exist" }
@@ -430,10 +482,17 @@ run_test "Card item without field specification returns default field" \
     "./target/debug/secretspec get bw_integration_test_payment_gateway --provider bw://" \
     "5555555555554444"
 
-# Test 15: Invalid item type should fail
+# Test 15: Invalid item type is rejected when the address is parsed.
+# It used to fail only incidentally, because the item did not exist either; now
+# the typo itself is what is reported.
 run_test_expect_fail "Invalid item type should fail" \
     "./target/debug/secretspec get bw_test_nonexistent_item --provider 'bw://?type=invalid'" \
-    "not found"
+    "Unknown Bitwarden item type"
+
+# Test 15b: an unknown query parameter is likewise a typo, not a no-op
+run_test_expect_fail "Unknown query parameter should fail" \
+    "./target/debug/secretspec get bw_test_nonexistent_item --provider 'bw://?feild=api_key'" \
+    "Unknown Bitwarden URI parameter"
 
 # Test 16: Non-existent item
 run_test_expect_fail "Non-existent item should return error or empty" \
@@ -505,15 +564,22 @@ roundtrip_type card card
 roundtrip_type identity identity
 roundtrip_type ssh ssh
 
-if [ $TESTS_FAILED -eq 0 ]; then
-    echo -e "\n${GREEN}🎉 ALL TESTS PASSED!${NC}"
-    echo "The Bitwarden provider is working correctly with real vault data."
-else
-    echo -e "\n${RED}❌ SOME TESTS FAILED${NC}"
-    echo "Please review the failed tests above."
-fi
-
 # Test items and the test config are both cleaned up by the EXIT trap, which
 # also restores any secretspec.toml that was here before the run.
 
-echo -e "\n${BLUE}Testing complete!${NC}"
+if [ $TESTS_FAILED -eq 0 ]; then
+    echo -e "\n${GREEN}🎉 ALL TESTS PASSED!${NC}"
+    echo "The Bitwarden provider is working correctly with real vault data."
+    echo -e "\n${BLUE}Testing complete!${NC}"
+    exit 0
+fi
+
+echo -e "\n${RED}❌ $TESTS_FAILED of $TESTS_RUN TESTS FAILED${NC}"
+echo "Please review the failed tests above."
+
+# `run_test` records failures in a counter rather than letting them propagate,
+# so `set -e` never sees them and the script used to end on a successful `echo`.
+# vaultwarden_harness.sh reads this status, so returning 0 here made the whole
+# documented harness incapable of failing on a provider regression. The EXIT
+# trap still runs and does not itself call `exit`, so this status survives it.
+exit 1

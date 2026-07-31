@@ -14,6 +14,23 @@
 #           type-specific default (set succeeds, get returns the old value)
 #   R4  P2  update matches field names case-sensitively while reads are
 #           case-insensitive (duplicate field, stale reads)
+#
+# Covered findings (bw.rs review round 2, 2026-07-30):
+#   R5  P1  a read extracts from the first `--search` hit, so API_KEY can
+#           answer with API_KEY_OLD
+#   R6  P1  the addressed `?type=` never narrows a read, so a Card and a
+#           same-named Login are indistinguishable
+#   R7  P1  a write falls back to a substring match and overwrites an
+#           unrelated item instead of creating the addressed one
+#   R8  P1  an explicit Secure Note field that is absent falls through to the
+#           legacy `value` field and then to the note body
+#   R9  P1  creation does not recognise the built-in field aliases that
+#           reading and updating do (card exp_month, identity first_name)
+#   R10 P2  an unsupported `?type=` (and any unknown query key) is discarded
+#           rather than reported
+#   R11 P2  names fold with ASCII-only case rules, unlike the `bw` CLI
+#   R12 P1  the integration suite adopts a same-named real vault item as a
+#           mutable fixture and never restores it
 set -uo pipefail
 
 # See bitwarden_integration.sh: without a reason, `[project].require_reason`
@@ -48,13 +65,22 @@ mk_item() { # mk_item <json> -> echoes id, tracks for cleanup
   echo "$id"
 }
 
-item_json() { # item_json <name> <type:1 login|2 note> [fields-json]
+item_json() { # item_json <name> <type:1 login|2 note|3 card|4 identity> [fields-json]
   jq -n --arg name "$1" --argjson type "$2" --argjson fields "${3:-[]}" '
     {organizationId: null, collectionIds: null, folderId: null, type: $type,
      name: $name, notes: (if $type == 2 then "old-note-value" else null end),
      favorite: false, fields: $fields,
      login: (if $type == 1 then {username: null, password: "unused", totp: null} else null end),
+     card: (if $type == 3 then {cardholderName: null, brand: null, number: null,
+                                expMonth: null, expYear: null, code: null} else null end),
+     identity: (if $type == 4 then {title: null, firstName: null, middleName: null,
+                                    lastName: null, username: null, company: null,
+                                    email: null, phone: null} else null end),
      secureNote: (if $type == 2 then {type: 0} else null end)}'
+}
+
+item_json_with() { # item_json_with <name> <type> <fields-json> <patch-json>
+  item_json "$1" "$2" "$3" | jq --argjson patch "$4" '. * $patch'
 }
 
 report() { # report <id> <desc> <fixed:0|1> [detail]
@@ -75,10 +101,20 @@ regr_canary = { required = false, description = "R1 canary write", ref = { item 
 regr_new_api_key = { required = false, description = "R2 named field on create", ref = { item = "Regr New Login", field = "api_key" } }
 regr_note = { required = false, description = "R3 secure note default", ref = { item = "Regr Note" } }
 regr_case = { required = false, description = "R4 case-insensitive update", ref = { item = "Regr Case Item", field = "api_key" } }
+
+# Round 2 (2026-07-30)
+regr_exact = { required = false, description = "R5 exact item match on read", ref = { item = "RegrExactKey" } }
+regr_typed = { required = false, description = "R6 type filter on read", ref = { item = "RegrTyped" } }
+regr_clobber = { required = false, description = "R7 no substring update target", ref = { item = "RegrApiKey" } }
+regr_absent = { required = false, description = "R8 explicit field miss", ref = { item = "Regr Absent Note", field = "absent_field" } }
+regr_expmonth = { required = false, description = "R9 built-in field on create", ref = { item = "RegrCardCreate", field = "exp_month" } }
+regr_umlaut = { required = false, description = "R11 non-ASCII case folding", ref = { item = "überblick" } }
 EOF
 cd "$WORKDIR" || exit 2
 
 SS() { "$BIN" "$@" --provider bw:// 2>&1; }
+SSP() { local prov="$1"; shift; "$BIN" "$@" --provider "$prov" 2>&1; }
+item_name_exists() { bw list items 2>/dev/null | jq -e --arg n "$1" 'any(.[]; .name == $n)' >/dev/null; }
 
 echo "── R1: linked custom field (type 3) poisons unrelated writes ──"
 LINKED_ID=$(mk_item "$(item_json "Regr Linked Item" 1 '[{"name":"linked_username","value":null,"type":3,"linkedId":100}]')")
@@ -124,6 +160,98 @@ if [ "$GOT" = "new-value" ]; then
   report R4 "update matched the existing field case-insensitively" 1
 else
   report R4 "update added a duplicate field; get still returns '$GOT'" 0
+fi
+
+echo "── R5: a read resolves the exactly named item ──"
+# `bw list --search RegrExactKey` returns both, and the order is not specified.
+mk_item "$(item_json_with "RegrExactKeyOld" 1 '[]' '{"login":{"password":"wrong-old-value"}}')" >/dev/null
+mk_item "$(item_json_with "RegrExactKey" 1 '[]' '{"login":{"password":"right-value"}}')" >/dev/null
+GOT=$(SS get regr_exact) || true
+if [ "$GOT" = "right-value" ]; then
+  report R5 "read returned the exactly named item" 1
+else
+  report R5 "read returned a similarly named item instead" 0 "got '$GOT'"
+fi
+
+echo "── R6: an addressed type disambiguates same-named items ──"
+mk_item "$(item_json_with "RegrTyped" 1 '[]' '{"login":{"password":"the-login"}}')" >/dev/null
+mk_item "$(item_json_with "RegrTyped" 3 '[]' '{"card":{"number":"the-card"}}')" >/dev/null
+GOT=$(SSP 'bw://?type=card' get regr_typed) || true
+if [ "$GOT" = "the-card" ]; then
+  report R6 "?type=card selected the Card over the same-named Login" 1
+else
+  report R6 "?type=card did not select by type" 0 "got '$GOT'"
+fi
+
+echo "── R7: a write never adopts a substring match ──"
+# "old_regrapikey" contains "regrapikey", which is what used to make this an
+# update target. Nothing named RegrApiKey exists yet, so `set` must create one.
+OLD_ID=$(mk_item "$(item_json_with "OLD_RegrApiKey" 1 '[]' '{"login":{"password":"must-not-change"}}')")
+SS set regr_clobber brand-new-value >/dev/null
+bw sync >/dev/null 2>&1
+SURVIVED=$(bw get item "$OLD_ID" 2>/dev/null | jq -r '.login.password')
+if [ "$SURVIVED" = "must-not-change" ] && item_name_exists "RegrApiKey"; then
+  report R7 "set created RegrApiKey and left OLD_RegrApiKey intact" 1
+else
+  report R7 "set overwrote the unrelated OLD_RegrApiKey" 0 "its password is now '$SURVIVED'"
+fi
+
+echo "── R8: an absent explicit field returns nothing, not another secret ──"
+mk_item "$(item_json "Regr Absent Note" 2 '[{"name":"value","value":"the-value-field","type":1}]')" >/dev/null
+GOT=$(SS get regr_absent) || true
+if [ "$GOT" = "the-value-field" ]; then
+  report R8 "field=absent_field fell through to the legacy value field" 0
+else
+  report R8 "an explicit field that is missing resolves to nothing" 1
+fi
+
+echo "── R9: a built-in field named on create is readable back ──"
+SSP 'bw://?type=card' set regr_expmonth "07" >/dev/null
+bw sync >/dev/null 2>&1
+GOT=$(SSP 'bw://?type=card' get regr_expmonth) || true
+CARD_ID=$(bw list items 2>/dev/null | jq -r '.[] | select(.name == "RegrCardCreate") | .id' | head -1)
+[ -n "$CARD_ID" ] && [ "$CARD_ID" != "null" ] && CREATED_IDS+=("$CARD_ID")
+if [ "$GOT" = "07" ]; then
+  report R9 "set --field exp_month round-trips through the card's built-in" 1
+else
+  report R9 "exp_month was stored where the getter does not look" 0 "get returned '$GOT'"
+fi
+
+echo "── R10: a misspelled address is rejected ──"
+OUT=$(SSP 'bw://?type=sshkee' get regr_exact); RC=$?
+OUT2=$(SSP 'bw://?feild=api_key' get regr_exact); RC2=$?
+if [ $RC -ne 0 ] && [ $RC2 -ne 0 ]; then
+  report R10 "?type=sshkee and ?feild= are both rejected" 1
+elif [ $RC -ne 0 ]; then
+  report R10 "?type=sshkee is rejected but ?feild= is silently ignored" 0
+else
+  report R10 "a misspelled ?type= silently fell back to Login" 0 "$(head -1 <<<"$OUT")"
+fi
+
+echo "── R11: names fold case beyond ASCII ──"
+mk_item "$(item_json_with "Überblick" 1 '[]' '{"login":{"password":"umlaut-value"}}')" >/dev/null
+GOT=$(SS get regr_umlaut) || true
+if [ "$GOT" = "umlaut-value" ]; then
+  report R11 "an item named Überblick is addressable as überblick" 1
+else
+  report R11 "a non-ASCII name is unreachable in lower case" 0 "got '$GOT'"
+fi
+
+echo "── R12: the integration suite refuses a pre-existing fixture ──"
+# The data-loss path: the suite used to adopt a same-named vault item as a
+# mutable fixture and then overwrite its password, without recording it for
+# cleanup. Planting one must abort the run and leave the item untouched.
+SQUATTER_NAME="secretspec-it Test Database"
+SQUATTER_ID=$(mk_item "$(item_json_with "$SQUATTER_NAME" 1 '[]' '{"login":{"password":"precious"}}')")
+bw sync >/dev/null 2>&1
+( cd "$REPO_ROOT" && bash tests/bitwarden_integration.sh "$BW_SESSION" </dev/null ) >/dev/null 2>&1
+SUITE_RC=$?
+bw sync >/dev/null 2>&1
+STILL=$(bw get item "$SQUATTER_ID" 2>/dev/null | jq -r '.login.password')
+if [ $SUITE_RC -ne 0 ] && [ "$STILL" = "precious" ]; then
+  report R12 "the suite aborted and left the pre-existing item alone" 1
+else
+  report R12 "the suite adopted a real vault item as a fixture" 0 "exit $SUITE_RC, password now '$STILL'"
 fi
 
 echo

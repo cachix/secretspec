@@ -86,6 +86,16 @@ echo "── 3/5 bw login (isolated appdata) ──"
 export BITWARDENCLI_APPDATA_DIR="$HARNESS_DIR/bw-appdata"
 export NODE_TLS_REJECT_UNAUTHORIZED=0   # self-signed internal cert, local only
 mkdir -p "$BITWARDENCLI_APPDATA_DIR"
+
+# Isolate SecretSpec's own config the same way, and for the same reason. A
+# `[defaults] profile = "..."` in the developer's ~/.config/secretspec/config.toml
+# applies to the suites below, whose secretspec.toml defines only `default`, so
+# every get/set fails with "Invalid profile: ... is not defined in
+# secretspec.toml". That reads as a wholesale provider failure and has nothing
+# to do with the provider. XDG_CONFIG_HOME is the path SecretSpec resolves the
+# user config through on macOS too.
+export XDG_CONFIG_HOME="$HARNESS_DIR/xdg-config"
+mkdir -p "$XDG_CONFIG_HOME"
 bw config server "https://localhost:$TLS_PORT" >/dev/null
 BW_SESSION=$(bw login "$FIXTURE_EMAIL" "$FIXTURE_PASSWORD" --raw)
 export BW_SESSION
@@ -169,19 +179,40 @@ else
   echo "  prod-secrets $BW_TEST_COLL_PROD_ID"
 fi
 
-echo "── 5/5 integration suite ──"
+# Every suite runs even when an earlier one fails, and the worst status wins.
+# Under `set -e` the first failure would abort the harness, so one unrelated
+# integration failure would hide every regression finding -- exactly the report
+# you need when checking which findings are still REPRODUCED.
+SUITES_FAILED=0
+run_suite() { # run_suite <label> <script> [args...]
+  local label="$1"; shift
+  local rc=0
+  echo "── $label ──"
+  # `|| rc=$?` both captures the status and keeps `set -e` from aborting here,
+  # which is the point: a failing suite must not stop the ones after it.
+  bash "$@" </dev/null || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    SUITES_FAILED=$((SUITES_FAILED + 1))
+    echo "!! $label failed (exit $rc)" >&2
+  fi
+}
+
 cd "$REPO_ROOT"
-bash tests/bitwarden_integration.sh "$BW_SESSION" </dev/null
+run_suite "5/5 integration suite" tests/bitwarden_integration.sh "$BW_SESSION"
 
 # Optional: regression tests for the PR #166 review findings. They exit
 # non-zero while any finding is still REPRODUCED, so they're opt-in until
 # the fixes land — then they become part of the green path.
 if [ "${RUN_REGRESSIONS:-0}" = "1" ]; then
-  echo "── regressions: review findings ──"
-  bash tests/bitwarden_regression_findings.sh </dev/null
+  run_suite "regressions: review findings" tests/bitwarden_regression_findings.sh
 fi
 
 # C3: organization and collection name resolution. Skips itself when the
 # fixture above did not run.
-echo "── collection addressing ──"
-bash tests/bitwarden_collection_addressing.sh </dev/null
+run_suite "collection addressing" tests/bitwarden_collection_addressing.sh
+
+if [ "$SUITES_FAILED" -ne 0 ]; then
+  echo "$SUITES_FAILED suite(s) failed" >&2
+  exit 1
+fi
+echo "all suites passed"

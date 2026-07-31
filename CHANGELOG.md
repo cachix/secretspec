@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   libdbus.
 
 ### Fixed
+- AWS Parameter Store writes now reject unsupported reference coordinates and
+  ARN-pinned references before requesting a value. Versioned ARNs now point
+  users to writable parameter-name references instead of suggesting that only
+  the version selector be removed.
 - Cached provider routes now recognize Vault and OpenBao configurations that
   address the same endpoint, namespace, and mount as one store, even when they
   use different provider names or authentication methods, so a cache cannot
@@ -54,7 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   feature; planned for 0.18) for reading and writing KMS-encrypted
   `SecureString` parameters. It supports AWS profiles and regions, an optional
   hierarchy prefix, customer-managed KMS keys, parameter tiers, batched reads,
-  and read-only references pinned to a parameter version or label.
+  and references by parameter name, version, label, or ARN. Unversioned
+  parameter-name references can be written in place; version-, label-, and
+  ARN-pinned references are read-only.
   ([#209](https://github.com/cachix/secretspec/issues/209))
 
 ### Fixed

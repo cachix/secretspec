@@ -431,10 +431,23 @@ impl Provider for AwspsProvider {
 
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         match addr {
-            Address::Convention { .. } => Ok(()),
-            Address::Native(_) => Err(SecretSpecError::ProviderOperationFailed(
-                "awsps parameter references are read-only and cannot be written".to_string(),
-            )),
+            Address::Native(native) if native.item.starts_with("arn:") => {
+                Err(SecretSpecError::ProviderOperationFailed(
+                    "awsps refs using a parameter ARN are read-only: use the parameter's name to \
+                     write it in the provider's configured account and region."
+                        .to_string(),
+                ))
+            }
+            Address::Native(native) if native.version.is_some() => {
+                Err(SecretSpecError::ProviderOperationFailed(
+                    "awsps refs pinning a `version` are read-only: a Parameter Store version or \
+                     label cannot be overwritten. Drop `version` to write a new latest version."
+                        .to_string(),
+                ))
+            }
+            _ => self
+                .resolve_coords(addr)
+                .and_then(|coordinates| Self::validate_parameter_name(&coordinates.item)),
         }
     }
 
@@ -632,7 +645,19 @@ mod tests {
     }
 
     #[test]
-    fn native_ref_is_read_only() {
+    fn unversioned_native_name_ref_is_writable() {
+        let provider = AwspsProvider::new(config("awsps://us-east-1"));
+        let reference = crate::config::NativeAddress {
+            item: "/prod/token".to_string(),
+            ..Default::default()
+        };
+        provider
+            .check_writable(Address::Native(&reference))
+            .unwrap();
+    }
+
+    #[test]
+    fn versioned_native_ref_is_read_only() {
         let provider = AwspsProvider::new(config("awsps://us-east-1"));
         let reference = crate::config::NativeAddress {
             item: "/prod/token".to_string(),
@@ -646,17 +671,71 @@ mod tests {
     }
 
     #[test]
-    fn native_ref_rejects_field_before_network_access() {
+    fn native_arn_ref_is_read_only() {
         let provider = AwspsProvider::new(config("awsps://us-east-1"));
         let reference = crate::config::NativeAddress {
-            item: "/prod/token".to_string(),
-            field: Some("password".to_string()),
+            item: "arn:aws:ssm:us-east-1:123456789012:parameter/prod/token".to_string(),
             ..Default::default()
         };
         let error = provider
-            .resolve_coords(Address::Native(&reference))
+            .check_writable(Address::Native(&reference))
             .unwrap_err();
-        assert!(error.to_string().contains("`field`"), "{error}");
+        assert!(error.to_string().contains("ARN"), "{error}");
+        assert!(error.to_string().contains("read-only"), "{error}");
+    }
+
+    #[test]
+    fn versioned_native_arn_ref_reports_arn_remediation() {
+        let provider = AwspsProvider::new(config("awsps://us-east-1"));
+        let reference = crate::config::NativeAddress {
+            item: "arn:aws:ssm:us-east-1:123456789012:parameter/prod/token".to_string(),
+            version: Some("3".to_string()),
+            ..Default::default()
+        };
+        let error = provider
+            .check_writable(Address::Native(&reference))
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("ARN"), "{message}");
+        assert!(!message.contains("Drop `version`"), "{message}");
+    }
+
+    #[test]
+    fn native_ref_rejects_unsupported_coordinates_during_writability_check() {
+        let provider = AwspsProvider::new(config("awsps://us-east-1"));
+        let references = [
+            (
+                "field",
+                crate::config::NativeAddress {
+                    item: "/prod/token".to_string(),
+                    field: Some("password".to_string()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "vault",
+                crate::config::NativeAddress {
+                    item: "/prod/token".to_string(),
+                    vault: Some("production".to_string()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "section",
+                crate::config::NativeAddress {
+                    item: "/prod/token".to_string(),
+                    section: Some("credentials".to_string()),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (coordinate, reference) in references {
+            let error = provider
+                .check_writable(Address::Native(&reference))
+                .unwrap_err();
+            assert!(error.to_string().contains(coordinate), "{error}");
+        }
     }
 
     #[test]

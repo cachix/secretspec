@@ -35,6 +35,8 @@
 //! - `auth` -- `token` (default), `approle`, or `jwt`
 //! - `kv` -- KV engine version: `1` or `2` (default)
 //! - `tls` -- `true` (default) or `false`; the latter is intended for dev mode
+//! - `auth_mount` -- non-default AppRole or JWT mount beneath `/v1/auth`
+//!   (SecretSpec 0.18+)
 //! - `role` -- role for JWT auth, falling back through `BAO_JWT_ROLE` and
 //!   `VAULT_JWT_ROLE`
 //! - `audience` -- audience requested from the CI OIDC issuer, falling back
@@ -44,6 +46,8 @@
 //!
 //! - `openbao://bao.example.com:8200/secret` -- KV v2 with token auth
 //! - `openbao://bao.example.com:8200/secret?auth=approle` -- AppRole auth
+//! - `openbao://bao.example.com:8200/secret?auth=approle&auth_mount=platform-approle`
+//!   -- custom AppRole mount (SecretSpec 0.18+)
 //! - `openbao://bao.example.com:8200/secret?auth=jwt&role=ci` -- JWT auth
 //! - `openbao://team-a@bao.example.com:8200/secret` -- OpenBao namespace
 //! - `openbao://127.0.0.1:8200/secret?kv=1&tls=false` -- local KV v1 server

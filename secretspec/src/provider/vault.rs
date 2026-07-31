@@ -25,6 +25,8 @@
 //! - `auth` -- `token` (default), `approle`, or `jwt` (0.17+)
 //! - `kv` -- KV engine version: `1` or `2` (default)
 //! - `tls` -- `true` (default) or `false`; the latter is intended for dev mode
+//! - `auth_mount` -- non-default AppRole or JWT mount beneath `/v1/auth`
+//!   (SecretSpec 0.18+)
 //! - `role` -- Vault role for JWT auth, falling back to `VAULT_JWT_ROLE` (0.17+)
 //! - `audience` -- audience requested from the CI OIDC issuer, falling back to
 //!   `VAULT_JWT_AUDIENCE` (0.17+)
@@ -33,6 +35,8 @@
 //!
 //! - `vault://vault.example.com:8200/secret` -- KV v2 with token auth
 //! - `vault://vault.example.com:8200/secret?auth=approle` -- AppRole auth
+//! - `vault://vault.example.com:8200/secret?auth=approle&auth_mount=platform-approle`
+//!   -- custom AppRole mount (SecretSpec 0.18+)
 //! - `vault://vault.example.com:8200/secret?auth=jwt&role=ci` -- JWT auth
 //! - `vault://team-a@vault.example.com:8200/secret` -- Vault namespace
 //! - `vault://127.0.0.1:8200/secret?kv=1&tls=false` -- local KV v1 server

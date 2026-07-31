@@ -120,6 +120,8 @@ jobs:
   swift:
     name: Swift package
     needs: authorize
+    permissions:
+      contents: write
     uses: ./.github/workflows/swift-package.yml
 
   release-artifacts:

@@ -1,9 +1,8 @@
 name: "FFI cdylib"
 
 # Builds the secretspec-ffi C ABI library for each platform the language SDKs
-# bundle. Linux builds use a manylinux_2_28 baseline and compile libdbus into
-# the library so consumers do not need a matching system soname. Other targets
-# build natively on per-platform runners rather than cross-compiling.
+# bundle. Linux builds use a manylinux_2_28 baseline. Other targets build
+# natively on per-platform runners rather than cross-compiling.
 
 on:
   workflow_call:
@@ -47,12 +46,10 @@ jobs:
             runner: ubuntu-latest
             container: quay.io/pypa/manylinux_2_28_x86_64
             artifact: libsecretspec_ffi.so
-            cargo_features: --features vendored-dbus
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
             container: quay.io/pypa/manylinux_2_28_aarch64
             artifact: libsecretspec_ffi.so
-            cargo_features: --features vendored-dbus
           - target: aarch64-apple-darwin
             runner: macos-latest
             artifact: libsecretspec_ffi.dylib
@@ -76,9 +73,9 @@ jobs:
       - name: Build cdylib
         run: >-
           cargo build -p secretspec-ffi --release
-          --target ${{ matrix.target }} ${{ matrix.cargo_features }}
+          --target ${{ matrix.target }}
 
-      - name: Verify Linux portability (glibc <= 2.28, no dynamic libdbus)
+      - name: Verify Linux portability (glibc <= 2.28, no libdbus)
         if: matrix.container
         shell: bash
         run: >-

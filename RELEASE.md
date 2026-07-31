@@ -132,10 +132,9 @@ re-runs of an already-published version harmless).
   maturin) — there is no separate cdylib bundled. The extension targets
   pyo3's `abi3-py39` feature, so one `cp39-abi3-<platform>` wheel per platform
   serves all CPython >= 3.9. Linux wheels are built via `PyO3/maturin-action`
-  inside a `manylinux_2_28` container (old glibc); maturin vendors the
-  extension's dynamic system dependencies itself (notably `libdbus`, pulled in
-  by the keyring provider), no separate `auditwheel` step needed. macOS builds
-  natively; a Windows wheel is a follow-up.
+  inside a `manylinux_2_28` container (old glibc); maturin repairs the wheel,
+  so no separate `auditwheel` step is needed. macOS builds natively; a Windows
+  wheel is a follow-up.
 - **Publish:** `pypa/gh-action-pypi-publish` via **PyPI Trusted Publishing**
   (OIDC); no token needed. One-time setup already done — see "Before your
   first release" above.
@@ -146,7 +145,7 @@ re-runs of an already-published version harmless).
   `secretspec-ffi` staticlib in `vendor/`. At `gem install`, mkmf compiles a tiny
   C glue and statically links that archive, so the resolver is embedded in the
   extension and one platform gem serves every Ruby ABI (install needs a C
-  compiler + Ruby headers, plus `libdbus-1-dev` for the keyring provider).
+  compiler and Ruby headers).
 - **Publish:** `gem push` for each platform gem, authenticated via **RubyGems
   Trusted Publishing** (OIDC) through `rubygems/configure-rubygems-credentials`
   — no token stored in CI. One-time setup already done — see "Before your
@@ -278,8 +277,7 @@ In order:
 - **Native assets:** one NuGet package carries `secretspec-ffi` under the
   standard `runtimes/<rid>/native/` layout for glibc and musl Linux x64/Arm64,
   macOS x64/Arm64, and Windows x64/Arm64. Glibc builds use a manylinux 2.28
-  baseline, Linux builds vendor dbus, and Windows builds statically link the
-  MSVC runtime.
+  baseline, and Windows builds statically link the MSVC runtime.
 - **Publish:** `dotnet-package.yml` tests every native asset on its target,
   assembles `Cachix.SecretSpec.<version>.nupkg`, then installs that exact
   package in isolated framework-dependent and NativeAOT consumers on all eight

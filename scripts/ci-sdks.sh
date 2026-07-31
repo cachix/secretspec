@@ -27,7 +27,7 @@ export SECRETSPEC_BIN="$target_dir/debug/secretspec"
 # instead of dlopening the cdylib. A Rust staticlib does not carry its own native
 # dependency closure, so capture the transitive system libs the archive needs and
 # hand them to every consumer's linker. NEVER hardcode this list -- it drifts as
-# providers change (today: -ldbus-1 -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc).
+# providers change.
 export SECRETSPEC_FFI_STATICLIB="$target_dir/debug/libsecretspec_ffi.a"
 export SECRETSPEC_FFI_INCLUDE="$repo_root/secretspec-ffi/include"
 SECRETSPEC_FFI_NATIVE_LIBS="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \

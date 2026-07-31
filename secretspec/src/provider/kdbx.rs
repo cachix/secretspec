@@ -167,14 +167,16 @@ impl KdbxProvider {
         if let Some(path) = self.config.keyfile.as_deref() {
             let mut file = File::open(path).map_err(|error| {
                 operation_error(format!(
-                    "Failed to open KDBX key file '{}': {error}",
-                    path.display()
+                    "Failed to open KDBX key file '{}': {}",
+                    path.display(),
+                    crate::error::display_error_chain(&error)
                 ))
             })?;
             key = key.with_keyfile(&mut file).map_err(|error| {
                 operation_error(format!(
-                    "Failed to read KDBX key file '{}': {error}",
-                    path.display()
+                    "Failed to read KDBX key file '{}': {}",
+                    path.display(),
+                    crate::error::display_error_chain(&error)
                 ))
             })?;
         }
@@ -197,8 +199,9 @@ impl KdbxProvider {
             .map(Some)
             .map_err(|error| {
                 operation_error(format!(
-                    "Failed to unlock KDBX database '{}': {error}",
-                    self.config.path.display()
+                    "Failed to unlock KDBX database '{}': {}",
+                    self.config.path.display(),
+                    crate::error::display_error_chain(&error)
                 ))
             })
     }
@@ -216,27 +219,32 @@ impl KdbxProvider {
             .unwrap_or_else(|| Path::new("."));
         let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
             operation_error(format!(
-                "Failed to create a temporary KDBX database next to '{}': {error}",
-                self.config.path.display()
+                "Failed to create a temporary KDBX database next to '{}': {}",
+                self.config.path.display(),
+                crate::error::display_error_chain(&error)
             ))
         })?;
 
         database
             .save(temporary.as_file_mut(), self.key()?)
             .map_err(|error| {
-                operation_error(format!("Failed to encrypt KDBX database: {error}"))
+                operation_error(format!(
+                    "Failed to encrypt KDBX database: {}",
+                    crate::error::display_error_chain(&error)
+                ))
             })?;
         temporary.as_file().sync_all().map_err(|error| {
             operation_error(format!(
-                "Failed to flush KDBX database '{}': {error}",
-                self.config.path.display()
+                "Failed to flush KDBX database '{}': {}",
+                self.config.path.display(),
+                crate::error::display_error_chain(&error)
             ))
         })?;
         temporary.persist(&self.config.path).map_err(|error| {
             operation_error(format!(
                 "Failed to atomically replace KDBX database '{}': {}",
                 self.config.path.display(),
-                error.error
+                crate::error::display_error_chain(&error.error)
             ))
         })?;
         Ok(())
@@ -348,8 +356,9 @@ impl Provider for KdbxProvider {
         };
         let version = Database::get_version(&mut file).map_err(|error| {
             operation_error(format!(
-                "Failed to inspect KDBX database '{}': {error}",
-                self.config.path.display()
+                "Failed to inspect KDBX database '{}': {}",
+                self.config.path.display(),
+                crate::error::display_error_chain(&error)
             ))
         })?;
         if !matches!(version, DatabaseVersion::KDB4(_)) {

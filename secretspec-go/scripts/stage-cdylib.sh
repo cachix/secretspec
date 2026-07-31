@@ -22,12 +22,6 @@ build_args=(
   --release
   --manifest-path "$repo_root/Cargo.toml"
 )
-# The staged library is a distributable artifact, not a development build.
-# Linux consumers cannot be expected to provide the exact libdbus soname from
-# the build host (notably on NixOS), so compile libdbus into the cdylib.
-if [[ "$goos" == "linux" ]]; then
-  build_args+=(--features vendored-dbus)
-fi
 cargo build "${build_args[@]}"
 
 target_dir="$(cargo metadata --no-deps --format-version 1 --manifest-path "$repo_root/Cargo.toml" \

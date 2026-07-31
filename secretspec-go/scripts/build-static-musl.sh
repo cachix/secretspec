@@ -2,7 +2,7 @@
 #
 # Build a fully-static (musl) Go binary that links the secretspec-ffi archive in
 # via cgo. Run inside the project devenv shell, which provides the musl C
-# cross-toolchain and static libdbus/libunwind via MUSL_CC / MUSL_STATIC_LDFLAGS
+# cross-toolchain and static libunwind via MUSL_CC / MUSL_STATIC_LDFLAGS
 # (and the CC_/linker env so cargo compiles the C deps against musl):
 #
 #     devenv shell -- bash secretspec-go/scripts/build-static-musl.sh <pkg-or-dir> [out]

@@ -215,14 +215,14 @@ impl GcsmProvider {
     }
 
     /// Checks if an error indicates the resource was not found.
-    fn is_not_found_error(e: &impl std::error::Error) -> bool {
-        let s = e.to_string();
+    fn is_not_found_error(e: &(impl std::error::Error + 'static)) -> bool {
+        let s = crate::error::display_error_chain(e);
         s.contains("NOT_FOUND") || s.contains("notFound")
     }
 
     /// Checks if an error indicates the resource already exists.
-    fn is_already_exists_error(e: &impl std::error::Error) -> bool {
-        let s = e.to_string();
+    fn is_already_exists_error(e: &(impl std::error::Error + 'static)) -> bool {
+        let s = crate::error::display_error_chain(e);
         s.contains("ALREADY_EXISTS") || s.contains("alreadyExists")
     }
 
@@ -235,7 +235,7 @@ impl GcsmProvider {
                 - Local development: Run 'gcloud auth application-default login'\n  \
                 - Service account: Set GOOGLE_APPLICATION_CREDENTIALS environment variable\n  \
                 - GKE: Configure Workload Identity",
-                e
+                crate::error::display_error_chain(&e)
             ))
         })
     }
@@ -280,7 +280,8 @@ impl GcsmProvider {
                 } else {
                     Err(SecretSpecError::ProviderOperationFailed(format!(
                         "Failed to access secret '{}': {}",
-                        coords.item, e
+                        coords.item,
+                        crate::error::display_error_chain(&e)
                     )))
                 }
             }
@@ -311,7 +312,8 @@ impl GcsmProvider {
         {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "Failed to create secret '{}': {}",
-                secret_name, e
+                secret_name,
+                crate::error::display_error_chain(&e)
             )));
         }
         // ALREADY_EXISTS is expected for existing secrets, continue to add version
@@ -331,7 +333,8 @@ impl GcsmProvider {
             .map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
                     "Failed to add secret version for '{}': {}",
-                    secret_name, e
+                    secret_name,
+                    crate::error::display_error_chain(&e)
                 ))
             })?;
 

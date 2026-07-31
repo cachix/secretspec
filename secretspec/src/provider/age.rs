@@ -53,7 +53,10 @@ impl ParsedIdentity {
     fn to_recipients(&self) -> Result<Vec<Box<dyn Recipient + Send>>> {
         match self {
             Self::Age(identity_file) => identity_file.to_recipients().map_err(|e| {
-                provider_err(format!("Failed to derive recipient from identity: {}", e))
+                provider_err(format!(
+                    "Failed to derive recipient from identity: {}",
+                    crate::error::display_error_chain(&e)
+                ))
             }),
             Self::Ssh(identity) => age::ssh::Recipient::try_from(identity.clone())
                 .map(|recipient| vec![Box::new(recipient) as Box<dyn Recipient + Send>])
@@ -68,9 +71,12 @@ impl ParsedIdentity {
 
     fn into_identities(self) -> Result<Vec<Box<dyn Identity + Send + Sync>>> {
         match self {
-            Self::Age(identity_file) => identity_file
-                .into_identities()
-                .map_err(|e| provider_err(format!("Failed to load age identities: {}", e))),
+            Self::Age(identity_file) => identity_file.into_identities().map_err(|e| {
+                provider_err(format!(
+                    "Failed to load age identities: {}",
+                    crate::error::display_error_chain(&e)
+                ))
+            }),
             Self::Ssh(identity) => Ok(vec![Box::new(identity.with_callbacks(NoCallbacks))]),
         }
     }
@@ -176,8 +182,12 @@ impl AgeProvider {
     /// Parses the configured identity from credential, env, or path.
     fn identity(&self) -> Result<ParsedIdentity> {
         if let Some(material) = credential_or_env(&self.credentials, IDENTITY, AGE_IDENTITY_ENV) {
-            return parse_identity(material.as_bytes(), None)
-                .map_err(|e| provider_err(format!("Failed to parse age identity: {}", e)));
+            return parse_identity(material.as_bytes(), None).map_err(|e| {
+                provider_err(format!(
+                    "Failed to parse age identity: {}",
+                    crate::error::display_error_chain(&e)
+                ))
+            });
         }
         if let Some(path) = &self.config.identity_path {
             let data = std::fs::read(path).map_err(|e| {
@@ -191,7 +201,7 @@ impl AgeProvider {
                 provider_err(format!(
                     "Failed to parse age identity file {}: {}",
                     path.display(),
-                    e
+                    crate::error::display_error_chain(&e)
                 ))
             });
         }
@@ -218,12 +228,21 @@ impl AgeProvider {
         let identities = self.identity()?.into_identities()?;
 
         let reader = ArmoredReader::new(&ciphertext[..]);
-        let decryptor = Decryptor::new(reader)
-            .map_err(|e| provider_err(format!("Failed to read age file: {}", e)))?;
+        let decryptor = Decryptor::new(reader).map_err(|e| {
+            provider_err(format!(
+                "Failed to read age file: {}",
+                crate::error::display_error_chain(&e)
+            ))
+        })?;
         let mut plaintext = Vec::new();
         decryptor
             .decrypt(identities.iter().map(|i| i.as_ref() as &dyn Identity))
-            .map_err(|e| provider_err(format!("Failed to decrypt age file: {}", e)))?
+            .map_err(|e| {
+                provider_err(format!(
+                    "Failed to decrypt age file: {}",
+                    crate::error::display_error_chain(&e)
+                ))
+            })?
             .read_to_end(&mut plaintext)?;
 
         parse_dotenv(&plaintext)
@@ -235,7 +254,12 @@ impl AgeProvider {
         let recipients = self.recipients()?;
         let encryptor =
             Encryptor::with_recipients(recipients.iter().map(|r| r.as_ref() as &dyn Recipient))
-                .map_err(|e| provider_err(format!("No age recipients available: {}", e)))?;
+                .map_err(|e| {
+                    provider_err(format!(
+                        "No age recipients available: {}",
+                        crate::error::display_error_chain(&e)
+                    ))
+                })?;
 
         let mut out = Vec::new();
         let format = if self.config.armor {
@@ -244,13 +268,21 @@ impl AgeProvider {
             Format::Binary
         };
         let armored = ArmoredWriter::wrap_output(&mut out, format)?;
-        let mut writer = encryptor
-            .wrap_output(armored)
-            .map_err(|e| provider_err(format!("Failed to encrypt age file: {}", e)))?;
+        let mut writer = encryptor.wrap_output(armored).map_err(|e| {
+            provider_err(format!(
+                "Failed to encrypt age file: {}",
+                crate::error::display_error_chain(&e)
+            ))
+        })?;
         writer.write_all(plaintext.as_bytes())?;
         writer
             .finish()
-            .map_err(|e| provider_err(format!("Failed to finish age stream: {}", e)))?
+            .map_err(|e| {
+                provider_err(format!(
+                    "Failed to finish age stream: {}",
+                    crate::error::display_error_chain(&e)
+                ))
+            })?
             .finish()?;
 
         std::fs::write(&self.config.path, out)?;

@@ -6,7 +6,7 @@
 //! # Features
 //!
 //! - **Declarative Configuration**: Define secrets in `secretspec.toml`
-//! - **Multiple Providers**: Keyring, dotenv, environment variables, OnePassword, LastPass
+//! - **Multiple Providers**: Keyring, dotenv, environment variables, Keeper Secrets Manager (0.18+)
 //! - **Profile Support**: Different configurations for development, staging, production
 //! - **Type Safety**: Optional compile-time code generation for strongly-typed access
 //! - **Validation**: Ensure all required secrets are present before running applications

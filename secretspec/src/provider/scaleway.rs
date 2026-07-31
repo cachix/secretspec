@@ -252,7 +252,8 @@ impl ScalewayProvider {
             .build()
             .map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to build Scaleway HTTP client: {e}"
+                    "Failed to build Scaleway HTTP client: {}",
+                    crate::error::display_error_chain(&e)
                 ))
             })
     }
@@ -299,7 +300,8 @@ impl ScalewayProvider {
             .await
             .map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to reach Scaleway Secret Manager: {e}"
+                    "Failed to reach Scaleway Secret Manager: {}",
+                    crate::error::display_error_chain(&e)
                 ))
             })?;
 
@@ -307,7 +309,8 @@ impl ScalewayProvider {
             200 => {
                 let body: AccessResponse = response.json().await.map_err(|e| {
                     SecretSpecError::ProviderOperationFailed(format!(
-                        "Failed to parse Scaleway access response: {e}"
+                        "Failed to parse Scaleway access response: {}",
+                        crate::error::display_error_chain(&e)
                     ))
                 })?;
                 let decoded = decode_payload(item, &body.data)?;
@@ -346,7 +349,8 @@ impl ScalewayProvider {
             .await
             .map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to reach Scaleway Secret Manager: {e}"
+                    "Failed to reach Scaleway Secret Manager: {}",
+                    crate::error::display_error_chain(&e)
                 ))
             })?;
 
@@ -378,7 +382,8 @@ impl ScalewayProvider {
             .await
             .map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to reach Scaleway Secret Manager: {e}"
+                    "Failed to reach Scaleway Secret Manager: {}",
+                    crate::error::display_error_chain(&e)
                 ))
             })?;
 
@@ -386,7 +391,8 @@ impl ScalewayProvider {
             200 | 201 => {
                 let created: CreatedSecret = response.json().await.map_err(|e| {
                     SecretSpecError::ProviderOperationFailed(format!(
-                        "Failed to parse Scaleway create-secret response: {e}"
+                        "Failed to parse Scaleway create-secret response: {}",
+                        crate::error::display_error_chain(&e)
                     ))
                 })?;
                 Ok(created.id)
@@ -420,7 +426,8 @@ impl ScalewayProvider {
             .await
             .map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to reach Scaleway Secret Manager: {e}"
+                    "Failed to reach Scaleway Secret Manager: {}",
+                    crate::error::display_error_chain(&e)
                 ))
             })?;
 
@@ -431,7 +438,8 @@ impl ScalewayProvider {
 
         let body: ListSecretsResponse = response.json().await.map_err(|e| {
             SecretSpecError::ProviderOperationFailed(format!(
-                "Failed to parse Scaleway list-secrets response: {e}"
+                "Failed to parse Scaleway list-secrets response: {}",
+                crate::error::display_error_chain(&e)
             ))
         })?;
 
@@ -465,7 +473,13 @@ fn decode_payload(item: &str, data: &str) -> Result<String> {
 
 /// Builds an error for a non-success HTTP response, including the body.
 async fn http_error(action: &str, status: u16, response: reqwest::Response) -> SecretSpecError {
-    let body = response.text().await.unwrap_or_default();
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(error) => format!(
+            "<failed to read response body: {}>",
+            crate::error::display_error_chain(&error)
+        ),
+    };
     SecretSpecError::ProviderOperationFailed(format!(
         "Scaleway returned HTTP {status} while {action}: {body}"
     ))

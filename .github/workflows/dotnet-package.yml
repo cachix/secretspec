@@ -2,8 +2,7 @@ name: ".NET SDK"
 
 # Builds the C# client and the runtime-specific secretspec-ffi libraries packed
 # into Cachix.SecretSpec. Glibc Linux uses a manylinux_2_28 baseline; Alpine
-# receives separate musl assets. Both vendor dbus so consumers do not need a
-# system libdbus installation.
+# receives separate musl assets.
 
 on:
   workflow_call:
@@ -47,14 +46,12 @@ jobs:
             runner: ubuntu-latest
             container: quay.io/pypa/manylinux_2_28_x86_64
             library: libsecretspec_ffi.so
-            cargo_features: --features vendored-dbus
             rustflags: -C strip=symbols
           - rid: linux-arm64
             target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
             container: quay.io/pypa/manylinux_2_28_aarch64
             library: libsecretspec_ffi.so
-            cargo_features: --features vendored-dbus
             rustflags: -C strip=symbols
           - rid: osx-x64
             target: x86_64-apple-darwin
@@ -112,9 +109,9 @@ jobs:
           RUSTFLAGS: ${{ matrix.rustflags }}
         run: >-
           cargo build -p secretspec-ffi --release
-          --target ${{ matrix.target }} ${{ matrix.cargo_features }}
+          --target ${{ matrix.target }}
 
-      - name: Verify glibc portability (glibc <= 2.28, no dynamic libdbus)
+      - name: Verify glibc portability (glibc <= 2.28, no libdbus)
         if: matrix.container
         shell: bash
         run: >-
@@ -193,7 +190,7 @@ jobs:
               export PATH="$HOME/.cargo/bin:$PATH"
               rustup toolchain install
               cargo build -p secretspec-ffi --release \
-                --target "${{ matrix.target }}" --features vendored-dbus
+                --target "${{ matrix.target }}"
             '
           test -f \
             "target/${{ matrix.target }}/release/libsecretspec_ffi.so"

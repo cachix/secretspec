@@ -81,9 +81,9 @@ jobs:
           # Ensure the dev headers are available for the build.
           phpts: nts
 
-      - name: Install Linux build dependencies (clang for bindgen, dbus for keyring)
+      - name: Install Linux build dependencies (clang for bindgen)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y llvm-dev libclang-dev clang libdbus-1-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y llvm-dev libclang-dev clang
 
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install

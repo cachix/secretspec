@@ -17,6 +17,7 @@
 //!
 //! - [`keyring::KeyringProvider`]: System keyring integration (default)
 //! - [`kdbx::KdbxProvider`]: KeePass KDBX database integration (0.17+)
+//! - [`keeper::KeeperProvider`]: Keeper Secrets Manager integration (0.18+)
 //! - [`dotenv::DotEnvProvider`]: `.env` file support
 //! - [`env::EnvProvider`]: Environment variables (read-only)
 //! - [`pass::PassProvider`]: Pass integration
@@ -45,6 +46,7 @@
 //! dotenv://.env.production
 //! onepassword://vault
 //! lastpass://folder
+//! keeper://SHARED_FOLDER_UID  # Keeper, 0.18+
 //! ```
 //!
 //! ## Example
@@ -296,6 +298,8 @@ pub mod gopass;
 pub mod infisical;
 #[cfg(feature = "kdbx")]
 pub mod kdbx;
+#[cfg(feature = "keeper")]
+pub mod keeper;
 #[cfg(feature = "keyring")]
 pub mod keyring;
 pub mod lastpass;
@@ -1086,11 +1090,13 @@ impl PreflightGuard {
         if let Some(scope) = self.inner.auth_scope_key() {
             return PREFLIGHT_AUTH_CACHE
                 .check((self.inner.name(), scope), || {
-                    f().map_err(|e| e.to_string())
+                    f().map_err(|e| crate::error::display_error_chain(&e))
                 })
                 .map_err(SecretSpecError::ProviderOperationFailed);
         }
-        let result = self.result.get_or_init(|| f().map_err(|e| e.to_string()));
+        let result = self
+            .result
+            .get_or_init(|| f().map_err(|e| crate::error::display_error_chain(&e)));
         match result {
             Ok(()) => Ok(()),
             Err(msg) => Err(SecretSpecError::ProviderOperationFailed(msg.clone())),
@@ -1585,6 +1591,70 @@ mod provider_credentials_tests {
             assert_eq!(
                 preferred_env(&[PREFERRED, FALLBACK]).as_deref(),
                 Some("from-fallback")
+            );
+        }
+    }
+}
+
+/// Property tests for the URI encoding every provider's `uri()` runs through.
+///
+/// `QUERY_ENCODE_SET` states its own contract: it "makes `ProviderUrl::encode_query`
+/// a true inverse of that parsing, so query values round-trip". That is a claim
+/// about every string, checked today against one hand-written value in one
+/// provider's tests. These quantify it.
+#[cfg(test)]
+mod encoding_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Reads a query value back the way a provider's `TryFrom` does.
+    fn query_value_of(uri: &str, key: &str) -> Option<String> {
+        let url = ProviderUrl::new(Url::parse(uri).ok()?);
+        url.query_pairs()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.into_owned())
+    }
+
+    proptest! {
+        /// A query value survives `encode_query` -> parse unchanged.
+        ///
+        /// The characters that break this are the ones form-urlencoded parsing
+        /// claims: `&` splits a pair, `+` becomes a space, `%` starts an escape,
+        /// `#` ends the query. Each silently truncates or mangles a value rather
+        /// than failing, so the store a provider ends up talking to is not the
+        /// one the URI named.
+        #[test]
+        fn encode_query_round_trips(value in ".*") {
+            let uri = format!("keyring://?v={}", ProviderUrl::encode_query(&value));
+            let decoded = query_value_of(&uri, "v");
+            prop_assert_eq!(
+                decoded.as_deref(),
+                Some(value.as_str()),
+                "value {:?} did not survive the round-trip through {:?}",
+                value,
+                uri,
+            );
+        }
+
+        /// Encoding is deterministic: the same value always encodes the same
+        /// way, so a `uri()` rendering is stable across runs (it lands in audit
+        /// records, which are compared).
+        #[test]
+        fn encode_query_is_deterministic(value in ".*") {
+            prop_assert_eq!(
+                ProviderUrl::encode_query(&value),
+                ProviderUrl::encode_query(&value),
+            );
+        }
+
+        /// An encoded value never carries a character that would end the query
+        /// or start a new pair, whatever went in.
+        #[test]
+        fn encoded_values_are_query_safe(value in ".*") {
+            let encoded = ProviderUrl::encode_query(&value);
+            prop_assert!(
+                !encoded.contains('&') && !encoded.contains('#') && !encoded.contains('+'),
+                "encoded {encoded:?} still carries a query-structural character",
             );
         }
     }

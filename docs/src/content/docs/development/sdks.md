@@ -71,9 +71,8 @@ Notes:
 - Most Linux binary artifacts build inside manylinux_2_28 containers so they
   run on any distro with glibc >= 2.28 (the Ruby Linux gem still links the
   build runner's glibc; a baseline toolchain there is a tracked follow-up).
-  On Linux the keyring provider's libdbus is either compiled in
-  (`vendored-dbus`) or required at runtime, per artifact — each workflow's
-  header comment states which.
+  The keyring provider uses a Rust-native D-Bus transport on Linux and does not
+  require system libdbus.
 - Hackage distributes source only; the Haskell column records which platforms
   CI builds and tests, since users link `secretspec-ffi` themselves.
 - The fully-static Go binary (`-tags static`, musl) is Linux x64 only.
@@ -113,8 +112,8 @@ GHC's linker at them.
    deliberately avoid cross-compiling because the crate links system
    libraries.
 3. Keep the artifact self-contained: vendor or statically link anything an end
-   user's machine will not have (see the manylinux/dbus and MinGW import
-   library notes above).
+   user's machine will not have (see the manylinux and MinGW import library
+   notes above).
 4. Smoke test in the same workflow: install or load the built artifact and
    call one function through it.
 5. Update the platform table above, the [SDK overview](/sdk/overview) platform

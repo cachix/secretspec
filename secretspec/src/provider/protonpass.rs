@@ -294,8 +294,12 @@ impl ProtonPassProvider {
             return Err(SecretSpecError::ProviderOperationFailed(stderr.to_string()));
         }
 
-        String::from_utf8(output.stdout)
-            .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))
+        String::from_utf8(output.stdout).map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Proton Pass CLI returned non-UTF-8 output: {}",
+                crate::error::display_error_chain(&e)
+            ))
+        })
     }
 }
 
@@ -356,8 +360,13 @@ impl Provider for ProtonPassProvider {
             None,
         ) {
             Ok(output) => {
-                let response: ProtonPassViewResponse = serde_json::from_str(&output)
-                    .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))?;
+                let response: ProtonPassViewResponse =
+                    serde_json::from_str(&output).map_err(|e| {
+                        SecretSpecError::ProviderOperationFailed(format!(
+                            "Failed to parse Proton Pass CLI response: {}",
+                            crate::error::display_error_chain(&e)
+                        ))
+                    })?;
                 Ok(response
                     .item
                     .content
@@ -405,7 +414,12 @@ impl Provider for ProtonPassProvider {
             title: title.into_owned(),
             note: value.expose_secret().to_string(),
         })
-        .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))?;
+        .map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to encode Proton Pass CLI request: {}",
+                crate::error::display_error_chain(&e)
+            ))
+        })?;
 
         self.run_pass_cli(
             &[

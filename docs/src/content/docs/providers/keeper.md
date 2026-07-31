@@ -1,0 +1,208 @@
+---
+title: Keeper Secrets Manager Provider
+description: Keeper Secrets Manager integration through Keeper's official Rust SDK
+---
+
+:::caution[Version compatibility]
+The `keeper` provider is added in SecretSpec 0.18.
+:::
+
+The Keeper provider reads and writes records available to a
+[Keeper Secrets Manager](https://docs.keeper.io/keeperpam/secrets-manager)
+application. SecretSpec links
+[Keeper's official Rust SDK](https://github.com/Keeper-Security/secrets-manager/tree/master/sdk/rust),
+so no separate `ksm` executable is required.
+
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `keeper` (0.18+) |
+| URI | `keeper://FOLDER_UID[?config_file=PATH]` |
+| Access | Read, write, and delete |
+| Best for | Machine and CI/CD secrets managed in Keeper |
+| Authentication | KSM configuration, or a one-time token while creating a file configuration |
+| Availability | SecretSpec 0.18+; requires the `keeper` build feature |
+| Default storage | Login record `secretspec/{project}/{profile}/{key}`, field `password` |
+
+## Quick start
+
+```bash
+# Store a secret as a Keeper record
+$ secretspec set DATABASE_URL \
+    --provider "keeper://SHARED_FOLDER_UID?config_file=.keeper/client-config.json"
+
+# Read it back
+$ secretspec get DATABASE_URL \
+    --provider "keeper://SHARED_FOLDER_UID?config_file=.keeper/client-config.json"
+
+# Resolve the profile and run a command
+$ secretspec run \
+    --provider "keeper://SHARED_FOLDER_UID?config_file=.keeper/client-config.json" \
+    -- npm start
+```
+
+The folder must be shared with the KSM application and grant edit permission
+for writes.
+
+## Setup
+
+### Prerequisites
+
+- SecretSpec 0.18+ built with the `keeper` feature
+- A Keeper Secrets Manager application
+- A shared folder available to that application
+- A bound KSM client configuration, or a one-time access token for initial
+  binding
+
+Keeper's Rust SDK is embedded in SecretSpec. Keeper Commander and the `ksm` CLI
+are useful for application setup, but neither is needed when SecretSpec runs.
+
+### Authentication with KSM_CONFIG
+
+Set `KSM_CONFIG` to the JSON or Base64 KSM client configuration:
+
+```bash
+export KSM_CONFIG="$KEEPER_CLIENT_CONFIG"
+secretspec check --provider "keeper://SHARED_FOLDER_UID"
+```
+
+The configuration contains private client keys. Treat the whole value as a
+secret.
+
+SecretSpec 0.18+ also declares `config` as a
+[provider credential](/concepts/providers/#provider-credentials), so the
+configuration can be loaded from another provider instead of the environment:
+
+```toml title="secretspec.toml"
+[providers]
+bootstrap = "keyring://"
+
+[providers.keeper]
+uri = "keeper://SHARED_FOLDER_UID"
+credentials = { config = "bootstrap" }
+
+[profiles.production]
+DATABASE_URL = { description = "Database URL", providers = ["keeper"] }
+```
+
+When no explicit `config` credential is supplied, the provider falls back to
+`KSM_CONFIG`.
+
+### Authentication with a configuration file
+
+Use `config_file` to read and update a Keeper SDK configuration file:
+
+```toml title="secretspec.toml"
+[providers]
+keeper = "keeper://SHARED_FOLDER_UID?config_file=.keeper/client-config.json"
+```
+
+Relative paths are resolved from the directory containing `secretspec.toml`.
+Without `config_file`, the SDK honors `KSM_CONFIG_FILE`, then uses its
+`client-config.json` default.
+
+### Bind with a one-time token
+
+The `token` provider credential, or `KSM_TOKEN` fallback, can bind a new client.
+Pair it with file storage so the SDK can persist the generated client keys for
+later SecretSpec processes:
+
+```bash
+export KSM_TOKEN="US:ONE_TIME_TOKEN"
+secretspec check \
+  --provider "keeper://SHARED_FOLDER_UID?config_file=.keeper/client-config.json"
+unset KSM_TOKEN
+```
+
+A Keeper one-time token cannot be reused. Remove it after the first successful
+request and retain the generated configuration file securely.
+
+## Configuration
+
+### URI format
+
+```text
+keeper://FOLDER_UID[?config_file=PATH]
+```
+
+- `FOLDER_UID` is required. It is the case-sensitive UID of a shared folder or
+  one of its subfolders. New convention records are created there.
+- `config_file` is optional. It selects a Keeper SDK client configuration file.
+
+### URI examples
+
+```text
+keeper://SHARED_FOLDER_UID
+keeper://SHARED_FOLDER_UID?config_file=.keeper/client-config.json
+```
+
+### Project configuration
+
+```toml title="secretspec.toml"
+[providers]
+keeper_prod = "keeper://SHARED_FOLDER_UID?config_file=.keeper/client-config.json"
+
+[profiles.production]
+DATABASE_URL = { description = "Database URL", providers = ["keeper_prod"] }
+API_KEY = { description = "API key", providers = ["keeper_prod"] }
+```
+
+## Storage model
+
+Convention secrets use Keeper login records:
+
+```text
+record title: secretspec/{project}/{profile}/{key}
+field:        password
+```
+
+For example, project `storefront`, profile `production`, and key `DATABASE_URL`
+map to record title `secretspec/storefront/production/DATABASE_URL`.
+
+SecretSpec fetches the application's available records once for a batch of
+secret requests, then resolves all requested titles and fields locally. A
+duplicate convention title is rejected as ambiguous.
+
+## Use existing records
+
+A secret's [`ref`](/reference/configuration/#secret-references) can select an
+existing Keeper record by exact title or record UID. `field` selects a standard
+field type/label or custom field label and defaults to `password`:
+
+```toml title="secretspec.toml"
+[providers]
+keeper = "keeper://SHARED_FOLDER_UID?config_file=.keeper/client-config.json"
+
+[profiles.production]
+DATABASE_URL = {
+  description = "Database URL",
+  providers = ["keeper"],
+  ref = { item = "KEEPER_RECORD_UID", field = "Database URL" }
+}
+```
+
+Reads and writes target the existing field in place. A write through `ref`
+never creates a missing record or field; create it in Keeper first. Use a
+record UID when duplicate titles exist.
+
+## CI/CD
+
+Store the bound KSM configuration as one protected CI secret:
+
+```bash
+export KSM_CONFIG="$CI_KEEPER_CONFIG"
+secretspec run --provider "keeper://SHARED_FOLDER_UID" -- ./deploy
+```
+
+The KSM application should receive access only to the folders the job needs.
+Grant edit permission only when the job must run `set`, refresh a Keeper-backed
+cache, or otherwise write records.
+
+## Security considerations
+
+The official SDK encrypts and decrypts Keeper records inside the SecretSpec
+process. Secret values and KSM credentials are not placed in child-process
+arguments. A `config_file` contains long-lived private client keys and must be
+protected like any other secret; prefer `KSM_CONFIG` or a provider credential
+when persistent local files are undesirable.

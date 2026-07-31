@@ -116,7 +116,12 @@ impl KeyringProvider {
 
     /// The current system username, the account convention entries live under.
     fn current_username() -> Result<String> {
-        whoami::username().map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))
+        whoami::username().map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to determine the current username for keyring storage: {}",
+                crate::error::display_error_chain(&e)
+            ))
+        })
     }
 }
 

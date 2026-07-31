@@ -50,13 +50,35 @@
 use super::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use aws_sdk_secretsmanager::Client;
+use aws_sdk_secretsmanager::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_secretsmanager::types::Tag;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::error::Error;
+use std::fmt::Debug;
 
 /// Maximum number of secrets per BatchGetSecretValue API call.
 const AWS_BATCH_GET_MAX_SECRETS: usize = 20;
+
+/// Formats an AWS SDK error without collapsing non-service failures into a
+/// generated operation error's opaque `unhandled error` variant.
+fn format_aws_error<E, R>(error: &SdkError<E, R>) -> String
+where
+    E: Error + ProvideErrorMetadata + 'static,
+    R: Debug + 'static,
+{
+    if let Some(service_error) = error.as_service_error() {
+        return match (service_error.code(), service_error.message()) {
+            (Some(code), Some(message)) => format!("{code}: {message}"),
+            (Some(code), None) => code.to_string(),
+            (None, Some(message)) => message.to_string(),
+            (None, None) => crate::error::display_error_chain(service_error),
+        };
+    }
+
+    crate::error::display_error_chain(error)
+}
 
 /// Configuration for the AWS Secrets Manager provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,13 +269,16 @@ impl AwssmProvider {
         let output = match client.get_secret_value().secret_id(name).send().await {
             Ok(output) => output,
             Err(err) => {
-                let service_err = err.into_service_error();
-                return if service_err.is_resource_not_found_exception() {
+                return if err
+                    .as_service_error()
+                    .is_some_and(|service_err| service_err.is_resource_not_found_exception())
+                {
                     Ok(None)
                 } else {
                     Err(SecretSpecError::ProviderOperationFailed(format!(
                         "Failed to get secret '{}': {}",
-                        name, service_err
+                        name,
+                        format_aws_error(&err)
                     )))
                 };
             }
@@ -298,7 +323,7 @@ impl AwssmProvider {
             let response = request.send().await.map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
                     "BatchGetSecretValue failed: {}",
-                    e.into_service_error()
+                    format_aws_error(&e)
                 ))
             })?;
 
@@ -369,8 +394,10 @@ impl AwssmProvider {
         match create.send().await {
             Ok(_) => Ok(()),
             Err(err) => {
-                let service_err = err.into_service_error();
-                if service_err.is_resource_exists_exception() {
+                if err
+                    .as_service_error()
+                    .is_some_and(|service_err| service_err.is_resource_exists_exception())
+                {
                     // Secret already exists, update its value (KMS key and tags
                     // are create-only and left untouched here).
                     client
@@ -383,14 +410,15 @@ impl AwssmProvider {
                             SecretSpecError::ProviderOperationFailed(format!(
                                 "Failed to update secret '{}': {}",
                                 secret_name,
-                                e.into_service_error()
+                                format_aws_error(&e)
                             ))
                         })?;
                     Ok(())
                 } else {
                     Err(SecretSpecError::ProviderOperationFailed(format!(
                         "Failed to create secret '{}': {}",
-                        secret_name, service_err
+                        secret_name,
+                        format_aws_error(&err)
                     )))
                 }
             }
@@ -502,6 +530,7 @@ impl Provider for AwssmProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_sdk_secretsmanager::operation::batch_get_secret_value::BatchGetSecretValueError;
 
     #[test]
     fn test_format_secret_name() {
@@ -616,6 +645,33 @@ mod tests {
         assert_eq!(chunks[0].len(), 20);
         assert_eq!(chunks[1].len(), 20);
         assert_eq!(chunks[2].len(), 5);
+    }
+
+    #[test]
+    fn batch_error_includes_unmodeled_service_code_and_message() {
+        let service_error = BatchGetSecretValueError::generic(
+            aws_sdk_secretsmanager::error::ErrorMetadata::builder()
+                .code("AccessDeniedException")
+                .message("not authorized to read these secrets")
+                .build(),
+        );
+        let sdk_error = SdkError::service_error(service_error, ());
+
+        assert_eq!(
+            format_aws_error(&sdk_error),
+            "AccessDeniedException: not authorized to read these secrets"
+        );
+    }
+
+    #[test]
+    fn batch_error_includes_non_service_cause() {
+        let sdk_error: SdkError<BatchGetSecretValueError, ()> =
+            SdkError::construction_failure(std::io::Error::other("invalid AWS endpoint"));
+
+        assert_eq!(
+            format_aws_error(&sdk_error),
+            "failed to construct request: invalid AWS endpoint"
+        );
     }
 
     fn config(s: &str) -> AwssmConfig {

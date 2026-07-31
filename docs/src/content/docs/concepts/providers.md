@@ -50,6 +50,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [onepassword](/providers/onepassword/) | 1Password | ✓ | ✓ | ✓ | — |
 | [lastpass](/providers/lastpass/) | LastPass | ✓ | ✓ | ✓ | — |
 | [dashlane](/providers/dashlane/) (0.18+) | Dashlane, through the `dcli` CLI | ✓ | ✗ | ✓ | — |
+| [keeper](/providers/keeper/) (0.18+) | Keeper Secrets Manager (requires the `keeper` build feature) | ✓ | ✓ | ✓ | — |
 | [gcsm](/providers/gcsm/) | Google Cloud Secret Manager (requires the `gcsm` build feature) | ✓ | ✓ | ✓ | — |
 | [awssm](/providers/awssm/) | AWS Secrets Manager (requires the `awssm` build feature) | ✓ | ✓ | ✓ | — |
 | [scaleway](/providers/scaleway/) (0.17+) | Scaleway Secret Manager (requires the `scaleway` build feature) | ✓ | ✓ | ✓ | — |

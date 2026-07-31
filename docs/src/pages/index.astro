@@ -44,6 +44,7 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'apple', slug: 'keyring', label: 'macOS Keychain' },
   { slug: 'kdbx', label: 'KeePass KDBX (0.17+)' },
   { icon: '1password', slug: 'onepassword', label: '1Password' },
+  { slug: 'keeper', label: 'Keeper Secrets Manager (0.18+)' },
   { icon: 'lastpass', slug: 'lastpass', label: 'LastPass' },
   { slug: 'dashlane', label: 'Dashlane (0.18+)' },
   { icon: 'bitwarden', slug: 'bw', label: 'Bitwarden Password Manager (0.18+)' },
@@ -156,6 +157,7 @@ $ secretspec config global init
 <span class="tok-pun">›</span> keyring: Uses system keychain (Recommended)
   bw: Bitwarden Password Manager (0.18+)
   kdbx: KeePass KDBX databases (0.17+)
+  keeper: Keeper Secrets Manager (0.18+) via official Rust SDK
   infisical: Infisical secret management
   openbao: OpenBao secret management (0.17+)
   age: age-encrypted file (0.17+)
@@ -241,6 +243,7 @@ $ secretspec run --profile production -- npm start
 > keyring: Uses system keychain (Recommended)
   bw: Bitwarden Password Manager (0.18+)
   kdbx: KeePass KDBX databases (0.17+)
+  keeper: Keeper Secrets Manager (0.18+) via official Rust SDK
   infisical: Infisical secret management
   openbao: OpenBao secret management (0.17+)
   age: age-encrypted file (0.17+)

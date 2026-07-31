@@ -16,12 +16,9 @@ edition = "2024"
 
 [workspace.dependencies]
 clap = { version = "4.0", features = ["derive", "env"] }
-keyring = { version = "3.6.2", features = [
-  "sync-secret-service",
-  "windows-native",
-  "apple-native",
-] }
+keyring = "4"
 keepass = { version = "0.13.17", features = ["save_kdbx4"] }
+keeper-secrets-manager-core = { version = "17.3.0", default-features = false, features = ["blocking"] }
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.9"
 toml_edit = "0.23"
@@ -32,6 +29,7 @@ dotenvy = "0.15"
 inquire = { version = "0.9.4", features = ["experimental-multiline-input"] }
 miette = { version = "7.6", features = ["fancy"] }
 serde_json = "1.0"
+proptest = "1"
 tempfile = "3.0"
 http = "1.0"
 url = "2.5.4"

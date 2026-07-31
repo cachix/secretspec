@@ -162,7 +162,7 @@ fn dispatch(request_json: &str) -> serde_json::Value {
     };
     let mut app = match loaded {
         Ok(app) => app,
-        Err(e) => return error_envelope(e.kind(), e.to_string()),
+        Err(e) => return error_envelope(e.kind(), crate::error::display_error_chain(&e)),
     };
 
     if let Some(provider) = request.provider {
@@ -183,7 +183,7 @@ fn dispatch(request_json: &str) -> serde_json::Value {
         // inventory/preflight consumer always gets the shape back.
         RequestMode::Report => match app.report() {
             Ok(report) => ok_envelope(report),
-            Err(e) => error_envelope(e.kind(), e.to_string()),
+            Err(e) => error_envelope(e.kind(), crate::error::display_error_chain(&e)),
         },
         // Value-carrying resolve. `no_values` takes the path that never copies a
         // secret value into the response (and persists no temp file).
@@ -195,7 +195,7 @@ fn dispatch(request_json: &str) -> serde_json::Value {
             };
             match resolved {
                 Ok(response) => ok_envelope(response),
-                Err(e) => error_envelope(e.kind(), e.to_string()),
+                Err(e) => error_envelope(e.kind(), crate::error::display_error_chain(&e)),
             }
         }
     }

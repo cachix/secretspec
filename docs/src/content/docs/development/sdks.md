@@ -100,9 +100,10 @@ Swift layer is limited to `Codable` request/response models and idiomatic errors
 resolution remains entirely in Rust.
 
 `scripts/build-swift-xcframework.sh` changes Cargo's target-local dylib install
-name to `@rpath`, adds the C header and module map, and invokes
+name to `@rpath`, merges the native slices into a universal dylib, adds the C
+header and module map, and invokes
 `xcodebuild -create-xcframework`. `swift-package.yml` builds each architecture
-natively, tests the final two-slice artifact, computes SwiftPM's SHA-256
+natively, tests the final universal artifact, computes SwiftPM's SHA-256
 checksum, and attaches the ZIP to the GitHub release. See `RELEASE.md` for the
 required pre-tag checksum step.
 

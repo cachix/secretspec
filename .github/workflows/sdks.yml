@@ -52,4 +52,6 @@ jobs:
           secretspec-swift/Artifacts/CSecretSpec.xcframework
           target/debug/libsecretspec_ffi.dylib
       - name: Run the Swift SDK and conformance tests
-        run: swift test --parallel
+        run: |
+          swift test --parallel
+          swift test --filter SecretSpecTests.testCrossLanguageConformance

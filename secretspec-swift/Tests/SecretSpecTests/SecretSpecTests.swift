@@ -191,6 +191,10 @@ final class SecretSpecTests: XCTestCase {
             )
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        XCTAssertFalse(
+            fixtureDirectories.isEmpty,
+            "no cross-language conformance fixtures were discovered"
+        )
 
         for fixture in fixtureDirectories {
             let manifest = fixture.appendingPathComponent("secretspec.toml").path

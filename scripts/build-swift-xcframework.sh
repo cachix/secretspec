@@ -2,7 +2,8 @@
 #
 # Package one or more macOS secretspec-ffi cdylibs as the CSecretSpec
 # XCFramework imported by the Swift SDK. Pass one native library per
-# architecture; xcodebuild reads each Mach-O architecture from the file.
+# architecture; multiple inputs are merged into one universal Mach-O because
+# xcodebuild rejects separate library definitions for the same platform.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,9 +32,7 @@ fi
 staging="$(mktemp -d "${TMPDIR:-/tmp}/secretspec-swift.XXXXXX")"
 trap 'rm -rf "$staging"' EXIT
 
-xcframework_args=()
 seen_arches=""
-index=0
 
 for library in "$@"; do
   if [[ ! -f "$library" ]]; then
@@ -54,30 +53,30 @@ for library in "$@"; do
     seen_arches="$seen_arches $arch"
   done
 
-  slice="$staging/slice-$index"
-  headers="$slice/Headers"
-  mkdir -p "$headers"
-  staged_library="$slice/libCSecretSpec.dylib"
-  cp "$library" "$staged_library"
-  cp "$repo_root/secretspec-ffi/include/secretspec.h" "$headers/"
-  cp "$repo_root/secretspec-swift/ffi/module.modulemap" "$headers/"
-
-  # A SwiftPM binary target embeds this dylib beside the consumer and supplies
-  # an @rpath. Do not retain Cargo's absolute/target-local install name. The
-  # edit invalidates Cargo/linker's existing signature on Apple silicon, so
-  # replace it with a deterministic ad-hoc signature for local SwiftPM loads;
-  # application distribution can sign the embedded dylib with its own identity.
-  install_name_tool -id "@rpath/libCSecretSpec.dylib" "$staged_library"
-  codesign --force --sign - --timestamp=none "$staged_library"
-
-  xcframework_args+=(
-    -library "$staged_library"
-    -headers "$headers"
-  )
-  index=$((index + 1))
 done
+
+slice="$staging/macos"
+headers="$slice/Headers"
+mkdir -p "$headers"
+staged_library="$slice/libCSecretSpec.dylib"
+if [[ "$#" -eq 1 ]]; then
+  cp "$1" "$staged_library"
+else
+  xcrun lipo -create "$@" -output "$staged_library"
+fi
+cp "$repo_root/secretspec-ffi/include/secretspec.h" "$headers/"
+cp "$repo_root/secretspec-swift/ffi/module.modulemap" "$headers/"
+
+# A SwiftPM binary target embeds this dylib beside the consumer and supplies
+# an @rpath. Do not retain Cargo's absolute/target-local install name. The
+# edit invalidates Cargo/linker's existing signature on Apple silicon, so
+# replace it with a deterministic ad-hoc signature for local SwiftPM loads;
+# application distribution can sign the embedded dylib with its own identity.
+install_name_tool -id "@rpath/libCSecretSpec.dylib" "$staged_library"
+codesign --force --sign - --timestamp=none "$staged_library"
 
 mkdir -p "$(dirname "$output")"
 xcodebuild -create-xcframework \
-  "${xcframework_args[@]}" \
+  -library "$staged_library" \
+  -headers "$headers" \
   -output "$output"

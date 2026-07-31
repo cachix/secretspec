@@ -105,7 +105,9 @@ jobs:
             secretspec-swift/Artifacts/CSecretSpec.xcframework \
             "${libraries[@]}"
       - name: Run Swift SDK tests and cross-language conformance
-        run: swift test --parallel
+        run: |
+          swift test --parallel
+          swift test --filter SecretSpecTests.testCrossLanguageConformance
       - name: Create the release archive
         shell: bash
         run: |

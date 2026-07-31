@@ -223,8 +223,8 @@ self-contained, vendored build — not a module-proxy install).
 - **Build:** native Intel and Apple-silicon macOS runners build the
   `secretspec-ffi` cdylib with a macOS 12 deployment target.
   `scripts/build-swift-xcframework.sh` gives each dylib an `@rpath` install
-  name, adds the public header and Clang module map, and combines both slices
-  with `xcodebuild -create-xcframework`.
+  name, combines the slices into a universal dylib, adds the public header and
+  Clang module map, and wraps it with `xcodebuild -create-xcframework`.
 - **Test:** the Swift package selects the local XCFramework when staged under
   `secretspec-swift/Artifacts/`; its unit and cross-language conformance tests
   run against the final two-architecture artifact.

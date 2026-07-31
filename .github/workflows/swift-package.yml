@@ -47,32 +47,30 @@ permissions:
 
 jobs:
   native:
-    name: ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-apple-darwin
-            runner: macos-15-intel
-          - target: aarch64-apple-darwin
-            runner: macos-latest
+    name: macOS native libraries
+    runs-on: macos-latest
 
     steps:
       - uses: actions/checkout@v5
       - name: Install Rust
-        run: rustup toolchain install
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-apple-darwin
       - name: Build native resolver
         env:
           MACOSX_DEPLOYMENT_TARGET: "12.0"
           RUSTFLAGS: "-C strip=symbols"
-        run: >-
-          cargo build -p secretspec-ffi --release
-          --target ${{ matrix.target }}
+        run: |
+          cargo build -p secretspec-ffi --release \
+            --target aarch64-apple-darwin
+          cargo build -p secretspec-ffi --release \
+            --target x86_64-apple-darwin
       - uses: actions/upload-artifact@v4
         with:
-          name: swift-native-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/libsecretspec_ffi.dylib
+          name: swift-native-macos
+          path: |
+            target/aarch64-apple-darwin/release/libsecretspec_ffi.dylib
+            target/x86_64-apple-darwin/release/libsecretspec_ffi.dylib
 
   package:
     name: XCFramework and Swift tests
@@ -87,7 +85,7 @@ jobs:
           git diff --exit-code -- Package.swift
       - uses: actions/download-artifact@v5
         with:
-          pattern: swift-native-*
+          name: swift-native-macos
           path: staged
       - name: Build the universal XCFramework
         shell: bash

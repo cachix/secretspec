@@ -2,9 +2,9 @@ use crate::provider::{Provider, providers, spec_names_known_provider};
 use crate::{Config, ExportFormat, GlobalConfig, GlobalDefaults, Profile, Project, Secrets};
 use clap::{Parser, Subcommand};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -77,6 +77,24 @@ enum Commands {
         /// Name of the secret
         name: String,
         /// Provider backend to use
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        provider: Option<String>,
+        /// Profile to use
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        profile: Option<String>,
+    },
+    /// Delete stored secret values from a provider (0.18+)
+    Delete {
+        /// Names of the secrets to delete
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        names: Vec<String>,
+        /// Delete every provider-backed secret declared in the active profile
+        #[arg(long)]
+        all: bool,
+        /// Skip the confirmation required by --all
+        #[arg(short, long, requires = "all", conflicts_with = "names")]
+        yes: bool,
+        /// Provider backend to delete from
         #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
         provider: Option<String>,
         /// Profile to use
@@ -163,6 +181,9 @@ enum Commands {
     Import {
         /// Provider backend to import from (secrets will be imported to the default provider)
         from_provider: String,
+        /// Delete a source value only after the destination contains the same value (0.18+)
+        #[arg(long)]
+        delete_source: bool,
     },
     /// Manage cached provider values (0.17+)
     Cache {
@@ -174,7 +195,7 @@ enum Commands {
         /// Only show entries for this project
         #[arg(long)]
         project: Option<String>,
-        /// Only show entries for this action (get, set, check, run, import, export, cache_clear)
+        /// Only show entries for this action (get, set, delete, check, run, import, export, cache_clear)
         #[arg(long)]
         action: Option<String>,
         /// Show only the last N entries
@@ -1134,6 +1155,101 @@ pub fn main() -> Result<()> {
                 .wrap_err("Failed to get secret")?;
             Ok(())
         }
+        Commands::Delete {
+            mut names,
+            all,
+            yes,
+            provider,
+            profile,
+        } => {
+            let mut app = load_secrets(&cli.file, &cli.reason)?;
+            if let Some(provider) = provider {
+                app.set_provider(provider);
+            }
+            if let Some(profile) = profile {
+                app.set_profile(profile);
+            }
+
+            if all {
+                names = app
+                    .profile_secret_names_unscoped(None)
+                    .into_diagnostic()
+                    .wrap_err("Failed to list secrets for deletion")?;
+                // Composed secrets have no stored value. An explicit name gets
+                // a useful error from `Secrets::delete`; a whole-profile sweep
+                // simply has nothing to do for them.
+                names.retain(|name| {
+                    app.resolve_secret_config(name, None)
+                        .is_some_and(|secret| secret.composed.is_none())
+                });
+            } else {
+                // Repeating a name should not turn the second occurrence into a
+                // confusing "already absent" result.
+                let mut seen = HashSet::new();
+                names.retain(|name| seen.insert(name.clone()));
+            }
+
+            if all && !yes && !names.is_empty() {
+                if !std::io::stdin().is_terminal() {
+                    return Err(miette!(
+                        "refusing to delete all stored secret values without confirmation; pass --yes for non-interactive use"
+                    ));
+                }
+                use inquire::Confirm;
+                let profile = app.resolve_profile_name(None);
+                let confirmed = Confirm::new(&format!(
+                    "Delete {} stored secret {} from profile '{profile}'?",
+                    names.len(),
+                    if names.len() == 1 { "value" } else { "values" }
+                ))
+                .with_default(false)
+                .prompt()
+                .into_diagnostic()?;
+                if !confirmed {
+                    println!("Cancelled.");
+                    return Ok(());
+                }
+            }
+
+            let mut deleted = 0;
+            let mut absent = 0;
+            let mut failures = Vec::new();
+            for name in names {
+                match app.delete(&name) {
+                    Ok(true) => {
+                        println!("Deleted '{name}'");
+                        deleted += 1;
+                    }
+                    Ok(false) => {
+                        println!("'{name}' was already absent");
+                        absent += 1;
+                    }
+                    Err(error) => failures.push((name, error.to_string())),
+                }
+            }
+
+            println!(
+                "Deleted {deleted} secret {}; {absent} already absent",
+                if deleted == 1 { "value" } else { "values" }
+            );
+            if !failures.is_empty() {
+                return Err(miette!(
+                    "{} secret {} could not be deleted: {}",
+                    failures.len(),
+                    if failures.len() == 1 {
+                        "value"
+                    } else {
+                        "values"
+                    },
+                    failures
+                        .into_iter()
+                        .map(|(name, error)| format!("'{name}': {error}"))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ));
+            }
+            Ok(())
+        }
         // Execute a command with secrets injected as environment variables
         Commands::Run {
             command,
@@ -1247,11 +1363,20 @@ pub fn main() -> Result<()> {
             Ok(())
         }
         // Import secrets from one provider to another
-        Commands::Import { from_provider } => {
+        Commands::Import {
+            from_provider,
+            delete_source,
+        } => {
             let app = load_secrets(&cli.file, &cli.reason)?;
-            app.import(&from_provider)
-                .into_diagnostic()
-                .wrap_err("Failed to import secrets")?;
+            if delete_source {
+                app.import_with_delete_source(&from_provider)
+                    .into_diagnostic()
+                    .wrap_err("Failed to import and delete source secrets")?;
+            } else {
+                app.import(&from_provider)
+                    .into_diagnostic()
+                    .wrap_err("Failed to import secrets")?;
+            }
             Ok(())
         }
         Commands::Cache { action } => match action {
@@ -2025,6 +2150,70 @@ API_KEY = { description = "Existing" }
             Commands::Check { no_prompt, .. } => assert!(no_prompt),
             _ => panic!("expected Check command"),
         }
+    }
+
+    #[test]
+    fn delete_requires_names_or_explicit_all() {
+        let cli = Cli::try_parse_from([
+            "secretspec",
+            "delete",
+            "API_KEY",
+            "DATABASE_URL",
+            "--provider",
+            "dotenv://.env",
+            "--profile",
+            "production",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Delete {
+                names,
+                all,
+                yes,
+                provider,
+                profile,
+            } => {
+                assert_eq!(names, vec!["API_KEY", "DATABASE_URL"]);
+                assert!(!all);
+                assert!(!yes);
+                assert_eq!(provider.as_deref(), Some("dotenv://.env"));
+                assert_eq!(profile.as_deref(), Some("production"));
+            }
+            _ => panic!("expected delete"),
+        }
+
+        assert!(Cli::try_parse_from(["secretspec", "delete"]).is_err());
+        let cli = Cli::try_parse_from(["secretspec", "delete", "--all", "--yes"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Delete {
+                names,
+                all: true,
+                yes: true,
+                ..
+            } if names.is_empty()
+        ));
+        assert!(
+            Cli::try_parse_from(["secretspec", "delete", "API_KEY", "--all"]).is_err(),
+            "a named delete and --all must be mutually exclusive"
+        );
+        assert!(
+            Cli::try_parse_from(["secretspec", "delete", "API_KEY", "--yes"]).is_err(),
+            "--yes is meaningful only with --all"
+        );
+    }
+
+    #[test]
+    fn import_parses_delete_source() {
+        let cli = Cli::try_parse_from(["secretspec", "import", "dotenv://.env", "--delete-source"])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Import {
+                from_provider,
+                delete_source: true,
+            } if from_provider == "dotenv://.env"
+        ));
     }
 
     #[test]

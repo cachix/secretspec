@@ -697,9 +697,10 @@ pub trait Provider: Send + Sync {
     /// Deletes a secret at `addr`. Available since SecretSpec 0.17.
     ///
     /// Providers opt into deletion explicitly. This is used by cache
-    /// invalidation and defaults to a clear unsupported-operation error so
-    /// adding the method does not silently make destructive behavior available
-    /// to every provider.
+    /// invalidation and, starting in SecretSpec 0.18, by `secretspec delete`
+    /// and `secretspec import --delete-source`. It defaults to a clear
+    /// unsupported-operation error so adding the method does not silently make
+    /// destructive behavior available to every provider.
     ///
     /// Deleting is idempotent: an address that holds nothing is `Ok(false)`,
     /// not an error. The `bool` reports whether an entry was actually removed,

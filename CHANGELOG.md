@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   environment export, codegen input, and deterministic `as_path` cleanup. Its
   checksummed XCFramework includes the shared Rust resolver, so applications do
   not need a Rust toolchain or separately installed native library.
+- `secretspec delete` removes one or more stored secret values without changing
+  their manifest declarations, while `--all` requires explicit confirmation.
+  `secretspec import --delete-source` verifies each destination value before
+  deleting its source, and retains the source when an existing target differs.
 - Dashlane provider (`dashlane://`) for reading secrets from a Dashlane vault
   through the `dcli` CLI. Convention secrets read the item titled
   `secretspec/{project}/{profile}/{key}`, and a `ref` names an existing item by

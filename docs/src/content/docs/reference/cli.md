@@ -350,6 +350,56 @@ $ secretspec set API_KEY sk-1234567890
 `set` rejects composed secrets because their values are derived and read-only.
 Available since SecretSpec 0.16.
 
+### delete (0.18+)
+
+:::caution[Version compatibility]
+`delete` is available starting with SecretSpec 0.18.
+:::
+
+Delete stored provider values without changing their declarations in
+`secretspec.toml`.
+
+```bash
+secretspec delete <NAME>... [--provider <PROVIDER>] [--profile <PROFILE>]
+secretspec delete --all [--yes] [--provider <PROVIDER>] [--profile <PROFILE>]
+```
+
+**Arguments and options:**
+
+- `<NAME>...` - One or more declared secrets to delete.
+- `--all` - Delete every provider-backed secret declared in the active profile.
+  It cannot be combined with a name.
+- `-y, --yes` - Skip the interactive confirmation for `--all`. Non-interactive
+  use of `--all` requires this option.
+- `-p, --provider <PROVIDER>` - Delete from this provider instead of the
+  manifest's primary write provider.
+- `-P, --profile <PROFILE>` - Profile whose values are addressed.
+
+```bash
+# Delete one value from its primary write provider
+$ secretspec delete API_KEY
+Deleted 'API_KEY'
+Deleted 1 secret value; 0 already absent
+
+# Delete selected values from an old dotenv provider
+$ secretspec delete API_KEY DATABASE_URL --provider dotenv://.env.old
+
+# Explicitly delete every stored value in production
+$ secretspec delete --all --profile production --yes
+```
+
+Deletion is idempotent: an already-absent value is reported as such and does
+not fail the command. Without `--provider`, routing mirrors `set`: only the
+primary write provider is changed, never every provider in a fallback chain.
+Any cache entry declared for the secret is invalidated so it cannot continue to
+serve the deleted value.
+
+The providers that support deletion in 0.18 are keyring, dotenv, pass, gopass,
+Vault, OpenBao, and Keeper Secrets Manager. Other providers return an explicit
+unsupported-operation error. Vault, OpenBao, and Keeper refuse to delete native
+`ref` entries because their backends would have to destroy a whole externally
+managed path or record rather than only the referenced field.
+
 ### run
 Run a command with secrets injected as environment variables.
 
@@ -441,13 +491,16 @@ The `gha` format targets a `secretspec export --format gha` step in a GitHub or 
 Import secrets from one provider to another.
 
 ```bash
-secretspec import <FROM_PROVIDER>
+secretspec import <FROM_PROVIDER> [--delete-source]
 ```
 
 The destination provider and profile are determined from your configuration. Secrets that already exist in the destination provider will not be overwritten.
 
 **Arguments:**
 - `<FROM_PROVIDER>` - Provider to import from (e.g., `env`, `dotenv:/path/to/.env`)
+- `--delete-source` - After copying, delete a source value only when the
+  destination is verified to contain the same value. Available in SecretSpec
+  0.18+.
 
 **Example:**
 ```bash
@@ -463,6 +516,9 @@ Summary: 1 imported, 1 already exists, 1 not found in source
 
 # Import from a specific .env file
 $ secretspec import dotenv:/home/user/old-project/.env
+
+# Move values out of an old provider (SecretSpec 0.18+)
+$ secretspec import dotenv:/home/user/old-project/.env --delete-source
 ```
 
 **Use Cases:**
@@ -472,6 +528,14 @@ $ secretspec import dotenv:/home/user/old-project/.env
 
 `import` skips composed secrets because they have no stored value to copy; their
 component secrets are imported normally. Available since SecretSpec 0.16.
+
+With `--delete-source`, source and destination must resolve to different
+providers. A value copied during this run is read back before its source is
+deleted. If the destination already contains an identical value, the source is
+also safe to delete; if it differs, SecretSpec retains the source and reports
+the conflict. A source provider that does not support deletion fails explicitly
+instead of pretending the migration completed. This behavior is available
+starting with SecretSpec 0.18.
 
 ### cache clear (0.17+)
 
@@ -521,7 +585,7 @@ secretspec audit [--project <NAME>] [--action <ACTION>] [-n <N>] [--json]
 
 **Options:**
 - `--project <NAME>` - Only show entries for this project
-- `--action <ACTION>` - Only show entries for this action (`get`, `set`, `check`, `run`, `import`, `export`, or `cache_clear` and `cache_refresh` in 0.17+)
+- `--action <ACTION>` - Only show entries for this action (`get`, `set`, `check`, `run`, `import`, `export`, `cache_clear` and `cache_refresh` in 0.17+, or `delete` in 0.18+)
 - `-n, --tail <N>` - Show only the last N entries
 - `--json` - Output raw JSON Lines instead of the formatted summary
 

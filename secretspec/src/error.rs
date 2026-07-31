@@ -61,7 +61,9 @@ pub enum SecretSpecError {
     SecretNotFound(String),
     #[error("Secret '{0}' is required but not set")]
     RequiredSecretMissing(String),
-    #[error("Composed secret '{0}' is derived from other secrets and cannot be written")]
+    #[error(
+        "Composed secret '{0}' is derived from other secrets and has no stored value to change"
+    )]
     ComposedSecretReadOnly(String),
     #[error("Failed to compose secret: {0}")]
     CompositionFailed(String),

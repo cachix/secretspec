@@ -6083,6 +6083,196 @@ fn test_import_source_literal_uri_still_works() {
 }
 
 #[test]
+fn delete_removes_one_provider_value_and_is_idempotent() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let store = temp.path().join("store.env");
+    fs::write(&store, "API_KEY=secret\nOTHER=keep\n").unwrap();
+    let config: Config = toml::from_str(
+        r#"
+[project]
+name = "delete-test"
+revision = "1.0"
+
+[profiles.default]
+API_KEY = { description = "API key" }
+"#,
+    )
+    .unwrap();
+    let spec = Secrets::new(
+        config,
+        None,
+        Some(format!("dotenv://{}", store.display())),
+        None,
+    );
+
+    assert!(spec.delete("API_KEY").unwrap());
+    assert_eq!(read_env_var(&store, "API_KEY"), None);
+    assert_eq!(read_env_var(&store, "OTHER").as_deref(), Some("keep"));
+    assert!(!spec.delete("API_KEY").unwrap());
+}
+
+#[test]
+fn delete_changes_only_the_primary_write_provider() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let primary = temp.path().join("primary.env");
+    let fallback = temp.path().join("fallback.env");
+    fs::write(&primary, "API_KEY=primary\n").unwrap();
+    fs::write(&fallback, "API_KEY=fallback\n").unwrap();
+    let primary_uri = format!("dotenv://{}", primary.display());
+    let fallback_uri = format!("dotenv://{}", fallback.display());
+    let config: Config = toml::from_str(&format!(
+        r#"
+[project]
+name = "delete-route-test"
+revision = "1.0"
+
+[providers]
+primary = "{primary_uri}"
+fallback = "{fallback_uri}"
+
+[profiles.default]
+API_KEY = {{ description = "API key", providers = ["primary", "fallback"] }}
+"#
+    ))
+    .unwrap();
+    let spec = Secrets::new(config, None, None, None);
+
+    assert!(spec.delete("API_KEY").unwrap());
+    assert_eq!(read_env_var(&primary, "API_KEY"), None);
+    assert_eq!(
+        read_env_var(&fallback, "API_KEY").as_deref(),
+        Some("fallback"),
+        "delete must not walk and destroy fallback copies"
+    );
+    assert_eq!(resolved_value(&spec, "API_KEY"), "fallback");
+}
+
+#[test]
+fn import_with_delete_source_deletes_only_verified_values() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let target = temp.path().join("target.env");
+    fs::write(
+        &source,
+        "COPIED=from-source\nIDENTICAL=same\nCONFLICT=source-value\n",
+    )
+    .unwrap();
+    fs::write(&target, "IDENTICAL=same\nCONFLICT=target-value\n").unwrap();
+    let config: Config = toml::from_str(
+        r#"
+[project]
+name = "import-delete-source-test"
+revision = "1.0"
+
+[profiles.default]
+COPIED = { description = "Copied" }
+IDENTICAL = { description = "Identical" }
+CONFLICT = { description = "Conflict" }
+"#,
+    )
+    .unwrap();
+    let spec = Secrets::new(
+        config,
+        None,
+        Some(format!("dotenv://{}", target.display())),
+        None,
+    );
+
+    spec.import_with_delete_source(&format!("dotenv://{}", source.display()))
+        .unwrap();
+
+    assert_eq!(
+        read_env_var(&target, "COPIED").as_deref(),
+        Some("from-source")
+    );
+    assert_eq!(read_env_var(&target, "IDENTICAL").as_deref(), Some("same"));
+    assert_eq!(
+        read_env_var(&target, "CONFLICT").as_deref(),
+        Some("target-value"),
+        "import must not overwrite an existing target"
+    );
+    assert_eq!(read_env_var(&source, "COPIED"), None);
+    assert_eq!(read_env_var(&source, "IDENTICAL"), None);
+    assert_eq!(
+        read_env_var(&source, "CONFLICT").as_deref(),
+        Some("source-value"),
+        "a differing target must retain the source copy"
+    );
+}
+
+#[test]
+fn import_with_delete_source_rejects_the_same_store() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let store = temp.path().join("store.env");
+    fs::write(&store, "API_KEY=keep\n").unwrap();
+    let store_uri = format!("dotenv://{}", store.display());
+    let config: Config = toml::from_str(
+        r#"
+[project]
+name = "same-import-store-test"
+revision = "1.0"
+
+[profiles.default]
+API_KEY = { description = "API key" }
+"#,
+    )
+    .unwrap();
+    let spec = Secrets::new(config, None, Some(store_uri.clone()), None);
+
+    let error = spec
+        .import_with_delete_source(&store_uri)
+        .expect_err("a move within one store would delete the destination");
+    assert!(error.to_string().contains("same provider"), "{error}");
+    assert_eq!(read_env_var(&store, "API_KEY").as_deref(), Some("keep"));
+}
+
+#[test]
+fn import_with_delete_source_preflights_every_destination_before_moving_values() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let target = temp.path().join("target.env");
+    fs::write(&source, "A_FIRST=keep-at-source\nZ_SAME=also-keep\n").unwrap();
+    let source_uri = format!("dotenv://{}", source.display());
+    let target_uri = format!("dotenv://{}", target.display());
+    let config: Config = toml::from_str(&format!(
+        r#"
+[project]
+name = "preflight-import-store-test"
+revision = "1.0"
+
+[providers]
+target = "{target_uri}"
+source = "{source_uri}"
+
+[profiles.default]
+A_FIRST = {{ description = "Would otherwise move first", providers = ["target"] }}
+Z_SAME = {{ description = "Unsafe same-store route", providers = ["source"] }}
+"#
+    ))
+    .unwrap();
+    let spec = Secrets::new(config, None, None, None);
+
+    let error = spec
+        .import_with_delete_source(&source_uri)
+        .expect_err("all routes must be checked before the first source deletion");
+    assert!(error.to_string().contains("same provider"), "{error}");
+    assert_eq!(
+        read_env_var(&source, "A_FIRST").as_deref(),
+        Some("keep-at-source")
+    );
+    assert_eq!(
+        read_env_var(&target, "A_FIRST"),
+        None,
+        "preflight must happen before any earlier value is copied"
+    );
+}
+
+#[test]
 fn test_import_unknown_source_lists_available_aliases() {
     let temp_dir = TempDir::new().unwrap();
     let source_uri = format!("dotenv://{}", temp_dir.path().join(".env.source").display());
@@ -8464,6 +8654,28 @@ fn set_writes_authoritative_provider_then_refreshes_cache() {
     assert_eq!(source_value, ("API_KEY".to_string(), "written".to_string()));
     fs::remove_file(&source).unwrap();
     assert_eq!(resolved_value(&secrets, "API_KEY"), "written");
+}
+
+#[test]
+fn delete_removes_the_authoritative_value_and_its_cache_entry() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "1h");
+
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote");
+    assert!(cache.exists(), "the first read should populate the cache");
+    assert!(secrets.delete("API_KEY").unwrap());
+
+    assert_eq!(read_env_var(&source, "API_KEY"), None);
+    assert_eq!(read_env_var(&cache, "API_KEY"), None);
+    let errors = match secrets.validate().unwrap() {
+        Ok(_) => panic!("a deleted required secret must no longer resolve from cache"),
+        Err(errors) => errors,
+    };
+    assert_eq!(errors.missing_required, vec!["API_KEY".to_string()]);
 }
 
 #[test]

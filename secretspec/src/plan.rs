@@ -303,7 +303,7 @@ impl Secrets {
         })
     }
 
-    /// Plan a single secret the CLI's `get`/`set` operate on, reusing the exact
+    /// Plan a single secret the CLI's `get`/`set`/`delete` operate on, reusing the exact
     /// per-secret decisions batch resolution makes. Returns `Ok(None)` when the
     /// secret is not declared in the (merged) profile, mirroring
     /// [`Secrets::resolve_secret_config`], so the caller can raise its own
@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn plan_secret_matches_the_batch_plan_for_a_declared_secret() {
         let _env = scrub_resolution_env();
-        // `get`/`set` plan one secret; the decision must match `build_plan`.
+        // `get`/`set`/`delete` plan one secret; the decision must match `build_plan`.
         let secrets = HashMap::from([(
             "API_KEY".to_string(),
             secret(Some(vec!["onepassword://Production", "keyring://"])),

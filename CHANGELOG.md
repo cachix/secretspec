@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   libdbus.
 
 ### Fixed
+- Cached provider routes now recognize Vault and OpenBao configurations that
+  address the same endpoint, namespace, and mount as one store, even when they
+  use different provider names or authentication methods, so a cache cannot
+  target its own authoritative source.
 - Provider and SDK errors now retain underlying causes such as authentication,
   timeout, DNS, TLS, connection, and response-parsing failures. AWS Secrets
   Manager and Parameter Store errors also report AWS error codes and messages

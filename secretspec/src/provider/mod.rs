@@ -768,6 +768,24 @@ pub trait Provider: Send + Sync {
     /// `provider::tests`.
     fn uri(&self) -> String;
 
+    /// Returns a credential-free identity for the physical store this provider
+    /// addresses.
+    ///
+    /// Unlike [`Self::uri`], this value is not user-facing attribution. It is
+    /// used when SecretSpec must decide whether two differently configured
+    /// providers can read and write the same storage location, such as when
+    /// ensuring a cache is distinct from its authoritative sources. Authentication
+    /// choices that do not change the store must therefore not change this
+    /// identity, and protocol-compatible provider names should return the same
+    /// identity when they target the same store.
+    ///
+    /// Most providers have one public spelling for a store, so the default uses
+    /// their canonical URI. Providers with equivalent spellings or compatible
+    /// identities should override this method.
+    fn storage_identity(&self) -> String {
+        self.uri()
+    }
+
     /// Records a human-readable reason for the secrets access happening in this
     /// session (e.g. "secretspec run: deploy"), set via [`Secrets::with_reason`].
     ///
@@ -982,6 +1000,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn uri(&self) -> String {
         (**self).uri()
     }
+    fn storage_identity(&self) -> String {
+        (**self).storage_identity()
+    }
     fn set_reason(&self, reason: Option<String>) {
         (**self).set_reason(reason);
     }
@@ -1159,6 +1180,10 @@ impl Provider for PreflightGuard {
 
     fn uri(&self) -> String {
         self.inner.uri()
+    }
+
+    fn storage_identity(&self) -> String {
+        self.inner.storage_identity()
     }
 
     fn set_reason(&self, reason: Option<String>) {

@@ -84,6 +84,19 @@ run_dotnet() { (
   cd secretspec-dotnet
   dotnet run --project tests/SecretSpec.Tests --configuration Release
 ); }
+run_swift() { (
+  local artifact="$repo_root/secretspec-swift/Artifacts/CSecretSpec.xcframework"
+  if [[ "$(uname -s)" != Darwin ]]; then
+    echo "Swift binary dependencies are supported only on Apple platforms"
+    return 125
+  fi
+  if [[ -e "$artifact" ]]; then
+    rm -rf "$artifact"
+  fi
+  bash scripts/build-swift-xcframework.sh \
+    "$artifact" "$SECRETSPEC_FFI_LIB"
+  swift test --filter SecretSpecTests.testCrossLanguageConformance
+); }
 
 run "Python"  python run_python
 run "Go"      go     run_go
@@ -92,6 +105,12 @@ run "Node"    node   run_node
 run "Haskell" cabal  run_haskell
 run "C#"      dotnet run_dotnet
 run "PHP"     php    run_php
+if [[ "$(uname -s)" == Darwin ]]; then
+  run "Swift" swift run_swift
+else
+  echo "==> SKIP Swift (the XCFramework SDK is macOS-only)"
+  names+=("Swift"); statuses+=("SKIP")
+fi
 
 echo
 echo "==> Conformance summary"

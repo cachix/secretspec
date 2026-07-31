@@ -341,6 +341,11 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
               slug: "sdk/csharp",
               badge: { text: "0.16+", variant: "note" },
             },
+            {
+              label: "Swift",
+              slug: "sdk/swift",
+              badge: { text: "0.18+", variant: "note" },
+            },
           ],
         },
         {

@@ -1,0 +1,4 @@
+module CSecretSpec {
+  header "secretspec.h"
+  export *
+}

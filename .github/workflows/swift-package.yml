@@ -141,7 +141,7 @@ jobs:
         run: |
           pending="0000000000000000000000000000000000000000000000000000000000000000"
           expected="$(sed -n \
-            's/^let secretSpecBinaryChecksum = "\\([0-9a-f]*\\)"/\\1/p' \
+            's/^let secretSpecBinaryChecksum = "\([0-9a-f]*\)"/\1/p' \
             Package.swift)"
           if [[ "$ACTUAL_CHECKSUM" == "$expected" ]]; then
             exit 0

@@ -15,8 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Provider and SDK errors now retain underlying causes such as authentication,
   timeout, DNS, TLS, connection, and response-parsing failures. AWS Secrets
-  Manager errors also report AWS error codes and messages instead of only
-  `unhandled error`.
+  Manager and Parameter Store errors also report AWS error codes and messages
+  instead of only `unhandled error`.
 - The dotenv provider's "cannot store" error now tells you to rename the secret
   in `secretspec.toml` when the name came from a manifest declaration, instead
   of always pointing at a `ref` item the config may not contain.
@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache-compatible deletion. SDK calls are safe from async Rust applications,
   and updates preserve the JSON types of Keeper fields such as dates,
   checkboxes, hosts, and names.
+- AWS Systems Manager Parameter Store provider (`awsps://`, `awsps` build
+  feature; planned for 0.18) for reading and writing KMS-encrypted
+  `SecureString` parameters. It supports AWS profiles and regions, an optional
+  hierarchy prefix, customer-managed KMS keys, parameter tiers, batched reads,
+  and read-only references pinned to a parameter version or label.
+  ([#209](https://github.com/cachix/secretspec/issues/209))
 
 ### Fixed
 

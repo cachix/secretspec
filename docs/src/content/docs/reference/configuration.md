@@ -586,13 +586,13 @@ never silently ignored.
 | `field` | No | A named component inside the item. Rejected by stores whose secrets hold a single value |
 | `vault` | No | The container holding the item. 1Password only; other stores take their container from the provider URI |
 | `section` | No | A named group of fields inside the item. 1Password only; requires `field` |
-| `version` | No | Which revision of the secret to read. Google Secret Manager only; defaults to the latest |
+| `version` | No | Which revision of the secret to read. Supported by versioned stores such as Google Secret Manager and AWS Parameter Store (0.18+); defaults to the latest |
 
 Stores fall into two groups for `field`:
 
 | Store | Shape of one secret | `field` |
 |-------|---------------------|---------|
-| dotenv, env, pass, LastPass, Proton Pass, Bitwarden | a single value | Rejected: there is nothing to select |
+| dotenv, env, pass, LastPass, Proton Pass, Bitwarden, AWS Parameter Store (0.18+) | a single value | Rejected: there is nothing to select |
 | 1Password, Keeper (0.18+), Vault KV, AWS Secrets Manager, keyring | a record of named parts | Selects the part: field label, map key, JSON key, account |
 
 `vault` is the only container coordinate. For every store except 1Password the
@@ -628,6 +628,7 @@ chain, and each provider is asked for the same coordinates.
 | [Vault](/providers/vault/#use-existing-secrets) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
 | [OpenBao](/providers/openbao/#use-existing-secrets) (0.17+) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
 | [AWS Secrets Manager](/providers/awssm/#use-existing-secrets) | Secret name or ARN | JSON key | Whole secret string | — (read-only) |
+| [AWS Parameter Store (0.18+)](/providers/awsps/#use-existing-parameters) | Parameter name or ARN; `version` selects a version or label | Rejected | Reads the decrypted value | — (read-only) |
 | [GCSM](/providers/gcsm/#use-existing-secrets) | Secret id; `version` also applies | Rejected | Reads latest or the pinned version | — (read-only) |
 | [Bitwarden (bws)](/providers/bws/#use-existing-secrets) | BWS key name | Rejected | Reads the key | ✅ |
 | [Azure Key Vault (0.15+)](/providers/akv/#use-existing-secrets) | Secret name | Rejected | Reads the secret | — (read-only) |

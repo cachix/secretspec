@@ -53,6 +53,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [keeper](/providers/keeper/) (0.18+) | Keeper Secrets Manager (requires the `keeper` build feature) | ✓ | ✓ | ✓ | — |
 | [gcsm](/providers/gcsm/) | Google Cloud Secret Manager (requires the `gcsm` build feature) | ✓ | ✓ | ✓ | — |
 | [awssm](/providers/awssm/) | AWS Secrets Manager (requires the `awssm` build feature) | ✓ | ✓ | ✓ | — |
+| [awsps](/providers/awsps/) (0.18+) | AWS Systems Manager Parameter Store (requires the `awsps` build feature in 0.18+) | ✓ | ✓ | ✓ (`SecureString`) | — |
 | [scaleway](/providers/scaleway/) (0.17+) | Scaleway Secret Manager (requires the `scaleway` build feature) | ✓ | ✓ | ✓ | — |
 | [vault](/providers/vault/) | HashiCorp Vault (requires the `vault` build feature) | ✓ | ✓ | ✓ | — |
 | [openbao](/providers/openbao/) (0.17+) | OpenBao (requires the `openbao` build feature; 0.16 uses `openbao://` through `vault`) | ✓ | ✓ | ✓ | — |

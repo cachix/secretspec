@@ -138,13 +138,22 @@ impl Provider for OpenBaoProvider {
     }
 
     fn supported_coords(&self) -> &'static [&'static str] {
-        &["field"]
+        self.core.supported_coords()
     }
 
     /// A native reference must identify the field inside the KV entry's map.
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
         let coords = self.resolve_coords(addr)?;
         self.core.get(&coords)
+    }
+
+    /// Reuses one operation-scoped login across the batch while retaining the
+    /// default address deduplication and concurrency cap.
+    fn get_many(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<std::collections::HashMap<String, SecretString>> {
+        self.core.get_many(requests)
     }
 
     /// Only convention addresses are writable; see [`Self::check_writable`].

@@ -907,6 +907,20 @@ pub(crate) fn get_each<P: Provider + ?Sized>(
     provider: &P,
     requests: &[(&str, Address<'_>)],
 ) -> Result<HashMap<String, SecretString>> {
+    get_each_with(requests, |addr| provider.get(addr))
+}
+
+/// [`get_each`] with an operation-scoped fetch function.
+///
+/// Providers can use this when the per-address reads need to share state that
+/// belongs to exactly one `get_many` call, such as a short-lived login token.
+pub(crate) fn get_each_with<'a, F>(
+    requests: &[(&str, Address<'a>)],
+    fetch: F,
+) -> Result<HashMap<String, SecretString>>
+where
+    F: Fn(Address<'a>) -> Result<Option<SecretString>> + Sync,
+{
     let mut groups: HashMap<Address<'_>, Vec<&str>> = HashMap::new();
     for (name, addr) in requests {
         groups.entry(*addr).or_default().push(name);
@@ -921,7 +935,7 @@ pub(crate) fn get_each<P: Provider + ?Sized>(
     let fetched: Vec<(Vec<&str>, Result<Option<SecretString>>)> = if groups.len() <= 1 {
         groups
             .into_iter()
-            .map(|(addr, names)| (names, provider.get(addr)))
+            .map(|(addr, names)| (names, fetch(addr)))
             .collect()
     } else {
         let concurrency = get_each_concurrency();
@@ -936,7 +950,8 @@ pub(crate) fn get_each<P: Provider + ?Sized>(
                     .iter()
                     .map(|(addr, names)| {
                         let addr = *addr;
-                        (names, scope.spawn(move || provider.get(addr)))
+                        let fetch = &fetch;
+                        (names, scope.spawn(move || fetch(addr)))
                     })
                     .collect();
                 for (names, handle) in handles {

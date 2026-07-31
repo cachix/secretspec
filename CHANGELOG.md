@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ARN-pinned references before requesting a value. Versioned ARNs now point
   users to writable parameter-name references instead of suggesting that only
   the version selector be removed.
+- Vault and OpenBao AppRole and JWT authentication methods now reuse login
+  tokens within each provider operation up to each token's reported use and
+  lease limits, including time spent completing authentication, avoiding
+  repeated logins without exhausting or outliving tokens during batches,
+  writes, or deletes. Invalid batch addresses are rejected before login, and
+  concurrent requests remain safe across Tokio runtime flavors while keeping
+  pooled HTTP connections alive for the full operation.
 - Cached provider routes now recognize Vault and OpenBao configurations that
   address the same endpoint, namespace, and mount as one store, even when they
   use different provider names or authentication methods, so a cache cannot

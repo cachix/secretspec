@@ -31,6 +31,7 @@ inquire.workspace = true
 miette.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+same-file.workspace = true
 url.workspace = true
 percent-encoding.workspace = true
 whoami = { workspace = true, optional = true }

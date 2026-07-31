@@ -3337,7 +3337,7 @@ impl Secrets {
                         .expect("composed secrets were filtered above");
                     let to_provider =
                         self.write_provider_for_route(route, Some(&profile_display))?;
-                    if from_provider_instance.uri() == to_provider.uri() {
+                    if from_provider_instance.same_store(to_provider.as_ref()) {
                         return Err(SecretSpecError::ProviderOperationFailed(format!(
                             "refusing to delete '{}' from the import source because source and destination resolve to the same provider ({})",
                             planned.name,

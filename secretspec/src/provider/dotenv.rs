@@ -244,6 +244,10 @@ impl Provider for DotEnvProvider {
         }
     }
 
+    fn physical_store_path(&self) -> Option<&std::path::Path> {
+        Some(&self.config.path)
+    }
+
     /// Resolves a relative `.env` path against the project root (the directory
     /// containing `secretspec.toml`) rather than the current working directory.
     ///

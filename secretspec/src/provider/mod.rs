@@ -791,6 +791,41 @@ pub trait Provider: Send + Sync {
         self.uri()
     }
 
+    /// Returns whether `other` addresses the same physical secret store.
+    /// Available since SecretSpec 0.18.
+    ///
+    /// Destructive cross-provider operations must use this instead of comparing
+    /// [`uri`](Provider::uri) strings: one store may have multiple equivalent
+    /// spellings. Providers backed by a filesystem path can opt into same-file
+    /// checks by returning it from
+    /// [`physical_store_path`](Provider::physical_store_path); other providers
+    /// use their canonical, credential-free URI.
+    fn same_store(&self, other: &dyn Provider) -> bool {
+        if self.name() != other.name() {
+            return false;
+        }
+        match (self.physical_store_path(), other.physical_store_path()) {
+            (Some(left), Some(right)) => {
+                same_file::is_same_file(left, right).unwrap_or_else(|_| {
+                    let left = std::path::absolute(left).unwrap_or_else(|_| left.to_path_buf());
+                    let right = std::path::absolute(right).unwrap_or_else(|_| right.to_path_buf());
+                    left == right
+                })
+            }
+            _ => self.uri() == other.uri(),
+        }
+    }
+
+    /// Returns the path that identifies a filesystem-backed store, if any.
+    /// Available since SecretSpec 0.18.
+    ///
+    /// The path is compared using filesystem identity when it exists, catching
+    /// lexical aliases, symlinks, and hard links. Providers that are not backed
+    /// by one file keep the default and are identified by [`uri`](Provider::uri).
+    fn physical_store_path(&self) -> Option<&std::path::Path> {
+        None
+    }
+
     /// Records a human-readable reason for the secrets access happening in this
     /// session (e.g. "secretspec run: deploy"), set via [`Secrets::with_reason`].
     ///
@@ -1023,6 +1058,12 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn storage_identity(&self) -> String {
         (**self).storage_identity()
     }
+    fn same_store(&self, other: &dyn Provider) -> bool {
+        (**self).same_store(other)
+    }
+    fn physical_store_path(&self) -> Option<&std::path::Path> {
+        (**self).physical_store_path()
+    }
     fn set_reason(&self, reason: Option<String>) {
         (**self).set_reason(reason);
     }
@@ -1204,6 +1245,14 @@ impl Provider for PreflightGuard {
 
     fn storage_identity(&self) -> String {
         self.inner.storage_identity()
+    }
+
+    fn same_store(&self, other: &dyn Provider) -> bool {
+        self.inner.same_store(other)
+    }
+
+    fn physical_store_path(&self) -> Option<&std::path::Path> {
+        self.inner.physical_store_path()
     }
 
     fn set_reason(&self, reason: Option<String>) {

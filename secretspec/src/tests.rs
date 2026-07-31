@@ -6231,6 +6231,66 @@ API_KEY = { description = "API key" }
 }
 
 #[test]
+fn import_with_delete_source_rejects_equivalent_dotenv_paths() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let store = temp.path().join("store.env");
+    fs::write(&store, "API_KEY=keep\n").unwrap();
+    let config: Config = toml::from_str(
+        r#"
+[project]
+name = "same-import-path-test"
+revision = "1.0"
+
+[profiles.default]
+API_KEY = { description = "API key" }
+"#,
+    )
+    .unwrap();
+    let mut spec = Secrets::new(config, None, Some("dotenv://store.env".to_string()), None);
+    spec.config_dir = temp.path().to_path_buf();
+
+    let error = spec
+        .import_with_delete_source("dotenv://./store.env")
+        .expect_err("equivalent paths must not bypass the same-store preflight");
+    assert!(error.to_string().contains("same provider"), "{error}");
+    assert_eq!(read_env_var(&store, "API_KEY").as_deref(), Some("keep"));
+}
+
+#[test]
+fn import_with_delete_source_rejects_hard_linked_dotenv_paths() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let target = temp.path().join("target.env");
+    fs::write(&source, "API_KEY=keep\n").unwrap();
+    fs::hard_link(&source, &target).unwrap();
+    let config: Config = toml::from_str(
+        r#"
+[project]
+name = "same-import-file-test"
+revision = "1.0"
+
+[profiles.default]
+API_KEY = { description = "API key" }
+"#,
+    )
+    .unwrap();
+    let spec = Secrets::new(
+        config,
+        None,
+        Some(format!("dotenv://{}", target.display())),
+        None,
+    );
+
+    let error = spec
+        .import_with_delete_source(&format!("dotenv://{}", source.display()))
+        .expect_err("hard links to one file must be treated as the same store");
+    assert!(error.to_string().contains("same provider"), "{error}");
+    assert_eq!(read_env_var(&source, "API_KEY").as_deref(), Some("keep"));
+}
+
+#[test]
 fn import_with_delete_source_preflights_every_destination_before_moving_values() {
     let _env = scrub_resolution_env();
     let temp = TempDir::new().unwrap();

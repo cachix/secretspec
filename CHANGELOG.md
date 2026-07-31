@@ -54,7 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   feature; planned for 0.18) for reading and writing KMS-encrypted
   `SecureString` parameters. It supports AWS profiles and regions, an optional
   hierarchy prefix, customer-managed KMS keys, parameter tiers, batched reads,
-  and read-only references pinned to a parameter version or label.
+  and references by parameter name, version, label, or ARN. Unversioned
+  parameter-name references can be written in place; version-, label-, and
+  ARN-pinned references are read-only.
   ([#209](https://github.com/cachix/secretspec/issues/209))
 
 ### Fixed

@@ -522,8 +522,12 @@ const SSH_KEY_FIELD_UNSET: &str = "(not set by SecretSpec)";
 /// Returns `Ok(None)` when the CLI targets the public cloud, which it reports as
 /// `null` (older builds may omit the key entirely).
 fn parse_status_server(stdout: &str) -> std::result::Result<Option<String>, String> {
-    let status: serde_json::Value = serde_json::from_str(stdout.trim())
-        .map_err(|e| format!("could not parse `bw status` output as JSON: {e}"))?;
+    let status: serde_json::Value = serde_json::from_str(stdout.trim()).map_err(|e| {
+        format!(
+            "could not parse `bw status` output as JSON: {}",
+            crate::error::display_error_chain(&e)
+        )
+    })?;
 
     match status.get("serverUrl") {
         None | Some(serde_json::Value::Null) => Ok(None),
@@ -627,8 +631,12 @@ fn parse_named_objects(
         return Ok(Vec::new());
     }
 
-    serde_json::from_str(trimmed)
-        .map_err(|e| format!("could not parse `bw list {kind}` output as JSON: {e}"))
+    serde_json::from_str(trimmed).map_err(|e| {
+        format!(
+            "could not parse `bw list {kind}` output as JSON: {}",
+            crate::error::display_error_chain(&e)
+        )
+    })
 }
 
 /// Names an organization for an error message, preferring its human-readable
@@ -947,6 +955,49 @@ fn builtin_member(item_type: BitwardenItemType, field: &str) -> Option<&'static 
     Some(member)
 }
 
+/// Describes a `bw` invocation that exited non-zero.
+///
+/// The CLI's stderr used to be the whole error, which left the reader to guess
+/// which of several `bw` calls behind one `get` or `set` had failed, and lost
+/// the exit status entirely. `operation` names the call the way it would be
+/// typed.
+///
+/// Not a job for [`crate::error::display_error_chain`]: this is a subprocess's
+/// output, not a `std::error::Error`, so there is no `source()` to walk. What
+/// was missing here is attribution.
+///
+/// Falls back to stdout when stderr is empty because `bw` is not consistent
+/// about which stream carries a diagnostic, and an error saying only that a
+/// command failed is barely better than the status code.
+///
+/// Safe to name the command: secret *values* never reach argv. `set` writes
+/// them as base64 JSON on stdin (see `create_item_from_template` and
+/// `update_item_with_json`); arguments carry only subcommands, ids and item
+/// names.
+fn bw_command_failed(operation: &str, output: &std::process::Output) -> SecretSpecError {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = match stderr.trim() {
+        "" => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            stdout.trim().to_string()
+        }
+        message => message.to_string(),
+    };
+
+    let status = match output.status.code() {
+        Some(code) => format!("exit status {code}"),
+        None => "terminated by a signal".to_string(),
+    };
+
+    if detail.is_empty() {
+        SecretSpecError::ProviderOperationFailed(format!("`{operation}` failed ({status})"))
+    } else {
+        SecretSpecError::ProviderOperationFailed(format!(
+            "`{operation}` failed ({status}): {detail}"
+        ))
+    }
+}
+
 /// Whether `field` addresses a secure note's body rather than a custom field.
 ///
 /// The one built-in a Secure Note has. Shared by the reader, the updater and
@@ -1098,10 +1149,20 @@ impl BitwardenProvider {
 
         let organizations = self
             .execute_bw_command(&["list", "organizations"])
-            .map_err(|e| format!("could not list Bitwarden organizations: {e}"))?;
+            .map_err(|e| {
+                format!(
+                    "could not list Bitwarden organizations: {}",
+                    crate::error::display_error_chain(&e)
+                )
+            })?;
         let collections = self
             .execute_bw_command(&["list", "collections"])
-            .map_err(|e| format!("could not list Bitwarden collections: {e}"))?;
+            .map_err(|e| {
+                format!(
+                    "could not list Bitwarden collections: {}",
+                    crate::error::display_error_chain(&e)
+                )
+            })?;
 
         resolve_scope(
             &organizations,
@@ -1316,13 +1377,21 @@ impl BitwardenProvider {
                 ));
             }
 
-            return Err(SecretSpecError::ProviderOperationFailed(
-                error_msg.to_string(),
+            // Both cases above are more useful than anything generic, so they
+            // stay ahead of it; this is for everything else.
+            return Err(bw_command_failed(
+                &format!("bw {}", args.join(" ")),
+                &output,
             ));
         }
 
-        String::from_utf8(output.stdout)
-            .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))
+        String::from_utf8(output.stdout).map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "`bw {}` returned output that is not valid UTF-8: {}",
+                args.join(" "),
+                crate::error::display_error_chain(&e)
+            ))
+        })
     }
 
     /// Checks if the user is authenticated with Bitwarden.
@@ -1994,7 +2063,11 @@ impl BitwardenProvider {
                     "Bitwarden CLI (bw) is not installed.\n\nTo install it:\n  - npm: npm install -g @bitwarden/cli\n  - Homebrew: brew install bitwarden-cli\n  - Chocolatey: choco install bitwarden-cli\n  - Download: https://bitwarden.com/help/cli/".to_string(),
                 )
             } else {
-                SecretSpecError::ProviderOperationFailed(e.to_string())
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to run `bw {}`: {}",
+                    args.join(" "),
+                    crate::error::display_error_chain(&e)
+                ))
             }
         })?;
 
@@ -2002,18 +2075,26 @@ impl BitwardenProvider {
         use std::io::Write;
         if let Some(stdin) = child.stdin.as_mut() {
             stdin.write_all(encoded_json.as_bytes()).map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(format!("Failed to write to stdin: {}", e))
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to send the item to `bw {}` on stdin: {}",
+                    args.join(" "),
+                    crate::error::display_error_chain(&e)
+                ))
             })?;
         }
 
-        let output = child
-            .wait_with_output()
-            .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))?;
+        let output = child.wait_with_output().map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to wait for `bw {}`: {}",
+                args.join(" "),
+                crate::error::display_error_chain(&e)
+            ))
+        })?;
 
         if !output.status.success() {
-            let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(SecretSpecError::ProviderOperationFailed(
-                error_msg.to_string(),
+            return Err(bw_command_failed(
+                &format!("bw {}", args.join(" ")),
+                &output,
             ));
         }
 
@@ -2324,7 +2405,11 @@ impl BitwardenProvider {
                     "Bitwarden CLI (bw) is not installed.\n\nTo install it:\n  - npm: npm install -g @bitwarden/cli\n  - Homebrew: brew install bitwarden-cli\n  - Chocolatey: choco install bitwarden-cli\n  - Download: https://bitwarden.com/help/cli/".to_string(),
                 )
             } else {
-                SecretSpecError::ProviderOperationFailed(e.to_string())
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to run `bw {}`: {}",
+                    args.join(" "),
+                    crate::error::display_error_chain(&e)
+                ))
             }
         })?;
 
@@ -2332,18 +2417,26 @@ impl BitwardenProvider {
         use std::io::Write;
         if let Some(stdin) = child.stdin.as_mut() {
             stdin.write_all(encoded_json.as_bytes()).map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(format!("Failed to write to stdin: {}", e))
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to send the item to `bw {}` on stdin: {}",
+                    args.join(" "),
+                    crate::error::display_error_chain(&e)
+                ))
             })?;
         }
 
-        let output = child
-            .wait_with_output()
-            .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))?;
+        let output = child.wait_with_output().map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to wait for `bw {}`: {}",
+                args.join(" "),
+                crate::error::display_error_chain(&e)
+            ))
+        })?;
 
         if !output.status.success() {
-            let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(SecretSpecError::ProviderOperationFailed(
-                error_msg.to_string(),
+            return Err(bw_command_failed(
+                &format!("bw {}", args.join(" ")),
+                &output,
             ));
         }
 
@@ -3452,6 +3545,69 @@ mod tests {
 
         assert!(template["organizationId"].is_null());
         assert!(template["collectionIds"].is_null());
+    }
+
+    // ---- Error reporting ----
+
+    /// A finished `bw` invocation, without running one.
+    ///
+    /// Unix-only because `ExitStatus` cannot be built portably; the assertions
+    /// are about `bw_command_failed`'s formatting, which is platform-independent.
+    /// Same gating as `bws`'s process tests.
+    #[cfg(unix)]
+    fn finished(code: i32, stdout: &str, stderr: &str) -> std::process::Output {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::Output {
+            status: std::process::ExitStatus::from_raw(code << 8),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_command_names_itself_and_its_status() {
+        // Returning bare stderr left the reader guessing which of the several
+        // `bw` calls behind one `get` had failed, and dropped the status.
+        let err = bw_command_failed("bw list items", &finished(1, "", "Vault is locked."));
+        let msg = err.to_string();
+
+        assert!(msg.contains("bw list items"), "{msg}");
+        assert!(msg.contains("exit status 1"), "{msg}");
+        assert!(msg.contains("Vault is locked."), "{msg}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_command_falls_back_to_stdout() {
+        // `bw` is not consistent about which stream carries a diagnostic, and
+        // an error reporting only a status code is barely better than none.
+        let err = bw_command_failed("bw create item", &finished(1, "Cipher already exists", ""));
+
+        assert!(err.to_string().contains("Cipher already exists"), "{err}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_command_still_reports_when_both_streams_are_empty() {
+        let err = bw_command_failed("bw sync", &finished(2, "", ""));
+        let msg = err.to_string();
+
+        assert!(msg.contains("bw sync"), "{msg}");
+        assert!(msg.contains("exit status 2"), "{msg}");
+        // No trailing separator with nothing after it.
+        assert!(!msg.trim_end().ends_with(':'), "{msg}");
+    }
+
+    #[test]
+    fn a_reported_cause_keeps_the_chain_underneath_it() {
+        // The half `display_error_chain` supplies: an io::Error reaching a
+        // provider message has to bring its cause, not just its own summary.
+        // Mirrors error.rs's own round-trip for the helper.
+        let source = std::io::Error::other("broken pipe while writing");
+        let rendered = crate::error::display_error_chain(&source);
+
+        assert!(rendered.contains("broken pipe while writing"), "{rendered}");
     }
 
     // ---- Strict address parsing (PR #166 review round 2, finding #6) ----

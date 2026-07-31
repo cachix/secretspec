@@ -76,8 +76,10 @@ impl BitwardenItemType {
         }
     }
 
-    /// Get string representation
-    #[allow(dead_code)]
+    /// Get string representation.
+    ///
+    /// Each spelling is one `from_str` accepts, so `uri()` can emit `type=`
+    /// and have it read back as the same type.
     pub fn as_str(&self) -> &'static str {
         match self {
             BitwardenItemType::Login => "login",
@@ -349,7 +351,7 @@ where
 /// // Personal vault
 /// let config = BitwardenConfig::default();
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BitwardenConfig {
     /// Optional organization ID for organization vaults.
     ///
@@ -375,25 +377,25 @@ pub struct BitwardenConfig {
     pub folder_prefix: Option<String>,
 
     // Flexible item creation fields
-    /// Default item type for creating new items.
+    /// Item type selected by `?type=`, if the address named one.
+    ///
+    /// `None` means the address did not ask for a type, which is distinct from
+    /// asking for a Login: a named type also *filters* reads and update targets
+    /// (see [`BitwardenProvider::find_addressed_item`]), while an unnamed one
+    /// matches any type and only picks a default at creation time. Collapsing
+    /// the two would make `bw://` behave as though every read had been
+    /// restricted to Logins.
+    ///
     /// Can be overridden by BITWARDEN_DEFAULT_TYPE environment variable.
+    ///
+    /// Defaults to `None` rather than `Some(Login)`, which is what makes the
+    /// distinction above expressible; creation falls back to Login in
+    /// `create_new_item`, the only place that has to pick a type when the
+    /// address named none.
     pub default_item_type: Option<BitwardenItemType>,
     /// Default field name for storing values.
     /// Can be overridden by BITWARDEN_DEFAULT_FIELD environment variable.
     pub default_field: Option<String>,
-}
-
-impl Default for BitwardenConfig {
-    fn default() -> Self {
-        Self {
-            organization_id: None,
-            collection_id: None,
-            server: None,
-            folder_prefix: None,
-            default_item_type: Some(BitwardenItemType::Login), // Login by default
-            default_field: None,
-        }
-    }
 }
 
 impl TryFrom<&ProviderUrl> for BitwardenConfig {
@@ -433,13 +435,17 @@ impl TryFrom<&ProviderUrl> for BitwardenConfig {
                 "collection" => config.collection_id = Some(value.into_owned()),
                 "server" => config.server = Some(value.into_owned()),
                 "folder" => config.folder_prefix = Some(value.into_owned()),
-                "type" => {
-                    if let Some(item_type) = BitwardenItemType::from_str(&value) {
-                        config.default_item_type = Some(item_type);
-                    }
-                }
+                "type" => config.default_item_type = Some(parse_item_type(&value, "?type=")?),
                 "field" => config.default_field = Some(value.into_owned()),
-                _ => {} // Ignore unknown parameters
+                unknown => {
+                    // Ignoring these made `?feild=api_key` a silent no-op: the
+                    // address looked accepted and the secret came back from
+                    // whatever the default field was.
+                    return Err(SecretSpecError::ProviderOperationFailed(format!(
+                        "Unknown Bitwarden URI parameter '{unknown}'. Valid parameters are \
+                         org (or organization), collection, server, folder, type, and field."
+                    )));
+                }
             }
         }
 
@@ -687,9 +693,13 @@ fn resolve_organization<'a>(
         return Ok(hit);
     }
 
+    // `to_lowercase`, not `eq_ignore_ascii_case`: the CLI compares names with
+    // JavaScript's `toLowerCase`, so an ASCII-only fold would leave a name like
+    // `ÜBERBLICK` addressable in `bw` but not here. Same fold as
+    // `find_addressed_item` uses for item names.
     let matches: Vec<&BitwardenNamedObject> = organizations
         .iter()
-        .filter(|o| o.name.eq_ignore_ascii_case(requested))
+        .filter(|o| o.name.to_lowercase() == requested.to_lowercase())
         .collect();
 
     match matches.as_slice() {
@@ -750,9 +760,10 @@ fn resolve_collection<'a>(
         return check_collection_org(hit, organizations, org);
     }
 
+    // Folded like organization names above.
     let by_name: Vec<&BitwardenNamedObject> = collections
         .iter()
-        .filter(|c| c.name.eq_ignore_ascii_case(requested))
+        .filter(|c| c.name.to_lowercase() == requested.to_lowercase())
         .collect();
 
     // Narrow by organization only when the address gave one: an unqualified
@@ -867,6 +878,148 @@ fn resolve_scope(
             .or_else(|| org.map(|o| o.id.clone())),
         collection_id: Some(collection.id.clone()),
     })
+}
+
+/// Parses an addressed item type, naming the offending value and its source.
+///
+/// Shared by `?type=` and `BITWARDEN_DEFAULT_TYPE` so a spelling the address
+/// rejects cannot still be swallowed by the environment. Both used to discard
+/// what they could not parse, leaving the default in place — a typo then
+/// surfaced much later, as a Login created where an SSH key was asked for.
+fn parse_item_type(value: &str, source: &str) -> Result<BitwardenItemType> {
+    BitwardenItemType::from_str(value).ok_or_else(|| {
+        SecretSpecError::ProviderOperationFailed(format!(
+            "Unknown Bitwarden item type '{value}' in {source}. Valid types are \
+             login, note (or securenote, secure_note), card, identity, and ssh \
+             (or sshkey, ssh_key)."
+        ))
+    })
+}
+
+/// The member of `item_type`'s JSON object that `field` names, if any.
+///
+/// One table for both writers — the creation template and the update mutation —
+/// so a name cannot be a built-in on one path and a custom field on the other.
+/// That split is exactly what made `set --field exp_month` store a custom field
+/// while `get` read the untouched `card.expMonth`.
+///
+/// Reading resolves the same aliases through its typed accessors rather than
+/// through JSON, so it cannot share this table directly;
+/// `a_built_in_field_named_on_create_is_readable_under_that_name` walks every
+/// alias here and is what keeps the two descriptions in step.
+fn builtin_member(item_type: BitwardenItemType, field: &str) -> Option<&'static str> {
+    let field = field.to_lowercase();
+    let member = match item_type {
+        BitwardenItemType::Login => match field.as_str() {
+            "password" => "password",
+            "username" => "username",
+            "totp" => "totp",
+            _ => return None,
+        },
+        BitwardenItemType::Card => match field.as_str() {
+            "number" => "number",
+            "code" | "cvv" | "cvc" => "code",
+            "cardholder" | "name" => "cardholderName",
+            "brand" => "brand",
+            "expmonth" | "exp_month" => "expMonth",
+            "expyear" | "exp_year" => "expYear",
+            _ => return None,
+        },
+        BitwardenItemType::Identity => match field.as_str() {
+            "email" => "email",
+            "username" => "username",
+            "phone" => "phone",
+            "firstname" | "first_name" => "firstName",
+            "lastname" | "last_name" => "lastName",
+            "company" => "company",
+            _ => return None,
+        },
+        BitwardenItemType::SshKey => match field.as_str() {
+            "private_key" | "privatekey" | "private" => "privateKey",
+            "public_key" | "publickey" | "public" => "publicKey",
+            "fingerprint" | "key_fingerprint" => "keyFingerprint",
+            _ => return None,
+        },
+        // A note's body is not a member of a sub-object; `is_note_body_field`
+        // is its equivalent.
+        BitwardenItemType::SecureNote => return None,
+    };
+    Some(member)
+}
+
+/// Whether `field` addresses a secure note's body rather than a custom field.
+///
+/// The one built-in a Secure Note has. Shared by the reader, the updater and
+/// the creation template so a value written under this name is read back from
+/// the same place; the fold matches how field names are compared everywhere
+/// else in this provider.
+fn is_note_body_field(field: &str) -> bool {
+    field.eq_ignore_ascii_case("notes")
+}
+
+/// Finds the one item `item_name` addresses, for both reads and writes.
+///
+/// Narrows the way `bw get item` itself does — by name, then by type, then
+/// refusing what is still ambiguous — with one deliberate difference: the name
+/// has to match in full.
+///
+/// `bw`'s own lookup accepts a substring (`searchCiphersBasic` splits the query
+/// and matches parts across name, username and URIs) because it is an
+/// interactive affordance: when it matches several items it prints their ids
+/// and a human picks one. A provider resolving a coordinate from
+/// `secretspec.toml` has no such backstop, and a substring that quietly
+/// resolves to a neighbouring item is a wrong secret on a read and an
+/// overwritten one on a write. So the fuzziness goes and the guardrails —
+/// the type filter and the hard stop on ambiguity — stay.
+///
+/// Case still folds, because `bw` folds it: an item the user can address in the
+/// CLI has to be addressable here. `to_lowercase` rather than
+/// `eq_ignore_ascii_case` for the same reason as `dashlane`'s titles — the CLI
+/// compares with JavaScript's `toLowerCase`, so an ASCII-only fold would leave
+/// `Überblick` unreachable as `überblick`.
+///
+/// `require_type` is `Some` only when the address named a type; see
+/// [`BitwardenConfig::default_item_type`].
+fn find_addressed_item<'a>(
+    items: &'a [BitwardenItem],
+    item_name: &str,
+    require_type: Option<BitwardenItemType>,
+) -> Result<Option<&'a BitwardenItem>> {
+    let wanted = item_name.to_lowercase();
+    let by_name: Vec<&BitwardenItem> = items
+        .iter()
+        .filter(|item| item.name.to_lowercase() == wanted)
+        .collect();
+
+    // An addressed type filters unconditionally, which is the one place this
+    // is stricter than `bw get` — the CLI only consults its type filter to
+    // break a tie. `?type=` is a standing part of the address rather than a
+    // one-off flag, so it has to mean the same thing on every operation: a
+    // `set` through `bw://?type=card` creates a Card next to a same-named
+    // Login, and a read through it then has to find that Card rather than the
+    // Login that also matches the name.
+    let candidates: Vec<&BitwardenItem> = match require_type {
+        Some(wanted_type) => by_name
+            .into_iter()
+            .filter(|item| item.item_type == wanted_type)
+            .collect(),
+        None => by_name,
+    };
+
+    match candidates.as_slice() {
+        [] => Ok(None),
+        [only] => Ok(Some(only)),
+        several => Err(SecretSpecError::ProviderOperationFailed(format!(
+            "{} Bitwarden items are named '{item_name}'. Rename them, or point the \
+             secret at one of these ids with ref = {{ item = \"<id>\" }}:\n{}",
+            several.len(),
+            several
+                .iter()
+                .map(|item| format!("  {} ({:?})", item.id, item.item_type))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ))),
+    }
 }
 
 crate::register_provider! {
@@ -1005,6 +1158,19 @@ impl BitwardenProvider {
         }
 
         Ok(Vec::new())
+    }
+
+    /// The item type this address selected, if it selected one at all.
+    ///
+    /// Environment beats config, matching every other resolution in this
+    /// provider. `None` means no type was named, which reads and writes treat
+    /// as "any type" rather than as Login — only `create_new_item` has to
+    /// invent one. See [`BitwardenConfig::default_item_type`].
+    fn resolved_item_type(&self) -> Result<Option<BitwardenItemType>> {
+        match std::env::var("BITWARDEN_DEFAULT_TYPE") {
+            Ok(raw) => parse_item_type(&raw, "BITWARDEN_DEFAULT_TYPE").map(Some),
+            Err(_) => Ok(self.config.default_item_type),
+        }
     }
 
     /// Where newly created items are filed, with names already resolved.
@@ -1214,8 +1380,7 @@ impl BitwardenProvider {
         let output = self.execute_bw_command(&list_args)?;
         let items: Vec<BitwardenItem> = serde_json::from_str(&output)?;
 
-        // If we found items, use the first one
-        if let Some(item) = items.first() {
+        if let Some(item) = find_addressed_item(&items, item_name, self.resolved_item_type()?)? {
             return self.extract_value_from_item(item, field_hint);
         }
 
@@ -1317,14 +1482,28 @@ impl BitwardenProvider {
         item: &BitwardenItem,
         resolved_field: Option<&str>,
     ) -> Result<Option<SecretString>> {
-        // If specific field requested, check custom fields first
-        if let Some(field_name) = resolved_field
-            && let Some(value) = self.extract_from_custom_fields(item, field_name)?
-        {
-            return Ok(Some(SecretString::new(value.into())));
+        // An explicit selector resolves to that field or to nothing, the same
+        // as every other item type (see the Login, Card, Identity and SSH key
+        // extractors). Falling through to another field would answer a request
+        // for one secret with a different one.
+        if let Some(field_name) = resolved_field {
+            // `notes` is the body, not a custom field: that is where both the
+            // creation template and the updater put it, so a read has to look
+            // there or `set --field notes` stops round-tripping.
+            if is_note_body_field(field_name) {
+                return Ok(item
+                    .notes
+                    .as_ref()
+                    .map(|notes| SecretString::new(notes.clone().into())));
+            }
+
+            return Ok(self
+                .extract_from_custom_fields(item, field_name)?
+                .map(|value| SecretString::new(value.into())));
         }
 
-        // Look for legacy "value" field (backward compatibility)
+        // Nothing named: the legacy "value" field (backward compatibility),
+        // then the note body.
         if let Some(value) = self.extract_from_custom_fields(item, "value")? {
             return Ok(Some(SecretString::new(value.into())));
         }
@@ -1590,20 +1769,7 @@ impl BitwardenProvider {
         let output = self.execute_bw_command(&list_args)?;
         let items: Vec<BitwardenItem> = serde_json::from_str(&output)?;
 
-        // Search strategies:
-        // 1. Exact name match with item_name
-        // 2. Items containing the item name in their name
-
-        // Strategy 1: Exact key match
-        if let Some(item) = items.iter().find(|item| item.name == item_name) {
-            return self.update_existing_item(item, target_field, value.expose_secret());
-        }
-
-        // Strategy 2: Contains item_name in name (case-insensitive)
-        if let Some(item) = items
-            .iter()
-            .find(|item| item.name.to_lowercase().contains(&item_name.to_lowercase()))
-        {
+        if let Some(item) = find_addressed_item(&items, item_name, self.resolved_item_type()?)? {
             return self.update_existing_item(item, target_field, value.expose_secret());
         }
 
@@ -1657,22 +1823,15 @@ impl BitwardenProvider {
         field: &str,
         value: &str,
     ) -> Result<()> {
-        match field.to_lowercase().as_str() {
-            "password" => {
-                item_json["login"]["password"] = serde_json::Value::String(value.to_string());
+        // Same table as the creation template, so an update lands in the member
+        // a later read looks at.
+        match builtin_member(BitwardenItemType::Login, field) {
+            Some(member) => {
+                item_json["login"][member] = serde_json::Value::String(value.to_string());
+                Ok(())
             }
-            "username" => {
-                item_json["login"]["username"] = serde_json::Value::String(value.to_string());
-            }
-            "totp" => {
-                item_json["login"]["totp"] = serde_json::Value::String(value.to_string());
-            }
-            _ => {
-                // Update custom field
-                return self.update_custom_field_in_json(item_json, field, value);
-            }
+            None => self.update_custom_field_in_json(item_json, field, value),
         }
-        Ok(())
     }
 
     /// Updates Secure Note item fields in JSON.
@@ -1682,7 +1841,7 @@ impl BitwardenProvider {
         field: &str,
         value: &str,
     ) -> Result<()> {
-        if field == "notes" {
+        if is_note_body_field(field) {
             item_json["notes"] = serde_json::Value::String(value.to_string());
             Ok(())
         } else {
@@ -1698,31 +1857,15 @@ impl BitwardenProvider {
         field: &str,
         value: &str,
     ) -> Result<()> {
-        match field.to_lowercase().as_str() {
-            "number" => {
-                item_json["card"]["number"] = serde_json::Value::String(value.to_string());
+        // Same table as the creation template, so an update lands in the member
+        // a later read looks at.
+        match builtin_member(BitwardenItemType::Card, field) {
+            Some(member) => {
+                item_json["card"][member] = serde_json::Value::String(value.to_string());
+                Ok(())
             }
-            "code" | "cvv" | "cvc" => {
-                item_json["card"]["code"] = serde_json::Value::String(value.to_string());
-            }
-            "cardholder" | "name" => {
-                item_json["card"]["cardholderName"] = serde_json::Value::String(value.to_string());
-            }
-            "brand" => {
-                item_json["card"]["brand"] = serde_json::Value::String(value.to_string());
-            }
-            "expmonth" | "exp_month" => {
-                item_json["card"]["expMonth"] = serde_json::Value::String(value.to_string());
-            }
-            "expyear" | "exp_year" => {
-                item_json["card"]["expYear"] = serde_json::Value::String(value.to_string());
-            }
-            _ => {
-                // Update custom field
-                return self.update_custom_field_in_json(item_json, field, value);
-            }
+            None => self.update_custom_field_in_json(item_json, field, value),
         }
-        Ok(())
     }
 
     /// Updates Identity item fields in JSON.
@@ -1732,31 +1875,15 @@ impl BitwardenProvider {
         field: &str,
         value: &str,
     ) -> Result<()> {
-        match field.to_lowercase().as_str() {
-            "email" => {
-                item_json["identity"]["email"] = serde_json::Value::String(value.to_string());
+        // Same table as the creation template, so an update lands in the member
+        // a later read looks at.
+        match builtin_member(BitwardenItemType::Identity, field) {
+            Some(member) => {
+                item_json["identity"][member] = serde_json::Value::String(value.to_string());
+                Ok(())
             }
-            "username" => {
-                item_json["identity"]["username"] = serde_json::Value::String(value.to_string());
-            }
-            "phone" => {
-                item_json["identity"]["phone"] = serde_json::Value::String(value.to_string());
-            }
-            "firstname" | "first_name" => {
-                item_json["identity"]["firstName"] = serde_json::Value::String(value.to_string());
-            }
-            "lastname" | "last_name" => {
-                item_json["identity"]["lastName"] = serde_json::Value::String(value.to_string());
-            }
-            "company" => {
-                item_json["identity"]["company"] = serde_json::Value::String(value.to_string());
-            }
-            _ => {
-                // Update custom field
-                return self.update_custom_field_in_json(item_json, field, value);
-            }
+            None => self.update_custom_field_in_json(item_json, field, value),
         }
-        Ok(())
     }
 
     /// Updates an SSH Key item JSON with a new field value.
@@ -1766,23 +1893,15 @@ impl BitwardenProvider {
         field: &str,
         value: &str,
     ) -> Result<()> {
-        match field.to_lowercase().as_str() {
-            "private_key" | "privatekey" | "private" => {
-                item_json["sshKey"]["privateKey"] = serde_json::Value::String(value.to_string());
+        // Same table as the creation template, so an update lands in the member
+        // a later read looks at.
+        match builtin_member(BitwardenItemType::SshKey, field) {
+            Some(member) => {
+                item_json["sshKey"][member] = serde_json::Value::String(value.to_string());
+                Ok(())
             }
-            "public_key" | "publickey" | "public" => {
-                item_json["sshKey"]["publicKey"] = serde_json::Value::String(value.to_string());
-            }
-            "fingerprint" | "key_fingerprint" => {
-                item_json["sshKey"]["keyFingerprint"] =
-                    serde_json::Value::String(value.to_string());
-            }
-            _ => {
-                // Update custom field
-                return self.update_custom_field_in_json(item_json, field, value);
-            }
+            None => self.update_custom_field_in_json(item_json, field, value),
         }
-        Ok(())
     }
 
     /// Gets an item as a JSON template for editing.
@@ -1908,11 +2027,10 @@ impl BitwardenProvider {
         target_field: Option<&str>,
         value: &str,
     ) -> Result<()> {
-        // Determine item type from config, environment variable, or use default (Login)
-        let item_type = std::env::var("BITWARDEN_DEFAULT_TYPE")
-            .ok()
-            .and_then(|s| BitwardenItemType::from_str(&s))
-            .or(self.config.default_item_type)
+        // Creation is the one path that must name a type even when the address
+        // did not, so this is where the Login default lives.
+        let item_type = self
+            .resolved_item_type()?
             .unwrap_or(BitwardenItemType::Login);
 
         // Which field to write: explicit > env > config > the item type's
@@ -1961,11 +2079,11 @@ impl BitwardenProvider {
 
         let mut fields = vec![];
 
-        match field.to_lowercase().as_str() {
-            "username" => login_data["username"] = serde_json::Value::String(value.to_string()),
-            "totp" => login_data["totp"] = serde_json::Value::String(value.to_string()),
-            "password" => login_data["password"] = serde_json::Value::String(value.to_string()),
-            _ => {
+        // The shared table, so a built-in named here lands where the getter
+        // looks for it rather than in a custom field it will never read.
+        match builtin_member(BitwardenItemType::Login, field) {
+            Some(member) => login_data[member] = serde_json::Value::String(value.to_string()),
+            None => {
                 // Store unknown fields as custom fields so they can be read back
                 let field_type = BitwardenFieldType::for_field_name(field);
                 fields.push(serde_json::json!({
@@ -2006,16 +2124,11 @@ impl BitwardenProvider {
 
         let mut fields = vec![];
 
-        match field.to_lowercase().as_str() {
-            "code" | "cvv" | "cvc" => {
-                card_data["code"] = serde_json::Value::String(value.to_string())
-            }
-            "cardholder" | "name" => {
-                card_data["cardholderName"] = serde_json::Value::String(value.to_string())
-            }
-            "brand" => card_data["brand"] = serde_json::Value::String(value.to_string()),
-            "number" => card_data["number"] = serde_json::Value::String(value.to_string()),
-            _ => {
+        // The shared table, so a built-in named here lands where the getter
+        // looks for it rather than in a custom field it will never read.
+        match builtin_member(BitwardenItemType::Card, field) {
+            Some(member) => card_data[member] = serde_json::Value::String(value.to_string()),
+            None => {
                 // Store unknown fields as custom fields so they can be read back
                 let field_type = BitwardenFieldType::for_field_name(field);
                 fields.push(serde_json::json!({
@@ -2058,12 +2171,11 @@ impl BitwardenProvider {
 
         let mut fields = vec![];
 
-        match field.to_lowercase().as_str() {
-            "username" => identity_data["username"] = serde_json::Value::String(value.to_string()),
-            "phone" => identity_data["phone"] = serde_json::Value::String(value.to_string()),
-            "company" => identity_data["company"] = serde_json::Value::String(value.to_string()),
-            "email" => identity_data["email"] = serde_json::Value::String(value.to_string()),
-            _ => {
+        // The shared table, so a built-in named here lands where the getter
+        // looks for it rather than in a custom field it will never read.
+        match builtin_member(BitwardenItemType::Identity, field) {
+            Some(member) => identity_data[member] = serde_json::Value::String(value.to_string()),
+            None => {
                 // Store unknown fields as custom fields so they can be read back
                 let field_type = BitwardenFieldType::for_field_name(field);
                 fields.push(serde_json::json!({
@@ -2094,8 +2206,9 @@ impl BitwardenProvider {
         placement: &ItemPlacement,
     ) -> serde_json::Value {
         let mut fields = vec![];
+        let into_body = is_note_body_field(field);
 
-        if field != "notes" {
+        if !into_body {
             // Store in custom field
             let field_type = BitwardenFieldType::for_field_name(field);
             fields.push(serde_json::json!({
@@ -2108,7 +2221,7 @@ impl BitwardenProvider {
         serde_json::json!({
             "type": BitwardenItemType::SecureNote.to_u8(),
             "name": item_name,
-            "notes": if field == "notes" { value.to_string() } else { format!("SecretSpec managed secret: {}", item_name) },
+            "notes": if into_body { value.to_string() } else { format!("SecretSpec managed secret: {}", item_name) },
             "secureNote": {
                 "type": 0
             },
@@ -2145,17 +2258,11 @@ impl BitwardenProvider {
 
         let mut fields = vec![];
 
-        match field.to_lowercase().as_str() {
-            "private_key" | "privatekey" | "private" => {
-                ssh_key_data["privateKey"] = serde_json::Value::String(value.to_string())
-            }
-            "public_key" | "publickey" | "public" => {
-                ssh_key_data["publicKey"] = serde_json::Value::String(value.to_string())
-            }
-            "fingerprint" | "key_fingerprint" => {
-                ssh_key_data["keyFingerprint"] = serde_json::Value::String(value.to_string())
-            }
-            _ => {
+        // The shared table, so a built-in named here lands where the getter
+        // looks for it rather than in a custom field it will never read.
+        match builtin_member(BitwardenItemType::SshKey, field) {
+            Some(member) => ssh_key_data[member] = serde_json::Value::String(value.to_string()),
+            None => {
                 // Store unknown fields as custom fields so they can be read back
                 let field_type = BitwardenFieldType::for_field_name(field);
                 fields.push(serde_json::json!({
@@ -2273,18 +2380,54 @@ impl Provider for BitwardenProvider {
         Self::PROVIDER_NAME
     }
 
+    /// Reconstructs every option that changes which secret this provider
+    /// answers with.
+    ///
+    /// SecretSpec fingerprints cached routes with this string and names the
+    /// answering store with it in audit records and reports, so two addresses
+    /// that read different secrets have to render differently. Omitting
+    /// `type`, `field` or `folder` made `bw://team?field=password` and
+    /// `bw://team?field=api_key` the same store: repointing the source left the
+    /// cached password fresh and served it for the API key.
     fn uri(&self) -> String {
         let mut uri = String::from("bw://");
-        if let Some(ref org_id) = self.config.organization_id {
-            uri.push_str(&ProviderUrl::encode(org_id));
-            uri.push('@');
+        let mut params: Vec<String> = Vec::new();
+
+        // `org@collection` is only a valid authority when there is a
+        // collection to anchor it -- `bw://myorg@` has an empty host and
+        // re-parses with no organization at all. Alone, the organization goes
+        // in the query, which is also how it can be addressed on the way in.
+        match (&self.config.organization_id, &self.config.collection_id) {
+            (org, Some(collection)) => {
+                if let Some(org) = org {
+                    uri.push_str(&ProviderUrl::encode(org));
+                    uri.push('@');
+                }
+                uri.push_str(&ProviderUrl::encode(collection));
+            }
+            (Some(org), None) => {
+                params.push(format!("org={}", ProviderUrl::encode_query(org)));
+            }
+            (None, None) => {}
         }
-        if let Some(ref coll_id) = self.config.collection_id {
-            uri.push_str(&ProviderUrl::encode(coll_id));
+
+        if let Some(folder) = &self.config.folder_prefix {
+            params.push(format!("folder={}", ProviderUrl::encode_query(folder)));
         }
-        if let Some(ref server) = self.config.server {
+        if let Some(item_type) = self.config.default_item_type {
+            // `as_str` spells each type the way `from_str` accepts it.
+            params.push(format!("type={}", item_type.as_str()));
+        }
+        if let Some(field) = &self.config.default_field {
+            params.push(format!("field={}", ProviderUrl::encode_query(field)));
+        }
+        if let Some(server) = &self.config.server {
+            params.push(format!("server={}", ProviderUrl::encode_query(server)));
+        }
+
+        if !params.is_empty() {
             uri.push('?');
-            uri.push_str(&format!("server={}", server));
+            uri.push_str(&params.join("&"));
         }
         uri
     }
@@ -2610,6 +2753,96 @@ mod tests {
         extracted
             .expect("extraction must not fail")
             .map(|secret| secret.expose_secret().to_string())
+    }
+
+    /// Reads an item the way `get` does when a field *is* named.
+    ///
+    /// The companion to [`read_without_naming_a_field`]. Named fields are the
+    /// half of the round trip that had no coverage: the existing sweep uses
+    /// `api_key`, chosen precisely because it matches no built-in, so a name
+    /// that collides with one was never read back.
+    fn read_naming_a_field(
+        provider: &BitwardenProvider,
+        item: &BitwardenItem,
+        field: &str,
+    ) -> Option<String> {
+        provider
+            .extract_value_from_item(item, Some(field))
+            .expect("extraction must not fail")
+            .map(|secret| secret.expose_secret().to_string())
+    }
+
+    /// Field names that name a built-in of their item type, in both spellings.
+    ///
+    /// Reading and updating already route these to the type's own slot; the
+    /// creation templates did not, so `set` stored a custom field that `get`
+    /// would never look at.
+    const BUILTIN_FIELD_ALIASES: &[(BitwardenItemType, &str)] = &[
+        (BitwardenItemType::Card, "exp_month"),
+        (BitwardenItemType::Card, "expmonth"),
+        (BitwardenItemType::Card, "exp_year"),
+        (BitwardenItemType::Card, "expyear"),
+        (BitwardenItemType::Card, "number"),
+        (BitwardenItemType::Card, "brand"),
+        (BitwardenItemType::Card, "code"),
+        (BitwardenItemType::Identity, "first_name"),
+        (BitwardenItemType::Identity, "firstname"),
+        (BitwardenItemType::Identity, "last_name"),
+        (BitwardenItemType::Identity, "lastname"),
+        (BitwardenItemType::Identity, "email"),
+        (BitwardenItemType::Identity, "company"),
+        (BitwardenItemType::Login, "username"),
+        (BitwardenItemType::Login, "totp"),
+        (BitwardenItemType::SshKey, "public_key"),
+        (BitwardenItemType::SshKey, "fingerprint"),
+        (BitwardenItemType::SecureNote, "notes"),
+    ];
+
+    #[test]
+    fn a_built_in_field_named_on_create_is_readable_under_that_name() {
+        // `set --field exp_month` reported success while writing a custom
+        // field, and the getter -- which knows `exp_month` as a built-in --
+        // read the still-null `card.expMonth`. An immediate `get` returned
+        // nothing. Creation has to recognise the same aliases as reading.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+
+        for (item_type, field) in BUILTIN_FIELD_ALIASES {
+            let template = template_for(&provider, *item_type, "Built In", "written-value", field);
+            let item = item_from_template(template);
+
+            assert_eq!(
+                read_naming_a_field(&provider, &item, field).as_deref(),
+                Some("written-value"),
+                "{item_type:?}: value written to field={field} was not readable under that name",
+            );
+        }
+    }
+
+    #[test]
+    fn a_built_in_field_survives_an_update_to_the_item_it_created() {
+        // The other half of the round trip. Creation and update read the same
+        // table now, so this holds by construction -- which is the point: it
+        // fails the moment either writer grows an alias the other lacks.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+
+        for (item_type, field) in BUILTIN_FIELD_ALIASES {
+            let mut item_json =
+                template_for(&provider, *item_type, "Built In", "created-value", field);
+            apply_update(
+                &provider,
+                *item_type,
+                &mut item_json,
+                field,
+                "updated-value",
+            );
+            let item = item_from_template(item_json);
+
+            assert_eq!(
+                read_naming_a_field(&provider, &item, field).as_deref(),
+                Some("updated-value"),
+                "{item_type:?}: update to field={field} was not readable under that name",
+            );
+        }
     }
 
     #[test]
@@ -2940,16 +3173,19 @@ mod tests {
     const ACME_DEV_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const ACME_PROD_ID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
     const GLOBEX_DEV_ID: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const UMLAUT_ID: &str = "33333333-3333-4333-8333-333333333333";
 
     const ORGANIZATIONS_JSON: &str = r#"[
         {"object":"organization","id":"11111111-1111-4111-8111-111111111111","name":"Acme Inc","status":2,"type":0,"enabled":true},
-        {"object":"organization","id":"22222222-2222-4222-8222-222222222222","name":"Globex","status":2,"type":0,"enabled":true}
+        {"object":"organization","id":"22222222-2222-4222-8222-222222222222","name":"Globex","status":2,"type":0,"enabled":true},
+        {"object":"organization","id":"33333333-3333-4333-8333-333333333333","name":"ÜBERBLICK","status":2,"type":0,"enabled":true}
     ]"#;
 
     const COLLECTIONS_JSON: &str = r#"[
         {"object":"collection","id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","organizationId":"11111111-1111-4111-8111-111111111111","name":"dev-secrets","externalId":null},
         {"object":"collection","id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","organizationId":"11111111-1111-4111-8111-111111111111","name":"prod-secrets","externalId":null},
-        {"object":"collection","id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","organizationId":"22222222-2222-4222-8222-222222222222","name":"dev-secrets","externalId":null}
+        {"object":"collection","id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","organizationId":"22222222-2222-4222-8222-222222222222","name":"dev-secrets","externalId":null},
+        {"object":"collection","id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee","organizationId":"33333333-3333-4333-8333-333333333333","name":"Geheimnisse","externalId":null}
     ]"#;
 
     fn resolve(
@@ -3021,6 +3257,17 @@ mod tests {
         let scope = resolve(Some("acme inc"), Some("DEV-SECRETS")).unwrap();
         assert_eq!(scope.organization_id.as_deref(), Some(ACME_ID));
         assert_eq!(scope.collection_id.as_deref(), Some(ACME_DEV_ID));
+    }
+
+    #[test]
+    fn names_fold_case_beyond_ascii() {
+        // `bw` compares names with JavaScript's `toLowerCase`, so a vault the
+        // user can address in the CLI has to be addressable here. An
+        // ASCII-only fold leaves every non-ASCII name unreachable in lower
+        // case -- and the fixtures above are all ASCII, which is why the
+        // divergence went unnoticed.
+        let scope = resolve(Some("überblick"), None).unwrap();
+        assert_eq!(scope.organization_id.as_deref(), Some(UMLAUT_ID));
     }
 
     #[test]
@@ -3205,5 +3452,328 @@ mod tests {
 
         assert!(template["organizationId"].is_null());
         assert!(template["collectionIds"].is_null());
+    }
+
+    // ---- Strict address parsing (PR #166 review round 2, finding #6) ----
+
+    fn config_error(spec: &str) -> String {
+        let url = url::Url::parse(spec).expect("the spec must parse");
+        BitwardenConfig::try_from(&ProviderUrl::new(url))
+            .expect_err("the spec must be rejected")
+            .to_string()
+    }
+
+    #[test]
+    fn a_misspelled_item_type_is_rejected_rather_than_ignored() {
+        // Silently falling back to Login means the typo surfaces much later,
+        // as a Login item created where a key was wanted.
+        let msg = config_error("bw://?type=sshkee");
+        assert!(msg.contains("sshkee"), "{msg}");
+        assert!(msg.contains("ssh"), "{msg}");
+    }
+
+    #[test]
+    fn a_misspelled_query_key_is_rejected_rather_than_ignored() {
+        // `?feild=api_key` used to parse cleanly and do nothing at all.
+        let msg = config_error("bw://?feild=api_key");
+        assert!(msg.contains("feild"), "{msg}");
+        assert!(msg.contains("field"), "{msg}");
+    }
+
+    #[test]
+    fn every_documented_query_key_is_still_accepted() {
+        // The guard on the rejection above: strictness must not cost a
+        // parameter the docs promise.
+        for spec in [
+            "bw://?org=acme",
+            "bw://?organization=acme",
+            "bw://?collection=dev",
+            "bw://?server=https://vault.example.com",
+            "bw://?folder=team",
+            "bw://?type=note",
+            "bw://?field=api_key",
+        ] {
+            let url = url::Url::parse(spec).expect("the spec must parse");
+            assert!(
+                BitwardenConfig::try_from(&ProviderUrl::new(url)).is_ok(),
+                "{spec} was rejected",
+            );
+        }
+    }
+
+    #[test]
+    fn an_item_type_is_parsed_the_same_way_wherever_it_is_named() {
+        // The URI and BITWARDEN_DEFAULT_TYPE share one parser, so the
+        // environment variable cannot keep swallowing what the URI rejects.
+        // Exercised directly rather than through the environment, which tests
+        // running in parallel cannot safely set.
+        assert_eq!(
+            parse_item_type("note", "?type=").expect("a valid spelling"),
+            BitwardenItemType::SecureNote,
+        );
+        let msg = parse_item_type("garbage", "BITWARDEN_DEFAULT_TYPE")
+            .expect_err("an invalid spelling")
+            .to_string();
+        assert!(msg.contains("BITWARDEN_DEFAULT_TYPE"), "{msg}");
+    }
+
+    // ---- Canonical URI (PR #166 review round 2, finding #5) ----
+
+    fn config_from_spec(spec: &str) -> BitwardenConfig {
+        let url = url::Url::parse(spec).expect("the spec must parse");
+        BitwardenConfig::try_from(&ProviderUrl::new(url)).expect("the spec must be valid")
+    }
+
+    fn uri_of(spec: &str) -> String {
+        BitwardenProvider::new(config_from_spec(spec)).uri()
+    }
+
+    /// Every field of the parsed config, for comparing two spellings of one
+    /// store. `BitwardenConfig` has no `PartialEq`, and `Debug` already names
+    /// the field that differs when this fails.
+    fn store_identity(spec: &str) -> String {
+        format!("{:?}", config_from_spec(spec))
+    }
+
+    #[test]
+    fn uri_round_trips_every_behaviour_changing_option() {
+        // `uri()` is the provider's identity: SecretSpec fingerprints cached
+        // routes with it and names the answering store with it in audit records
+        // and reports. Dropping an option that changes which secret is read
+        // makes two different stores indistinguishable -- a cache filled
+        // through `?field=password` stays "fresh" after the source is repointed
+        // at `?field=api_key`, and serves the password for the API key.
+        for spec in [
+            "bw://",
+            "bw://my-collection",
+            "bw://myorg@dev-secrets",
+            "bw://?type=card",
+            "bw://?field=api_key",
+            "bw://?folder=team/{project}",
+            "bw://?server=https://vault.company.com",
+            "bw://myorg@dev-secrets?type=card&field=api_key",
+        ] {
+            let rendered = uri_of(spec);
+            assert_eq!(
+                store_identity(&rendered),
+                store_identity(spec),
+                "{spec} rendered as {rendered}, which does not read back as the same store",
+            );
+        }
+    }
+
+    #[test]
+    fn uri_keeps_an_organization_addressed_without_a_collection() {
+        // `bw://?org=myorg` used to render as `bw://myorg@`, whose empty host
+        // makes the org unparseable on the way back in -- the scope silently
+        // widened to the whole vault.
+        let rendered = uri_of("bw://?org=myorg");
+        assert_eq!(
+            config_from_spec(&rendered).organization_id.as_deref(),
+            Some("myorg"),
+            "rendered as {rendered}, which loses the organization",
+        );
+    }
+
+    #[test]
+    fn uri_escapes_values_that_would_break_the_query() {
+        // Every other query-emitting provider encodes; `server` was
+        // interpolated raw.
+        let rendered = uri_of("bw://?folder=a%26b%3Dc");
+        assert_eq!(
+            config_from_spec(&rendered).folder_prefix.as_deref(),
+            Some("a&b=c"),
+            "rendered as {rendered}, which does not survive re-parsing",
+        );
+    }
+
+    // ---- Explicit field selectors (PR #166 review round 2, finding #3) ----
+
+    /// A secure note carrying both a legacy `value` field and a body.
+    fn note_with_value_field_and_body() -> BitwardenItem {
+        serde_json::from_value(serde_json::json!({
+            "id": "note",
+            "name": "Config",
+            "type": BitwardenItemType::SecureNote.to_u8(),
+            "notes": "the-note-body",
+            "fields": [{"name": "value", "value": "the-value-field", "type": 1}],
+        }))
+        .expect("a minimal note must deserialize")
+    }
+
+    #[test]
+    fn an_absent_secure_note_field_returns_nothing_rather_than_another_secret() {
+        // Naming a field is a statement about *which* secret is wanted. When
+        // that field is missing, falling back to `value` or to the note body
+        // hands back a different secret under the requested name -- the four
+        // other item types already return `None` here.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = note_with_value_field_and_body();
+
+        let got = provider
+            .extract_from_secure_note_item(&item, Some("config_value"))
+            .expect("extraction must not fail");
+
+        assert!(
+            got.is_none(),
+            "field=config_value returned '{}'",
+            got.map(|s| s.expose_secret().to_string())
+                .unwrap_or_default(),
+        );
+    }
+
+    #[test]
+    fn field_notes_reads_the_note_body_not_the_value_field() {
+        // Both the creation template and the updater treat `field=notes` as the
+        // note body, so the reader has to agree or `set --field notes` stops
+        // round-tripping.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = note_with_value_field_and_body();
+
+        let got = provider
+            .extract_from_secure_note_item(&item, Some("notes"))
+            .expect("extraction must not fail")
+            .expect("the note has a body");
+
+        assert_eq!(got.expose_secret(), "the-note-body");
+    }
+
+    #[test]
+    fn an_unqualified_secure_note_read_still_prefers_the_legacy_value_field() {
+        // The compatibility path stays exactly where it was: it applies when no
+        // field was named, which is the case it was written for.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = note_with_value_field_and_body();
+
+        let got = provider
+            .extract_from_secure_note_item(&item, None)
+            .expect("extraction must not fail")
+            .expect("the legacy field is present");
+
+        assert_eq!(got.expose_secret(), "the-value-field");
+    }
+
+    // ---- Item addressing (PR #166 review round 2, findings #1 and #2) ----
+
+    /// A vault item with just the fields addressing looks at.
+    fn named_item(id: &str, name: &str, item_type: BitwardenItemType) -> BitwardenItem {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": name,
+            "type": item_type.to_u8(),
+        }))
+        .expect("a minimal item must deserialize")
+    }
+
+    #[test]
+    fn a_read_does_not_answer_with_a_similarly_named_item() {
+        // `bw list items --search API_KEY` matches substrings, so `API_KEY_OLD`
+        // comes back too — and `bw` does not specify the order. Answering with
+        // whatever landed first hands back a different secret than the one the
+        // address names.
+        let items = [
+            named_item("old", "API_KEY_OLD", BitwardenItemType::Login),
+            named_item("wanted", "API_KEY", BitwardenItemType::Login),
+        ];
+
+        let hit = find_addressed_item(&items, "API_KEY", None)
+            .expect("one API_KEY item is not ambiguous")
+            .expect("the item exists");
+
+        assert_eq!(
+            hit.id, "wanted",
+            "a read of API_KEY answered with {} instead",
+            hit.name
+        );
+    }
+
+    #[test]
+    fn a_read_honours_an_explicitly_addressed_type() {
+        // `bw://?type=card` has to be able to tell a Card from a Login of the
+        // same name; `bw get` narrows the same way before reporting ambiguity.
+        let items = [
+            named_item("login", "API_KEY", BitwardenItemType::Login),
+            named_item("card", "API_KEY", BitwardenItemType::Card),
+        ];
+
+        let hit = find_addressed_item(&items, "API_KEY", Some(BitwardenItemType::Card))
+            .expect("the type filter leaves exactly one")
+            .expect("the card exists");
+
+        assert_eq!(hit.id, "card", "?type=card selected a {:?}", hit.item_type);
+    }
+
+    #[test]
+    fn a_write_never_adopts_a_substring_match() {
+        // The data-loss case: setting API_KEY with no such item present must
+        // create one, not overwrite the unrelated OLD_API_KEY that happens to
+        // contain the name.
+        let items = [named_item("old", "OLD_API_KEY", BitwardenItemType::Login)];
+
+        assert!(
+            find_addressed_item(&items, "API_KEY", None)
+                .expect("no match is not an error")
+                .is_none(),
+            "a write to API_KEY selected OLD_API_KEY as its update target"
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_name_is_refused_rather_than_guessed() {
+        // Bitwarden does not enforce unique names, and `bw get item` reports
+        // the collision instead of picking one. Silently choosing here would
+        // reintroduce the bug the exact match just fixed.
+        let items = [
+            named_item("first", "API_KEY", BitwardenItemType::Login),
+            named_item("second", "API_KEY", BitwardenItemType::Login),
+        ];
+
+        let err =
+            find_addressed_item(&items, "API_KEY", None).expect_err("two items share the name");
+        let msg = err.to_string();
+
+        assert!(msg.contains("2 Bitwarden items"), "{msg}");
+        assert!(msg.contains("first") && msg.contains("second"), "{msg}");
+        assert!(msg.contains("ref = { item ="), "{msg}");
+    }
+
+    #[test]
+    fn an_addressed_type_selects_between_same_named_items_on_write() {
+        // The `set` half of the type filter: with only a Login present, an
+        // address that named Card must not adopt it as an update target --
+        // that is what lets `bw://?type=card` create the Card it asked for.
+        let items = [named_item("login", "API_KEY", BitwardenItemType::Login)];
+
+        assert!(
+            find_addressed_item(&items, "API_KEY", Some(BitwardenItemType::Card))
+                .expect("a type mismatch is not an error")
+                .is_none(),
+            "?type=card adopted a Login as its update target",
+        );
+    }
+
+    #[test]
+    fn addressing_folds_case_like_the_bw_cli() {
+        // `bw` compares names with JavaScript's `toLowerCase`, so an item the
+        // user can address in the CLI has to be addressable here too — and the
+        // fold has to be Unicode-aware, not ASCII-only.
+        let items = [
+            named_item("db", "Test Database", BitwardenItemType::Login),
+            named_item("u", "Überblick", BitwardenItemType::SecureNote),
+        ];
+
+        assert_eq!(
+            find_addressed_item(&items, "test database", None)
+                .unwrap()
+                .map(|i| i.id.as_str()),
+            Some("db"),
+        );
+        assert_eq!(
+            find_addressed_item(&items, "überblick", None)
+                .unwrap()
+                .map(|i| i.id.as_str()),
+            Some("u"),
+            "an ASCII-only fold leaves non-ASCII names unaddressable",
+        );
     }
 }

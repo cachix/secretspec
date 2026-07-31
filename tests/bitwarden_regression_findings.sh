@@ -83,6 +83,37 @@ item_json_with() { # item_json_with <name> <type> <fields-json> <patch-json>
   item_json "$1" "$2" "$3" | jq --argjson patch "$4" '. * $patch'
 }
 
+require_item() { # require_item <name> <json> -> 0 once the CLI can see the item
+  local name="$1" json="$2"
+
+  if ! mk_item "$json" >/dev/null; then
+    echo "  fixture '$name': the creation command itself failed" >&2
+    return 1
+  fi
+
+  bw sync --nointeraction >/dev/null 2>&1 || true
+  if bw list items --nointeraction 2>/dev/null \
+    | jq -e --arg n "$name" 'any(.[]; .name == $n)' >/dev/null; then
+    return 0
+  fi
+
+  # Created, but not listable under the name we asked for. Print what did land,
+  # with bytes for anything non-ASCII: that is what separates "the name was
+  # mangled on the way in" (e.g. NFC arriving as NFD) from "nothing was
+  # created", which a bare absence cannot.
+  echo "  fixture '$name': not listable under that exact name. Vault contains:" >&2
+  bw list items --nointeraction 2>/dev/null | jq -r '.[].name' \
+    | while IFS= read -r listed; do
+        if LC_ALL=C printf '%s' "$listed" | grep -q '[^ -~]'; then
+          printf '    %s  (bytes: %s)\n' "$listed" \
+            "$(printf '%s' "$listed" | od -An -tx1 | tr -s ' ' | tr -d '\n')" >&2
+        else
+          printf '    %s\n' "$listed" >&2
+        fi
+      done
+  return 1
+}
+
 report() { # report <id> <desc> <fixed:0|1> [detail]
   if [ "$3" = "1" ]; then
     FIXED=$((FIXED+1));      printf '  \033[0;32mFIXED\033[0m      %s — %s\n' "$1" "$2"
@@ -164,36 +195,53 @@ fi
 
 echo "── R5: a read resolves the exactly named item ──"
 # `bw list --search RegrExactKey` returns both, and the order is not specified.
-mk_item "$(item_json_with "RegrExactKeyOld" 1 '[]' '{"login":{"password":"wrong-old-value"}}')" >/dev/null
-mk_item "$(item_json_with "RegrExactKey" 1 '[]' '{"login":{"password":"right-value"}}')" >/dev/null
-GOT=$(SS get regr_exact) || true
-if [ "$GOT" = "right-value" ]; then
-  report R5 "read returned the exactly named item" 1
+if ! require_item "RegrExactKeyOld" \
+     "$(item_json_with "RegrExactKeyOld" 1 '[]' '{"login":{"password":"wrong-old-value"}}')" \
+   || ! require_item "RegrExactKey" \
+     "$(item_json_with "RegrExactKey" 1 '[]' '{"login":{"password":"right-value"}}')"; then
+  report R5 "fixtures never reached the vault" 0 "a fixture problem, not a provider result"
 else
-  report R5 "read returned a similarly named item instead" 0 "got '$GOT'"
+  GOT=$(SS get regr_exact) || true
+  if [ "$GOT" = "right-value" ]; then
+    report R5 "read returned the exactly named item" 1
+  else
+    report R5 "read returned a similarly named item instead" 0 "got '$GOT'"
+  fi
 fi
 
 echo "── R6: an addressed type disambiguates same-named items ──"
-mk_item "$(item_json_with "RegrTyped" 1 '[]' '{"login":{"password":"the-login"}}')" >/dev/null
-mk_item "$(item_json_with "RegrTyped" 3 '[]' '{"card":{"number":"the-card"}}')" >/dev/null
-GOT=$(SSP 'bw://?type=card' get regr_typed) || true
-if [ "$GOT" = "the-card" ]; then
-  report R6 "?type=card selected the Card over the same-named Login" 1
+if ! require_item "RegrTyped" \
+     "$(item_json_with "RegrTyped" 1 '[]' '{"login":{"password":"the-login"}}')" \
+   || ! require_item "RegrTyped" \
+     "$(item_json_with "RegrTyped" 3 '[]' '{"card":{"number":"the-card"}}')"; then
+  report R6 "fixtures never reached the vault" 0 "a fixture problem, not a provider result"
 else
-  report R6 "?type=card did not select by type" 0 "got '$GOT'"
+  GOT=$(SSP 'bw://?type=card' get regr_typed) || true
+  if [ "$GOT" = "the-card" ]; then
+    report R6 "?type=card selected the Card over the same-named Login" 1
+  else
+    report R6 "?type=card did not select by type" 0 "got '$GOT'"
+  fi
 fi
 
 echo "── R7: a write never adopts a substring match ──"
 # "old_regrapikey" contains "regrapikey", which is what used to make this an
 # update target. Nothing named RegrApiKey exists yet, so `set` must create one.
 OLD_ID=$(mk_item "$(item_json_with "OLD_RegrApiKey" 1 '[]' '{"login":{"password":"must-not-change"}}')")
+if [ -z "$OLD_ID" ]; then
+  report R7 "the OLD_RegrApiKey fixture was never created" 0 \
+    "a fixture problem, not a provider result"
+  OLD_ID=""
+fi
 SS set regr_clobber brand-new-value >/dev/null
 bw sync >/dev/null 2>&1
-SURVIVED=$(bw get item "$OLD_ID" 2>/dev/null | jq -r '.login.password')
-if [ "$SURVIVED" = "must-not-change" ] && item_name_exists "RegrApiKey"; then
-  report R7 "set created RegrApiKey and left OLD_RegrApiKey intact" 1
-else
-  report R7 "set overwrote the unrelated OLD_RegrApiKey" 0 "its password is now '$SURVIVED'"
+if [ -n "$OLD_ID" ]; then
+  SURVIVED=$(bw get item "$OLD_ID" 2>/dev/null | jq -r '.login.password')
+  if [ "$SURVIVED" = "must-not-change" ] && item_name_exists "RegrApiKey"; then
+    report R7 "set created RegrApiKey and left OLD_RegrApiKey intact" 1
+  else
+    report R7 "set overwrote the unrelated OLD_RegrApiKey" 0 "its password is now '$SURVIVED'"
+  fi
 fi
 
 echo "── R8: an absent explicit field returns nothing, not another secret ──"
@@ -229,12 +277,22 @@ else
 fi
 
 echo "── R11: names fold case beyond ASCII ──"
-mk_item "$(item_json_with "Überblick" 1 '[]' '{"login":{"password":"umlaut-value"}}')" >/dev/null
-GOT=$(SS get regr_umlaut) || true
-if [ "$GOT" = "umlaut-value" ]; then
-  report R11 "an item named Überblick is addressable as überblick" 1
+# The only non-ASCII value in this file, so the only one whose *fixture* can
+# fail where the others' cannot -- it passes through jq and `bw encode` on the
+# way in. Creation used to be unchecked here, which made a failed fixture and a
+# failed lookup produce the same "got ''" and left a third-party report
+# impossible to diagnose.
+if ! require_item "Überblick" \
+  "$(item_json_with "Überblick" 1 '[]' '{"login":{"password":"umlaut-value"}}')"; then
+  report R11 "the Überblick fixture never reached the vault under that name" 0 \
+    "a fixture problem, not a provider result -- see the listing above"
 else
-  report R11 "a non-ASCII name is unreachable in lower case" 0 "got '$GOT'"
+  GOT=$(SS get regr_umlaut) || true
+  if [ "$GOT" = "umlaut-value" ]; then
+    report R11 "an item named Überblick is addressable as überblick" 1
+  else
+    report R11 "a non-ASCII name is unreachable in lower case" 0 "got '$GOT'"
+  fi
 fi
 
 echo "── R12: the integration suite refuses a pre-existing fixture ──"
@@ -244,14 +302,22 @@ echo "── R12: the integration suite refuses a pre-existing fixture ──"
 SQUATTER_NAME="secretspec-it Test Database"
 SQUATTER_ID=$(mk_item "$(item_json_with "$SQUATTER_NAME" 1 '[]' '{"login":{"password":"precious"}}')")
 bw sync >/dev/null 2>&1
-( cd "$REPO_ROOT" && bash tests/bitwarden_integration.sh "$BW_SESSION" </dev/null ) >/dev/null 2>&1
-SUITE_RC=$?
-bw sync >/dev/null 2>&1
-STILL=$(bw get item "$SQUATTER_ID" 2>/dev/null | jq -r '.login.password')
-if [ $SUITE_RC -ne 0 ] && [ "$STILL" = "precious" ]; then
-  report R12 "the suite aborted and left the pre-existing item alone" 1
+if [ -z "$SQUATTER_ID" ]; then
+  report R12 "the squatting fixture was never created" 0 \
+    "a fixture problem, not a provider result"
+  SUITE_RC=0
 else
-  report R12 "the suite adopted a real vault item as a fixture" 0 "exit $SUITE_RC, password now '$STILL'"
+  ( cd "$REPO_ROOT" && bash tests/bitwarden_integration.sh "$BW_SESSION" </dev/null ) >/dev/null 2>&1
+  SUITE_RC=$?
+fi
+bw sync >/dev/null 2>&1
+if [ -n "$SQUATTER_ID" ]; then
+  STILL=$(bw get item "$SQUATTER_ID" 2>/dev/null | jq -r '.login.password')
+  if [ $SUITE_RC -ne 0 ] && [ "$STILL" = "precious" ]; then
+    report R12 "the suite aborted and left the pre-existing item alone" 1
+  else
+    report R12 "the suite adopted a real vault item as a fixture" 0 "exit $SUITE_RC, password now '$STILL'"
+  fi
 fi
 
 echo

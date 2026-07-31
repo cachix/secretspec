@@ -53,6 +53,25 @@ for dep in docker python3 bw jq cargo; do
   command -v "$dep" >/dev/null || { echo "Missing dependency: $dep" >&2; exit 1; }
 done
 
+# The `bw` CLI is the client under test, so its version changes what the suites
+# below observe. One difference has already cost a round of confused reports:
+# before bitwarden/clients e1aa943b (2026-07-13, first shipped in CLI 2026.7.0)
+# `searchCiphersBasic` stripped diacritics from a search query but not from the
+# item names it compared against, so `--search überblick` found nothing for an
+# item named `Überblick`.
+#
+# The provider no longer depends on that — it re-lists unfiltered when the
+# narrowed search comes back empty — so this is a warning rather than a gate:
+# an older CLI still exercises the fix, which is exactly where it matters.
+BW_VERSION=$(bw --version 2>/dev/null | tr -d '[:space:]')
+BW_DIACRITIC_FIX="2026.7.0"
+if [ -n "$BW_VERSION" ] && [ "$BW_VERSION" != "$BW_DIACRITIC_FIX" ] && \
+   [ "$(printf '%s\n%s\n' "$BW_VERSION" "$BW_DIACRITIC_FIX" | sort -V | head -1)" = "$BW_VERSION" ]; then
+  echo "note: bw $BW_VERSION predates $BW_DIACRITIC_FIX, whose searchCiphersBasic" >&2
+  echo "      fixed diacritic normalization. R11 exercises the provider's fallback" >&2
+  echo "      for exactly this; if it fails, that fallback is the thing to look at." >&2
+fi
+
 echo "── 1/5 disposable vaultwarden + TLS proxy ──"
 docker network create "$NET_NAME" >/dev/null
 docker run -d --rm --name "$VW_NAME" --network "$NET_NAME" \

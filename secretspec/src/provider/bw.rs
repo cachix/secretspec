@@ -1234,6 +1234,30 @@ impl BitwardenProvider {
         }
     }
 
+    /// Lists the items in scope, optionally narrowed by bw's own search.
+    ///
+    /// `search` is an optimization only. Callers must treat an empty result as
+    /// "the prefilter matched nothing" rather than as "no such item"; see
+    /// `get_from_password_manager` for the CLI bug that makes the distinction
+    /// load-bearing.
+    fn list_items(&self, search: Option<&str>) -> Result<Vec<BitwardenItem>> {
+        let mut list_args = vec!["list", "items"];
+        if let Some(term) = search {
+            list_args.push("--search");
+            list_args.push(term);
+        }
+
+        // At most one scope filter; see `search_filter_args` for why a second
+        // would widen the candidate set rather than narrow it. That matters
+        // most on the write path, where a wider set means `set` could update a
+        // same-named item sitting in a sibling collection.
+        let filter = self.search_filter_args()?;
+        list_args.extend(filter.iter().map(String::as_str));
+
+        let output = self.execute_bw_command(&list_args)?;
+        Ok(serde_json::from_str(&output)?)
+    }
+
     /// Where newly created items are filed, with names already resolved.
     fn item_placement(&self) -> Result<ItemPlacement> {
         Ok(ItemPlacement::from(self.resolved_scope()?))
@@ -1438,16 +1462,25 @@ impl BitwardenProvider {
             ));
         }
 
-        // Use Bitwarden's built-in search to find items matching the key
-        let mut list_args = vec!["list", "items", "--search", item_name];
-
-        // At most one scope filter; see `search_filter_args` for why both would
-        // widen the search rather than narrow it.
-        let filter = self.search_filter_args()?;
-        list_args.extend(filter.iter().map(String::as_str));
-
-        let output = self.execute_bw_command(&list_args)?;
-        let items: Vec<BitwardenItem> = serde_json::from_str(&output)?;
+        // `--search` narrows server-side, which is worth having on a large
+        // vault, but it is bw's own fuzzy matcher and not the lookup: it
+        // decides on its own terms which items are even considered.
+        //
+        // Those terms have been wrong. Before bitwarden/clients e1aa943b
+        // (2026-07-13, first released in CLI 2026.7.0), `searchCiphersBasic`
+        // stripped diacritics from the query but not from the item names, so
+        // `--search überblick` returned nothing for an item named `Überblick`.
+        // On any older CLI a diacritic name is unreachable — the candidate is
+        // filtered out before this provider ever compares it.
+        //
+        // So an empty result means "the prefilter found nothing", not "the
+        // secret is absent", and the fall back re-lists unfiltered. `set` has
+        // always listed unfiltered, so this also makes reads and writes
+        // consider the same set of items.
+        let mut items = self.list_items(Some(item_name))?;
+        if items.is_empty() {
+            items = self.list_items(None)?;
+        }
 
         if let Some(item) = find_addressed_item(&items, item_name, self.resolved_item_type()?)? {
             return self.extract_value_from_item(item, field_hint);
@@ -1825,18 +1858,9 @@ impl BitwardenProvider {
             ));
         }
 
-        // First, search for existing items using the same strategy as get()
-        let mut list_args = vec!["list", "items"];
-
-        // At most one scope filter. This matters most here: under the CLI's OR
-        // semantics a second filter would widen the candidate set to the whole
-        // organization, and the name matching below would then happily update a
-        // same-named item sitting in a sibling collection.
-        let filter = self.search_filter_args()?;
-        list_args.extend(filter.iter().map(String::as_str));
-
-        let output = self.execute_bw_command(&list_args)?;
-        let items: Vec<BitwardenItem> = serde_json::from_str(&output)?;
+        // Unfiltered: a write must see every item that could already hold this
+        // address, and `--search` decides candidacy on its own fuzzy terms.
+        let items = self.list_items(None)?;
 
         if let Some(item) = find_addressed_item(&items, item_name, self.resolved_item_type()?)? {
             return self.update_existing_item(item, target_field, value.expose_secret());

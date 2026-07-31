@@ -136,6 +136,7 @@ jobs:
         shell: bash
         env:
           ACTUAL_CHECKSUM: ${{ steps.checksum.outputs.checksum }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
           pending="0000000000000000000000000000000000000000000000000000000000000000"
           expected="$(sed -n \
@@ -148,8 +149,8 @@ jobs:
           echo "Package.swift checksum does not match the XCFramework" >&2
           echo "expected: $expected" >&2
           echo "actual:   $ACTUAL_CHECKSUM" >&2
-          if [[ "${GITHUB_REF:-}" == refs/tags/v* || "$expected" != "$pending" ]]; then
-            echo "download the uploaded artifact and update Package.swift before tagging" >&2
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* || "$PUBLISH" == "true" || "$expected" != "$pending" ]]; then
+            echo "download the uploaded artifact and update Package.swift before publishing or tagging" >&2
             exit 1
           fi
           echo "the all-zero checksum is allowed only while the first Swift release is in development"

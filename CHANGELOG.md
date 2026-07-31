@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   libdbus.
 
 ### Fixed
+- AWS Parameter Store writes now reject unsupported reference coordinates and
+  ARN-pinned references before requesting a value. Versioned ARNs now point
+  users to writable parameter-name references instead of suggesting that only
+  the version selector be removed.
 - Cached provider routes now recognize Vault and OpenBao configurations that
   address the same endpoint, namespace, and mount as one store, even when they
   use different provider names or authentication methods, so a cache cannot

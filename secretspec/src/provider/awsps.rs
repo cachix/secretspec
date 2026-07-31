@@ -431,14 +431,6 @@ impl Provider for AwspsProvider {
 
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         match addr {
-            Address::Convention { .. } => Ok(()),
-            Address::Native(native) if native.version.is_some() => {
-                Err(SecretSpecError::ProviderOperationFailed(
-                    "awsps refs pinning a `version` are read-only: a Parameter Store version or \
-                     label cannot be overwritten. Drop `version` to write a new latest version."
-                        .to_string(),
-                ))
-            }
             Address::Native(native) if native.item.starts_with("arn:") => {
                 Err(SecretSpecError::ProviderOperationFailed(
                     "awsps refs using a parameter ARN are read-only: use the parameter's name to \
@@ -446,7 +438,16 @@ impl Provider for AwspsProvider {
                         .to_string(),
                 ))
             }
-            Address::Native(native) => Self::validate_parameter_name(&native.item),
+            Address::Native(native) if native.version.is_some() => {
+                Err(SecretSpecError::ProviderOperationFailed(
+                    "awsps refs pinning a `version` are read-only: a Parameter Store version or \
+                     label cannot be overwritten. Drop `version` to write a new latest version."
+                        .to_string(),
+                ))
+            }
+            _ => self
+                .resolve_coords(addr)
+                .and_then(|coordinates| Self::validate_parameter_name(&coordinates.item)),
         }
     }
 
@@ -684,17 +685,57 @@ mod tests {
     }
 
     #[test]
-    fn native_ref_rejects_field_before_network_access() {
+    fn versioned_native_arn_ref_reports_arn_remediation() {
         let provider = AwspsProvider::new(config("awsps://us-east-1"));
         let reference = crate::config::NativeAddress {
-            item: "/prod/token".to_string(),
-            field: Some("password".to_string()),
+            item: "arn:aws:ssm:us-east-1:123456789012:parameter/prod/token".to_string(),
+            version: Some("3".to_string()),
             ..Default::default()
         };
         let error = provider
-            .resolve_coords(Address::Native(&reference))
+            .check_writable(Address::Native(&reference))
             .unwrap_err();
-        assert!(error.to_string().contains("`field`"), "{error}");
+        let message = error.to_string();
+        assert!(message.contains("ARN"), "{message}");
+        assert!(!message.contains("Drop `version`"), "{message}");
+    }
+
+    #[test]
+    fn native_ref_rejects_unsupported_coordinates_during_writability_check() {
+        let provider = AwspsProvider::new(config("awsps://us-east-1"));
+        let references = [
+            (
+                "field",
+                crate::config::NativeAddress {
+                    item: "/prod/token".to_string(),
+                    field: Some("password".to_string()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "vault",
+                crate::config::NativeAddress {
+                    item: "/prod/token".to_string(),
+                    vault: Some("production".to_string()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "section",
+                crate::config::NativeAddress {
+                    item: "/prod/token".to_string(),
+                    section: Some("credentials".to_string()),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (coordinate, reference) in references {
+            let error = provider
+                .check_writable(Address::Native(&reference))
+                .unwrap_err();
+            assert!(error.to_string().contains(coordinate), "{error}");
+        }
     }
 
     #[test]

@@ -32,7 +32,7 @@ Those requirements outlive any process and any developer laptop. They belong
 in a durable project declaration. `.env` stores values for delivery; it cannot
 define the application's secret model.
 
-:::tip[How does SecretSpec solve this?]
+:::note[How does SecretSpec solve this?]
 SecretSpec separates the committed
 [declaration](/concepts/declarative/) from value
 [storage](/concepts/providers/) and delivery. The CLI and
@@ -72,7 +72,7 @@ access control and rotation. Mixing them makes the whole file sensitive.
 Without an explicit declaration, missing values fail late: the application
 discovers them only when code tries to use them.
 
-:::tip[How does SecretSpec solve this?]
+:::note[How does SecretSpec solve this?]
 The [SecretSpec declaration](/reference/configuration/) records names,
 descriptions, required values, and safe defaults. `secretspec check` and
 `secretspec run` validate those requirements before the application starts,
@@ -105,7 +105,7 @@ Now every new value must be added to `.env.example`, documented in a README,
 validated in code, and copied into the right real files. Miss one and the
 environments drift.
 
-:::tip[How does SecretSpec solve this?]
+:::note[How does SecretSpec solve this?]
 [Profiles](/concepts/profiles/) express real requirement differences as sparse
 overlays on `profiles.default`. Each deployment selects its values through
 providers instead of maintaining a complete, copied secret file.
@@ -135,7 +135,7 @@ that
 [quotes became part of an exported
 key](https://github.com/cachix/devenv/issues/1333).
 
-:::tip[How does SecretSpec solve this?]
+:::note[How does SecretSpec solve this?]
 SecretSpec defines one TOML declaration and one resolution model shared by its
 CLI and [SDKs](/sdk/overview/). Dotenv parsing is confined to the
 [compatibility provider](/providers/dotenv/), so changing loaders or storage
@@ -159,7 +159,7 @@ working as
 designed](https://github.com/docker/compose/issues/9443), a maintainer described
 the option's name as unfortunately chosen.
 
-:::tip[How does SecretSpec solve this?]
+:::note[How does SecretSpec solve this?]
 SecretSpec applies one deterministic [provider resolution
 order](/concepts/providers/fallback/#provider-selection-order). Per-secret
 routes and fallbacks are explicit in the declaration, and the same resolver
@@ -184,7 +184,7 @@ At that point `.env` behaves like a small program, with control flow spread
 across filenames, flags, working directories, parent processes, and library
 versions.
 
-:::tip[How does SecretSpec solve this?]
+:::note[How does SecretSpec solve this?]
 [`secretspec run`](/reference/cli/#run) resolves and validates secrets before
 launching the child, so its complete environment exists from process startup.
 Applications using an SDK load the declaration explicitly instead of depending
@@ -217,7 +217,7 @@ A process also gets one global map, so a frontend build, worker, migration, and
 web service often receive the same secrets even when each needs only a few.
 Dotenv has no way to express that scope.
 
-:::tip[How does SecretSpec solve this?]
+:::note[How does SecretSpec solve this?]
 The committed declaration contains no secret values. Providers supply storage,
 encryption, identity, and access control, while the
 [metadata-only audit log](/concepts/audit/) records local access. [Scopes

@@ -38,6 +38,13 @@ pub trait Provider: Send + Sync {
     /// store has a real bulk surface (one listing, a batch API).
     fn get_many(&self, requests: &[(&str, Address<'_>)])
         -> Result<HashMap<String, SecretString>> { /* default */ }
+
+    /// SecretSpec 0.18+: optional discovery hook used to build secret
+    /// declarations from a provider. Return definitions only; never put values
+    /// in descriptions or other manifest fields. Flat stores can ignore the
+    /// context; hierarchical stores use it to bound discovery.
+    fn reflect(&self, context: DiscoveryContext<'_>)
+        -> Result<HashMap<String, Secret>> { /* unsupported */ }
 }
 ```
 
@@ -48,6 +55,54 @@ written for another store fails loudly instead of resolving something else —
 you declare the set, you never write the check. Have `set` call
 `self.check_writable(addr)?` first, so the pre-check and the write agree on
 one refusal message.
+
+### Convention templates
+
+When a provider lets users replace its complete convention layout, call that
+option `template` and support the `{project}`, `{profile}`, and `{key}`
+placeholders. Reserve `prefix` for an option that only prepends literal text to
+an otherwise fixed convention. For example, a hierarchical provider might use:
+
+```text
+mybackend://account?template=/{profile}/{project}/{key}
+```
+
+Render the template only in `convention_address`, then validate the resulting
+native name before any provider I/O. This keeps `get`, `set`, batch reads,
+generation, and imports in the same address space. Document when a template
+omits a placeholder intentionally; in particular, omitting `{key}` can make
+several declarations target the same stored value.
+
+### Discovery and `init --from`
+
+SecretSpec 0.18+ passes a `DiscoveryContext` to the `reflect(context)`
+discovery hook. During `secretspec init --from PROVIDER`, the CLI constructs
+the provider, calls that hook, and turns the returned map into declarations in
+a new manifest. Flat stores such as dotenv and age ignore the context;
+hierarchical stores use it to bound discovery. A reflected `Secret` describes
+the discovered key; do not copy its value into the description, default, or
+any other committed field.
+
+`secretspec import PROVIDER` is different: it does **not** call
+`reflect(context)` or enumerate the source. It iterates the secrets
+already declared in the active and default profiles and copies their values
+into the configured destination. Implement the reflection hook for manifest
+discovery, not to change import semantics. SecretSpec 0.18+ accepts any
+provider that implements the hook as an `init --from` source. Use `--project`
+and `--profile` when the provider's convention needs context other than the
+current directory name and the `default` profile.
+
+For a hierarchical store, reflection must have a bounded namespace and a
+reversible mapping from native names to SecretSpec keys. A configured template
+such as `/{profile}/{project}/{key}` provides both: render it with
+`DiscoveryContext`, list the prefix before `{key}`, reject nested or otherwise
+ambiguous results, and return the remaining key names. Do not list an entire
+account or vault as a fallback.
+
+The reflection hook returns declarations, not values, so it is also not a
+runtime namespace-injection API. A Chamber-style “export everything under this
+path” feature would need a separate value-bearing contract or an intentional
+extension of the provider trait.
 
 ## Implementation Steps
 

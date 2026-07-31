@@ -7,20 +7,21 @@
 //!
 //! # URI Format
 //!
-//! `awsps://[aws-profile@]region[?prefix=PREFIX][&kms_key_id=KEY][&tier=TIER]`
+//! `awsps://[aws-profile@]region[?prefix=PREFIX][&template=TEMPLATE][&kms_key_id=KEY][&tier=TIER]`
 //!
 //! - `awsps://us-east-1` — use SDK default credentials in us-east-1
 //! - `awsps://production@us-east-1` — use the "production" AWS profile
 //! - `awsps://us-east-1?prefix=/myteam` — store parameters below `/myteam`
+//! - `awsps://us-east-1?template=/{profile}/{project}/{key}` — use a custom hierarchy
 //! - `awsps://us-east-1?kms_key_id=alias/my-key&tier=advanced`
 //! - `awsps://` — use SDK defaults for both profile and region
 //!
 //! # Parameter Naming
 //!
-//! Parameters use the path
-//! `[/prefix]/secretspec/{project}/{profile}/{key}`.
+//! Parameters use the path `[/prefix]/secretspec/{project}/{profile}/{key}` by
+//! default. `template` replaces that complete layout.
 
-use super::{Address, Provider, ProviderUrl};
+use super::{Address, DiscoveryContext, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use aws_sdk_ssm::Client;
 use aws_sdk_ssm::error::{ProvideErrorMetadata, SdkError};
@@ -33,6 +34,7 @@ use std::fmt::Debug;
 
 /// Maximum number of names accepted by one `GetParameters` request.
 const AWS_GET_PARAMETERS_MAX_NAMES: usize = 10;
+const DEFAULT_PARAMETER_TEMPLATE: &str = "/secretspec/{project}/{profile}/{key}";
 
 /// Formats an AWS SDK error without collapsing non-service failures into a
 /// generated operation error's opaque `unhandled error` variant.
@@ -101,6 +103,9 @@ pub struct AwspsConfig {
     pub aws_profile: Option<String>,
     /// Optional hierarchy placed before `/secretspec`.
     pub prefix: Option<String>,
+    /// Optional complete convention layout. Must end in `/{key}` so discovery
+    /// can map one bounded hierarchy back to declaration names.
+    pub template: Option<String>,
     /// Optional customer-managed KMS key for `SecureString` writes.
     pub kms_key_id: Option<String>,
     /// Optional Parameter Store tier for writes.
@@ -127,6 +132,17 @@ impl TryFrom<&ProviderUrl> for AwspsConfig {
             .query_value("prefix")
             .map(|value| value.trim_matches('/').to_string())
             .filter(|value| !value.is_empty());
+        let template = url.query_value("template");
+        if prefix.is_some() && template.is_some() {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "awsps `prefix` and `template` are mutually exclusive: `prefix` prepends the \
+                 default layout, while `template` replaces it"
+                    .to_string(),
+            ));
+        }
+        if let Some(template) = &template {
+            AwspsProvider::validate_template(template)?;
+        }
         let kms_key_id = url.query_value("kms_key_id");
         let tier = url
             .query_value("tier")
@@ -147,6 +163,7 @@ impl TryFrom<&ProviderUrl> for AwspsConfig {
             region,
             aws_profile,
             prefix,
+            template,
             kms_key_id,
             tier,
         })
@@ -168,6 +185,7 @@ crate::register_provider! {
         "awsps://us-east-1",
         "awsps://production@us-east-1",
         "awsps://us-east-1?prefix=/myteam",
+        "awsps://us-east-1?template=/{profile}/{project}/{key}",
         "awsps://us-east-1?kms_key_id=alias/my-key&tier=advanced",
     ],
 }
@@ -177,9 +195,88 @@ impl AwspsProvider {
         Self { config }
     }
 
+    fn effective_template(prefix: Option<&str>, template: Option<&str>) -> Result<String> {
+        if prefix.is_some() && template.is_some() {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "awsps `prefix` and `template` are mutually exclusive: `prefix` prepends the \
+                 default layout, while `template` replaces it"
+                    .to_string(),
+            ));
+        }
+        if let Some(template) = template {
+            return Ok(template.to_string());
+        }
+
+        let prefix = prefix.unwrap_or_default().trim_matches('/');
+        if prefix.is_empty() {
+            Ok(DEFAULT_PARAMETER_TEMPLATE.to_string())
+        } else {
+            Ok(format!("/{prefix}{DEFAULT_PARAMETER_TEMPLATE}"))
+        }
+    }
+
+    fn validate_template(template: &str) -> Result<()> {
+        if !template.starts_with('/') {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "awsps template must start with `/`".to_string(),
+            ));
+        }
+
+        let mut rest = template;
+        let mut key_count = 0;
+        while let Some(open) = rest.find('{') {
+            if rest[..open].contains('}') {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "awsps template '{template}' contains an unmatched `}}`"
+                )));
+            }
+            let after_open = &rest[open + 1..];
+            let Some(close) = after_open.find('}') else {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "awsps template '{template}' contains an unmatched `{{`"
+                )));
+            };
+            let placeholder = &after_open[..close];
+            match placeholder {
+                "project" | "profile" => {}
+                "key" => key_count += 1,
+                _ => {
+                    return Err(SecretSpecError::ProviderOperationFailed(format!(
+                        "unknown awsps template placeholder '{{{placeholder}}}': expected \
+                         {{project}}, {{profile}}, or {{key}}"
+                    )));
+                }
+            }
+            rest = &after_open[close + 1..];
+        }
+        if rest.contains('}') {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "awsps template '{template}' contains an unmatched `}}`"
+            )));
+        }
+        if key_count != 1 || !template.ends_with("/{key}") {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "awsps template must contain `{key}` exactly once as its final path segment"
+                    .to_string(),
+            ));
+        }
+        if template == "/{key}" {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "awsps template must include a bounded parent path before `/{key}`".to_string(),
+            ));
+        }
+
+        let sample = template
+            .replace("{project}", "project")
+            .replace("{profile}", "profile")
+            .replace("{key}", "KEY");
+        Self::validate_parameter_name(&sample)
+    }
+
     /// Builds and validates the convention hierarchy.
     fn format_parameter_name(
         prefix: Option<&str>,
+        template: Option<&str>,
         project: &str,
         profile: &str,
         key: &str,
@@ -192,14 +289,68 @@ impl AwspsProvider {
             }
         }
 
-        let prefix = prefix.unwrap_or_default().trim_matches('/');
-        let parameter_name = if prefix.is_empty() {
-            format!("/secretspec/{project}/{profile}/{key}")
-        } else {
-            format!("/{prefix}/secretspec/{project}/{profile}/{key}")
-        };
+        let template = Self::effective_template(prefix, template)?;
+        Self::validate_template(&template)?;
+        let parameter_name = template
+            .replace("{project}", project)
+            .replace("{profile}", profile)
+            .replace("{key}", key);
         Self::validate_parameter_name(&parameter_name)?;
         Ok(parameter_name)
+    }
+
+    /// Renders the exact parent hierarchy that reflection may enumerate.
+    fn discovery_path(
+        prefix: Option<&str>,
+        template: Option<&str>,
+        context: DiscoveryContext<'_>,
+    ) -> Result<String> {
+        for (name, value) in [("project", context.project), ("profile", context.profile)] {
+            if value.is_empty() {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "discovery {name} cannot be empty"
+                )));
+            }
+        }
+
+        let template = Self::effective_template(prefix, template)?;
+        Self::validate_template(&template)?;
+        let rendered = template
+            .replace("{project}", context.project)
+            .replace("{profile}", context.profile);
+        let path = rendered
+            .strip_suffix("/{key}")
+            .expect("validated template ends in /{key}")
+            .to_string();
+        Self::validate_parameter_name(&path)?;
+        Ok(path)
+    }
+
+    fn declaration_from_parameter(
+        path: &str,
+        name: &str,
+    ) -> Result<Option<(String, crate::Secret)>> {
+        let Some(key) = name.strip_prefix(&format!("{path}/")) else {
+            return Ok(None);
+        };
+        if key.is_empty() || key.contains('/') {
+            return Ok(None);
+        }
+        if !crate::config::is_valid_identifier(key) {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Parameter Store parameter '{name}' maps to invalid SecretSpec name '{key}': \
+                 names must be alphanumeric and underscores and cannot start with a number"
+            )));
+        }
+
+        Ok(Some((
+            key.to_string(),
+            crate::Secret {
+                description: Some(format!("{key} secret")),
+                required: Some(true),
+                ..Default::default()
+            },
+        )))
     }
 
     /// Applies the Parameter Store naming constraints that can be checked
@@ -393,6 +544,52 @@ impl AwspsProvider {
         })?;
         Ok(())
     }
+
+    async fn reflect_async(
+        &self,
+        context: DiscoveryContext<'_>,
+    ) -> Result<HashMap<String, crate::Secret>> {
+        let path = Self::discovery_path(
+            self.config.prefix.as_deref(),
+            self.config.template.as_deref(),
+            context,
+        )?;
+        let client = self.create_client().await;
+        let mut declarations = HashMap::new();
+        let mut next_token = None;
+
+        loop {
+            let mut request = client
+                .get_parameters_by_path()
+                .path(&path)
+                .recursive(false)
+                .with_decryption(false);
+            if let Some(token) = next_token {
+                request = request.next_token(token);
+            }
+            let output = request.send().await.map_err(|error| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to discover Parameter Store parameters under '{path}': {}",
+                    format_aws_error(&error)
+                ))
+            })?;
+
+            for parameter in output.parameters() {
+                if let Some(name) = parameter.name()
+                    && let Some((key, declaration)) = Self::declaration_from_parameter(&path, name)?
+                {
+                    declarations.insert(key, declaration);
+                }
+            }
+
+            next_token = output.next_token().map(str::to_string);
+            if next_token.is_none() {
+                break;
+            }
+        }
+
+        Ok(declarations)
+    }
 }
 
 impl Provider for AwspsProvider {
@@ -405,6 +602,7 @@ impl Provider for AwspsProvider {
         Ok(crate::config::NativeAddress {
             item: Self::format_parameter_name(
                 self.config.prefix.as_deref(),
+                self.config.template.as_deref(),
                 project,
                 profile,
                 key,
@@ -473,6 +671,9 @@ impl Provider for AwspsProvider {
                 ProviderUrl::encode_query(&format!("/{prefix}"))
             ));
         }
+        if let Some(template) = &self.config.template {
+            parameters.push(format!("template={}", ProviderUrl::encode_query(template)));
+        }
         if let Some(kms_key_id) = &self.config.kms_key_id {
             parameters.push(format!(
                 "kms_key_id={}",
@@ -505,6 +706,10 @@ impl Provider for AwspsProvider {
         }
         super::block_on(self.get_many_async(&resolved))
     }
+
+    fn reflect(&self, context: DiscoveryContext<'_>) -> Result<HashMap<String, crate::Secret>> {
+        super::block_on(self.reflect_async(context))
+    }
 }
 
 #[cfg(test)]
@@ -530,23 +735,25 @@ mod tests {
     fn convention_accepts_normalized_prefix() {
         for prefix in ["myteam", "/myteam", "/myteam/"] {
             let name =
-                AwspsProvider::format_parameter_name(Some(prefix), "app", "prod", "TOKEN").unwrap();
+                AwspsProvider::format_parameter_name(Some(prefix), None, "app", "prod", "TOKEN")
+                    .unwrap();
             assert_eq!(name, "/myteam/secretspec/app/prod/TOKEN");
         }
     }
 
     #[test]
     fn convention_rejects_invalid_names() {
-        assert!(AwspsProvider::format_parameter_name(None, "", "prod", "KEY").is_err());
-        assert!(AwspsProvider::format_parameter_name(None, "app", "", "KEY").is_err());
-        assert!(AwspsProvider::format_parameter_name(None, "app", "prod", "").is_err());
+        assert!(AwspsProvider::format_parameter_name(None, None, "", "prod", "KEY").is_err());
+        assert!(AwspsProvider::format_parameter_name(None, None, "app", "", "KEY").is_err());
+        assert!(AwspsProvider::format_parameter_name(None, None, "app", "prod", "").is_err());
 
         let error =
-            AwspsProvider::format_parameter_name(None, "my app", "prod", "KEY").unwrap_err();
+            AwspsProvider::format_parameter_name(None, None, "my app", "prod", "KEY").unwrap_err();
         assert!(error.to_string().contains("invalid character"), "{error}");
 
-        let error = AwspsProvider::format_parameter_name(Some("/aws/team"), "app", "prod", "KEY")
-            .unwrap_err();
+        let error =
+            AwspsProvider::format_parameter_name(Some("/aws/team"), None, "app", "prod", "KEY")
+                .unwrap_err();
         assert!(error.to_string().contains("reserved prefix"), "{error}");
     }
 
@@ -556,9 +763,85 @@ mod tests {
             .map(|number| format!("p{number}"))
             .collect::<Vec<_>>()
             .join("/");
-        let error =
-            AwspsProvider::format_parameter_name(Some(&prefix), "app", "prod", "KEY").unwrap_err();
+        let error = AwspsProvider::format_parameter_name(Some(&prefix), None, "app", "prod", "KEY")
+            .unwrap_err();
         assert!(error.to_string().contains("maximum 15"), "{error}");
+    }
+
+    #[test]
+    fn custom_template_replaces_default_hierarchy() {
+        let provider = AwspsProvider::new(config(
+            "awsps://us-east-1?template=/{profile}/{project}/{key}",
+        ));
+        let address = provider
+            .convention_address("payments", "production", "DATABASE_URL")
+            .unwrap();
+        assert_eq!(address.item, "/production/payments/DATABASE_URL");
+    }
+
+    #[test]
+    fn template_requires_a_bounded_reversible_key_path() {
+        for template in [
+            "relative/{key}",
+            "/{key}",
+            "/prod/static",
+            "/prod/{key}/nested",
+            "/prod/{unknown}/{key}",
+            "/prod/{key}/{key}",
+        ] {
+            let uri = format!("awsps://us-east-1?template={template}");
+            let url = url::Url::parse(&uri).unwrap();
+            assert!(
+                AwspsConfig::try_from(&ProviderUrl::new(url)).is_err(),
+                "expected invalid template: {template}"
+            );
+        }
+    }
+
+    #[test]
+    fn prefix_and_template_are_mutually_exclusive() {
+        let url =
+            url::Url::parse("awsps://us-east-1?prefix=/team&template=/{profile}/{project}/{key}")
+                .unwrap();
+        let error = AwspsConfig::try_from(&ProviderUrl::new(url)).unwrap_err();
+        assert!(error.to_string().contains("mutually exclusive"), "{error}");
+    }
+
+    #[test]
+    fn discovery_renders_the_same_bounded_parent_as_the_convention() {
+        let context = DiscoveryContext::new("payments", "production");
+        assert_eq!(
+            AwspsProvider::discovery_path(None, None, context).unwrap(),
+            "/secretspec/payments/production"
+        );
+        assert_eq!(
+            AwspsProvider::discovery_path(None, Some("/{profile}/{project}/{key}"), context,)
+                .unwrap(),
+            "/production/payments"
+        );
+    }
+
+    #[test]
+    fn discovery_maps_only_direct_valid_children_to_declarations() {
+        let path = "/production/payments";
+        let (key, declaration) =
+            AwspsProvider::declaration_from_parameter(path, "/production/payments/DATABASE_URL")
+                .unwrap()
+                .unwrap();
+        assert_eq!(key, "DATABASE_URL");
+        assert_eq!(declaration.required, Some(true));
+        assert!(
+            AwspsProvider::declaration_from_parameter(path, "/production/payments/nested/TOKEN")
+                .unwrap()
+                .is_none()
+        );
+
+        let error = AwspsProvider::declaration_from_parameter(path, "/production/payments/api-key")
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("invalid SecretSpec name"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -593,6 +876,23 @@ mod tests {
         let reparsed = config(&uri);
         assert_eq!(reparsed.prefix.as_deref(), Some("team/platform"));
         assert_eq!(reparsed.tier, Some(AwspsTier::IntelligentTiering));
+    }
+
+    #[test]
+    fn uri_round_trips_template() {
+        let provider = AwspsProvider::new(config(
+            "awsps://production@us-east-1?template=/{profile}/{project}/{key}",
+        ));
+        let uri = provider.uri();
+        assert_eq!(
+            uri,
+            "awsps://production@us-east-1?template=/{profile}/{project}/{key}"
+        );
+        let reparsed = config(&uri);
+        assert_eq!(
+            reparsed.template.as_deref(),
+            Some("/{profile}/{project}/{key}")
+        );
     }
 
     #[test]

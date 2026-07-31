@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::provider::{Address, Provider};
+use crate::provider::{Address, DiscoveryContext, Provider};
 use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -1358,9 +1358,9 @@ mod integration_tests {
 
     #[test]
     fn test_default_reflect_returns_error() {
-        // Test that the default reflect implementation returns an error
+        // Test that the default reflection implementation returns an error
         let provider = MockProvider::new();
-        let result = provider.reflect();
+        let result = provider.reflect(DiscoveryContext::new("project", "default"));
         assert!(
             result.is_err(),
             "Default reflect implementation should return an error"

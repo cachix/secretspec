@@ -123,6 +123,31 @@ $ secretspec get 'MyApp Database' --provider 'bw://?type=login'
 $ secretspec run -- npm start
 ```
 
+### Discover declarations (0.18+)
+
+SecretSpec 0.18+ can initialize a manifest from the items visible through a
+Bitwarden provider URI. Scope discovery to a collection, and optionally an
+item type, so unrelated personal or organization-vault entries are not treated
+as application secrets:
+
+```bash
+$ secretspec init --from 'bw://myorg@dev-secrets?type=login' # 0.18+
+✓ Created secretspec.toml with 8 secrets
+```
+
+Each item name becomes a SecretSpec key. Names must therefore contain only
+letters, numbers, and underscores, cannot start with a number, and cannot be
+the reserved name `defaults`. Bitwarden allows duplicate names and matches them
+case-insensitively; discovery stops when two selected items collide under those
+rules instead of generating an ambiguous manifest. Rename the items or use
+`?type=` to select one type.
+
+Discovery writes only names and generated descriptions to `secretspec.toml`;
+it never writes secret values. The `--project` and `--profile` discovery
+context does not change Bitwarden item names. To migrate the discovered values
+after reviewing the declarations, run the `secretspec import` command printed
+by `init`.
+
 ### Item Type Configuration
 
 The Bitwarden provider supports all Bitwarden item types with smart field detection:

@@ -565,6 +565,23 @@ pub(crate) fn provider_display_name_for_spec(spec: &str) -> String {
         .unwrap_or_else(|| scheme.to_string())
 }
 
+/// Context supplied when a provider discovers secret declarations.
+///
+/// Available starting with SecretSpec 0.18. Hierarchical providers use the
+/// project and profile to render a bounded namespace before listing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DiscoveryContext<'a> {
+    pub project: &'a str,
+    pub profile: &'a str,
+}
+
+impl<'a> DiscoveryContext<'a> {
+    pub const fn new(project: &'a str, profile: &'a str) -> Self {
+        Self { project, profile }
+    }
+}
+
 /// Trait defining the interface for secret storage providers.
 ///
 /// All secret storage backends must implement this trait to integrate with SecretSpec.
@@ -832,26 +849,27 @@ pub trait Provider: Send + Sync {
     /// [`with_base_dir`]: Provider::with_base_dir
     fn with_credentials(&mut self, _credentials: ProviderCredentials) {}
 
-    /// Discovers and returns all secrets available in this provider.
+    /// Discovers declarations using the project and profile that the new
+    /// manifest will contain. Available starting with SecretSpec 0.18.
     ///
-    /// This method is used to introspect the provider and find all available secrets.
-    /// It's particularly useful for importing secrets from external sources.
-    ///
-    /// # Returns
-    ///
-    /// A HashMap where keys are secret names and values are `Secret` configurations.
-    /// The default implementation returns an empty map, indicating the provider
-    /// doesn't support reflection.
+    /// Providers whose namespace does not depend on that context can ignore
+    /// it. Hierarchical providers should use it so discovery stays inside the
+    /// same namespace as [`convention_address`](Provider::convention_address).
+    /// The default implementation returns an unsupported-operation error.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let secrets = provider.reflect()?;
+    /// let context = DiscoveryContext::new("payments", "production");
+    /// let secrets = provider.reflect(context)?;
     /// for (name, secret) in secrets {
     ///     println!("Found secret: {} = {:?}", name, secret);
     /// }
     /// ```
-    fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
+    fn reflect(
+        &self,
+        _context: DiscoveryContext<'_>,
+    ) -> Result<HashMap<String, crate::config::Secret>> {
         Err(SecretSpecError::ProviderOperationFailed(format!(
             "Provider '{}' does not support reflection",
             self.name()
@@ -1025,8 +1043,11 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn set_reason(&self, reason: Option<String>) {
         (**self).set_reason(reason);
     }
-    fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
-        (**self).reflect()
+    fn reflect(
+        &self,
+        context: DiscoveryContext<'_>,
+    ) -> Result<HashMap<String, crate::config::Secret>> {
+        (**self).reflect(context)
     }
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
         (**self).get_many(requests)
@@ -1217,9 +1238,12 @@ impl Provider for PreflightGuard {
         self.inner.with_credentials(credentials);
     }
 
-    fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
+    fn reflect(
+        &self,
+        context: DiscoveryContext<'_>,
+    ) -> Result<HashMap<String, crate::config::Secret>> {
         self.check()?;
-        self.inner.reflect()
+        self.inner.reflect(context)
     }
 
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {

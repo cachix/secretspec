@@ -48,11 +48,11 @@ The same secret can come from a developer's
 [system keyring](/providers/keyring/) or CI
 [environment variables](/providers/env/), while a more sensitive production
 environment resolves it from [Vault](/providers/vault/). Applications use the
-same declaration through eight SDKs for [Rust](/sdk/rust/),
+same declaration through nine SDKs for [Rust](/sdk/rust/),
 [Python](/sdk/python/), [Go](/sdk/go/),
 [Ruby](/sdk/ruby/), [Node.js/TypeScript](/sdk/nodejs/),
-[Haskell](/sdk/haskell/), [PHP](/sdk/php/), and [C#](/sdk/csharp/) without
-knowing the provider.
+[Haskell](/sdk/haskell/), [PHP](/sdk/php/), [C#](/sdk/csharp/), and
+[Swift (0.18+)](/sdk/swift/) without knowing the provider.
 
 Encrypted files also make the key workflow a project-wide requirement. Adding a
 teammate means adding their key to `.sops.yaml` and re-encrypting every file;

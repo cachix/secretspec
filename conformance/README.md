@@ -1,8 +1,9 @@
 # Cross-language conformance suite
 
-Every SecretSpec SDK (Python, Go, Ruby, Node.js, Haskell, C#, and PHP) is a thin
-client over the same resolver contract. This suite proves they agree: each SDK
-resolves the same fixtures and must produce the identical **canonical** result.
+Every SecretSpec SDK (Python, Go, Ruby, Node.js, Haskell, C#, PHP, and Swift
+(0.18+)) is a thin client over the same resolver contract. This suite proves
+they agree: each SDK resolves the same fixtures and must produce the identical
+**canonical** result.
 
 ## Fixtures
 
@@ -60,3 +61,6 @@ relative to the repo root:
   staticlib staged on `--extra-lib-dirs`; see the Haskell SDK build steps)
 - C#: `cd secretspec-dotnet && dotnet run --project tests/SecretSpec.Tests`
 - PHP: `cd secretspec-php && ./vendor/bin/phpunit tests/ConformanceTest.php`
+- Swift (0.18+, macOS):
+  `swift test --filter SecretSpecTests.testCrossLanguageConformance` after
+  staging the local XCFramework as described in `secretspec-swift/README.md`

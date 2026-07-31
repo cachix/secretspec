@@ -408,20 +408,16 @@ impl KvProvider {
         })
     }
 
-    /// Returns the credential-free provider URI used in audit records and
-    /// fallback diagnostics.
-    ///
-    /// The URI is canonical rather than source-preserving: implicit defaults
-    /// stay implicit, while every setting that changes the effective store or
-    /// authentication context is retained.
-    pub(crate) fn uri(&self) -> String {
+    /// Builds the shared authority, namespace, and mount portion of a canonical
+    /// provider or storage-identity URL.
+    fn base_uri(&self, scheme: &str) -> Url {
         let authority = self
             .config
             .endpoint
             .strip_prefix("https://")
             .or_else(|| self.config.endpoint.strip_prefix("http://"))
             .expect("KvConfig endpoints are normalized HTTP origins");
-        let mut uri = Url::parse(&format!("{}://{authority}", self.product.scheme()))
+        let mut uri = Url::parse(&format!("{scheme}://{authority}"))
             .expect("a normalized endpoint forms a provider URI");
 
         if let Some(namespace) = &self.config.namespace {
@@ -429,6 +425,18 @@ impl KvProvider {
                 .expect("a provider URI supports namespace userinfo");
         }
         uri.set_path(&format!("/{}", self.config.mount));
+
+        uri
+    }
+
+    /// Returns the credential-free provider URI used in audit records and
+    /// fallback diagnostics.
+    ///
+    /// The URI is canonical rather than source-preserving: implicit defaults
+    /// stay implicit, while every setting that changes the effective store or
+    /// authentication context is retained.
+    pub(crate) fn uri(&self) -> String {
+        let mut uri = self.base_uri(self.product.scheme());
 
         if self.config.endpoint.starts_with("http://") {
             uri.query_pairs_mut().append_pair("tls", "false");
@@ -452,6 +460,20 @@ impl KvProvider {
             }
         }
 
+        uri.into()
+    }
+
+    /// Canonical identity of the Vault-compatible KV mount behind this provider.
+    ///
+    /// Vault and OpenBao are separate public providers, but their compatible KV
+    /// clients can address the same endpoint, namespace, and mount. Authentication
+    /// method, role, audience, and KV interpretation do not create a distinct
+    /// physical store, so none of them may let a cache disguise its own source.
+    pub(crate) fn storage_identity(&self) -> String {
+        let mut uri = self.base_uri("vault-compatible");
+        if self.config.endpoint.starts_with("http://") {
+            uri.query_pairs_mut().append_pair("tls", "false");
+        }
         uri.into()
     }
 
@@ -1357,6 +1379,62 @@ mod tests {
             KvProvider::new(approle, Product::OpenBao).uri(),
             "openbao://team-a@bao.example.com:8200/secret?auth=approle"
         );
+    }
+
+    #[test]
+    fn storage_identity_unifies_compatible_products_and_authentication() {
+        let vault = KvConfig::parse(
+            &provider_url("vault://team-a@bao.example.com:8200/secret?tls=false&kv=1&auth=approle"),
+            Product::Vault,
+        )
+        .unwrap();
+        let openbao = KvConfig::parse(
+            &provider_url(
+                "openbao://team-a@bao.example.com:8200/secret?tls=false&auth=jwt&role=ci&audience=deploy",
+            ),
+            Product::OpenBao,
+        )
+        .unwrap();
+
+        let expected = "vault-compatible://team-a@bao.example.com:8200/secret?tls=false";
+        assert_eq!(
+            KvProvider::new(vault, Product::Vault).storage_identity(),
+            expected
+        );
+        assert_eq!(
+            KvProvider::new(openbao, Product::OpenBao).storage_identity(),
+            expected
+        );
+    }
+
+    #[test]
+    fn storage_identity_retains_the_physical_location() {
+        let identity = |spec, product| {
+            let config = KvConfig::parse(&provider_url(spec), product).unwrap();
+            KvProvider::new(config, product).storage_identity()
+        };
+        let base = identity("vault://team-a@bao.example.com:8200/secret", Product::Vault);
+
+        for different in [
+            identity(
+                "openbao://team-b@bao.example.com:8200/secret",
+                Product::OpenBao,
+            ),
+            identity(
+                "openbao://team-a@bao.example.com:8200/cache",
+                Product::OpenBao,
+            ),
+            identity(
+                "openbao://team-a@other.example.com:8200/secret",
+                Product::OpenBao,
+            ),
+            identity(
+                "openbao://team-a@bao.example.com:8200/secret?tls=false",
+                Product::OpenBao,
+            ),
+        ] {
+            assert_ne!(base, different);
+        }
     }
 
     #[test]

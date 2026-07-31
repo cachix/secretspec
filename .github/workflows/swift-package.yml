@@ -1,0 +1,179 @@
+name: "Swift SDK"
+
+# Builds the macOS Intel and Apple-silicon Rust cdylibs, packages them as one
+# XCFramework, and runs the Swift SDK (including cross-language conformance)
+# against that exact local artifact. A release tag publishes the checksummed
+# XCFramework ZIP that the root Package.swift references.
+
+on:
+  workflow_call:
+    inputs:
+      publish:
+        description: Attach the XCFramework to the GitHub Release
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: Existing GitHub Release tag to upload the XCFramework to
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Attach the XCFramework to an existing GitHub Release
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: Existing GitHub Release tag to upload the XCFramework to
+        required: false
+        type: string
+        default: ""
+  push:
+    tags:
+      - v**
+  pull_request:
+    paths:
+      - "Package.swift"
+      - "secretspec-swift/**"
+      - "secretspec-ffi/**"
+      - "scripts/build-swift-xcframework.sh"
+      - "scripts/sync-sdk-versions.sh"
+      - ".github/workflows/swift-package.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: macOS native libraries
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-apple-darwin
+      - name: Build native resolver
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+          RUSTFLAGS: "-C strip=symbols"
+        run: |
+          cargo build -p secretspec-ffi --release \
+            --target aarch64-apple-darwin
+          cargo build -p secretspec-ffi --release \
+            --target x86_64-apple-darwin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swift-native-macos
+          path: |
+            target/aarch64-apple-darwin/release/libsecretspec_ffi.dylib
+            target/x86_64-apple-darwin/release/libsecretspec_ffi.dylib
+
+  package:
+    name: XCFramework and Swift tests
+    needs: native
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify the committed Swift binary version
+        shell: bash
+        run: |
+          bash scripts/sync-sdk-versions.sh
+          git diff --exit-code -- Package.swift
+      - uses: actions/download-artifact@v5
+        with:
+          name: swift-native-macos
+          path: staged
+      - name: Build the universal XCFramework
+        shell: bash
+        run: |
+          libraries=()
+          while IFS= read -r library; do
+            libraries+=("$library")
+          done < <(find staged -type f -name libsecretspec_ffi.dylib -print | sort)
+          if [[ "${#libraries[@]}" -ne 2 ]]; then
+            printf 'expected 2 native libraries, found %s\n' "${#libraries[@]}" >&2
+            printf '%s\n' "${libraries[@]}" >&2
+            exit 1
+          fi
+          bash scripts/build-swift-xcframework.sh \
+            secretspec-swift/Artifacts/CSecretSpec.xcframework \
+            "${libraries[@]}"
+      - name: Run Swift SDK tests and cross-language conformance
+        run: |
+          swift test --parallel
+          swift test --filter SecretSpecTests.testCrossLanguageConformance
+      - name: Create the release archive
+        shell: bash
+        run: |
+          # SwiftPM checks the ZIP byte-for-byte. Normalize metadata and archive
+          # in lexical order so release preparation and the tag build produce
+          # the same checksum from identical Mach-O inputs.
+          xattr -cr secretspec-swift/Artifacts/CSecretSpec.xcframework
+          find secretspec-swift/Artifacts/CSecretSpec.xcframework \
+            -exec touch -t 200001010000 {} +
+          (
+            cd secretspec-swift/Artifacts
+            find CSecretSpec.xcframework -print |
+              LC_ALL=C sort |
+              zip -X -q "$GITHUB_WORKSPACE/CSecretSpec.xcframework.zip" -@
+          )
+      - name: Record the SwiftPM checksum
+        id: checksum
+        shell: bash
+        run: |
+          actual="$(swift package compute-checksum CSecretSpec.xcframework.zip)"
+          echo "checksum=$actual" >> "$GITHUB_OUTPUT"
+          echo "CSecretSpec.xcframework.zip checksum: $actual"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swift-xcframework
+          path: CSecretSpec.xcframework.zip
+      - name: Validate the committed SwiftPM checksum
+        shell: bash
+        env:
+          ACTUAL_CHECKSUM: ${{ steps.checksum.outputs.checksum }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          pending="0000000000000000000000000000000000000000000000000000000000000000"
+          expected="$(sed -n \
+            's/^let secretSpecBinaryChecksum = "\([0-9a-f]*\)"/\1/p' \
+            Package.swift)"
+          if [[ "$ACTUAL_CHECKSUM" == "$expected" ]]; then
+            exit 0
+          fi
+
+          echo "Package.swift checksum does not match the XCFramework" >&2
+          echo "expected: $expected" >&2
+          echo "actual:   $ACTUAL_CHECKSUM" >&2
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* || "$PUBLISH" == "true" || "$expected" != "$pending" ]]; then
+            echo "download the uploaded artifact and update Package.swift before publishing or tagging" >&2
+            exit 1
+          fi
+          echo "the all-zero checksum is allowed only while the first Swift release is in development"
+
+  publish:
+    name: Publish Swift XCFramework
+    needs: package
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (inputs.publish && inputs.release_tag != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: swift-xcframework
+          path: artifacts
+      - name: Attach the XCFramework to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          bash scripts/upload-release-asset.sh
+          "${{ inputs.release_tag || github.ref_name }}"
+          artifacts/CSecretSpec.xcframework.zip

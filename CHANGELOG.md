@@ -13,10 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   libdbus.
 
 ### Fixed
+- Cached provider routes now recognize Vault and OpenBao configurations that
+  address the same endpoint, namespace, and mount as one store, even when they
+  use different provider names or authentication methods, so a cache cannot
+  target its own authoritative source.
 - Provider and SDK errors now retain underlying causes such as authentication,
   timeout, DNS, TLS, connection, and response-parsing failures. AWS Secrets
-  Manager errors also report AWS error codes and messages instead of only
-  `unhandled error`.
+  Manager and Parameter Store errors also report AWS error codes and messages
+  instead of only `unhandled error`.
 - The dotenv provider's "cannot store" error now tells you to rename the secret
   in `secretspec.toml` when the name came from a manifest declaration, instead
   of always pointing at a `ref` item the config may not contain.
@@ -24,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `as_path` secrets alive until the returned resolved secrets are dropped.
 
 ### Added
+- Swift SDK (available in 0.18) for resolving SecretSpec manifests from macOS
+  12+ on Intel and Apple silicon. The SwiftPM package provides fluent and
+  one-shot resolution, typed failures, scopes, value-free reports, provenance,
+  environment export, codegen input, and deterministic `as_path` cleanup. Its
+  checksummed XCFramework includes the shared Rust resolver, so applications do
+  not need a Rust toolchain or separately installed native library.
 - Dashlane provider (`dashlane://`) for reading secrets from a Dashlane vault
   through the `dcli` CLI. Convention secrets read the item titled
   `secretspec/{project}/{profile}/{key}`, and a `ref` names an existing item by
@@ -78,6 +88,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache-compatible deletion. SDK calls are safe from async Rust applications,
   and updates preserve the JSON types of Keeper fields such as dates,
   checkboxes, hosts, and names.
+- AWS Systems Manager Parameter Store provider (`awsps://`, `awsps` build
+  feature; planned for 0.18) for reading and writing KMS-encrypted
+  `SecureString` parameters. It supports AWS profiles and regions, an optional
+  hierarchy prefix, customer-managed KMS keys, parameter tiers, batched reads,
+  and read-only references pinned to a parameter version or label.
+  ([#209](https://github.com/cachix/secretspec/issues/209))
 
 
 ## [0.17.0] - 2026-07-26

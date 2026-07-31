@@ -31,6 +31,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [systemd credentials](https://secretspec.dev/providers/systemd-credential) (0.17+)
   - [Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)
   - [AWS Secrets Manager](https://secretspec.dev/providers/awssm)
+  - [AWS Systems Manager Parameter Store](https://secretspec.dev/providers/awsps) (0.18+)
   - [Scaleway Secret Manager](https://secretspec.dev/providers/scaleway) (0.17+)
   - [Vault](https://secretspec.dev/providers/vault)
   - [OpenBao](https://secretspec.dev/providers/openbao) (0.17+)
@@ -76,6 +77,7 @@ $ secretspec config global init  # 0.17+
   dashlane: Dashlane password manager, read-only (0.18+)
   gcsm: Google Cloud Secret Manager
   awssm: AWS Secrets Manager
+  awsps: AWS Systems Manager Parameter Store (0.18+)
   scaleway: Scaleway Secret Manager (0.17+)
   vault: HashiCorp Vault secret management
   openbao: OpenBao secret management (0.17+)
@@ -173,6 +175,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Dashlane](https://secretspec.dev/providers/dashlane)** (0.18+) - Read-only access to a Dashlane vault via the `dcli` CLI
 - **[Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)** - GCP secret management
 - **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
+- **[AWS Systems Manager Parameter Store](https://secretspec.dev/providers/awsps)** (0.18+) - Encrypted hierarchical parameters in AWS
 - **[Scaleway Secret Manager](https://secretspec.dev/providers/scaleway)** (0.17+) - Scaleway secret management
 - **[Vault](https://secretspec.dev/providers/vault)** - HashiCorp Vault KV engine
 - **[OpenBao](https://secretspec.dev/providers/openbao)** (0.17+) - OpenBao KV integration; SecretSpec 0.16 accepts `openbao://` through the Vault provider
@@ -231,6 +234,7 @@ works identically with no per-language resolution logic:
 - [Haskell](https://secretspec.dev/sdk/haskell) (build-time FFI link)
 - [PHP](https://secretspec.dev/sdk/php) (ext-php-rs extension, with an `ext-ffi` fallback)
 - [C# (0.16+)](https://secretspec.dev/sdk/csharp) (P/Invoke with native assets in the NuGet package)
+- [Swift (0.18+)](https://secretspec.dev/sdk/swift) (SwiftPM XCFramework for macOS Intel and Apple silicon)
 
 ```python
 from secretspec import SecretSpec

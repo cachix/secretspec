@@ -245,6 +245,33 @@ awssm://                      # SDK default region and credentials
 **Prerequisites**: AWS credentials configured, build with `--features awssm`
 **Storage**: Secret name `secretspec/{project}/{profile}/{key}`
 
+## AWS Systems Manager Parameter Store Provider (0.18+)
+
+:::caution[Version compatibility]
+The `awsps` provider is added in SecretSpec 0.18.
+:::
+
+**URI**: `awsps://[profile@]REGION[?prefix=PATH&kms_key_id=KEY&tier=TIER]` -
+Stores secrets as encrypted AWS Systems Manager Parameter Store values
+
+```bash
+awsps://us-east-1                                  # Specific AWS region
+awsps://production@us-east-1                       # AWS profile and region
+awsps://us-east-1?prefix=/team                     # Additional hierarchy
+awsps://us-east-1?kms_key_id=alias/key&tier=advanced
+awsps://                                           # SDK defaults
+```
+
+**Features (0.18+)**: Read/write, `SecureString` encryption, cloud sync,
+profiles, IAM/SSO authentication, batched reads, version- or label-pinned
+read-only refs
+**Prerequisites (0.18+)**: AWS credentials configured, build with
+`--features awsps`
+**Storage (0.18+)**: Parameter
+`[/prefix]/secretspec/{project}/{profile}/{key}`; `kms_key_id` selects a
+customer-managed key, while `tier` accepts `standard`, `advanced`, or
+`intelligent-tiering`
+
 ## Scaleway Secret Manager Provider (0.17+)
 
 **URI**: `scaleway://[REGION][?project_id=UUID&path=/folder]` - Stores secrets in Scaleway Secret Manager
@@ -488,6 +515,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Keeper (0.18+) | ✅ End-to-end | Cloud (Keeper) | ✅ Yes |
 | GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |
+| AWS Parameter Store (0.18+) | ✅ AWS KMS (`SecureString`) | Cloud (AWS) | ✅ Yes |
 | Scaleway (0.17+) | ✅ Scaleway-managed | Cloud (Scaleway) | ✅ Yes |
 | Vault | ✅ Vault encryption | Vault server | ✅ Yes |
 | OpenBao (0.17+) | ✅ OpenBao encryption | OpenBao server | ✅ Yes |

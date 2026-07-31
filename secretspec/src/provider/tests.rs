@@ -1507,6 +1507,51 @@ mod integration_tests {
         assert!(!result.contains_key("NONEXISTENT"));
     }
 
+    #[cfg(feature = "awsps")]
+    #[test]
+    fn test_awsps_batch_get() {
+        let providers = get_test_providers();
+        if !providers.contains(&"awsps".to_string()) {
+            return;
+        }
+
+        let (provider, _temp_dir) = create_provider_with_temp_path("awsps");
+        let project_name = generate_test_project_name();
+        let profile = "default";
+
+        let test_parameters = [
+            ("BATCH_TEST_1", "value1"),
+            ("BATCH_TEST_2", "value2"),
+            ("BATCH_TEST_3", "value3"),
+        ];
+        for (key, value) in test_parameters {
+            provider
+                .set(
+                    Address::convention(&project_name, profile, key),
+                    &SecretString::new(value.to_string().into()),
+                )
+                .unwrap();
+        }
+
+        let keys = [
+            "BATCH_TEST_1",
+            "BATCH_TEST_2",
+            "BATCH_TEST_3",
+            "NONEXISTENT",
+        ];
+        let requests: Vec<(&str, Address<'_>)> = keys
+            .iter()
+            .map(|key| (*key, Address::convention(&project_name, profile, key)))
+            .collect();
+        let result = provider.get_many(&requests).unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result["BATCH_TEST_1"].expose_secret(), "value1");
+        assert_eq!(result["BATCH_TEST_2"].expose_secret(), "value2");
+        assert_eq!(result["BATCH_TEST_3"].expose_secret(), "value3");
+        assert!(!result.contains_key("NONEXISTENT"));
+    }
+
     #[cfg(feature = "awssm")]
     #[test]
     fn test_awssm_provider_creation() {
@@ -1566,6 +1611,40 @@ mod integration_tests {
         let provider = Box::<dyn Provider>::try_from("awssm://?prefix=myteam").unwrap();
         assert_eq!(provider.name(), "awssm");
         assert_eq!(provider.uri(), "awssm://?prefix=myteam");
+    }
+
+    #[cfg(feature = "awsps")]
+    #[test]
+    fn test_awsps_provider_creation() {
+        let provider = Box::<dyn Provider>::try_from("awsps://us-east-1").unwrap();
+        assert_eq!(provider.name(), "awsps");
+        assert_eq!(provider.uri(), "awsps://us-east-1");
+    }
+
+    #[cfg(feature = "awsps")]
+    #[test]
+    fn test_awsps_provider_creation_without_region() {
+        let provider = Box::<dyn Provider>::try_from("awsps://").unwrap();
+        assert_eq!(provider.name(), "awsps");
+        assert_eq!(provider.uri(), "awsps");
+
+        let provider = Box::<dyn Provider>::try_from("awsps").unwrap();
+        assert_eq!(provider.name(), "awsps");
+        assert_eq!(provider.uri(), "awsps");
+    }
+
+    #[cfg(feature = "awsps")]
+    #[test]
+    fn test_awsps_provider_with_profile_and_options() {
+        let provider = Box::<dyn Provider>::try_from(
+            "awsps://production@us-east-1?prefix=/team&kms_key_id=alias/parameters&tier=advanced",
+        )
+        .unwrap();
+        assert_eq!(provider.name(), "awsps");
+        assert_eq!(
+            provider.uri(),
+            "awsps://production@us-east-1?prefix=/team&kms_key_id=alias/parameters&tier=advanced"
+        );
     }
 
     #[cfg(feature = "vault")]

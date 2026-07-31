@@ -121,6 +121,10 @@ impl Provider for VaultProvider {
         self.core.uri()
     }
 
+    fn storage_identity(&self) -> String {
+        self.core.storage_identity()
+    }
+
     fn supported_coords(&self) -> &'static [&'static str] {
         &["field"]
     }

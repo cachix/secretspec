@@ -516,17 +516,24 @@ impl Secrets {
 
         let source_identities = source_uris
             .iter()
+            .map(|uri| self.canonical_storage_identity(uri))
+            .collect::<Result<Vec<_>>>()?;
+        let source_route_uris = source_uris
+            .iter()
             .map(|uri| self.canonical_provider_uri(uri))
             .collect::<Result<Vec<_>>>()?;
-        let cache_identity = self.canonical_provider_uri(&cache_uri)?;
+        let cache_identity = self.canonical_storage_identity(&cache_uri)?;
 
         // The cache entry lives at the same logical address the authoritative
         // read asks for, so a cache pointed at one of its own sources would
         // overwrite the secret with the cache envelope the first time it
         // refreshed, and then serve that envelope back as the value. Compare
-        // provider-reconstructed URIs after applying the project base directory:
+        // provider-reconstructed storage identities after applying the project
+        // base directory:
         // raw specs such as `dotenv:.env` and `dotenv://.env` are different
-        // strings but identify the same store.
+        // strings but identify the same store. Public provider attribution is
+        // deliberately not used: two auth methods, or Vault and OpenBao, can
+        // address the same physical store through different public URIs.
         if let Some(shared) = source_identities
             .iter()
             .position(|identity| *identity == cache_identity)
@@ -564,20 +571,31 @@ impl Secrets {
                 spec: cache.provider().to_string(),
                 uri: cache_uri,
                 max_age_secs: cache.max_age_secs(),
-                route_fingerprint: stable_fingerprint(source_identities.iter().map(String::as_str)),
+                route_fingerprint: stable_fingerprint(source_route_uris.iter().map(String::as_str)),
             }),
         })
     }
 
-    /// Reconstruct a provider's public URI without resolving its credentials or
-    /// touching the store. Provider implementations normalize shorthand,
-    /// defaults, percent encoding, and relative filesystem paths in this URI,
-    /// making it suitable for cache/source identity comparisons.
+    /// Reconstruct a provider's public canonical URI without resolving its
+    /// credentials or touching the store. Unlike its storage identity, this URI
+    /// retains configuration that can change what the authoritative route
+    /// answers and must therefore invalidate cached values.
     fn canonical_provider_uri(&self, uri: &str) -> Result<String> {
         let mut provider =
             crate::provider::provider_from_spec(uri, crate::provider::ProviderCredentials::new())?;
         provider.with_base_dir(&self.config_dir);
         Ok(provider.uri())
+    }
+
+    /// Reconstruct a provider's physical storage identity without resolving its
+    /// credentials or touching the store. Provider implementations normalize
+    /// shorthand, defaults, percent encoding, relative filesystem paths, and
+    /// compatible public provider spellings in this identity.
+    fn canonical_storage_identity(&self, uri: &str) -> Result<String> {
+        let mut provider =
+            crate::provider::provider_from_spec(uri, crate::provider::ProviderCredentials::new())?;
+        provider.with_base_dir(&self.config_dir);
+        Ok(provider.storage_identity())
     }
 
     /// The URI to report for an explicit provider override.
@@ -1025,6 +1043,107 @@ mod tests {
         let message = spec.build_plan(None).unwrap_err().to_string();
         assert!(message.contains("distinct store"), "{message}");
         assert!(message.contains("dotenv:.env"), "{message}");
+    }
+
+    #[test]
+    fn vault_compatible_spelling_and_auth_cannot_bypass_cache_separation() {
+        let _env = scrub_resolution_env();
+        for (source, cache) in [
+            (
+                "vault://127.0.0.1:8200/secret?tls=false",
+                "openbao://127.0.0.1:8200/secret?tls=false",
+            ),
+            (
+                "vault://127.0.0.1:8200/secret?tls=false&auth=token",
+                "vault://127.0.0.1:8200/secret?tls=false&auth=approle",
+            ),
+            (
+                "openbao://127.0.0.1:8200/secret?tls=false&auth=jwt&role=read&audience=one",
+                "openbao://127.0.0.1:8200/secret?tls=false&auth=jwt&role=deploy&audience=two",
+            ),
+            (
+                "vault://127.0.0.1:8200/secret?tls=false&kv=1",
+                "openbao://127.0.0.1:8200/secret?tls=false&kv=2",
+            ),
+        ] {
+            let spec = cached_spec_with(
+                vec!["route"],
+                &[("route", cached_alias(&[source], cache, "8h"))],
+            );
+
+            let message = spec.build_plan(None).unwrap_err().to_string();
+            assert!(
+                message.contains("distinct store"),
+                "{source} / {cache}: {message}"
+            );
+            assert!(message.contains(source), "{source} / {cache}: {message}");
+        }
+    }
+
+    #[test]
+    fn compatible_providers_may_cache_into_a_different_location() {
+        let _env = scrub_resolution_env();
+        for (source, cache) in [
+            (
+                "vault://team-a@bao.example.com:8200/secret",
+                "openbao://team-b@bao.example.com:8200/secret",
+            ),
+            (
+                "vault://team-a@bao.example.com:8200/secret",
+                "openbao://team-a@bao.example.com:8200/cache",
+            ),
+            (
+                "vault://team-a@bao.example.com:8200/secret",
+                "openbao://team-a@other.example.com:8200/secret",
+            ),
+        ] {
+            let spec = cached_spec_with(
+                vec!["route"],
+                &[("route", cached_alias(&[source], cache, "8h"))],
+            );
+
+            assert!(
+                spec.build_plan(None).is_ok(),
+                "{source} and {cache} are different stores"
+            );
+        }
+    }
+
+    #[test]
+    fn vault_compatible_route_configuration_changes_invalidate_the_cache() {
+        let _env = scrub_resolution_env();
+        let fingerprint = |source| {
+            let spec = cached_spec_with(
+                vec!["route"],
+                &[("route", cached_alias(&[source], "keyring://", "8h"))],
+            );
+            let plan = plan(&spec);
+            route(find(&plan, "API_KEY"))
+                .cache()
+                .expect("cached route")
+                .route_fingerprint
+                .clone()
+        };
+
+        let baseline = fingerprint("vault://bao.example.com:8200/secret");
+        for changed in [
+            "openbao://bao.example.com:8200/secret",
+            "vault://bao.example.com:8200/secret?auth=approle",
+            "vault://bao.example.com:8200/secret?auth=jwt&role=ci&audience=deploy",
+            "vault://bao.example.com:8200/secret?kv=1",
+        ] {
+            assert_ne!(
+                baseline,
+                fingerprint(changed),
+                "route configuration change must invalidate the cache: {changed}"
+            );
+        }
+
+        assert_ne!(
+            fingerprint("vault://bao.example.com:8200/secret?auth=jwt&role=read"),
+            fingerprint("vault://bao.example.com:8200/secret?auth=jwt&role=deploy"),
+            "changing the JWT role must invalidate the cache"
+        );
     }
 
     #[test]

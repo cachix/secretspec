@@ -12,14 +12,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transport on Linux, so source builds and binaries no longer require system
   libdbus.
 
-### Fixed
-- AWS Parameter Store writes now reject unsupported reference coordinates and
-  ARN-pinned references before requesting a value. Versioned ARNs now point
-  users to writable parameter-name references instead of suggesting that only
-  the version selector be removed.
-- AWS Parameter Store errors now report AWS error codes and messages instead
-  of only `unhandled error`.
-
 ### Added
 - Swift SDK (available in 0.18) for resolving SecretSpec manifests from macOS
   12+ on Intel and Apple silicon. The SwiftPM package provides fluent and
@@ -51,7 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hierarchy prefix, customer-managed KMS keys, parameter tiers, batched reads,
   and references by parameter name, version, label, or ARN. Unversioned
   parameter-name references can be written in place; version-, label-, and
-  ARN-pinned references are read-only.
+  ARN-pinned references are read-only. Writes reject unsupported reference
+  coordinates before requesting a value, and versioned ARN errors point to
+  writable parameter-name references. AWS service errors include their error
+  codes and messages instead of only `unhandled error`.
   ([#209](https://github.com/cachix/secretspec/issues/209))
 
 ## [0.17.1] - 2026-08-01

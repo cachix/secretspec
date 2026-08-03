@@ -339,7 +339,7 @@ enum Materialize {
 }
 
 /// Walks up from the current directory looking for `secretspec.toml`.
-fn find_config_file() -> Result<PathBuf> {
+pub(crate) fn find_config_file() -> Result<PathBuf> {
     find_config_file_from(std::env::current_dir()?)
 }
 

@@ -294,6 +294,42 @@ The same pattern works in every SDK: Go `UnmarshalSecretSpec(resolved.FieldsJSON
 TypeScript `Convert.toSecretSpec(resolved.fieldsJson())`, Ruby
 `SecretSpec.from_dynamic!(resolved.fields)`.
 
+### add (0.18+)
+
+:::caution[Version compatibility]
+`add` is available starting with SecretSpec 0.18.
+:::
+
+Add a secret declaration to an existing `secretspec.toml`. This edits only the
+selected profile and preserves the manifest's comments, formatting, and
+unrelated tables. The new declaration follows the profile's defaults; without
+a `required` profile default, it is required like any other declaration.
+
+```bash
+secretspec add <NAME> [--description <DESCRIPTION>] [--profile <PROFILE>] # 0.18+
+```
+
+**Arguments and options:**
+
+- `<NAME>` - Secret name. It must be a valid identifier: letters, numbers, and
+  underscores, without a leading number.
+- `-d, --description <DESCRIPTION>` - Human-readable description. When omitted,
+  SecretSpec prompts for it.
+- `-P, --profile <PROFILE>` - Profile to edit. When omitted, SecretSpec uses the
+  normal active-profile resolution, including `SECRETSPEC_PROFILE` and the
+  user-global default.
+
+```bash
+$ secretspec add API_KEY --description "API access token" # 0.18+
+✓ Added secret 'API_KEY' to profile 'development' in secretspec.toml
+Set its value with: secretspec set API_KEY --profile development
+```
+
+`add` changes only the declaration; it never asks for or stores the secret
+value. Use `secretspec set` afterward to store the value. It rejects names that
+are already available in the selected profile, including declarations inherited
+from `default` or an extended manifest.
+
 ### set
 Set a secret value.
 

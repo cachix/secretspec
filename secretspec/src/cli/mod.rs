@@ -4,9 +4,10 @@ use clap::{Parser, Subcommand};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Main CLI structure for the secretspec application.
 ///
@@ -46,6 +47,17 @@ enum Commands {
         /// Note: no short flag here — `-f` is the global `--file` option.
         #[arg(long, default_value = "dotenv://.env")]
         from: String,
+    },
+    /// Add a secret declaration to secretspec.toml (0.18+)
+    Add {
+        /// Name of the secret
+        name: String,
+        /// Human-readable description (prompts when omitted)
+        #[arg(short, long)]
+        description: Option<String>,
+        /// Profile to add the secret to
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        profile: Option<String>,
     },
     /// Set a secret value
     Set {
@@ -463,6 +475,170 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
     Ok(doc.to_string())
 }
 
+/// Rejects names that cannot occupy a flattened secret key in [`Profile`].
+fn validate_add_secret_name(name: &str) -> Result<()> {
+    if !crate::config::is_valid_identifier(name) {
+        return Err(miette!(
+            "Invalid secret name '{}': must be a valid identifier (alphanumeric and underscores, not starting with a number)",
+            name
+        ));
+    }
+    // `Profile` reserves this key for its defaults table before flattening all
+    // remaining keys into secret declarations. Without an explicit check, the
+    // edit would be valid TOML but would not actually declare a secret.
+    if name == "defaults" {
+        return Err(miette!(
+            "Secret name 'defaults' is reserved for profile defaults"
+        ));
+    }
+    Ok(())
+}
+
+/// Ensures `add` will create a new effective declaration in an existing profile.
+fn validate_add_target(app: &Secrets, profile: &str, name: &str) -> Result<()> {
+    validate_add_secret_name(name)?;
+
+    if !app.config().profiles.contains_key(profile) {
+        let mut available: Vec<&str> = app.config().profiles.keys().map(String::as_str).collect();
+        available.sort_unstable();
+        return Err(miette!(
+            "Profile '{}' is not defined in secretspec.toml. Available profiles: {}",
+            profile,
+            available.join(", ")
+        ));
+    }
+    if app.resolve_secret_config(name, Some(profile)).is_some() {
+        return Err(miette!(
+            "Secret '{}' is already declared for profile '{}'",
+            name,
+            profile
+        ));
+    }
+
+    Ok(())
+}
+
+/// Adds one secret to a manifest document without re-serializing the rest.
+///
+/// `toml_edit` retains the user's comments, whitespace, ordering, and any syntax
+/// that is not represented by [`Config`]. The caller validates the selected
+/// profile against the fully loaded configuration first; this helper creates a
+/// local profile table when that profile currently comes only from `extends`.
+fn add_secret_to_manifest(
+    source: &str,
+    profile: &str,
+    name: &str,
+    description: &str,
+) -> Result<String> {
+    use toml_edit::{DocumentMut, InlineTable, Item, Table, Value};
+
+    validate_add_secret_name(name)?;
+    if description.trim().is_empty() {
+        return Err(miette!("Secret description cannot be empty"));
+    }
+
+    let mut doc = source
+        .parse::<DocumentMut>()
+        .into_diagnostic()
+        .wrap_err("Failed to parse secretspec.toml for editing")?;
+    let profiles = doc
+        .get_mut("profiles")
+        .and_then(Item::as_table_like_mut)
+        .ok_or_else(|| miette!("secretspec.toml does not contain a [profiles] table"))?;
+
+    if !profiles.contains_key(profile) {
+        profiles.insert(profile, Item::Table(Table::new()));
+    }
+    let profile_table = profiles
+        .get_mut(profile)
+        .and_then(Item::as_table_like_mut)
+        .ok_or_else(|| miette!("Profile '{}' is not a TOML table", profile))?;
+
+    if profile_table.contains_key(name) {
+        return Err(miette!(
+            "Secret '{}' is already declared in profile '{}'",
+            name,
+            profile
+        ));
+    }
+
+    let mut secret = InlineTable::new();
+    secret.insert("description", Value::from(description));
+    profile_table.insert(name, toml_edit::value(secret));
+
+    Ok(doc.to_string())
+}
+
+/// Replaces an existing manifest only after its complete replacement has been
+/// written and flushed to a temporary file in the same directory.
+fn replace_manifest_atomically(
+    path: &Path,
+    write: impl FnOnce(&mut fs::File) -> std::io::Result<()>,
+) -> Result<()> {
+    let metadata = fs::metadata(path)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("Failed to read permissions for {}", path.display()))?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".secretspec-")
+        .tempfile_in(parent)
+        .into_diagnostic()
+        .wrap_err_with(|| {
+            format!(
+                "Failed to create a temporary manifest next to {}",
+                path.display()
+            )
+        })?;
+
+    write(temporary.as_file_mut())
+        .into_diagnostic()
+        .wrap_err_with(|| format!("Failed to write temporary manifest for {}", path.display()))?;
+    temporary
+        .flush()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("Failed to flush temporary manifest for {}", path.display()))?;
+    temporary
+        .as_file()
+        .set_permissions(metadata.permissions())
+        .into_diagnostic()
+        .wrap_err_with(|| format!("Failed to preserve permissions for {}", path.display()))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("Failed to sync temporary manifest for {}", path.display()))?;
+    temporary.persist(path).map_err(|error| {
+        miette!(
+            "Failed to atomically replace {}: {}",
+            path.display(),
+            error.error
+        )
+    })?;
+
+    Ok(())
+}
+
+fn write_manifest_atomically(path: &Path, contents: &str) -> Result<()> {
+    replace_manifest_atomically(path, |temporary| temporary.write_all(contents.as_bytes()))
+}
+
+/// Quotes one argument for copying into a POSIX-compatible shell.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn add_follow_up_command(name: &str, profile: &str, file: Option<&Path>) -> String {
+    let mut command = format!("secretspec set {name} --profile {}", shell_quote(profile));
+    if let Some(path) = file {
+        command.push_str(" --file ");
+        command.push_str(&shell_quote(&path.to_string_lossy()));
+    }
+    command
+}
+
 /// Loads secrets using an explicit path or auto-detection, applying the optional
 /// session reason (from `--reason`/`SECRETSPEC_REASON`).
 fn load_secrets(file: &Option<PathBuf>, reason: &Option<String>) -> miette::Result<Secrets> {
@@ -667,6 +843,48 @@ pub fn main() -> Result<()> {
             println!("  2. secretspec check          # Verify all secrets and set them");
             println!("  3. secretspec run -- your-command  # Run with secrets");
 
+            Ok(())
+        }
+        Commands::Add {
+            name,
+            description,
+            profile,
+        } => {
+            let app = load_secrets(&cli.file, &cli.reason)?;
+            let profile = app.resolve_profile_name(profile.as_deref());
+            validate_add_target(&app, &profile, &name)?;
+
+            let description = match description {
+                Some(description) => description,
+                None => inquire::Text::new(&format!("Description for {name}:"))
+                    .prompt()
+                    .into_diagnostic()?,
+            };
+            let description = description.trim();
+            if description.is_empty() {
+                return Err(miette!("Secret description cannot be empty"));
+            }
+
+            let manifest_path = match &cli.file {
+                Some(path) => path.clone(),
+                None => crate::secrets::find_config_file().into_diagnostic()?,
+            };
+            let source = fs::read_to_string(&manifest_path)
+                .into_diagnostic()
+                .wrap_err_with(|| format!("Failed to read {}", manifest_path.display()))?;
+            let updated = add_secret_to_manifest(&source, &profile, &name, description)?;
+            write_manifest_atomically(&manifest_path, &updated)?;
+
+            println!(
+                "✓ Added secret '{}' to profile '{}' in {}",
+                name,
+                profile,
+                manifest_path.display()
+            );
+            println!(
+                "Set its value with: {}",
+                add_follow_up_command(&name, &profile, cli.file.as_deref())
+            );
             Ok(())
         }
         // Handle configuration management commands
@@ -1600,6 +1818,192 @@ mod tests {
             Commands::Init { from } => assert_eq!(from, "dotenv://.env"),
             _ => panic!("expected Init command"),
         }
+    }
+
+    #[test]
+    fn add_parses_description_and_profile() {
+        let cli = Cli::try_parse_from([
+            "secretspec",
+            "add",
+            "API_KEY",
+            "--description",
+            "API access token",
+            "--profile",
+            "production",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Add {
+                name,
+                description,
+                profile,
+            } => {
+                assert_eq!(name, "API_KEY");
+                assert_eq!(description.as_deref(), Some("API access token"));
+                assert_eq!(profile.as_deref(), Some("production"));
+            }
+            _ => panic!("expected Add command"),
+        }
+    }
+
+    #[test]
+    fn add_secret_to_manifest_preserves_comments_and_other_tables() {
+        let source = r#"# Project documentation
+[project]
+name = "demo"
+revision = "1.0"
+
+[profiles.default]
+# Keep this explanation attached to the existing secret.
+DATABASE_URL = { description = "Database connection string" }
+
+[providers]
+local = "dotenv://.env"
+"#;
+
+        let updated =
+            add_secret_to_manifest(source, "default", "API_KEY", "API access token").unwrap();
+
+        assert!(updated.contains("# Project documentation"));
+        assert!(updated.contains("# Keep this explanation attached to the existing secret."));
+        assert!(updated.contains("local = \"dotenv://.env\""));
+        assert!(updated.contains("API_KEY = { description = \"API access token\" }"));
+
+        let config: Config = toml::from_str(&updated).expect("edited manifest must parse");
+        config.validate().expect("edited manifest must validate");
+        assert_eq!(
+            config.profiles["default"].secrets["API_KEY"]
+                .description
+                .as_deref(),
+            Some("API access token")
+        );
+    }
+
+    #[test]
+    fn add_secret_to_manifest_can_overlay_an_inherited_profile() {
+        let source = r#"[project]
+name = "demo"
+revision = "1.0"
+extends = ["../shared"]
+
+[profiles.default]
+LOCAL = { description = "Local secret" }
+"#;
+
+        let updated =
+            add_secret_to_manifest(source, "production", "API_KEY", "API access token").unwrap();
+
+        assert!(updated.contains("[profiles.production]"));
+        assert!(updated.contains("API_KEY = { description = \"API access token\" }"));
+    }
+
+    #[test]
+    fn add_target_rejects_inherited_secrets_and_unknown_profiles() {
+        let config: Config = toml::from_str(
+            r#"[project]
+name = "demo"
+revision = "1.0"
+
+[profiles.default]
+API_KEY = { description = "API access token" }
+
+[profiles.development]
+"#,
+        )
+        .unwrap();
+        let app = Secrets::new(config, None, None, None);
+
+        let inherited = validate_add_target(&app, "development", "API_KEY")
+            .unwrap_err()
+            .to_string();
+        assert!(inherited.contains("already declared for profile 'development'"));
+
+        let unknown = validate_add_target(&app, "production", "NEW_KEY")
+            .unwrap_err()
+            .to_string();
+        assert!(unknown.contains("Available profiles: default, development"));
+
+        validate_add_target(&app, "development", "NEW_KEY").unwrap();
+    }
+
+    #[test]
+    fn add_secret_to_manifest_rejects_invalid_or_duplicate_declarations() {
+        let source = r#"[profiles.default]
+API_KEY = { description = "Existing" }
+"#;
+
+        let invalid = add_secret_to_manifest(source, "default", "1BAD", "Description")
+            .unwrap_err()
+            .to_string();
+        assert!(invalid.contains("Invalid secret name"));
+
+        let reserved = add_secret_to_manifest(source, "default", "defaults", "Description")
+            .unwrap_err()
+            .to_string();
+        assert!(reserved.contains("reserved for profile defaults"));
+
+        let duplicate = add_secret_to_manifest(source, "default", "API_KEY", "Description")
+            .unwrap_err()
+            .to_string();
+        assert!(duplicate.contains("already declared"));
+
+        let empty = add_secret_to_manifest(source, "default", "NEW_KEY", "   ")
+            .unwrap_err()
+            .to_string();
+        assert!(empty.contains("description cannot be empty"));
+    }
+
+    #[test]
+    fn atomic_manifest_write_failure_leaves_original_unchanged() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("secretspec.toml");
+        fs::write(&manifest, "original manifest\n").unwrap();
+
+        let error = replace_manifest_atomically(&manifest, |temporary| {
+            temporary.write_all(b"partial replacement")?;
+            Err(std::io::Error::other("simulated interrupted write"))
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("Failed to write temporary manifest"));
+        assert_eq!(
+            fs::read_to_string(&manifest).unwrap(),
+            "original manifest\n"
+        );
+    }
+
+    #[test]
+    fn atomic_manifest_write_preserves_permissions() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("secretspec.toml");
+        fs::write(&manifest, "original manifest\n").unwrap();
+
+        #[cfg(unix)]
+        fs::set_permissions(&manifest, fs::Permissions::from_mode(0o640)).unwrap();
+        let permissions = fs::metadata(&manifest).unwrap().permissions();
+
+        write_manifest_atomically(&manifest, "updated manifest\n").unwrap();
+
+        assert_eq!(fs::read_to_string(&manifest).unwrap(), "updated manifest\n");
+        assert_eq!(fs::metadata(&manifest).unwrap().permissions(), permissions);
+    }
+
+    #[test]
+    fn add_follow_up_command_quotes_profile_and_explicit_file() {
+        assert_eq!(
+            add_follow_up_command(
+                "API_KEY",
+                "qa west",
+                Some(Path::new("/tmp/project's manifest.toml"))
+            ),
+            "secretspec set API_KEY --profile 'qa west' --file '/tmp/project'\\''s manifest.toml'"
+        );
+        assert_eq!(
+            add_follow_up_command("API_KEY", "default", None),
+            "secretspec set API_KEY --profile 'default'"
+        );
     }
 
     #[test]

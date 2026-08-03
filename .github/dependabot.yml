@@ -5,5 +5,7 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    exclude-paths:
+      - ".github/workflows/v-release.yml"
     cooldown:
       default-days: 7

@@ -37,6 +37,7 @@ whoami = { workspace = true, optional = true }
 linkme.workspace = true
 jiff.workspace = true
 secrecy.workspace = true
+base64 = { workspace = true, optional = true }
 google-cloud-secretmanager-v1 = { workspace = true, optional = true }
 aws-config = { workspace = true, optional = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
@@ -54,7 +55,7 @@ detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
 
 [features]
-default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "infisical", "age", "scaleway", "sops"]
+default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "infisical", "bw", "age", "scaleway", "sops"]
 cli = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
@@ -72,6 +73,7 @@ openbao = ["dep:reqwest", "tokio/sync"]
 # name the features it uses rather than inherit them from a sibling.
 infisical = ["dep:reqwest", "tokio/sync"]
 bws = []
+bw = ["dep:base64"]
 akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secrets"]
 age = ["dep:age"]
 sops = []

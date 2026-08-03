@@ -65,6 +65,13 @@
     pkgs.cargo-tarpaulin
     # installers
     pkgs.cargo-dist
+    # bitwarden-cli for integration testing
+    pkgs.bitwarden-cli
+    # docker CLI for tests/vaultwarden_harness.sh, which runs the disposable
+    # Vaultwarden + TLS proxy containers. Client only: the harness talks to
+    # whatever runtime the developer already provides (Docker Desktop, colima,
+    # or a podman machine exposing /var/run/docker.sock).
+    pkgs.docker-client
     # Building the secretspec-php-native extension (ext-php-rs) needs php-config +
     # the PHP dev headers, and bindgenHook wires libclang/clang system headers so
     # ext-php-rs's bindgen step can parse php.h.

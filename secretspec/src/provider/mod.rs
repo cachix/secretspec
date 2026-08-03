@@ -35,6 +35,7 @@
 //! - [`bws::BwsProvider`]: Bitwarden Secrets Manager integration
 //! - [`akv::AkvProvider`]: Azure Key Vault integration
 //! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
+//! - [`bw::BitwardenProvider`]: Bitwarden Password Manager (0.18+)
 //! - [`sops::SopsProvider`]: SOPS-encrypted file integration (0.17+)
 //!
 //! ## URI-Based Configuration
@@ -211,6 +212,7 @@ impl ProviderUrl {
 
     #[cfg(any(
         feature = "awssm",
+        feature = "bw",
         feature = "infisical",
         feature = "kdbx",
         feature = "openbao",
@@ -285,6 +287,8 @@ pub mod akv;
 pub mod awsps;
 #[cfg(feature = "awssm")]
 pub mod awssm;
+#[cfg(feature = "bw")]
+pub mod bw;
 #[cfg(feature = "bws")]
 pub mod bws;
 pub mod dashlane;

@@ -47,6 +47,7 @@ const providerMetadata: ProviderMetadata[] = [
   { slug: 'keeper', label: 'Keeper Secrets Manager (0.18+)' },
   { icon: 'lastpass', slug: 'lastpass', label: 'LastPass' },
   { slug: 'dashlane', label: 'Dashlane (0.18+)' },
+  { icon: 'bitwarden', slug: 'bw', label: 'Bitwarden Password Manager (0.18+)' },
   { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden' },
   { icon: 'vault', slug: 'vault', label: 'Vault' },
   { slug: 'openbao', label: 'OpenBao (0.17+)' },
@@ -155,6 +156,7 @@ $ secretspec init --from dotenv
 $ secretspec config global init
 ? Select your preferred provider backend:
 <span class="tok-pun">›</span> keyring: Uses system keychain (Recommended)
+  bw: Bitwarden Password Manager (0.18+)
   kdbx: KeePass KDBX databases (0.17+)
   keeper: Keeper Secrets Manager (0.18+) via official Rust SDK
   infisical: Infisical secret management
@@ -241,6 +243,7 @@ $ secretspec run --profile production -- npm start
         <pre is:raw class="landing-step-code"><code>$ secretspec config global init <span class="tok-com"># 0.17+</span>
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
+  bw: Bitwarden Password Manager (0.18+)
   kdbx: KeePass KDBX databases (0.17+)
   keeper: Keeper Secrets Manager (0.18+) via official Rust SDK
   infisical: Infisical secret management

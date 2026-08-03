@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transport on Linux, so source builds and binaries no longer require system
   libdbus.
 
+### Fixed
+- The Bitwarden provider now treats a locked vault or a missing session as a
+  clear authentication failure on `get`/`set`, with the same "run `bw login`
+  and `bw unlock`, then set `BW_SESSION`" guidance in both cases, instead of
+  surfacing the underlying CLI error text.
+
 ### Added
 - Vault and OpenBao AppRole and JWT authentication can target non-default auth
   method mounts, including printable Unicode mount names, with the `auth_mount`

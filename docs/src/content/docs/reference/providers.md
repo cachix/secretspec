@@ -331,6 +331,43 @@ openbao://127.0.0.1:8200/secret?kv=1&tls=false
 **Prerequisites**: OpenBao server, authentication credentials, build with `--features openbao` (0.17+)
 **Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
 
+## Bitwarden Password Manager Provider (0.18+)
+
+**URI**: `bw://[COLLECTION]` - Stores secrets in a Bitwarden Password Manager vault via the `bw` CLI
+
+```bash
+bw://                                   # Personal vault
+bw://dev-secrets                        # Collection, by name or ID
+bw://myorg@dev-secrets                  # Organization and collection
+bw://?server=https://vault.company.com  # Expected self-hosted server (guard)
+bw://?type=login&field=username         # Default item type and field
+```
+
+Organizations and collections may be named or given as IDs; SecretSpec resolves
+a name to the ID the CLI requires, matching case-insensitively. The organization
+scopes and validates the collection rather than filtering alongside it: it
+selects which `dev-secrets` is meant when more than one exists, and must match
+the collection's actual organization. Naming it is optional when the collection
+name is unambiguous. Addresses that resolve to nothing fail with the
+organizations or collections that do exist.
+
+Item names match the same way — **in full and case-insensitively** (0.18+), so
+`API_KEY` never resolves `API_KEY_OLD`. Names are not unique in Bitwarden, and a
+name matching several items is refused with their ids rather than resolved to an
+arbitrary one; address a single item by using its id as the `item`. `?type=`
+narrows both reads and writes to that item type, keeping a Card and a same-named
+Login separately addressable. An unsupported `?type=`, or an unknown query
+parameter, is rejected when the address is parsed rather than ignored.
+
+`?server=` does not configure the CLI. The `bw` CLI takes its server only from
+`bw config server`, which must be run while logged out, so self-hosted users
+configure the CLI themselves and SecretSpec verifies the setting matches before
+each operation. See the [provider guide](/providers/bw/#self-hosted-servers).
+
+**Features**: Read/write, all vault item types (logins, cards, identities, SSH keys, secure notes), organization/collection addressing by name or ID, field selection, `ref = { item, field }` mapping in `secretspec.toml`
+**Prerequisites**: Bitwarden CLI (`bw`), signed in and unlocked (`BW_SESSION` env var), self-hosted servers set with `bw config server` before login, build with `--features bw`
+**Storage**: One vault item per secret; reads use per-type default fields unless `?field=` or a `ref` mapping selects one
+
 ## Bitwarden Secrets Manager Provider
 
 **URI**: `bws://[SERVER_BASE@]PROJECT_UUID` - Stores secrets in Bitwarden Secrets Manager
@@ -487,6 +524,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Scaleway (0.17+) | ✅ Scaleway-managed | Cloud (Scaleway) | ✅ Yes |
 | Vault | ✅ Vault encryption | Vault server | ✅ Yes |
 | OpenBao (0.17+) | ✅ OpenBao encryption | OpenBao server | ✅ Yes |
+| BW (0.18+) | ✅ End-to-end | Cloud (Bitwarden) or self-hosted | ✅ Yes |
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
 | Infisical | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |

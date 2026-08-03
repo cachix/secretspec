@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.18.0] - 2026-08-03
 
 ### Changed
 - The keyring provider now uses keyring 4's Rust-native Secret Service
@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider configurations (including dotenv path aliases) from deleting the
   destination value. Sources without deletion support are also rejected before
   any destination is written.
+- The AWS Secrets Manager provider now authenticates with shared credentials
+  file profiles backed by an active AWS login session, which previously failed
+  because the required AWS SDK feature was not enabled. `BatchGetSecretValue`
+  failures also report the full service error instead of a shortened message.
 
 ### Added
 - The dotenv provider accepts a leading `~` in custom paths, such as
@@ -64,6 +68,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their manifest declarations, while `--all` requires explicit confirmation.
   `secretspec import --delete-source` verifies each destination value before
   deleting its source, and retains the source when an existing target differs.
+- Bitwarden Password Manager provider (`bw://`, `bw` build feature) for reading
+  and writing secrets in a personal or organization vault through the `bw` CLI.
+  Collections and organizations are addressed by name or by id
+  (`bw://myorg@dev-secrets`), `?type=` and `?field=` select an item type and
+  field, and `?server=` asserts which self-hosted server the configuration
+  expects. Every item type is supported (login, secure note, card, identity, SSH
+  key), each with a default field shared by reads and writes. Item names are
+  matched in full and case-insensitively, and an ambiguous name is refused with
+  the colliding ids rather than resolved to an arbitrary item.
 - Dashlane provider (`dashlane://`) for reading secrets from a Dashlane vault
   through the `dcli` CLI. Convention secrets read the item titled
   `secretspec/{project}/{profile}/{key}`, and a `ref` names an existing item by
@@ -83,7 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and updates preserve the JSON types of Keeper fields such as dates,
   checkboxes, hosts, and names.
 - AWS Systems Manager Parameter Store provider (`awsps://`, `awsps` build
-  feature; planned for 0.18) for reading and writing KMS-encrypted
+  feature) for reading and writing KMS-encrypted
   `SecureString` parameters. It supports AWS profiles and regions, an optional
   hierarchy prefix, customer-managed KMS keys, parameter tiers, batched reads,
   and references by parameter name, version, label, or ARN. Unversioned

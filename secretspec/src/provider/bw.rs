@@ -1437,7 +1437,18 @@ impl BitwardenProvider {
                 Ok(status_str == "unlocked")
             }
             Err(SecretSpecError::ProviderOperationFailed(msg))
-                if msg.contains("You are not logged in") || msg.contains("Vault is locked") =>
+                // `execute_bw_command` rewrites the not-logged-in and locked
+                // stderr into its own messages before this is reached, so
+                // both the raw phrases and the rewrites are matched. The
+                // comparisons are case-insensitive: the rewrites spell the
+                // locked vault in lowercase ("Bitwarden vault is locked…").
+                if {
+                    let lower = msg.to_lowercase();
+                    lower.contains("you are not logged in")
+                        || lower.contains("bw login")
+                        || lower.contains("vault is locked")
+                        || lower.contains("bw unlock")
+                } =>
             {
                 Ok(false)
             }

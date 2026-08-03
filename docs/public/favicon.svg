@@ -1,15 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="481 336 165 208" role="img" aria-labelledby="title">
   <title id="title">SecretSpec</title>
-  <defs>
-    <mask id="s-cutout">
-      <rect width="240" height="240" fill="#fff"/>
-      <text x="76" y="190" fill="#000" font-family="Arial, Helvetica, 'Liberation Sans', sans-serif" font-size="116" font-weight="600">S</text>
-    </mask>
-  </defs>
-  <g class="mark" transform="translate(1 -5) scale(.54)">
-    <path fill-rule="evenodd" d="M68 92V70c0-32 21-54 48-54s48 22 48 54v22h-24V70c0-20-10-32-24-32S92 50 92 70v22H68Z"/>
-    <rect x="26" y="82" width="180" height="142" rx="42" mask="url(#s-cutout)"/>
-  </g>
+  <path class="mark" d="M586.868 385.684L586.881 386.198C587.14 391.311 591.241 395.411 596.354 395.67L596.868 395.684H638V527.336C638 531.754 634.418 535.336 630 535.336H497C492.582 535.336 489 531.754 489 527.336V352C489 347.582 492.582 344 497 344H586.868V385.684ZM563.499 402.831C550.594 402.831 540.132 413.293 540.132 426.198C540.132 435.836 545.968 444.109 554.298 447.682L547.281 492.45H581.37L573.509 447.316C581.405 443.567 586.866 435.521 586.866 426.198C586.866 413.293 576.404 402.831 563.499 402.831ZM635.859 383.684H598.868V346.692L635.859 383.684Z"/>
   <style>
     .mark { fill: #000; }
     @media (prefers-color-scheme: dark) { .mark { fill: #fff; } }

@@ -51,7 +51,7 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Install Rust
         run: |
           rustup toolchain install
@@ -65,7 +65,7 @@ jobs:
             --target aarch64-apple-darwin
           cargo build -p secretspec-ffi --release \
             --target x86_64-apple-darwin
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: swift-native-macos
           path: |
@@ -77,13 +77,13 @@ jobs:
     needs: native
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Verify the committed Swift binary version
         shell: bash
         run: |
           bash scripts/sync-sdk-versions.sh
           git diff --exit-code -- Package.swift
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           name: swift-native-macos
           path: staged
@@ -128,7 +128,7 @@ jobs:
           actual="$(swift package compute-checksum CSecretSpec.xcframework.zip)"
           echo "checksum=$actual" >> "$GITHUB_OUTPUT"
           echo "CSecretSpec.xcframework.zip checksum: $actual"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: swift-xcframework
           path: CSecretSpec.xcframework.zip
@@ -165,8 +165,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           name: swift-xcframework
           path: artifacts

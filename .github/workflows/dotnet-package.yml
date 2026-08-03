@@ -77,7 +77,7 @@ jobs:
             rustflags: -C strip=symbols -C target-feature=+crt-static
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Sync SDK package versions
         shell: bash
         run: bash scripts/sync-sdk-versions.sh
@@ -98,7 +98,7 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: "8.0.x"
 
@@ -149,7 +149,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/${{ matrix.library }}" \
              "staged/${{ matrix.rid }}/native/"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dotnet-native-${{ matrix.rid }}
           path: staged/${{ matrix.rid }}
@@ -171,7 +171,7 @@ jobs:
             image: quay.io/pypa/musllinux_1_2_aarch64
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Sync SDK package versions
         run: bash scripts/sync-sdk-versions.sh
       - name: Build dynamically loadable musl resolver
@@ -226,7 +226,7 @@ jobs:
           mkdir -p "staged/${{ matrix.rid }}/native"
           cp "target/${{ matrix.target }}/release/libsecretspec_ffi.so" \
              "staged/${{ matrix.rid }}/native/"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dotnet-native-${{ matrix.rid }}
           path: staged/${{ matrix.rid }}
@@ -236,13 +236,13 @@ jobs:
     needs: [native, musl]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Sync SDK package versions
         run: bash scripts/sync-sdk-versions.sh
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: "8.0.x"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: dotnet-native-*
           path: staged
@@ -274,7 +274,7 @@ jobs:
             rid="${artifact##*/dotnet-native-}"
             unzip -l "$package" | grep -q "runtimes/$rid/native/"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dotnet-nuget
           path: artifacts/*.nupkg
@@ -313,12 +313,12 @@ jobs:
             musl: false
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: dotnet-nuget
           path: artifacts
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         if: matrix.musl == false
         with:
           dotnet-version: "8.0.x"
@@ -487,17 +487,17 @@ jobs:
       id-token: write # NuGet Trusted Publishing (OIDC), no long-lived key
       contents: read
     steps:
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: "8.0.x"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: dotnet-nuget
           path: artifacts
       # Trades the job's OIDC token for an API key that expires in about an
       # hour, so it must stay immediately before the push.
       - name: NuGet login (OIDC trusted publishing)
-        uses: NuGet/login@v1
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         id: login
         with:
           user: ${{ secrets.NUGET_USER }}

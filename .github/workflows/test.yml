@@ -20,7 +20,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
     # The full devenv shell includes every SDK toolchain plus the musl static
     # dependencies. It no longer fits alongside the preinstalled software on
     # GitHub's Ubuntu image, so reclaim that space before populating /nix.
@@ -32,8 +32,8 @@ jobs:
           /usr/local/share/boost /usr/local/share/powershell
         sudo docker image prune --all --force
         df -h /
-    - uses: cachix/install-nix-action@v31
-    - uses: cachix/cachix-action@v17
+    - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+    - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
       with:
         name: devenv
     - name: Install devenv.sh
@@ -69,7 +69,7 @@ jobs:
   features:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
     - name: Install Rust
       run: rustup toolchain install stable --profile minimal
     - name: Cache Rust builds
@@ -86,7 +86,7 @@ jobs:
   package:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
     - name: Install Rust
       run: rustup toolchain install stable --profile minimal
     - name: Verify the published crate contains its schema fixture
@@ -105,9 +105,9 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
     - name: Download SOPS 3.13.2
-      uses: robinraju/release-downloader@28fc21f50d76778e7023361aa1f863e717d3d56f
+      uses: robinraju/release-downloader@28fc21f50d76778e7023361aa1f863e717d3d56f # v1.13
       with:
         repository: getsops/sops
         tag: v3.13.2

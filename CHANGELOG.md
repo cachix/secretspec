@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Vault and OpenBao JWT authentication now allows the role to be omitted when
   the auth mount has a server-configured `default_role`, while explicit URI or
   environment roles continue to take precedence.
+- Vault and OpenBao AppRole authentication now supports roles configured with
+  `bind_secret_id=false` by omitting `secret_id` from the login request when no
+  SecretID credential is configured.
 
 ### Added
 - Vault and OpenBao AppRole and JWT authentication can target non-default auth

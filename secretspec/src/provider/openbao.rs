@@ -12,10 +12,11 @@
 //!   the compatibility fallback `VAULT_TOKEN`. It then reads the path selected
 //!   by `BAO_TOKEN_PATH` / `VAULT_TOKEN_PATH`, or the OpenBao CLI's default
 //!   `~/.vault-token`.
-//! - AppRole (`?auth=approle`) -- exchanges the `role_id` and `secret_id`
-//!   provider credentials, or SecretSpec's `BAO_ROLE_ID` and `BAO_SECRET_ID`
-//!   inputs, for a client token. The corresponding `VAULT_*` names remain
-//!   compatibility fallbacks.
+//! - AppRole (`?auth=approle`) -- exchanges the required `role_id` and optional
+//!   `secret_id` provider credentials, or SecretSpec's `BAO_ROLE_ID` and
+//!   `BAO_SECRET_ID` inputs, for a client token. Starting with SecretSpec 0.18,
+//!   the SecretID may be omitted when the AppRole has `bind_secret_id=false`.
+//!   The corresponding `VAULT_*` names remain compatibility fallbacks.
 //! - JWT/OIDC (`?auth=jwt`) -- logs in using SecretSpec's `BAO_JWT` input
 //!   (falling back to `VAULT_JWT`) or a short-lived GitHub Actions / Forgejo
 //!   Actions OIDC token. Starting with SecretSpec 0.18, the role may be omitted

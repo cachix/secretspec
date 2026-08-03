@@ -931,21 +931,13 @@ impl KvProvider {
         })?;
 
         let secret_id =
-            credential_or_envs(&self.credentials, SECRET_ID, self.product.secret_id_envs())
-                .ok_or_else(|| {
-                    SecretSpecError::ProviderOperationFailed(format!(
-                        "{} secret_id credential is required for AppRole authentication; configure \
-                 credentials.secret_id or set {}.",
-                        self.product.display_name(),
-                        self.product.secret_id_envs().join(" or ")
-                    ))
-                })?;
+            credential_or_envs(&self.credentials, SECRET_ID, self.product.secret_id_envs());
 
         let url = self.auth_login_url();
-        let body = serde_json::json!({
-            "role_id": role_id,
-            "secret_id": secret_id,
-        });
+        let mut body = serde_json::json!({ "role_id": role_id });
+        if let Some(secret_id) = secret_id {
+            body["secret_id"] = serde_json::Value::String(secret_id);
+        }
 
         // The server-side lease begins while the request is in flight. Anchor
         // its deadline before sending so response latency cannot extend the
@@ -1984,6 +1976,75 @@ mod tests {
             request_json(&observed[0].0),
             serde_json::json!({ "jwt": "test-jwt" })
         );
+    }
+
+    #[test]
+    fn approle_login_includes_a_configured_secret_id() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let (endpoint, server) = auth_server(1, 0, None);
+        let config = KvConfig::parse(
+            &provider_url(&format!("vault://{endpoint}/secret?tls=false&auth=approle")),
+            Product::Vault,
+        )
+        .unwrap();
+        let mut provider = KvProvider::new(config, Product::Vault);
+        provider.with_credentials(approle_credentials());
+
+        block_on(provider.resolve_approle_auth()).unwrap();
+
+        let observed = server.join().unwrap();
+        assert_eq!(observed.len(), 1);
+        assert_eq!(
+            request_json(&observed[0].0),
+            serde_json::json!({
+                "role_id": "test-role",
+                "secret_id": "test-secret"
+            })
+        );
+    }
+
+    #[test]
+    fn approle_login_omits_an_absent_secret_id_for_an_unbound_role() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let (endpoint, server) = auth_server(1, 0, None);
+        let config = KvConfig::parse(
+            &provider_url(&format!(
+                "openbao://{endpoint}/secret?tls=false&auth=approle"
+            )),
+            Product::OpenBao,
+        )
+        .unwrap();
+        let mut provider = KvProvider::new(config, Product::OpenBao);
+        provider.with_credentials(ProviderCredentials::from([(
+            ROLE_ID.to_string(),
+            SecretString::new("test-role".to_string().into()),
+        )]));
+
+        block_on(provider.resolve_approle_auth()).unwrap();
+
+        let observed = server.join().unwrap();
+        assert_eq!(observed.len(), 1);
+        assert_eq!(
+            request_json(&observed[0].0),
+            serde_json::json!({ "role_id": "test-role" })
+        );
+    }
+
+    #[test]
+    fn approle_login_still_requires_a_role_id() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let config = KvConfig::parse(
+            &provider_url("vault://127.0.0.1:1/secret?tls=false&auth=approle"),
+            Product::Vault,
+        )
+        .unwrap();
+        let provider = KvProvider::new(config, Product::Vault);
+
+        let error = block_on(provider.resolve_approle_auth())
+            .err()
+            .expect("AppRole login without a role_id must fail");
+
+        assert!(error.to_string().contains("role_id credential is required"));
     }
 
     #[test]

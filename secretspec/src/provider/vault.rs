@@ -9,9 +9,10 @@
 //!
 //! - Token (default) -- reads the `token` provider credential, `VAULT_TOKEN`,
 //!   or `~/.vault-token`, in that order.
-//! - AppRole (`?auth=approle`) -- exchanges the `role_id` and `secret_id`
-//!   provider credentials, or `VAULT_ROLE_ID` and `VAULT_SECRET_ID`, for a
-//!   client token.
+//! - AppRole (`?auth=approle`) -- exchanges the required `role_id` and optional
+//!   `secret_id` provider credentials, or `VAULT_ROLE_ID` and
+//!   `VAULT_SECRET_ID`, for a client token. Starting with SecretSpec 0.18, the
+//!   SecretID may be omitted when the AppRole has `bind_secret_id=false`.
 //! - JWT/OIDC (SecretSpec 0.17+, `?auth=jwt`) -- logs in using `VAULT_JWT` or a
 //!   short-lived GitHub Actions / Forgejo Actions OIDC token. Starting with
 //!   SecretSpec 0.18, the role may be omitted when the auth mount has a

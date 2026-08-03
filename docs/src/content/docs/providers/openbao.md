@@ -105,13 +105,18 @@ path (`secret` in these examples).
 
 ### JWT / OIDC authentication
 
-Select JWT with `?auth=jwt` and a `role`. The provider performs the
-`auth/jwt/login` exchange itself. The JWT comes from SecretSpec's `BAO_JWT`
-input, then the `VAULT_JWT` compatibility fallback. Otherwise, in a GitHub
-Actions or Forgejo job with `id-token: write`, the provider mints one from the
-runner's OIDC identity.
+Select JWT with `?auth=jwt`. The provider performs the `auth/jwt/login`
+exchange itself. The JWT comes from SecretSpec's `BAO_JWT` input, then the
+`VAULT_JWT` compatibility fallback. Otherwise, in a GitHub Actions or Forgejo
+job with `id-token: write`, the provider mints one from the runner's OIDC
+identity.
 
-- `?role=`, `BAO_JWT_ROLE`, or `VAULT_JWT_ROLE` (required)
+Starting with SecretSpec 0.18, the role may be omitted when the JWT auth mount
+has a `default_role`; OpenBao then selects that role during login. An explicit
+SecretSpec role still takes precedence.
+
+- `?role=`, `BAO_JWT_ROLE`, or `VAULT_JWT_ROLE`; optional with a
+  server-configured `default_role` (0.18+)
 - `?audience=`, `BAO_JWT_AUDIENCE`, or `VAULT_JWT_AUDIENCE`
 
 ## Configuration
@@ -127,7 +132,8 @@ openbao://[namespace@]host[:port][/mount][?key=value&...]
 - `namespace@`: Optional namespace (falls back through `BAO_NAMESPACE`,
   `VAULT_NAMESPACE`)
 - `?auth=approle`: Use AppRole authentication (default: `token`)
-- `?auth=jwt`: Use JWT/OIDC authentication (requires a role)
+- `?auth=jwt`: Use JWT/OIDC authentication; a server-configured `default_role`
+  can supply the role when using SecretSpec 0.18+
 - `?auth_mount=` (0.18+): Non-default AppRole or JWT mount beneath `/v1/auth`
 - `?role=`: OpenBao role for JWT auth
 - `?audience=`: Audience requested from the CI OIDC issuer
@@ -150,6 +156,8 @@ openbao://bao.example.com:8200/secret?auth=approle
 # SecretSpec 0.18+
 openbao://bao.example.com:8200/secret?auth=approle&auth_mount=platform-approle
 openbao://bao.example.com:8200/secret?auth=jwt&role=ci
+# SecretSpec 0.18+, with default_role configured on the JWT auth mount
+openbao://bao.example.com:8200/secret?auth=jwt
 ```
 
 ### Project configuration

@@ -12,9 +12,10 @@
 //! - AppRole (`?auth=approle`) -- exchanges the `role_id` and `secret_id`
 //!   provider credentials, or `VAULT_ROLE_ID` and `VAULT_SECRET_ID`, for a
 //!   client token.
-//! - JWT/OIDC (SecretSpec 0.17+, `?auth=jwt`) -- logs in with a configured
-//!   Vault role, using `VAULT_JWT` or a short-lived GitHub Actions / Forgejo
-//!   Actions OIDC token.
+//! - JWT/OIDC (SecretSpec 0.17+, `?auth=jwt`) -- logs in using `VAULT_JWT` or a
+//!   short-lived GitHub Actions / Forgejo Actions OIDC token. Starting with
+//!   SecretSpec 0.18, the role may be omitted when the auth mount has a
+//!   `default_role`.
 //!
 //! # URI format
 //!
@@ -27,7 +28,8 @@
 //! - `tls` -- `true` (default) or `false`; the latter is intended for dev mode
 //! - `auth_mount` -- non-default AppRole or JWT mount beneath `/v1/auth`
 //!   (SecretSpec 0.18+)
-//! - `role` -- Vault role for JWT auth, falling back to `VAULT_JWT_ROLE` (0.17+)
+//! - `role` -- Vault role for JWT auth, falling back to `VAULT_JWT_ROLE`;
+//!   optional with a server-configured `default_role` (SecretSpec 0.18+)
 //! - `audience` -- audience requested from the CI OIDC issuer, falling back to
 //!   `VAULT_JWT_AUDIENCE` (0.17+)
 //!
@@ -38,6 +40,8 @@
 //! - `vault://vault.example.com:8200/secret?auth=approle&auth_mount=platform-approle`
 //!   -- custom AppRole mount (SecretSpec 0.18+)
 //! - `vault://vault.example.com:8200/secret?auth=jwt&role=ci` -- JWT auth
+//! - `vault://vault.example.com:8200/secret?auth=jwt` -- JWT auth using the
+//!   mount's `default_role` (SecretSpec 0.18+)
 //! - `vault://team-a@vault.example.com:8200/secret` -- Vault namespace
 //! - `vault://127.0.0.1:8200/secret?kv=1&tls=false` -- local KV v1 server
 //!

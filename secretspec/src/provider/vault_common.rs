@@ -366,12 +366,13 @@ impl KvConfig {
         // Canonical provider URIs omit an explicitly stated default.
         let auth_mount = auth_mount.filter(|mount| Some(mount.as_str()) != auth.default_mount());
 
+        // Empty query values follow the provider-wide convention of being
+        // absent, so `?role=` still permits the environment fallback. When
+        // neither source supplies a role, the JWT auth mount may select its
+        // server-side `default_role` during login.
         let role = url
-            .query_pairs()
-            .find(|(key, _)| key == "role")
-            .map(|(_, value)| value.to_string())
-            .or_else(|| preferred_env(product.jwt_role_envs()))
-            .filter(|value| !value.is_empty());
+            .query_value("role")
+            .or_else(|| preferred_env(product.jwt_role_envs()));
 
         let audience = url
             .query_pairs()
@@ -981,22 +982,15 @@ impl KvProvider {
         self.parse_login_token(&response, "AppRole", login_started_at)
     }
 
-    /// Exchanges a JWT and role at the configured JWT auth mount.
+    /// Exchanges a JWT at the configured auth mount, optionally selecting a role.
     async fn resolve_jwt_auth(&self) -> Result<IssuedToken> {
-        let role = self.config.role.clone().ok_or_else(|| {
-            SecretSpecError::ProviderOperationFailed(format!(
-                "{} JWT authentication requires a role. Set `?role=` in the provider URI or {}.",
-                self.product.display_name(),
-                self.product.jwt_role_envs().join(" or ")
-            ))
-        })?;
         let jwt = self.resolve_jwt().await?;
 
         let url = self.auth_login_url();
-        let body = serde_json::json!({
-            "role": role,
-            "jwt": jwt.expose_secret(),
-        });
+        let mut body = serde_json::json!({ "jwt": jwt.expose_secret() });
+        if let Some(role) = &self.config.role {
+            body["role"] = serde_json::Value::String(role.clone());
+        }
         // The server-side lease begins while the request is in flight. Anchor
         // its deadline before sending so response latency cannot extend the
         // token's perceived lifetime.
@@ -1751,6 +1745,13 @@ mod tests {
         request
     }
 
+    fn request_json(request: &str) -> serde_json::Value {
+        let (_, body) = request
+            .split_once("\r\n\r\n")
+            .expect("HTTP request must contain a header/body separator");
+        serde_json::from_str(body).expect("HTTP request body must be JSON")
+    }
+
     fn auth_server(
         request_count: usize,
         token_num_uses: u64,
@@ -1826,7 +1827,7 @@ mod tests {
                 } else {
                     ("204 No Content", String::new())
                 };
-                observed.push((request_line, token));
+                observed.push((request, token));
                 write!(
                     stream,
                     "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -1953,10 +1954,49 @@ mod tests {
         let observed = server.join().unwrap();
         assert!(observed[0].0.contains("/v1/auth/jwt/login"));
         assert!(observed[1].0.contains("/v1/auth/jwt/login"));
+        assert_eq!(request_json(&observed[0].0)["role"], "ci");
+        assert_eq!(request_json(&observed[1].0)["role"], "ci");
         assert!(observed[2].0.contains("/v1/secret/metadata/"));
         assert_eq!(observed[2].1.as_deref(), Some("operation-token-1"));
         assert!(observed[3].0.contains("/v1/secret/data/"));
         assert_eq!(observed[3].1.as_deref(), Some("operation-token-2"));
+    }
+
+    #[test]
+    fn jwt_login_omits_an_absent_role_for_the_server_default() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _jwt = EnvVarGuard::set("VAULT_JWT", "test-jwt");
+        let _role = EnvVarGuard::remove("VAULT_JWT_ROLE");
+        let (endpoint, server) = auth_server(1, 0, None);
+        let config = KvConfig::parse(
+            &provider_url(&format!("vault://{endpoint}/secret?tls=false&auth=jwt")),
+            Product::Vault,
+        )
+        .unwrap();
+        let provider = KvProvider::new(config, Product::Vault);
+
+        block_on(provider.resolve_jwt_auth()).unwrap();
+
+        let observed = server.join().unwrap();
+        assert_eq!(observed.len(), 1);
+        assert!(observed[0].0.contains("/v1/auth/jwt/login"));
+        assert_eq!(
+            request_json(&observed[0].0),
+            serde_json::json!({ "jwt": "test-jwt" })
+        );
+    }
+
+    #[test]
+    fn empty_jwt_role_query_uses_the_environment_fallback() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _role = EnvVarGuard::set("VAULT_JWT_ROLE", "ci-from-env");
+        let config = KvConfig::parse(
+            &provider_url("vault://vault.example.com/secret?auth=jwt&role="),
+            Product::Vault,
+        )
+        .unwrap();
+
+        assert_eq!(config.role.as_deref(), Some("ci-from-env"));
     }
 
     #[cfg(feature = "openbao")]

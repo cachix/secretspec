@@ -16,9 +16,10 @@
 //!   provider credentials, or SecretSpec's `BAO_ROLE_ID` and `BAO_SECRET_ID`
 //!   inputs, for a client token. The corresponding `VAULT_*` names remain
 //!   compatibility fallbacks.
-//! - JWT/OIDC (`?auth=jwt`) -- logs in with an OpenBao role, using SecretSpec's
-//!   `BAO_JWT` input (falling back to `VAULT_JWT`) or a short-lived GitHub
-//!   Actions / Forgejo Actions OIDC token.
+//! - JWT/OIDC (`?auth=jwt`) -- logs in using SecretSpec's `BAO_JWT` input
+//!   (falling back to `VAULT_JWT`) or a short-lived GitHub Actions / Forgejo
+//!   Actions OIDC token. Starting with SecretSpec 0.18, the role may be omitted
+//!   when the auth mount has a `default_role`.
 //!
 //! For environment variables defined by the OpenBao CLI -- address, namespace,
 //! token, and token path -- `BAO_*` takes precedence and the corresponding
@@ -38,7 +39,8 @@
 //! - `auth_mount` -- non-default AppRole or JWT mount beneath `/v1/auth`
 //!   (SecretSpec 0.18+)
 //! - `role` -- role for JWT auth, falling back through `BAO_JWT_ROLE` and
-//!   `VAULT_JWT_ROLE`
+//!   `VAULT_JWT_ROLE`; optional with a server-configured `default_role`
+//!   (SecretSpec 0.18+)
 //! - `audience` -- audience requested from the CI OIDC issuer, falling back
 //!   through `BAO_JWT_AUDIENCE` and `VAULT_JWT_AUDIENCE`
 //!
@@ -49,6 +51,8 @@
 //! - `openbao://bao.example.com:8200/secret?auth=approle&auth_mount=platform-approle`
 //!   -- custom AppRole mount (SecretSpec 0.18+)
 //! - `openbao://bao.example.com:8200/secret?auth=jwt&role=ci` -- JWT auth
+//! - `openbao://bao.example.com:8200/secret?auth=jwt` -- JWT auth using the
+//!   mount's `default_role` (SecretSpec 0.18+)
 //! - `openbao://team-a@bao.example.com:8200/secret` -- OpenBao namespace
 //! - `openbao://127.0.0.1:8200/secret?kv=1&tls=false` -- local KV v1 server
 //!

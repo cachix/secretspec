@@ -1,6 +1,5 @@
 ---
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
-import { Image } from 'astro:assets';
 import { getCollection } from 'astro:content';
 import sopsLogo from '../assets/sops-logo.svg';
 
@@ -69,8 +68,72 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: { src: sopsLogo, type: 'bundled' }, slug: 'sops', label: 'SOPS (0.17+)' },
 ];
 
+type ConsumerMetadata = {
+  icon?: string;
+  label: string;
+  href: string;
+  secrets: string[];
+};
 
-const dup = <T,>(arr: T[]) => [...arr, ...arr];
+const consumerMetadata: ConsumerMetadata[] = [
+  { icon: 'rust', label: 'Rust', href: '/sdk/rust/',
+    secrets: ['DATABASE_URL', 'API_TOKEN', 'HMAC_SECRET'] },
+  { icon: 'python', label: 'Python', href: '/sdk/python/',
+    secrets: ['DATABASE_URL', 'SECRET_KEY', 'REDIS_URL'] },
+  { icon: 'django', label: 'Django', href: '/sdk/python/',
+    secrets: ['DJANGO_SECRET_KEY', 'DATABASE_URL', 'EMAIL_HOST_PASSWORD'] },
+  { icon: 'fastapi', label: 'FastAPI', href: '/sdk/python/',
+    secrets: ['DATABASE_URL', 'JWT_SECRET', 'OPENAI_API_KEY'] },
+  { icon: 'nodedotjs', label: 'Node.js', href: '/sdk/nodejs/',
+    secrets: ['DATABASE_URL', 'SESSION_SECRET', 'STRIPE_SECRET_KEY'] },
+  { icon: 'nextdotjs', label: 'Next.js', href: '/sdk/nodejs/',
+    secrets: ['AUTH_SECRET', 'DATABASE_URL', 'STRIPE_SECRET_KEY'] },
+  { icon: 'express', label: 'Express', href: '/sdk/nodejs/',
+    secrets: ['DATABASE_URL', 'SESSION_SECRET', 'JWT_SECRET'] },
+  { icon: 'go', label: 'Go', href: '/sdk/go/',
+    secrets: ['DATABASE_URL', 'API_KEY', 'REDIS_URL'] },
+  { icon: 'ruby', label: 'Ruby', href: '/sdk/ruby/',
+    secrets: ['DATABASE_URL', 'SECRET_KEY_BASE', 'REDIS_URL'] },
+  { icon: 'rubyonrails', label: 'Rails', href: '/sdk/ruby/',
+    secrets: ['SECRET_KEY_BASE', 'DATABASE_URL', 'RAILS_MASTER_KEY'] },
+  { icon: 'php', label: 'PHP', href: '/sdk/php/',
+    secrets: ['DATABASE_URL', 'APP_KEY', 'MAIL_PASSWORD'] },
+  { icon: 'laravel', label: 'Laravel', href: '/sdk/php/',
+    secrets: ['APP_KEY', 'DB_PASSWORD', 'PUSHER_APP_SECRET'] },
+  { icon: 'symfony', label: 'Symfony', href: '/sdk/php/',
+    secrets: ['APP_SECRET', 'DATABASE_URL', 'MAILER_DSN'] },
+  { icon: 'dotnet', label: '.NET / C#', href: '/sdk/csharp/',
+    secrets: ['CONNECTIONSTRINGS__DEFAULT', 'JWT__SECRET', 'API_KEY'] },
+  { icon: 'haskell', label: 'Haskell', href: '/sdk/haskell/',
+    secrets: ['DATABASE_URL', 'API_KEY', 'SIGNING_KEY'] },
+  { icon: 'swift', label: 'Swift (0.18+)', href: '/sdk/swift/',
+    secrets: ['DATABASE_URL', 'API_KEY', 'SENTRY_DSN'] },
+  { icon: 'githubactions', label: 'GitHub Actions', href: '/ci/github-actions/',
+    secrets: ['NPM_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'CODECOV_TOKEN'] },
+  { label: 'Forgejo Actions', href: '/ci/github-actions/',
+    secrets: ['NPM_TOKEN', 'FORGEJO_TOKEN', 'DEPLOY_KEY'] },
+  { icon: 'nixos', label: 'devenv & Nix', href: 'https://devenv.sh/integrations/secretspec/',
+    secrets: ['DATABASE_URL', 'CACHIX_AUTH_TOKEN', 'REDIS_URL'] },
+  { icon: 'systemd', label: 'systemd', href: '/providers/systemd-credential/',
+    secrets: ['TLS_CERT', 'DB_PASSWORD', 'SERVICE_TOKEN'] },
+  { icon: 'docker', label: 'Docker', href: '/reference/cli/#export',
+    secrets: ['POSTGRES_PASSWORD', 'REDIS_URL', 'REGISTRY_AUTH'] },
+  { icon: 'kubernetes', label: 'Kubernetes', href: '/reference/cli/#export',
+    secrets: ['DATABASE_URL', 'TLS_CERT', 'HELM_REGISTRY_TOKEN'] },
+];
+
+const providerLoop = [...providerMetadata, ...providerMetadata, ...providerMetadata];
+const consumerLoop = [...consumerMetadata, ...consumerMetadata, ...consumerMetadata];
+
+const isReelDuplicate = (index: number, itemCount: number) =>
+  index < itemCount || index >= itemCount * 2;
+
+const reelScriptData = {
+  providerLabels: providerMetadata.map((p) => p.label),
+  consumers: consumerMetadata.map((c) => ({ label: c.label, secrets: c.secrets })),
+  providerCount: providerMetadata.length,
+  consumerCount: consumerMetadata.length,
+};
 ---
 
 <StarlightPage
@@ -183,36 +246,427 @@ $ secretspec run --profile production -- npm start
   </div>
 </section>
 
-<!-- ============ PROVIDER MARQUEE ============ -->
-<section class="landing-marquee-section">
-  <p class="landing-marquee-heading">One declaration · Any provider</p>
-
-  <div class="landing-marquee">
-    <div class="landing-marquee-track">
-      {dup(providerMetadata).map(({ icon, label, slug }: ProviderMetadata) => (
-        <a href={`/providers/${slug}`} class="landing-marquee-item">
-          {typeof icon === 'string' ? (
-            <img class="landing-marquee-icon" src={`https://cdn.simpleicons.org/${icon}/888888`} alt="" loading="lazy" width="18" height="18" onerror="this.outerHTML='<svg class=&quot;landing-marquee-icon&quot; viewBox=&quot;0 0 24 24&quot; fill=&quot;none&quot; stroke=&quot;currentColor&quot; stroke-width=&quot;2&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; aria-hidden=&quot;true&quot;><rect x=&quot;3&quot; y=&quot;11&quot; width=&quot;18&quot; height=&quot;11&quot; rx=&quot;2&quot;/><path d=&quot;M7 11V7a5 5 0 0 1 10 0v4&quot;/></svg>'" />
-          ) : typeof icon === 'object' && icon.type === 'bundled' ? (
-            <Image
-              alt="provider logo"
-              class="landing-marquee-icon"
-              decoding="async"
-              height="18"
-              loading="lazy"
-              src={icon.src}
-              width="18"
-            />
-          ) : (
-            <svg class="landing-marquee-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          )}
-          <span>{label}</span>
-        </a>
-      ))}
-    </div>
+<!-- ============ PIPELINE REEL ============ -->
+<section class="landing-pipeline-section">
+  <div class="landing-pipeline-head">
+    <span class="landing-showcase-eyebrow">The interface</span>
+    <h2 class="landing-section-title">One declaration. Swap either side without touching the other.</h2>
+    <p class="landing-section-lead landing-section-lead-narrow">
+      Every contributor picks the provider they trust. One declaration in the middle connects it to any app, stack, or framework.
+    </p>
   </div>
 
+  <div class="landing-pipeline-grid">
+
+    <div class="landing-pipeline-side">
+      <div class="landing-pipeline-label">
+        <span class="landing-pipeline-label-count">{providerCount}</span>
+        providers
+      </div>
+      <div class="landing-reel" data-reel="providers" data-direction="down"
+           data-item-count={providerMetadata.length}
+           aria-label="Scrollable list of secret providers">
+        <div class="landing-reel-track" style={`--scroll:${providerMetadata.length}`}>
+          {providerLoop.map((p, i) => (
+            <a
+              href={`/providers/${p.slug}`}
+              class="landing-reel-slot"
+              data-index={i}
+              style={`--i:${i}`}
+              draggable="false"
+              aria-hidden={isReelDuplicate(i, providerMetadata.length) ? 'true' : undefined}
+              tabindex={isReelDuplicate(i, providerMetadata.length) ? -1 : undefined}
+            >
+              <div class="landing-reel-slot-inner">
+                <div class="landing-reel-item">
+                  {typeof p.icon === 'string' ? (
+                    <>
+                      <img data-reel-icon-img class="landing-reel-icon" src={`https://cdn.simpleicons.org/${p.icon}/888888`} alt="" width="20" height="20" loading="lazy" />
+                      <svg class="landing-reel-icon landing-reel-icon-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    </>
+                  ) : typeof p.icon === 'object' && p.icon.type === 'bundled' ? (
+                    <img class="landing-reel-icon" src={p.icon.src.src} alt="" width="20" height="20" loading="lazy" />
+                  ) : (
+                    <svg class="landing-reel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  )}
+                  <span>{p.label}</span>
+                </div>
+              </div>
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
+
+    <div class="landing-pipeline-center">
+      <div class="landing-terminal landing-pipeline-terminal" data-pipeline-terminal>
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">secretspec.toml</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code data-pipeline-terminal-body><span class="tok-sec">[project]</span>
+<span class="tok-key">name</span> <span class="tok-pun">=</span> <span class="tok-str">"my-app"</span>
+<span class="tok-key">revision</span> <span class="tok-pun">=</span> <span class="tok-str">"1.0"</span>
+
+<span class="tok-sec">[profiles.default]</span>
+<span class="tok-key">DATABASE_URL</span>      <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span>
+<span class="tok-key">API_TOKEN</span>         <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span>
+<span class="tok-key">HMAC_SECRET</span>       <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span></code></pre>
+      </div>
+      <p class="landing-pipeline-resolve">
+        <span class="landing-pipeline-resolve-label">Resolving from</span>
+        <span class="landing-pipeline-resolve-provider" data-pipeline-resolving>{providerMetadata[0].label}</span>
+      </p>
+    </div>
+
+    <div class="landing-pipeline-side">
+      <div class="landing-pipeline-label">
+        <span class="landing-pipeline-label-count">{consumerMetadata.length}</span>
+        SDKs &amp; integrations
+      </div>
+      <div class="landing-reel" data-reel="consumers" data-direction="up"
+           data-item-count={consumerMetadata.length}
+           aria-label="Scrollable list of SDKs and integrations">
+        <div class="landing-reel-track" style={`--scroll:${consumerMetadata.length}`}>
+          {consumerLoop.map((c, i) => (
+            <a
+              href={c.href}
+              class="landing-reel-slot"
+              data-index={i}
+              style={`--i:${i}`}
+              draggable="false"
+              aria-hidden={isReelDuplicate(i, consumerMetadata.length) ? 'true' : undefined}
+              tabindex={isReelDuplicate(i, consumerMetadata.length) ? -1 : undefined}
+            >
+              <div class="landing-reel-slot-inner">
+                <div class="landing-reel-item">
+                  {c.icon ? (
+                    <>
+                      <img data-reel-icon-img class="landing-reel-icon" src={`https://cdn.simpleicons.org/${c.icon}/888888`} alt="" width="20" height="20" loading="lazy" />
+                      <svg class="landing-reel-icon landing-reel-icon-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    </>
+                  ) : (
+                    <svg class="landing-reel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  )}
+                  <span>{c.label}</span>
+                </div>
+              </div>
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
+
+  </div>
 </section>
+
+<script is:inline define:vars={{ reelData: reelScriptData }}>
+  (function () {
+    const providerReel = document.querySelector('[data-reel="providers"]');
+    const consumerReel = document.querySelector('[data-reel="consumers"]');
+    const terminalEl = document.querySelector('[data-pipeline-terminal]');
+    const terminalBody = document.querySelector('[data-pipeline-terminal-body]');
+    const resolvingEl = document.querySelector('[data-pipeline-resolving]');
+
+    if (!providerReel || !consumerReel || !terminalBody || !resolvingEl || !terminalEl) return;
+
+    document.querySelectorAll('[data-reel-icon-img]').forEach((img) => {
+      function markMissing() {
+        const item = img.closest('.landing-reel-item');
+        if (item) item.classList.add('is-icon-missing');
+      }
+
+      img.addEventListener('error', markMissing, { once: true });
+      if (img.complete && img.naturalWidth === 0) markMissing();
+    });
+
+    const SLOT_H = 76;
+    const SLOT_W_MOBILE = 216;
+    const MOBILE_QUERY = window.matchMedia('(max-width: 900px)');
+    const AUTO_TICK_MS = 2600;
+    const AUTO_ANIM_MS = 760;
+    const SNAP_ANIM_MS = 320;
+    const RESUME_AFTER_MS = 4200;
+    const DRAG_THRESHOLD_PX = 5;
+    const AUTO_EPOCH = performance.now();
+
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    function codeLine(html, index) {
+      return '<span class="landing-code-line" style="--line:' + index + '">' + html + '</span>';
+    }
+
+    function restartClass(el, className) {
+      el.classList.remove(className);
+      void el.offsetWidth;
+      el.classList.add(className);
+    }
+
+    function updateTerminal(consumer) {
+      terminalEl.classList.remove('is-popping');
+
+      const maxLen = Math.max.apply(null, consumer.secrets.map((s) => s.length));
+      const rows = consumer.secrets.map((name, index) => {
+        const pad = ' '.repeat(Math.max(1, maxLen - name.length + 1));
+        const row =
+          '<span class="tok-key">' + esc(name) + '</span>' + pad +
+          '<span class="tok-pun">= {</span> ' +
+          '<span class="tok-key">required</span> ' +
+          '<span class="tok-pun">=</span> ' +
+          '<span class="tok-num">true</span> ' +
+          '<span class="tok-pun">}</span>';
+        return codeLine(row, index + 5);
+      }).join('');
+
+      terminalBody.innerHTML = [
+        codeLine('<span class="tok-sec">[project]</span>', 0),
+        codeLine('<span class="tok-key">name</span> <span class="tok-pun">=</span> <span class="tok-str">"my-app"</span>', 1),
+        codeLine('<span class="tok-key">revision</span> <span class="tok-pun">=</span> <span class="tok-str">"1.0"</span>', 2),
+        codeLine('&nbsp;', 3),
+        codeLine('<span class="tok-sec">[profiles.default]</span>', 4),
+        rows,
+      ].join('');
+
+      restartClass(terminalEl, 'is-popping');
+    }
+
+    const resolvePill = resolvingEl.parentElement;
+    let resolveWidthTimer = null;
+
+    function updateResolving(label) {
+      clearTimeout(resolveWidthTimer);
+
+      const startWidth = resolvePill.getBoundingClientRect().width + 'px';
+      resolvePill.style.width = startWidth;
+      resolvingEl.textContent = label;
+
+      resolvePill.style.width = 'auto';
+      const endWidth = resolvePill.getBoundingClientRect().width + 'px';
+      resolvePill.style.width = startWidth;
+      void resolvePill.offsetWidth;
+
+      resolvePill.classList.add('is-tweening');
+      resolvePill.style.width = endWidth;
+      restartClass(resolvePill, 'is-pulsing');
+
+      resolveWidthTimer = setTimeout(() => {
+        resolvePill.classList.remove('is-tweening');
+        resolvePill.classList.remove('is-pulsing');
+        resolvePill.style.width = '';
+      }, 260);
+    }
+
+    function makeReel(opts) {
+      const { reelEl, itemCount, direction, onActiveChange, phase } = opts;
+      const trackEl = reelEl.querySelector('.landing-reel-track');
+      let scroll = itemCount;
+      let currentActive = -1;
+      let rafId = null;
+      let autoTimerId = null;
+      let autoStartId = null;
+      let resumeTimerId = null;
+      let dragState = null;
+      let suppressNextClick = false;
+
+      function applyScroll() {
+        const min = itemCount * 0.5;
+        const max = itemCount * 2.5;
+        while (scroll < min) scroll += itemCount;
+        while (scroll > max) scroll -= itemCount;
+        trackEl.style.setProperty('--scroll', String(scroll));
+
+        const rounded = Math.round(scroll);
+        const active = ((rounded % itemCount) + itemCount) % itemCount;
+        if (active !== currentActive) {
+          currentActive = active;
+          onActiveChange(active);
+        }
+      }
+
+      function stopAnim() {
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+
+      function animateTo(target, duration) {
+        stopAnim();
+        const start = scroll;
+        const startTime = performance.now();
+        const step = (now) => {
+          const t = Math.min(1, (now - startTime) / duration);
+          const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+          scroll = start + (target - start) * e;
+          applyScroll();
+          if (t < 1) {
+            rafId = requestAnimationFrame(step);
+          } else {
+            rafId = null;
+          }
+        };
+        rafId = requestAnimationFrame(step);
+      }
+
+      function snapToNearest(duration) {
+        const target = Math.round(scroll);
+        if (Math.abs(target - scroll) < 0.001) return;
+        animateTo(target, duration || SNAP_ANIM_MS);
+      }
+
+      function autoTick() {
+        const base = Math.round(scroll);
+        const target = direction === 'up' ? base + 1 : base - 1;
+        animateTo(target, AUTO_ANIM_MS);
+      }
+
+      function startAuto() {
+        if (autoTimerId || autoStartId) return;
+        const elapsed = performance.now() - AUTO_EPOCH;
+        const cyclePos = ((elapsed - (phase || 0)) % AUTO_TICK_MS + AUTO_TICK_MS) % AUTO_TICK_MS;
+        const delay = (AUTO_TICK_MS - cyclePos) % AUTO_TICK_MS;
+        autoStartId = setTimeout(function () {
+          autoStartId = null;
+          autoTick();
+          autoTimerId = setInterval(autoTick, AUTO_TICK_MS);
+        }, delay);
+      }
+      function stopAuto() {
+        if (autoTimerId) { clearInterval(autoTimerId); autoTimerId = null; }
+        if (autoStartId) { clearTimeout(autoStartId); autoStartId = null; }
+      }
+      function scheduleResume() {
+        clearTimeout(resumeTimerId);
+        resumeTimerId = setTimeout(startAuto, RESUME_AFTER_MS);
+      }
+
+      function onPointerDown(e) {
+        if (e.button !== undefined && e.button !== 0) return;
+        stopAuto();
+        stopAnim();
+        clearTimeout(resumeTimerId);
+        dragState = {
+          startX: e.clientX,
+          startY: e.clientY,
+          startScroll: scroll,
+          moved: false,
+          pointerId: e.pointerId,
+        };
+        try { reelEl.setPointerCapture(e.pointerId); } catch (_) {}
+        reelEl.classList.add('is-dragging');
+      }
+      function onPointerMove(e) {
+        if (!dragState) return;
+        const horizontal = MOBILE_QUERY.matches;
+        const d = horizontal ? (e.clientX - dragState.startX) : (e.clientY - dragState.startY);
+        if (Math.abs(d) > DRAG_THRESHOLD_PX) dragState.moved = true;
+        scroll = dragState.startScroll - d / (horizontal ? SLOT_W_MOBILE : SLOT_H);
+        applyScroll();
+      }
+      function onPointerUp(e) {
+        if (!dragState) return;
+        try { reelEl.releasePointerCapture(dragState.pointerId); } catch (_) {}
+        const moved = dragState.moved;
+        dragState = null;
+        reelEl.classList.remove('is-dragging');
+
+        if (moved) {
+          snapToNearest();
+          suppressNextClick = true;
+        } else {
+          const hit = document.elementFromPoint(e.clientX, e.clientY);
+          const slot = hit && hit.closest && hit.closest('.landing-reel-slot');
+          const idx = slot ? Number(slot.dataset.index) : NaN;
+          if (Number.isFinite(idx) && idx !== Math.round(scroll)) {
+            stopAuto();
+            clearTimeout(resumeTimerId);
+            animateTo(idx, SNAP_ANIM_MS);
+            suppressNextClick = true;
+          }
+        }
+        scheduleResume();
+      }
+      function onClickCapture(e) {
+        if (suppressNextClick) {
+          e.preventDefault();
+          e.stopPropagation();
+          suppressNextClick = false;
+        }
+      }
+
+      reelEl.addEventListener('pointerdown', onPointerDown);
+      reelEl.addEventListener('pointermove', onPointerMove);
+      reelEl.addEventListener('pointerup', onPointerUp);
+      reelEl.addEventListener('pointercancel', onPointerUp);
+      reelEl.addEventListener('click', onClickCapture, true);
+      reelEl.addEventListener('dragstart', (e) => e.preventDefault());
+
+      let hovering = false;
+      reelEl.addEventListener('mouseenter', () => {
+        hovering = true;
+        stopAuto();
+      });
+      reelEl.addEventListener('mouseleave', () => {
+        hovering = false;
+        scheduleResume();
+      });
+      reelEl.addEventListener('focusin', () => {
+        stopAuto();
+      });
+      reelEl.addEventListener('focusout', () => {
+        scheduleResume();
+      });
+
+      applyScroll();
+
+      return {
+        start: () => { if (!hovering && !dragState) startAuto(); },
+        stop: () => { stopAuto(); stopAnim(); },
+      };
+    }
+
+    const providerCtl = makeReel({
+      reelEl: providerReel,
+      itemCount: reelData.providerCount,
+      direction: providerReel.dataset.direction || 'down',
+      onActiveChange: (idx) => updateResolving(reelData.providerLabels[idx]),
+    });
+
+    const consumerCtl = makeReel({
+      reelEl: consumerReel,
+      itemCount: reelData.consumerCount,
+      direction: consumerReel.dataset.direction || 'up',
+      onActiveChange: (idx) => updateTerminal(reelData.consumers[idx]),
+      phase: AUTO_TICK_MS / 2,
+    });
+
+    const section = document.querySelector('.landing-pipeline-section');
+    if (section && 'IntersectionObserver' in window) {
+      const io = new IntersectionObserver((entries) => {
+        entries.forEach((e) => {
+          if (e.isIntersecting) {
+            providerCtl.start();
+            consumerCtl.start();
+          } else {
+            providerCtl.stop();
+            consumerCtl.stop();
+          }
+        });
+      }, { threshold: 0.15 });
+      io.observe(section);
+    } else {
+      providerCtl.start();
+      consumerCtl.start();
+    }
+
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      providerCtl.stop();
+      consumerCtl.stop();
+    }
+  })();
+</script>
 
 <!-- ============ THREE STEPS ============ -->
 <section class="landing-section">
@@ -407,6 +861,7 @@ println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span cla
           </div>
           <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[project]</span>
 <span class="tok-key">name</span> <span class="tok-pun">=</span> <span class="tok-str">"my-app"</span>
+<span class="tok-key">revision</span> <span class="tok-pun">=</span> <span class="tok-str">"1.0"</span>
 
 <span class="tok-sec">[profiles.default]</span>
 <span class="tok-key">DATABASE_URL</span>      <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span>

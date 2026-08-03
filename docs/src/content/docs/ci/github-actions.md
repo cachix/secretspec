@@ -23,7 +23,11 @@ A missing required secret fails the step before the job runs anything with an in
 
 For secrets kept in a dedicated store, resolve them on the runner with the matching provider, shown here with [Vault or OpenBao](/providers/vault/). Other stores plug in the same way with their own credentials.
 
-Grant the job `id-token: write` and select `?auth=jwt` with a `role`. Vault exchanges the runner's OIDC token for a client token, so nothing is stored on the platform.
+Grant the job `id-token: write` and select `?auth=jwt`. Pinning a `role`, as in
+the example below, keeps the workflow independent of server configuration.
+Starting with SecretSpec 0.18, the role may instead come from the JWT auth
+mount's configured `default_role`. Vault exchanges the runner's OIDC token for
+a client token, so nothing is stored on the platform.
 
 ```yaml
       - uses: cachix/secretspec-action@main

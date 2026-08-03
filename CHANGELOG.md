@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is not an authentication state, and the install guidance ("…run 'bw login'
   and 'bw unlock' to authenticate") used to match the not-authenticated
   classifier and mask the real problem.
+- Vault and OpenBao JWT authentication now allows the role to be omitted when
+  the auth mount has a server-configured `default_role`, while explicit URI or
+  environment roles continue to take precedence.
 
 ### Added
 - Vault and OpenBao AppRole and JWT authentication can target non-default auth

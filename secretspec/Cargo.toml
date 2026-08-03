@@ -63,11 +63,11 @@ keeper = ["dep:keeper-secrets-manager-core"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]
 awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "aws-config/credentials-login"]
 awsps = ["dep:aws-config", "dep:aws-sdk-ssm"]
-vault = ["dep:reqwest"]
+vault = ["dep:reqwest", "tokio/sync"]
 # Scaleway Secret Manager talks to the v1beta1 REST API directly; base64
 # payloads use data-encoding, which is already a non-optional dependency.
 scaleway = ["dep:reqwest"]
-openbao = ["dep:reqwest"]
+openbao = ["dep:reqwest", "tokio/sync"]
 # `tokio/sync` for the async `OnceCell` that serializes the Universal Auth
 # exchange. It is already on transitively via reqwest, but a provider should
 # name the features it uses rather than inherit them from a sibling.

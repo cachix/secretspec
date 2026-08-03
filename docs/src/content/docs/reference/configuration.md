@@ -628,7 +628,7 @@ chain, and each provider is asked for the same coordinates.
 | [Vault](/providers/vault/#use-existing-secrets) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
 | [OpenBao](/providers/openbao/#use-existing-secrets) (0.17+) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
 | [AWS Secrets Manager](/providers/awssm/#use-existing-secrets) | Secret name or ARN | JSON key | Whole secret string | — (read-only) |
-| [AWS Parameter Store (0.18+)](/providers/awsps/#use-existing-parameters) | Parameter name or ARN; `version` selects a version or label | Rejected | Reads the decrypted value | — (read-only) |
+| [AWS Parameter Store (0.18+)](/providers/awsps/#use-existing-parameters) | Parameter name or ARN; `version` selects a version or label | Rejected | Reads the decrypted value | ✅ by unversioned parameter name; version, label, and ARN refs are read-only |
 | [GCSM](/providers/gcsm/#use-existing-secrets) | Secret id; `version` also applies | Rejected | Reads latest or the pinned version | — (read-only) |
 | [Bitwarden (bws)](/providers/bws/#use-existing-secrets) | BWS key name | Rejected | Reads the key | ✅ |
 | [Azure Key Vault (0.15+)](/providers/akv/#use-existing-secrets) | Secret name | Rejected | Reads the secret | — (read-only) |

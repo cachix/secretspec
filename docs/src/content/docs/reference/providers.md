@@ -264,7 +264,8 @@ awsps://                                           # SDK defaults
 
 **Features (0.18+)**: Read/write, `SecureString` encryption, cloud sync,
 profiles, IAM/SSO authentication, batched reads, version- or label-pinned
-read-only refs
+read-only refs, writable unversioned parameter-name refs; ARN refs are
+read-only
 **Prerequisites (0.18+)**: AWS credentials configured, build with
 `--features awsps`
 **Storage (0.18+)**: Parameter

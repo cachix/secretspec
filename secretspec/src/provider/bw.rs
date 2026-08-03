@@ -4022,6 +4022,1096 @@ mod tests {
         result
     }
 
+    // ---------------------------------------------------------------------
+    // Fake-`bw` CLI harness: the pure helpers above cover the code that runs
+    // without a CLI; these cover the code that spawns `bw` at all. The fake
+    // is a shell script installed into a per-test directory that is put first
+    // on PATH (see tests/fixtures/bw-shim.sh). Unit tests must never run the
+    // developer's real `bw`, which would answer with — and write to — a real
+    // vault; the fake answers fixture files instead and records every
+    // invocation so tests can assert what was asked for.
+    // ---------------------------------------------------------------------
+
+    /// Tests that put the fake `bw` on PATH run one at a time: PATH is
+    /// process-global state, exactly like the BITWARDEN_* variables guarded by
+    /// [`ENV_LOCK`].
+    static BW_SHIM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A disposable fake `bw` CLI for one test.
+    ///
+    /// The directory holds the shim script (installed from
+    /// `tests/fixtures/bw-shim.sh`), fixture JSON files the script answers
+    /// with, and `invocations.log` recording every call. [`FakeBw::run`] puts
+    /// the directory first on PATH for the duration of `body` and isolates
+    /// `BITWARDENCLI_APPDATA_DIR`, mirroring the vaultwarden harness, so
+    /// nothing the fake does can reach the developer's own bw config.
+    struct FakeBw {
+        dir: std::path::PathBuf,
+    }
+
+    /// Restores the process-global state [`FakeBw::run`] changed, even when
+    /// `body` panics — a leaked PATH pointing at a soon-deleted fixture
+    /// directory would turn a later accidental `bw` spawn into a silent
+    /// NotFound.
+    struct PathRestore {
+        old_path: String,
+        old_appdata: Option<String>,
+    }
+
+    impl Drop for PathRestore {
+        fn drop(&mut self) {
+            unsafe { std::env::set_var("PATH", &self.old_path) };
+            match &self.old_appdata {
+                Some(appdata) => unsafe { std::env::set_var("BITWARDENCLI_APPDATA_DIR", appdata) },
+                None => unsafe { std::env::remove_var("BITWARDENCLI_APPDATA_DIR") },
+            }
+        }
+    }
+
+    impl FakeBw {
+        /// Creates a fresh fake in a temp directory with the shim script
+        /// installed and ready to answer `[]` to every listing.
+        fn new() -> FakeBw {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "bw-shim-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&dir).expect("create fake bw directory");
+            let script = include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../tests/fixtures/bw-shim.sh"
+            ));
+            std::fs::write(dir.join("bw"), script).expect("install fake bw script");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(dir.join("bw"))
+                    .expect("stat fake bw")
+                    .permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(dir.join("bw"), perms).expect("chmod fake bw");
+            }
+            FakeBw { dir }
+        }
+
+        /// Writes the fixture `bw status` answers with.
+        fn with_status(self, status: serde_json::Value) -> Self {
+            std::fs::write(self.dir.join("status.json"), status.to_string())
+                .expect("write status fixture");
+            self
+        }
+
+        /// Writes the fixture `bw list organizations` answers with.
+        fn with_organizations(self, organizations: serde_json::Value) -> Self {
+            std::fs::write(
+                self.dir.join("organizations.json"),
+                organizations.to_string(),
+            )
+            .expect("write organizations fixture");
+            self
+        }
+
+        /// Writes the fixture `bw list collections` answers with.
+        fn with_collections(self, collections: serde_json::Value) -> Self {
+            std::fs::write(self.dir.join("collections.json"), collections.to_string())
+                .expect("write collections fixture");
+            self
+        }
+
+        /// Writes the fixture `bw list items` and `bw get item` answer with.
+        fn with_items(self, items: serde_json::Value) -> Self {
+            std::fs::write(self.dir.join("items.json"), items.to_string())
+                .expect("write items fixture");
+            self
+        }
+
+        /// Forces every `bw` call to exit `code` with these streams, driving
+        /// the provider's subprocess error paths (missing login, locked
+        /// vault, generic failure, malformed output).
+        fn with_failure(self, code: i32, stdout: &str, stderr: &str) -> Self {
+            std::fs::write(
+                self.dir.join("fail.env"),
+                format!("{code}\n{stdout}\n{stderr}"),
+            )
+            .expect("write failure fixture");
+            self
+        }
+
+        /// Like [`Self::with_failure`], but only for invocations whose argv
+        /// contains `arg` — so one listing can fail while a sibling listing
+        /// in the same flow succeeds.
+        fn with_failure_on(self, code: i32, stdout: &str, stderr: &str, arg: &str) -> Self {
+            std::fs::write(
+                self.dir.join("fail.env"),
+                format!("{code}\n{stdout}\n{stderr}\n{arg}"),
+            )
+            .expect("write failure fixture");
+            self
+        }
+
+        /// Makes every `bw` call print these raw bytes and exit 0, for output
+        /// that is not valid UTF-8.
+        fn with_garbage(self, bytes: &[u8]) -> Self {
+            std::fs::write(self.dir.join("garbage.bin"), bytes).expect("write garbage fixture");
+            self
+        }
+
+        /// The invocation log: one `argv: <...>` line per call, plus
+        /// `stdin=<base64>` when the provider piped JSON at it.
+        fn invocations(&self) -> String {
+            std::fs::read_to_string(self.dir.join("invocations.log")).unwrap_or_default()
+        }
+
+        /// Runs `body` with this fake first on PATH.
+        ///
+        /// Takes [`BW_SHIM_LOCK`] so no other fake-`bw` test observes the
+        /// process-global PATH while it is installed.
+        fn run<T>(&self, body: impl FnOnce() -> T) -> T {
+            let _guard = BW_SHIM_LOCK.lock().unwrap();
+            let old_path = std::env::var("PATH").unwrap_or_default();
+            let old_appdata = std::env::var("BITWARDENCLI_APPDATA_DIR").ok();
+            let new_path = if old_path.is_empty() {
+                self.dir.display().to_string()
+            } else {
+                format!("{}:{}", self.dir.display(), old_path)
+            };
+            let _restore = PathRestore {
+                old_path,
+                old_appdata,
+            };
+            unsafe {
+                std::env::set_var("PATH", new_path);
+                std::env::set_var("BITWARDENCLI_APPDATA_DIR", self.dir.join("appdata"));
+            }
+            body()
+        }
+    }
+
+    impl Drop for FakeBw {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// Runs `body` with no `bw` on PATH at all, so the provider's
+    /// "CLI not installed" branches (a distinct `NotFound` handling per call
+    /// site) are exercised for real.
+    fn with_no_bw<T>(body: impl FnOnce() -> T) -> T {
+        let _guard = BW_SHIM_LOCK.lock().unwrap();
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let empty = std::env::temp_dir().join(format!(
+            "bw-shim-empty-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&empty).expect("create empty PATH directory");
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        unsafe { std::env::set_var("PATH", &empty) };
+        let result = body();
+        unsafe { std::env::set_var("PATH", old_path) };
+        let _ = std::fs::remove_dir_all(&empty);
+        result
+    }
+
+    // -- fake-bw CLI subprocess tests -------------------------------------
+
+    // -- check_server ------------------------------------------------------
+
+    #[test]
+    fn check_server_accepts_a_matching_server_url() {
+        // A self-hosted address verifies that the CLI already targets that
+        // server; a matching `bw status` must pass.
+        let fake = FakeBw::new().with_status(json!({
+            "serverUrl": "https://vault.company.com",
+            "status": "unlocked"
+        }));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            assert_eq!(provider.check_server("https://vault.company.com"), Ok(()));
+        });
+    }
+
+    #[test]
+    fn check_server_accepts_the_public_cloud_when_expected() {
+        // `bw status` reports the cloud as a null serverUrl; that must
+        // satisfy an expectation of the cloud URL rather than read as a
+        // mismatch.
+        let fake = FakeBw::new(); // default status: cloud, unlocked
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            assert_eq!(provider.check_server(BITWARDEN_CLOUD_SERVER), Ok(()));
+        });
+    }
+
+    #[test]
+    fn check_server_rejects_a_mismatched_server_with_remediation() {
+        // The provider must fail closed when the CLI points elsewhere and
+        // name the expected server, so the operator knows which command to
+        // run to fix it.
+        let fake = FakeBw::new().with_status(json!({
+            "serverUrl": "https://vault.other.com",
+            "status": "unlocked"
+        }));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider
+                .check_server("https://vault.company.com")
+                .unwrap_err();
+            assert!(err.contains("expects https://vault.company.com"), "{err}");
+            assert!(
+                err.contains("bw config server https://vault.company.com"),
+                "{err}"
+            );
+        });
+    }
+
+    #[test]
+    fn check_server_names_the_public_cloud_as_the_current_server() {
+        // A null serverUrl means the cloud; the mismatch message must say so
+        // explicitly instead of printing a bare null the user never
+        // configured.
+        let fake = FakeBw::new(); // default status: cloud
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider
+                .check_server("https://vault.company.com")
+                .unwrap_err();
+            assert!(
+                err.contains(&format!(
+                    "the public Bitwarden cloud ({BITWARDEN_CLOUD_SERVER})"
+                )),
+                "{err}"
+            );
+        });
+    }
+
+    #[test]
+    fn check_server_ignores_a_missing_cli() {
+        // `execute_bw_command` reports a missing CLI with install
+        // instructions immediately after, so `check_server` must stay quiet
+        // on NotFound rather than error twice.
+        with_no_bw(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            assert_eq!(provider.check_server("https://vault.company.com"), Ok(()));
+        });
+    }
+
+    #[test]
+    fn check_server_reports_a_failed_status_call() {
+        let fake = FakeBw::new().with_failure(1, "", "boom");
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider
+                .check_server("https://vault.company.com")
+                .unwrap_err();
+            assert!(err.contains("`bw status` failed while verifying"), "{err}");
+            assert!(err.contains("boom"), "{err}");
+        });
+    }
+
+    #[test]
+    fn check_server_reports_unparseable_status_output() {
+        // A successful-but-garbage `bw status` is a configuration problem
+        // the operator needs to see, not a server mismatch.
+        let fake = FakeBw::new().with_failure(0, "not json", "");
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider
+                .check_server("https://vault.company.com")
+                .unwrap_err();
+            assert!(
+                err.contains("could not parse `bw status` output as JSON"),
+                "{err}"
+            );
+        });
+    }
+
+    // -- execute_bw_command ------------------------------------------------
+
+    #[test]
+    fn execute_bw_command_returns_the_stdout_of_a_successful_call() {
+        let fake = FakeBw::new().with_items(json!([{
+            "id": "it1", "name": "Vault", "type": 1
+        }]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let out = provider.execute_bw_command(&["list", "items"]).unwrap();
+            let items: serde_json::Value = serde_json::from_str(&out).unwrap();
+            assert_eq!(items[0]["name"], "Vault");
+        });
+    }
+
+    #[test]
+    fn execute_bw_command_reports_a_missing_cli_with_install_instructions() {
+        // A machine without the CLI gets instructions, not a bare "command
+        // not found".
+        with_no_bw(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider.execute_bw_command(&["status"]).unwrap_err();
+            let msg = format!("{err}");
+            assert!(msg.contains("Bitwarden CLI (bw) is not installed"), "{msg}");
+            assert!(msg.contains("brew install bitwarden-cli"), "{msg}");
+        });
+    }
+
+    #[test]
+    fn execute_bw_command_maps_a_not_logged_in_error() {
+        // `bw` says this on stderr when no session exists; the provider must
+        // translate it into an actionable message instead of the raw failure.
+        let fake = FakeBw::new().with_failure(1, "", "You are not logged in.");
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider.execute_bw_command(&["status"]).unwrap_err();
+            let msg = format!("{err}");
+            assert!(msg.contains("Please run 'bw login' first"), "{msg}");
+        });
+    }
+
+    #[test]
+    fn execute_bw_command_maps_a_locked_vault_error() {
+        let fake = FakeBw::new().with_failure(1, "", "Vault is locked.");
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider.execute_bw_command(&["status"]).unwrap_err();
+            let msg = format!("{err}");
+            assert!(msg.contains("Please run 'bw unlock'"), "{msg}");
+        });
+    }
+
+    #[test]
+    fn execute_bw_command_reports_generic_failures_with_stderr() {
+        // Anything outside the two known states surfaces as a plain failure
+        // that names the command and the exit status.
+        let fake = FakeBw::new().with_failure(3, "", "some generic failure");
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider.execute_bw_command(&["list", "items"]).unwrap_err();
+            let msg = format!("{err}");
+            assert!(
+                msg.contains("`bw list items` failed (exit status 3)"),
+                "{msg}"
+            );
+            assert!(msg.contains("some generic failure"), "{msg}");
+        });
+    }
+
+    #[test]
+    fn execute_bw_command_falls_back_to_stdout_for_failure_detail() {
+        // An error with empty stderr must not read as an empty message: the
+        // detail falls back to stdout.
+        let fake = FakeBw::new().with_failure(1, "detail on stdout", "");
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider.execute_bw_command(&["status"]).unwrap_err();
+            let msg = format!("{err}");
+            assert!(msg.contains("detail on stdout"), "{msg}");
+        });
+    }
+
+    #[test]
+    fn execute_bw_command_rejects_non_utf8_stdout() {
+        // `bw` output is treated as text; bytes that are not UTF-8 must fail
+        // loudly rather than be lossily mangled into a secret.
+        let fake = FakeBw::new().with_garbage(&[0xff, 0xfe]);
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider.execute_bw_command(&["status"]).unwrap_err();
+            let msg = format!("{err}");
+            assert!(
+                msg.contains("returned output that is not valid UTF-8"),
+                "{msg}"
+            );
+        });
+    }
+
+    // -- is_authenticated --------------------------------------------------
+
+    #[test]
+    fn is_authenticated_is_true_when_the_vault_is_unlocked() {
+        let fake = FakeBw::new(); // default status: unlocked
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            assert!(provider.is_authenticated().unwrap());
+        });
+    }
+
+    #[test]
+    fn is_authenticated_is_false_when_the_vault_is_locked() {
+        // A locked vault is a known, non-fatal state: the caller sees
+        // "not authenticated" rather than an error.
+        let fake = FakeBw::new().with_status(json!({
+            "serverUrl": null, "status": "locked", "authenticated": true
+        }));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            assert!(!provider.is_authenticated().unwrap());
+        });
+    }
+
+    #[test]
+    fn is_authenticated_is_false_when_not_logged_in() {
+        let fake = FakeBw::new().with_failure(1, "", "You are not logged in.");
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            assert!(!provider.is_authenticated().unwrap());
+        });
+    }
+
+    #[test]
+    fn is_authenticated_is_false_when_the_vault_is_locked_on_stderr() {
+        let fake = FakeBw::new().with_failure(1, "", "Vault is locked.");
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            assert!(!provider.is_authenticated().unwrap());
+        });
+    }
+
+    #[test]
+    fn is_authenticated_surfaces_unexpected_failures() {
+        // Any other failure is not a known state: it must propagate as an
+        // error rather than masquerade as "not authenticated".
+        let fake = FakeBw::new().with_failure(1, "", "mystery failure");
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            assert!(provider.is_authenticated().is_err());
+        });
+    }
+
+    // -- get / create over the fake CLI -----------------------------------
+
+    #[test]
+    fn get_item_as_template_answers_with_the_named_item() {
+        let fake = FakeBw::new().with_items(json!([
+            {"id": "it1", "name": "Vault", "type": 1, "login": {"password": "pw"}},
+            {"id": "it2", "name": "Other", "type": 1}
+        ]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let item = provider.get_item_as_template("it2").unwrap();
+            assert_eq!(item["name"], "Other");
+            let log = fake.invocations();
+            assert!(
+                log.contains("argv: <--nointeraction> <get> <item> <it2>"),
+                "{log}"
+            );
+        });
+    }
+
+    #[test]
+    fn get_item_as_template_fails_when_the_item_is_missing() {
+        let fake = FakeBw::new(); // empty vault
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider.get_item_as_template("nope").unwrap_err();
+            assert!(format!("{err}").contains("Not found"), "{err}");
+        });
+    }
+
+    #[test]
+    fn create_item_from_template_pipes_the_template_to_create_item() {
+        // The provider builds the item JSON itself and hands it to
+        // `bw create item` as base64 on stdin; the shim's log must show
+        // exactly that payload so a created secret is the one that was asked
+        // for.
+        use base64::{Engine as _, engine::general_purpose};
+        let template = json!({
+            "type": 1, "name": "New",
+            "notes": "SecretSpec managed secret: New",
+            "login": {"username": null, "password": "s3cret", "totp": null, "uris": []},
+            "fields": [], "organizationId": null, "collectionIds": []
+        });
+        let fake = FakeBw::new();
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            provider.create_item_from_template(&template).unwrap();
+        });
+        let log = fake.invocations();
+        assert!(
+            log.contains("argv: <--nointeraction> <create> <item>"),
+            "{log}"
+        );
+        let stdin_line = log
+            .lines()
+            .find(|line| line.starts_with(" stdin="))
+            .expect("create must pipe the item on stdin");
+        let sent = general_purpose::STANDARD
+            .decode(stdin_line.trim_start_matches(" stdin="))
+            .expect("stdin must be base64");
+        let sent: serde_json::Value = serde_json::from_slice(&sent).unwrap();
+        assert_eq!(sent["name"], "New");
+        assert_eq!(sent["login"]["password"], "s3cret");
+    }
+
+    // -- scope resolution over the fake CLI --------------------------------
+
+    #[test]
+    fn look_up_scope_resolves_an_organization_name_through_the_fake_cli() {
+        let fake = FakeBw::new().with_organizations(json!([
+            {"id": "org-1", "name": "DevOps"},
+            {"id": "org-2", "name": "Security"}
+        ]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig {
+                organization_id: Some("DevOps".to_string()),
+                ..Default::default()
+            });
+            let scope = provider.look_up_scope().unwrap();
+            assert_eq!(scope.organization_id.as_deref(), Some("org-1"));
+            let log = fake.invocations();
+            assert!(
+                log.contains("argv: <--nointeraction> <list> <organizations>"),
+                "{log}"
+            );
+            assert!(
+                log.contains("argv: <--nointeraction> <list> <collections>"),
+                "{log}"
+            );
+        });
+    }
+
+    #[test]
+    fn look_up_scope_fails_when_the_organization_is_not_visible() {
+        let fake = FakeBw::new().with_organizations(json!([]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig {
+                organization_id: Some("Missing".to_string()),
+                ..Default::default()
+            });
+            let err = provider.look_up_scope().unwrap_err();
+            assert!(err.contains("No organization matching 'Missing'"), "{err}");
+        });
+    }
+
+    #[test]
+    fn server_check_is_memoized_to_one_status_call_per_provider() {
+        // `ensure_server_configured` may run before every command, but the
+        // `bw status` behind it must happen once per process, not once per
+        // command.
+        let fake = FakeBw::new().with_status(json!({
+            "serverUrl": "https://vault.company.com", "status": "unlocked"
+        }));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig {
+                server: Some("https://vault.company.com".to_string()),
+                ..Default::default()
+            });
+            provider.ensure_server_configured().unwrap();
+            provider.ensure_server_configured().unwrap();
+            provider.ensure_server_configured().unwrap();
+            let status_calls = fake
+                .invocations()
+                .lines()
+                .filter(|line| line.contains("<status>"))
+                .count();
+            assert_eq!(status_calls, 1);
+        });
+    }
+
+    // -- get / set flows over the fake CLI --------------------------------
+
+    #[test]
+    fn get_answers_with_the_password_of_a_matching_login() {
+        // The read path: authenticate, narrow with bw's own search, match
+        // the name ourselves, and answer with the type's default field.
+        let fake = FakeBw::new().with_items(json!([{
+            "id": "it1", "name": "Vault", "type": 1,
+            "login": {"username": "alice", "password": "pw"}
+        }]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let value = provider.get_from_password_manager("Vault", None).unwrap();
+            assert_eq!(
+                value.map(|s| s.expose_secret().to_string()),
+                Some("pw".to_string())
+            );
+            let log = fake.invocations();
+            assert!(
+                log.contains("argv: <--nointeraction> <list> <items> <--search> <Vault>"),
+                "{log}"
+            );
+        });
+    }
+
+    #[test]
+    fn get_falls_back_from_an_empty_search_to_an_unfiltered_listing() {
+        // bw's own search is a fuzzy matcher that has been wrong; an empty
+        // search result must mean "the prefilter matched nothing", not "no
+        // such secret", so the read re-lists unfiltered. Here the shim's
+        // case-sensitive filter rejects "api_key" against "API_KEY" and the
+        // fall-back must still find the item by the provider's own
+        // case-insensitive name match.
+        let fake = FakeBw::new().with_items(json!([{
+            "id": "it1", "name": "API_KEY", "type": 1,
+            "login": {"password": "casefolded"}
+        }]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let value = provider.get_from_password_manager("api_key", None).unwrap();
+            assert_eq!(
+                value.map(|s| s.expose_secret().to_string()),
+                Some("casefolded".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn get_returns_none_for_an_absent_secret() {
+        // An empty vault answers Ok(None) — an absence, not an error.
+        let fake = FakeBw::new();
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            assert_eq!(
+                provider
+                    .get_from_password_manager("Vault", None)
+                    .unwrap()
+                    .map(|s| s.expose_secret().to_string()),
+                None
+            );
+        });
+    }
+
+    #[test]
+    fn get_reports_ambiguous_items_instead_of_answering() {
+        // Two items with the same name cannot be told apart by the address;
+        // answering either one could serve the wrong secret, so the read must
+        // fail and say how many.
+        let fake = FakeBw::new().with_items(json!([
+            {"id": "it1", "name": "Vault", "type": 1, "login": {"password": "a"}},
+            {"id": "it2", "name": "Vault", "type": 1, "login": {"password": "b"}}
+        ]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider
+                .get_from_password_manager("Vault", None)
+                .unwrap_err();
+            let msg = format!("{err}");
+            assert!(msg.contains("are named 'Vault'"), "{msg}");
+        });
+    }
+
+    #[test]
+    fn get_fails_closed_when_not_authenticated() {
+        // A locked vault must not be served as if the secret were absent:
+        // the read fails with an authentication error instead.
+        let fake = FakeBw::new().with_status(json!({
+            "serverUrl": null, "status": "locked", "authenticated": true
+        }));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider
+                .get_from_password_manager("Vault", None)
+                .unwrap_err();
+            assert!(
+                format!("{err}").contains("Bitwarden authentication required"),
+                "{err}"
+            );
+        });
+    }
+
+    #[test]
+    fn get_through_an_organization_sends_the_resolved_scope_filter() {
+        // An organization address resolves the name to a UUID once, then the
+        // item listing carries `--organizationid` so the CLI acts in that
+        // organization rather than the whole vault.
+        let fake = FakeBw::new()
+            .with_organizations(json!([{"id": "org-1", "name": "DevOps"}]))
+            .with_items(json!([{
+                "id": "it1", "name": "Vault", "type": 1,
+                "login": {"password": "pw"}, "organizationId": "org-1"
+            }]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig {
+                organization_id: Some("DevOps".to_string()),
+                ..Default::default()
+            });
+            let value = provider.get_from_password_manager("Vault", None).unwrap();
+            assert_eq!(
+                value.map(|s| s.expose_secret().to_string()),
+                Some("pw".to_string())
+            );
+            let log = fake.invocations();
+            assert!(
+                log.contains("<list> <items> <--search> <Vault> <--organizationid> <org-1>"),
+                "{log}"
+            );
+        });
+    }
+
+    #[test]
+    fn set_updates_an_existing_item_in_place() {
+        // A set against an existing item must fetch it, change the addressed
+        // field, and send the whole item back through `edit item` — never
+        // create a second item alongside it.
+        let fake = FakeBw::new().with_items(json!([{
+            "id": "it1", "name": "Vault", "type": 1,
+            "login": {"username": "alice", "password": "old"}
+        }]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            provider
+                .set_to_password_manager("Vault", None, &SecretString::new("new".into()))
+                .unwrap();
+        });
+        let log = fake.invocations();
+        assert!(
+            log.contains("argv: <--nointeraction> <get> <item> <it1>"),
+            "{log}"
+        );
+        assert!(
+            log.contains("argv: <--nointeraction> <edit> <item> <it1>"),
+            "{log}"
+        );
+        assert!(
+            !log.contains("<create>"),
+            "must not create a second item: {log}"
+        );
+        let sent = decode_stdin_line(&fake, "edit");
+        assert_eq!(sent["login"]["password"], "new");
+        assert_eq!(sent["login"]["username"], "alice");
+    }
+
+    #[test]
+    fn set_creates_a_new_item_when_none_matches() {
+        // A set against an empty vault must create a Login (the type
+        // default) with the value in the type's default field, so a later
+        // unqualified get finds it.
+        let fake = FakeBw::new();
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            provider
+                .set_to_password_manager("Vault", None, &SecretString::new("s3cret".into()))
+                .unwrap();
+        });
+        let log = fake.invocations();
+        assert!(
+            log.contains("argv: <--nointeraction> <create> <item>"),
+            "{log}"
+        );
+        let sent = decode_stdin_line(&fake, "create");
+        assert_eq!(sent["name"], "Vault");
+        assert_eq!(sent["type"], 1);
+        assert_eq!(sent["login"]["password"], "s3cret");
+    }
+
+    #[test]
+    fn set_with_an_explicit_field_writes_that_field() {
+        // `set --field username` updates the built-in login member, leaving
+        // the password alone: a write to one secret is never a write to
+        // another.
+        let fake = FakeBw::new().with_items(json!([{
+            "id": "it1", "name": "Vault", "type": 1,
+            "login": {"username": "old-user", "password": "pw"}
+        }]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            provider
+                .set_to_password_manager(
+                    "Vault",
+                    Some("username"),
+                    &SecretString::new("new-user".into()),
+                )
+                .unwrap();
+        });
+        let sent = decode_stdin_line(&fake, "edit");
+        assert_eq!(sent["login"]["username"], "new-user");
+        assert_eq!(sent["login"]["password"], "pw");
+    }
+
+    #[test]
+    fn set_fails_closed_when_not_authenticated() {
+        let fake = FakeBw::new().with_status(json!({
+            "serverUrl": null, "status": "locked", "authenticated": true
+        }));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider
+                .set_to_password_manager("Vault", None, &SecretString::new("x".into()))
+                .unwrap_err();
+            assert!(
+                format!("{err}").contains("Bitwarden authentication required"),
+                "{err}"
+            );
+        });
+    }
+
+    #[test]
+    fn create_new_item_builds_a_card_item_for_a_card_address() {
+        // A `?type=card` address creates a Card with the value in the card
+        // number slot, not a Login.
+        let fake = FakeBw::new();
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig {
+                default_item_type: Some(BitwardenItemType::Card),
+                ..Default::default()
+            });
+            provider
+                .create_new_item("NewCard", None, "4111 1111 1111 1111")
+                .unwrap();
+        });
+        let sent = decode_stdin_line(&fake, "create");
+        assert_eq!(sent["name"], "NewCard");
+        assert_eq!(sent["type"], 3);
+        assert_eq!(sent["card"]["number"], "4111 1111 1111 1111");
+    }
+
+    /// Decodes the single base64 JSON payload the fake `bw` logged on stdin
+    /// for the given command (`create` or `edit`), for tests that assert what
+    /// the provider actually sent.
+    fn decode_stdin_line(fake: &FakeBw, command: &str) -> serde_json::Value {
+        use base64::{Engine as _, engine::general_purpose};
+        let log = fake.invocations();
+        let cmd_line = log
+            .lines()
+            .find(|line| line.contains(&format!("<{command}> <item>")))
+            .unwrap_or_else(|| panic!("no {command} invocation in log:\n{log}"));
+        // The stdin line immediately follows the command's argv line.
+        let stdin_line = log
+            .lines()
+            .skip_while(|line| *line != cmd_line)
+            .nth(1)
+            .and_then(|line| line.strip_prefix(" stdin="))
+            .unwrap_or_else(|| panic!("no stdin recorded for {command}:\n{log}"));
+        let bytes = general_purpose::STANDARD
+            .decode(stdin_line)
+            .expect("stdin must be base64");
+        serde_json::from_slice(&bytes).expect("stdin must decode as an item")
+    }
+
+    // -- last error paths and trait wrappers -------------------------------
+
+    #[test]
+    fn create_item_from_template_reports_a_missing_cli() {
+        // The creation spawn carries its own NotFound handling with install
+        // instructions, separate from `execute_bw_command`'s.
+        with_no_bw(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider
+                .create_item_from_template(&json!({ "name": "Vault" }))
+                .unwrap_err();
+            assert!(
+                format!("{err}").contains("Bitwarden CLI (bw) is not installed"),
+                "{err}"
+            );
+        });
+    }
+
+    #[test]
+    fn update_item_with_json_reports_a_missing_cli() {
+        with_no_bw(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider
+                .update_item_with_json("it1", &json!({ "id": "it1" }))
+                .unwrap_err();
+            assert!(
+                format!("{err}").contains("Bitwarden CLI (bw) is not installed"),
+                "{err}"
+            );
+        });
+    }
+
+    #[test]
+    fn look_up_scope_reports_an_organizations_listing_failure() {
+        // A failed `bw list organizations` is surfaced with its own context
+        // so the operator knows which call failed.
+        let fake = FakeBw::new().with_failure(1, "", "boom");
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig {
+                organization_id: Some("DevOps".to_string()),
+                ..Default::default()
+            });
+            let err = provider.look_up_scope().unwrap_err();
+            assert!(
+                err.contains("could not list Bitwarden organizations"),
+                "{err}"
+            );
+        });
+    }
+
+    #[test]
+    fn look_up_scope_reports_a_collections_listing_failure() {
+        // Only the collections listing fails here; the organizations listing
+        // must still succeed, or its own earlier error would shadow this one.
+        let fake = FakeBw::new().with_failure_on(1, "", "boom", "collections");
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig {
+                organization_id: Some("DevOps".to_string()),
+                ..Default::default()
+            });
+            let err = provider.look_up_scope().unwrap_err();
+            assert!(
+                err.contains("could not list Bitwarden collections"),
+                "{err}"
+            );
+        });
+    }
+
+    #[test]
+    fn provider_get_resolves_a_convention_address() {
+        // The Provider trait entry point maps the convention address onto
+        // the item name and delegates to the password-manager read.
+        let fake = FakeBw::new().with_items(json!([{
+            "id": "it1", "name": "Vault", "type": 1,
+            "login": {"password": "pw"}
+        }]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let addr = Address::convention("myapp", "production", "Vault");
+            let value = provider.get(addr).unwrap();
+            assert_eq!(
+                value.map(|s| s.expose_secret().to_string()),
+                Some("pw".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn provider_get_resolves_a_native_address_with_a_field() {
+        // A native `ref` can name the item *and* a field coordinate, which
+        // the convention scheme has no room for.
+        let fake = FakeBw::new().with_items(json!([{
+            "id": "it1", "name": "Vault", "type": 1,
+            "login": {"username": "alice", "password": "pw"}
+        }]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let native = crate::config::NativeAddress {
+                item: "Vault".to_string(),
+                field: Some("username".to_string()),
+                ..Default::default()
+            };
+            let value = provider.get(Address::Native(&native)).unwrap();
+            assert_eq!(
+                value.map(|s| s.expose_secret().to_string()),
+                Some("alice".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn provider_set_resolves_a_convention_address() {
+        let fake = FakeBw::new(); // empty vault: the write must create
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let addr = Address::convention("myapp", "production", "Vault");
+            provider
+                .set(addr, &SecretString::new("s3cret".into()))
+                .unwrap();
+        });
+        assert!(
+            fake.invocations()
+                .contains("argv: <--nointeraction> <create> <item>"),
+            "{}",
+            fake.invocations()
+        );
+    }
+
+    #[test]
+    fn create_new_item_with_an_explicit_field_writes_that_field() {
+        // A named field on creation is resolved the same way as on update:
+        // a login created with `--field username` stores the value in the
+        // login member, not in a custom field.
+        let fake = FakeBw::new();
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            provider
+                .create_new_item("New", Some("username"), "alice")
+                .unwrap();
+        });
+        let sent = decode_stdin_line(&fake, "create");
+        assert_eq!(sent["login"]["username"], "alice");
+    }
+
+    #[test]
+    fn get_returns_secure_note_body_when_no_value_field_exists() {
+        // A secure note's body is where the updater writes, so an unqualified
+        // read falls back to it only after the legacy "value" custom field;
+        // naming the body explicitly reads it directly.
+        let fake = FakeBw::new().with_items(json!([{
+            "id": "n1", "name": "Note", "type": 2, "notes": "body", "fields": []
+        }]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let unqualified = provider.get_from_password_manager("Note", None).unwrap();
+            assert_eq!(
+                unqualified.map(|s| s.expose_secret().to_string()),
+                Some("body".to_string())
+            );
+            let named = provider
+                .get_from_password_manager("Note", Some("notes"))
+                .unwrap();
+            assert_eq!(
+                named.map(|s| s.expose_secret().to_string()),
+                Some("body".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn an_item_with_an_unknown_type_fails_to_parse() {
+        // A listing `bw` could never produce must not deserialize into a
+        // defaulted item: the parse fails and the read reports it.
+        let fake = FakeBw::new().with_items(json!([{
+            "id": "x", "name": "Bad", "type": 99
+        }]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider.get_from_password_manager("Bad", None).unwrap_err();
+            assert!(format!("{err}").contains("Unknown item type"), "{err}");
+        });
+    }
+
+    #[test]
+    fn an_item_with_an_unknown_field_type_fails_to_parse() {
+        let fake = FakeBw::new().with_items(json!([{
+            "id": "x", "name": "Bad", "type": 1,
+            "login": {"password": "pw"},
+            "fields": [{"name": "f", "value": "v", "type": 99}]
+        }]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider.get_from_password_manager("Bad", None).unwrap_err();
+            assert!(format!("{err}").contains("Unknown field type"), "{err}");
+        });
+    }
+
+    #[test]
+    fn from_value_rejects_an_unknown_item_type() {
+        // The `Value` deserializer instantiation (used when an item is built
+        // from already-parsed JSON) enforces the same bounds as the listing
+        // parser.
+        let err = serde_json::from_value::<BitwardenItem>(json!({ "type": 99 })).unwrap_err();
+        assert!(err.to_string().contains("Unknown item type"), "{err}");
+    }
+
+    #[test]
+    fn from_value_rejects_an_unknown_field_type() {
+        let err = serde_json::from_value::<BitwardenItem>(json!({
+            "type": 1, "fields": [{"name": "f", "type": 99}]
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("Unknown field type"), "{err}");
+    }
+
+    #[test]
+    fn look_up_scope_keeps_a_collection_without_an_organization() {
+        // A collection whose fixture omits `organizationId` resolves with the
+        // organization slot left empty (no org was addressed to inherit one).
+        let fake = FakeBw::new().with_collections(json!([{
+            "id": "col-1", "name": "dev"
+        }]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig {
+                collection_id: Some("dev".to_string()),
+                ..Default::default()
+            });
+            let scope = provider.look_up_scope().unwrap();
+            assert_eq!(scope.organization_id, None);
+            assert_eq!(scope.collection_id.as_deref(), Some("col-1"));
+        });
+    }
+
     // -- login items --------------------------------------------------------
 
     #[test]

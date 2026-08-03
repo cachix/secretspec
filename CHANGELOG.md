@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clear authentication failure on `get`/`set`, with the same "run `bw login`
   and `bw unlock`, then set `BW_SESSION`" guidance in both cases, instead of
   surfacing the underlying CLI error text.
+- The Bitwarden provider now reports a missing `bw` CLI with install
+  instructions instead of an authentication error: a machine without the CLI
+  is not an authentication state, and the install guidance ("…run 'bw login'
+  and 'bw unlock' to authenticate") used to match the not-authenticated
+  classifier and mask the real problem.
 
 ### Added
 - Vault and OpenBao AppRole and JWT authentication can target non-default auth

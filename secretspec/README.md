@@ -1,9 +1,13 @@
-[![Build Status](https://img.shields.io/github/check-runs/cachix/secretspec/main)](https://github.com/cachix/secretspec/actions)
-[![Crates.io](https://img.shields.io/crates/v/secretspec)](https://crates.io/crates/secretspec)
-[![docs.rs](https://docs.rs/secretspec/badge.svg)](https://docs.rs/secretspec)
-[![Discord channel](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Finvites%2FnaMgvexb6q%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&logo=discord&logoColor=white&label=Discord%20users&color=green&style=flat)](https://discord.gg/naMgvexb6q)
+<p align="center">
+  <img src="secretspec.png" alt="SecretSpec logo" width="420">
+</p>
 
-# SecretSpec
+<p align="center">
+  <a href="https://github.com/cachix/secretspec/actions"><img src="https://img.shields.io/github/check-runs/cachix/secretspec/main" alt="Build Status"></a>
+  <a href="https://crates.io/crates/secretspec"><img src="https://img.shields.io/crates/v/secretspec" alt="Crates.io"></a>
+  <a href="https://docs.rs/secretspec"><img src="https://docs.rs/secretspec/badge.svg" alt="docs.rs"></a>
+  <a href="https://discord.gg/naMgvexb6q"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Finvites%2FnaMgvexb6q%3Fwith_counts%3Dtrue&amp;query=%24.approximate_member_count&amp;logo=discord&amp;logoColor=white&amp;label=Discord%20users&amp;color=green&amp;style=flat" alt="Discord users"></a>
+</p>
 
 Stop committing secrets to git and putting them to .env files.
 

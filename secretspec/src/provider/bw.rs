@@ -4498,4 +4498,137 @@ mod tests {
         assert!(listing.contains("Available organizations:"), "{listing}");
         assert!(listing.contains("Acme Inc (o1)"), "{listing}");
     }
+
+    // -- remaining pure-path gaps (issue #5, survey pass) -------------------
+
+    #[test]
+    fn reading_password_explicitly_returns_the_login_password() {
+        // The explicit "password" selector is a real coordinate, not just the
+        // unqualified default: it must answer with the password.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "l5", "name": "Vault", "type": 1,
+            "login": { "username": "alice", "password": "pw" }
+        }));
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "password").as_deref(),
+            Some("pw")
+        );
+    }
+
+    #[test]
+    fn a_login_with_neither_password_nor_username_falls_back_to_custom_fields() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "l6", "name": "Vault", "type": 1,
+            "login": { "username": null, "password": null },
+            "fields": [ { "name": "value", "value": "legacy", "type": 0 } ]
+        }));
+        assert_eq!(
+            read_without_naming_a_field(&provider, &item).as_deref(),
+            Some("legacy"),
+        );
+    }
+
+    #[test]
+    fn an_item_type_without_its_data_object_falls_back_to_custom_fields() {
+        // A login/card/identity/ssh item whose data sub-object is absent: the
+        // unqualified read still answers from the legacy "value" field.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        for (item_type, id) in [
+            (BitwardenItemType::Login, "no-login"),
+            (BitwardenItemType::Card, "no-card"),
+            (BitwardenItemType::Identity, "no-identity"),
+            (BitwardenItemType::SshKey, "no-ssh"),
+        ] {
+            let item = item_from(json!({
+                "id": id, "name": "Bare", "type": item_type.to_u8(),
+                "fields": [ { "name": "value", "value": "legacy", "type": 0 } ]
+            }));
+            assert_eq!(
+                read_without_naming_a_field(&provider, &item).as_deref(),
+                Some("legacy"),
+                "{item_type:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_non_builtin_card_field_reads_a_custom_field_or_nothing() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "c5", "name": "Card", "type": 3,
+            "card": { "cardholderName": "Ada", "number": "4242" },
+            "fields": [ { "name": "api_token", "value": "tok-1", "type": 0 } ]
+        }));
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "api_token").as_deref(),
+            Some("tok-1")
+        );
+        assert_eq!(read_naming_a_field(&provider, &item, "missing"), None);
+    }
+
+    #[test]
+    fn a_non_builtin_identity_field_reads_a_custom_field_or_nothing() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "i4", "name": "Person", "type": 4,
+            "identity": { "firstName": "Ada", "email": "ada@example.test" },
+            "fields": [ { "name": "employee_id", "value": "EMP001", "type": 0 } ]
+        }));
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "employee_id").as_deref(),
+            Some("EMP001"),
+        );
+        assert_eq!(read_naming_a_field(&provider, &item, "missing"), None);
+    }
+
+    #[test]
+    fn a_non_builtin_ssh_field_reads_a_custom_field_or_nothing() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "s3", "name": "Key", "type": 5,
+            "sshKey": { "privateKey": "PRIV", "publicKey": "PUB" },
+            "fields": [ { "name": "passphrase", "value": "secret", "type": 0 } ]
+        }));
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "passphrase").as_deref(),
+            Some("secret"),
+        );
+        assert_eq!(read_naming_a_field(&provider, &item, "missing"), None);
+    }
+
+    #[test]
+    fn an_identity_without_an_email_defaults_to_the_username() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "i5", "name": "Person", "type": 4,
+            "identity": { "firstName": "Ada", "email": null, "username": "ada" }
+        }));
+        assert_eq!(
+            read_without_naming_a_field(&provider, &item).as_deref(),
+            Some("ada")
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_organization_name_is_reported_with_a_remedy() {
+        // Two organizations sharing a name cannot be resolved by name; the
+        // error must say so and point at the UUID rather than silently pick one.
+        let orgs = vec![
+            BitwardenNamedObject {
+                id: "o1".to_string(),
+                name: "Acme Inc".to_string(),
+                organization_id: None,
+            },
+            BitwardenNamedObject {
+                id: "o2".to_string(),
+                name: "Acme Inc".to_string(),
+                organization_id: None,
+            },
+        ];
+        let err = resolve_organization(&orgs, "Acme Inc").expect_err("duplicate name");
+        assert!(err.contains("ambiguous"), "{err}");
+        assert!(err.contains("UUID"), "{err}");
+    }
 }

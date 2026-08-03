@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any destination is written.
 
 ### Added
+- The dotenv provider accepts a leading `~` in custom paths, such as
+  `dotenv:~/.config/my-project/.env`, and resolves it to the user's home
+  directory.
 - Vault and OpenBao AppRole and JWT authentication can target non-default auth
   method mounts, including printable Unicode mount names, with the `auth_mount`
   provider URI option.

@@ -42,7 +42,13 @@ dotenv
 dotenv:.env.local
 dotenv:config/.env
 dotenv:/absolute/path/.env
+
+# Home-relative path (0.18+)
+dotenv:~/.config/my-project/.env
 ```
+
+Starting in SecretSpec 0.18, a leading `~` path component expands to the
+current user's home directory.
 
 ### Environment variable
 

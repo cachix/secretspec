@@ -1172,10 +1172,10 @@ pub(crate) fn cache_dir() -> Option<PathBuf> {
 }
 
 /// Expands a leading `~` (or `~/`) in a configured path to the user's home
-/// directory. A documented `path = "~/.local/state/..."` would otherwise become
-/// a literal `./~` directory. Paths without a leading `~`, or paths that cannot
+/// directory. A configured `~/.local/...` path would otherwise become a
+/// literal `./~` directory. Paths without a leading `~`, or paths that cannot
 /// be resolved to a home directory, are returned unchanged.
-fn expand_tilde(path: PathBuf) -> PathBuf {
+pub(crate) fn expand_tilde(path: PathBuf) -> PathBuf {
     let Ok(rest) = path.strip_prefix("~") else {
         return path;
     };

@@ -1,4 +1,5 @@
 use super::{Address, DiscoveryContext, Provider, ProviderUrl};
+use crate::config::expand_tilde;
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -102,7 +103,8 @@ pub struct DotEnvConfig {
     /// Path to the .env file.
     ///
     /// Can be either an absolute path (e.g., `/etc/secrets/.env`)
-    /// or a relative path (e.g., `.env`, `config/.env.local`).
+    /// or a relative path (e.g., `.env`, `config/.env.local`). Starting in
+    /// SecretSpec 0.18, a leading `~` resolves to the user's home directory.
     pub path: PathBuf,
 }
 
@@ -130,6 +132,7 @@ impl TryFrom<&ProviderUrl> for DotEnvConfig {
     ///
     /// - `dotenv:///absolute/path` - Absolute path
     /// - `dotenv://.env` - Relative path (authority as filename)
+    /// - `dotenv://~/.config/project/.env` - Home-relative path (0.18+)
     /// - `dotenv://` - Uses default `.env` in current directory
     fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
         if url.scheme() != "dotenv" {
@@ -208,7 +211,8 @@ impl DotEnvProvider {
     /// let config = DotEnvConfig::default();
     /// let provider = DotEnvProvider::new(config);
     /// ```
-    pub fn new(config: DotEnvConfig) -> Self {
+    pub fn new(mut config: DotEnvConfig) -> Self {
+        config.path = expand_tilde(config.path);
         Self { config }
     }
 }
@@ -485,6 +489,27 @@ mod tests {
         });
         provider.with_base_dir(base);
         assert_eq!(provider.config.path, absolute);
+    }
+
+    #[test]
+    fn test_home_relative_provider_paths_expand_before_rebasing() {
+        let Some(home) = etcetera::home_dir()
+            .ok()
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        else {
+            return;
+        };
+        let expected = home.join(".config/project/.env");
+
+        // Cover both the shorthand reported in #226 and its full URI form.
+        for spec in [
+            "dotenv:~/.config/project/.env",
+            "dotenv://~/.config/project/.env",
+        ] {
+            let mut provider = Box::<dyn Provider>::try_from(spec).unwrap();
+            provider.with_base_dir(std::path::Path::new("/project/root"));
+            assert_eq!(provider.physical_store_path(), Some(expected.as_path()));
+        }
     }
 
     #[test]

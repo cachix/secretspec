@@ -17,6 +17,7 @@ the link for the individual provider.
 dotenv://                    # Uses default .env
 dotenv:///config/.env        # Custom path
 dotenv://config/.env         # Relative path
+dotenv://~/.config/app/.env  # Home-relative path (0.18+)
 ```
 
 **Features**: Read/write, profiles, human-readable, no encryption

@@ -292,7 +292,7 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
               badge: { text: "0.17+", variant: "note" },
             },
             {
-              label: "SOPS (0.17+)",
+              label: "SOPS",
               slug: "providers/sops",
               badge: { text: "0.17+", variant: "note" },
             },

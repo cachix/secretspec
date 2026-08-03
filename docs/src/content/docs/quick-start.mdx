@@ -158,6 +158,14 @@ Enter value for DATABASE_URL: postgresql://localhost/myapp
 ✓ Secret DATABASE_URL saved
 ```
 
+SecretSpec 0.18+ can also declare a new secret without hand-editing
+the manifest, then store its value:
+
+```bash
+$ secretspec add API_KEY --description "API access token" # 0.18+
+$ secretspec set API_KEY
+```
+
 ## 5. Run your application
 
 Run your application with secrets injected as environment variables:

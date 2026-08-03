@@ -266,6 +266,7 @@ secretspec config global init    # Set up user defaults (0.17+)
 
 # Manage secrets
 secretspec check                  # Verify all secrets are set
+secretspec add KEY --description "Purpose" # Declare a secret (0.18+)
 secretspec set KEY               # Set a secret interactively
 secretspec get KEY               # Retrieve a secret
 secretspec import PROVIDER       # Import secrets from another provider

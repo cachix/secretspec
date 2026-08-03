@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Vault and OpenBao AppRole and JWT authentication can target non-default auth
   method mounts, including printable Unicode mount names, with the `auth_mount`
   provider URI option.
+- `secretspec add NAME --description "..."` (available in 0.18) adds a secret
+  declaration to the active profile while preserving the manifest's
+  existing comments, formatting, and unrelated configuration.
 - Swift SDK (available in 0.18) for resolving SecretSpec manifests from macOS
   12+ on Intel and Apple silicon. The SwiftPM package provides fluent and
   one-shot resolution, typed failures, scopes, value-free reports, provenance,

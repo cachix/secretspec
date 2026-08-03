@@ -173,14 +173,13 @@ raw_dirs_for() {
   case "$1" in
     unit)                       echo "$RAW_DIR/unit" ;;
     unit+integration)           echo "$RAW_DIR/unit $RAW_DIR/suite-integration" ;;
-    unit+integration+collection) echo "$RAW_DIR/unit $RAW_DIR/suite-integration $RAW_DIR/suite-collection" ;;
     unit+all)                   echo "$RAW_DIR/unit $RAW_DIR/suite-integration $RAW_DIR/suite-collection $RAW_DIR/suite-regressions" ;;
   esac
 }
 
 cmd_merge() {
   mkdir -p "$MERGED_DIR"
-  for scenario in unit unit+integration unit+integration+collection unit+all; do
+  for scenario in unit unit+integration unit+all; do
     local dirs; dirs=$(raw_dirs_for "$scenario")
     local profs=()
     for d in $dirs; do [ -d "$d" ] && profs+=("$d"/*.profraw); done
@@ -219,7 +218,7 @@ cmd_report() {
   mkdir -p "$REPORT_DIR"
   local src_args=()
   for s in "${SOURCES[@]}"; do src_args+=(-sources "$s"); done
-  for scenario in unit unit+integration unit+integration+collection unit+all; do
+  for scenario in unit unit+integration unit+all; do
     [ -f "$MERGED_DIR/$scenario.profdata" ] || { say "no merged profile for $scenario"; continue; }
     "$LLVM_COV" report \
       --instr-profile="$MERGED_DIR/$scenario.profdata" \
@@ -334,9 +333,9 @@ cmd_history() {
       echo
       echo "Measured with \`scripts/coverage-bitwarden.sh\` (run inside \`devenv shell\`)."
       echo "Scenario meaning: \`unit\` = bw.rs in-file tests + the bw URI tests in"
-      echo "provider/tests.rs; \`integration\` = tests/bitwarden_integration.sh;";
-      echo "\`collection\` = tests/bitwarden_collection_addressing.sh; \`regressions\` ="
-      echo "tests/bitwarden_regression_findings.sh (all driven by the vaultwarden harness)."
+      echo "provider/tests.rs; \`unit+integration\` adds tests/bitwarden_integration.sh;";
+      echo "\`unit+all\` adds the collection-addressing and regression-finding suites"
+      echo "(all driven by the vaultwarden harness)."
       echo
     } > "$HISTORY_FILE"
   fi
@@ -355,7 +354,7 @@ cmd_history() {
     echo "|---|---|---|---|---|"
     # report columns: 1=Filename 2=Regions 3=Missed 4=Cover% 5=Functions 6=Missed 7=Executed%
     #                 8=Lines 9=Missed 10=Cover% 11=Branches 12=Missed 13=Cover%
-    for scenario in unit unit+integration unit+integration+collection unit+all; do
+    for scenario in unit unit+integration unit+all; do
       [ -f "$REPORT_DIR/report-$scenario.txt" ] || continue
       awk -v sc="$scenario" \
         '$1 ~ /^(bw|mod|tests)\.rs$/ {

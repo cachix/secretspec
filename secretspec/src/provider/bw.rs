@@ -1442,12 +1442,18 @@ impl BitwardenProvider {
                 // both the raw phrases and the rewrites are matched. The
                 // comparisons are case-insensitive: the rewrites spell the
                 // locked vault in lowercase ("Bitwarden vault is locked…").
+                // Only the phrases that uniquely describe those two states
+                // match: a missing CLI's install instructions also contain
+                // "bw login" and "bw unlock" ("…run 'bw login' and 'bw
+                // unlock' to authenticate"), and folding that error into
+                // "not authenticated" would make a machine without bw
+                // report a bogus login prompt instead of the install error.
                 if {
                     let lower = msg.to_lowercase();
                     lower.contains("you are not logged in")
-                        || lower.contains("bw login")
                         || lower.contains("vault is locked")
-                        || lower.contains("bw unlock")
+                        || lower.contains("please run 'bw login'")
+                        || lower.contains("please run 'bw unlock'")
                 } =>
             {
                 Ok(false)
@@ -4514,8 +4520,23 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn is_authenticated_reports_a_missing_cli() {
+        // A missing `bw` is not a known auth state: it must propagate as the
+        // install error, not masquerade as "not authenticated" (the install
+        // instructions contain "bw login"/"bw unlock", which used to match
+        // the auth-state guard).
+        with_no_bw(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider.is_authenticated().unwrap_err();
+            assert!(format!("{err}").contains("is not installed"), "{err}");
+        });
+    }
+
     // -- get / create over the fake CLI -----------------------------------
 
+    #[cfg(unix)]
     #[test]
     fn get_item_as_template_answers_with_the_named_item() {
         let fake = FakeBw::new().with_items(json!([

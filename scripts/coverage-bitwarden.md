@@ -39,3 +39,33 @@ tests/bitwarden_regression_findings.sh (all driven by the vaultwarden harness).
 | `secretspec/src/provider/mod.rs` | 0 (declarations/doc only) | — | n/a |
 - bw.rs is entirely added by this PR: whole-file numbers in the table above apply.
 - raw reports: `/Users/ashebanow/Development/nix/secretspec/main.bitwarden-provider/target/coverage/reports`
+
+## Run 2026-08-03 (44881e6)
+
+- toolchain: rustc 1.92.0 (ded5c06cf 2025-12-08), bw 2025.11.0, suites run: suite-collection,suite-integration,suite-regressions,unit
+- branch coverage: stable rustc `-C instrument-coverage` does not emit branch
+  mappings; the regions column is llvm-cov's decision-point metric (closest
+  stable proxy). True branch coverage would need nightly `-Z coverage-options=branch`.
+
+### Whole-file coverage (functions / lines / regions)
+
+| scenario | file | functions | lines | regions |
+|---|---|---|---|---|
+| unit | bw.rs | 97.80% | 95.50% | 94.35% |
+| unit | mod.rs | 13.19% | 15.69% | 15.10% |
+| unit | tests.rs | 2.63% | 1.75% | 2.35% |
+| unit+integration | bw.rs | 97.80% | 95.70% | 94.98% |
+| unit+integration | mod.rs | 15.28% | 16.55% | 15.94% |
+| unit+integration | tests.rs | 2.63% | 1.75% | 2.35% |
+| unit+all | bw.rs | 97.80% | 95.79% | 95.25% |
+| unit+all | mod.rs | 15.28% | 16.55% | 15.94% |
+| unit+all | tests.rs | 2.63% | 1.75% | 2.35% |
+
+### PR-added lines executed (unit+all profile, added vs upstream/main)
+
+| file | added instrumented lines | executed | % |
+|---|---|---|---|
+| `secretspec/src/provider/tests.rs` | 21 | 21 | 100.0% |
+| `secretspec/src/provider/mod.rs` | 0 (declarations/doc only) | — | n/a |
+- bw.rs is entirely added by this PR: whole-file numbers in the table above apply.
+- raw reports: `/Users/ashebanow/Development/nix/secretspec/main.bitwarden-provider/target/coverage/reports`

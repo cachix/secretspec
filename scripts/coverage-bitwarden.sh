@@ -121,6 +121,10 @@ cmd_build() {
 
 cmd_unit() {
   say "== unit: bw.rs tests + bw URI tests (raw -> $RAW_DIR/unit) =="
+  # Self-contained: drop profraws from earlier builds so a rebuilt binary is
+  # never merged against counters from a previous one (they would be dropped
+  # as mismatched, understating coverage).
+  rm -rf "$RAW_DIR/unit"
   mkdir -p "$RAW_DIR/unit"
   local pf="$RAW_DIR/unit/unit-%p-%m.profraw"
   # 'provider::bw::' (trailing ::) matches bw.rs's tests but not bws.rs's.
@@ -141,6 +145,8 @@ cmd_suite() {
   local name="$1"; shift
   local extra=("$@")
   say "== suite: $name =="
+  # See cmd_unit: keep each suite's raw dir tied to the current build.
+  rm -rf "$RAW_DIR/suite-$name"
   mkdir -p "$RAW_DIR/suite-$name"
   local rc=0
   env "${extra[@]}" \
@@ -195,8 +201,20 @@ cmd_merge() {
 # -- report ----------------------------------------------------------------
 
 find_test_bin() {
-  ls "$BUILD_DIR/debug/deps"/secretspec-* 2>/dev/null \
-    | grep -E '/secretspec-[0-9a-f]+$' | head -1 || true
+  # The deps directory accumulates incremental-compilation artifacts —
+  # thousands of *.rcgu.o files — that a `secretspec-*` glob expands to,
+  # blowing past ARG_MAX and making `ls` fail (hidden by 2>/dev/null). It
+  # also holds several plausible `secretspec-<hash>` test binaries; the one
+  # that produced the current profraws is the newest, so pick by mtime.
+  # Python keeps this portable between BSD and GNU stat and globs the
+  # directory without ARG_MAX.
+  python3 -c '
+import glob, os, sys
+pattern = sys.argv[1] + "/secretspec-*"
+cands = [p for p in glob.glob(pattern) if os.path.isfile(p) and os.access(p, os.X_OK)]
+cands.sort(key=os.path.getmtime, reverse=True)
+print(cands[0] if cands else "")
+' "$BUILD_DIR/debug/deps"
 }
 
 BRANCH_FLAG=""

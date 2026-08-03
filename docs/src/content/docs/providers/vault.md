@@ -47,7 +47,8 @@ $ export VAULT_TOKEN=hvs.your-token-here
 
 ### AppRole authentication
 
-Select AppRole with `?auth=approle` and provide both environment variables:
+Select AppRole with `?auth=approle`. Vault roles bind a SecretID by default, so
+the usual configuration provides both environment variables:
 
 ```bash
 $ export VAULT_ROLE_ID=your-role-id
@@ -67,6 +68,17 @@ secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "vault-a
 ```
 
 SecretSpec 0.14 supports only `VAULT_ROLE_ID` and `VAULT_SECRET_ID`.
+
+:::note[Version compatibility]
+Starting with SecretSpec 0.18, `VAULT_SECRET_ID` or the `secret_id` provider
+credential may be omitted when the AppRole is configured with
+`bind_secret_id=false`. SecretSpec then sends only `role_id` and lets Vault
+apply the role's remaining login constraints.
+:::
+
+Disabling SecretID binding removes AppRole's usual second credential. Keep the
+server default unless the workload deliberately relies on another trust
+boundary, such as a tightly controlled Agent host and network constraints.
 
 ### Custom authentication mounts (0.18+)
 

@@ -251,13 +251,16 @@ awssm://                      # SDK default region and credentials
 The `awsps` provider is added in SecretSpec 0.18.
 :::
 
-**URI**: `awsps://[profile@]REGION[?prefix=PATH&kms_key_id=KEY&tier=TIER]` -
-Stores secrets as encrypted AWS Systems Manager Parameter Store values
+**URI (0.18+)**:
+`awsps://[profile@]REGION[?prefix=PATH&template=TEMPLATE&kms_key_id=KEY&tier=TIER]`
+- Stores secrets as encrypted AWS Systems Manager Parameter Store values;
+  `prefix` and `template` are mutually exclusive.
 
 ```bash
 awsps://us-east-1                                  # Specific AWS region
 awsps://production@us-east-1                       # AWS profile and region
 awsps://us-east-1?prefix=/team                     # Additional hierarchy
+awsps://us-east-1?template=/{profile}/{project}/{key} # Replace the hierarchy
 awsps://us-east-1?kms_key_id=alias/key&tier=advanced
 awsps://                                           # SDK defaults
 ```
@@ -269,9 +272,10 @@ read-only
 **Prerequisites (0.18+)**: AWS credentials configured, build with
 `--features awsps`
 **Storage (0.18+)**: Parameter
-`[/prefix]/secretspec/{project}/{profile}/{key}`; `kms_key_id` selects a
-customer-managed key, while `tier` accepts `standard`, `advanced`, or
-`intelligent-tiering`
+`[/prefix]/secretspec/{project}/{profile}/{key}`. `template` replaces the
+complete layout and must end in `/{key}`; `kms_key_id` selects a customer-managed
+key, while `tier` accepts `standard`, `advanced`, or `intelligent-tiering`
+**Discovery (0.18+)**: Bounded declaration discovery through `init --from`
 
 ## Scaleway Secret Manager Provider (0.17+)
 
@@ -368,7 +372,7 @@ parameter, is rejected when the address is parsed rather than ignored.
 configure the CLI themselves and SecretSpec verifies the setting matches before
 each operation. See the [provider guide](/providers/bw/#self-hosted-servers).
 
-**Features**: Read/write, all vault item types (logins, cards, identities, SSH keys, secure notes), organization/collection addressing by name or ID, field selection, `ref = { item, field }` mapping in `secretspec.toml`
+**Features**: Read/write, all vault item types (logins, cards, identities, SSH keys, secure notes), organization/collection addressing by name or ID, field selection, `ref = { item, field }` mapping in `secretspec.toml`, declaration discovery through `init --from` (0.18+)
 **Prerequisites**: Bitwarden CLI (`bw`), signed in and unlocked (`BW_SESSION` env var), self-hosted servers set with `bw config server` before login, build with `--features bw`
 **Storage**: One vault item per secret; reads use per-type default fields unless `?field=` or a `ref` mapping selects one
 

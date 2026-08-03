@@ -21,19 +21,45 @@ $ secretspec run --reason "Deploying web frontend" -- ./deploy.sh
 ## Commands
 
 ### init
-Initialize a new `secretspec.toml` configuration file from an existing .env file.
+Initialize a new `secretspec.toml` from declarations discovered in a provider.
+Dotenv files are supported in every current release. SecretSpec 0.18+ accepts
+any provider that implements reflection, including age files, AWS Parameter
+Store, and Bitwarden Password Manager vaults.
 
 ```bash
-secretspec init [OPTIONS]
+secretspec init [--from <PROVIDER>] [--project <PROJECT>] [--profile <PROFILE>]
 ```
 
 **Options:**
-- `--from <PATH>` - Path to .env file to import from (default: `.env`)
 
-**Example:**
+- `--from <PROVIDER>` - Provider URI to discover (default: `dotenv://.env`);
+  use a `dotenv://` URI for dotenv files
+- `--project <PROJECT>` - Project used to render the provider namespace
+  (SecretSpec 0.18+; default: current directory name)
+- `-P, --profile <PROFILE>` - Profile used to render the provider namespace
+  and written to the manifest (SecretSpec 0.18+; default: `default`)
+
+Reflection creates declarations only: values are never written to the
+manifest. Configure the discovered provider as the profile's source to keep
+using it, or run `secretspec import` afterward to copy the declared values to a
+different destination.
+
+**Examples:**
+
 ```bash
-$ secretspec init --from .env.example
+$ secretspec init --from dotenv://.env.example
 ✓ Created secretspec.toml with 5 secrets
+
+# SecretSpec 0.18+: discover one rendered Parameter Store hierarchy
+$ secretspec init \
+    --from 'awsps://us-east-1?template=/{profile}/{project}/{key}' \
+    --project payments \
+    --profile production
+✓ Created secretspec.toml with 12 secrets
+
+# SecretSpec 0.18+: discover items in one Bitwarden collection
+$ secretspec init --from 'bw://dev-secrets?type=login'
+✓ Created secretspec.toml with 8 secrets
 ```
 
 ### config global init

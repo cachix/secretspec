@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The keyring provider now uses keyring 4's Rust-native Secret Service
   transport on Linux, so source builds and binaries no longer require system
   libdbus.
+- `secretspec init --from` now accepts every provider with declaration
+  reflection, including age, AWS Parameter Store, and Bitwarden Password
+  Manager, and accepts `--project` and `--profile` as explicit discovery
+  context for hierarchical stores.
+- Custom Rust providers now pass discovery context to the
+  `Provider::reflect` hook so hierarchical stores can select the project and
+  profile namespace.
 
 ### Fixed
 - The Bitwarden provider now treats a locked vault or a missing session as a
@@ -36,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `secretspec add NAME --description "..."` (available in 0.18) adds a secret
   declaration to the active profile while preserving the manifest's
   existing comments, formatting, and unrelated configuration.
+- AWS Parameter Store convention templates and bounded `GetParametersByPath`
+  discovery can create declarations from the direct children of an existing
+  hierarchy without decrypting their values.
 - Swift SDK (available in 0.18) for resolving SecretSpec manifests from macOS
   12+ on Intel and Apple silicon. The SwiftPM package provides fluent and
   one-shot resolution, typed failures, scopes, value-free reports, provenance,

@@ -76,7 +76,7 @@ pub use config::{GenerateConfig, GenerateOptions, Secret};
 
 // Public API exports
 pub use error::{Result, SecretSpecError};
-pub use provider::Provider;
+pub use provider::{DiscoveryContext, Provider};
 pub use report::{
     RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus, SecretResolution,
 };

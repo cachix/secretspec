@@ -4742,7 +4742,7 @@ fn write_export(
 }
 
 /// POSIX single-quote escaping so the value survives `eval` verbatim
-fn shell_single_quote(value: &str) -> String {
+pub(crate) fn shell_single_quote(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('\'');
     for ch in value.chars() {

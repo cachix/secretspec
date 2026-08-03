@@ -1,7 +1,8 @@
-use crate::provider::{Address, Provider, ProviderCredentials, ProviderUrl};
-use crate::{Result, SecretSpecError};
+use crate::provider::{Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl};
+use crate::{Result, Secret, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::process::Command;
 use std::sync::OnceLock;
 
@@ -1071,6 +1072,64 @@ fn find_addressed_item<'a>(
                 .join("\n"),
         ))),
     }
+}
+
+/// Builds declarations for the Bitwarden items the provider can address.
+///
+/// Reflection uses the same optional type filter as reads and writes. Item
+/// names are otherwise direct convention addresses, so every reflected name
+/// must already be a valid SecretSpec identifier. Bitwarden compares names
+/// case-insensitively and permits duplicates; reject either kind of collision
+/// instead of generating declarations that would be ambiguous at read time.
+fn declarations_from_items(
+    items: &[BitwardenItem],
+    required_type: Option<BitwardenItemType>,
+) -> Result<HashMap<String, Secret>> {
+    let mut declarations = HashMap::new();
+    let mut seen_names = HashMap::<String, &BitwardenItem>::new();
+
+    for item in items
+        .iter()
+        .filter(|item| required_type.is_none_or(|item_type| item.item_type == item_type))
+    {
+        if !crate::config::is_valid_identifier(&item.name) {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Bitwarden item '{}' cannot become a SecretSpec declaration: names must be \
+                 alphanumeric and underscores and cannot start with a number. Rename the item \
+                 or narrow discovery with a collection and/or `?type=`.",
+                item.name
+            )));
+        }
+        if item.name == "defaults" {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "Bitwarden item 'defaults' cannot become a SecretSpec declaration because \
+                 that name is reserved for profile defaults. Rename the item or narrow \
+                 discovery with a collection and/or `?type=`."
+                    .to_string(),
+            ));
+        }
+
+        let folded_name = item.name.to_lowercase();
+        if let Some(previous) = seen_names.insert(folded_name, item) {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Bitwarden items '{}' ({}) and '{}' ({}) have names that collide \
+                 case-insensitively. Rename one or narrow discovery with `?type=` so every \
+                 reflected declaration has one address.",
+                previous.name, previous.id, item.name, item.id
+            )));
+        }
+
+        declarations.insert(
+            item.name.clone(),
+            Secret {
+                description: Some(format!("{} Bitwarden secret", item.name)),
+                required: Some(true),
+                ..Default::default()
+            },
+        );
+    }
+
+    Ok(declarations)
 }
 
 crate::register_provider! {
@@ -2608,6 +2667,17 @@ impl Provider for BitwardenProvider {
         let target_field = coords.field.as_deref();
         self.set_to_password_manager(item_name, target_field, value)
     }
+
+    fn reflect(&self, _context: DiscoveryContext<'_>) -> Result<HashMap<String, Secret>> {
+        if !self.is_authenticated()? {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "Bitwarden authentication required. Please run 'bw login' and 'bw unlock', then set the BW_SESSION environment variable.".to_string(),
+            ));
+        }
+
+        let items = self.list_items(None)?;
+        declarations_from_items(&items, self.resolved_item_type()?)
+    }
 }
 
 impl Default for BitwardenProvider {
@@ -3975,6 +4045,76 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reflection_builds_declarations_for_the_addressed_item_type() {
+        let items = [
+            named_item("login", "API_KEY", BitwardenItemType::Login),
+            named_item("card", "API_KEY", BitwardenItemType::Card),
+            named_item("token", "CARD_TOKEN", BitwardenItemType::Card),
+        ];
+
+        let declarations = declarations_from_items(&items, Some(BitwardenItemType::Card))
+            .expect("the type filter makes every item addressable");
+
+        assert_eq!(declarations.len(), 2);
+        assert_eq!(
+            declarations["API_KEY"].description.as_deref(),
+            Some("API_KEY Bitwarden secret")
+        );
+        assert_eq!(declarations["API_KEY"].required, Some(true));
+        assert!(declarations.contains_key("CARD_TOKEN"));
+    }
+
+    #[test]
+    fn reflection_rejects_names_that_cannot_be_declared() {
+        let items = [named_item(
+            "invalid",
+            "Database Login",
+            BitwardenItemType::Login,
+        )];
+
+        let err = declarations_from_items(&items, None)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("cannot become a SecretSpec declaration"),
+            "{err}"
+        );
+        assert!(err.contains("Database Login"), "{err}");
+        assert!(err.contains("collection and/or `?type=`"), "{err}");
+    }
+
+    #[test]
+    fn reflection_rejects_the_reserved_defaults_name() {
+        let items = [named_item(
+            "reserved",
+            "defaults",
+            BitwardenItemType::SecureNote,
+        )];
+
+        let err = declarations_from_items(&items, None)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("reserved for profile defaults"), "{err}");
+    }
+
+    #[test]
+    fn reflection_rejects_case_insensitive_name_collisions() {
+        let items = [
+            named_item("first", "API_KEY", BitwardenItemType::Login),
+            named_item("second", "api_key", BitwardenItemType::Login),
+        ];
+
+        let err = declarations_from_items(&items, None)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("collide case-insensitively"), "{err}");
+        assert!(err.contains("first") && err.contains("second"), "{err}");
+    }
+
     // ---------------------------------------------------------------------
     // Behavioral coverage for the pure extraction / mutation / resolution
     // helpers (see ashebanow/secretspec#5). These read and write the same
@@ -4772,6 +4912,50 @@ mod tests {
             assert!(
                 format!("{err}").contains("Bitwarden authentication required"),
                 "{err}"
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reflect_lists_the_addressed_collection_without_copying_values() {
+        let fake = FakeBw::new()
+            .with_organizations(json!([{"id": "org-id", "name": "Acme"}]))
+            .with_collections(json!([{
+                "id": "collection-id",
+                "name": "dev-secrets",
+                "organizationId": "org-id"
+            }]))
+            .with_items(json!([{
+                "id": "item-id",
+                "name": "API_KEY",
+                "type": 1,
+                "login": {"password": "must-not-appear"}
+            }]));
+
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig {
+                collection_id: Some("dev-secrets".to_string()),
+                ..Default::default()
+            });
+            let declarations = provider
+                .reflect(DiscoveryContext::new("ignored", "ignored"))
+                .unwrap();
+
+            assert_eq!(declarations.len(), 1);
+            assert_eq!(
+                declarations["API_KEY"].description.as_deref(),
+                Some("API_KEY Bitwarden secret")
+            );
+            assert!(!format!("{:?}", declarations["API_KEY"]).contains("must-not-appear"));
+
+            let log = fake.invocations();
+            assert!(log.contains("<status>"), "{log}");
+            assert!(log.contains("<list> <organizations>"), "{log}");
+            assert!(log.contains("<list> <collections>"), "{log}");
+            assert!(
+                log.contains("<list> <items> <--collectionid> <collection-id>"),
+                "{log}"
             );
         });
     }

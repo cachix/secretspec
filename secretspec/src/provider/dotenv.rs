@@ -1,4 +1,4 @@
-use super::{Address, Provider, ProviderUrl};
+use super::{Address, DiscoveryContext, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -372,7 +372,10 @@ impl Provider for DotEnvProvider {
         Ok(true)
     }
 
-    fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
+    fn reflect(
+        &self,
+        _context: DiscoveryContext<'_>,
+    ) -> Result<HashMap<String, crate::config::Secret>> {
         use crate::config::Secret;
 
         if !self.config.path.exists() {
@@ -518,7 +521,9 @@ mod tests {
             path: env_file.clone(),
         });
 
-        let secrets = provider.reflect().unwrap();
+        let secrets = provider
+            .reflect(DiscoveryContext::new("project", "default"))
+            .unwrap();
         assert_eq!(secrets.len(), 2);
         assert!(secrets.contains_key("API_KEY"));
         assert!(secrets.contains_key("DATABASE_URL"));
@@ -538,7 +543,9 @@ mod tests {
             path: PathBuf::from("/tmp/nonexistent/.env"),
         });
 
-        let secrets = provider.reflect().unwrap();
+        let secrets = provider
+            .reflect(DiscoveryContext::new("project", "default"))
+            .unwrap();
         assert!(secrets.is_empty());
     }
 

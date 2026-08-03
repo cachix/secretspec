@@ -22,7 +22,10 @@
 //! keys also work when their `age-plugin-*` binary is on `PATH`, including the
 //! ML-KEM-768 + X25519 `age1pq1...` recipient via `age-plugin-pq`.
 
-use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env, flat_item};
+use super::{
+    Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl, credential_or_env,
+    flat_item,
+};
 use crate::config::{NativeAddress, Secret};
 use crate::{Result, SecretSpecError};
 use age::armor::{ArmoredReader, ArmoredWriter, Format};
@@ -447,7 +450,7 @@ impl Provider for AgeProvider {
         Ok(out)
     }
 
-    fn reflect(&self) -> Result<HashMap<String, Secret>> {
+    fn reflect(&self, _context: DiscoveryContext<'_>) -> Result<HashMap<String, Secret>> {
         Ok(self
             .load()?
             .into_keys()

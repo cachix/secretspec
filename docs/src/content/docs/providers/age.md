@@ -88,6 +88,19 @@ post-quantum protection.
 
 ## Configuration
 
+### Discover declarations (0.18+)
+
+SecretSpec 0.18+ can initialize a manifest from the key names already in an
+age file. Reflection decrypts the file in memory to enumerate its keys but
+never writes their values to `secretspec.toml`:
+
+```bash
+$ secretspec init --from "age://secrets.age?identity=$HOME/.config/age/plugin-identity.txt"
+```
+
+The provider must have enough identity configuration to open the file. Use
+`--project` and `--profile` to choose the metadata written to the new manifest.
+
 ### URI format
 
 ```text

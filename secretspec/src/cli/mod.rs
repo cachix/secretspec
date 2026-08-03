@@ -41,12 +41,17 @@ struct Cli {
 enum Commands {
     /// Initialize a new secretspec.toml (optionally, from a provider)
     Init {
-        /// Provider URL to import from (e.g., dotenv://.env, dotenv://.env.production)
-        /// Currently only dotenv provider is supported.
+        /// Discover declarations from a provider (additional providers in 0.18+)
         ///
         /// Note: no short flag here — `-f` is the global `--file` option.
         #[arg(long, default_value = "dotenv://.env")]
         from: String,
+        /// Project used to select the provider namespace (0.18+; defaults to directory name)
+        #[arg(long)]
+        project: Option<String>,
+        /// Profile used to select the provider namespace (0.18+)
+        #[arg(short = 'P', long, default_value = "default")]
+        profile: String,
     },
     /// Add a secret declaration to secretspec.toml (0.18+)
     Add {
@@ -356,7 +361,7 @@ fn normalize_config_action(action: ConfigAction) -> ConfigAction {
 fn get_example_toml() -> &'static str {
     r#"# DATABASE_URL = { description = "Database connection string", required = true }
 
-[profiles.development]
+# [profiles.development]
 # Development profile inherits all secrets from default profile
 # Only define secrets here that need different values or settings than default
 # DATABASE_URL = { default = "sqlite:///dev.db" }
@@ -364,6 +369,17 @@ fn get_example_toml() -> &'static str {
 # New secrets
 # REDIS_URL = { description = "Redis connection URL for caching", required = false, default = "redis://localhost:6379" }
 "#
+}
+
+/// Builds a copyable POSIX-shell command for importing discovered values.
+fn migration_command(from: &str, profile: &str) -> String {
+    let from = crate::secrets::shell_single_quote(from);
+    if profile == "default" {
+        format!("secretspec import {from}")
+    } else {
+        let profile = crate::secrets::shell_single_quote(profile);
+        format!("SECRETSPEC_PROFILE={profile} secretspec import {from}")
+    }
 }
 
 /// Generates a `secretspec.toml` document from a [`Config`] with helpful comments.
@@ -754,7 +770,11 @@ pub fn main() -> Result<()> {
 
     match cli.command {
         // Initialize a new secretspec.toml configuration file
-        Commands::Init { from } => {
+        Commands::Init {
+            from,
+            project,
+            profile,
+        } => {
             // Check if secretspec.toml already exists
             if PathBuf::from("secretspec.toml").exists() {
                 use inquire::Confirm;
@@ -769,25 +789,34 @@ pub fn main() -> Result<()> {
                 }
             }
 
-            // Create provider from the specification string
-            // This handles various formats like "dotenv", "dotenv:.env", "dotenv://.env.production"
-            let provider: Box<dyn Provider> = from.as_str().try_into().into_diagnostic()?;
-
-            // Check if it's a dotenv provider
-            if provider.name() != "dotenv" {
-                return Err(miette!(
-                    "Only 'dotenv' provider is currently supported for init --from. Got provider: {}",
-                    provider.name()
-                ));
+            let project_name = match project {
+                Some(project) => project,
+                None => std::env::current_dir()
+                    .into_diagnostic()?
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+            };
+            if project_name.is_empty() {
+                return Err(miette!("init project cannot be empty"));
+            }
+            if profile.is_empty() {
+                return Err(miette!("init profile cannot be empty"));
             }
 
-            // Reflect secrets from the provider
-            let secrets = provider.reflect().into_diagnostic()?;
+            // Create provider from the specification string.
+            let provider: Box<dyn Provider> = from.as_str().try_into().into_diagnostic()?;
+
+            // Discover declarations in the namespace the new manifest will use.
+            let secrets = provider
+                .reflect(crate::DiscoveryContext::new(&project_name, &profile))
+                .into_diagnostic()?;
 
             // Create a new project config
             let mut profiles = HashMap::new();
             profiles.insert(
-                "default".to_string(),
+                profile.clone(),
                 Profile {
                     defaults: None,
                     secrets,
@@ -796,12 +825,7 @@ pub fn main() -> Result<()> {
 
             let project_config = Config {
                 project: Project {
-                    name: std::env::current_dir()
-                        .into_diagnostic()?
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string(),
+                    name: project_name,
                     ..Default::default()
                 },
                 profiles,
@@ -831,11 +855,15 @@ pub fn main() -> Result<()> {
                 .sum::<usize>();
             println!("✓ Created secretspec.toml with {} secrets", secret_count);
 
-            // If we imported from a provider, suggest migration
-            if provider.name() == "dotenv" && secret_count > 0 {
+            // If we discovered a populated provider, explain how to copy its
+            // values after reviewing the declarations.
+            if secret_count > 0 {
                 println!("\nTo migrate your secrets from {}:", from);
                 println!("  1. Review secretspec.toml and adjust as needed");
-                println!("  2. secretspec import {}    # Import secret values", from);
+                println!(
+                    "  2. {}    # Import secret values",
+                    migration_command(&from, &profile)
+                );
             }
 
             println!("\nNext steps:");
@@ -1793,16 +1821,43 @@ mod tests {
     }
 
     #[test]
-    fn generated_config_with_example_template_is_valid_toml() {
-        let mut out = generate_toml_with_comments(&config_with_secret(Secret {
-            description: Some("desc".to_string()),
-            ..Default::default()
-        }))
-        .unwrap();
-        out.push_str(get_example_toml());
-        // The appended example only adds commented secrets, so it must remain
-        // syntactically valid TOML.
-        toml::from_str::<Config>(&out).expect("init output template must be valid TOML");
+    fn generated_config_with_example_template_is_valid_for_every_profile() {
+        for profile in ["default", "development", "production"] {
+            let mut config = config_with_secret(Secret {
+                description: Some("desc".to_string()),
+                ..Default::default()
+            });
+            if profile != "default" {
+                let declarations = config.profiles.remove("default").unwrap();
+                config.profiles.insert(profile.to_string(), declarations);
+            }
+
+            let mut out = generate_toml_with_comments(&config).unwrap();
+            out.push_str(get_example_toml());
+
+            let parsed: Config = toml::from_str(&out)
+                .unwrap_or_else(|error| panic!("init output for {profile} must parse: {error}"));
+            parsed
+                .validate()
+                .unwrap_or_else(|error| panic!("init output for {profile} must validate: {error}"));
+            assert_eq!(parsed.profiles.len(), 1);
+            assert!(parsed.profiles.contains_key(profile));
+        }
+    }
+
+    #[test]
+    fn migration_command_shell_quotes_provider_and_profile() {
+        assert_eq!(
+            migration_command(
+                "awsps://us-east-1?template=/{profile}/{project}/{key}&tier=advanced",
+                "default"
+            ),
+            "secretspec import 'awsps://us-east-1?template=/{profile}/{project}/{key}&tier=advanced'"
+        );
+        assert_eq!(
+            migration_command("dotenv://.env production", "team's production"),
+            "SECRETSPEC_PROFILE='team'\\''s production' secretspec import 'dotenv://.env production'"
+        );
     }
 
     #[test]
@@ -1815,7 +1870,45 @@ mod tests {
     fn init_defaults_from_to_dotenv() {
         let cli = Cli::try_parse_from(["secretspec", "init"]).unwrap();
         match cli.command {
-            Commands::Init { from } => assert_eq!(from, "dotenv://.env"),
+            Commands::Init {
+                from,
+                project,
+                profile,
+            } => {
+                assert_eq!(from, "dotenv://.env");
+                assert_eq!(project, None);
+                assert_eq!(profile, "default");
+            }
+            _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
+    fn init_accepts_discovery_context() {
+        let cli = Cli::try_parse_from([
+            "secretspec",
+            "init",
+            "--from",
+            "awsps://us-east-1?template=/{profile}/{project}/{key}",
+            "--project",
+            "payments",
+            "--profile",
+            "production",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Init {
+                from,
+                project,
+                profile,
+            } => {
+                assert_eq!(
+                    from,
+                    "awsps://us-east-1?template=/{profile}/{project}/{key}"
+                );
+                assert_eq!(project.as_deref(), Some("payments"));
+                assert_eq!(profile, "production");
+            }
             _ => panic!("expected Init command"),
         }
     }

@@ -22,7 +22,7 @@ parameters.
 | Best for | AWS workloads using Parameter Store for application configuration |
 | Authentication | Standard AWS SDK credential chain |
 | Build feature | `awsps` (0.18+) |
-| Default storage | `/secretspec/{project}/{profile}/{key}` |
+| Default storage | `/secretspec/{project}/{profile}/{key}`; replaceable with `template` |
 
 ## Quick start
 
@@ -76,13 +76,17 @@ awsps
 ### URI format
 
 ```text
-awsps://[AWS_PROFILE@]REGION[?prefix=PREFIX][&kms_key_id=KEY][&tier=TIER]
+awsps://[AWS_PROFILE@]REGION[?prefix=PREFIX][&template=TEMPLATE][&kms_key_id=KEY][&tier=TIER]
 ```
 
 - `AWS_PROFILE`: Optional profile from the shared AWS config.
 - `REGION`: Optional AWS region. If omitted, the SDK region chain is used.
 - `prefix`: Optional hierarchy before `/secretspec`. A leading slash is
   optional and normalized.
+- `template`: Optional complete hierarchy using `{project}`, `{profile}`, and
+  `{key}`. It must start with `/`, contain `{key}` exactly once as the final
+  path segment, and include a parent path before it. `template` and `prefix`
+  are mutually exclusive.
 - `kms_key_id`: Optional customer-managed KMS key ID, ARN, or alias used for
   `SecureString` writes. If omitted, Parameter Store uses the account's default
   key.
@@ -95,6 +99,7 @@ awsps://[AWS_PROFILE@]REGION[?prefix=PREFIX][&kms_key_id=KEY][&tier=TIER]
 awsps://us-east-1
 awsps://production@us-east-1
 awsps://us-east-1?prefix=/myteam
+awsps://us-east-1?template=/{profile}/{project}/{key}
 awsps://us-east-1?kms_key_id=alias/my-key&tier=advanced
 awsps://
 ```
@@ -124,6 +129,50 @@ With `?prefix=/myteam`, it maps to:
 ```text
 /myteam/secretspec/myapp/production/DATABASE_URL
 ```
+
+Use `template` to replace the whole convention. This is useful when Terraform
+already provisions a Chamber-style hierarchy. For example,
+`?template=/{profile}/{project}/{key}` maps the same declaration to:
+
+```text
+/production/myapp/DATABASE_URL
+```
+
+The `{project}` and `{profile}` placeholders are optional, but `{key}` must be
+the final path segment. That restriction gives discovery a bounded parent path
+and a reversible mapping from parameter names to SecretSpec declarations.
+
+## Discover existing parameters
+
+SecretSpec 0.18+ can create declarations for the direct children of the
+rendered Parameter Store hierarchy. It calls `GetParametersByPath` without
+decryption, does not write parameter values to the manifest, and does not scan
+outside that one path:
+
+```bash
+$ secretspec init \
+    --from 'awsps://production@us-east-1?template=/{profile}/{project}/{key}' \
+    --project payments \
+    --profile production
+✓ Created secretspec.toml with 12 secrets
+```
+
+`--project` defaults to the current directory name and `--profile` defaults to
+`default`. Initialization discovers declarations only. To continue reading the
+values from Parameter Store, add the URI as a checked-in provider alias and use
+it as the profile default:
+
+```toml title="secretspec.toml"
+[providers]
+parameters = "awsps://production@us-east-1?template=/{profile}/{project}/{key}"
+
+[profiles.production.defaults]
+providers = ["parameters"]
+```
+
+Alternatively, `secretspec import` copies the now-declared values from the
+source into your configured destination provider; it does not perform
+discovery itself.
 
 Every value SecretSpec creates is a `SecureString`. Writes set
 `Overwrite=true`, so updating a value creates a new Parameter Store version.
@@ -178,6 +227,9 @@ Reads require `ssm:GetParameter` and `ssm:GetParameters`; convention and
 unversioned name-reference writes require `ssm:PutParameter`. A
 customer-managed KMS key also needs the corresponding KMS permissions for
 encryption and decryption.
+
+Discovery requires `ssm:GetParametersByPath`. It requests encrypted values
+without decrypting them, while normal secret reads do decrypt.
 
 Scope IAM resources to the configured hierarchy where possible. For the
 `/myteam/secretspec/` prefix in `us-east-1`, that resource pattern is:

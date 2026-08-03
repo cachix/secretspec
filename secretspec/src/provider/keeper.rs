@@ -452,7 +452,7 @@ impl Provider for KeeperProvider {
 
     /// Authentication configuration does not change the Keeper shared folder
     /// in which convention-owned records live.
-    fn storage_identity(&self) -> String {
+    fn entry_container_identity(&self) -> String {
         format!("keeper://{}", self.config.folder_uid)
     }
 

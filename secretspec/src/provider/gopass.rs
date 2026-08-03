@@ -291,7 +291,7 @@ impl Provider for GoPassProvider {
 
     /// The URI's folder prefix is compiled into the native entry name and does
     /// not identify a separate gopass installation.
-    fn storage_identity(&self) -> String {
+    fn entry_container_identity(&self) -> String {
         "gopass".to_string()
     }
 }

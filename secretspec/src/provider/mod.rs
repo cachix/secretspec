@@ -791,6 +791,19 @@ pub trait Provider: Send + Sync {
         self.uri()
     }
 
+    /// Returns the identity of the container holding a resolved secret entry.
+    /// Available since SecretSpec 0.18.
+    ///
+    /// This differs from [`Self::storage_identity`] only for providers whose
+    /// public URI contains an addressing template. Cache routing must retain
+    /// that template so sibling address spaces remain distinct, while
+    /// destructive operations compare the template's resolved native
+    /// coordinates separately and need the identity of the underlying
+    /// container here.
+    fn entry_container_identity(&self) -> String {
+        self.storage_identity()
+    }
+
     /// Returns whether `self` and `other` resolve `addr` to the same physical
     /// secret entry. Available since SecretSpec 0.18.
     ///
@@ -809,7 +822,7 @@ pub trait Provider: Send + Sync {
                     left == right
                 })
             }
-            (None, None) => self.storage_identity() == other.storage_identity(),
+            (None, None) => self.entry_container_identity() == other.entry_container_identity(),
             _ => false,
         };
         if !same_store {
@@ -1065,6 +1078,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn storage_identity(&self) -> String {
         (**self).storage_identity()
     }
+    fn entry_container_identity(&self) -> String {
+        (**self).entry_container_identity()
+    }
     fn physical_store_path(&self) -> Option<&std::path::Path> {
         (**self).physical_store_path()
     }
@@ -1253,6 +1269,10 @@ impl Provider for PreflightGuard {
 
     fn storage_identity(&self) -> String {
         self.inner.storage_identity()
+    }
+
+    fn entry_container_identity(&self) -> String {
+        self.inner.entry_container_identity()
     }
 
     fn physical_store_path(&self) -> Option<&std::path::Path> {

@@ -160,7 +160,7 @@ impl Provider for KeyringProvider {
 
     /// The configured prefix selects a service entry inside the current user's
     /// keyring; it does not select another keyring store.
-    fn storage_identity(&self) -> String {
+    fn entry_container_identity(&self) -> String {
         "keyring".to_string()
     }
 

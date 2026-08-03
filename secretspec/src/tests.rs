@@ -6129,8 +6129,8 @@ name = "delete-route-test"
 revision = "1.0"
 
 [providers]
-primary = "{primary_uri}"
-fallback = "{fallback_uri}"
+primary = '{primary_uri}'
+fallback = '{fallback_uri}'
 
 [profiles.default]
 API_KEY = {{ description = "API key", providers = ["primary", "fallback"] }}
@@ -6372,8 +6372,8 @@ name = "preflight-import-store-test"
 revision = "1.0"
 
 [providers]
-target = "{target_uri}"
-source = "{source_uri}"
+target = '{target_uri}'
+source = '{source_uri}'
 
 [profiles.default]
 A_FIRST = {{ description = "Would otherwise move first", providers = ["target"] }}

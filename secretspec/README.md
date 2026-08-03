@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="secretspec.png" alt="SecretSpec logo" width="420">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="secretspec-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="secretspec.png">
+    <img src="secretspec.png" alt="SecretSpec logo" width="420">
+  </picture>
 </p>
 
 <p align="center">

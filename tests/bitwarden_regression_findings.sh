@@ -42,7 +42,7 @@ export SECRETSPEC_REASON="${SECRETSPEC_REASON:-bw provider regression checks}"
 export BW_SESSION
 
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
-BIN="$REPO_ROOT/target/debug/secretspec"
+BIN="${SECRETSPEC_BIN:-$REPO_ROOT/target/debug/secretspec}"
 [ -x "$BIN" ] || { echo "Build first: cargo build --bin secretspec" >&2; exit 2; }
 
 WORKDIR=$(mktemp -d)

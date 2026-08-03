@@ -4,6 +4,9 @@
 # Tests the Bitwarden provider against actual vault data
 # Usage: ./bitwarden_integration.sh [BW_SESSION]
 #
+# Set SECRETSPEC_BIN to a pre-built secretspec binary (e.g. an instrumented
+# coverage build) to skip the local build and run that binary instead.
+#
 # The script auto-creates test items if they don't exist,
 # and removes them on clean exit (unless --keep-test-data is passed).
 #
@@ -402,101 +405,109 @@ EOF
 echo -e "${GREEN}✓ Created test secretspec.toml${NC}"
 
 # Build the binary first to avoid warnings during tests
-echo -e "\n${YELLOW}Building secretspec binary...${NC}"
-cargo build --bin secretspec --quiet
-echo -e "${GREEN}✓ Binary built successfully${NC}"
+# Resolve the secretspec binary under test. SECRETSPEC_BIN lets the caller
+# supply a pre-built binary (e.g. an instrumented coverage build) and skip
+# the build below.
+if [ -z "${SECRETSPEC_BIN:-}" ]; then
+    echo -e "\n${YELLOW}Building secretspec binary...${NC}"
+    cargo build --bin secretspec --quiet
+    SECRETSPEC_BIN="./target/debug/secretspec"
+else
+    echo -e "\n${YELLOW}Using pre-built binary from SECRETSPEC_BIN: $SECRETSPEC_BIN${NC}"
+fi
+echo -e "${GREEN}✓ Binary ready${NC}"
 
 echo -e "\n${YELLOW}=== PASSWORD MANAGER TESTS ===${NC}"
 
 # Test 1: Login Items - Default password field (Test Database)
 run_test "Get password from Login item" \
-    "./target/debug/secretspec get bw_integration_test_database --provider bw://" \
+    "$SECRETSPEC_BIN get bw_integration_test_database --provider bw://" \
     "test-db-password"
 
 # Test 2: Login Items - Custom field (Test Database api_key)
 run_test "Get api_key custom field from Login item" \
-    "./target/debug/secretspec get bw_integration_test_database_api_key --provider bw://" \
+    "$SECRETSPEC_BIN get bw_integration_test_database_api_key --provider bw://" \
     "sk_test_db_12345"
 
 # Test 3: Login Items - Username field (Test Database)
 run_test "Get username field from Login item" \
-    "./target/debug/secretspec get bw_integration_test_database_username --provider bw://" \
+    "$SECRETSPEC_BIN get bw_integration_test_database_username --provider bw://" \
     "testuser"
 
 # Test 4: Credit Card Items - Custom field (Stripe Test Card)
 run_test "Get api_key custom field from Credit Card item" \
-    "./target/debug/secretspec get bw_integration_test_stripe_card_api_key --provider bw://" \
+    "$SECRETSPEC_BIN get bw_integration_test_stripe_card_api_key --provider bw://" \
     "sk_test_stripe_12345"
 
 # Test 5: Credit Card Items - Standard field
 run_test "Get card number field from Credit Card item" \
-    "./target/debug/secretspec get bw_integration_test_stripe_card_number --provider bw://" \
+    "$SECRETSPEC_BIN get bw_integration_test_stripe_card_number --provider bw://" \
     "4242424242424242"
 
 # Test 6: Identity Items - Custom field (field required)
 run_test "Get employee_id field from Identity item" \
-    "./target/debug/secretspec get bw_integration_test_employee_id --provider bw://" \
+    "$SECRETSPEC_BIN get bw_integration_test_employee_id --provider bw://" \
     "EMP001"
 
 # Test 7: Identity Items - Standard field
 run_test "Get email field from Identity item" \
-    "./target/debug/secretspec get bw_integration_test_employee_email --provider bw://" \
+    "$SECRETSPEC_BIN get bw_integration_test_employee_email --provider bw://" \
     "test.employee@example.com"
 
 # Test 8: SSH Key Items - Default field (private key)
 run_test "Get private key from SSH Key item" \
-    "./target/debug/secretspec get bw_integration_test_deploy_ssh_key --provider bw://" \
+    "$SECRETSPEC_BIN get bw_integration_test_deploy_ssh_key --provider bw://" \
     "BEGIN OPENSSH PRIVATE KEY"
 
 # Test 9: SSH Key Items - Custom field
 run_test "Get passphrase field from SSH Key item" \
-    "./target/debug/secretspec get bw_integration_test_ssh_passphrase --provider bw://" \
+    "$SECRETSPEC_BIN get bw_integration_test_ssh_passphrase --provider bw://" \
     "ssh_passphrase_123"
 
 # Test 10: Secure Note Items - Get note contents
 run_test "Get value from Secure Note item" \
-    "./target/debug/secretspec get bw_integration_test_note_to_self --provider bw://" \
+    "$SECRETSPEC_BIN get bw_integration_test_note_to_self --provider bw://" \
     "this is a note."
 
 echo -e "\n${YELLOW}=== ENVIRONMENT VARIABLE TESTS ===${NC}"
 
 # Test 11: Environment variable for type
 run_test "Get API key using environment variable type" \
-    "BITWARDEN_DEFAULT_TYPE=card BITWARDEN_DEFAULT_FIELD=api_key ./target/debug/secretspec get bw_integration_test_stripe_card_api_key --provider bw://" \
+    "BITWARDEN_DEFAULT_TYPE=card BITWARDEN_DEFAULT_FIELD=api_key $SECRETSPEC_BIN get bw_integration_test_stripe_card_api_key --provider bw://" \
     "sk_test_stripe_12345"
 
 # Test 12: Environment variable for field
 run_test "Get username using environment variable field" \
-    "BITWARDEN_DEFAULT_TYPE=login BITWARDEN_DEFAULT_FIELD=username ./target/debug/secretspec get bw_integration_test_database_username --provider bw://" \
+    "BITWARDEN_DEFAULT_TYPE=login BITWARDEN_DEFAULT_FIELD=username $SECRETSPEC_BIN get bw_integration_test_database_username --provider bw://" \
     "testuser"
 
 # Test 13: One-liner with multiple environment variables
 run_test "Get employee ID with environment variables" \
-    "BITWARDEN_DEFAULT_TYPE=identity BITWARDEN_DEFAULT_FIELD=employee_id ./target/debug/secretspec get bw_integration_test_employee_id --provider bw://" \
+    "BITWARDEN_DEFAULT_TYPE=identity BITWARDEN_DEFAULT_FIELD=employee_id $SECRETSPEC_BIN get bw_integration_test_employee_id --provider bw://" \
     "EMP001"
 
 echo -e "\n${YELLOW}=== ERROR HANDLING TESTS ===${NC}"
 
 # Test 14: Missing field specification for Card items
 run_test "Card item without field specification returns default field" \
-    "./target/debug/secretspec get bw_integration_test_payment_gateway --provider bw://" \
+    "$SECRETSPEC_BIN get bw_integration_test_payment_gateway --provider bw://" \
     "5555555555554444"
 
 # Test 15: Invalid item type is rejected when the address is parsed.
 # It used to fail only incidentally, because the item did not exist either; now
 # the typo itself is what is reported.
 run_test_expect_fail "Invalid item type should fail" \
-    "./target/debug/secretspec get bw_test_nonexistent_item --provider 'bw://?type=invalid'" \
+    "$SECRETSPEC_BIN get bw_test_nonexistent_item --provider 'bw://?type=invalid'" \
     "Unknown Bitwarden item type"
 
 # Test 15b: an unknown query parameter is likewise a typo, not a no-op
 run_test_expect_fail "Unknown query parameter should fail" \
-    "./target/debug/secretspec get bw_test_nonexistent_item --provider 'bw://?feild=api_key'" \
+    "$SECRETSPEC_BIN get bw_test_nonexistent_item --provider 'bw://?feild=api_key'" \
     "Unknown Bitwarden URI parameter"
 
 # Test 16: Non-existent item
 run_test_expect_fail "Non-existent item should return error or empty" \
-    "./target/debug/secretspec get bw_integration_test_nonexistent --provider bw://" \
+    "$SECRETSPEC_BIN get bw_integration_test_nonexistent --provider bw://" \
     ""
 
 echo -e "\n${YELLOW}=== ITEM CREATION TESTS ===${NC}"
@@ -509,17 +520,17 @@ fi
 
 # Test 20: Create new Login item
 run_test "Create new Login item" \
-    "./target/debug/secretspec set bw_integration_test_new_login 'test-new-secret' --provider 'bw://?type=login'" \
+    "$SECRETSPEC_BIN set bw_integration_test_new_login 'test-new-secret' --provider 'bw://?type=login'" \
     "Secret.*saved"
 
 # Test 21: Create new Card item with custom field
 run_test "Create new Card item with custom field" \
-    "./target/debug/secretspec set bw_integration_test_new_card 'test-card-token' --provider 'bw://?type=card&field=api_token'" \
+    "$SECRETSPEC_BIN set bw_integration_test_new_card 'test-card-token' --provider 'bw://?type=card&field=api_token'" \
     "Secret.*saved"
 
 # Test 22: Update existing item
 run_test "Update existing Login item" \
-    "./target/debug/secretspec set bw_integration_test_database 'updated-password' --provider bw://" \
+    "$SECRETSPEC_BIN set bw_integration_test_database 'updated-password' --provider bw://" \
     "Secret.*saved"
 
 echo -e "\n${YELLOW}=== CREATE → UPDATE → READ-BACK SWEEP ===${NC}"
@@ -540,21 +551,21 @@ roundtrip_type() {
     local updated="updated-${label}-value"
 
     run_test "Round-trip ${label}: set creates the item" \
-        "./target/debug/secretspec set $secret '$created' --provider 'bw://?type=$type'" \
+        "$SECRETSPEC_BIN set $secret '$created' --provider 'bw://?type=$type'" \
         "Secret.*saved"
 
     run_test "Round-trip ${label}: get returns what set wrote" \
-        "./target/debug/secretspec get $secret --provider 'bw://?type=$type'" \
+        "$SECRETSPEC_BIN get $secret --provider 'bw://?type=$type'" \
         "$created"
 
     run_test "Round-trip ${label}: set updates its own item" \
-        "./target/debug/secretspec set $secret '$updated' --provider 'bw://?type=$type'" \
+        "$SECRETSPEC_BIN set $secret '$updated' --provider 'bw://?type=$type'" \
         "Secret.*saved"
 
     # Fails if the update landed in a different field than the getter reads,
     # or created a duplicate item alongside the original.
     run_test "Round-trip ${label}: get reflects the update" \
-        "./target/debug/secretspec get $secret --provider 'bw://?type=$type'" \
+        "$SECRETSPEC_BIN get $secret --provider 'bw://?type=$type'" \
         "$updated"
 }
 

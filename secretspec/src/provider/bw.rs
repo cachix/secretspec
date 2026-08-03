@@ -2605,6 +2605,7 @@ impl Default for BitwardenProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_deserialize_linked_field_type() {
@@ -3955,5 +3956,546 @@ mod tests {
             Some("u"),
             "an ASCII-only fold leaves non-ASCII names unaddressable",
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // Behavioral coverage for the pure extraction / mutation / resolution
+    // helpers (see ashebanow/secretspec#5). These read and write the same
+    // JSON shapes `bw` hands back, without spawning the CLI.
+    // ---------------------------------------------------------------------
+
+    /// Builds an item from JSON, the way `bw` would hand it back.
+    fn item_from(json: serde_json::Value) -> BitwardenItem {
+        serde_json::from_value(json).expect("fixture must deserialize as a vault item")
+    }
+
+    /// The env-sensitive resolution helpers read process-global variables, so
+    /// tests that flip them run one at a time.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Runs `body` with the BITWARDEN_* resolution variables unset, restoring
+    /// whatever was there. The variables are only read by `requested_org`,
+    /// `requested_collection` and `resolved_item_type`, so no other test can
+    /// observe a transient change.
+    fn with_clean_env<T>(body: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let saved = [
+            "BITWARDEN_ORGANIZATION",
+            "BITWARDEN_COLLECTION",
+            "BITWARDEN_DEFAULT_TYPE",
+        ]
+        .map(|key| (key, std::env::var(key).ok()));
+        for (key, _) in &saved {
+            unsafe { std::env::remove_var(key) };
+        }
+        let result = body();
+        for (key, previous) in saved {
+            match previous {
+                Some(previous) => unsafe { std::env::set_var(key, previous) },
+                None => unsafe { std::env::remove_var(key) },
+            }
+        }
+        result
+    }
+
+    /// Runs `body` with `key` set to `value`, restoring whatever was there.
+    fn with_env<T>(key: &str, value: &str, body: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous = std::env::var(key).ok();
+        unsafe { std::env::set_var(key, value) };
+        let result = body();
+        match previous {
+            Some(previous) => unsafe { std::env::set_var(key, previous) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+        result
+    }
+
+    // -- login items --------------------------------------------------------
+
+    #[test]
+    fn reading_totp_returns_the_totp_seed() {
+        // `totp` is a built-in login slot, not a custom field: reading it must
+        // answer with the seed rather than falling through to the password.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "l1", "name": "Vault", "type": 1,
+            "login": { "username": "alice", "password": "pw", "totp": "JBSWY3DPEHPK3PXP" }
+        }));
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "totp").as_deref(),
+            Some("JBSWY3DPEHPK3PXP"),
+        );
+    }
+
+    #[test]
+    fn a_login_without_a_password_defaults_to_the_username() {
+        // The unqualified read prefers password, then username: a login with
+        // no password must not become unreadable.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "l2", "name": "Vault", "type": 1,
+            "login": { "username": "alice", "password": null }
+        }));
+        assert_eq!(
+            read_without_naming_a_field(&provider, &item).as_deref(),
+            Some("alice"),
+        );
+    }
+
+    #[test]
+    fn an_unknown_login_field_that_is_absent_returns_nothing() {
+        // A misspelled or absent field must not fall through to the password:
+        // a request for one secret is never answered with a different one.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "l3", "name": "Vault", "type": 1,
+            "login": { "username": "alice", "password": "pw" }
+        }));
+        assert_eq!(read_naming_a_field(&provider, &item, "totp"), None);
+        assert_eq!(read_naming_a_field(&provider, &item, "api_key"), None);
+    }
+
+    // -- card items ---------------------------------------------------------
+
+    #[test]
+    fn card_aliases_read_the_same_slot() {
+        // Every documented spelling of a card slot names the same member.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "c1", "name": "Card", "type": 3,
+            "card": { "cardholderName": "Ada L", "number": "4242", "brand": "Visa",
+                       "expMonth": "12", "expYear": "2030", "code": "123" }
+        }));
+        for alias in ["code", "cvv", "cvc"] {
+            assert_eq!(
+                read_naming_a_field(&provider, &item, alias).as_deref(),
+                Some("123"),
+                "{alias}"
+            );
+        }
+        for alias in ["cardholder", "name"] {
+            assert_eq!(
+                read_naming_a_field(&provider, &item, alias).as_deref(),
+                Some("Ada L"),
+                "{alias}",
+            );
+        }
+        for alias in ["expmonth", "exp_month"] {
+            assert_eq!(
+                read_naming_a_field(&provider, &item, alias).as_deref(),
+                Some("12"),
+                "{alias}"
+            );
+        }
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "exp_year").as_deref(),
+            Some("2030")
+        );
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "brand").as_deref(),
+            Some("Visa")
+        );
+    }
+
+    #[test]
+    fn a_card_read_is_case_insensitive() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "c2", "name": "Card", "type": 3,
+            "card": { "cardholderName": "Ada L", "number": "4242", "brand": "Visa" }
+        }));
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "BRAND").as_deref(),
+            Some("Visa")
+        );
+    }
+
+    #[test]
+    fn an_unknown_card_field_that_is_absent_returns_nothing() {
+        // An explicit selector resolves to that slot or to nothing; it is not
+        // answered with the card number.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "c3", "name": "Card", "type": 3,
+            "card": { "cardholderName": "Ada L", "number": "4242" }
+        }));
+        assert_eq!(read_naming_a_field(&provider, &item, "exp_month"), None);
+        assert_eq!(read_naming_a_field(&provider, &item, "cvv"), None);
+    }
+
+    #[test]
+    fn a_card_without_a_number_falls_back_to_its_value_field() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "c4", "name": "Card", "type": 3,
+            "card": { "cardholderName": "Ada", "number": null },
+            "fields": [ { "name": "value", "value": "legacy", "type": 0 } ]
+        }));
+        assert_eq!(
+            read_without_naming_a_field(&provider, &item).as_deref(),
+            Some("legacy"),
+        );
+    }
+
+    // -- identity items -----------------------------------------------------
+
+    #[test]
+    fn identity_aliases_read_the_same_slot() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "i1", "name": "Person", "type": 4,
+            "identity": { "firstName": "Ada", "lastName": "Lovelace", "username": "ada",
+                           "company": "Analytical Engine", "email": "ada@example.test",
+                           "phone": "+1-555-0100" }
+        }));
+        for alias in ["firstname", "first_name"] {
+            assert_eq!(
+                read_naming_a_field(&provider, &item, alias).as_deref(),
+                Some("Ada"),
+                "{alias}"
+            );
+        }
+        for alias in ["lastname", "last_name"] {
+            assert_eq!(
+                read_naming_a_field(&provider, &item, alias).as_deref(),
+                Some("Lovelace"),
+                "{alias}",
+            );
+        }
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "username").as_deref(),
+            Some("ada")
+        );
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "company").as_deref(),
+            Some("Analytical Engine"),
+        );
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "email").as_deref(),
+            Some("ada@example.test"),
+        );
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "phone").as_deref(),
+            Some("+1-555-0100")
+        );
+    }
+
+    #[test]
+    fn an_unknown_identity_field_that_is_absent_returns_nothing() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "i2", "name": "Person", "type": 4,
+            "identity": { "firstName": "Ada", "lastName": "Lovelace", "email": "ada@example.test" }
+        }));
+        assert_eq!(read_naming_a_field(&provider, &item, "company"), None);
+    }
+
+    #[test]
+    fn an_identity_without_builtin_slots_falls_back_to_its_value_field() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "i3", "name": "Person", "type": 4,
+            "identity": { "firstName": null, "email": null },
+            "fields": [ { "name": "value", "value": "legacy", "type": 0 } ]
+        }));
+        assert_eq!(
+            read_without_naming_a_field(&provider, &item).as_deref(),
+            Some("legacy"),
+        );
+    }
+
+    // -- ssh key items ------------------------------------------------------
+
+    #[test]
+    fn ssh_aliases_read_the_same_slot() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "s1", "name": "Key", "type": 5,
+            "sshKey": { "privateKey": "PRIV", "publicKey": "PUB", "keyFingerprint": "SHA256:fp" }
+        }));
+        for alias in ["private_key", "privatekey", "private"] {
+            assert_eq!(
+                read_naming_a_field(&provider, &item, alias).as_deref(),
+                Some("PRIV"),
+                "{alias}"
+            );
+        }
+        for alias in ["public_key", "publickey", "public"] {
+            assert_eq!(
+                read_naming_a_field(&provider, &item, alias).as_deref(),
+                Some("PUB"),
+                "{alias}"
+            );
+        }
+        for alias in ["fingerprint", "key_fingerprint"] {
+            assert_eq!(
+                read_naming_a_field(&provider, &item, alias).as_deref(),
+                Some("SHA256:fp"),
+                "{alias}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_public_key_request_is_never_answered_with_the_private_key() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "s2", "name": "Key", "type": 5,
+            "sshKey": { "privateKey": "PRIV", "publicKey": "PUB" }
+        }));
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "public").as_deref(),
+            Some("PUB")
+        );
+    }
+
+    // -- secure notes -------------------------------------------------------
+
+    #[test]
+    fn an_explicit_secure_note_field_that_is_absent_returns_nothing() {
+        // R8: an explicit selector resolves to that field or to nothing; the
+        // note body is not a fallback for a misspelled custom field.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "n1", "name": "Note", "type": 2, "notes": "body",
+            "fields": [ { "name": "value", "value": "legacy", "type": 0 } ]
+        }));
+        assert_eq!(read_naming_a_field(&provider, &item, "missing"), None);
+    }
+
+    #[test]
+    fn a_secure_note_with_neither_value_field_nor_body_reads_as_nothing() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({ "id": "n2", "name": "Empty Note", "type": 2 }));
+        assert_eq!(read_without_naming_a_field(&provider, &item), None);
+    }
+
+    // -- custom fields ------------------------------------------------------
+
+    #[test]
+    fn an_exact_custom_field_match_wins_over_a_partial_one() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "f1", "name": "API Keys", "type": 1,
+            "login": { "username": "alice", "password": "pw" },
+            "fields": [
+                { "name": "API_KEY_OLD", "value": "stale", "type": 0 },
+                { "name": "API_KEY", "value": "fresh", "type": 0 }
+            ]
+        }));
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "API_KEY").as_deref(),
+            Some("fresh")
+        );
+    }
+
+    #[test]
+    fn a_partial_custom_field_match_resolves_to_the_first_containing_field() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let item = item_from(json!({
+            "id": "f2", "name": "Notes", "type": 2, "notes": "body",
+            "fields": [ { "name": "My API Key", "value": "sk-123", "type": 0 } ]
+        }));
+        assert_eq!(
+            read_naming_a_field(&provider, &item, "api").as_deref(),
+            Some("sk-123")
+        );
+    }
+
+    // -- custom-field writes ------------------------------------------------
+
+    #[test]
+    fn adding_a_custom_field_creates_it_in_the_fields_array() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let mut item_json = serde_json::json!({ "id": "t1", "name": "Item", "type": 1 });
+        provider
+            .update_custom_field_in_json(&mut item_json, "api_key", "sk-1")
+            .unwrap();
+        let fields = item_json["fields"]
+            .as_array()
+            .expect("a fields array is created");
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0]["name"].as_str(), Some("api_key"));
+        assert_eq!(fields[0]["value"].as_str(), Some("sk-1"));
+    }
+
+    #[test]
+    fn secret_like_field_names_are_stored_hidden_and_others_as_text() {
+        // Hidden (type 1) fields are masked in the vault UI; a field holding a
+        // secret must not be stored as visible plaintext.
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let mut item_json = serde_json::json!({ "id": "t2", "name": "Item", "type": 1 });
+        provider
+            .update_custom_field_in_json(&mut item_json, "api_key", "sk")
+            .unwrap();
+        provider
+            .update_custom_field_in_json(&mut item_json, "display_name", "prod")
+            .unwrap();
+        let fields = item_json["fields"].as_array().unwrap();
+        let by_name = |n: &str| fields.iter().find(|f| f["name"] == n).unwrap();
+        assert_eq!(
+            by_name("api_key")["type"].as_u64(),
+            Some(1),
+            "api_key holds a secret"
+        );
+        assert_eq!(
+            by_name("display_name")["type"].as_u64(),
+            Some(0),
+            "display_name does not"
+        );
+    }
+
+    #[test]
+    fn a_non_array_fields_value_is_reported_not_ignored() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let mut item_json =
+            serde_json::json!({ "id": "t3", "name": "Item", "type": 1, "fields": "oops" });
+        let err = provider
+            .update_custom_field_in_json(&mut item_json, "x", "y")
+            .expect_err("fields must be an array");
+        assert!(err.to_string().contains("Invalid fields array"), "{err}");
+    }
+
+    // -- addressing and placement -------------------------------------------
+
+    #[test]
+    fn convention_address_names_the_secret_key_as_the_item() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        let address = provider
+            .convention_address("project", "default", "DATABASE_URL")
+            .unwrap();
+        assert_eq!(address.item, "DATABASE_URL");
+    }
+
+    #[test]
+    fn items_support_field_coordinates() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        assert_eq!(provider.supported_coords(), &["field"]);
+    }
+
+    #[test]
+    fn placement_from_a_scope_carries_its_organization_and_collection() {
+        let scoped = VaultScope {
+            organization_id: Some("org-1".to_string()),
+            collection_id: Some("col-2".to_string()),
+        };
+        let placement = ItemPlacement::from(&scoped);
+        assert_eq!(placement.organization_id.as_deref(), Some("org-1"));
+        assert_eq!(
+            placement.collection_ids.as_deref(),
+            Some(&["col-2".to_string()][..]),
+        );
+
+        let org_only = VaultScope {
+            organization_id: Some("org-1".to_string()),
+            collection_id: None,
+        };
+        let placement = ItemPlacement::from(&org_only);
+        assert_eq!(placement.organization_id.as_deref(), Some("org-1"));
+        assert_eq!(placement.collection_ids, None);
+    }
+
+    #[test]
+    fn an_unscoped_provider_places_items_nowhere() {
+        let provider = BitwardenProvider::new(BitwardenConfig::default());
+        with_clean_env(|| {
+            let placement = provider.item_placement().expect("unscoped: no CLI call");
+            assert_eq!(placement.organization_id, None);
+            assert_eq!(placement.collection_ids, None);
+        });
+    }
+
+    // -- scope / type resolution --------------------------------------------
+
+    #[test]
+    fn the_environment_overrides_the_configured_scope() {
+        let provider = BitwardenProvider::new(BitwardenConfig {
+            organization_id: Some("cfg-org".to_string()),
+            collection_id: Some("cfg-col".to_string()),
+            ..Default::default()
+        });
+        with_clean_env(|| {
+            assert_eq!(provider.requested_org().as_deref(), Some("cfg-org"));
+            assert_eq!(provider.requested_collection().as_deref(), Some("cfg-col"));
+        });
+        with_env("BITWARDEN_ORGANIZATION", "env-org", || {
+            assert_eq!(provider.requested_org().as_deref(), Some("env-org"));
+        });
+        with_env("BITWARDEN_COLLECTION", "env-col", || {
+            assert_eq!(provider.requested_collection().as_deref(), Some("env-col"));
+        });
+    }
+
+    #[test]
+    fn resolved_item_type_prefers_the_environment_and_falls_back_to_config() {
+        let provider = BitwardenProvider::new(BitwardenConfig {
+            default_item_type: Some(BitwardenItemType::Card),
+            ..Default::default()
+        });
+        with_clean_env(|| {
+            assert_eq!(
+                provider.resolved_item_type().unwrap(),
+                Some(BitwardenItemType::Card)
+            );
+        });
+        with_env("BITWARDEN_DEFAULT_TYPE", "ssh", || {
+            assert_eq!(
+                provider.resolved_item_type().unwrap(),
+                Some(BitwardenItemType::SshKey)
+            );
+        });
+
+        let bare = BitwardenProvider::new(BitwardenConfig::default());
+        with_clean_env(|| assert_eq!(bare.resolved_item_type().unwrap(), None));
+    }
+
+    // -- enums and error rendering ------------------------------------------
+
+    #[test]
+    fn every_item_type_round_trips_through_as_str() {
+        // `as_str` must emit a spelling `from_str` accepts, or a `type=` a
+        // `uri()` emits could never be read back as the same item type.
+        for item_type in ALL_ITEM_TYPES {
+            assert_eq!(
+                BitwardenItemType::from_str(item_type.as_str()),
+                Some(item_type)
+            );
+        }
+    }
+
+    #[test]
+    fn field_types_have_readable_names() {
+        assert_eq!(BitwardenFieldType::Text.as_str(), "text");
+        assert_eq!(BitwardenFieldType::Hidden.as_str(), "hidden");
+        assert_eq!(BitwardenFieldType::Boolean.as_str(), "boolean");
+        assert_eq!(BitwardenFieldType::Linked.as_str(), "linked");
+    }
+
+    #[test]
+    fn describe_org_prefers_the_listed_name_and_falls_back_to_the_id() {
+        let orgs = vec![BitwardenNamedObject {
+            id: "o1".to_string(),
+            name: "Acme Inc".to_string(),
+            organization_id: None,
+        }];
+        assert_eq!(describe_org(Some("o1"), &orgs), "'Acme Inc' (o1)");
+        assert_eq!(describe_org(Some("unknown"), &orgs), "'unknown'");
+        assert_eq!(describe_org(None, &orgs), "your personal vault");
+    }
+
+    #[test]
+    fn list_organizations_names_them_or_says_none_are_visible() {
+        let none = list_organizations(&[]);
+        assert!(none.contains("listed no organizations"), "{none}");
+
+        let orgs = vec![BitwardenNamedObject {
+            id: "o1".to_string(),
+            name: "Acme Inc".to_string(),
+            organization_id: None,
+        }];
+        let listing = list_organizations(&orgs);
+        assert!(listing.contains("Available organizations:"), "{listing}");
+        assert!(listing.contains("Acme Inc (o1)"), "{listing}");
     }
 }

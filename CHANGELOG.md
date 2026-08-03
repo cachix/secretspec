@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Vault and OpenBao AppRole authentication now supports roles configured with
   `bind_secret_id=false` by omitting `secret_id` from the login request when no
   SecretID credential is configured.
+- `secretspec import --delete-source` now compares resolved storage entries
+  without conflating distinct cache address spaces, preventing equivalent
+  provider configurations (including dotenv path aliases) from deleting the
+  destination value. Sources without deletion support are also rejected before
+  any destination is written.
 
 ### Added
 - Vault and OpenBao AppRole and JWT authentication can target non-default auth
@@ -52,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   environment export, codegen input, and deterministic `as_path` cleanup. Its
   checksummed XCFramework includes the shared Rust resolver, so applications do
   not need a Rust toolchain or separately installed native library.
+- `secretspec delete` removes one or more stored secret values without changing
+  their manifest declarations, while `--all` requires explicit confirmation.
+  `secretspec import --delete-source` verifies each destination value before
+  deleting its source, and retains the source when an existing target differs.
 - Dashlane provider (`dashlane://`) for reading secrets from a Dashlane vault
   through the `dcli` CLI. Convention secrets read the item titled
   `secretspec/{project}/{profile}/{key}`, and a `ref` names an existing item by

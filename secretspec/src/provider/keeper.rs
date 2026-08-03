@@ -450,6 +450,12 @@ impl Provider for KeeperProvider {
         uri
     }
 
+    /// Authentication configuration does not change the Keeper shared folder
+    /// in which convention-owned records live.
+    fn entry_container_identity(&self) -> String {
+        format!("keeper://{}", self.config.folder_uid)
+    }
+
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
         let target = self.target(addr)?;
         let records = self.records()?;
@@ -479,6 +485,12 @@ impl Provider for KeeperProvider {
     }
 
     fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        if matches!(addr, Address::Native(_)) {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "Keeper secret references cannot be deleted: a reference names a record managed outside SecretSpec, and deleting it would remove the whole record"
+                    .to_string(),
+            ));
+        }
         let target = self.target(addr)?;
         let mut records = self.records()?;
         let Some(index) = self.record_index(&records, &target)? else {
@@ -939,7 +951,7 @@ mod tests {
     fn sdk_operations_run_outside_tokio_runtimes() {
         let (provider, state) = provider_with_records(vec![record(
             "RecordUID",
-            "existing",
+            "secretspec/demo/default/existing",
             true,
             serde_json::json!([
                 {"type": "password", "label": "", "value": ["old"]}
@@ -969,13 +981,37 @@ mod tests {
                     &SecretString::new("created".to_string().into()),
                 )
                 .unwrap();
-            provider.delete(Address::Native(&native)).unwrap();
+            provider
+                .delete(Address::convention("demo", "default", "existing"))
+                .unwrap();
         });
 
         let state = state.lock().unwrap();
         assert_eq!(state.updated.len(), 1);
         assert_eq!(state.created.len(), 1);
         assert_eq!(state.deleted, ["RecordUID"]);
+    }
+
+    #[test]
+    fn delete_rejects_native_references_before_touching_the_record() {
+        let (provider, state) = provider_with_records(vec![record(
+            "RecordUID",
+            "external-record",
+            true,
+            serde_json::json!([
+                {"type": "password", "label": "", "value": ["value"]}
+            ]),
+            serde_json::json!([]),
+        )]);
+        let native = NativeAddress {
+            item: "RecordUID".to_string(),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+
+        let error = provider.delete(Address::Native(&native)).unwrap_err();
+        assert!(error.to_string().contains("whole record"), "{error}");
+        assert!(state.lock().unwrap().deleted.is_empty());
     }
 
     #[test]

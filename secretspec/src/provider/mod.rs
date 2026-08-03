@@ -714,9 +714,10 @@ pub trait Provider: Send + Sync {
     /// Deletes a secret at `addr`. Available since SecretSpec 0.17.
     ///
     /// Providers opt into deletion explicitly. This is used by cache
-    /// invalidation and defaults to a clear unsupported-operation error so
-    /// adding the method does not silently make destructive behavior available
-    /// to every provider.
+    /// invalidation and, starting in SecretSpec 0.18, by `secretspec delete`
+    /// and `secretspec import --delete-source`. It defaults to a clear
+    /// unsupported-operation error so adding the method does not silently make
+    /// destructive behavior available to every provider.
     ///
     /// Deleting is idempotent: an address that holds nothing is `Ok(false)`,
     /// not an error. The `bool` reports whether an entry was actually removed,
@@ -805,6 +806,58 @@ pub trait Provider: Send + Sync {
     /// identities should override this method.
     fn storage_identity(&self) -> String {
         self.uri()
+    }
+
+    /// Returns the identity of the container holding a resolved secret entry.
+    /// Available since SecretSpec 0.18.
+    ///
+    /// This differs from [`Self::storage_identity`] only for providers whose
+    /// public URI contains an addressing template. Cache routing must retain
+    /// that template so sibling address spaces remain distinct, while
+    /// destructive operations compare the template's resolved native
+    /// coordinates separately and need the identity of the underlying
+    /// container here.
+    fn entry_container_identity(&self) -> String {
+        self.storage_identity()
+    }
+
+    /// Returns whether `self` and `other` resolve `addr` to the same physical
+    /// secret entry. Available since SecretSpec 0.18.
+    ///
+    /// Destructive cross-provider operations must use this instead of comparing
+    /// [`uri`](Provider::uri) strings: one store may have multiple equivalent
+    /// spellings, and provider URIs can include convention templates that are
+    /// only meaningful after resolving a concrete address. The physical store
+    /// and the resolved native coordinates must both match before an entry is
+    /// considered shared.
+    fn same_entry(&self, other: &dyn Provider, addr: Address<'_>) -> Result<bool> {
+        let same_store = match (self.physical_store_path(), other.physical_store_path()) {
+            (Some(left), Some(right)) => {
+                same_file::is_same_file(left, right).unwrap_or_else(|_| {
+                    let left = std::path::absolute(left).unwrap_or_else(|_| left.to_path_buf());
+                    let right = std::path::absolute(right).unwrap_or_else(|_| right.to_path_buf());
+                    left == right
+                })
+            }
+            (None, None) => self.entry_container_identity() == other.entry_container_identity(),
+            _ => false,
+        };
+        if !same_store {
+            return Ok(false);
+        }
+
+        Ok(self.resolve_coords(addr)? == other.resolve_coords(addr)?)
+    }
+
+    /// Returns the path that identifies a filesystem-backed store, if any.
+    /// Available since SecretSpec 0.18.
+    ///
+    /// The path is compared using filesystem identity when it exists, catching
+    /// lexical aliases, symlinks, and hard links. Providers that are not backed
+    /// by one path keep the default and are identified by
+    /// [`storage_identity`](Provider::storage_identity).
+    fn physical_store_path(&self) -> Option<&std::path::Path> {
+        None
     }
 
     /// Records a human-readable reason for the secrets access happening in this
@@ -1037,8 +1090,17 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn uri(&self) -> String {
         (**self).uri()
     }
+    fn same_entry(&self, other: &dyn Provider, addr: Address<'_>) -> Result<bool> {
+        (**self).same_entry(other, addr)
+    }
     fn storage_identity(&self) -> String {
         (**self).storage_identity()
+    }
+    fn entry_container_identity(&self) -> String {
+        (**self).entry_container_identity()
+    }
+    fn physical_store_path(&self) -> Option<&std::path::Path> {
+        (**self).physical_store_path()
     }
     fn set_reason(&self, reason: Option<String>) {
         (**self).set_reason(reason);
@@ -1222,8 +1284,20 @@ impl Provider for PreflightGuard {
         self.inner.uri()
     }
 
+    fn same_entry(&self, other: &dyn Provider, addr: Address<'_>) -> Result<bool> {
+        self.inner.same_entry(other, addr)
+    }
+
     fn storage_identity(&self) -> String {
         self.inner.storage_identity()
+    }
+
+    fn entry_container_identity(&self) -> String {
+        self.inner.entry_container_identity()
+    }
+
+    fn physical_store_path(&self) -> Option<&std::path::Path> {
+        self.inner.physical_store_path()
     }
 
     fn set_reason(&self, reason: Option<String>) {

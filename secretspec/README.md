@@ -269,7 +269,9 @@ secretspec check                  # Verify all secrets are set
 secretspec add KEY --description "Purpose" # Declare a secret (0.18+)
 secretspec set KEY               # Set a secret interactively
 secretspec get KEY               # Retrieve a secret
+secretspec delete KEY            # Delete a stored provider value (0.18+)
 secretspec import PROVIDER       # Import secrets from another provider
+secretspec import PROVIDER --delete-source # Move verified values (0.18+)
 secretspec cache clear [KEY]     # Clear cached provider values (0.17+)
 
 # Run with secrets

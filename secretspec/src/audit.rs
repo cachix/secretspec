@@ -45,6 +45,8 @@ pub(crate) enum AuditAction {
     Get,
     /// Write a single secret (`secretspec set`).
     Set,
+    /// Delete a stored secret value (`secretspec delete`, SecretSpec 0.18+).
+    Delete,
     /// Validate availability of all secrets (`secretspec check`).
     Check,
     /// Inject all secrets into a subprocess (`secretspec run`).
@@ -74,7 +76,7 @@ pub(crate) enum AuditOutcome {
     Default,
     /// The secret was written successfully.
     Written,
-    /// A cached secret was deleted successfully.
+    /// A stored secret or cached value was deleted successfully.
     Deleted,
     /// The audited subprocess (`run`) was successfully started with the secrets
     /// injected. Distinct from `found`, which is about a secret lookup.
@@ -122,7 +124,7 @@ pub(crate) struct AuditContext<'a> {
     pub profile: &'a str,
     /// The active named scope for scope-aware bulk actions.
     pub scope: Option<&'a str>,
-    /// The single secret involved (`get`/`set`).
+    /// The single secret involved (`get`/`set`/`delete`).
     pub key: Option<&'a str>,
     /// The set of secrets involved in a bulk action
     /// (`check`/`run`/`import`/`export`).

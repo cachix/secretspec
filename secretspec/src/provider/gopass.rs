@@ -288,6 +288,12 @@ impl Provider for GoPassProvider {
             format!("gopass://{}", prefix)
         }
     }
+
+    /// The URI's folder prefix is compiled into the native entry name and does
+    /// not identify a separate gopass installation.
+    fn entry_container_identity(&self) -> String {
+        "gopass".to_string()
+    }
 }
 
 #[cfg(test)]

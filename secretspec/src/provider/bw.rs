@@ -4030,11 +4030,21 @@ mod tests {
     // developer's real `bw`, which would answer with — and write to — a real
     // vault; the fake answers fixture files instead and records every
     // invocation so tests can assert what was asked for.
+    //
+    // Everything below this line is `#[cfg(unix)]`-only: the fake is an
+    // extensionless POSIX shell script, and on Windows `Command::new("bw")`
+    // goes through CreateProcess, which cannot execute such a file (bare-name
+    // resolution only finds `.exe`-style programs). A compiled fake would
+    // need a helper binary, which unit tests cannot build — `CARGO_BIN_EXE_*`
+    // is only available to integration tests. So the subprocess flows are
+    // exercised on Linux/macOS only, while the pure helpers above still run
+    // on every platform, including the Windows CI job.
     // ---------------------------------------------------------------------
 
     /// Tests that put the fake `bw` on PATH run one at a time: PATH is
     /// process-global state, exactly like the BITWARDEN_* variables guarded by
     /// [`ENV_LOCK`].
+    #[cfg(unix)]
     static BW_SHIM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// A disposable fake `bw` CLI for one test.
@@ -4045,6 +4055,7 @@ mod tests {
     /// the directory first on PATH for the duration of `body` and isolates
     /// `BITWARDENCLI_APPDATA_DIR`, mirroring the vaultwarden harness, so
     /// nothing the fake does can reach the developer's own bw config.
+    #[cfg(unix)]
     struct FakeBw {
         dir: std::path::PathBuf,
     }
@@ -4053,11 +4064,13 @@ mod tests {
     /// `body` panics — a leaked PATH pointing at a soon-deleted fixture
     /// directory would turn a later accidental `bw` spawn into a silent
     /// NotFound.
+    #[cfg(unix)]
     struct PathRestore {
         old_path: String,
         old_appdata: Option<String>,
     }
 
+    #[cfg(unix)]
     impl Drop for PathRestore {
         fn drop(&mut self) {
             unsafe { std::env::set_var("PATH", &self.old_path) };
@@ -4068,6 +4081,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl FakeBw {
         /// Creates a fresh fake in a temp directory with the shim script
         /// installed and ready to answer `[]` to every listing.
@@ -4189,6 +4203,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl Drop for FakeBw {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.dir);
@@ -4198,6 +4213,7 @@ mod tests {
     /// Runs `body` with no `bw` on PATH at all, so the provider's
     /// "CLI not installed" branches (a distinct `NotFound` handling per call
     /// site) are exercised for real.
+    #[cfg(unix)]
     fn with_no_bw<T>(body: impl FnOnce() -> T) -> T {
         let _guard = BW_SHIM_LOCK.lock().unwrap();
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -4219,6 +4235,7 @@ mod tests {
 
     // -- check_server ------------------------------------------------------
 
+    #[cfg(unix)]
     #[test]
     fn check_server_accepts_a_matching_server_url() {
         // A self-hosted address verifies that the CLI already targets that
@@ -4233,6 +4250,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn check_server_accepts_the_public_cloud_when_expected() {
         // `bw status` reports the cloud as a null serverUrl; that must
@@ -4245,6 +4263,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn check_server_rejects_a_mismatched_server_with_remediation() {
         // The provider must fail closed when the CLI points elsewhere and
@@ -4267,6 +4286,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn check_server_names_the_public_cloud_as_the_current_server() {
         // A null serverUrl means the cloud; the mismatch message must say so
@@ -4287,6 +4307,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn check_server_ignores_a_missing_cli() {
         // `execute_bw_command` reports a missing CLI with install
@@ -4298,6 +4319,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn check_server_reports_a_failed_status_call() {
         let fake = FakeBw::new().with_failure(1, "", "boom");
@@ -4311,6 +4333,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn check_server_reports_unparseable_status_output() {
         // A successful-but-garbage `bw status` is a configuration problem
@@ -4330,6 +4353,7 @@ mod tests {
 
     // -- execute_bw_command ------------------------------------------------
 
+    #[cfg(unix)]
     #[test]
     fn execute_bw_command_returns_the_stdout_of_a_successful_call() {
         let fake = FakeBw::new().with_items(json!([{
@@ -4343,6 +4367,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn execute_bw_command_reports_a_missing_cli_with_install_instructions() {
         // A machine without the CLI gets instructions, not a bare "command
@@ -4356,6 +4381,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn execute_bw_command_maps_a_not_logged_in_error() {
         // `bw` says this on stderr when no session exists; the provider must
@@ -4369,6 +4395,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn execute_bw_command_maps_a_locked_vault_error() {
         let fake = FakeBw::new().with_failure(1, "", "Vault is locked.");
@@ -4380,6 +4407,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn execute_bw_command_reports_generic_failures_with_stderr() {
         // Anything outside the two known states surfaces as a plain failure
@@ -4397,6 +4425,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn execute_bw_command_falls_back_to_stdout_for_failure_detail() {
         // An error with empty stderr must not read as an empty message: the
@@ -4410,6 +4439,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn execute_bw_command_rejects_non_utf8_stdout() {
         // `bw` output is treated as text; bytes that are not UTF-8 must fail
@@ -4428,6 +4458,7 @@ mod tests {
 
     // -- is_authenticated --------------------------------------------------
 
+    #[cfg(unix)]
     #[test]
     fn is_authenticated_is_true_when_the_vault_is_unlocked() {
         let fake = FakeBw::new(); // default status: unlocked
@@ -4437,6 +4468,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn is_authenticated_is_false_when_the_vault_is_locked() {
         // A locked vault is a known, non-fatal state: the caller sees
@@ -4450,6 +4482,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn is_authenticated_is_false_when_not_logged_in() {
         let fake = FakeBw::new().with_failure(1, "", "You are not logged in.");
@@ -4459,6 +4492,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn is_authenticated_is_false_when_the_vault_is_locked_on_stderr() {
         let fake = FakeBw::new().with_failure(1, "", "Vault is locked.");
@@ -4468,6 +4502,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn is_authenticated_surfaces_unexpected_failures() {
         // Any other failure is not a known state: it must propagate as an
@@ -4499,6 +4534,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn get_item_as_template_fails_when_the_item_is_missing() {
         let fake = FakeBw::new(); // empty vault
@@ -4509,6 +4545,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn create_item_from_template_pipes_the_template_to_create_item() {
         // The provider builds the item JSON itself and hands it to
@@ -4546,6 +4583,7 @@ mod tests {
 
     // -- scope resolution over the fake CLI --------------------------------
 
+    #[cfg(unix)]
     #[test]
     fn look_up_scope_resolves_an_organization_name_through_the_fake_cli() {
         let fake = FakeBw::new().with_organizations(json!([
@@ -4571,6 +4609,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn look_up_scope_fails_when_the_organization_is_not_visible() {
         let fake = FakeBw::new().with_organizations(json!([]));
@@ -4584,6 +4623,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn server_check_is_memoized_to_one_status_call_per_provider() {
         // `ensure_server_configured` may run before every command, but the
@@ -4611,6 +4651,7 @@ mod tests {
 
     // -- get / set flows over the fake CLI --------------------------------
 
+    #[cfg(unix)]
     #[test]
     fn get_answers_with_the_password_of_a_matching_login() {
         // The read path: authenticate, narrow with bw's own search, match
@@ -4634,6 +4675,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn get_falls_back_from_an_empty_search_to_an_unfiltered_listing() {
         // bw's own search is a fuzzy matcher that has been wrong; an empty
@@ -4656,6 +4698,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn get_returns_none_for_an_absent_secret() {
         // An empty vault answers Ok(None) — an absence, not an error.
@@ -4672,6 +4715,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn get_reports_ambiguous_items_instead_of_answering() {
         // Two items with the same name cannot be told apart by the address;
@@ -4691,6 +4735,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn get_fails_closed_when_not_authenticated() {
         // A locked vault must not be served as if the secret were absent:
@@ -4710,6 +4755,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn get_through_an_organization_sends_the_resolved_scope_filter() {
         // An organization address resolves the name to a UUID once, then the
@@ -4739,6 +4785,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn set_updates_an_existing_item_in_place() {
         // A set against an existing item must fetch it, change the addressed
@@ -4772,6 +4819,7 @@ mod tests {
         assert_eq!(sent["login"]["username"], "alice");
     }
 
+    #[cfg(unix)]
     #[test]
     fn set_creates_a_new_item_when_none_matches() {
         // A set against an empty vault must create a Login (the type
@@ -4795,6 +4843,7 @@ mod tests {
         assert_eq!(sent["login"]["password"], "s3cret");
     }
 
+    #[cfg(unix)]
     #[test]
     fn set_with_an_explicit_field_writes_that_field() {
         // `set --field username` updates the built-in login member, leaving
@@ -4819,6 +4868,7 @@ mod tests {
         assert_eq!(sent["login"]["password"], "pw");
     }
 
+    #[cfg(unix)]
     #[test]
     fn set_fails_closed_when_not_authenticated() {
         let fake = FakeBw::new().with_status(json!({
@@ -4836,6 +4886,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn create_new_item_builds_a_card_item_for_a_card_address() {
         // A `?type=card` address creates a Card with the value in the card
@@ -4859,6 +4910,7 @@ mod tests {
     /// Decodes the single base64 JSON payload the fake `bw` logged on stdin
     /// for the given command (`create` or `edit`), for tests that assert what
     /// the provider actually sent.
+    #[cfg(unix)]
     fn decode_stdin_line(fake: &FakeBw, command: &str) -> serde_json::Value {
         use base64::{Engine as _, engine::general_purpose};
         let log = fake.invocations();
@@ -4881,6 +4933,7 @@ mod tests {
 
     // -- last error paths and trait wrappers -------------------------------
 
+    #[cfg(unix)]
     #[test]
     fn create_item_from_template_reports_a_missing_cli() {
         // The creation spawn carries its own NotFound handling with install
@@ -4897,6 +4950,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn update_item_with_json_reports_a_missing_cli() {
         with_no_bw(|| {
@@ -4911,6 +4965,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn look_up_scope_reports_an_organizations_listing_failure() {
         // A failed `bw list organizations` is surfaced with its own context
@@ -4929,6 +4984,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn look_up_scope_reports_a_collections_listing_failure() {
         // Only the collections listing fails here; the organizations listing
@@ -4947,6 +5003,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn provider_get_resolves_a_convention_address() {
         // The Provider trait entry point maps the convention address onto
@@ -4966,6 +5023,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn provider_get_resolves_a_native_address_with_a_field() {
         // A native `ref` can name the item *and* a field coordinate, which
@@ -4989,6 +5047,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn provider_set_resolves_a_convention_address() {
         let fake = FakeBw::new(); // empty vault: the write must create
@@ -5007,6 +5066,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn create_new_item_with_an_explicit_field_writes_that_field() {
         // A named field on creation is resolved the same way as on update:
@@ -5023,6 +5083,7 @@ mod tests {
         assert_eq!(sent["login"]["username"], "alice");
     }
 
+    #[cfg(unix)]
     #[test]
     fn get_returns_secure_note_body_when_no_value_field_exists() {
         // A secure note's body is where the updater writes, so an unqualified
@@ -5048,6 +5109,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_item_with_an_unknown_type_fails_to_parse() {
         // A listing `bw` could never produce must not deserialize into a
@@ -5062,6 +5124,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_item_with_an_unknown_field_type_fails_to_parse() {
         let fake = FakeBw::new().with_items(json!([{
@@ -5094,6 +5157,7 @@ mod tests {
         assert!(err.to_string().contains("Unknown field type"), "{err}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn look_up_scope_keeps_a_collection_without_an_organization() {
         // A collection whose fixture omits `organizationId` resolves with the

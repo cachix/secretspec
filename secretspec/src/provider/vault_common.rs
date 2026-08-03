@@ -80,6 +80,17 @@ pub(crate) enum AuthMethod {
     Jwt,
 }
 
+impl AuthMethod {
+    /// Default mount name beneath `/v1/auth` for login-based methods.
+    fn default_mount(self) -> Option<&'static str> {
+        match self {
+            Self::Token => None,
+            Self::AppRole => Some("approle"),
+            Self::Jwt => Some("jwt"),
+        }
+    }
+}
+
 /// Product-specific identity and environment conventions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)] // Each variant is constructed only when its Cargo feature is enabled.
@@ -184,6 +195,8 @@ pub(crate) struct KvConfig {
     pub(crate) namespace: Option<String>,
     /// Login flow used to obtain the token attached to data requests.
     pub(crate) auth: AuthMethod,
+    /// Optional non-default auth-method mount beneath `/v1/auth`.
+    pub(crate) auth_mount: Option<String>,
     /// Role sent to the JWT login endpoint.
     pub(crate) role: Option<String>,
     /// Audience requested when SecretSpec mints a CI OIDC token.
@@ -198,6 +211,7 @@ impl Default for KvConfig {
             kv_version: KvVersion::default(),
             namespace: None,
             auth: AuthMethod::default(),
+            auth_mount: None,
             role: None,
             audience: None,
         }
@@ -338,6 +352,20 @@ impl KvConfig {
             .transpose()?
             .unwrap_or_default();
 
+        let auth_mount = url
+            .query_pairs()
+            .find(|(key, _)| key == "auth_mount")
+            .map(|(_, value)| Self::normalize_auth_mount(&value))
+            .transpose()?;
+        if auth_mount.is_some() && auth == AuthMethod::Token {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "`auth_mount` requires `auth=approle` or `auth=jwt`; token authentication has no login mount"
+                    .to_string(),
+            ));
+        }
+        // Canonical provider URIs omit an explicitly stated default.
+        let auth_mount = auth_mount.filter(|mount| Some(mount.as_str()) != auth.default_mount());
+
         let role = url
             .query_pairs()
             .find(|(key, _)| key == "role")
@@ -370,9 +398,36 @@ impl KvConfig {
             kv_version,
             namespace,
             auth,
+            auth_mount,
             role,
             audience,
         })
+    }
+
+    /// Normalizes a mount name relative to `/v1/auth` while preserving valid
+    /// nested mount paths. Empty and dot segments are rejected so the login URL
+    /// cannot escape or ambiguously address the selected mount.
+    fn normalize_auth_mount(value: &str) -> Result<String> {
+        let mount = value.trim_matches('/');
+        if mount.is_empty() {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "`auth_mount` must name a mount beneath `/v1/auth`".to_string(),
+            ));
+        }
+        if mount.chars().any(char::is_control) {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "`auth_mount` cannot contain control characters".to_string(),
+            ));
+        }
+        if mount
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+        {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "`auth_mount` cannot contain empty, `.` or `..` path segments".to_string(),
+            ));
+        }
+        Ok(mount.to_string())
     }
 }
 
@@ -619,9 +674,15 @@ impl KvProvider {
             AuthMethod::Token => {}
             AuthMethod::AppRole => {
                 uri.query_pairs_mut().append_pair("auth", "approle");
+                if let Some(auth_mount) = &self.config.auth_mount {
+                    uri.query_pairs_mut().append_pair("auth_mount", auth_mount);
+                }
             }
             AuthMethod::Jwt => {
                 uri.query_pairs_mut().append_pair("auth", "jwt");
+                if let Some(auth_mount) = &self.config.auth_mount {
+                    uri.query_pairs_mut().append_pair("auth_mount", auth_mount);
+                }
                 if let Some(role) = &self.config.role {
                     uri.query_pairs_mut().append_pair("role", role);
                 }
@@ -879,7 +940,7 @@ impl KvProvider {
                     ))
                 })?;
 
-        let url = format!("{}/v1/auth/approle/login", self.config.endpoint);
+        let url = self.auth_login_url();
         let body = serde_json::json!({
             "role_id": role_id,
             "secret_id": secret_id,
@@ -890,7 +951,7 @@ impl KvProvider {
         // token's perceived lifetime.
         let login_started_at = Instant::now();
         let response = self
-            .build_login_request(&url, &body)?
+            .build_login_request(url.as_str(), &body)?
             .send()
             .await
             .map_err(|error| {
@@ -920,7 +981,7 @@ impl KvProvider {
         self.parse_login_token(&response, "AppRole", login_started_at)
     }
 
-    /// Exchanges a JWT and role at the standard `auth/jwt/login` endpoint.
+    /// Exchanges a JWT and role at the configured JWT auth mount.
     async fn resolve_jwt_auth(&self) -> Result<IssuedToken> {
         let role = self.config.role.clone().ok_or_else(|| {
             SecretSpecError::ProviderOperationFailed(format!(
@@ -931,7 +992,7 @@ impl KvProvider {
         })?;
         let jwt = self.resolve_jwt().await?;
 
-        let url = format!("{}/v1/auth/jwt/login", self.config.endpoint);
+        let url = self.auth_login_url();
         let body = serde_json::json!({
             "role": role,
             "jwt": jwt.expose_secret(),
@@ -941,7 +1002,7 @@ impl KvProvider {
         // token's perceived lifetime.
         let login_started_at = Instant::now();
         let response = self
-            .build_login_request(&url, &body)?
+            .build_login_request(url.as_str(), &body)?
             .send()
             .await
             .map_err(|error| {
@@ -1112,6 +1173,30 @@ impl KvProvider {
             .post(url)
             .headers(self.build_namespace_headers()?)
             .json(body))
+    }
+
+    /// Builds `/v1/auth/<mount>/login`, encoding each nested mount segment as a
+    /// URL path component rather than interpolating query-derived text.
+    fn auth_login_url(&self) -> Url {
+        let mount = self
+            .config
+            .auth_mount
+            .as_deref()
+            .or_else(|| self.config.auth.default_mount())
+            .expect("only login-based authentication builds a login URL");
+        let mut url = Url::parse(&self.config.endpoint)
+            .expect("KvConfig endpoints are normalized HTTP origins");
+        {
+            let mut path = url
+                .path_segments_mut()
+                .expect("a normalized HTTP endpoint supports path segments");
+            path.clear().push("v1").push("auth");
+            for segment in mount.split('/') {
+                path.push(segment);
+            }
+            path.push("login");
+        }
+        url
     }
 
     /// Builds headers shared by authenticated Vault-compatible API requests.
@@ -2252,6 +2337,102 @@ mod tests {
     }
 
     #[test]
+    fn auth_mount_is_normalized_and_defaults_stay_implicit() {
+        let custom = KvConfig::parse(
+            &provider_url(
+                "vault://vault.example.com:8200/secret?auth=approle&auth_mount=/team/approle/",
+            ),
+            Product::Vault,
+        )
+        .unwrap();
+        assert_eq!(custom.auth_mount.as_deref(), Some("team/approle"));
+        let custom = KvProvider::new(custom, Product::Vault);
+        assert_eq!(
+            custom.uri(),
+            "vault://vault.example.com:8200/secret?auth=approle&auth_mount=team%2Fapprole"
+        );
+        assert_eq!(
+            custom.auth_login_url().as_str(),
+            "https://vault.example.com:8200/v1/auth/team/approle/login"
+        );
+
+        let unicode = KvConfig::parse(
+            &provider_url(
+                "openbao://bao.example.com:8200/secret?auth=jwt&auth_mount=%C3%A9quipe-jwt&role=ci",
+            ),
+            Product::OpenBao,
+        )
+        .unwrap();
+        assert_eq!(unicode.auth_mount.as_deref(), Some("équipe-jwt"));
+        let unicode = KvProvider::new(unicode, Product::OpenBao);
+        assert_eq!(
+            unicode.uri(),
+            "openbao://bao.example.com:8200/secret?auth=jwt&auth_mount=%C3%A9quipe-jwt&role=ci"
+        );
+        assert_eq!(
+            unicode.auth_login_url().as_str(),
+            "https://bao.example.com:8200/v1/auth/%C3%A9quipe-jwt/login"
+        );
+
+        for (spec, product) in [
+            (
+                "vault://vault.example.com:8200/secret?auth=approle&auth_mount=approle",
+                Product::Vault,
+            ),
+            (
+                "openbao://bao.example.com:8200/secret?auth=jwt&auth_mount=jwt&role=ci",
+                Product::OpenBao,
+            ),
+        ] {
+            let config = KvConfig::parse(&provider_url(spec), product).unwrap();
+            assert_eq!(config.auth_mount, None);
+            assert!(
+                !KvProvider::new(config, product)
+                    .uri()
+                    .contains("auth_mount")
+            );
+        }
+    }
+
+    #[test]
+    fn login_urls_use_the_auth_method_default_mounts() {
+        for (auth, expected) in [
+            (
+                AuthMethod::AppRole,
+                "https://vault.example.com:8200/v1/auth/approle/login",
+            ),
+            (
+                AuthMethod::Jwt,
+                "https://vault.example.com:8200/v1/auth/jwt/login",
+            ),
+        ] {
+            let provider = KvProvider::new(
+                KvConfig {
+                    endpoint: "https://vault.example.com:8200".to_string(),
+                    auth,
+                    ..Default::default()
+                },
+                Product::Vault,
+            );
+            assert_eq!(provider.auth_login_url().as_str(), expected);
+        }
+    }
+
+    #[test]
+    fn invalid_auth_mounts_are_rejected_before_login() {
+        for spec in [
+            "vault://vault.example.com:8200/secret?auth_mount=approle",
+            "vault://vault.example.com:8200/secret?auth=approle&auth_mount=",
+            "vault://vault.example.com:8200/secret?auth=approle&auth_mount=team%2F%2Fapprole",
+            "vault://vault.example.com:8200/secret?auth=approle&auth_mount=team%2F..%2Fapprole",
+            "vault://vault.example.com:8200/secret?auth=approle&auth_mount=team%0Aapprole",
+        ] {
+            let error = KvConfig::parse(&provider_url(spec), Product::Vault).unwrap_err();
+            assert!(error.to_string().contains("auth_mount"), "{spec}: {error}");
+        }
+    }
+
+    #[test]
     fn storage_identity_unifies_compatible_products_and_authentication() {
         let vault = KvConfig::parse(
             &provider_url("vault://team-a@bao.example.com:8200/secret?tls=false&kv=1&auth=approle"),
@@ -2274,6 +2455,21 @@ mod tests {
         assert_eq!(
             KvProvider::new(openbao, Product::OpenBao).storage_identity(),
             expected
+        );
+    }
+
+    #[test]
+    fn auth_mount_does_not_change_storage_identity() {
+        let identity = |spec| {
+            let config = KvConfig::parse(&provider_url(spec), Product::Vault).unwrap();
+            KvProvider::new(config, Product::Vault).storage_identity()
+        };
+
+        assert_eq!(
+            identity("vault://team-a@bao.example.com:8200/secret?auth=approle"),
+            identity(
+                "vault://team-a@bao.example.com:8200/secret?auth=approle&auth_mount=team-approle"
+            )
         );
     }
 

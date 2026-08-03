@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   libdbus.
 
 ### Added
+- Vault and OpenBao AppRole and JWT authentication can target non-default auth
+  method mounts, including printable Unicode mount names, with the `auth_mount`
+  provider URI option.
 - Swift SDK (available in 0.18) for resolving SecretSpec manifests from macOS
   12+ on Intel and Apple silicon. The SwiftPM package provides fluent and
   one-shot resolution, typed failures, scopes, value-free reports, provenance,

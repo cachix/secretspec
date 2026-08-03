@@ -299,11 +299,13 @@ vault://ns1@vault.example.com:8200/secret   # With namespace
 vault://vault.example.com:8200/secret?auth=approle
 # SecretSpec 0.17+
 vault://vault.example.com:8200/secret?auth=jwt&role=ci
+# SecretSpec 0.18+
+vault://vault.example.com:8200/secret?auth=approle&auth_mount=platform-approle
 vault://127.0.0.1:8200/secret?kv=1         # KV v1 engine
 vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
 ```
 
-**Features**: Read/write, KV v1 and v2, namespaces; token and AppRole authentication; JWT/OIDC authentication (0.17+)
+**Features**: Read/write, KV v1 and v2, namespaces; token and AppRole authentication; JWT/OIDC authentication (0.17+); custom AppRole/JWT mounts (0.18+)
 **Prerequisites**: Vault server, authentication credentials, build with `--features vault`
 **Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
 
@@ -320,10 +322,12 @@ openbao://bao.example.com:8200/secret
 openbao://team-a@bao.example.com:8200/secret
 openbao://bao.example.com:8200/secret?auth=approle
 openbao://bao.example.com:8200/secret?auth=jwt&role=ci
+# SecretSpec 0.18+
+openbao://bao.example.com:8200/secret?auth=jwt&auth_mount=ci-jwt&role=ci
 openbao://127.0.0.1:8200/secret?kv=1&tls=false
 ```
 
-**Features**: Read/write, KV v1 and v2, namespaces; token, AppRole, and JWT/OIDC authentication; documented OpenBao CLI variables plus SecretSpec-defined `BAO_*` AppRole/JWT inputs, all with `VAULT_*` compatibility fallbacks
+**Features**: Read/write, KV v1 and v2, namespaces; token, AppRole, and JWT/OIDC authentication; custom AppRole/JWT mounts (0.18+); documented OpenBao CLI variables plus SecretSpec-defined `BAO_*` AppRole/JWT inputs, all with `VAULT_*` compatibility fallbacks
 **Prerequisites**: OpenBao server, authentication credentials, build with `--features openbao` (0.17+)
 **Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
 

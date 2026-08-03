@@ -68,6 +68,24 @@ secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "vault-a
 
 SecretSpec 0.14 supports only `VAULT_ROLE_ID` and `VAULT_SECRET_ID`.
 
+### Custom authentication mounts (0.18+)
+
+:::note[Version compatibility]
+Custom authentication mounts are available starting with SecretSpec 0.18.
+:::
+
+AppRole and JWT methods mounted somewhere other than their defaults can be
+selected with `?auth_mount=`. The value is relative to `/v1/auth`:
+
+```text
+vault://vault.example.com:8200/secret?auth=approle&auth_mount=platform-approle
+vault://vault.example.com:8200/secret?auth=jwt&auth_mount=ci-jwt&role=ci
+```
+
+The provider logs in at `/v1/auth/platform-approle/login` and
+`/v1/auth/ci-jwt/login`, respectively. The KV mount remains the provider URI
+path (`secret` in these examples).
+
 ### JWT / OIDC authentication (0.17+)
 
 :::note[Version compatibility]
@@ -100,6 +118,7 @@ vault://[namespace@]host[:port][/mount][?key=value&...]
 - `namespace@`: Optional Vault namespace (also reads `VAULT_NAMESPACE`)
 - `?auth=approle`: Use AppRole authentication (default: `token`)
 - `?auth=jwt` (0.17+): Use JWT/OIDC authentication (requires `?role=`)
+- `?auth_mount=` (0.18+): Non-default AppRole or JWT mount beneath `/v1/auth`
 - `?role=` (0.17+): Vault role for JWT auth (or `VAULT_JWT_ROLE`)
 - `?audience=` (0.17+): OIDC audience (or `VAULT_JWT_AUDIENCE`)
 - `?kv=1`: Use KV v1 (default: v2)
@@ -118,6 +137,8 @@ vault://[namespace@]host[:port][/mount][?key=value&...]
 vault://vault.example.com:8200/secret
 vault://team-a@vault.example.com:8200/secret
 vault://vault.example.com:8200/secret?auth=approle
+# SecretSpec 0.18+
+vault://vault.example.com:8200/secret?auth=approle&auth_mount=platform-approle
 # SecretSpec 0.17+
 vault://vault.example.com:8200/secret?auth=jwt&role=ci
 ```

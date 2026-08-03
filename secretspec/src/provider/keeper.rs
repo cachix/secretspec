@@ -450,6 +450,12 @@ impl Provider for KeeperProvider {
         uri
     }
 
+    /// Authentication configuration does not change the Keeper shared folder
+    /// in which convention-owned records live.
+    fn storage_identity(&self) -> String {
+        format!("keeper://{}", self.config.folder_uid)
+    }
+
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
         let target = self.target(addr)?;
         let records = self.records()?;

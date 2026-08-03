@@ -28,9 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Vault and OpenBao AppRole authentication now supports roles configured with
   `bind_secret_id=false` by omitting `secret_id` from the login request when no
   SecretID credential is configured.
-- `secretspec import --delete-source` now recognizes equivalent dotenv paths,
-  symlinks, and hard links as the same store, preventing source cleanup from
-  deleting the destination value.
+- `secretspec import --delete-source` now compares resolved storage entries,
+  preventing equivalent provider configurations (including dotenv path aliases)
+  from deleting the destination value. Sources without deletion support are
+  also rejected before any destination is written.
 
 ### Added
 - Vault and OpenBao AppRole and JWT authentication can target non-default auth

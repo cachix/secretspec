@@ -791,20 +791,17 @@ pub trait Provider: Send + Sync {
         self.uri()
     }
 
-    /// Returns whether `other` addresses the same physical secret store.
-    /// Available since SecretSpec 0.18.
+    /// Returns whether `self` and `other` resolve `addr` to the same physical
+    /// secret entry. Available since SecretSpec 0.18.
     ///
     /// Destructive cross-provider operations must use this instead of comparing
     /// [`uri`](Provider::uri) strings: one store may have multiple equivalent
-    /// spellings. Providers backed by a filesystem path can opt into same-file
-    /// checks by returning it from
-    /// [`physical_store_path`](Provider::physical_store_path); other providers
-    /// use their canonical, credential-free URI.
-    fn same_store(&self, other: &dyn Provider) -> bool {
-        if self.name() != other.name() {
-            return false;
-        }
-        match (self.physical_store_path(), other.physical_store_path()) {
+    /// spellings, and provider URIs can include convention templates that are
+    /// only meaningful after resolving a concrete address. The physical store
+    /// and the resolved native coordinates must both match before an entry is
+    /// considered shared.
+    fn same_entry(&self, other: &dyn Provider, addr: Address<'_>) -> Result<bool> {
+        let same_store = match (self.physical_store_path(), other.physical_store_path()) {
             (Some(left), Some(right)) => {
                 same_file::is_same_file(left, right).unwrap_or_else(|_| {
                     let left = std::path::absolute(left).unwrap_or_else(|_| left.to_path_buf());
@@ -812,8 +809,14 @@ pub trait Provider: Send + Sync {
                     left == right
                 })
             }
-            _ => self.uri() == other.uri(),
+            (None, None) => self.storage_identity() == other.storage_identity(),
+            _ => false,
+        };
+        if !same_store {
+            return Ok(false);
         }
+
+        Ok(self.resolve_coords(addr)? == other.resolve_coords(addr)?)
     }
 
     /// Returns the path that identifies a filesystem-backed store, if any.
@@ -821,7 +824,8 @@ pub trait Provider: Send + Sync {
     ///
     /// The path is compared using filesystem identity when it exists, catching
     /// lexical aliases, symlinks, and hard links. Providers that are not backed
-    /// by one file keep the default and are identified by [`uri`](Provider::uri).
+    /// by one path keep the default and are identified by
+    /// [`storage_identity`](Provider::storage_identity).
     fn physical_store_path(&self) -> Option<&std::path::Path> {
         None
     }
@@ -1055,11 +1059,11 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn uri(&self) -> String {
         (**self).uri()
     }
+    fn same_entry(&self, other: &dyn Provider, addr: Address<'_>) -> Result<bool> {
+        (**self).same_entry(other, addr)
+    }
     fn storage_identity(&self) -> String {
         (**self).storage_identity()
-    }
-    fn same_store(&self, other: &dyn Provider) -> bool {
-        (**self).same_store(other)
     }
     fn physical_store_path(&self) -> Option<&std::path::Path> {
         (**self).physical_store_path()
@@ -1243,12 +1247,12 @@ impl Provider for PreflightGuard {
         self.inner.uri()
     }
 
-    fn storage_identity(&self) -> String {
-        self.inner.storage_identity()
+    fn same_entry(&self, other: &dyn Provider, addr: Address<'_>) -> Result<bool> {
+        self.inner.same_entry(other, addr)
     }
 
-    fn same_store(&self, other: &dyn Provider) -> bool {
-        self.inner.same_store(other)
+    fn storage_identity(&self) -> String {
+        self.inner.storage_identity()
     }
 
     fn physical_store_path(&self) -> Option<&std::path::Path> {

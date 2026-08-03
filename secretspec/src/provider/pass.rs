@@ -159,6 +159,21 @@ impl Provider for PassProvider {
         }
     }
 
+    /// The folder prefix chooses an entry, not a password store. Keep it out
+    /// of the store identity so a default prefix and the same explicitly
+    /// spelled prefix can still be recognized as one physical entry after
+    /// their convention addresses are resolved.
+    fn storage_identity(&self) -> String {
+        match &self.config.store_dir {
+            Some(store_dir) => format!("pass:{}", store_dir),
+            None => "pass".to_string(),
+        }
+    }
+
+    fn physical_store_path(&self) -> Option<&std::path::Path> {
+        self.config.store_dir.as_deref().map(std::path::Path::new)
+    }
+
     /// Retrieves a secret from the password store.
     ///
     /// # Arguments

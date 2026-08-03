@@ -3304,6 +3304,22 @@ impl Secrets {
                 self.build_provider(from_provider.to_string(), Some(&profile_display))?;
             source_uri = Some(from_provider_instance.uri());
 
+            // Deletion support is a registered provider capability. Reject a
+            // source that cannot delete before planning or touching any target;
+            // otherwise the first copied value would leave a partial import
+            // when the trait's default `delete` implementation inevitably
+            // failed.
+            if delete_source
+                && !crate::provider::spec_provider_deletes(
+                    &self.resolve_provider_spec(from_provider.to_string()),
+                )
+            {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "provider '{}' does not support deleting secrets and cannot be used with import --delete-source",
+                    from_provider_instance.name()
+                )));
+            }
+
             eprintln!(
                 "Importing secrets from {} (profile: {})...\n",
                 from_provider.blue(),
@@ -3337,7 +3353,8 @@ impl Secrets {
                         .expect("composed secrets were filtered above");
                     let to_provider =
                         self.write_provider_for_route(route, Some(&profile_display))?;
-                    if from_provider_instance.same_store(to_provider.as_ref()) {
+                    let addr = planned.as_address(&self.config.project.name, &profile_display);
+                    if from_provider_instance.same_entry(to_provider.as_ref(), addr)? {
                         return Err(SecretSpecError::ProviderOperationFailed(format!(
                             "refusing to delete '{}' from the import source because source and destination resolve to the same provider ({})",
                             planned.name,

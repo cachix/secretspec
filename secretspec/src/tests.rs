@@ -6231,6 +6231,72 @@ API_KEY = { description = "API key" }
 }
 
 #[test]
+fn import_with_delete_source_rejects_equivalent_pass_addresses() {
+    let _env = scrub_resolution_env();
+    let config: Config = toml::from_str(
+        r#"
+[project]
+name = "same-import-pass-test"
+revision = "1.0"
+
+[profiles.default]
+API_KEY = { description = "API key" }
+"#,
+    )
+    .unwrap();
+    let spec = Secrets::new(
+        config,
+        None,
+        Some("pass://secretspec/{project}/{profile}/{key}".to_string()),
+        None,
+    );
+
+    let error = spec
+        .import_with_delete_source("pass")
+        .expect_err("the explicit default pass path must resolve to the source entry");
+    assert!(error.to_string().contains("same provider"), "{error}");
+}
+
+#[test]
+fn import_with_delete_source_rejects_non_deleting_source_before_target_writes() {
+    let _env = scrub_resolution_env();
+    let _source = EnvVarGuard::set("A_FIRST", "keep-at-source");
+    let temp = TempDir::new().unwrap();
+    let target = temp.path().join("target.env");
+    let config: Config = toml::from_str(
+        r#"
+[project]
+name = "unsupported-import-source-test"
+revision = "1.0"
+
+[profiles.default]
+A_FIRST = { description = "Would otherwise be copied" }
+"#,
+    )
+    .unwrap();
+    let spec = Secrets::new(
+        config,
+        None,
+        Some(format!("dotenv://{}", target.display())),
+        None,
+    );
+
+    let error = spec
+        .import_with_delete_source("env")
+        .expect_err("a non-deleting source must fail before importing any value");
+    assert!(
+        error
+            .to_string()
+            .contains("does not support deleting secrets"),
+        "{error}"
+    );
+    assert!(
+        !target.exists(),
+        "source capability preflight must happen before the target is created"
+    );
+}
+
+#[test]
 fn import_with_delete_source_rejects_equivalent_dotenv_paths() {
     let _env = scrub_resolution_env();
     let temp = TempDir::new().unwrap();

@@ -85,6 +85,24 @@ role_id = { provider = "onepassword", ref = { vault = "Infra", item = "bao-appro
 secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "bao-approle", field = "secret_id" } }
 ```
 
+### Custom authentication mounts (0.18+)
+
+:::note[Version compatibility]
+Custom authentication mounts are available starting with SecretSpec 0.18.
+:::
+
+AppRole and JWT methods mounted somewhere other than their defaults can be
+selected with `?auth_mount=`. The value is relative to `/v1/auth`:
+
+```text
+openbao://bao.example.com:8200/secret?auth=approle&auth_mount=platform-approle
+openbao://bao.example.com:8200/secret?auth=jwt&auth_mount=ci-jwt&role=ci
+```
+
+The provider logs in at `/v1/auth/platform-approle/login` and
+`/v1/auth/ci-jwt/login`, respectively. The KV mount remains the provider URI
+path (`secret` in these examples).
+
 ### JWT / OIDC authentication
 
 Select JWT with `?auth=jwt` and a `role`. The provider performs the
@@ -110,6 +128,7 @@ openbao://[namespace@]host[:port][/mount][?key=value&...]
   `VAULT_NAMESPACE`)
 - `?auth=approle`: Use AppRole authentication (default: `token`)
 - `?auth=jwt`: Use JWT/OIDC authentication (requires a role)
+- `?auth_mount=` (0.18+): Non-default AppRole or JWT mount beneath `/v1/auth`
 - `?role=`: OpenBao role for JWT auth
 - `?audience=`: Audience requested from the CI OIDC issuer
 - `?kv=1`: Use KV v1 (default: v2)
@@ -128,6 +147,8 @@ openbao://[namespace@]host[:port][/mount][?key=value&...]
 openbao://bao.example.com:8200/secret
 openbao://team-a@bao.example.com:8200/secret
 openbao://bao.example.com:8200/secret?auth=approle
+# SecretSpec 0.18+
+openbao://bao.example.com:8200/secret?auth=approle&auth_mount=platform-approle
 openbao://bao.example.com:8200/secret?auth=jwt&role=ci
 ```
 

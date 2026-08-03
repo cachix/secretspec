@@ -27,9 +27,10 @@ pub trait Provider: Send + Sync {
     /// honor beyond `item`; every other coordinate is rejected for you.
     fn supported_coords(&self) -> &'static [&'static str] { &[] }
 
-    /// Optional, defaults to writable. Read-only providers reject every
-    /// address; providers whose refs name externally managed secrets reject
-    /// native addresses only. State the reason: it is what the user sees.
+    /// Optional, defaults to writable. Reject only the addresses the provider
+    /// cannot safely write: for example every address on a read-only provider,
+    /// or version-pinned and ARN refs on an otherwise writable provider. State
+    /// the reason: it is what the user sees.
     fn check_writable(&self, addr: Address<'_>) -> Result<()> { Ok(()) }
 
     /// Optional batch read. The default resolves each request's address and

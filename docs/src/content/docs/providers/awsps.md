@@ -18,7 +18,7 @@ parameters.
 | --- | --- |
 | Provider | `awsps` (0.18+) |
 | URI | `awsps://[AWS_PROFILE@]REGION[?options]` |
-| Access | Read and write; parameter references are read-only |
+| Access | Read and write; version-, label-, and ARN-pinned references are read-only |
 | Best for | AWS workloads using Parameter Store for application configuration |
 | Authentication | Standard AWS SDK credential chain |
 | Build feature | `awsps` (0.18+) |
@@ -145,7 +145,8 @@ In SecretSpec 0.18+, a secret's
 [`ref`](/reference/configuration/#secret-references) field can name an existing
 Parameter Store parameter. `item` is its full name or ARN. The optional
 `version` is appended as a Parameter Store selector and may be a numeric
-version or label. References are **read-only**.
+version or label. An unversioned reference by parameter name is writable;
+references using a version, label, or ARN are read-only.
 
 ```toml
 [profiles.production]
@@ -157,17 +158,26 @@ SIGNING_KEY = { description = "Signing key", ref = { item = "/prod/signing-key",
 
 # Version carrying the "current" label
 API_TOKEN = { description = "API token", ref = { item = "/prod/api-token", version = "current" }, providers = ["awsps://us-east-1"] }
+
+# Generate at an existing hierarchy on first use, then reuse it
+DB_PASSWORD = { description = "DB password", ref = { item = "/prod/db-password" }, type = "password", generate = true, providers = ["awsps://us-east-1"] }
 ```
 
-Cross-account shared parameters must be read by ARN. SecretSpec still writes
-only to its convention hierarchy in the provider's configured account and
-region.
+`secretspec set`, interactive `check`, generation, and `import` write an
+unversioned name reference at that exact parameter name. As with convention
+writes, an existing value receives a new Parameter Store version and is never
+changed from `String` or `StringList` to `SecureString`.
+
+Cross-account shared parameters must be read by ARN. ARN references are
+read-only; SecretSpec writes only by parameter name in the provider's
+configured account and region.
 
 ## IAM permissions
 
-Reads require `ssm:GetParameter` and `ssm:GetParameters`; convention writes
-require `ssm:PutParameter`. A customer-managed KMS key also needs the
-corresponding KMS permissions for encryption and decryption.
+Reads require `ssm:GetParameter` and `ssm:GetParameters`; convention and
+unversioned name-reference writes require `ssm:PutParameter`. A
+customer-managed KMS key also needs the corresponding KMS permissions for
+encryption and decryption.
 
 Scope IAM resources to the configured hierarchy where possible. For the
 `/myteam/secretspec/` prefix in `us-east-1`, that resource pattern is:

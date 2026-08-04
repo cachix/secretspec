@@ -588,9 +588,9 @@ mod tests {
 
     /// Installs an executable fake `bws` in `dir`, returning its path.
     ///
-    /// The script is written to a scratch file and copied into place by a
-    /// short-lived subprocess, so this process never holds a write descriptor to
-    /// the file it is about to execute.
+    /// The script is written to a scratch file and renamed into place after the
+    /// write descriptor is closed, so this process never holds a write descriptor
+    /// to the file it is about to execute.
     ///
     /// That indirection is the whole point. libtest runs this crate's tests as
     /// threads of one process, and several of them spawn subprocesses. `fork`
@@ -609,12 +609,7 @@ mod tests {
         std::fs::write(&scratch, script).unwrap();
 
         let cli = dir.join("bws");
-        let copied = Command::new("cp")
-            .arg(&scratch)
-            .arg(&cli)
-            .status()
-            .expect("cp is available to install the fake CLI");
-        assert!(copied.success(), "installing the fake bws failed");
+        std::fs::rename(&scratch, &cli).expect("install fake bws script");
 
         let mut permissions = std::fs::metadata(&cli).unwrap().permissions();
         permissions.set_mode(0o700);

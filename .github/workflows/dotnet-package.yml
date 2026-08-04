@@ -149,7 +149,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/${{ matrix.library }}" \
              "staged/${{ matrix.rid }}/native/"
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dotnet-native-${{ matrix.rid }}
           path: staged/${{ matrix.rid }}
@@ -226,7 +226,7 @@ jobs:
           mkdir -p "staged/${{ matrix.rid }}/native"
           cp "target/${{ matrix.target }}/release/libsecretspec_ffi.so" \
              "staged/${{ matrix.rid }}/native/"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dotnet-native-${{ matrix.rid }}
           path: staged/${{ matrix.rid }}
@@ -274,7 +274,7 @@ jobs:
             rid="${artifact##*/dotnet-native-}"
             unzip -l "$package" | grep -q "runtimes/$rid/native/"
           done
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dotnet-nuget
           path: artifacts/*.nupkg

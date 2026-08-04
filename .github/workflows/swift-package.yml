@@ -65,7 +65,7 @@ jobs:
             --target aarch64-apple-darwin
           cargo build -p secretspec-ffi --release \
             --target x86_64-apple-darwin
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: swift-native-macos
           path: |
@@ -128,7 +128,7 @@ jobs:
           actual="$(swift package compute-checksum CSecretSpec.xcframework.zip)"
           echo "checksum=$actual" >> "$GITHUB_OUTPUT"
           echo "CSecretSpec.xcframework.zip checksum: $actual"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: swift-xcframework
           path: CSecretSpec.xcframework.zip

@@ -97,11 +97,15 @@ jobs:
   go-static:
     name: Go static library
     needs: authorize
+    permissions:
+      contents: write
     uses: ./.github/workflows/go-static.yml
 
   go-embed:
     name: Go embedded libraries
     needs: authorize
+    permissions:
+      contents: write
     uses: ./.github/workflows/go-embed.yml
 
   haskell:

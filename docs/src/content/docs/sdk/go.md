@@ -70,3 +70,31 @@ loaded at runtime, not linked. Either install/build `libsecretspec_ffi` and set
 with `-tags embed_lib` for a self-contained binary. The embedded library is
 extracted to a per-user, owner-only cache directory at first use, and is not
 distributed through the Go module proxy.
+
+## Static linking
+
+For a self-contained binary with no runtime library to locate, build with
+`-tags static` instead. This uses cgo and links `libsecretspec_ffi.a` directly
+into the Go binary. In a development checkout:
+
+```bash
+bash scripts/stage-staticlib.sh
+CGO_ENABLED=1 go build -tags static ./...
+```
+
+### pkg-config (0.19+)
+
+Install the library with [cargo-c](https://github.com/lu-zero/cargo-c) and add
+the `pkgconfig` tag instead of staging:
+
+```bash
+cargo cinstall -p secretspec-ffi --library-type staticlib --prefix "$PREFIX"
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" CGO_ENABLED=1 go build -tags static,pkgconfig ./...
+```
+
+Unlike staging, this also works for a `go get` dependency.
+
+### Dynamic linking (0.19+)
+
+Drop `--library-type staticlib` from the install and the binary links the
+shared library instead.

@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Ruby SDK's native extension accepts a new `--enable-pkg-config` build
   flag (`gem install secretspec -- --enable-pkg-config`) that resolves the
   archive through pkg-config.
+- The Go SDK's `-tags static` build accepts a new `pkgconfig` build tag
+  (`go build -tags static,pkgconfig`) that resolves the archive through
+  pkg-config, so it also works for a `go get` dependency.
 - The Haskell SDK declares the archive's macOS system frameworks
   (`SystemConfiguration`, `Security`, `CoreFoundation`) in its cabal file, so
   GHC passes them to every link on macOS.

@@ -56,6 +56,9 @@ echo "==> Go (-tags static: cgo links the archive in)"
 ( cd secretspec-go && SECRETSPEC_FFI_PROFILE=debug bash scripts/stage-staticlib.sh )
 ( cd secretspec-go && CGO_ENABLED=1 go test -tags static ./... )
 
+echo "==> Go (-tags static,pkgconfig: link inputs from secretspec_ffi.pc)"
+( cd secretspec-go && CGO_ENABLED=1 go test -tags static,pkgconfig ./... )
+
 echo "==> Ruby"
 # The Ruby SDK compiles an mkmf C extension that statically links the archive
 # (using the SECRETSPEC_FFI_* contract above); build it once up front.

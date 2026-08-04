@@ -4,6 +4,8 @@
 # per-platform archive (lib/), the C header (include/), and a generated
 # cgo_ldflags_<os>_<arch>.go carrying the archive path + its transitive native
 # deps (captured from `rustc --print native-static-libs`, never hardcoded).
+# A `-tags static,pkgconfig` build skips the staged inputs and reads
+# secretspec_ffi.pc instead.
 #
 # Honors:
 #   SECRETSPEC_FFI_PROFILE  release|debug   (default: debug)
@@ -38,7 +40,7 @@ cp "$repo_root/secretspec-ffi/include/secretspec.h" "$pkg_dir/include/secretspec
 # The cgo LDFLAGS live in a generated per-platform file (the wasmtime-go pattern):
 # the archive is pulled for the referenced symbols, then its native deps follow.
 cat > "$pkg_dir/cgo_ldflags_${goos}_${goarch}.go" <<EOF
-//go:build static && $goos && $goarch
+//go:build static && !pkgconfig && $goos && $goarch
 
 package secretspec
 

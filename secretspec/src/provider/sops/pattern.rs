@@ -103,16 +103,129 @@ impl SopsPathPattern {
         validate_template(&self.template)
     }
 
+    /// Substitutes `{project}` and `{profile}` in a single pass over the
+    /// template.
+    ///
+    /// Sequential `.replace()` calls substitute into their own output, so a
+    /// project literally named `{profile}` had the profile substituted into it
+    /// by the second call, resolving to a different file on disk than the one
+    /// configured. Walking the template once means a substituted value is
+    /// copied out, never rescanned.
+    ///
+    /// Unknown placeholders and unclosed braces are kept as literal text rather
+    /// than panicking: [`validate`](Self::validate) rejects both, but
+    /// `SopsPathPattern` also derives `Deserialize`, which does not run it.
     pub fn render(&self, project: &str, profile: &str) -> PathBuf {
-        let rendered = self
-            .template
-            .replace("{project}", project)
-            .replace("{profile}", profile);
+        let mut rendered = String::with_capacity(self.template.len());
+        let mut remainder = self.template.as_str();
+
+        while let Some(start) = remainder.find('{') {
+            rendered.push_str(&remainder[..start]);
+            let after_start = &remainder[start + 1..];
+
+            let Some(end) = after_start.find('}') else {
+                rendered.push_str(&remainder[start..]);
+                return PathBuf::from(rendered);
+            };
+
+            match &after_start[..end] {
+                "project" => rendered.push_str(project),
+                "profile" => rendered.push_str(profile),
+                other => {
+                    rendered.push('{');
+                    rendered.push_str(other);
+                    rendered.push('}');
+                }
+            }
+
+            remainder = &after_start[end + 1..];
+        }
+
+        rendered.push_str(remainder);
 
         PathBuf::from(rendered)
     }
 
     pub fn debug_template(&self) -> String {
         self.template.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn render(template: &str, project: &str, profile: &str) -> String {
+        SopsPathPattern::try_from(template)
+            .unwrap()
+            .render(project, profile)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn substitutes_both_placeholders() {
+        assert_eq!(
+            render("secrets/{project}/{profile}.yaml", "myapp", "production"),
+            "secrets/myapp/production.yaml"
+        );
+    }
+
+    #[test]
+    fn a_project_named_like_a_placeholder_is_not_re_substituted() {
+        // The sequential `.replace()` chain this replaces resolved to
+        // "secrets/production/production.yaml", reading another profile's file.
+        assert_eq!(
+            render(
+                "secrets/{project}/{profile}.yaml",
+                "{profile}",
+                "production"
+            ),
+            "secrets/{profile}/production.yaml"
+        );
+    }
+
+    #[test]
+    fn a_profile_named_like_a_placeholder_is_not_re_substituted() {
+        assert_eq!(
+            render("secrets/{profile}/{project}.yaml", "myapp", "{project}"),
+            "secrets/{project}/myapp.yaml"
+        );
+    }
+
+    #[test]
+    fn placeholders_may_repeat_and_reorder() {
+        assert_eq!(
+            render("{profile}/{project}/{profile}.yaml", "myapp", "prod"),
+            "prod/myapp/prod.yaml"
+        );
+    }
+
+    #[test]
+    fn a_template_without_placeholders_renders_verbatim() {
+        assert_eq!(
+            render("secrets/shared.yaml", "myapp", "prod"),
+            "secrets/shared.yaml"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_unknown_and_partial_placeholders() {
+        assert!(SopsPathPattern::try_from("{project}/{profile}/{key}.yaml").is_err());
+        assert!(SopsPathPattern::try_from("{project}.yaml").is_err());
+        assert!(SopsPathPattern::try_from("{project/{profile}.yaml").is_err());
+        assert!(SopsPathPattern::try_from("{project}/{profile}}.yaml").is_err());
+    }
+
+    /// `validate` rejects these, but `Deserialize` does not run it, so `render`
+    /// has to stay total for a pattern that never passed validation.
+    #[test]
+    fn an_unvalidated_pattern_keeps_bad_placeholders_literal() {
+        let pattern: SopsPathPattern =
+            serde_json::from_str(r#"{"template":"{project}/{key}/{unclosed.yaml"}"#).unwrap();
+        assert_eq!(
+            pattern.render("myapp", "prod").to_string_lossy(),
+            "myapp/{key}/{unclosed.yaml"
+        );
     }
 }

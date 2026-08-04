@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - The keyring provider no longer intermittently fails with a "No default store
   has been set" error when resolving multiple secrets concurrently.
+- The SOPS provider no longer substitutes a second time into a rendered path
+  segment, so a project or profile literally named `{profile}` or `{project}`
+  resolves to the file you configured instead of a different one.
 
 ## [0.18.0] - 2026-08-03
 

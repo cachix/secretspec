@@ -7,6 +7,11 @@ on:
   push:
     branches: [ main ]
 
+# Do not let superseded revisions occupy the limited macOS runner pool.
+concurrency:
+  group: ${{ github.workflow }}-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     strategy:
@@ -33,11 +38,21 @@ jobs:
         name: devenv
     - name: Install devenv.sh
       run: nix profile install nixpkgs#devenv
+    - name: Cache Rust builds
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ matrix.os }}
+        # The tests compile with devenv's pinned Nix toolchain, so use the same
+        # toolchain when rust-cache calculates its compiler and dependency keys.
+        cmd-format: devenv shell -- {0}
 
     # `devenv test` also starts every configured process. The docs dev server is
     # unrelated to this suite and makes process-compose wait for its timeout when
     # docs dependencies are not installed, so run the hooks and tests directly.
+    # rustfmt and clippy are platform-independent; run them once on Linux rather
+    # than paying for a second cold compilation on the slower macOS runner.
     - name: Run pre-commit hooks
+      if: runner.os == 'Linux'
       run: devenv tasks run devenv:git-hooks:run --show-output
     - name: Run tests
       run: devenv shell -- cargo test --all
@@ -54,6 +69,8 @@ jobs:
     - uses: actions/checkout@v5
     - name: Install Rust
       run: rustup toolchain install stable --profile minimal
+    - name: Cache Rust builds
+      uses: Swatinem/rust-cache@v2
     - name: Check each provider feature standalone
       run: |
         set -euo pipefail
@@ -102,6 +119,8 @@ jobs:
           Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
     - name: Install Rust
       run: rustup toolchain install stable --profile minimal
+    - name: Cache Rust builds
+      uses: Swatinem/rust-cache@v2
     - name: cargo test
       # Exclude secretspec-php-native: it is an ext-php-rs extension that needs a
       # PHP dev toolchain (php-config/headers) this bare runner does not have, and

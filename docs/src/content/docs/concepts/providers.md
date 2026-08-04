@@ -259,10 +259,10 @@ Provider credentials follow these rules:
 - **Names are provider-specific.** Bitwarden accepts `access_token`; Vault
   accepts `token`, `role_id`, and `secret_id`; 1Password accepts
   `service_account_token`; Azure Key Vault accepts `tenant_id`, `client_id`, and
-  `client_secret`; SOPS (0.17+) accepts `age_key`, `aws_secret_access_key`,
-  `azure_client_secret`, `google_oauth_access_token`, `hc_vault_token`,
-  `huawei_sdk_ak`, and `huawei_sdk_sk`. Unsupported names are rejected before
-  any source is read.
+  `client_secret`; Age (0.17+) accepts `identity`; SOPS (0.17+) accepts `age_key`,
+  `aws_secret_access_key`, `azure_client_secret`, `google_oauth_access_token`,
+  `hc_vault_token`, `huawei_sdk_ak`, and `huawei_sdk_sk`. Unsupported names are
+  rejected before any source is read.
 
 ## Next steps
 

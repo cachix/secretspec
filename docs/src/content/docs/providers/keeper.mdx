@@ -3,6 +3,8 @@ title: Keeper Secrets Manager Provider
 description: Keeper Secrets Manager integration through Keeper's official Rust SDK
 ---
 
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
 :::caution[Version compatibility]
 The `keeper` provider is added in SecretSpec 0.18.
 :::
@@ -71,7 +73,7 @@ The configuration contains private client keys. Treat the whole value as a
 secret.
 
 SecretSpec 0.18+ also declares `config` as a
-[provider credential](/concepts/providers/#provider-credentials), so the
+[provider credential](/reference/provider-credentials/), so the
 configuration can be loaded from another provider instead of the environment:
 
 ```toml title="secretspec.toml"
@@ -117,6 +119,10 @@ unset KSM_TOKEN
 
 A Keeper one-time token cannot be reused. Remove it after the first successful
 request and retain the generated configuration file securely.
+
+## Provider credentials
+
+<ProviderCredentials provider="keeper" />
 
 ## Configuration
 

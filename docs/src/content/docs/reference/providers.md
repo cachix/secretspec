@@ -7,7 +7,9 @@ SecretSpec supports multiple storage backends for secrets. Each provider has its
 
 This page is a compact URI reference. For installation, authentication,
 copyable project configuration, storage behavior, and CI/CD guidance, follow
-the link for the individual provider.
+the link for the individual provider. For the semantic authentication names
+accepted by those providers and their environment fallbacks, see the
+[provider credentials reference](/reference/provider-credentials/).
 
 ## DotEnv Provider
 
@@ -102,9 +104,9 @@ kdbx:./shared.kdbx?prefix=teams/{project}/{profile}/{key}
 authentication, standard and custom entry fields, profiles
 **Prerequisites**: Master password, key file, or both; build with
 `--features kdbx` (0.17+)
-**Authentication**: `password` provider credential from a bootstrap provider
-(recommended), or the discouraged `SECRETSPEC_KDBX_PASSWORD` fallback; optional
-`?keyfile=PATH`
+**Authentication**: [`password` provider credential](/providers/kdbx/#provider-credentials)
+from a bootstrap provider (recommended), or the discouraged
+`SECRETSPEC_KDBX_PASSWORD` fallback; optional `?keyfile=PATH`
 **Storage**: Entry path `secretspec/{project}/{profile}/{key}`, field `Password`
 by default. A secret `ref` uses `item` for the complete group path and entry
 title, and optional `field` for a standard or custom field.
@@ -188,8 +190,8 @@ keeper://SHARED_FOLDER_UID?config_file=.keeper/client-config.json
 titles, standard and custom field references, batched retrieval
 **Prerequisites**: A Keeper Secrets Manager application with access to the
 selected folder; build with `--features keeper` (0.18+)
-**Authentication**: `config` provider credential or `KSM_CONFIG`; alternatively
-a bound `config_file`. `token`/`KSM_TOKEN` can initialize a file configuration.
+**Authentication**: [`config` or `token` provider credentials](/providers/keeper/#provider-credentials),
+with `KSM_CONFIG` and `KSM_TOKEN` fallbacks; alternatively a bound `config_file`.
 **Storage**: Login record titled `secretspec/{project}/{profile}/{key}`, field
 `password`. A `ref` selects an existing record by UID or exact title and an
 optional standard/custom `field`.
@@ -483,8 +485,8 @@ sops://secrets/{project}/.env.{profile}.enc?format=dotenv
 support, and profile-aware templated paths
 **Prerequisites**: The `sops` CLI and the required SOPS key configuration;
 build with `--features sops` (0.17+)
-**Authentication**: SOPS environment variables or provider credentials such as
-`age_key`, `aws_secret_access_key`, `azure_client_secret`, and `hc_vault_token`
+**Authentication**: SOPS environment variables or the
+[supported provider credentials](/providers/sops/#provider-credentials)
 **Storage**: Single-file YAML and JSON can namespace convention secrets by
 project and profile; INI uses profile sections and dotenv is flat. Templated
 paths contain flat keys in one file per project/profile.

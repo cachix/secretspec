@@ -365,6 +365,11 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
             { label: "Configuration", slug: "reference/configuration" },
             { label: "CLI Commands", slug: "reference/cli" },
             { label: "Providers", slug: "reference/providers" },
+            {
+              label: "Provider credentials",
+              slug: "reference/provider-credentials",
+              badge: { text: "0.15+", variant: "note" },
+            },
           ],
         },
         {

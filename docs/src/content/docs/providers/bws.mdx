@@ -3,6 +3,8 @@ title: Bitwarden Secrets Manager Provider
 description: Bitwarden Secrets Manager integration
 ---
 
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
 :::caution[Why SecretSpec 0.17+ uses the CLI]
 Bitwarden publishes a Rust SDK, but its
 [SDK license](https://github.com/bitwarden/sdk-sm/blob/main/LICENSE) does not
@@ -70,7 +72,7 @@ Generate a machine account access token from the Bitwarden Secrets Manager web
 interface.
 
 In SecretSpec 0.15 and later, you can declare the access token as a
-[provider credential](/concepts/providers/#provider-credentials), for example
+[provider credential](/reference/provider-credentials/), for example
 to store it in your system keyring so it never lives in a shell profile:
 
 ```toml title="secretspec.toml"
@@ -86,6 +88,10 @@ export BWS_ACCESS_TOKEN="0.your-access-token..."
 ```
 
 SecretSpec 0.14 supports only the environment-variable form.
+
+## Provider credentials
+
+<ProviderCredentials provider="bws" />
 
 ## Configuration
 

@@ -3,6 +3,8 @@ title: OpenBao Provider
 description: OpenBao integration, available in SecretSpec 0.17+
 ---
 
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
 The OpenBao provider integrates with OpenBao's KV (Key-Value) secrets engine
 using OpenBao's own provider identity and configuration conventions.
 
@@ -130,6 +132,10 @@ SecretSpec role still takes precedence.
 - `?role=`, `BAO_JWT_ROLE`, or `VAULT_JWT_ROLE`; optional with a
   server-configured `default_role` (0.18+)
 - `?audience=`, `BAO_JWT_AUDIENCE`, or `VAULT_JWT_AUDIENCE`
+
+## Provider credentials
+
+<ProviderCredentials provider="openbao" />
 
 ## Configuration
 

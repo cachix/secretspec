@@ -3,6 +3,8 @@ title: age Provider
 description: Store secrets in an age-encrypted file committed alongside code
 ---
 
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
 :::note[Version compatibility]
 The age provider is added in SecretSpec 0.17.
 :::
@@ -85,6 +87,10 @@ Use only post-quantum recipients (`age1pq1...` or `age1tagpq1...`) together in
 a roster. Age intentionally rejects a mixture of post-quantum and classic
 recipients, because the classic recipient would remove the file's
 post-quantum protection.
+
+## Provider credentials
+
+<ProviderCredentials provider="age" />
 
 ## Configuration
 

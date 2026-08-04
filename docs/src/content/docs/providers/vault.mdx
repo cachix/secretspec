@@ -3,6 +3,8 @@ title: Vault Provider
 description: HashiCorp Vault integration
 ---
 
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
 The Vault provider integrates with HashiCorp Vault for centralized secret
 management using the KV (Key-Value) secrets engine.
 
@@ -120,6 +122,10 @@ variable:
   `default_role` (0.18+)
 - `?audience=` or `VAULT_JWT_AUDIENCE`, matched against the role's
   `bound_audiences`
+
+## Provider credentials
+
+<ProviderCredentials provider="vault" />
 
 ## Configuration
 

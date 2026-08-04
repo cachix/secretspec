@@ -3,6 +3,8 @@ title: Infisical Provider
 description: Infisical integration
 ---
 
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
 The Infisical provider integrates with [Infisical](https://infisical.com) over its REST API, for
 both Infisical Cloud and self-hosted instances.
 
@@ -72,7 +74,7 @@ machine identities.
 
 A machine identity's credentials can live in another store rather than in the
 environment, declared as
-[provider credentials](/concepts/providers/#provider-credentials):
+[provider credentials](/reference/provider-credentials/):
 
 ```toml title="secretspec.toml"
 [providers.infisical]
@@ -87,6 +89,10 @@ The provider declares `client_id` and `client_secret` for Universal Auth, and
 `token` for a ready-made access token. Each falls back to its corresponding
 environment variable when it is not declared. Use
 `secretspec config provider login infisical` to store declared credentials.
+
+## Provider credentials
+
+<ProviderCredentials provider="infisical" />
 
 ## Configuration
 

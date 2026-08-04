@@ -39,7 +39,7 @@ jobs:
     - name: Install devenv.sh
       run: nix profile install nixpkgs#devenv
     - name: Cache Rust builds
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:
         key: ${{ matrix.os }}
         # The tests compile with devenv's pinned Nix toolchain, so use the same
@@ -73,7 +73,7 @@ jobs:
     - name: Install Rust
       run: rustup toolchain install stable --profile minimal
     - name: Cache Rust builds
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
     - name: Check each provider feature standalone
       run: |
         set -euo pipefail
@@ -123,7 +123,7 @@ jobs:
     - name: Install Rust
       run: rustup toolchain install stable --profile minimal
     - name: Cache Rust builds
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
     - name: cargo test
       # Exclude secretspec-php-native: it is an ext-php-rs extension that needs a
       # PHP dev toolchain (php-config/headers) this bare runner does not have, and

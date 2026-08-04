@@ -188,6 +188,10 @@ An alias can load these credentials from another provider. This avoids storing
 long-lived provider credentials in a shell profile or CI variable when a secure
 store is available.
 
+The [provider credential reference](/reference/provider-credentials/) lists
+every accepted semantic name, its environment fallbacks, and the SecretSpec
+version that introduced it.
+
 ### Use the convention address
 
 In an alias's `credentials` table, map each semantic credential name to the
@@ -256,13 +260,8 @@ Provider credentials follow these rules:
 - **Convention addresses are profile-specific.** A string source uses the
   active project and profile. Use a `ref` source when multiple projects or
   profiles should share one provider credential.
-- **Names are provider-specific.** Bitwarden accepts `access_token`; Vault
-  accepts `token`, `role_id`, and `secret_id`; 1Password accepts
-  `service_account_token`; Azure Key Vault accepts `tenant_id`, `client_id`, and
-  `client_secret`; Age (0.17+) accepts `identity`; SOPS (0.17+) accepts `age_key`,
-  `aws_secret_access_key`, `azure_client_secret`, `google_oauth_access_token`,
-  `hc_vault_token`, `huawei_sdk_ak`, and `huawei_sdk_sk`. Unsupported names are
-  rejected before any source is read.
+- **Names are provider-specific.** The catalog above is exhaustive. Unsupported
+  names are rejected before any source is read.
 
 ## Next steps
 

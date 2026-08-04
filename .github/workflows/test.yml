@@ -54,6 +54,9 @@ jobs:
     - name: Run pre-commit hooks
       if: runner.os == 'Linux'
       run: devenv tasks run devenv:git-hooks:run --show-output
+    - name: Check provider credential documentation
+      if: runner.os == 'Linux'
+      run: devenv shell -- npm --prefix docs run check:provider-credentials
     - name: Run tests
       run: devenv shell -- cargo test --all
 

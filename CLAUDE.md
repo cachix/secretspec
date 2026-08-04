@@ -74,13 +74,28 @@ Providers support URI-based configuration (e.g., `keyring://`, `onepassword://va
 
 When adding a new provider, update **every** location below — provider names appear in several listings that drift out of sync if any are missed:
 
-1. `docs/src/content/docs/providers/<provider>.md` - Create the provider's doc page and add a version compatibility notice if it is unreleased
+1. `docs/src/content/docs/providers/<provider>.md` - Create the provider's doc page and add a version compatibility notice if it is unreleased. Use `.mdx` instead when the provider accepts provider credentials, import the shared `ProviderCredentials` component, and add its catalog entry as described below.
 2. `docs/astro.config.ts` - Add to sidebar navigation under "Providers" **and** to the providers sentence in the `starlightLlmsTxt` description block
-3. `docs/src/content/docs/concepts/providers.md` - Add a row to the "Available Providers" table
+3. `docs/src/content/docs/concepts/providers.mdx` - Add a row to the "Available Providers" table
 4. `docs/src/content/docs/reference/providers.md` - Add a provider section **and** a row in the "Security Considerations" table
 5. `docs/src/pages/index.astro` - Add to the `providerMetadata` array (top of file) **and** to the `secretspec config init` mini-terminal in the hero
 6. `docs/src/content/docs/quick-start.mdx` - Update the `secretspec config init` example output to include the new provider
 7. `README.md` (symlink to `secretspec/README.md`) - Add to the "Providers" bullet list **and** to the `secretspec config init` example output
+
+Provider credential names, environment fallbacks, and minimum versions are
+maintained in `docs/src/data/provider-credentials.json`. For a provider with a
+non-empty Rust `credential_names` registration:
+
+1. Add or update its catalog entry, including every Rust implementation file
+   that contains its environment fallback definitions.
+2. Add exactly one `## Provider credentials` section to its `.mdx` page and
+   render `<ProviderCredentials provider="<provider>" />` there.
+3. The same catalog renders the complete
+   `docs/src/content/docs/reference/provider-credentials.mdx` reference. The
+   provider-specific component links readers back to that page.
+4. Run `npm --prefix docs run check:provider-credentials`. The check compares
+   the catalog with Rust registrations, validates environment-source backlinks,
+   and requires every credential-aware provider page to use the shared table.
 
 If the provider is unreleased, add its target version (for example `(0.15+)`)
 in every listing above. See
@@ -200,7 +215,7 @@ The docs site is an Astro Starlight site deployed to https://secretspec.dev/.
 - `docs/src/content/docs/` - All other content pages (markdown/mdx)
   - `quick-start.mdx` - Getting started guide
   - `concepts/` - Declarative config, profiles, providers overview
-  - `providers/` - Individual provider docs (one `.md` per registered provider; see [Adding Provider Documentation](#adding-provider-documentation) when adding a new one)
+  - `providers/` - Individual provider docs (one `.md` or `.mdx` per registered provider; see [Adding Provider Documentation](#adding-provider-documentation) when adding a new one)
   - `sdk/` - Rust SDK docs
   - `reference/` - Configuration, CLI, providers reference, adding providers guide
 

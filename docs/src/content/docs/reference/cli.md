@@ -131,7 +131,7 @@ secretspec config global provider add <ALIAS> <URI> [--credential NAME=PROVIDER]
 - `<URI>` - Provider URI (e.g., `onepassword://Production`, `env://`)
 
 **Options:**
-- `--credential <NAME=PROVIDER>` - Declare a [provider credential](/concepts/providers/#provider-credentials) and its source. `NAME` is semantic and provider-specific, such as `access_token` or `role_id`. Repeatable. Only the bare-string source form is expressible on the command line; add a `ref` by editing the config.
+- `--credential <NAME=PROVIDER>` - Declare a [provider credential](/reference/provider-credentials/) and its source. `NAME` is semantic and provider-specific, such as `access_token` or `role_id`. Repeatable. Only the bare-string source form is expressible on the command line; add a `ref` by editing the config.
 
 **Example:**
 ```bash
@@ -176,7 +176,7 @@ $ secretspec config global provider remove prod_vault  # 0.17+
 ```
 
 ### config provider login
-Store the [credentials](/concepts/providers/#provider-credentials) a provider alias declares. Prompts (hidden input) for each credential and writes it to its source provider at the exact location resolution reads it back from. Runs in a project, like `set` and `check`.
+Store the [credentials](/reference/provider-credentials/) a provider alias declares. Prompts (hidden input) for each credential and writes it to its source provider at the exact location resolution reads it back from. Runs in a project, like `set` and `check`.
 
 :::note[Version compatibility]
 `config provider login` is available starting with SecretSpec 0.15. In

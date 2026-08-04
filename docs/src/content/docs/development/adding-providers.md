@@ -187,15 +187,39 @@ When adding a provider for an upcoming release:
 
 Update every provider location; names otherwise drift out of sync:
 
-1. `docs/src/content/docs/providers/<provider>.md`
+1. `docs/src/content/docs/providers/<provider>.md` (or `.mdx` when it renders
+   the provider credential catalog)
 2. `docs/astro.config.ts` — sidebar and `starlightLlmsTxt` provider summary
-3. `docs/src/content/docs/concepts/providers.md` — available providers table
+3. `docs/src/content/docs/concepts/providers.mdx` — available providers table
 4. `docs/src/content/docs/reference/providers.md` — provider details and
    security considerations
 5. `docs/src/pages/index.astro` — `providerMetadata` and any provider selector
    examples
 6. `docs/src/content/docs/quick-start.mdx` — provider selector example
 7. `README.md` — provider lists and provider selector example
+
+If the provider accepts injected provider credentials, also update
+`docs/src/data/provider-credentials.json`. Record every semantic credential
+name in the Rust registration's order, its ordered environment fallbacks, its
+minimum SecretSpec version, and the implementation files where those fallbacks
+are defined. Use an `.mdx` provider page with exactly one
+`## Provider credentials` section and render the shared component there:
+
+```mdx
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
+## Provider credentials
+
+<ProviderCredentials provider="mybackend" />
+```
+
+The catalog also renders the complete
+[provider credentials reference](/reference/provider-credentials/), and every
+provider-specific component links back to it.
+
+Run `npm --prefix docs run check:provider-credentials`. It rejects missing or
+stale catalog entries, environment fallbacks without implementation backlinks,
+and credential-aware provider pages that do not render their catalog entry.
 
 Use durable wording such as “Added in SecretSpec 0.16.” The `(0.16+)` labels
 may remain where knowing the minimum version is useful.

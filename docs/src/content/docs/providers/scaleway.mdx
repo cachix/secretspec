@@ -3,6 +3,8 @@ title: Scaleway Secret Manager Provider
 description: Scaleway Secret Manager integration
 ---
 
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
 :::note
 The Scaleway Secret Manager provider is available in SecretSpec 0.17+.
 :::
@@ -58,6 +60,10 @@ The target project is read from `?project_id=` in the URI, falling back to
 `SCW_DEFAULT_PROJECT_ID`. The region is the URI host, falling back to
 `SCW_DEFAULT_REGION`, and finally `fr-par`. Secret Manager is available in the
 `fr-par`, `nl-ams`, and `pl-waw` regions.
+
+## Provider credentials
+
+<ProviderCredentials provider="scaleway" />
 
 ## Configuration
 

@@ -3,6 +3,8 @@ title: Dashlane Provider
 description: Read-only access to a Dashlane vault through the Dashlane CLI
 ---
 
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
 :::note[Version compatibility]
 The Dashlane provider is added in SecretSpec 0.18.
 :::
@@ -70,6 +72,10 @@ SecretSpec checks `dcli status` before reading and reports an unregistered
 device or a locked vault. It never answers a `dcli` prompt — reads run with
 stdin closed, so an unauthenticated CLI fails immediately rather than leaving
 `secretspec run` waiting on a password.
+
+## Provider credentials
+
+<ProviderCredentials provider="dashlane" />
 
 ## Configuration
 

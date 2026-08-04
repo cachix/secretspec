@@ -3,6 +3,8 @@ title: Azure Key Vault Provider
 description: Azure Key Vault integration
 ---
 
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
 The Azure Key Vault provider integrates with Azure for centralized secret management.
 
 :::note[Version compatibility]
@@ -51,6 +53,10 @@ Select an authentication mode with the URI's `auth` option:
 - `cli`: Azure CLI or Azure Developer CLI only.
 - `managed_identity`: system-assigned managed identity.
 - `workload_identity`: AKS workload identity federation.
+
+## Provider credentials
+
+<ProviderCredentials provider="akv" />
 
 ## Configuration
 
@@ -122,7 +128,7 @@ DATABASE_URL = { description = "DB", ref = { item = "database-url" }, providers 
 ### Service principal
 
 The `auth=env` mode accepts `tenant_id`, `client_id`, and `client_secret` as
-[provider credentials](/concepts/providers/#provider-credentials). For example,
+[provider credentials](/reference/provider-credentials/). For example,
 the credentials can be stored in the system keyring instead of a shell profile:
 
 ```toml title="secretspec.toml"

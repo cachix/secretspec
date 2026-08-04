@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
-    "build": "astro check && astro build",
+    "build": "npm run check:provider-credentials && astro check && astro build",
+    "check:provider-credentials": "node --test scripts/provider-credentials.test.mjs && node scripts/check-provider-credentials.mjs",
     "preview": "astro preview",
     "astro": "astro"
   },

@@ -5,6 +5,8 @@ tableOfContents:
   maxHeadingLevel: 4
 ---
 
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
 The SOPS provider integrates with <a href="https://getsops.io" target="_blank" rel="noopener noreferrer">SOPS</a> to enable reading and writing of secrets encrypted at rest in local files.
 
 :::caution[Version compatibility]
@@ -130,21 +132,12 @@ Excepting the SecretSpec-specific `format` parameter, refer to <a href="https://
 | huawei_kms_ids                    | SOPS_HUAWEICLOUD_KMS_IDS           |
 | huawei_sdk_project_id             | HUAWEICLOUD_SDK_PROJECT_ID         |
 
-### Provider credentials
+## Provider credentials
 
 Secret values used to authenticate SOPS belong in a provider alias's
-`credentials` map, not in the SOPS URI. The SOPS provider accepts these
-semantic credential names:
+`credentials` map, not in the SOPS URI.
 
-| Credential | SOPS environment fallback |
-| ---------- | ------------------------- |
-| `age_key` | `SOPS_AGE_KEY` |
-| `aws_secret_access_key` | `AWS_SECRET_ACCESS_KEY` |
-| `azure_client_secret` | `AZURE_CLIENT_SECRET` |
-| `google_oauth_access_token` | `GOOGLE_OAUTH_ACCESS_TOKEN` |
-| `hc_vault_token` | `VAULT_TOKEN` |
-| `huawei_sdk_ak` | `HUAWEICLOUD_SDK_AK` |
-| `huawei_sdk_sk` | `HUAWEICLOUD_SDK_SK` |
+<ProviderCredentials provider="sops" />
 
 For example, this alias loads an age identity from the system keyring and
 passes it only to the SOPS child process:
@@ -161,10 +154,9 @@ providers = ["sops_age"]
 ```
 
 When a credential is not declared on the alias, SOPS can still use its normal
-environment variable. See [Provider credentials](/concepts/providers/#provider-credentials)
-for convention and explicit credential-source addresses.
+environment variable.
 
-### Format handling
+## Format handling
 
 SecretSpec asks SOPS to emit JSON when decrypting, then uses one lookup path
 for YAML, JSON, dotenv, and INI files. When `?format=` is present, SecretSpec

@@ -134,6 +134,16 @@ crates (`libwindows.*.a` from `windows_x86_64_gnu`, `libwinapi_*.a` from
 the archive — the Ruby gem bundles them in `vendor/`, the Haskell job points
 GHC's linker at them.
 
+## Linking through pkg-config (0.19+)
+
+`cargo cinstall -p secretspec-ffi`
+([cargo-c](https://github.com/lu-zero/cargo-c)) installs the libraries, the
+header, and a `secretspec_ffi.pc` carrying the full link line, so pkg-config
+consumers skip the `native-static-libs` capture above. Install with
+`--library-type staticlib` for static linking. The default install also
+carries the shared library, which the linker then prefers — one prefix cannot
+serve both modes.
+
 ## Adding a platform to an SDK
 
 1. Add the platform to the SDK's distribution workflow matrix, and make the

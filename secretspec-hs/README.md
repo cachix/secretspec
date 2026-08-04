@@ -68,11 +68,9 @@ secretspec schema | quicktype -s schema --top-level SecretSpec --lang haskell -o
 
 ## Building
 
-The `secretspec-ffi` archive is statically linked at build time, so the resolver
-is embedded in the binary — no `cdylib` and no `LD_LIBRARY_PATH` at runtime.
-Stage the `.a` in a directory of its own (so `-lsecretspec_ffi` resolves to the
-archive, not the co-located `.so`) and pass its transitive native dependencies to
-the linker:
+The build links the `secretspec-ffi` archive statically. Stage the `.a` in a
+directory of its own (so the linker picks the archive, not the co-located
+`.so`) and pass its native dependencies to the linker:
 
 ```bash
 cargo build -p secretspec-ffi
@@ -88,3 +86,20 @@ OPTL=(); for l in $NATIVE_LIBS; do OPTL+=("--ghc-options=-optl$l"); done
 cabal build --extra-lib-dirs="$LIBDIR" "${OPTL[@]}"
 cabal test  --extra-lib-dirs="$LIBDIR" "${OPTL[@]}"
 ```
+
+### pkg-config (0.19+)
+
+Install the library with [cargo-c](https://github.com/lu-zero/cargo-c) and
+build with the `use-pkg-config` flag instead of the flags above:
+
+```bash
+cargo cinstall -p secretspec-ffi --library-type staticlib --prefix "$PREFIX"
+cd secretspec-hs
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal build -f use-pkg-config
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal test  -f use-pkg-config
+```
+
+### Dynamic linking (0.19+)
+
+Drop `--library-type staticlib` from the install and the build links the shared
+library instead.

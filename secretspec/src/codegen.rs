@@ -251,7 +251,7 @@ pub mod schema {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Profile, Project, Secret};
+    use crate::config::{Profile, ProfileDefaults, Project, Secret};
     use std::collections::HashMap;
 
     fn secret(required: Option<bool>, as_path: Option<bool>, desc: Option<&str>) -> Secret {
@@ -455,6 +455,44 @@ mod tests {
             serde_json::from_str(&schema::emit(&ir, Some("production")).unwrap()).unwrap();
         assert!(schema["properties"]["SHARED_TOKEN"].is_object());
         assert_eq!(schema["additionalProperties"], false);
+    }
+
+    #[test]
+    fn standalone_profile_fields_exclude_default_secrets() {
+        let mut config = config_with(vec![
+            (
+                "default",
+                vec![("SHARED_TOKEN", secret(Some(true), None, None))],
+            ),
+            (
+                "deployment",
+                vec![("DEPLOY_TOKEN", secret(Some(true), None, None))],
+            ),
+        ]);
+        config.profiles.get_mut("deployment").unwrap().defaults = Some(ProfileDefaults {
+            inherit: Some(false),
+            required: None,
+            default: None,
+            providers: None,
+        });
+
+        let ir = build_ir(&config);
+        let deployment = ir
+            .profile_fields
+            .iter()
+            .find(|profile| profile.name == "deployment")
+            .unwrap();
+        let names: Vec<&str> = deployment
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["DEPLOY_TOKEN"]);
+
+        let schema: serde_json::Value =
+            serde_json::from_str(&schema::emit(&ir, Some("deployment")).unwrap()).unwrap();
+        assert!(schema["properties"]["DEPLOY_TOKEN"].is_object());
+        assert!(schema["properties"].get("SHARED_TOKEN").is_none());
     }
 
     #[test]

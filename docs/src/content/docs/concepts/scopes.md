@@ -141,6 +141,10 @@ Scopes are orthogonal to profiles and reusable across them. They do not inherit
 from the `default` profile; instead, the selected scope is applied after normal
 profile inheritance produces the effective profile.
 
+In SecretSpec 0.19+, a profile with `defaults.inherit = false` does not include
+any default-profile secrets. A scope still intersects the effective profile, so
+it cannot bring an inherited secret into a standalone profile.
+
 When a project uses [`extends`](/concepts/inheritance/), a child scope replaces
 a parent scope with the same name. The lists are not unioned, so extending a
 configuration cannot silently widen an allowlist. Scopes defined only by a

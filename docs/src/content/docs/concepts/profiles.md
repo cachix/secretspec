@@ -7,7 +7,14 @@ description: Managing environment-specific secret requirements with profiles
 
 Profiles are named configurations that define how secrets behave in different environments. They specify which secrets are required vs optional, provide safe defaults for development, and enforce strict requirements for production.
 
-A key feature of profiles is inheritance: all profiles automatically inherit secrets from the `default` profile. This means you only need to override the specific properties that change between environments, reducing duplication and making your configuration cleaner and easier to maintain.
+A key feature of profiles is inheritance: non-default profiles inherit secrets
+from the `default` profile when it exists. This means you only need to override
+the specific properties that change between related environments. SecretSpec
+0.19+ also lets an unrelated profile opt out and remain standalone.
+
+If a manifest omits `default`, callers must select an existing profile with
+`--profile`, `SECRETSPEC_PROFILE`, or their user config; the final fallback name
+is still `default`.
 
 ## Basic Usage
 
@@ -59,6 +66,37 @@ When using profiles, inheritance works as follows:
 3. **Field-level overrides**: Most explicitly set properties replace the corresponding property from `default`, while omitted properties continue to inherit
 4. **Profile-specific secrets**: Secrets not in the default profile can be added to any profile
 
+### Standalone profiles (0.19+)
+
+:::caution[Version compatibility]
+Profile-level `inherit` is available starting with SecretSpec 0.19.
+:::
+
+Set `inherit = false` in a non-default profile's `defaults` table when its
+secret set is unrelated to `[profiles.default]`:
+
+```toml
+[profiles.default]
+DATABASE_URL = { description = "Development database", default = "sqlite://./dev.db" }
+API_KEY = { description = "Development API key" }
+
+[profiles.production]
+# Inherits both default declarations and overrides only what changes.
+DATABASE_URL = { required = true }
+
+[profiles.deployment.defaults]
+inherit = false # SecretSpec 0.19+
+
+[profiles.deployment]
+# Does not inherit DATABASE_URL, API_KEY, or any of their fields.
+DEPLOY_TOKEN = { description = "Deployment credential", required = true }
+```
+
+The setting disables both automatic inclusion of default secrets and
+field-by-field inheritance for secrets explicitly redeclared in the standalone
+profile. Omitting it preserves the existing inheritance behavior. A standalone
+profile must declare at least one secret.
+
 ### Switching reference models (0.19+)
 
 :::caution[Version compatibility]
@@ -89,6 +127,26 @@ Within one effective secret, `ref` and `refs` remain mutually exclusive. See
 [Secret References](/concepts/references/#different-coordinates-per-provider-019)
 for how each model addresses providers.
 
+## Profiles, Scopes, Providers, and Extends
+
+These features solve different dimensions of a configuration:
+
+- A **profile** chooses an environment or context. It controls requiredness,
+  defaults, provider routes, references, and the `{profile}` storage namespace.
+- A **scope** selects which secrets one service or task receives from the
+  effective profile. It does not create another environment.
+- A secret's **providers** choose where its value is read and written. Provider
+  chains are also the least-privilege boundary: a process only needs access to
+  the stores used by the secrets in its scope.
+- **`extends`** merges separate `secretspec.toml` files. Use it to share
+  manifests across projects, not to express relationships among several
+  profiles in one small manifest.
+
+For an application with `development` and `production` environments plus
+`app`, `public`, and `deploy` consumers, profiles normally model the two
+environments, scopes model the three consumers, and per-secret provider chains
+route each value to the appropriate store.
+
 ## Profile-Level Defaults
 
 To reduce repetition when multiple secrets in a profile share the same settings, use the `profiles.<name>.defaults` section:
@@ -108,7 +166,11 @@ API_KEY = { description = "API Key" }
 SENTRY_DSN = { description = "Error tracking" }
 ```
 
-Profile defaults apply to all secrets in that profile unless explicitly overridden. The precedence order is:
+Profile defaults apply to all secrets in that profile unless explicitly
+overridden. In SecretSpec 0.19+, the same table accepts `inherit = false` to
+make a non-default profile standalone; unlike `required`, `default`, and
+`providers`, this controls the relationship with `[profiles.default]` rather
+than supplying a value to each secret. The precedence order is:
 
 1. **Secret-level configuration** (highest priority) -- explicit settings in the secret definition
 2. **Profile defaults** -- from `profiles.<name>.defaults`

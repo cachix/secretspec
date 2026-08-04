@@ -1947,6 +1947,7 @@ revision = "1.0"
 PARENT_ONLY = { description = "parent", required = true }
 
 [profiles.production.defaults]
+inherit = false
 required = false
 providers = ["shared"]
 "#,
@@ -1971,6 +1972,7 @@ CHILD_ONLY = { description = "child", required = true }
         .defaults
         .as_ref()
         .expect("profile defaults should be inherited");
+    assert_eq!(defaults.inherit, Some(false));
     assert_eq!(defaults.required, Some(false));
     assert_eq!(
         defaults.providers.as_deref(),
@@ -5796,6 +5798,7 @@ fn build_chain_scenario(
                 "development".to_string(),
                 Profile {
                     defaults: Some(crate::config::ProfileDefaults {
+                        inherit: None,
                         required: None,
                         default: None,
                         providers: Some(vec!["personal".to_string(), "team".to_string()]),

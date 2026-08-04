@@ -61,6 +61,9 @@ extends = ["../../shared/base", "../../shared/database", "../../shared/auth"]
 - Shared ancestors are applied once, so diamond-shaped inheritance is supported
 - Each profile is merged independently
 - Profile `[defaults]` inherit field by field across source files
+- The `inherit` profile-default field (0.19+) follows that same `extends`
+  precedence. A child profile keeps an inherited `inherit = false` unless a
+  later source explicitly sets it to `true`.
 - A child `[scopes.<name>]` completely replaces the parent scope of the same
   name — its `secrets` list wins outright; the two lists are **not** unioned.
   Scopes defined only in a parent are inherited. (Whole-value replacement is the

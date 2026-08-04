@@ -11,7 +11,7 @@ A [`secretspec.toml`](/concepts/declarative/) file lists the secrets your projec
 
 ## Use profiles for environments
 
-[Profiles](/concepts/profiles/) let you vary secret requirements per environment. A `production` profile can enforce strict requirements while a `development` profile provides safe defaults. All profiles inherit from `default`, so you only specify what changes.
+[Profiles](/concepts/profiles/) let you vary secret requirements per environment. A `production` profile can enforce strict requirements while a `development` profile provides safe defaults. Non-default profiles inherit from `default` when it exists, so you only specify what changes; SecretSpec 0.19+ also supports standalone profiles that opt out of this inheritance.
 
 ## Store secrets anywhere with providers
 

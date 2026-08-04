@@ -90,13 +90,14 @@ echo "==> Haskell"
   cd secretspec-hs
   hs_lib_dir="$(mktemp -d)"
   cp "$SECRETSPEC_FFI_STATICLIB" "$hs_lib_dir/"
-  ghc_optl=()
-  for l in $SECRETSPEC_FFI_NATIVE_LIBS; do ghc_optl+=("--ghc-options=-optl$l"); done
   cabal update
   # --write-ghc-environment-files lets the codegen test's runghc see aeson and
   # the quicktype-generated module's transitive imports; SECRETSPEC_BIN (set
-  # above) lets it run `secretspec schema`.
-  cabal test --extra-lib-dirs="$hs_lib_dir" "${ghc_optl[@]}" \
+  # above) lets it run `secretspec schema`. All -optl flags go in ONE
+  # --ghc-options occurrence: cabal reverses the order of repeated occurrences,
+  # which breaks two-token `-framework X` pairs on macOS.
+  cabal test --extra-lib-dirs="$hs_lib_dir" \
+    --ghc-options="-optl${SECRETSPEC_FFI_NATIVE_LIBS// / -optl}" \
     --write-ghc-environment-files=always
 )
 

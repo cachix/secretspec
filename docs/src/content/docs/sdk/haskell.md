@@ -83,10 +83,9 @@ LIBDIR="$(mktemp -d)"
 cp "$TARGET/debug/libsecretspec_ffi.a" "$LIBDIR/"
 NATIVE_LIBS="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
   --print native-static-libs 2>&1 | sed -n 's/^note: native-static-libs: //p' | tail -1)"
-OPTL=(); for l in $NATIVE_LIBS; do OPTL+=("--ghc-options=-optl$l"); done
 
-cabal build --extra-lib-dirs="$LIBDIR" "${OPTL[@]}"
-cabal test  --extra-lib-dirs="$LIBDIR" "${OPTL[@]}"
+cabal build --extra-lib-dirs="$LIBDIR" --ghc-options="-optl${NATIVE_LIBS// / -optl}"
+cabal test  --extra-lib-dirs="$LIBDIR" --ghc-options="-optl${NATIVE_LIBS// / -optl}"
 ```
 
 ### pkg-config (0.19+)

@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dynamically — without hand-written linker flags.
 - The Haskell SDK's new `use-pkg-config` cabal flag
   (`cabal build -f use-pkg-config`) resolves the archive through pkg-config.
+- The Ruby SDK's native extension accepts a new `--enable-pkg-config` build
+  flag (`gem install secretspec -- --enable-pkg-config`) that resolves the
+  archive through pkg-config.
 - The Haskell SDK declares the archive's macOS system frameworks
   (`SystemConfiguration`, `Security`, `CoreFoundation`) in its cabal file, so
   GHC passes them to every link on macOS.

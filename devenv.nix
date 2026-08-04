@@ -71,7 +71,8 @@
     # Vaultwarden + TLS proxy containers. Client only: the harness talks to
     # whatever runtime the developer already provides (Docker Desktop, colima,
     # or a podman machine exposing /var/run/docker.sock).
-    pkgs.docker-client
+    # docker-client currently aliases the insecure Docker 28 package.
+    (pkgs.docker_29.override { clientOnly = true; })
     # Building the secretspec-php-native extension (ext-php-rs) needs php-config +
     # the PHP dev headers, and bindgenHook wires libclang/clang system headers so
     # ext-php-rs's bindgen step can parse php.h.

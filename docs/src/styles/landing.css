@@ -1107,6 +1107,111 @@
 .landing-terminal-body .tok-sec,
 .landing-bento-mini-code .tok-sec { color: #c79be0; }
 
+.landing-terminal-run {
+  --run-command: var(--color-accent-100);
+  --run-prompt: var(--color-accent-300);
+  --run-success: var(--color-accent-200);
+  --run-argument: var(--color-accent-300);
+  --run-cursor-idle: rgba(255, 255, 255, 0.55);
+  --run-selected: var(--color-accent-300);
+}
+
+.landing-terminal-run .tok-com {
+  color: var(--color-gray-400);
+}
+
+.landing-terminal-run .tok-pun {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.landing-terminal-run .landing-cmd {
+  color: var(--run-command);
+  font-weight: 600;
+}
+
+.landing-terminal-run .landing-prompt {
+  color: var(--run-prompt);
+  font-weight: 700;
+}
+
+.landing-terminal-run .landing-flag {
+  color: var(--color-gray-400);
+  font-style: italic;
+  font-weight: 500;
+}
+
+.landing-terminal-run .landing-arg {
+  color: var(--run-argument);
+  font-weight: 600;
+}
+
+.landing-terminal-run .landing-ok {
+  color: var(--run-success);
+  font-weight: 700;
+}
+
+.landing-run-step {
+  display: contents;
+}
+
+.landing-provider-cursor,
+.landing-provider-slot {
+  display: inline-block;
+  width: 1.25ch;
+}
+
+.landing-provider-cursor {
+  color: var(--run-selected);
+  font-weight: 700;
+  transform: var(--landing-provider-cursor-transform, translate(0.28rem, 0));
+  transition:
+    color 0.18s ease,
+    transform 0.18s ease;
+}
+
+.landing-provider-slot {
+  color: transparent;
+}
+
+.landing-provider-line {
+  display: inline-block;
+  color: rgba(255, 255, 255, 0.82);
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    color 0.18s ease,
+    transform 0.18s ease;
+  will-change: color, transform;
+}
+
+.landing-provider-line:focus-visible {
+  outline: 2px solid var(--run-selected);
+  outline-offset: 0.15rem;
+}
+
+.landing-provider-line.is-selected {
+  color: var(--run-selected);
+  transform: translateX(0.28rem);
+}
+
+.landing-provider-line .provider-name {
+  color: inherit;
+  font-weight: inherit;
+}
+
+.landing-provider-line.is-selected .tok-pun,
+.landing-provider-line.is-selected .provider-name {
+  color: var(--run-selected);
+  font-weight: 700;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-provider-cursor,
+  .landing-provider-line {
+    transition: none;
+  }
+}
+
 /* ── Provider switcher (SecretSpec showcase) ── */
 
 .landing-secret {

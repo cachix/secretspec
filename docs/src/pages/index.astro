@@ -206,39 +206,39 @@ const reelScriptData = {
 
       <!-- Right: runtime/terminal -->
       <div class="landing-hero-preview">
-        <div class="landing-terminal">
+        <div class="landing-terminal landing-terminal-run">
           <div class="landing-terminal-header">
             <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
             <span class="landing-terminal-title">terminal</span>
           </div>
-          <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># 1. Initialize from existing .env</span>
-$ secretspec init --from dotenv
-<span class="tok-str">✓</span> Created secretspec.toml with 5 secrets
+          <pre is:raw class="landing-terminal-body"><code><span class="landing-run-step"><span class="tok-com"># 1. Initialize from existing .env</span>
+<span class="landing-prompt">$</span> <span class="landing-cmd">secretspec init <span class="landing-flag">--from</span> <span class="landing-arg">dotenv</span></span>
+<span class="landing-ok">✓</span> Created secretspec.toml with 5 secrets</span>
 
-<span class="tok-com"># 2. Pick a user-global default (0.17+)</span>
-$ secretspec config global init
+<span class="landing-run-step is-provider-list"><span class="tok-com"># 2. Pick a user-global default (0.17+)</span>
+<span class="landing-prompt">$</span> <span class="landing-cmd">secretspec config global init</span>
 ? Select your preferred provider backend:
-<span class="tok-pun">›</span> keyring: Uses system keychain (Recommended)
-  bw: Bitwarden Password Manager (0.18+)
-  kdbx: KeePass KDBX databases (0.17+)
-  keeper: Keeper Secrets Manager (0.18+) via official Rust SDK
-  infisical: Infisical secret management
-  openbao: OpenBao secret management (0.17+)
-  age: age-encrypted file (0.17+)
-  sops: SOPS encrypted files (0.17+)
-  systemd-credential: Read-only systemd service credentials (0.17+)
-  awsps: AWS Systems Manager Parameter Store (0.18+)
-  scaleway: Scaleway Secret Manager (0.17+)
-  dashlane: Dashlane password manager, read-only (0.18+)
-<span class="tok-str">✓</span> Saved to ~/.config/secretspec/config.toml
+<span class="landing-provider-cursor" aria-hidden="true">›</span><a class="landing-provider-line is-selected" href="/providers/keyring/"><span class="provider-name">keyring</span>: Uses system keychain (Recommended)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" href="/providers/bw/"><span class="provider-name">bw</span>: Bitwarden Password Manager (0.18+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" href="/providers/kdbx/"><span class="provider-name">kdbx</span>: KeePass KDBX databases (0.17+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" href="/providers/keeper/"><span class="provider-name">keeper</span>: Keeper Secrets Manager (0.18+) via official Rust SDK</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" href="/providers/infisical/"><span class="provider-name">infisical</span>: Infisical secret management</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" href="/providers/openbao/"><span class="provider-name">openbao</span>: OpenBao secret management (0.17+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" href="/providers/age/"><span class="provider-name">age</span>: age-encrypted file (0.17+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" href="/providers/sops/"><span class="provider-name">sops</span>: SOPS encrypted files (0.17+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" href="/providers/systemd-credential/"><span class="provider-name">systemd-credential</span>: Read-only systemd service credentials (0.17+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" href="/providers/awsps/"><span class="provider-name">awsps</span>: AWS Systems Manager Parameter Store (0.18+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" href="/providers/scaleway/"><span class="provider-name">scaleway</span>: Scaleway Secret Manager (0.17+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" href="/providers/dashlane/"><span class="provider-name">dashlane</span>: Dashlane password manager, read-only (0.18+)</a>
+<span class="landing-ok">✓</span> Saved to ~/.config/secretspec/config.toml</span>
 
-<span class="tok-com"># 3. Run your app with secrets injected</span>
-$ secretspec run --profile production -- npm start
-<span class="tok-str">✓</span> Loaded DATABASE_URL from keyring
-<span class="tok-str">✓</span> Loaded REDIS_URL    from keyring
-<span class="tok-str">✓</span> Generated DB_PASSWORD (32 chars)
-<span class="tok-str">✓</span> Wrote TLS_CERT to /tmp/secretspec-tls-cert
-<span class="tok-pun">›</span> npm start</code></pre>
+<span class="landing-run-step"><span class="tok-com"># 3. Run your app with secrets injected</span>
+<span class="landing-prompt">$</span> <span class="landing-cmd">secretspec run <span class="landing-flag">--profile</span> <span class="landing-arg">production</span> <span class="landing-flag">--</span> npm start</span>
+<span class="landing-ok">✓</span> Loaded DATABASE_URL from keyring
+<span class="landing-ok">✓</span> Loaded REDIS_URL    from keyring
+<span class="landing-ok">✓</span> Generated DB_PASSWORD (32 chars)
+<span class="landing-ok">✓</span> Wrote TLS_CERT to /tmp/secretspec-tls-cert
+<span class="tok-pun">›</span> npm start</span></code></pre>
         </div>
       </div>
     </div>
@@ -1505,6 +1505,115 @@ REDIS_URL=redis://…</code></pre>
 <img referrerpolicy="no-referrer-when-downgrade" src="https://static.scarf.sh/a.png?x-pxid=ddbe4178-cff6-4549-9365-facbc08f3b6f" alt="" width="1" height="1" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden" />
 
 <script>
+  (function () {
+    const providerList = document.querySelector<HTMLElement>('.landing-run-step.is-provider-list');
+    const cursor = providerList?.querySelector<HTMLElement>('.landing-provider-cursor');
+    const lines = Array.from(providerList?.querySelectorAll<HTMLElement>('.landing-provider-line') ?? []);
+    const firstLine = lines[0];
+
+    if (!providerList || !cursor || !firstLine) return;
+
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const selectionDelay = 1500;
+
+    function greatestCommonDivisor(left: number, right: number): number {
+      while (right !== 0) {
+        const next = left % right;
+        left = right;
+        right = next;
+      }
+
+      return left;
+    }
+
+    function coprimeStep(total: number): number {
+      for (let candidate = Math.max(1, Math.floor(total / 2)); candidate > 1; candidate -= 1) {
+        if (greatestCommonDivisor(candidate, total) === 1) return candidate;
+      }
+
+      return 1;
+    }
+
+    const selectionStep = coprimeStep(lines.length);
+    const selectionOrder = lines.map(function (_, index) {
+      return (index * selectionStep) % lines.length;
+    });
+
+    let nextOrderIndex = 1;
+    let autoSelectTimer: number | undefined;
+
+    function lineOffset(line: HTMLElement) {
+      return line.getBoundingClientRect().top - firstLine.getBoundingClientRect().top;
+    }
+
+    function selectLine(line: HTMLElement) {
+      lines.forEach(function (line) {
+        line.classList.remove('is-selected');
+      });
+      line.classList.add('is-selected');
+      cursor.style.setProperty(
+        '--landing-provider-cursor-transform',
+        `translate(0.28rem, ${lineOffset(line)}px)`
+      );
+    }
+
+    function stopAutoSelect() {
+      if (autoSelectTimer !== undefined) {
+        window.clearInterval(autoSelectTimer);
+        autoSelectTimer = undefined;
+      }
+    }
+
+    function selectNextLine() {
+      const nextLineIndex = selectionOrder[nextOrderIndex];
+      nextOrderIndex = (nextOrderIndex + 1) % selectionOrder.length;
+      const nextLine = lines[nextLineIndex];
+
+      if (nextLine) selectLine(nextLine);
+    }
+
+    function startAutoSelect() {
+      stopAutoSelect();
+      if (reduceMotion.matches) return;
+      autoSelectTimer = window.setInterval(selectNextLine, selectionDelay);
+    }
+
+    function resumeAutoSelect(line: HTMLElement) {
+      if (line.matches(':hover') || document.activeElement === line) return;
+      startAutoSelect();
+    }
+
+    function selectInteractiveLine(line: HTMLElement) {
+      const lineIndex = lines.indexOf(line);
+
+      if (lineIndex !== -1) {
+        const orderIndex = selectionOrder.indexOf(lineIndex);
+        nextOrderIndex = orderIndex === -1 ? 0 : (orderIndex + 1) % selectionOrder.length;
+      }
+
+      stopAutoSelect();
+      selectLine(line);
+    }
+
+    lines.forEach(function (line) {
+      line.addEventListener('pointerenter', function () { selectInteractiveLine(line); });
+      line.addEventListener('pointerleave', function () { resumeAutoSelect(line); });
+      line.addEventListener('focus', function () { selectInteractiveLine(line); });
+      line.addEventListener('blur', function () { resumeAutoSelect(line); });
+    });
+
+    selectLine(firstLine);
+    startAutoSelect();
+
+    reduceMotion.addEventListener('change', function () {
+      if (reduceMotion.matches) {
+        stopAutoSelect();
+      } else {
+        startAutoSelect();
+      }
+    });
+  })();
+
   // ── Provider switcher ──
   (function () {
     const tabs = document.querySelectorAll('#secret-tabs .landing-provider-tab');

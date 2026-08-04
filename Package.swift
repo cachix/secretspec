@@ -6,7 +6,7 @@ import PackageDescription
 // Keep this in sync with the Cargo workspace version via
 // scripts/sync-sdk-versions.sh. Release preparation replaces the checksum
 // after building the versioned XCFramework; see RELEASE.md.
-let secretSpecBinaryVersion = "0.17.0"
+let secretSpecBinaryVersion = "0.18.0"
 let secretSpecBinaryChecksum = "0000000000000000000000000000000000000000000000000000000000000000"
 
 let localBinaryPath = "secretspec-swift/Artifacts/CSecretSpec.xcframework"

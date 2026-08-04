@@ -504,6 +504,10 @@ pub struct BitwardenProvider {
     /// CLI invocation. Empty addresses resolve without spawning anything.
     /// Carries its error as a `String` for the same reason as `server_check`.
     vault_scope: OnceLock<std::result::Result<VaultScope, String>>,
+    /// Executable used by tests to exercise subprocess failures without
+    /// mutating the process-global PATH observed by concurrently running tests.
+    #[cfg(test)]
+    cli_binary_path: std::path::PathBuf,
 }
 
 /// Server the `bw` CLI targets when no self-hosted server is configured. `bw
@@ -1157,7 +1161,18 @@ impl BitwardenProvider {
             credentials: ProviderCredentials::new(),
             server_check: OnceLock::new(),
             vault_scope: OnceLock::new(),
+            #[cfg(test)]
+            cli_binary_path: "bw".into(),
         }
+    }
+
+    /// Builds a command for the Bitwarden CLI.
+    fn command(&self) -> Command {
+        #[cfg(test)]
+        return Command::new(&self.cli_binary_path);
+
+        #[cfg(not(test))]
+        Command::new("bw")
     }
 
     /// The organization the address asks for, before resolution.
@@ -1353,10 +1368,7 @@ impl BitwardenProvider {
     fn check_server(&self, expected: &str) -> std::result::Result<(), String> {
         // `execute_bw_command` calls this method, so invoke the CLI directly to
         // avoid recursing.
-        let output = match Command::new("bw")
-            .args(["--nointeraction", "status"])
-            .output()
-        {
+        let output = match self.command().args(["--nointeraction", "status"]).output() {
             Ok(output) => output,
             // Say nothing about a missing CLI here: `execute_bw_command` reports
             // that with installation instructions, and it runs immediately after.
@@ -1428,7 +1440,7 @@ impl BitwardenProvider {
     fn execute_bw_command(&self, args: &[&str]) -> Result<String> {
         self.ensure_server_configured()?;
 
-        let mut cmd = Command::new("bw");
+        let mut cmd = self.command();
 
         // Never allow bw to prompt on stdin; fail fast with a clear error
         // instead (e.g. when the session is missing or expired in CI).
@@ -2143,7 +2155,7 @@ impl BitwardenProvider {
         use std::process::Stdio;
         let encoded_json = general_purpose::STANDARD.encode(&item_json_str);
 
-        let mut cmd = std::process::Command::new("bw");
+        let mut cmd = self.command();
 
         let mut args = vec!["--nointeraction", "edit", "item", item_id];
         // The organization to act in, not a filter — see `search_filter_args`.
@@ -2485,7 +2497,7 @@ impl BitwardenProvider {
         use std::process::Stdio;
         let encoded_json = general_purpose::STANDARD.encode(&template_json);
 
-        let mut cmd = std::process::Command::new("bw");
+        let mut cmd = self.command();
 
         let mut args = vec!["--nointeraction", "create", "item"];
         // The organization to create in, not a filter — see `search_filter_args`.
@@ -4356,25 +4368,20 @@ mod tests {
         }
     }
 
-    /// Runs `body` with no `bw` on PATH at all, so the provider's
-    /// "CLI not installed" branches (a distinct `NotFound` handling per call
-    /// site) are exercised for real.
+    /// Returns a provider whose CLI path cannot exist, so the provider's "CLI
+    /// not installed" branches (a distinct `NotFound` handling per call site)
+    /// are exercised without mutating the process-global PATH.
     #[cfg(unix)]
-    fn with_no_bw<T>(body: impl FnOnce() -> T) -> T {
-        let _guard = BW_SHIM_LOCK.lock().unwrap();
+    fn provider_without_bw() -> BitwardenProvider {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let empty = std::env::temp_dir().join(format!(
-            "bw-shim-empty-{}-{}",
+        let missing = std::env::temp_dir().join(format!(
+            "missing-bw-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
-        std::fs::create_dir_all(&empty).expect("create empty PATH directory");
-        let old_path = std::env::var("PATH").unwrap_or_default();
-        unsafe { std::env::set_var("PATH", &empty) };
-        let result = body();
-        unsafe { std::env::set_var("PATH", old_path) };
-        let _ = std::fs::remove_dir_all(&empty);
-        result
+        let mut provider = BitwardenProvider::new(BitwardenConfig::default());
+        provider.cli_binary_path = missing;
+        provider
     }
 
     // -- fake-bw CLI subprocess tests -------------------------------------
@@ -4459,10 +4466,8 @@ mod tests {
         // `execute_bw_command` reports a missing CLI with install
         // instructions immediately after, so `check_server` must stay quiet
         // on NotFound rather than error twice.
-        with_no_bw(|| {
-            let provider = BitwardenProvider::new(BitwardenConfig::default());
-            assert_eq!(provider.check_server("https://vault.company.com"), Ok(()));
-        });
+        let provider = provider_without_bw();
+        assert_eq!(provider.check_server("https://vault.company.com"), Ok(()));
     }
 
     #[cfg(unix)]
@@ -4518,13 +4523,11 @@ mod tests {
     fn execute_bw_command_reports_a_missing_cli_with_install_instructions() {
         // A machine without the CLI gets instructions, not a bare "command
         // not found".
-        with_no_bw(|| {
-            let provider = BitwardenProvider::new(BitwardenConfig::default());
-            let err = provider.execute_bw_command(&["status"]).unwrap_err();
-            let msg = format!("{err}");
-            assert!(msg.contains("Bitwarden CLI (bw) is not installed"), "{msg}");
-            assert!(msg.contains("brew install bitwarden-cli"), "{msg}");
-        });
+        let provider = provider_without_bw();
+        let err = provider.execute_bw_command(&["status"]).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("Bitwarden CLI (bw) is not installed"), "{msg}");
+        assert!(msg.contains("brew install bitwarden-cli"), "{msg}");
     }
 
     #[cfg(unix)]
@@ -4667,11 +4670,9 @@ mod tests {
         // install error, not masquerade as "not authenticated" (the install
         // instructions contain "bw login"/"bw unlock", which used to match
         // the auth-state guard).
-        with_no_bw(|| {
-            let provider = BitwardenProvider::new(BitwardenConfig::default());
-            let err = provider.is_authenticated().unwrap_err();
-            assert!(format!("{err}").contains("is not installed"), "{err}");
-        });
+        let provider = provider_without_bw();
+        let err = provider.is_authenticated().unwrap_err();
+        assert!(format!("{err}").contains("is not installed"), "{err}");
     }
 
     // -- get / create over the fake CLI -----------------------------------
@@ -5143,31 +5144,27 @@ mod tests {
     fn create_item_from_template_reports_a_missing_cli() {
         // The creation spawn carries its own NotFound handling with install
         // instructions, separate from `execute_bw_command`'s.
-        with_no_bw(|| {
-            let provider = BitwardenProvider::new(BitwardenConfig::default());
-            let err = provider
-                .create_item_from_template(&json!({ "name": "Vault" }))
-                .unwrap_err();
-            assert!(
-                format!("{err}").contains("Bitwarden CLI (bw) is not installed"),
-                "{err}"
-            );
-        });
+        let provider = provider_without_bw();
+        let err = provider
+            .create_item_from_template(&json!({ "name": "Vault" }))
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("Bitwarden CLI (bw) is not installed"),
+            "{err}"
+        );
     }
 
     #[cfg(unix)]
     #[test]
     fn update_item_with_json_reports_a_missing_cli() {
-        with_no_bw(|| {
-            let provider = BitwardenProvider::new(BitwardenConfig::default());
-            let err = provider
-                .update_item_with_json("it1", &json!({ "id": "it1" }))
-                .unwrap_err();
-            assert!(
-                format!("{err}").contains("Bitwarden CLI (bw) is not installed"),
-                "{err}"
-            );
-        });
+        let provider = provider_without_bw();
+        let err = provider
+            .update_item_with_json("it1", &json!({ "id": "it1" }))
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("Bitwarden CLI (bw) is not installed"),
+            "{err}"
+        );
     }
 
     #[cfg(unix)]

@@ -15,7 +15,7 @@ jobs:
   sdks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The full workspace debug build (AWS/GCP/Bitwarden providers) plus the
       # Nix store overflows the ~14GB free on a hosted runner.
       # /usr/share/dotnet is safe to purge: the C# suite uses devenv's dotnet.
@@ -39,7 +39,7 @@ jobs:
     name: Swift SDK
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
       - name: Build the native resolver

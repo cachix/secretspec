@@ -51,7 +51,7 @@ jobs:
           - { target: x64-mingw-ucrt, runner: windows-latest }
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Sync SDK package versions
         run: bash scripts/sync-sdk-versions.sh
 
@@ -68,17 +68,17 @@ jobs:
         run: echo "CARGO_BUILD_TARGET=x86_64-pc-windows-gnu" >> "$GITHUB_ENV"
       - name: Install NASM (aws-lc-sys assembly, Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/setup-nasm@v1
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
 
       # Placed after the CARGO_BUILD_TARGET/toolchain setup so the cache key
       # reflects them; keyed per matrix target (the automatic key covers only
       # the job id, toolchain, and lockfile).
       - name: Cache Rust builds
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: ${{ matrix.target }}
 
-      - uses: ruby/setup-ruby@v1
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
         with:
           ruby-version: "3.3"
 
@@ -100,7 +100,7 @@ jobs:
           GEM_HOME="$RUNNER_TEMP/gemhome" GEM_PATH="$RUNNER_TEMP/gemhome" \
             ruby -e 'require "secretspec"; puts "abi " + Secretspec.abi_version'
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: gem-${{ matrix.target }}
           path: secretspec-rb/*.gem
@@ -119,15 +119,15 @@ jobs:
       id-token: write # RubyGems Trusted Publishing (OIDC), no token needed
       contents: read
     steps:
-      - uses: ruby/setup-ruby@v1
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
         with:
           ruby-version: "3.3"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: gems
           merge-multiple: true
       - name: Configure RubyGems credentials (OIDC trusted publishing)
-        uses: rubygems/configure-rubygems-credentials@v2.1.0
+        uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
       - name: gem push
         run: |
           for gem in gems/*.gem; do

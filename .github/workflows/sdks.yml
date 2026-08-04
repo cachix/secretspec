@@ -15,7 +15,7 @@ jobs:
   sdks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       # The full workspace debug build (AWS/GCP/Bitwarden providers) plus the
       # Nix store overflows the ~14GB free on a hosted runner.
       # /usr/share/dotnet is safe to purge: the C# suite uses devenv's dotnet.
@@ -26,8 +26,8 @@ jobs:
             /usr/local/share/boost /usr/local/share/powershell
           sudo docker image prune --all --force
           df -h /
-      - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v16
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+      - uses: cachix/cachix-action@3ba601ff5bbb07c7220846facfa2cd81eeee15a1 # v16
         with:
           name: devenv
       - name: Install devenv.sh
@@ -39,7 +39,7 @@ jobs:
     name: Swift SDK
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
       - name: Build the native resolver

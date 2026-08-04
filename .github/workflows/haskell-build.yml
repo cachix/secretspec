@@ -39,7 +39,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Sync SDK package versions
         run: bash scripts/sync-sdk-versions.sh
       # The cdylib + CLI debug build (AWS/GCP/Bitwarden providers) plus the
@@ -51,8 +51,8 @@ jobs:
             /usr/local/share/boost /usr/local/share/powershell
           sudo docker image prune --all --force
           df -h /
-      - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v16
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+      - uses: cachix/cachix-action@3ba601ff5bbb07c7220846facfa2cd81eeee15a1 # v16
         with:
           name: devenv
       - name: Install devenv.sh
@@ -86,25 +86,25 @@ jobs:
     name: build (windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Sync SDK package versions
         run: bash scripts/sync-sdk-versions.sh
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
       - name: Cache Rust builds
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Install NASM (aws-lc-sys assembly)
-        uses: ilammy/setup-nasm@v1
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
       # MINGW64 (msvcrt-based) matches the CRT the x86_64-pc-windows-gnu Rust
       # target links, so every object in the archive agrees on one C runtime.
       - name: Install MSYS2 MinGW toolchain (compiles the staticlib's C deps)
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
         with:
           msystem: MINGW64
           path-type: inherit
           install: mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils
       - name: Install GHC and cabal
-        uses: haskell-actions/setup@v2
+        uses: haskell-actions/setup@6037f33647c3f17758a2356c80fc4a53d7e0685d # v2.12.0
         with:
           ghc-version: "9.6"
       - name: Build staticlib + CLI and run the Haskell SDK test-suite
@@ -186,11 +186,11 @@ jobs:
     needs: [build, build-windows]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Sync SDK package versions
         run: bash scripts/sync-sdk-versions.sh
-      - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v16
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+      - uses: cachix/cachix-action@3ba601ff5bbb07c7220846facfa2cd81eeee15a1 # v16
         with:
           name: devenv
       - name: Install devenv.sh

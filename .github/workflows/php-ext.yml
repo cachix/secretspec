@@ -69,10 +69,10 @@ jobs:
           - { target: x86_64-pc-windows-msvc, runner: windows-latest, libext: dll }
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up PHP ${{ matrix.php }}
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: ${{ matrix.php }}
           # php-config + headers, needed by ext-php-rs's build.
@@ -99,7 +99,7 @@ jobs:
       # per-PHP-version bindings into the build dir. (The Windows rows build
       # on nightly, whose daily version bump naturally expires their cache.)
       - name: Cache Rust builds
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: ${{ matrix.target }}-php${{ matrix.php }}
 
@@ -138,7 +138,7 @@ jobs:
             echo secretspec_native_abi_version(), PHP_EOL;
           '
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: php-ext-${{ matrix.php }}-${{ matrix.target }}
           path: ${{ steps.stage.outputs.asset }}

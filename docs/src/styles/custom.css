@@ -57,3 +57,9 @@
 .sl-markdown-content a:not([class]):hover {
   color: var(--sl-color-accent-high);
 }
+
+/* Swap the release-post logo artwork with the active documentation theme. */
+:root[data-theme="dark"]
+  img[alt="The new SecretSpec document-and-keyhole logo"] {
+  content: url("../assets/logo-dark.png");
+}

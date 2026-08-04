@@ -1,27 +1,10 @@
 ---
 import { Icon } from '@astrojs/starlight/components';
 import config from 'virtual:starlight/user-config';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
-// Best-effort: read the workspace version at build time. Anchor to the
-// [workspace.package] section and stop at the next TOML header so we never
-// match a dependency's `version = "..."` pin.
-let version: string | null = null;
-try {
-  const cargoTomlPath = fileURLToPath(new URL('../../../Cargo.toml', import.meta.url));
-  const cargoToml = readFileSync(cargoTomlPath, 'utf-8');
-  const section = cargoToml.match(/\[workspace\.package\]([^\[]*)/);
-  const versionMatch = section?.[1].match(/^\s*version\s*=\s*["']([^"']+)["']/m);
-  version = versionMatch?.[1] ?? null;
-} catch {
-  // Cargo.toml missing or unreadable — degrade to no pill rather than fail the build.
-}
-
-// The star count is fetched at runtime (see the inline script below) from our own
-// /api/stars edge route, which proxies GitHub with edge caching — so we never
-// hit the GitHub API per-visitor. The pill renders hidden and reveals itself
-// once populated; a failed lookup just leaves it hidden.
+// The latest published release and star count are fetched at runtime (see the
+// inline script below) from our edge-cached GitHub proxy. Both pills render
+// hidden and reveal themselves once populated; a failed lookup leaves them hidden.
 
 // The GitHub-mark + star-count pill replaces the standalone GitHub icon, so
 // only render non-GitHub social links here.
@@ -29,15 +12,7 @@ try {
 const otherLinks = (config.social || []).filter((l) => l.icon !== 'github');
 ---
 
-{version && (
-  <a
-    class="release-pill"
-    href={`https://github.com/cachix/secretspec/releases/tag/v${version}`}
-    aria-label={`Latest release: v${version}`}
-  >
-    v{version}
-  </a>
-)}
+<a class="release-pill" data-release-pill hidden></a>
 <a
   class="release-pill stars-pill"
   href="https://github.com/cachix/secretspec"
@@ -55,23 +30,32 @@ const otherLinks = (config.social || []).filter((l) => l.icon !== 'github');
 ))}
 
 <script>
-  // Populate the GitHub star pill from our own edge-cached /api/stars route, so
-  // the GitHub API is never hit per-visitor. Hoisted by Astro, so it runs once
-  // even though this component renders in both the header and the mobile menu.
+  // Populate the release and star pills from our own edge-cached GitHub proxy.
+  // Hoisted by Astro, so this runs once even though the component renders in
+  // both the header and mobile menu.
   (async () => {
     const fmt = (n: number) =>
       n >= 10000 ? (n / 1000).toFixed(0) + 'k'
       : n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k'
       : String(n);
     try {
-      const res = await fetch('/api/stars');
+      const res = await fetch('/api/github');
       if (!res.ok) return;
-      const { stars } = await res.json();
-      if (typeof stars !== 'number') return;
-      for (const pill of document.querySelectorAll<HTMLElement>('[data-stars-pill]')) {
-        const count = pill.querySelector('[data-stars-count]');
-        if (count) count.textContent = fmt(stars);
-        pill.hidden = false;
+      const { stars, release } = await res.json();
+      if (typeof release === 'string') {
+        for (const pill of document.querySelectorAll<HTMLAnchorElement>('[data-release-pill]')) {
+          pill.href = `https://github.com/cachix/secretspec/releases/tag/${encodeURIComponent(release)}`;
+          pill.ariaLabel = `Latest release: ${release}`;
+          pill.textContent = release;
+          pill.hidden = false;
+        }
+      }
+      if (typeof stars === 'number') {
+        for (const pill of document.querySelectorAll<HTMLElement>('[data-stars-pill]')) {
+          const count = pill.querySelector('[data-stars-count]');
+          if (count) count.textContent = fmt(stars);
+          pill.hidden = false;
+        }
       }
     } catch {
       // Leave the pill hidden on any failure.

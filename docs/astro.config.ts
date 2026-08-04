@@ -5,29 +5,36 @@ import starlightLlmsTxt from "starlight-llms-txt";
 import starlightBlog from "starlight-blog";
 
 // Dev-only: `astro dev` (what `devenv up` runs) does not execute worker.js, so
-// /api/stars would 404 and the star pill would stay hidden locally. Mirror the
-// worker's GitHub proxy here so the pill populates during local development.
+// /api/github would 404 and the release/star pills would stay hidden locally.
+// Mirror the worker's GitHub proxy here so both populate during development.
 // Production is unaffected — it is served by worker.js.
-const devStarsApi: PluginOption = {
-  name: "dev-stars-api",
+const devGitHubApi: PluginOption = {
+  name: "dev-github-api",
   apply: "serve",
   enforce: "pre",
   configureServer(server) {
-    server.middlewares.use("/api/stars", async (_req, res) => {
+    server.middlewares.use("/api/github", async (_req, res) => {
       let stars = null;
+      let release = null;
       try {
-        const r = await fetch("https://api.github.com/repos/cachix/secretspec", {
-          headers: { "User-Agent": "secretspec-docs" },
-        });
-        if (r.ok) {
-          const data = await r.json();
+        const headers = { "User-Agent": "secretspec-docs" };
+        const [repoResponse, releaseResponse] = await Promise.all([
+          fetch("https://api.github.com/repos/cachix/secretspec", { headers }),
+          fetch("https://api.github.com/repos/cachix/secretspec/releases/latest", { headers }),
+        ]);
+        if (repoResponse.ok) {
+          const data = await repoResponse.json();
           if (typeof data.stargazers_count === "number") stars = data.stargazers_count;
         }
+        if (releaseResponse.ok) {
+          const data = await releaseResponse.json();
+          if (typeof data.tag_name === "string") release = data.tag_name;
+        }
       } catch {
-        // Degrade to { stars: null } — the pill simply stays hidden.
+        // Degrade to null values — the corresponding pills stay hidden.
       }
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ stars }));
+      res.end(JSON.stringify({ stars, release }));
     });
   },
 };
@@ -40,7 +47,7 @@ export default defineConfig({
     "/ci": "/ci/github-actions",
   },
   vite: {
-    plugins: [devStarsApi],
+    plugins: [devGitHubApi],
   },
   integrations: [
     starlight({

@@ -4,7 +4,7 @@ use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
 use crate::cache::{self, CacheEntryStatus, CacheOwnership};
 use crate::config::{
     Config, CredentialSource, GlobalConfig, NativeAddress, Profile, ProviderAlias, RequireReason,
-    Resolved,
+    Resolved, SecretEncoding,
 };
 use crate::error::{Result, SecretSpecError};
 use crate::manifest::{CompiledManifest, MissingPolicy};
@@ -14,7 +14,10 @@ use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
 use crate::resolve::{RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource};
 use crate::validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
 use colored::Colorize;
-use secrecy::{ExposeSecret, SecretString};
+use data_encoding::{
+    BASE64, BASE64_NOPAD, BASE64URL, BASE64URL_NOPAD, Encoding, HEXLOWER, HEXLOWER_PERMISSIVE,
+};
+use secrecy::{ExposeSecret, SecretSlice, SecretString};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::env;
@@ -396,6 +399,25 @@ enum Materialize {
     /// reported as it *would* resolve, without minting it. Backs `report()` and
     /// `resolve_without_values()`.
     None,
+}
+
+/// A logical value in the shape exposed to callers. Inline values remain
+/// secret strings; file-shaped values carry their owner so the caller decides
+/// whether cleanup follows the resolved-value lifetime or the path is kept.
+enum PreparedSecret {
+    Inline(SecretString),
+    File {
+        owner: tempfile::NamedTempFile,
+        path: String,
+    },
+}
+
+/// Whether a resolved string came from a storage boundary and is eligible for
+/// decoding, or is already the logical value produced inside SecretSpec.
+#[derive(Clone, Copy)]
+enum ResolvedRepresentation {
+    Stored,
+    Logical,
 }
 
 /// Walks up from the current directory looking for `secretspec.toml`.
@@ -1355,24 +1377,137 @@ impl Secrets {
         Ok(())
     }
 
-    /// Inserts a resolved secret into the working set, transparently materializing
-    /// an `as_path` secret to an owner-only temp file whose lifetime is tied to
-    /// `temp_files`. Shared by every resolution branch so the temp-file handling
-    /// cannot drift between them.
+    /// Decode a stored textual representation. Exactly one trailing LF or CRLF
+    /// is ignored to accommodate a value captured from command output; every
+    /// other non-alphabet character remains a hard error.
+    fn decode_stored_value(
+        encoding: SecretEncoding,
+        diagnostic_name: &str,
+        value: &SecretString,
+    ) -> Result<SecretSlice<u8>> {
+        let encoded = value
+            .expose_secret()
+            .strip_suffix("\r\n")
+            .or_else(|| value.expose_secret().strip_suffix('\n'))
+            .unwrap_or_else(|| value.expose_secret());
+
+        fn decode_base(
+            encoded: &[u8],
+            padded: &Encoding,
+            unpadded: &Encoding,
+        ) -> std::result::Result<Vec<u8>, String> {
+            if encoded.contains(&b'=') {
+                padded.decode(encoded).map_err(|error| error.to_string())
+            } else {
+                padded
+                    .decode(encoded)
+                    .or_else(|_| unpadded.decode(encoded))
+                    .map_err(|error| error.to_string())
+            }
+        }
+
+        let decoded = match encoding {
+            SecretEncoding::Base64 => decode_base(encoded.as_bytes(), &BASE64, &BASE64_NOPAD),
+            SecretEncoding::Base64Url => {
+                decode_base(encoded.as_bytes(), &BASE64URL, &BASE64URL_NOPAD)
+            }
+            SecretEncoding::Hex => HEXLOWER_PERMISSIVE
+                .decode(encoded.as_bytes())
+                .map_err(|error| error.to_string()),
+        }
+        .map_err(|reason| SecretSpecError::DecodeFailed {
+            name: diagnostic_name.to_string(),
+            encoding: encoding.as_str(),
+            reason,
+        })?;
+
+        Ok(decoded.into())
+    }
+
+    /// Encode a logical UTF-8 value into the canonical stored representation
+    /// for its declared encoding.
+    fn encode_logical_value(encoding: SecretEncoding, value: &SecretString) -> SecretString {
+        let bytes = value.expose_secret().as_bytes();
+        let encoded = match encoding {
+            SecretEncoding::Base64 => BASE64.encode(bytes),
+            SecretEncoding::Base64Url => BASE64URL_NOPAD.encode(bytes),
+            SecretEncoding::Hex => HEXLOWER.encode(bytes),
+        };
+        SecretString::new(encoded.into())
+    }
+
+    /// Return an encoded copy only when this secret declares an encoding. The
+    /// caller can otherwise pass the original value through without cloning it.
+    fn encoded_for_storage(planned: &PlannedSecret, value: &SecretString) -> Option<SecretString> {
+        planned
+            .encoding()
+            .map(|encoding| Self::encode_logical_value(encoding, value))
+    }
+
+    /// Decode a stored representation independently of its exposure shape, then
+    /// either return UTF-8 text or materialize the bytes to an owner-only file.
+    fn prepare_resolved(
+        &self,
+        planned: &PlannedSecret,
+        diagnostic_name: &str,
+        value: SecretString,
+        representation: ResolvedRepresentation,
+    ) -> Result<PreparedSecret> {
+        let decoded = match (representation, planned.encoding()) {
+            (ResolvedRepresentation::Stored, Some(encoding)) => {
+                let value = Self::decode_stored_value(encoding, diagnostic_name, &value)?;
+                Some((encoding, value))
+            }
+            _ => None,
+        };
+
+        if planned.as_path() {
+            let bytes = decoded
+                .as_ref()
+                .map(|(_, decoded)| decoded.expose_secret())
+                .unwrap_or_else(|| value.expose_secret().as_bytes());
+            let (owner, path) = self.write_secret_to_temp_file(bytes)?;
+            Ok(PreparedSecret::File { owner, path })
+        } else if let Some((encoding, decoded)) = decoded {
+            let text = std::str::from_utf8(decoded.expose_secret()).map_err(|error| {
+                SecretSpecError::DecodeFailed {
+                    name: diagnostic_name.to_string(),
+                    encoding: encoding.as_str(),
+                    reason: format!(
+                        "decoded bytes are not valid UTF-8 ({error}); set `as_path = true` to expose binary data"
+                    ),
+                }
+            })?;
+            Ok(PreparedSecret::Inline(SecretString::new(
+                text.to_owned().into(),
+            )))
+        } else {
+            Ok(PreparedSecret::Inline(value))
+        }
+    }
+
+    /// Inserts a resolved secret into the working set, decoding its optional
+    /// storage encoding when the value crossed a storage boundary, then
+    /// transparently materializing an `as_path` value to an owner-only temp
+    /// file whose lifetime is tied to `temp_files`. Shared by every resolution
+    /// branch so decoding and temp-file handling cannot drift.
     fn insert_resolved(
         &self,
         secrets: &mut HashMap<String, SecretString>,
         temp_files: &mut Vec<tempfile::NamedTempFile>,
-        name: String,
+        planned: &PlannedSecret,
+        diagnostic_name: &str,
         value: SecretString,
-        as_path: bool,
+        representation: ResolvedRepresentation,
     ) -> Result<()> {
-        if as_path {
-            let (temp_file, path_str) = self.write_secret_to_temp_file(&value)?;
-            temp_files.push(temp_file);
-            secrets.insert(name, SecretString::new(path_str.into()));
-        } else {
-            secrets.insert(name, value);
+        match self.prepare_resolved(planned, diagnostic_name, value, representation)? {
+            PreparedSecret::Inline(value) => {
+                secrets.insert(planned.name.clone(), value);
+            }
+            PreparedSecret::File { owner, path } => {
+                temp_files.push(owner);
+                secrets.insert(planned.name.clone(), SecretString::new(path.into()));
+            }
         }
         Ok(())
     }
@@ -2723,7 +2858,9 @@ impl Secrets {
             return Err(err);
         }
 
-        let result = backend.set(addr, &value);
+        let encoded_value = Self::encoded_for_storage(&planned, &value);
+        let stored_value = encoded_value.as_ref().unwrap_or(&value);
+        let result = backend.set(addr, stored_value);
         self.audit_write_result(
             &result,
             name,
@@ -2733,7 +2870,7 @@ impl Secrets {
             None,
         );
         result?;
-        self.sync_cache_after_write(&planned, route, &profile_name, &value);
+        self.sync_cache_after_write(&planned, route, &profile_name, stored_value);
 
         eprintln!(
             "{} Secret '{}' saved to {} (profile: {})",
@@ -2898,8 +3035,6 @@ impl Secrets {
             };
         };
         let default = planned.config().default.clone();
-        let as_path = planned.as_path();
-
         // A fresh cache hit completes the read without constructing or
         // contacting any authoritative provider. Misses and invalid entries
         // fall through to the ordinary ordered provider route.
@@ -2972,48 +3107,30 @@ impl Secrets {
             }
         }
 
-        match result?.0 {
-            Some(value) => {
-                if as_path {
-                    // Write to temp file and persist it (don't auto-delete)
-                    let (temp_file, _path_str) = self.write_secret_to_temp_file(&value)?;
-                    let temp_path = temp_file.into_temp_path();
-                    let persisted_path = temp_path.keep().map_err(|e| {
-                        SecretSpecError::Io(io::Error::other(format!(
-                            "Failed to persist temporary file: {}",
-                            e
-                        )))
-                    })?;
-                    println!("{}", persisted_path.display());
-                } else {
-                    // Use expose_secret() to access the actual value for printing
-                    println!("{}", value.expose_secret());
-                }
-                Ok(())
-            }
-            None => {
-                if let Some(default_value) = default {
-                    if as_path {
-                        // Write default value to temp file and persist it
-                        let (temp_file, _) = self
-                            .write_secret_to_temp_file(&SecretString::new(default_value.into()))?;
-                        let temp_path = temp_file.into_temp_path();
-                        let persisted_path = temp_path.keep().map_err(|e| {
-                            SecretSpecError::Io(io::Error::other(format!(
-                                "Failed to persist temporary file: {}",
-                                e
-                            )))
-                        })?;
-                        println!("{}", persisted_path.display());
-                    } else {
-                        println!("{}", default_value);
-                    }
-                    Ok(())
-                } else {
-                    Err(SecretSpecError::SecretNotFound(name.to_string()))
-                }
+        let (value, representation) = match result?.0 {
+            Some(value) => (value, ResolvedRepresentation::Stored),
+            None => (
+                default
+                    .map(|value| SecretString::new(value.into()))
+                    .ok_or_else(|| SecretSpecError::SecretNotFound(name.to_string()))?,
+                ResolvedRepresentation::Logical,
+            ),
+        };
+        match self.prepare_resolved(&planned, name, value, representation)? {
+            PreparedSecret::Inline(value) => println!("{}", value.expose_secret()),
+            PreparedSecret::File { owner, .. } => {
+                // `get` prints a path for use after this process exits, so unlike
+                // SDK resolution it deliberately persists the backing file.
+                let temp_path = owner.into_temp_path();
+                let persisted_path = temp_path.keep().map_err(|error| {
+                    SecretSpecError::Io(io::Error::other(format!(
+                        "Failed to persist temporary file: {error}"
+                    )))
+                })?;
+                println!("{}", persisted_path.display());
             }
         }
+        Ok(())
     }
 
     /// Ensures all required secrets are present, optionally prompting for missing ones
@@ -3126,9 +3243,11 @@ impl Secrets {
                                 .expect("prompted names are provider-backed leaves");
                             let backend =
                                 self.write_provider_for_route(route, Some(&profile_display))?;
+                            let encoded_value = Self::encoded_for_storage(&planned, &value);
+                            let stored_value = encoded_value.as_ref().unwrap_or(&value);
                             let set_result = backend.set(
                                 planned.as_address(&self.config.project.name, &profile_display),
-                                &value,
+                                stored_value,
                             );
                             self.audit_write_result(
                                 &set_result,
@@ -3139,7 +3258,12 @@ impl Secrets {
                                 None,
                             );
                             set_result?;
-                            self.sync_cache_after_write(&planned, route, &profile_display, &value);
+                            self.sync_cache_after_write(
+                                &planned,
+                                route,
+                                &profile_display,
+                                stored_value,
+                            );
                             eprintln!(
                                 "{} Secret '{}' saved to {} (profile: {})",
                                 "✓".green(),
@@ -3705,7 +3829,9 @@ impl Secrets {
         // The provider states why a write is refused; wrapping it here would
         // only nest a second "Provider operation failed" prefix.
         backend.check_writable(addr)?;
-        let set_result = backend.set(addr, &value);
+        let encoded_value = Self::encoded_for_storage(planned, &value);
+        let stored_value = encoded_value.as_ref().unwrap_or(&value);
+        let set_result = backend.set(addr, stored_value);
         // Generating a secret writes a brand-new value to the provider; record it
         // like any other write so the audit log captures every stored secret.
         self.audit_write_result(
@@ -3724,7 +3850,7 @@ impl Secrets {
                 .as_ref()
                 .expect("a generating secret is provider-backed"),
             profile_name,
-            &value,
+            stored_value,
         );
 
         eprintln!(
@@ -3738,11 +3864,11 @@ impl Secrets {
         Ok(Some(value))
     }
 
-    /// Writes a secret value to a temporary file and returns the file handle and path
+    /// Writes secret bytes to a temporary file and returns the file handle and path
     ///
     /// # Arguments
     ///
-    /// * `secret` - The secret value to write
+    /// * `secret` - The secret bytes to write
     ///
     /// # Returns
     ///
@@ -3753,15 +3879,13 @@ impl Secrets {
     /// Returns an error if the temporary file cannot be created or written to
     fn write_secret_to_temp_file(
         &self,
-        secret: &SecretString,
+        secret: &[u8],
     ) -> Result<(tempfile::NamedTempFile, String)> {
         use std::io::Write;
 
         let mut temp_file = tempfile::NamedTempFile::new().map_err(SecretSpecError::Io)?;
 
-        temp_file
-            .write_all(secret.expose_secret().as_bytes())
-            .map_err(SecretSpecError::Io)?;
+        temp_file.write_all(secret).map_err(SecretSpecError::Io)?;
 
         // Flush to ensure the data is written
         temp_file.flush().map_err(SecretSpecError::Io)?;
@@ -4470,6 +4594,7 @@ impl Secrets {
             let name = &planned.name;
             let required = planned.required();
             let as_path = planned.as_path();
+            let diagnostic_name = Self::diagnostic_secret_name(name, output_filter);
             // The group key (primary spec), matching how `group_uris` and
             // `failed_primary_uris` were keyed from `plan.groups()` above.
             let primary_uri = route.group_key();
@@ -4495,9 +4620,10 @@ impl Secrets {
                         self.insert_resolved(
                             &mut secrets,
                             &mut temp_files,
-                            name.clone(),
+                            planned,
+                            diagnostic_name,
                             value,
-                            as_path,
+                            ResolvedRepresentation::Stored,
                         )?;
                     }
                     status = ResolutionStatus::Resolved;
@@ -4544,9 +4670,10 @@ impl Secrets {
                             self.insert_resolved(
                                 &mut secrets,
                                 &mut temp_files,
-                                name.clone(),
+                                planned,
+                                diagnostic_name,
                                 value,
-                                as_path,
+                                ResolvedRepresentation::Stored,
                             )?;
                         }
                         status = ResolutionStatus::Resolved;
@@ -4564,9 +4691,10 @@ impl Secrets {
                                     self.insert_resolved(
                                         &mut secrets,
                                         &mut temp_files,
-                                        name.clone(),
+                                        planned,
+                                        diagnostic_name,
                                         generated_value,
-                                        as_path,
+                                        ResolvedRepresentation::Logical,
                                     )?;
                                 }
                                 status = ResolutionStatus::Resolved;
@@ -4582,9 +4710,10 @@ impl Secrets {
                                     self.insert_resolved(
                                         &mut secrets,
                                         &mut temp_files,
-                                        name.clone(),
+                                        planned,
+                                        diagnostic_name,
                                         SecretString::new(default_value.clone().into()),
-                                        as_path,
+                                        ResolvedRepresentation::Logical,
                                     )?;
                                     with_defaults.push((name.clone(), default_value.clone()));
                                 }
@@ -4676,9 +4805,10 @@ impl Secrets {
                         self.insert_resolved(
                             &mut secrets,
                             &mut temp_files,
-                            planned.name.clone(),
+                            planned,
+                            Self::diagnostic_secret_name(&planned.name, output_filter),
                             SecretString::new(rendered.into()),
-                            planned.as_path(),
+                            ResolvedRepresentation::Logical,
                         )?;
                     }
                     ResolutionStatus::Resolved
@@ -5771,6 +5901,41 @@ mod config_discovery_tests {
             "../ relative path: {:?}",
             from_parent.err()
         );
+    }
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+
+    #[test]
+    fn decoding_accepts_exactly_one_trailing_line_ending() {
+        for encoded in ["Zg==\n", "Zg==\r\n"] {
+            let value = SecretString::new(encoded.to_string().into());
+            let decoded =
+                Secrets::decode_stored_value(SecretEncoding::Base64, "VALUE", &value).unwrap();
+            assert_eq!(decoded.expose_secret(), b"f");
+        }
+
+        let value = SecretString::new("Zg==\n\n".to_string().into());
+        let error =
+            Secrets::decode_stored_value(SecretEncoding::Base64, "VALUE", &value).unwrap_err();
+        assert_eq!(error.kind(), "decode_failed");
+    }
+
+    #[test]
+    fn encoding_uses_canonical_storage_representations() {
+        let cases = [
+            (SecretEncoding::Base64, "value", "dmFsdWU="),
+            (SecretEncoding::Base64Url, "hello?", "aGVsbG8_"),
+            (SecretEncoding::Hex, "value", "76616c7565"),
+        ];
+
+        for (encoding, logical, expected) in cases {
+            let logical = SecretString::new(logical.to_string().into());
+            let stored = Secrets::encode_logical_value(encoding, &logical);
+            assert_eq!(stored.expose_secret(), expected);
+        }
     }
 }
 

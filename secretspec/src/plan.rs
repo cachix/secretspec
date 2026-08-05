@@ -16,7 +16,7 @@
 //! its own authoritative store. A plan never reads or writes a secret.
 
 use crate::composition::Template;
-use crate::config::{NativeAddress, Secret};
+use crate::config::{NativeAddress, Secret, SecretEncoding};
 use crate::error::{Result, SecretSpecError};
 use crate::manifest::CompiledSecret;
 use crate::provider::Address;
@@ -192,6 +192,11 @@ impl PlannedSecret {
     /// Whether the value is materialized to a temp file and exposed as a path.
     pub(crate) fn as_path(&self) -> bool {
         self.secret.config.as_path.unwrap_or(false)
+    }
+
+    /// Optional encoding applied at the storage boundary.
+    pub(crate) fn encoding(&self) -> Option<SecretEncoding> {
+        self.secret.config.encoding
     }
 
     pub(crate) fn is_composed(&self) -> bool {

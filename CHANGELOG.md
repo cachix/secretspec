@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Secrets can store values as standard Base64, URL-safe Base64, or hexadecimal
+  using `encoding`; writes encode logical text and reads decode stored values,
+  while `as_path = true` materializes arbitrary decoded bytes.
+
 ### Fixed
 - The keyring provider no longer intermittently fails with a "No default store
   has been set" error when resolving multiple secrets concurrently.

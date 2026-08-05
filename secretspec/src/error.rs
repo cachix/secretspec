@@ -87,6 +87,12 @@ pub enum SecretSpecError {
     ValidationFailed(Box<ValidationErrors>),
     #[error("Secret generation failed: {0}")]
     GenerationFailed(String),
+    #[error("Failed to decode secret '{name}' using {encoding}: {reason}")]
+    DecodeFailed {
+        name: String,
+        encoding: &'static str,
+        reason: String,
+    },
     #[error(
         "Accessing secrets requires a reason. Provide one with --reason \"<why you are accessing \
          these secrets>\", the SECRETSPEC_REASON environment variable, or Secrets::with_reason() in \
@@ -127,6 +133,7 @@ impl SecretSpecError {
             SecretSpecError::InvalidScope(_) => "invalid_scope",
             SecretSpecError::ValidationFailed(_) => "validation_failed",
             SecretSpecError::GenerationFailed(_) => "generation_failed",
+            SecretSpecError::DecodeFailed { .. } => "decode_failed",
             SecretSpecError::ReasonRequired => "reason_required",
         }
     }
@@ -239,6 +246,14 @@ mod tests {
             (
                 SecretSpecError::GenerationFailed("rng".into()),
                 "generation_failed",
+            ),
+            (
+                SecretSpecError::DecodeFailed {
+                    name: "VALUE".into(),
+                    encoding: "base64",
+                    reason: "invalid length".into(),
+                },
+                "decode_failed",
             ),
             (SecretSpecError::ReasonRequired, "reason_required"),
         ];

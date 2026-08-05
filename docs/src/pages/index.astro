@@ -1033,7 +1033,7 @@ const reelScriptData = {
 </section>
 
 <!-- ============ SHOWCASE: scopes ============ -->
-<section class="landing-showcase">
+<section class="landing-showcase landing-scopes-demo" data-scopes-demo data-active-scope="api">
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Scopes · 0.17+</span>
@@ -1050,15 +1050,13 @@ const reelScriptData = {
           <span class="landing-terminal-title">secretspec.toml</span>
         </div>
         <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[profiles.default]</span>
-<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"Database"</span> <span class="tok-pun">}</span>
-<span class="tok-key">API_KEY</span>      <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"API key"</span> <span class="tok-pun">}</span>
-<span class="tok-key">QUEUE_TOKEN</span>  <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"Queue token"</span> <span class="tok-pun">}</span>
-
-<span class="tok-sec">[scopes.api]</span>
-<span class="tok-key">secrets</span> <span class="tok-pun">= [</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">,</span> <span class="tok-str">"API_KEY"</span><span class="tok-pun">]</span>
-
-<span class="tok-sec">[scopes.worker]</span>
-<span class="tok-key">secrets</span> <span class="tok-pun">= [</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">,</span> <span class="tok-str">"QUEUE_TOKEN"</span><span class="tok-pun">]</span></code></pre>
+<span class="tok-key landing-scope-secret-name" data-scope-members="api worker">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"Database"</span> <span class="tok-pun">}</span>
+<span class="tok-key landing-scope-secret-name" data-scope-members="api">API_KEY</span>      <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"API key"</span> <span class="tok-pun">}</span>
+<span class="tok-key landing-scope-secret-name" data-scope-members="worker">QUEUE_TOKEN</span>  <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"Queue token"</span> <span class="tok-pun">}</span>
+<span class="landing-scope-block is-first-scope" data-scope-target="api" tabindex="0"><span class="tok-sec">[scopes.api]</span>
+<span class="tok-key">secrets</span> <span class="tok-pun">= [</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">,</span> <span class="tok-str">"API_KEY"</span><span class="tok-pun">]</span></span>
+<span class="landing-scope-block" data-scope-target="worker" tabindex="0"><span class="tok-sec">[scopes.worker]</span>
+<span class="tok-key">secrets</span> <span class="tok-pun">= [</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">,</span> <span class="tok-str">"QUEUE_TOKEN"</span><span class="tok-pun">]</span></span></code></pre>
       </div>
 
       <div class="landing-terminal">
@@ -1066,17 +1064,17 @@ const reelScriptData = {
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">terminal</span>
         </div>
-<pre is:raw class="landing-terminal-body"><code><span class="tok-com"># The API receives its database and API credentials</span>
+<pre is:raw class="landing-terminal-body"><code><span class="landing-scope-command" data-scope-target="api" tabindex="0"><span class="tok-com"># The API receives its database and API credentials</span>
 <span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--profile</span> <span class="tok-arg">production</span> <span class="tok-flag">--scope</span> <span class="tok-arg">api</span> <span class="tok-flag">--</span> <span class="tok-bin">./api</span>
-<span class="tok-str">✓</span> Loaded DATABASE_URL
-<span class="tok-str">✓</span> Loaded API_KEY
-<span class="tok-pun">›</span> <span class="tok-bin">./api</span>
+<span class="tok-str">✓</span> Loaded <span class="landing-scope-secret-name" data-scope-members="api worker">DATABASE_URL</span>
+<span class="tok-str">✓</span> Loaded <span class="landing-scope-secret-name" data-scope-members="api">API_KEY</span>
+<span class="tok-pun">›</span> <span class="tok-bin">./api</span></span>
 
-<span class="tok-com"># The worker receives its database and queue credentials</span>
+<span class="landing-scope-command" data-scope-target="worker" tabindex="0"><span class="tok-com"># The worker receives its database and queue credentials</span>
 <span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--profile</span> <span class="tok-arg">production</span> <span class="tok-flag">--scope</span> <span class="tok-arg">worker</span> <span class="tok-flag">--</span> <span class="tok-bin">./worker</span>
-<span class="tok-str">✓</span> Loaded DATABASE_URL
-<span class="tok-str">✓</span> Loaded QUEUE_TOKEN
-<span class="tok-pun">›</span> <span class="tok-bin">./worker</span></code></pre>
+<span class="tok-str">✓</span> Loaded <span class="landing-scope-secret-name" data-scope-members="api worker">DATABASE_URL</span>
+<span class="tok-str">✓</span> Loaded <span class="landing-scope-secret-name" data-scope-members="worker">QUEUE_TOKEN</span>
+<span class="tok-pun">›</span> <span class="tok-bin">./worker</span></span></code></pre>
       </div>
     </div>
 
@@ -1085,6 +1083,78 @@ const reelScriptData = {
     </p>
   </div>
 </section>
+
+<script>
+  (() => {
+    const demo = document.querySelector<HTMLElement>('[data-scopes-demo]');
+    if (!demo) return;
+    const demoEl = demo;
+
+    const scopes = ['api', 'worker'];
+    const targets = demoEl.querySelectorAll<HTMLElement>('[data-scope-target]');
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    let activeIndex = 0;
+    let isPinned = false;
+    let timer: number | undefined;
+
+    function setScope(scope: string) {
+      const nextIndex = scopes.indexOf(scope);
+      if (nextIndex === -1) return;
+      activeIndex = nextIndex;
+      demoEl.setAttribute('data-active-scope', scope);
+    }
+
+    function stop() {
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    }
+
+    function start() {
+      if (reducedMotion || timer !== undefined) return;
+      timer = window.setInterval(() => {
+        if (isPinned) return;
+        setScope(scopes[(activeIndex + 1) % scopes.length]);
+      }, 2600);
+    }
+
+    targets.forEach((target) => {
+      const scope = target.getAttribute('data-scope-target');
+      if (!scope) return;
+
+      target.addEventListener('pointerenter', () => {
+        isPinned = true;
+        setScope(scope);
+      });
+      target.addEventListener('pointerleave', () => {
+        isPinned = false;
+      });
+      target.addEventListener('focus', () => {
+        isPinned = true;
+        setScope(scope);
+      });
+      target.addEventListener('blur', () => {
+        isPinned = false;
+      });
+    });
+
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            start();
+          } else {
+            stop();
+          }
+        });
+      }, { threshold: 0.2 });
+      observer.observe(demoEl);
+    } else {
+      start();
+    }
+  })();
+</script>
 
 <!-- ============ SHOWCASE: fallback chains ============ -->
 <section class="landing-showcase">

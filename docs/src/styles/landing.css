@@ -1042,6 +1042,89 @@
   color: var(--color-accent-200);
 }
 
+.landing-scopes-demo {
+  --scope-api-color: var(--syntax-red);
+  --scope-worker-color: var(--syntax-orange);
+}
+
+.landing-scope-block,
+.landing-scope-command {
+  --scope-tone: var(--syntax-blue);
+  display: block;
+  margin: 0 -0.55rem;
+  padding: 0.12rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: 0.55rem;
+  line-height: inherit;
+  opacity: 0.68;
+  outline: none;
+  transition:
+    opacity 0.32s ease,
+    background-color 0.32s ease,
+    border-color 0.32s ease,
+    box-shadow 0.32s ease;
+}
+
+.landing-scope-block + .landing-scope-block,
+.landing-scope-command + .landing-scope-command {
+  margin-top: 0.2rem;
+}
+
+.landing-scope-block.is-first-scope {
+  margin-top: 1.65em;
+}
+
+.landing-scope-secret-name {
+  display: inline-block;
+  margin: 0 -0.15rem;
+  padding: 0 0.15rem;
+  border-radius: 0.3rem;
+  opacity: 0.68;
+  transition:
+    background-color 0.32s ease,
+    color 0.32s ease,
+    opacity 0.32s ease,
+    box-shadow 0.32s ease;
+}
+
+.landing-scope-block[data-scope-target='api'],
+.landing-scope-command[data-scope-target='api'] {
+  --scope-tone: var(--scope-api-color);
+}
+
+.landing-scope-block[data-scope-target='worker'],
+.landing-scope-command[data-scope-target='worker'] {
+  --scope-tone: var(--scope-worker-color);
+}
+
+.landing-scopes-demo[data-active-scope='api'] [data-scope-target='api'],
+.landing-scopes-demo[data-active-scope='worker'] [data-scope-target='worker'],
+.landing-scope-block:hover,
+.landing-scope-block:focus-visible,
+.landing-scope-command:hover,
+.landing-scope-command:focus-visible {
+  opacity: 1;
+  background: color-mix(in srgb, var(--scope-tone) 10%, transparent);
+  border-color: color-mix(in srgb, var(--scope-tone) 28%, transparent);
+  box-shadow: 0 0 0.95rem color-mix(in srgb, var(--scope-tone) 10%, transparent);
+}
+
+.landing-scopes-demo[data-active-scope='api'] [data-scope-members~='api'] {
+  --scope-secret-tone: var(--scope-api-color);
+}
+
+.landing-scopes-demo[data-active-scope='worker'] [data-scope-members~='worker'] {
+  --scope-secret-tone: var(--scope-worker-color);
+}
+
+.landing-scopes-demo[data-active-scope='api'] .landing-scope-secret-name[data-scope-members~='api'],
+.landing-scopes-demo[data-active-scope='worker'] .landing-scope-secret-name[data-scope-members~='worker'] {
+  color: var(--scope-secret-tone);
+  opacity: 1;
+  background: color-mix(in srgb, var(--scope-secret-tone) 9%, transparent);
+  box-shadow: 0 0 0.45rem color-mix(in srgb, var(--scope-secret-tone) 8%, transparent);
+}
+
 /* ── Bento grid ── */
 
 .landing-bento {

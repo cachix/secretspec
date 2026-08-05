@@ -148,4 +148,6 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash scripts/upload-release-asset.sh "${{ inputs.release_tag || github.ref_name }}" "${{ steps.stage.outputs.asset }}"
+          RELEASE_ASSET: ${{ steps.stage.outputs.asset }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: bash scripts/upload-release-asset.sh "$RELEASE_TAG" "$RELEASE_ASSET"

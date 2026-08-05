@@ -136,9 +136,10 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           set -euo pipefail
           asset="secretspec-go-static-x86_64-linux-musl.tar.gz"
           tar -czf "$asset" -C staged .
           bash scripts/upload-release-asset.sh \
-            "${{ inputs.release_tag || github.ref_name }}" "$asset"
+            "$RELEASE_TAG" "$asset"

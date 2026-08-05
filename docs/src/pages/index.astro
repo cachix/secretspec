@@ -167,20 +167,133 @@ const reelScriptData = {
     </a>
     )}
 
-    <div class="landing-hero-head">
+    <div class="landing-hero-head landing-hero-head-interface">
+      <span class="landing-showcase-eyebrow">The interface</span>
       <h1 id="_top" class="landing-hero-title">A declarative interface<br>for every secret provider.</h1>
       <p class="landing-hero-subtitle">
         Stop leaking <code class="inline-code">.env</code> files. Commit what your application expects in <code class="inline-code">secretspec.toml</code>, never the values. Developers, CI, and production can each resolve the same declaration from any of {providerCount} providers.
       </p>
-      <div class="landing-hero-actions">
-        <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
-        <a href="/concepts/overview/" class="landing-btn landing-btn-secondary">Concepts</a>
-        <a href="/concepts/providers/" class="landing-btn landing-btn-secondary">Providers ({providerCount})</a>
-        <a href="/sdk/overview/" class="landing-btn landing-btn-secondary">SDKs ({sdkCount})</a>
+    </div>
+
+    <div class="landing-pipeline-grid">
+
+    <div class="landing-pipeline-side">
+      <div class="landing-pipeline-action landing-pipeline-action-left">
+        <a href="/concepts/providers/" class="landing-btn landing-btn-secondary landing-btn-flow">Providers ({providerCount})</a>
+      </div>
+      <div class="landing-reel" data-reel="providers" data-direction="down"
+           data-item-count={providerMetadata.length}
+           aria-label="Scrollable list of secret providers">
+        <div class="landing-reel-track" style={`--scroll:${providerMetadata.length}`}>
+          {providerLoop.map((p, i) => (
+            <a
+              href={`/providers/${p.slug}`}
+              class="landing-reel-slot"
+              data-index={i}
+              style={`--i:${i}`}
+              draggable="false"
+              aria-hidden={isReelDuplicate(i, providerMetadata.length) ? 'true' : undefined}
+              tabindex={isReelDuplicate(i, providerMetadata.length) ? -1 : undefined}
+            >
+              <div class="landing-reel-slot-inner">
+                <div class="landing-reel-item">
+                  {typeof p.icon === 'string' ? (
+                    <>
+                      <img data-reel-icon-img class="landing-reel-icon" src={`https://cdn.simpleicons.org/${p.icon}/888888`} alt="" width="20" height="20" loading="lazy" />
+                      <svg class="landing-reel-icon landing-reel-icon-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    </>
+                  ) : typeof p.icon === 'object' && p.icon.type === 'bundled' ? (
+                    <img class="landing-reel-icon" src={p.icon.src.src} alt="" width="20" height="20" loading="lazy" />
+                  ) : (
+                    <svg class="landing-reel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  )}
+                  <span>{p.label}</span>
+                </div>
+              </div>
+            </a>
+          ))}
+        </div>
       </div>
     </div>
 
-    <div class="landing-hero-split">
+    <div class="landing-pipeline-center">
+      <div class="landing-terminal landing-pipeline-terminal" data-pipeline-terminal>
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">secretspec.toml</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code data-pipeline-terminal-body><span class="tok-sec">[project]</span>
+<span class="tok-key">name</span> <span class="tok-pun">=</span> <span class="tok-str">"my-app"</span>
+<span class="tok-key">revision</span> <span class="tok-pun">=</span> <span class="tok-str">"1.0"</span>
+
+<span class="tok-sec">[profiles.default]</span>
+<span class="tok-key">DATABASE_URL</span>      <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span>
+<span class="tok-key">API_TOKEN</span>         <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span>
+<span class="tok-key">HMAC_SECRET</span>       <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span></code></pre>
+      </div>
+      <p class="landing-pipeline-resolve">
+        <span class="landing-pipeline-resolve-label">Resolving from</span>
+        <span class="landing-pipeline-resolve-provider" data-pipeline-resolving>{providerMetadata[0].label}</span>
+      </p>
+    </div>
+
+    <div class="landing-pipeline-side">
+      <div class="landing-pipeline-action landing-pipeline-action-right">
+        <a href="/sdk/overview/" class="landing-btn landing-btn-secondary landing-btn-flow">SDKs ({sdkCount})</a>
+      </div>
+      <div class="landing-reel" data-reel="consumers" data-direction="up"
+           data-item-count={consumerMetadata.length}
+           aria-label="Scrollable list of SDKs and integrations">
+        <div class="landing-reel-track" style={`--scroll:${consumerMetadata.length}`}>
+          {consumerLoop.map((c, i) => (
+            <a
+              href={c.href}
+              class="landing-reel-slot"
+              data-index={i}
+              style={`--i:${i}`}
+              draggable="false"
+              aria-hidden={isReelDuplicate(i, consumerMetadata.length) ? 'true' : undefined}
+              tabindex={isReelDuplicate(i, consumerMetadata.length) ? -1 : undefined}
+            >
+              <div class="landing-reel-slot-inner">
+                <div class="landing-reel-item">
+                  {c.icon ? (
+                    <>
+                      <img data-reel-icon-img class="landing-reel-icon" src={`https://cdn.simpleicons.org/${c.icon}/888888`} alt="" width="20" height="20" loading="lazy" />
+                      <svg class="landing-reel-icon landing-reel-icon-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    </>
+                  ) : (
+                    <svg class="landing-reel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  )}
+                  <span>{c.label}</span>
+                </div>
+              </div>
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
+
+    </div>
+
+    <div class="landing-hero-lower-actions">
+      <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
+      <a href="/concepts/overview/" class="landing-btn landing-btn-secondary">Concepts</a>
+    </div>
+  </div>
+</section>
+
+<!-- ============ DECLARATIVE INTRO ============ -->
+<section class="landing-section landing-declarative-section">
+  <div class="landing-container">
+    <div class="landing-section-centered">
+      <h2 class="landing-section-title">One declaration. Swap either side without touching the other.</h2>
+      <p class="landing-section-lead landing-section-lead-narrow">
+        Every contributor picks the provider they trust. One declaration in the middle connects it to any app, stack, or framework.
+      </p>
+    </div>
+
+    <div class="landing-hero-split landing-declarative-split">
       <!-- Left: secretspec.toml preview -->
       <div class="landing-hero-preview">
         <div class="landing-terminal">
@@ -242,121 +355,6 @@ const reelScriptData = {
         </div>
       </div>
     </div>
-
-  </div>
-</section>
-
-<!-- ============ PIPELINE REEL ============ -->
-<section class="landing-pipeline-section">
-  <div class="landing-pipeline-head">
-    <span class="landing-showcase-eyebrow">The interface</span>
-    <h2 class="landing-section-title">One declaration. Swap either side without touching the other.</h2>
-    <p class="landing-section-lead landing-section-lead-narrow">
-      Every contributor picks the provider they trust. One declaration in the middle connects it to any app, stack, or framework.
-    </p>
-  </div>
-
-  <div class="landing-pipeline-grid">
-
-    <div class="landing-pipeline-side">
-      <div class="landing-pipeline-label">
-        <span class="landing-pipeline-label-count">{providerCount}</span>
-        providers
-      </div>
-      <div class="landing-reel" data-reel="providers" data-direction="down"
-           data-item-count={providerMetadata.length}
-           aria-label="Scrollable list of secret providers">
-        <div class="landing-reel-track" style={`--scroll:${providerMetadata.length}`}>
-          {providerLoop.map((p, i) => (
-            <a
-              href={`/providers/${p.slug}`}
-              class="landing-reel-slot"
-              data-index={i}
-              style={`--i:${i}`}
-              draggable="false"
-              aria-hidden={isReelDuplicate(i, providerMetadata.length) ? 'true' : undefined}
-              tabindex={isReelDuplicate(i, providerMetadata.length) ? -1 : undefined}
-            >
-              <div class="landing-reel-slot-inner">
-                <div class="landing-reel-item">
-                  {typeof p.icon === 'string' ? (
-                    <>
-                      <img data-reel-icon-img class="landing-reel-icon" src={`https://cdn.simpleicons.org/${p.icon}/888888`} alt="" width="20" height="20" loading="lazy" />
-                      <svg class="landing-reel-icon landing-reel-icon-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                    </>
-                  ) : typeof p.icon === 'object' && p.icon.type === 'bundled' ? (
-                    <img class="landing-reel-icon" src={p.icon.src.src} alt="" width="20" height="20" loading="lazy" />
-                  ) : (
-                    <svg class="landing-reel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                  )}
-                  <span>{p.label}</span>
-                </div>
-              </div>
-            </a>
-          ))}
-        </div>
-      </div>
-    </div>
-
-    <div class="landing-pipeline-center">
-      <div class="landing-terminal landing-pipeline-terminal" data-pipeline-terminal>
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">secretspec.toml</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code data-pipeline-terminal-body><span class="tok-sec">[project]</span>
-<span class="tok-key">name</span> <span class="tok-pun">=</span> <span class="tok-str">"my-app"</span>
-<span class="tok-key">revision</span> <span class="tok-pun">=</span> <span class="tok-str">"1.0"</span>
-
-<span class="tok-sec">[profiles.default]</span>
-<span class="tok-key">DATABASE_URL</span>      <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span>
-<span class="tok-key">API_TOKEN</span>         <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span>
-<span class="tok-key">HMAC_SECRET</span>       <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span></code></pre>
-      </div>
-      <p class="landing-pipeline-resolve">
-        <span class="landing-pipeline-resolve-label">Resolving from</span>
-        <span class="landing-pipeline-resolve-provider" data-pipeline-resolving>{providerMetadata[0].label}</span>
-      </p>
-    </div>
-
-    <div class="landing-pipeline-side">
-      <div class="landing-pipeline-label">
-        <span class="landing-pipeline-label-count">{consumerMetadata.length}</span>
-        SDKs &amp; integrations
-      </div>
-      <div class="landing-reel" data-reel="consumers" data-direction="up"
-           data-item-count={consumerMetadata.length}
-           aria-label="Scrollable list of SDKs and integrations">
-        <div class="landing-reel-track" style={`--scroll:${consumerMetadata.length}`}>
-          {consumerLoop.map((c, i) => (
-            <a
-              href={c.href}
-              class="landing-reel-slot"
-              data-index={i}
-              style={`--i:${i}`}
-              draggable="false"
-              aria-hidden={isReelDuplicate(i, consumerMetadata.length) ? 'true' : undefined}
-              tabindex={isReelDuplicate(i, consumerMetadata.length) ? -1 : undefined}
-            >
-              <div class="landing-reel-slot-inner">
-                <div class="landing-reel-item">
-                  {c.icon ? (
-                    <>
-                      <img data-reel-icon-img class="landing-reel-icon" src={`https://cdn.simpleicons.org/${c.icon}/888888`} alt="" width="20" height="20" loading="lazy" />
-                      <svg class="landing-reel-icon landing-reel-icon-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                    </>
-                  ) : (
-                    <svg class="landing-reel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                  )}
-                  <span>{c.label}</span>
-                </div>
-              </div>
-            </a>
-          ))}
-        </div>
-      </div>
-    </div>
-
   </div>
 </section>
 
@@ -642,7 +640,7 @@ const reelScriptData = {
       phase: AUTO_TICK_MS / 2,
     });
 
-    const section = document.querySelector('.landing-pipeline-section');
+    const section = document.querySelector('.landing-hero');
     if (section && 'IntersectionObserver' in window) {
       const io = new IntersectionObserver((entries) => {
         entries.forEach((e) => {
@@ -1513,6 +1511,7 @@ REDIS_URL=redis://…</code></pre>
 
     if (!providerList || !cursor || !firstLine) return;
 
+    const cursorEl = cursor;
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const selectionDelay = 1500;
 
@@ -1551,7 +1550,7 @@ REDIS_URL=redis://…</code></pre>
         line.classList.remove('is-selected');
       });
       line.classList.add('is-selected');
-      cursor.style.setProperty(
+      cursorEl.style.setProperty(
         '--landing-provider-cursor-transform',
         `translate(0.28rem, ${lineOffset(line)}px)`
       );

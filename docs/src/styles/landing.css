@@ -22,7 +22,6 @@
 .landing-pipeline-grid > *,
 .landing-fallback > *,
 .landing-bento > *,
-.landing-steps > *,
 .landing-hero-split > *,
 .landing-community > *,
 .landing-metrics > * {
@@ -30,7 +29,6 @@
 }
 
 .landing-bento-card,
-.landing-step,
 .landing-pipe-card,
 .landing-hero-preview,
 .landing-hero-prompt,
@@ -39,7 +37,6 @@
 }
 
 .landing-bento-mini-code,
-.landing-step-code,
 .landing-pipe-code,
 .landing-terminal-body {
   max-width: 100%;
@@ -47,7 +44,6 @@
 }
 
 .landing-bento-card pre,
-.landing-step pre,
 .landing-pipe-card pre {
   min-width: 0;
   max-width: 100%;
@@ -963,89 +959,6 @@
 
 [data-theme='dark'] .landing-showcase-eyebrow {
   color: var(--color-accent-200);
-}
-
-/* ── Three steps ── */
-
-.landing-steps {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1.5rem;
-  margin-top: 3rem;
-}
-
-@media (min-width: 768px) {
-  .landing-steps {
-    grid-template-columns: repeat(3, 1fr);
-  }
-}
-
-.landing-step {
-  position: relative;
-  padding: 1.5rem;
-  border-radius: 1rem;
-  background: var(--sl-color-bg-nav);
-  border: 1px solid var(--sl-color-hairline);
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.landing-step-head {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.landing-step-num {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.75rem;
-  height: 1.75rem;
-  border-radius: 999px;
-  background: var(--color-accent-600);
-  color: #fff;
-  font-family: var(--sl-font-mono, monospace);
-  font-size: 0.8125rem;
-  font-weight: 700;
-}
-
-[data-theme='dark'] .landing-step-num {
-  background: var(--color-accent-400);
-}
-
-.landing-step-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--color-gray-900);
-  margin: 0;
-}
-
-[data-theme='dark'] .landing-step-title {
-  color: #fff;
-}
-
-.landing-step-desc {
-  font-size: 0.875rem;
-  line-height: 1.55;
-  color: var(--color-gray-500);
-  margin: 0;
-}
-
-[data-theme='dark'] .landing-step-desc {
-  color: var(--color-gray-400);
-}
-
-.landing-step-code {
-  margin-top: auto;
-  font-family: var(--sl-font-mono, monospace);
-  font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.85);
-  background: var(--color-gray-900);
-  border-radius: 0.5rem;
-  padding: 0.7rem 0.9rem;
-  overflow-x: auto;
 }
 
 /* ── Bento grid ── */

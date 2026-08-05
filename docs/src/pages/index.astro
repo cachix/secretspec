@@ -360,9 +360,9 @@ const reelScriptData = {
 <section class="landing-section landing-declarative-section">
   <div class="landing-container">
     <div class="landing-section-centered">
-      <h2 class="landing-section-title">Declare once. Resolve anywhere.</h2>
+      <h2 class="landing-section-title">Set up SecretSpec in three steps.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Start from an existing <code class="inline-code">.env</code>, commit only the contract, then let each developer, CI job, or deployment choose where values are resolved from.
+        Create a shared contract for the secrets your application needs, choose a provider for the values, and run.
       </p>
     </div>
 
@@ -797,59 +797,6 @@ const reelScriptData = {
     }
   })();
 </script>
-
-<!-- ============ THREE STEPS ============ -->
-<section class="landing-section">
-  <div class="landing-container">
-    <div class="landing-section-centered">
-      <h2 class="landing-section-title">Set up SecretSpec in three steps.</h2>
-      <p class="landing-section-lead landing-section-lead-narrow">
-        Create a shared contract for the secrets your application needs, choose a provider for the values, and run.
-      </p>
-    </div>
-
-    <div class="landing-steps">
-      <div class="landing-step">
-        <div class="landing-step-head">
-          <span class="landing-step-num">1</span>
-          <p class="landing-step-title">Declare</p>
-        </div>
-        <p class="landing-step-desc">Create <code class="inline-code">secretspec.toml</code> from an existing <code class="inline-code">.env</code> or by hand. Commit secret names and requirements, not their values.</p>
-        <pre is:raw class="landing-step-code"><code>$ secretspec init --from dotenv</code></pre>
-      </div>
-
-      <div class="landing-step">
-        <div class="landing-step-head">
-          <span class="landing-step-num">2</span>
-          <p class="landing-step-title">Provider</p>
-        </div>
-        <p class="landing-step-desc">Choose where this machine looks for values: a system keyring, password manager, cloud secret store, or one of {providerCount} providers.</p>
-        <pre is:raw class="landing-step-code"><code>$ secretspec config global init <span class="tok-com"># 0.17+</span>
-? Select your preferred provider backend:
-> keyring: Uses system keychain (Recommended)
-  bw: Bitwarden Password Manager (0.18+)
-  kdbx: KeePass KDBX databases (0.17+)
-  keeper: Keeper Secrets Manager (0.18+) via official Rust SDK
-  infisical: Infisical secret management
-  openbao: OpenBao secret management (0.17+)
-  age: age-encrypted file (0.17+)
-  sops: SOPS encrypted files (0.17+)
-  systemd-credential: Read-only systemd service credentials (0.17+)
-  awsps: AWS Systems Manager Parameter Store (0.18+)
-  scaleway: Scaleway Secret Manager (0.17+)</code></pre>
-      </div>
-
-      <div class="landing-step">
-        <div class="landing-step-head">
-          <span class="landing-step-num">3</span>
-          <p class="landing-step-title">Run</p>
-        </div>
-        <p class="landing-step-desc">SecretSpec validates the active profile, resolves its values, and launches your application with them in the environment.</p>
-        <pre is:raw class="landing-step-code"><code>$ secretspec run -- npm start</code></pre>
-      </div>
-    </div>
-  </div>
-</section>
 
 <!-- ============ BENTO ============ -->
 <section class="landing-section">

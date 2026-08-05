@@ -974,6 +974,36 @@ pub(crate) fn get_each_concurrency() -> usize {
         .unwrap_or(DEFAULT_GET_EACH_CONCURRENCY)
 }
 
+/// Applies `map` in bounded, thread-scoped waves while preserving input order.
+///
+/// Shared by provider batch reads and higher-level fallback-chain reads so both
+/// honor [`GET_EACH_CONCURRENCY_ENV`] without an additional thread-pool
+/// dependency.
+pub(crate) fn map_concurrently<T, R, F>(items: &[T], concurrency: usize, map: F) -> Vec<R>
+where
+    T: Sync,
+    R: Send,
+    F: Fn(&T) -> R + Sync,
+{
+    let concurrency = concurrency.max(1);
+    if items.len() <= 1 || concurrency == 1 {
+        return items.iter().map(map).collect();
+    }
+
+    let mut mapped = Vec::with_capacity(items.len());
+    for chunk in items.chunks(concurrency) {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = chunk.iter().map(|item| scope.spawn(|| map(item))).collect();
+            mapped.extend(
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().expect("concurrent map thread panicked")),
+            );
+        });
+    }
+    mapped
+}
+
 /// Shared fallback used by the default [`Provider::get_many`] and by batch
 /// overrides for the part of a request set their bulk surface cannot serve:
 /// deduplicates identical addresses and fetches each unique address once,
@@ -1006,39 +1036,12 @@ where
     let groups: Vec<(Address<'_>, Vec<&str>)> = groups.into_iter().collect();
 
     // One address is the common case (a single secret, or several sharing a
-    // `ref`); fetching it on this thread skips the scope and the spawn.
-    let fetched: Vec<(Vec<&str>, Result<Option<SecretString>>)> = if groups.len() <= 1 {
-        groups
-            .into_iter()
-            .map(|(addr, names)| (names, fetch(addr)))
-            .collect()
-    } else {
-        let concurrency = get_each_concurrency();
-        let mut fetched = Vec::with_capacity(groups.len());
-        // Wave-based fan-out: never more than `concurrency` in-flight gets.
-        // A single unbounded `thread::scope` over dozens of addresses has been
-        // observed to open one TCP(+TLS) handshake per secret against a
-        // reverse-proxied Vault/OpenBao and lose part of the burst.
-        for chunk in groups.chunks(concurrency) {
-            std::thread::scope(|scope| {
-                let handles: Vec<_> = chunk
-                    .iter()
-                    .map(|(addr, names)| {
-                        let addr = *addr;
-                        let fetch = &fetch;
-                        (names, scope.spawn(move || fetch(addr)))
-                    })
-                    .collect();
-                for (names, handle) in handles {
-                    fetched.push((
-                        names.clone(),
-                        handle.join().expect("get_many fetch thread panicked"),
-                    ));
-                }
-            });
-        }
-        fetched
-    };
+    // `ref`); `map_concurrently` keeps it on this thread. Larger sets fan out in
+    // capped waves so they do not stampede a provider.
+    let fetched: Vec<(Vec<&str>, Result<Option<SecretString>>)> =
+        map_concurrently(&groups, get_each_concurrency(), |(addr, names)| {
+            (names.clone(), fetch(*addr))
+        });
 
     let mut results = HashMap::new();
     for (names, result) in fetched {

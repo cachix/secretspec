@@ -235,11 +235,14 @@ impl CredentialSource {
 
 type ProviderCredentialsKey = (String, String);
 type ProviderCredentialsSlot = Arc<Mutex<Option<ProviderCredentials>>>;
+type ProviderKey = (String, String);
+type ProviderSlot = Arc<Mutex<Option<Arc<dyn ProviderTrait>>>>;
 type GroupFetch<'a> = (
     Option<&'a str>,
     Vec<&'a PlannedSecret>,
     Box<dyn ProviderTrait>,
 );
+type FallbackReadResult = Result<(Option<SecretString>, Option<String>)>;
 
 /// Memoized provider credentials with single-flight population per key.
 ///
@@ -282,6 +285,67 @@ impl ProviderCredentialsCache {
             Err(err) => {
                 // Do not memoize failures: a later operation may succeed after
                 // credentials or provider availability change.
+                drop(cached);
+                let mut entries = self.entries.lock().unwrap();
+                if entries
+                    .get(&key)
+                    .is_some_and(|current| Arc::ptr_eq(current, &slot))
+                {
+                    entries.remove(&key);
+                }
+                Err(err)
+            }
+        }
+    }
+
+    #[cfg(any(feature = "cli", test))]
+    fn clear(&self) {
+        self.entries.lock().unwrap().clear();
+    }
+}
+
+/// Memoized built providers with single-flight construction per key.
+///
+/// A provider memoizes connection state to serve a batch, but a fallback chain
+/// is walked per secret, so rebuilding there discards it every time: with
+/// `akv?auth=cli` each rebuild re-spawns the Azure CLI. Locking mirrors
+/// [`ProviderCredentialsCache`]: the outer mutex guards only the key-to-slot
+/// map, so callers for one spec wait on its first construction while unrelated
+/// specs build concurrently.
+#[derive(Default)]
+struct ProviderCache {
+    entries: Mutex<HashMap<ProviderKey, ProviderSlot>>,
+}
+
+impl ProviderCache {
+    fn get_or_try_init<F>(&self, key: ProviderKey, build: F) -> Result<Arc<dyn ProviderTrait>>
+    where
+        F: FnOnce() -> Result<Box<dyn ProviderTrait>>,
+    {
+        let slot = {
+            let mut entries = self.entries.lock().unwrap();
+            Arc::clone(
+                entries
+                    .entry(key.clone())
+                    .or_insert_with(|| Arc::new(Mutex::new(None))),
+            )
+        };
+
+        let mut cached = slot.lock().unwrap();
+        if let Some(provider) = cached.as_ref() {
+            return Ok(Arc::clone(provider));
+        }
+
+        match build() {
+            Ok(provider) => {
+                let provider: Arc<dyn ProviderTrait> = Arc::from(provider);
+                *cached = Some(Arc::clone(&provider));
+                Ok(provider)
+            }
+            Err(err) => {
+                // Do not memoize failures, for the same reason the credentials
+                // cache does not: a later operation may succeed once provider
+                // availability or credentials change.
                 drop(cached);
                 let mut entries = self.entries.lock().unwrap();
                 if entries
@@ -420,6 +484,11 @@ pub struct Secrets {
     /// read. Cleared by [`Secrets::store_provider_credential`] so a freshly
     /// stored credential is re-read.
     provider_credentials_cache: ProviderCredentialsCache,
+    /// Built providers memoized per (profile, raw provider spec), so a fallback
+    /// chain walked per secret reuses each link's provider instead of
+    /// rebuilding it. Cleared with [`Self::provider_credentials_cache`], since
+    /// a provider captures its credentials at construction.
+    provider_cache: ProviderCache,
 }
 
 /// secretspec's own opt-in for marking the current process as an agent. Lets any
@@ -603,6 +672,7 @@ impl Secrets {
             require_reason: RequireReason::Never,
             audit: None,
             provider_credentials_cache: ProviderCredentialsCache::default(),
+            provider_cache: ProviderCache::default(),
         }
     }
 
@@ -684,6 +754,7 @@ impl Secrets {
             reason: env_reason(),
             audit,
             provider_credentials_cache: ProviderCredentialsCache::default(),
+            provider_cache: ProviderCache::default(),
         })
     }
 
@@ -858,6 +929,16 @@ impl Secrets {
         self.build_provider_with_credentials(&spec, credentials)
     }
 
+    /// [`Self::build_provider`], memoized so repeated builds of one spec share
+    /// one provider and the connection state it holds. Use it where a spec is
+    /// built per secret rather than per batch: the fallback chain walk,
+    /// interactive prompting.
+    fn shared_provider(&self, spec: &str, profile: Option<&str>) -> Result<Arc<dyn ProviderTrait>> {
+        let key = (self.resolve_profile_name(profile), spec.to_string());
+        self.provider_cache
+            .get_or_try_init(key, || self.build_provider(spec.to_string(), profile))
+    }
+
     /// Builds a credential source provider without resolving credentials for it,
     /// so credential-source chains are at most one hop and cannot recurse.
     fn build_source_provider(&self, spec: &str) -> Result<Box<dyn ProviderTrait>> {
@@ -1030,8 +1111,10 @@ impl Secrets {
         );
         result?;
         // The stored credential replaces whatever an earlier resolution
-        // memoized; drop the memo so the next build re-reads it.
+        // memoized; drop the memo so the next build re-reads it. Providers
+        // built from it go too, since they captured the value.
         self.provider_credentials_cache.clear();
+        self.provider_cache.clear();
         Ok(source.location(&project, name))
     }
 
@@ -2391,8 +2474,9 @@ impl Secrets {
                     }
                 };
                 // Build from the raw spec (not the resolved URI) so an alias's
-                // `credentials` is applied to this chain link too.
-                let provider = match self.build_provider(spec.clone(), profile) {
+                // `credentials` is applied to this chain link too. Shared, not
+                // rebuilt: this walk runs per secret (see [`ProviderCache`]).
+                let provider = match self.shared_provider(spec, profile) {
                     Ok(p) => p,
                     Err(e) => {
                         // Construction failed after resolution, so redact the
@@ -4336,6 +4420,48 @@ impl Secrets {
             }
         }
 
+        // Primary misses walk their fallback chains independently, so resolve
+        // those chains concurrently instead of paying one provider round-trip
+        // per secret in series. Each worker still calls
+        // `get_secret_from_providers`, preserving provider order, lazy alias
+        // resolution, warnings, and the healthy-miss/error distinction for its
+        // own secret. Providers themselves are shared through `ProviderCache`.
+        let pending_fallbacks: Vec<&PlannedSecret> = plan
+            .secrets
+            .iter()
+            .filter(|planned| {
+                !fetched_values.contains_key(&planned.name)
+                    && planned
+                        .route
+                        .as_ref()
+                        .and_then(Route::fallback_specs)
+                        .is_some()
+            })
+            .collect();
+        let mut fallback_results: HashMap<String, FallbackReadResult> =
+            crate::provider::map_concurrently(
+                &pending_fallbacks,
+                crate::provider::get_each_concurrency(),
+                |planned| {
+                    let route = planned
+                        .route
+                        .as_ref()
+                        .expect("pending fallback has a provider route");
+                    let fallback = route
+                        .fallback_specs()
+                        .expect("pending fallback has fallback specs");
+                    let result = self.get_secret_from_providers(
+                        Self::diagnostic_secret_name(&planned.name, output_filter),
+                        planned.as_address(project, profile),
+                        Some(fallback),
+                        Some(profile),
+                    );
+                    (planned.name.clone(), result)
+                },
+            )
+            .into_iter()
+            .collect();
+
         // Process each planned secret: apply the fetched value, its fallback
         // chain, generation, or default, and record a value-free provenance entry
         // for the resolution report.
@@ -4383,22 +4509,15 @@ impl Secrets {
                 None => {
                     let primary_failed = failed_primary_uris.contains_key(&primary_uri);
 
-                    // The primary missed, so now walk the fallback — tried in
-                    // order, each entry resolved lazily inside the chain walk; an
-                    // undefined alias is skipped with a warning so a working
-                    // provider after it still answers. An override or the
-                    // default store has no fallback. The chain warns per secret,
-                    // so it is handed the diagnostic label rather than the raw
-                    // name: under a scope this secret may be a hidden
-                    // composition input the consumer must not learn about.
+                    // The primary missed, so consume the fallback result fetched
+                    // concurrently above. Each chain was still tried in order
+                    // and received the diagnostic label rather than a hidden
+                    // composition input's raw name.
                     let (fallback_value, fallback_uri) = match route.fallback_specs() {
-                        Some(fallback) => {
-                            let resolved = self.get_secret_from_providers(
-                                Self::diagnostic_secret_name(name, output_filter),
-                                planned.as_address(project, profile),
-                                Some(fallback),
-                                Some(profile),
-                            )?;
+                        Some(_) => {
+                            let resolved = fallback_results
+                                .remove(name)
+                                .expect("primary miss with fallback was prefetched")?;
                             // A primary that errored plus an exhausted fallback
                             // chain is not "missing": the authoritative provider
                             // is unreachable and might hold the value. Surface the
@@ -5371,6 +5490,119 @@ mod provider_credentials_cache_tests {
             );
         }
         assert_eq!(fetches.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[cfg(test)]
+mod provider_cache_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+    use std::time::Duration;
+
+    fn env_provider() -> Result<Box<dyn ProviderTrait>> {
+        crate::provider::provider_from_spec("env://", ProviderCredentials::new())
+    }
+
+    /// A fallback chain is walked per secret, so N secrets sharing one link
+    /// must not build N providers.
+    #[test]
+    fn one_key_builds_once_and_hands_back_the_same_instance() {
+        let cache = ProviderCache::default();
+        let builds = AtomicUsize::new(0);
+        let key = ("default".to_string(), "env://".to_string());
+
+        let first = cache
+            .get_or_try_init(key.clone(), || {
+                builds.fetch_add(1, Ordering::SeqCst);
+                env_provider()
+            })
+            .unwrap();
+        let second = cache
+            .get_or_try_init(key, || {
+                builds.fetch_add(1, Ordering::SeqCst);
+                env_provider()
+            })
+            .unwrap();
+
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    /// The profile is part of the key: a provider carries the credentials of
+    /// the profile it was built under.
+    #[test]
+    fn distinct_keys_build_independently() {
+        let cache = ProviderCache::default();
+        let builds = AtomicUsize::new(0);
+
+        let build_under = |profile: &str| {
+            cache
+                .get_or_try_init((profile.to_string(), "env://".to_string()), || {
+                    builds.fetch_add(1, Ordering::SeqCst);
+                    env_provider()
+                })
+                .unwrap()
+        };
+        let default = build_under("default");
+        let production = build_under("production");
+
+        assert_eq!(builds.load(Ordering::SeqCst), 2);
+        assert!(!Arc::ptr_eq(&default, &production));
+    }
+
+    /// Failures are not memoized, so a provider that was unavailable can be
+    /// built by a later operation in the same session.
+    #[test]
+    fn failures_are_not_memoized() {
+        let cache = ProviderCache::default();
+        let key = ("default".to_string(), "env://".to_string());
+
+        let failed = cache.get_or_try_init(key.clone(), || {
+            Err(SecretSpecError::ProviderOperationFailed("nope".into()))
+        });
+        assert!(failed.is_err());
+
+        assert!(cache.get_or_try_init(key, env_provider).is_ok());
+    }
+
+    #[test]
+    fn concurrent_construction_for_one_key_is_single_flight() {
+        const CALLERS: usize = 8;
+        let cache = Arc::new(ProviderCache::default());
+        let start = Arc::new(Barrier::new(CALLERS));
+        let builds = Arc::new(AtomicUsize::new(0));
+
+        let threads: Vec<_> = (0..CALLERS)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                let start = Arc::clone(&start);
+                let builds = Arc::clone(&builds);
+                thread::spawn(move || {
+                    start.wait();
+                    cache
+                        .get_or_try_init(("default".into(), "env://".into()), || {
+                            builds.fetch_add(1, Ordering::SeqCst);
+                            // Hold the first construction in flight long enough
+                            // for every caller to contend on the same key.
+                            thread::sleep(Duration::from_millis(50));
+                            env_provider()
+                        })
+                        .unwrap()
+                })
+            })
+            .collect();
+
+        let providers: Vec<_> = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect();
+
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        for provider in &providers {
+            assert!(Arc::ptr_eq(provider, &providers[0]));
+        }
     }
 }
 

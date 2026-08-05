@@ -207,6 +207,89 @@ impl Provider for MemTestProvider {
     }
 }
 
+/// Peak in-flight reads for [`SlowTestProvider`], used to prove fallback-chain
+/// resolution shares the provider and fans reads out under the configured cap.
+static SLOW_CURRENT: AtomicUsize = AtomicUsize::new(0);
+static SLOW_PEAK: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn reset_slow_peak() {
+    SLOW_CURRENT.store(0, Ordering::SeqCst);
+    SLOW_PEAK.store(0, Ordering::SeqCst);
+}
+
+pub(crate) fn slow_peak() -> usize {
+    SLOW_PEAK.load(Ordering::SeqCst)
+}
+
+/// Registered in-memory provider whose reads pause long enough for fallback
+/// concurrency to be observed (`slowtest://`).
+pub(crate) struct SlowTestProvider;
+pub(crate) struct SlowTestConfig;
+
+impl TryFrom<&super::ProviderUrl> for SlowTestConfig {
+    type Error = crate::SecretSpecError;
+
+    fn try_from(_url: &super::ProviderUrl) -> Result<Self> {
+        Ok(Self)
+    }
+}
+
+impl SlowTestProvider {
+    fn new(_config: SlowTestConfig) -> Self {
+        Self
+    }
+}
+
+crate::register_provider! {
+    struct: SlowTestProvider,
+    config: SlowTestConfig,
+    name: "slowtest",
+    description: "Slow in-memory provider for fallback concurrency tests",
+    schemes: ["slowtest"],
+    examples: ["slowtest://"],
+    deletes: true,
+}
+
+impl Provider for SlowTestProvider {
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        MemTestProvider.convention_address(project, profile, key)
+    }
+
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        let item = super::flat_item(self, addr)?.into_owned();
+        let current = SLOW_CURRENT.fetch_add(1, Ordering::SeqCst) + 1;
+        SLOW_PEAK.fetch_max(current, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(50));
+        SLOW_CURRENT.fetch_sub(1, Ordering::SeqCst);
+        Ok(MEM_STORE
+            .lock()
+            .unwrap()
+            .get(&item)
+            .map(|value| SecretString::new(value.clone().into())))
+    }
+
+    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+        MemTestProvider.set(addr, value)
+    }
+
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        MemTestProvider.delete(addr)
+    }
+
+    fn name(&self) -> &'static str {
+        Self::PROVIDER_NAME
+    }
+
+    fn uri(&self) -> String {
+        "slowtest://".to_string()
+    }
+}
+
 /// Registered provider that reads and deletes [`MEM_STORE`] like `memtest://`
 /// but always fails to write (`failwrite://`).
 ///

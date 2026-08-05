@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The SOPS provider no longer substitutes a second time into a rendered path
   segment, so a project or profile literally named `{profile}` or `{project}`
   resolves to the file you configured instead of a different one.
+- Invalid SOPS path templates are now rejected when loading serialized
+  provider configurations instead of being accepted without validation.
 
 ## [0.18.0] - 2026-08-03
 

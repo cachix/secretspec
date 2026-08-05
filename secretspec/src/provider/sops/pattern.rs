@@ -68,8 +68,15 @@ fn validate_template(template: &str) -> std::result::Result<(), SecretSpecError>
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct SopsPathPattern {
     template: String,
+}
+
+impl From<SopsPathPattern> for String {
+    fn from(pattern: SopsPathPattern) -> Self {
+        pattern.template
+    }
 }
 
 impl TryFrom<String> for SopsPathPattern {
@@ -104,29 +111,22 @@ impl SopsPathPattern {
     }
 
     /// Substitutes `{project}` and `{profile}` in a single pass over the
-    /// template.
+    /// template, so a substituted value is copied out and never rescanned for
+    /// the other placeholder.
     ///
-    /// Sequential `.replace()` calls substitute into their own output, so a
-    /// project literally named `{profile}` had the profile substituted into it
-    /// by the second call, resolving to a different file on disk than the one
-    /// configured. Walking the template once means a substituted value is
-    /// copied out, never rescanned.
-    ///
-    /// Unknown placeholders and unclosed braces are kept as literal text rather
-    /// than panicking: [`validate`](Self::validate) rejects both, but
-    /// `SopsPathPattern` also derives `Deserialize`, which does not run it.
+    /// Every constructor (including `Deserialize`, which goes through
+    /// [`TryFrom<String>`]) validates the template, so the unknown-placeholder
+    /// and unclosed-brace branches exist only to keep this function total.
     pub fn render(&self, project: &str, profile: &str) -> PathBuf {
         let mut rendered = String::with_capacity(self.template.len());
         let mut remainder = self.template.as_str();
 
         while let Some(start) = remainder.find('{') {
-            rendered.push_str(&remainder[..start]);
             let after_start = &remainder[start + 1..];
-
             let Some(end) = after_start.find('}') else {
-                rendered.push_str(&remainder[start..]);
-                return PathBuf::from(rendered);
+                break;
             };
+            rendered.push_str(&remainder[..start]);
 
             match &after_start[..end] {
                 "project" => rendered.push_str(project),
@@ -172,24 +172,12 @@ mod tests {
     }
 
     #[test]
-    fn a_project_named_like_a_placeholder_is_not_re_substituted() {
+    fn placeholder_shaped_values_are_not_re_substituted() {
         // The sequential `.replace()` chain this replaces resolved to
-        // "secrets/production/production.yaml", reading another profile's file.
+        // "{project}/{project}.yaml", reading another profile's file.
         assert_eq!(
-            render(
-                "secrets/{project}/{profile}.yaml",
-                "{profile}",
-                "production"
-            ),
-            "secrets/{profile}/production.yaml"
-        );
-    }
-
-    #[test]
-    fn a_profile_named_like_a_placeholder_is_not_re_substituted() {
-        assert_eq!(
-            render("secrets/{profile}/{project}.yaml", "myapp", "{project}"),
-            "secrets/{project}/myapp.yaml"
+            render("secrets/{project}/{profile}.yaml", "{profile}", "{project}"),
+            "secrets/{profile}/{project}.yaml"
         );
     }
 
@@ -217,15 +205,20 @@ mod tests {
         assert!(SopsPathPattern::try_from("{project}/{profile}}.yaml").is_err());
     }
 
-    /// `validate` rejects these, but `Deserialize` does not run it, so `render`
-    /// has to stay total for a pattern that never passed validation.
     #[test]
-    fn an_unvalidated_pattern_keeps_bad_placeholders_literal() {
+    fn deserialization_validates_the_template() {
+        assert!(serde_json::from_str::<SopsPathPattern>(r#""{project}/{key}.yaml""#).is_err());
+        assert!(serde_json::from_str::<SopsPathPattern>(r#""{project/{profile}.yaml""#).is_err());
+
         let pattern: SopsPathPattern =
-            serde_json::from_str(r#"{"template":"{project}/{key}/{unclosed.yaml"}"#).unwrap();
+            serde_json::from_str(r#""secrets/{project}/{profile}.yaml""#).unwrap();
         assert_eq!(
             pattern.render("myapp", "prod").to_string_lossy(),
-            "myapp/{key}/{unclosed.yaml"
+            "secrets/myapp/prod.yaml"
+        );
+        assert_eq!(
+            serde_json::to_string(&pattern).unwrap(),
+            r#""secrets/{project}/{profile}.yaml""#
         );
     }
 }

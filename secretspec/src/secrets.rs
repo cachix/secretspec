@@ -304,14 +304,15 @@ impl ProviderCredentialsCache {
     }
 }
 
-/// Memoized built providers with single-flight construction per key.
+/// Operation-scoped built providers with single-flight construction per key.
 ///
 /// A provider memoizes connection state to serve a batch, but a fallback chain
 /// is walked per secret, so rebuilding there discards it every time: with
 /// `akv?auth=cli` each rebuild re-spawns the Azure CLI. Locking mirrors
 /// [`ProviderCredentialsCache`]: the outer mutex guards only the key-to-slot
 /// map, so callers for one spec wait on its first construction while unrelated
-/// specs build concurrently.
+/// specs build concurrently. A fresh cache is created for every resolution so
+/// provider-local snapshots cannot leak into a later operation.
 #[derive(Default)]
 struct ProviderCache {
     entries: Mutex<HashMap<ProviderKey, ProviderSlot>>,
@@ -357,11 +358,6 @@ impl ProviderCache {
                 Err(err)
             }
         }
-    }
-
-    #[cfg(any(feature = "cli", test))]
-    fn clear(&self) {
-        self.entries.lock().unwrap().clear();
     }
 }
 
@@ -484,11 +480,6 @@ pub struct Secrets {
     /// read. Cleared by [`Secrets::store_provider_credential`] so a freshly
     /// stored credential is re-read.
     provider_credentials_cache: ProviderCredentialsCache,
-    /// Built providers memoized per (profile, raw provider spec), so a fallback
-    /// chain walked per secret reuses each link's provider instead of
-    /// rebuilding it. Cleared with [`Self::provider_credentials_cache`], since
-    /// a provider captures its credentials at construction.
-    provider_cache: ProviderCache,
 }
 
 /// secretspec's own opt-in for marking the current process as an agent. Lets any
@@ -672,7 +663,6 @@ impl Secrets {
             require_reason: RequireReason::Never,
             audit: None,
             provider_credentials_cache: ProviderCredentialsCache::default(),
-            provider_cache: ProviderCache::default(),
         }
     }
 
@@ -754,7 +744,6 @@ impl Secrets {
             reason: env_reason(),
             audit,
             provider_credentials_cache: ProviderCredentialsCache::default(),
-            provider_cache: ProviderCache::default(),
         })
     }
 
@@ -929,14 +918,18 @@ impl Secrets {
         self.build_provider_with_credentials(&spec, credentials)
     }
 
-    /// [`Self::build_provider`], memoized so repeated builds of one spec share
-    /// one provider and the connection state it holds. Use it where a spec is
-    /// built per secret rather than per batch: the fallback chain walk,
-    /// interactive prompting.
-    fn shared_provider(&self, spec: &str, profile: Option<&str>) -> Result<Arc<dyn ProviderTrait>> {
+    /// [`Self::build_provider`], memoized within one resolution so repeated
+    /// builds of one spec share one provider and the connection state it holds.
+    /// The caller owns the cache to prevent provider-local snapshots and session
+    /// metadata from surviving into a later operation.
+    fn shared_provider(
+        &self,
+        cache: &ProviderCache,
+        spec: &str,
+        profile: Option<&str>,
+    ) -> Result<Arc<dyn ProviderTrait>> {
         let key = (self.resolve_profile_name(profile), spec.to_string());
-        self.provider_cache
-            .get_or_try_init(key, || self.build_provider(spec.to_string(), profile))
+        cache.get_or_try_init(key, || self.build_provider(spec.to_string(), profile))
     }
 
     /// Builds a credential source provider without resolving credentials for it,
@@ -1111,10 +1104,8 @@ impl Secrets {
         );
         result?;
         // The stored credential replaces whatever an earlier resolution
-        // memoized; drop the memo so the next build re-reads it. Providers
-        // built from it go too, since they captured the value.
+        // memoized; drop the memo so the next build re-reads it.
         self.provider_credentials_cache.clear();
-        self.provider_cache.clear();
         Ok(source.location(&project, name))
     }
 
@@ -2445,6 +2436,7 @@ impl Secrets {
     /// callers (e.g. the audit log) record which provider actually answered.
     fn get_secret_from_providers(
         &self,
+        provider_cache: &ProviderCache,
         secret_name: &str,
         addr: Address<'_>,
         provider_specs: Option<&[String]>,
@@ -2476,7 +2468,7 @@ impl Secrets {
                 // Build from the raw spec (not the resolved URI) so an alias's
                 // `credentials` is applied to this chain link too. Shared, not
                 // rebuilt: this walk runs per secret (see [`ProviderCache`]).
-                let provider = match self.shared_provider(spec, profile) {
+                let provider = match self.shared_provider(provider_cache, spec, profile) {
                     Ok(p) => p,
                     Err(e) => {
                         // Construction failed after resolution, so redact the
@@ -2921,7 +2913,9 @@ impl Secrets {
                 // broken link is skipped with a warning, so an undefined alias never
                 // blocks a provider elsewhere in the chain from answering.
                 let read_specs = route.specs();
+                let provider_cache = ProviderCache::default();
                 let result = self.get_secret_from_providers(
+                    &provider_cache,
                     name,
                     planned.as_address(&self.config.project.name, &profile_name),
                     read_specs.as_deref(),
@@ -4426,6 +4420,7 @@ impl Secrets {
         // `get_secret_from_providers`, preserving provider order, lazy alias
         // resolution, warnings, and the healthy-miss/error distinction for its
         // own secret. Providers themselves are shared through `ProviderCache`.
+        let provider_cache = ProviderCache::default();
         let pending_fallbacks: Vec<&PlannedSecret> = plan
             .secrets
             .iter()
@@ -4451,6 +4446,7 @@ impl Secrets {
                         .fallback_specs()
                         .expect("pending fallback has fallback specs");
                     let result = self.get_secret_from_providers(
+                        &provider_cache,
                         Self::diagnostic_secret_name(&planned.name, output_filter),
                         planned.as_address(project, profile),
                         Some(fallback),

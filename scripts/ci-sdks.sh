@@ -29,8 +29,9 @@ export SECRETSPEC_BIN="$target_dir/debug/secretspec"
 echo "==> Installing staticlib + header + pkg-config file"
 SECRETSPEC_FFI_PREFIX="$(mktemp -d)"
 export SECRETSPEC_FFI_PREFIX
-cargo cinstall -p secretspec-ffi --library-type staticlib --prefix "$SECRETSPEC_FFI_PREFIX"
+bash secretspec-ffi/scripts/cinstall.sh "$SECRETSPEC_FFI_PREFIX"
 export PKG_CONFIG_PATH="$SECRETSPEC_FFI_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+pkg-config --print-errors --exists secretspec_ffi
 export SECRETSPEC_FFI_STATICLIB="$SECRETSPEC_FFI_PREFIX/lib/libsecretspec_ffi.a"
 export SECRETSPEC_FFI_INCLUDE="$SECRETSPEC_FFI_PREFIX/include"
 # Raw linker flags for the legs that do not call pkg-config. A Rust staticlib

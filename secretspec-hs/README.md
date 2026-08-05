@@ -92,7 +92,7 @@ Install the library with [cargo-c](https://github.com/lu-zero/cargo-c) and
 build with the `use-pkg-config` flag instead of the flags above:
 
 ```bash
-cargo cinstall -p secretspec-ffi --library-type staticlib --prefix "$PREFIX"
+bash secretspec-ffi/scripts/cinstall.sh "$PREFIX"
 cd secretspec-hs
 PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal build -f use-pkg-config
 PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal test  -f use-pkg-config

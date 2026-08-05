@@ -64,7 +64,7 @@ Install the library with [cargo-c](https://github.com/lu-zero/cargo-c) and pass
 `--enable-pkg-config` to the build:
 
 ```bash
-cargo cinstall -p secretspec-ffi --library-type staticlib --prefix "$PREFIX"
+bash secretspec-ffi/scripts/cinstall.sh "$PREFIX"
 PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" gem install secretspec -- --enable-pkg-config
 ```
 

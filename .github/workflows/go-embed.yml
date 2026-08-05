@@ -146,6 +146,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           set -euo pipefail
           mapfile -t assets < <(find staged -type f -name 'secretspec_ffi_*' -print | sort)
@@ -155,7 +156,7 @@ jobs:
             exit 1
           fi
           bash scripts/upload-release-asset.sh \
-            "${{ inputs.release_tag || github.ref_name }}" "${assets[@]}"
+            "$RELEASE_TAG" "${assets[@]}"
 
       - name: Publish the Go module tag
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')

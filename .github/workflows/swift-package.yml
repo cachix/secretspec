@@ -173,7 +173,8 @@ jobs:
       - name: Attach the XCFramework to the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: >-
           bash scripts/upload-release-asset.sh
-          "${{ inputs.release_tag || github.ref_name }}"
+          "$RELEASE_TAG"
           artifacts/CSecretSpec.xcframework.zip

@@ -10,8 +10,20 @@
 # retry). Needs GH_TOKEN with contents: write.
 set -euo pipefail
 
+if (( $# < 2 )); then
+  echo "usage: upload-release-asset.sh <tag> <asset> [asset...]" >&2
+  exit 2
+fi
+
 tag="$1"
 shift
+
+# Release publication uses version tags. Reject malformed input before it is
+# passed to gh, while allowing SemVer prerelease and build suffixes.
+if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z][0-9A-Za-z.+-]*)?$ ]]; then
+  echo "invalid release tag: $tag" >&2
+  exit 2
+fi
 
 files=()
 for asset in "$@"; do

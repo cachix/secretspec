@@ -565,7 +565,7 @@
   overflow: hidden;
   cursor: grab;
   padding-inline: 1rem;
-  touch-action: pan-y;
+  touch-action: none;
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 14%, #000 86%, transparent);
   mask-image: linear-gradient(to bottom, transparent, #000 14%, #000 86%, transparent);
 }
@@ -584,6 +584,7 @@
 
 .landing-reel-slot {
   --i: 0;
+  --reel-color: var(--color-accent-500);
   height: 76px;
   display: flex;
   align-items: center;
@@ -635,26 +636,26 @@
   border-radius: 999px;
   font-size: clamp(0.75rem, 6cqw, 0.9375rem);
   border-color: color-mix(in srgb,
-    var(--color-accent-500) calc(var(--focus) * 100%),
+    var(--reel-color) calc(var(--focus) * 100%),
     var(--color-gray-200));
   background: color-mix(in srgb,
     var(--sl-color-bg) calc(var(--p) * 100%),
     var(--sl-color-bg-nav));
   color: color-mix(in srgb,
-    var(--color-accent-700) calc(var(--focus) * 100%),
+    var(--reel-color) calc(var(--focus) * 100%),
     var(--color-gray-700));
   font-weight: calc(500 + 100 * var(--focus));
   box-shadow:
-    0 0 0 4px color-mix(in srgb, var(--color-accent-400) calc(var(--focus) * 18%), transparent),
-    0 10px 24px -8px color-mix(in srgb, var(--color-accent-500) calc(var(--focus) * 45%), transparent);
+    0 0 0 4px color-mix(in srgb, var(--reel-color) calc(var(--focus) * 18%), transparent),
+    0 10px 24px -8px color-mix(in srgb, var(--reel-color) calc(var(--focus) * 45%), transparent);
 }
 
 [data-theme='dark'] .landing-reel-item {
   border-color: color-mix(in srgb,
-    var(--color-accent-400) calc(var(--focus) * 100%),
+    var(--reel-color) calc(var(--focus) * 100%),
     var(--color-gray-800));
   color: color-mix(in srgb,
-    var(--color-accent-200) calc(var(--focus) * 100%),
+    var(--reel-color) calc(var(--focus) * 100%),
     var(--color-gray-300));
 }
 
@@ -684,10 +685,6 @@
   display: block;
 }
 
-[data-theme='dark'] .landing-reel-icon {
-  filter: invert(0.85) brightness(1.1);
-}
-
 .landing-reel-slot:focus-visible {
   outline: none;
 }
@@ -695,8 +692,8 @@
 .landing-reel-slot:focus-visible .landing-reel-item {
   box-shadow:
     0 0 0 3px var(--sl-color-bg),
-    0 0 0 6px var(--color-accent-500),
-    0 12px 28px -10px color-mix(in srgb, var(--color-accent-500) 55%, transparent);
+    0 0 0 6px var(--reel-color),
+    0 12px 28px -10px color-mix(in srgb, var(--reel-color) 55%, transparent);
 }
 
 .landing-pipeline-center {

@@ -47,7 +47,6 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'lastpass', slug: 'lastpass', label: 'LastPass' },
   { slug: 'dashlane', label: 'Dashlane (0.18+)' },
   { icon: 'bitwarden', slug: 'bw', label: 'Bitwarden Password Manager (0.18+)' },
-  { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden' },
   { icon: 'vault', slug: 'vault', label: 'Vault' },
   { slug: 'openbao', label: 'OpenBao (0.17+)' },
   { slug: 'awssm', label: 'AWS Secrets Manager' },
@@ -63,6 +62,7 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'dotenv', slug: 'dotenv', label: '.env files' },
   { slug: 'env', label: 'Environment variables' },
   { icon: 'systemd', slug: 'systemd-credential', label: 'systemd credentials (0.17+)' },
+  { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden Secrets Manager' },
   { icon: 'linux', slug: 'keyring', label: 'Secret Service' },
   { slug: 'keyring', label: 'Credential Manager' },
   { icon: { src: sopsLogo, type: 'bundled' }, slug: 'sops', label: 'SOPS (0.17+)' },
@@ -124,6 +124,80 @@ const consumerMetadata: ConsumerMetadata[] = [
 
 const providerLoop = [...providerMetadata, ...providerMetadata, ...providerMetadata];
 const consumerLoop = [...consumerMetadata, ...consumerMetadata, ...consumerMetadata];
+
+const syntaxToneHex = {
+  key: '8ea3c0',
+  keyBright: '9eb6d6',
+  string: 'b5d0a6',
+  comment: '6a6f7a',
+  number: 'd8a162',
+  section: 'c79be0',
+  sectionBright: 'd7aff0',
+  red: 'd06f72',
+  yellow: 'd6c57b',
+  cyan: '82c7d8',
+  teal: '89c8ba',
+} as const;
+
+const providerTones: Record<string, keyof typeof syntaxToneHex> = {
+  keyring: 'keyBright',
+  kdbx: 'yellow',
+  onepassword: 'red',
+  keeper: 'yellow',
+  lastpass: 'red',
+  dashlane: 'teal',
+  bw: 'red',
+  bws: 'cyan',
+  vault: 'keyBright',
+  openbao: 'teal',
+  awssm: 'number',
+  awsps: 'number',
+  scaleway: 'section',
+  gcsm: 'red',
+  akv: 'keyBright',
+  infisical: 'teal',
+  age: 'yellow',
+  gopass: 'string',
+  protonpass: 'section',
+  pass: 'yellow',
+  dotenv: 'string',
+  env: 'comment',
+  'systemd-credential': 'key',
+  sops: 'sectionBright',
+};
+
+const consumerTones: Record<string, keyof typeof syntaxToneHex> = {
+  Rust: 'red',
+  Python: 'yellow',
+  Django: 'string',
+  FastAPI: 'teal',
+  'Node.js': 'string',
+  'Next.js': 'comment',
+  Express: 'comment',
+  Go: 'cyan',
+  Ruby: 'red',
+  Rails: 'red',
+  PHP: 'section',
+  Laravel: 'red',
+  Symfony: 'comment',
+  '.NET / C#': 'keyBright',
+  Haskell: 'sectionBright',
+  'Swift (0.18+)': 'red',
+  'GitHub Actions': 'comment',
+  'Forgejo Actions': 'number',
+  'devenv & Nix': 'cyan',
+  systemd: 'key',
+  Docker: 'cyan',
+  Kubernetes: 'keyBright',
+};
+
+function providerTone(provider: ProviderMetadata) {
+  return syntaxToneHex[providerTones[provider.slug] ?? 'key'];
+}
+
+function consumerTone(consumer: ConsumerMetadata) {
+  return syntaxToneHex[consumerTones[consumer.label] ?? 'key'];
+}
 
 const isReelDuplicate = (index: number, itemCount: number) =>
   index < itemCount || index >= itemCount * 2;
@@ -189,7 +263,7 @@ const reelScriptData = {
               href={`/providers/${p.slug}`}
               class="landing-reel-slot"
               data-index={i}
-              style={`--i:${i}`}
+              style={`--i:${i};--reel-color:#${providerTone(p)}`}
               draggable="false"
               aria-hidden={isReelDuplicate(i, providerMetadata.length) ? 'true' : undefined}
               tabindex={isReelDuplicate(i, providerMetadata.length) ? -1 : undefined}
@@ -198,7 +272,7 @@ const reelScriptData = {
                 <div class="landing-reel-item">
                   {typeof p.icon === 'string' ? (
                     <>
-                      <img data-reel-icon-img class="landing-reel-icon" src={`https://cdn.simpleicons.org/${p.icon}/888888`} alt="" width="20" height="20" loading="lazy" />
+                      <img data-reel-icon-img class="landing-reel-icon" src={`https://cdn.simpleicons.org/${p.icon}/${providerTone(p)}`} alt="" width="20" height="20" loading="lazy" />
                       <svg class="landing-reel-icon landing-reel-icon-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                     </>
                   ) : typeof p.icon === 'object' && p.icon.type === 'bundled' ? (
@@ -249,7 +323,7 @@ const reelScriptData = {
               href={c.href}
               class="landing-reel-slot"
               data-index={i}
-              style={`--i:${i}`}
+              style={`--i:${i};--reel-color:#${consumerTone(c)}`}
               draggable="false"
               aria-hidden={isReelDuplicate(i, consumerMetadata.length) ? 'true' : undefined}
               tabindex={isReelDuplicate(i, consumerMetadata.length) ? -1 : undefined}
@@ -258,7 +332,7 @@ const reelScriptData = {
                 <div class="landing-reel-item">
                   {c.icon ? (
                     <>
-                      <img data-reel-icon-img class="landing-reel-icon" src={`https://cdn.simpleicons.org/${c.icon}/888888`} alt="" width="20" height="20" loading="lazy" />
+                      <img data-reel-icon-img class="landing-reel-icon" src={`https://cdn.simpleicons.org/${c.icon}/${consumerTone(c)}`} alt="" width="20" height="20" loading="lazy" />
                       <svg class="landing-reel-icon landing-reel-icon-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                     </>
                   ) : (
@@ -385,6 +459,9 @@ const reelScriptData = {
     const SNAP_ANIM_MS = 320;
     const RESUME_AFTER_MS = 4200;
     const DRAG_THRESHOLD_PX = 5;
+    const INERTIA_MIN_VELOCITY = 0.00075;
+    const INERTIA_FRICTION = 0.000055;
+    const INERTIA_MAX_VELOCITY = 0.05;
     const AUTO_EPOCH = performance.now();
 
     function esc(s) {
@@ -489,6 +566,40 @@ const reelScriptData = {
         rafId = null;
       }
 
+      function startInertia(initialVelocity) {
+        stopAnim();
+        let velocity = Math.max(-INERTIA_MAX_VELOCITY, Math.min(INERTIA_MAX_VELOCITY, initialVelocity));
+        let lastTime = performance.now();
+
+        if (Math.abs(velocity) < INERTIA_MIN_VELOCITY) {
+          snapToNearest();
+          return;
+        }
+
+        const step = (now) => {
+          const dt = Math.min(48, now - lastTime);
+          lastTime = now;
+          scroll += velocity * dt;
+          applyScroll();
+
+          const drag = INERTIA_FRICTION * dt;
+          if (velocity > 0) {
+            velocity = Math.max(0, velocity - drag);
+          } else {
+            velocity = Math.min(0, velocity + drag);
+          }
+
+          if (Math.abs(velocity) >= INERTIA_MIN_VELOCITY) {
+            rafId = requestAnimationFrame(step);
+          } else {
+            rafId = null;
+            snapToNearest(420);
+          }
+        };
+
+        rafId = requestAnimationFrame(step);
+      }
+
       function animateTo(target, duration) {
         stopAnim();
         const start = scroll;
@@ -550,6 +661,9 @@ const reelScriptData = {
           startScroll: scroll,
           moved: false,
           pointerId: e.pointerId,
+          lastPos: MOBILE_QUERY.matches ? e.clientX : e.clientY,
+          lastTime: performance.now(),
+          velocity: 0,
         };
         try { reelEl.setPointerCapture(e.pointerId); } catch (_) {}
         reelEl.classList.add('is-dragging');
@@ -557,20 +671,31 @@ const reelScriptData = {
       function onPointerMove(e) {
         if (!dragState) return;
         const horizontal = MOBILE_QUERY.matches;
+        const now = performance.now();
+        const pos = horizontal ? e.clientX : e.clientY;
+        const dt = Math.max(1, now - dragState.lastTime);
+        const slotSize = horizontal ? SLOT_W_MOBILE : SLOT_H;
+        const instantVelocity = -((pos - dragState.lastPos) / slotSize) / dt;
+        dragState.velocity = dragState.velocity * 0.25 + instantVelocity * 0.75;
+        dragState.lastPos = pos;
+        dragState.lastTime = now;
+
         const d = horizontal ? (e.clientX - dragState.startX) : (e.clientY - dragState.startY);
         if (Math.abs(d) > DRAG_THRESHOLD_PX) dragState.moved = true;
-        scroll = dragState.startScroll - d / (horizontal ? SLOT_W_MOBILE : SLOT_H);
+        scroll = dragState.startScroll - d / slotSize;
         applyScroll();
       }
       function onPointerUp(e) {
         if (!dragState) return;
         try { reelEl.releasePointerCapture(dragState.pointerId); } catch (_) {}
         const moved = dragState.moved;
+        const staleMs = performance.now() - dragState.lastTime;
+        const releaseVelocity = staleMs > 80 ? dragState.velocity * 0.35 : dragState.velocity;
         dragState = null;
         reelEl.classList.remove('is-dragging');
 
         if (moved) {
-          snapToNearest();
+          startInertia(releaseVelocity);
           suppressNextClick = true;
         } else {
           const hit = document.elementFromPoint(e.clientX, e.clientY);
@@ -585,6 +710,14 @@ const reelScriptData = {
         }
         scheduleResume();
       }
+      function onPointerCancel() {
+        if (!dragState) return;
+        try { reelEl.releasePointerCapture(dragState.pointerId); } catch (_) {}
+        dragState = null;
+        reelEl.classList.remove('is-dragging');
+        snapToNearest();
+        scheduleResume();
+      }
       function onClickCapture(e) {
         if (suppressNextClick) {
           e.preventDefault();
@@ -596,7 +729,7 @@ const reelScriptData = {
       reelEl.addEventListener('pointerdown', onPointerDown);
       reelEl.addEventListener('pointermove', onPointerMove);
       reelEl.addEventListener('pointerup', onPointerUp);
-      reelEl.addEventListener('pointercancel', onPointerUp);
+      reelEl.addEventListener('pointercancel', onPointerCancel);
       reelEl.addEventListener('click', onClickCapture, true);
       reelEl.addEventListener('dragstart', (e) => e.preventDefault());
 

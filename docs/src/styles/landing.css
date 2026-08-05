@@ -1,5 +1,17 @@
 /* ── Landing page styles for SecretSpec ── */
 
+:root {
+  --syntax-foreground: #d7dee8;
+  --syntax-comment: #6a6f7a;
+  --syntax-red: #d06f72;
+  --syntax-green: #b5d0a6;
+  --syntax-yellow: #d6c57b;
+  --syntax-blue: #9eb6d6;
+  --syntax-magenta: #d7aff0;
+  --syntax-cyan: #82c7d8;
+  --syntax-orange: #d8a162;
+}
+
 /* Remove Starlight's content panel constraints on the landing page only.
    The DOM nests as `.content-panel > .sl-container`, so we anchor on the
    content panel (which contains the hero) and clear its padding/border too —
@@ -87,17 +99,14 @@
 
 .landing-hero {
   position: relative;
-  min-height: min(920px, calc(100svh - 3.5rem));
-  padding: 2.25rem 1rem 3.5rem;
+  padding: 2rem 1rem 2.5rem;
   overflow: hidden;
   isolation: isolate;
-  display: flex;
-  align-items: stretch;
 }
 
 @media (min-width: 640px) {
   .landing-hero {
-    padding: 2.5rem 1.5rem 4.75rem;
+    padding: 2.5rem 1.5rem 4rem;
   }
 }
 
@@ -138,8 +147,7 @@
 }
 
 .landing-hero-inner {
-  width: 100%;
-  max-width: 88rem;
+  max-width: 76rem;
   margin: 0 auto;
 }
 
@@ -155,7 +163,7 @@
 }
 
 .landing-hero-title {
-  font-size: clamp(2.8rem, 5.8vw, 5rem);
+  font-size: clamp(2.25rem, 5vw, 3.5rem);
   font-weight: 700;
   line-height: 1.04;
   letter-spacing: 0;
@@ -690,6 +698,13 @@
   flex-shrink: 0;
 }
 
+.landing-reel-icon-mask {
+  display: inline-block;
+  background: currentColor;
+  -webkit-mask: var(--reel-icon-mask) center / contain no-repeat;
+  mask: var(--reel-icon-mask) center / contain no-repeat;
+}
+
 .landing-reel-icon-fallback {
   display: none;
 }
@@ -855,7 +870,7 @@
   }
 
   .landing-hero-title {
-    font-size: clamp(2.35rem, 11vw, 3.5rem);
+    font-size: clamp(2.25rem, 5vw, 3.5rem);
   }
 
   .landing-pipeline-grid {
@@ -1162,35 +1177,42 @@
 
 .landing-terminal-body .tok-key,
 .landing-bento-mini-code .tok-key,
-.landing-pipe-code .tok-key { color: var(--syntax-blue); }
+.landing-pipe-code .tok-key,
+.landing-tree-node .tok-key { color: var(--syntax-blue); }
 
 .landing-terminal-body .tok-str,
 .landing-bento-mini-code .tok-str,
-.landing-pipe-code .tok-str { color: var(--syntax-green); }
+.landing-pipe-code .tok-str,
+.landing-tree-node .tok-str { color: var(--syntax-green); }
 
 .landing-terminal-body .tok-com,
 .landing-bento-mini-code .tok-com,
-.landing-pipe-code .tok-com {
+.landing-pipe-code .tok-com,
+.landing-tree-node .tok-com {
   color: var(--syntax-comment);
   font-style: italic;
 }
 
 .landing-terminal-body .tok-num,
 .landing-bento-mini-code .tok-num,
-.landing-pipe-code .tok-num { color: var(--syntax-orange); }
+.landing-pipe-code .tok-num,
+.landing-tree-node .tok-num { color: var(--syntax-orange); }
 
 .landing-terminal-body .tok-bool,
 .landing-bento-mini-code .tok-bool,
-.landing-pipe-code .tok-bool { color: var(--syntax-magenta); }
+.landing-pipe-code .tok-bool,
+.landing-tree-node .tok-bool { color: var(--syntax-magenta); }
 
 .landing-terminal-body .tok-pun,
 .landing-bento-mini-code .tok-pun,
 .landing-pipe-code .tok-pun,
-.landing-merged-cmd .tok-pun { color: var(--syntax-foreground); }
+.landing-merged-cmd .tok-pun,
+.landing-tree-node .tok-pun { color: var(--syntax-foreground); }
 
 .landing-terminal-body .tok-sec,
 .landing-bento-mini-code .tok-sec,
-.landing-pipe-code .tok-sec { color: var(--syntax-magenta); }
+.landing-pipe-code .tok-sec,
+.landing-tree-node .tok-sec { color: var(--syntax-magenta); }
 
 .landing-terminal-body .tok-kw,
 .landing-bento-mini-code .tok-kw,

@@ -2,7 +2,7 @@
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 import { getCollection } from 'astro:content';
 import sopsLogo from '../assets/sops-logo.svg';
-import { syntaxColorCss, syntaxColorHex, type SyntaxColorName } from '../data/syntax-colors';
+import type { SyntaxColorName } from '../data/syntax-colors';
 
 const docs = await getCollection('docs');
 
@@ -179,11 +179,15 @@ const consumerColors: Record<string, SyntaxColorName> = {
 };
 
 function providerTone(provider: ProviderMetadata) {
-  return syntaxColorHex[providerColors[provider.slug] ?? 'blue'];
+  return `var(--syntax-${providerColors[provider.slug] ?? 'blue'})`;
 }
 
 function consumerTone(consumer: ConsumerMetadata) {
-  return syntaxColorHex[consumerColors[consumer.label] ?? 'blue'];
+  return `var(--syntax-${consumerColors[consumer.label] ?? 'blue'})`;
+}
+
+function simpleIconMask(icon: string) {
+  return `url("https://cdn.simpleicons.org/${icon}/000000")`;
 }
 
 const isReelDuplicate = (index: number, itemCount: number) =>
@@ -206,7 +210,6 @@ const reelScriptData = {
   }}
   hasSidebar={false}
 >
-<style is:inline set:html={syntaxColorCss}></style>
 <div class="not-content">
 
 <!-- ============ HERO ============ -->
@@ -251,7 +254,7 @@ const reelScriptData = {
               href={`/providers/${p.slug}`}
               class="landing-reel-slot"
               data-index={i}
-              style={`--i:${i};--reel-color:#${providerTone(p)}`}
+              style={`--i:${i};--reel-color:${providerTone(p)}`}
               draggable="false"
               aria-hidden={isReelDuplicate(i, providerMetadata.length) ? 'true' : undefined}
               tabindex={isReelDuplicate(i, providerMetadata.length) ? -1 : undefined}
@@ -260,7 +263,7 @@ const reelScriptData = {
                 <div class="landing-reel-item">
                   {typeof p.icon === 'string' ? (
                     <>
-                      <img data-reel-icon-img class="landing-reel-icon" src={`https://cdn.simpleicons.org/${p.icon}/${providerTone(p)}`} alt="" width="20" height="20" loading="lazy" />
+                      <span data-reel-icon-img class="landing-reel-icon landing-reel-icon-mask" style={`--reel-icon-mask:${simpleIconMask(p.icon)}`} aria-hidden="true"></span>
                       <svg class="landing-reel-icon landing-reel-icon-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                     </>
                   ) : typeof p.icon === 'object' && p.icon.type === 'bundled' ? (
@@ -311,7 +314,7 @@ const reelScriptData = {
               href={c.href}
               class="landing-reel-slot"
               data-index={i}
-              style={`--i:${i};--reel-color:#${consumerTone(c)}`}
+              style={`--i:${i};--reel-color:${consumerTone(c)}`}
               draggable="false"
               aria-hidden={isReelDuplicate(i, consumerMetadata.length) ? 'true' : undefined}
               tabindex={isReelDuplicate(i, consumerMetadata.length) ? -1 : undefined}
@@ -320,7 +323,7 @@ const reelScriptData = {
                 <div class="landing-reel-item">
                   {c.icon ? (
                     <>
-                      <img data-reel-icon-img class="landing-reel-icon" src={`https://cdn.simpleicons.org/${c.icon}/${consumerTone(c)}`} alt="" width="20" height="20" loading="lazy" />
+                      <span data-reel-icon-img class="landing-reel-icon landing-reel-icon-mask" style={`--reel-icon-mask:${simpleIconMask(c.icon)}`} aria-hidden="true"></span>
                       <svg class="landing-reel-icon landing-reel-icon-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                     </>
                   ) : (
@@ -981,16 +984,16 @@ const reelScriptData = {
     <div class="landing-compose">
       <div class="landing-tree">
         <div class="landing-tree-node">
-          <div class="landing-tree-node-path">[profiles.default]</div>
-          <div class="landing-tree-node-content">DATABASE_URL = {`{ required = `}<span class="tok-bool">true</span>{` }`}</div>
+          <div class="landing-tree-node-path"><span class="tok-sec">[profiles.default]</span></div>
+          <div class="landing-tree-node-content"><span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {`{`}</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">{`}`}</span></div>
         </div>
         <div class="landing-tree-node">
-          <div class="landing-tree-node-path">[profiles.development]</div>
-          <div class="landing-tree-node-content">DATABASE_URL = {`{ default = "postgresql://localhost/dev" }`}</div>
+          <div class="landing-tree-node-path"><span class="tok-sec">[profiles.development]</span></div>
+          <div class="landing-tree-node-content"><span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {`{`}</span> <span class="tok-key">default</span> <span class="tok-pun">=</span> <span class="tok-str">"postgresql://localhost/dev"</span> <span class="tok-pun">{`}`}</span></div>
         </div>
         <div class="landing-tree-node">
-          <div class="landing-tree-node-path">[profiles.production]</div>
-          <div class="landing-tree-node-content">DATABASE_URL = {`{ providers = ["vault", "keyring"] }`}</div>
+          <div class="landing-tree-node-path"><span class="tok-sec">[profiles.production]</span></div>
+          <div class="landing-tree-node-content"><span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {`{`}</span> <span class="tok-key">providers</span> <span class="tok-pun">= [</span><span class="tok-str">"vault"</span><span class="tok-pun">,</span> <span class="tok-str">"keyring"</span><span class="tok-pun">] {`}`}</span></div>
         </div>
       </div>
 

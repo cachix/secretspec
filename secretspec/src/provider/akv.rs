@@ -74,7 +74,48 @@ use azure_security_keyvault_secrets::{SecretClient, models::SetSecretParameters}
 use data_encoding::BASE32_NOPAD;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
+
+/// Serializes a client's first request while Azure Key Vault discovers its
+/// authentication scope through a 401 challenge.
+///
+/// The Azure bearer-token policy caches tokens with single-flight refreshes,
+/// but the scope starts empty. If a cold client sends a batch concurrently,
+/// every request first receives a 401 and can invalidate a token another
+/// request just acquired, spawning the Azure CLI more than once. Once one
+/// request completes successfully, the client has both its scope and token and
+/// later requests can safely fan out.
+#[derive(Default)]
+struct InitialRequestGate {
+    ready: AtomicBool,
+    lock: Mutex<()>,
+}
+
+impl InitialRequestGate {
+    fn run<T, F>(&self, request: F) -> Result<T>
+    where
+        F: FnOnce() -> Result<T>,
+    {
+        if self.ready.load(Ordering::Acquire) {
+            return request();
+        }
+
+        let guard = self.lock.lock().unwrap();
+        if self.ready.load(Ordering::Acquire) {
+            drop(guard);
+            return request();
+        }
+
+        let result = request();
+        if result.is_ok() {
+            self.ready.store(true, Ordering::Release);
+        }
+        result
+    }
+}
 
 /// Authentication method for the Azure Key Vault provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -206,6 +247,14 @@ pub struct AkvProvider {
     config: AkvConfig,
     /// Service-principal credentials supplied by the provider alias.
     credentials: ProviderCredentials,
+    /// One client per provider, so a batch shares the credential's token cache
+    /// instead of authenticating per secret. Every `DeveloperToolsCredential`
+    /// starts with an empty cache, and under `auth=cli` filling it spawns the
+    /// Azure CLI.
+    client: OnceLock<SecretClient>,
+    /// Keeps a cold client's challenge-based authentication to one request, so
+    /// a concurrent batch cannot launch several Azure CLI processes.
+    initial_request: InitialRequestGate,
 }
 
 const TENANT_ID: &str = "tenant_id";
@@ -231,6 +280,8 @@ impl AkvProvider {
         Self {
             config,
             credentials: ProviderCredentials::new(),
+            client: OnceLock::new(),
+            initial_request: InitialRequestGate::default(),
         }
     }
 
@@ -444,6 +495,18 @@ impl AkvProvider {
         })
     }
 
+    /// Returns the shared client, building it on first use.
+    ///
+    /// Concurrent callers may each build one and discard all but the first,
+    /// which costs an extra construction rather than being incorrect.
+    fn client(&self) -> Result<&SecretClient> {
+        if let Some(client) = self.client.get() {
+            return Ok(client);
+        }
+        let created = self.create_client()?;
+        Ok(self.client.get_or_init(|| created))
+    }
+
     /// Checks whether an error indicates the secret was not found, via the
     /// typed HTTP status code rather than string-matching the error's
     /// `Display` output (a genuine 404's message is the service's plain-text
@@ -456,7 +519,7 @@ impl AkvProvider {
 
     /// Retrieves a secret's current value by name, mapping "not found" to `None`.
     async fn get_secret_async(&self, name: &str) -> Result<Option<SecretString>> {
-        let client = self.create_client()?;
+        let client = self.client()?;
         match client.get_secret(name, None).await {
             Ok(response) => {
                 let secret = response.into_model().map_err(|e| {
@@ -486,7 +549,7 @@ impl AkvProvider {
     /// creates a new version if the secret already exists, so create and
     /// update share this one call.
     async fn set_secret_async(&self, name: &str, value: &SecretString) -> Result<()> {
-        let client = self.create_client()?;
+        let client = self.client()?;
         let params = SetSecretParameters {
             value: Some(value.expose_secret().to_string()),
             ..Default::default()
@@ -556,13 +619,15 @@ impl Provider for AkvProvider {
 
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
         let item = self.resolve_item(addr)?;
-        super::block_on(self.get_secret_async(&item))
+        self.initial_request
+            .run(|| super::block_on(self.get_secret_async(&item)))
     }
 
     fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
         self.check_writable(addr)?;
         let item = self.resolve_item(addr)?;
-        super::block_on(self.set_secret_async(&item, value))
+        self.initial_request
+            .run(|| super::block_on(self.set_secret_async(&item, value)))
     }
 
     /// Native addresses are read-only: they name a secret managed outside
@@ -582,6 +647,11 @@ mod tests {
     use super::*;
     use crate::tests::EnvVarGuard;
     use azure_core::error::ErrorKind;
+    use std::sync::{
+        Barrier,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::{thread, time::Duration};
     use url::Url;
 
     fn config(s: &str) -> AkvConfig {
@@ -598,6 +668,67 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn initial_request_gate_allows_only_one_cold_request() {
+        const CALLERS: usize = 8;
+        let gate = Arc::new(InitialRequestGate::default());
+        let start = Arc::new(Barrier::new(CALLERS));
+        let first_finished = Arc::new(AtomicBool::new(false));
+        let cold_requests = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+
+        let threads: Vec<_> = (0..CALLERS)
+            .map(|_| {
+                let gate = Arc::clone(&gate);
+                let start = Arc::clone(&start);
+                let first_finished = Arc::clone(&first_finished);
+                let cold_requests = Arc::clone(&cold_requests);
+                let active = Arc::clone(&active);
+                let peak = Arc::clone(&peak);
+                thread::spawn(move || {
+                    start.wait();
+                    gate.run(|| {
+                        if !first_finished.load(Ordering::SeqCst) {
+                            cold_requests.fetch_add(1, Ordering::SeqCst);
+                        }
+                        let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(current, Ordering::SeqCst);
+                        thread::sleep(Duration::from_millis(30));
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        first_finished.store(true, Ordering::SeqCst);
+                        Ok(())
+                    })
+                })
+            })
+            .collect();
+
+        for thread in threads {
+            thread.join().unwrap().unwrap();
+        }
+        assert_eq!(cold_requests.load(Ordering::SeqCst), 1);
+        assert!(
+            peak.load(Ordering::SeqCst) >= 2,
+            "requests stayed serialized after the client was warm"
+        );
+        assert!(gate.ready.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn initial_request_gate_retries_after_failure() {
+        let gate = InitialRequestGate::default();
+        let failed = gate.run(|| {
+            Err::<(), _>(SecretSpecError::ProviderOperationFailed(
+                "authentication unavailable".into(),
+            ))
+        });
+        assert!(failed.is_err());
+        assert!(!gate.ready.load(Ordering::Acquire));
+
+        assert!(gate.run(|| Ok(())).is_ok());
+        assert!(gate.ready.load(Ordering::Acquire));
     }
 
     #[test]

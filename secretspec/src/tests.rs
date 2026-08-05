@@ -3947,6 +3947,202 @@ fn test_get_secret_with_fallback_chain() {
     }
 }
 
+#[test]
+fn fallback_chains_resolve_concurrently_under_the_provider_cap() {
+    let _lock = scrub_resolution_env();
+    let _concurrency = EnvVarGuard::set(crate::provider::GET_EACH_CONCURRENCY_ENV, "3");
+    let temp_dir = TempDir::new().unwrap();
+    let primary_file = temp_dir.path().join("empty.env");
+    fs::write(&primary_file, "").unwrap();
+
+    const PROJECT: &str = "fallback-concurrency-test";
+    let names: Vec<String> = (0..8).map(|index| format!("SECRET_{index}")).collect();
+    let fallback = crate::provider::provider_from_spec(
+        "slowtest://",
+        crate::provider::ProviderCredentials::new(),
+    )
+    .unwrap();
+    for name in &names {
+        fallback
+            .set(
+                crate::provider::Address::convention(PROJECT, "default", name),
+                &secrecy::SecretString::new(format!("value-{name}").into()),
+            )
+            .unwrap();
+    }
+    crate::provider::tests::reset_slow_peak();
+
+    let secrets = names
+        .iter()
+        .map(|name| {
+            (
+                name.clone(),
+                Secret {
+                    description: Some(format!("Fallback value for {name}")),
+                    required: Some(true),
+                    providers: Some(vec!["primary".into(), "fallback".into()]),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    let config = Config {
+        project: Project {
+            name: PROJECT.to_string(),
+            ..Default::default()
+        },
+        profiles: HashMap::from([(
+            "default".to_string(),
+            Profile {
+                defaults: None,
+                secrets,
+            },
+        )]),
+        providers: None,
+        scopes: None,
+    };
+    let primary_uri = format!("dotenv://{}", primary_file.display());
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: None,
+            profile: None,
+            providers: Some(aliases_map(&[
+                ("primary", primary_uri.as_str()),
+                ("fallback", "slowtest://"),
+            ])),
+        },
+        audit: None,
+    };
+
+    let validated = Secrets::new(config, Some(global_config), None, None)
+        .validate()
+        .unwrap()
+        .expect("all fallback values should resolve");
+    assert_eq!(validated.resolved.secrets.len(), names.len());
+    let peak = crate::provider::tests::slow_peak();
+    assert!(peak >= 2, "fallback reads stayed serial, peak={peak}");
+    assert!(
+        peak <= 3,
+        "fallback reads exceeded configured cap, peak={peak}"
+    );
+}
+
+fn stateful_fallback_spec(project: &str, secret_name: &str, primary_file: &Path) -> Secrets {
+    let config = Config {
+        project: Project {
+            name: project.to_string(),
+            ..Default::default()
+        },
+        profiles: HashMap::from([(
+            "default".to_string(),
+            Profile {
+                defaults: None,
+                secrets: HashMap::from([(
+                    secret_name.to_string(),
+                    Secret {
+                        required: Some(true),
+                        providers: Some(vec!["primary".into(), "stateful".into()]),
+                        ..Default::default()
+                    },
+                )]),
+            },
+        )]),
+        providers: None,
+        scopes: None,
+    };
+    let primary_uri = format!("dotenv://{}", primary_file.display());
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: None,
+            profile: None,
+            providers: Some(aliases_map(&[
+                ("primary", primary_uri.as_str()),
+                ("stateful", "statefultest://"),
+            ])),
+        },
+        audit: None,
+    };
+    Secrets::new(config, Some(global_config), None, None)
+}
+
+#[test]
+fn operation_scoped_provider_cache_refreshes_snapshots_between_resolutions() {
+    let _lock = scrub_resolution_env();
+    let temp_dir = TempDir::new().unwrap();
+    let primary_file = temp_dir.path().join("empty.env");
+    fs::write(&primary_file, "").unwrap();
+
+    const PROJECT: &str = "provider-operation-lifetime-test";
+    const SECRET: &str = "ROTATING_SECRET";
+    let address = crate::provider::Address::convention(PROJECT, "default", SECRET);
+    let store = crate::provider::provider_from_spec(
+        "statefultest://",
+        crate::provider::ProviderCredentials::new(),
+    )
+    .unwrap();
+    store
+        .set(
+            address,
+            &secrecy::SecretString::new("original".to_string().into()),
+        )
+        .unwrap();
+
+    let spec = stateful_fallback_spec(PROJECT, SECRET, &primary_file);
+    let first = spec.validate().unwrap().expect("first resolution succeeds");
+    assert_eq!(first.resolved.secrets[SECRET].expose_secret(), "original");
+
+    store
+        .set(
+            address,
+            &secrecy::SecretString::new("rotated".to_string().into()),
+        )
+        .unwrap();
+    let second = spec
+        .validate()
+        .unwrap()
+        .expect("second resolution succeeds");
+    assert_eq!(second.resolved.secrets[SECRET].expose_secret(), "rotated");
+}
+
+#[test]
+fn operation_scoped_provider_cache_applies_changed_reason_on_later_resolution() {
+    let _lock = scrub_resolution_env();
+    let temp_dir = TempDir::new().unwrap();
+    let primary_file = temp_dir.path().join("empty.env");
+    fs::write(&primary_file, "").unwrap();
+
+    const PROJECT: &str = "provider-reason-lifetime-test";
+    const SECRET: &str = "AUDITED_SECRET";
+    let item = format!("{PROJECT}/default/{SECRET}");
+    crate::provider::tests::take_stateful_reason_reads(&item);
+    let store = crate::provider::provider_from_spec(
+        "statefultest://",
+        crate::provider::ProviderCredentials::new(),
+    )
+    .unwrap();
+    store
+        .set(
+            crate::provider::Address::convention(PROJECT, "default", SECRET),
+            &secrecy::SecretString::new("value".to_string().into()),
+        )
+        .unwrap();
+
+    let spec = stateful_fallback_spec(PROJECT, SECRET, &primary_file).with_reason("first reason");
+    spec.validate().unwrap().expect("first resolution succeeds");
+    let spec = spec.with_reason("second reason");
+    spec.validate()
+        .unwrap()
+        .expect("second resolution succeeds");
+
+    assert_eq!(
+        crate::provider::tests::take_stateful_reason_reads(&item),
+        vec![
+            Some("first reason".to_string()),
+            Some("second reason".to_string())
+        ]
+    );
+}
+
 /// When the primary provider in a chain errors (e.g. authentication failure),
 /// validation should fall back to the next provider rather than propagating
 /// the error. Simulated here by pointing the primary dotenv at a directory,

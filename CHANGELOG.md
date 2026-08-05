@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at a new template invalidates its cached values instead of serving the old
   ones until they expire. Single-segment templates are unaffected; cached
   entries for a multi-segment template refetch once, silently, on first run.
+- Provider fallback chains now reuse each provider and resolve independent
+  primary misses concurrently. Azure Key Vault providers also reuse their
+  client and serialize its initial challenge-based authentication, so chains
+  such as `providers = ["keyring", "akv"]` no longer fetch every fallback in
+  series or launch separate Azure CLI processes for the same resolution.
+- Reusing a `Secrets` instance now refreshes fallback providers for each
+  resolution, so provider-side caches observe rotated values and providers use
+  the latest reason supplied with `with_reason`.
 
 ## [0.18.0] - 2026-08-03
 

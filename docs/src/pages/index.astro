@@ -178,6 +178,119 @@ const consumerColors: Record<string, SyntaxColorName> = {
   Kubernetes: 'blue',
 };
 
+const languageSdkMetadata = [
+  {
+    id: 'rust',
+    icon: 'rust',
+    label: 'Rust',
+    href: '/sdk/rust/',
+    color: consumerTone({ label: 'Rust', href: '/sdk/rust/', secrets: [] }),
+    code: `<span class="tok-var">secretspec_derive</span><span class="tok-pun">::</span><span class="tok-fn">declare_secrets!</span><span class="tok-pun">(</span><span class="tok-str">"secretspec.toml"</span><span class="tok-pun">);</span>
+
+<span class="tok-kw">let</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">::</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
+    <span class="tok-pun">.</span><span class="tok-fn">with_provider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
+    <span class="tok-pun">.</span><span class="tok-fn">with_reason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span><span class="tok-pun">()?;</span>
+<span class="tok-fn">println!</span><span class="tok-pun">(</span><span class="tok-str">"{}"</span><span class="tok-pun">,</span> <span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">.</span><span class="tok-var">database_url</span><span class="tok-pun">);</span>`,
+  },
+  {
+    id: 'python',
+    icon: 'python',
+    label: 'Python',
+    href: '/sdk/python/',
+    color: consumerTone({ label: 'Python', href: '/sdk/python/', secrets: [] }),
+    code: `<span class="tok-kw">from</span> <span class="tok-var">secretspec</span> <span class="tok-kw">import</span> <span class="tok-var">SecretSpec</span>
+
+<span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span><span class="tok-pun">()</span> \\
+    <span class="tok-pun">.</span><span class="tok-fn">with_provider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span> \\
+    <span class="tok-pun">.</span><span class="tok-fn">with_reason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span><span class="tok-pun">()</span>
+<span class="tok-fn">print</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">].</span><span class="tok-var">get</span><span class="tok-pun">)</span>`,
+  },
+  {
+    id: 'nodejs',
+    icon: 'nodedotjs',
+    label: 'Node.js',
+    href: '/sdk/nodejs/',
+    color: consumerTone({ label: 'Node.js', href: '/sdk/nodejs/', secrets: [] }),
+    code: `<span class="tok-kw">const</span> <span class="tok-pun">{</span> <span class="tok-var">SecretSpec</span> <span class="tok-pun">}</span> <span class="tok-pun">=</span> <span class="tok-fn">require</span><span class="tok-pun">(</span><span class="tok-str">"secretspec"</span><span class="tok-pun">);</span>
+
+<span class="tok-kw">const</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
+  <span class="tok-pun">.</span><span class="tok-fn">withProvider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
+  <span class="tok-pun">.</span><span class="tok-fn">withReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span><span class="tok-pun">();</span>
+<span class="tok-var">console</span><span class="tok-pun">.</span><span class="tok-fn">log</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">.</span><span class="tok-var">DATABASE_URL</span><span class="tok-pun">.</span><span class="tok-fn">get</span><span class="tok-pun">());</span>`,
+  },
+  {
+    id: 'go',
+    icon: 'go',
+    label: 'Go',
+    href: '/sdk/go/',
+    color: consumerTone({ label: 'Go', href: '/sdk/go/', secrets: [] }),
+    code: `<span class="tok-var">s</span><span class="tok-pun">,</span> <span class="tok-var">_</span> <span class="tok-pun">:=</span> <span class="tok-var">secretspec</span><span class="tok-pun">.</span><span class="tok-fn">New</span><span class="tok-pun">().</span>
+    <span class="tok-fn">WithProvider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">).</span>
+    <span class="tok-fn">WithReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">Load</span><span class="tok-pun">()</span>
+<span class="tok-var">fmt</span><span class="tok-pun">.</span><span class="tok-fn">Println</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">Secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">].</span><span class="tok-fn">Get</span><span class="tok-pun">())</span>`,
+  },
+  {
+    id: 'ruby',
+    icon: 'ruby',
+    label: 'Ruby',
+    href: '/sdk/ruby/',
+    color: consumerTone({ label: 'Ruby', href: '/sdk/ruby/', secrets: [] }),
+    code: `<span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">Secretspec</span><span class="tok-pun">::</span><span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span>
+      <span class="tok-pun">.</span><span class="tok-fn">with_provider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
+      <span class="tok-pun">.</span><span class="tok-fn">with_reason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span>
+<span class="tok-fn">puts</span> <span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">].</span><span class="tok-var">get</span>`,
+  },
+  {
+    id: 'haskell',
+    icon: 'haskell',
+    label: 'Haskell',
+    href: '/sdk/haskell/',
+    color: consumerTone({ label: 'Haskell', href: '/sdk/haskell/', secrets: [] }),
+    code: `<span class="tok-var">s</span> <span class="tok-pun">&lt;-</span> <span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">load</span> <span class="tok-pun">(</span><span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">builder</span>
+      <span class="tok-pun">&amp;</span> <span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">withProvider</span> <span class="tok-str">"keyring://"</span>
+      <span class="tok-pun">&amp;</span> <span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">withReason</span> <span class="tok-str">"boot"</span><span class="tok-pun">)</span>
+<span class="tok-fn">print</span> <span class="tok-pun">(</span><span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">get</span> <span class="tok-pun">=&lt;&lt;</span> <span class="tok-var">Map</span><span class="tok-pun">.</span><span class="tok-fn">lookup</span> <span class="tok-str">"DATABASE_URL"</span> <span class="tok-pun">(</span><span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">resolvedSecrets</span> <span class="tok-var">s</span><span class="tok-pun">))</span>`,
+  },
+  {
+    id: 'php',
+    icon: 'php',
+    label: 'PHP',
+    href: '/sdk/php/',
+    color: consumerTone({ label: 'PHP', href: '/sdk/php/', secrets: [] }),
+    code: `<span class="tok-kw">use</span> <span class="tok-var">Secretspec\\SecretSpec</span><span class="tok-pun">;</span>
+
+<span class="tok-var">$s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">::</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
+    <span class="tok-pun">-&gt;</span><span class="tok-fn">withProvider</span><span class="tok-pun">(</span><span class="tok-str">'keyring://'</span><span class="tok-pun">)</span>
+    <span class="tok-pun">-&gt;</span><span class="tok-fn">withReason</span><span class="tok-pun">(</span><span class="tok-str">'boot web app'</span><span class="tok-pun">)-&gt;</span><span class="tok-fn">load</span><span class="tok-pun">();</span>
+<span class="tok-var">$s</span><span class="tok-pun">-&gt;</span><span class="tok-fn">setAsEnv</span><span class="tok-pun">();</span>`,
+  },
+  {
+    id: 'csharp',
+    icon: 'dotnet',
+    label: 'C# / .NET',
+    href: '/sdk/csharp/',
+    color: consumerTone({ label: '.NET / C#', href: '/sdk/csharp/', secrets: [] }),
+    code: `<span class="tok-kw">using</span> <span class="tok-var">Cachix</span><span class="tok-pun">.</span><span class="tok-var">SecretSpec</span><span class="tok-pun">;</span>
+
+<span class="tok-kw">using</span> <span class="tok-kw">var</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">Builder</span><span class="tok-pun">()</span>
+    <span class="tok-pun">.</span><span class="tok-fn">WithProvider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
+    <span class="tok-pun">.</span><span class="tok-fn">WithReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">Load</span><span class="tok-pun">();</span>
+<span class="tok-var">Console</span><span class="tok-pun">.</span><span class="tok-fn">WriteLine</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">Secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">].</span><span class="tok-fn">Get</span><span class="tok-pun">());</span>`,
+  },
+  {
+    id: 'swift',
+    icon: 'swift',
+    label: 'Swift (0.18+)',
+    href: '/sdk/swift/',
+    color: consumerTone({ label: 'Swift (0.18+)', href: '/sdk/swift/', secrets: [] }),
+    code: `<span class="tok-kw">let</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-kw">try</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
+    <span class="tok-pun">.</span><span class="tok-fn">withProvider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
+    <span class="tok-pun">.</span><span class="tok-fn">withReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span><span class="tok-pun">()</span>
+<span class="tok-kw">defer</span> <span class="tok-pun">{</span> <span class="tok-kw">try</span><span class="tok-pun">?</span> <span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-fn">close</span><span class="tok-pun">()</span> <span class="tok-pun">}</span>
+<span class="tok-fn">print</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">]?.</span><span class="tok-fn">get</span><span class="tok-pun">()</span> <span class="tok-pun">??</span> <span class="tok-str">""</span><span class="tok-pun">)</span>`,
+  },
+];
+
 function providerTone(provider: ProviderMetadata) {
   return `var(--syntax-${providerColors[provider.slug] ?? 'blue'})`;
 }
@@ -188,6 +301,16 @@ function consumerTone(consumer: ConsumerMetadata) {
 
 function simpleIconMask(icon: string) {
   return `url("https://cdn.simpleicons.org/${icon}/000000")`;
+}
+
+function animatedCodeLines(html: string) {
+  return html
+    .split('\n')
+    .map((line, index) => {
+      const content = line.length ? line : '&nbsp;';
+      return `<span class="landing-code-line" style="--line:${index}">${content}</span>`;
+    })
+    .join('');
 }
 
 const isReelDuplicate = (index: number, itemCount: number) =>
@@ -922,75 +1045,8 @@ const reelScriptData = {
   </div>
 </section>
 
-<!-- ============ SHOWCASE: provider switcher ============ -->
-<section class="landing-showcase">
-  <div class="landing-container">
-    <div class="landing-showcase-head">
-      <span class="landing-showcase-eyebrow">Declaration vs storage</span>
-      <h2 class="landing-section-title">Keep secret names separate from storage.</h2>
-      <p class="landing-section-lead landing-section-lead-narrow">
-        Keep the declaration in your repository while each developer, CI job, or deployment chooses an appropriate provider. The application still receives the same variables.
-      </p>
-    </div>
-
-    <div class="landing-secret">
-      <div>
-        <div class="landing-provider-tabs" id="secret-tabs">
-          <button type="button" class="landing-provider-tab is-active" data-provider="keyring">Keyring</button>
-          <button type="button" class="landing-provider-tab" data-provider="onepassword">1Password</button>
-          <button type="button" class="landing-provider-tab" data-provider="vault">Vault</button>
-          <button type="button" class="landing-provider-tab" data-provider="openbao">OpenBao (0.17+)</button>
-          <button type="button" class="landing-provider-tab" data-provider="awssm">AWS</button>
-          <button type="button" class="landing-provider-tab" data-provider="awsps">AWS PS (0.18+)</button>
-          <button type="button" class="landing-provider-tab" data-provider="gcsm">GCP</button>
-          <button type="button" class="landing-provider-tab" data-provider="akv">Azure</button>
-          <button type="button" class="landing-provider-tab" data-provider="dotenv">.env</button>
-          <button type="button" class="landing-provider-tab" data-provider="env">env</button>
-          <button type="button" class="landing-provider-tab" data-provider="systemdCredential">systemd (0.17+)</button>
-        </div>
-
-        <div class="landing-terminal">
-          <div class="landing-terminal-header">
-            <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-            <span class="landing-terminal-title">secretspec.toml</span>
-          </div>
-          <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[project]</span>
-<span class="tok-key">name</span> <span class="tok-pun">=</span> <span class="tok-str">"my-app"</span>
-<span class="tok-key">revision</span> <span class="tok-pun">=</span> <span class="tok-str">"1.0"</span>
-
-<span class="tok-sec">[profiles.default]</span>
-<span class="tok-key">DATABASE_URL</span>      <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">}</span>
-<span class="tok-key">STRIPE_SECRET_KEY</span> <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">}</span></code></pre>
-        </div>
-      </div>
-
-      <div class="landing-secret-flow">
-        <div class="landing-secret-step">
-          <span aria-hidden="true">📄</span>
-          <span><strong>secretspec.toml</strong> says the app requires <code class="inline-code">DATABASE_URL</code></span>
-        </div>
-        <div class="landing-secret-arrow" aria-hidden="true">↓</div>
-        <div class="landing-secret-step is-source">
-          <span aria-hidden="true">🔐</span>
-          <span>SecretSpec resolves it from <strong id="secret-provider-name">System keyring</strong></span>
-        </div>
-        <div class="landing-secret-arrow" aria-hidden="true">↓</div>
-        <div class="landing-secret-step">
-          <span aria-hidden="true">🐚</span>
-          <span><code class="inline-code">$ <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span></code> adds it to the process environment</span>
-        </div>
-        <div class="landing-secret-arrow" aria-hidden="true">↓</div>
-        <div class="landing-secret-step">
-          <span aria-hidden="true">🚀</span>
-          <span>Your app reads <code class="inline-code">DATABASE_URL</code> as usual</span>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
 <!-- ============ SHOWCASE: profiles ============ -->
-<section class="landing-showcase">
+<section class="landing-showcase landing-profiles-demo" data-profiles-demo data-active-profile="development">
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Profiles</span>
@@ -1002,35 +1058,119 @@ const reelScriptData = {
 
     <div class="landing-compose">
       <div class="landing-tree">
-        <div class="landing-tree-node">
+        <div class="landing-tree-node landing-profile-base">
           <div class="landing-tree-node-path"><span class="tok-sec">[profiles.default]</span></div>
-          <div class="landing-tree-node-content"><span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {`{`}</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">{`}`}</span></div>
+          <div class="landing-tree-node-content"><span class="tok-key landing-profile-secret">DATABASE_URL</span> <span class="tok-pun">= {`{`}</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">{`}`}</span></div>
         </div>
-        <div class="landing-tree-node">
+        <div class="landing-tree-node landing-profile-node" data-profile-target="development" tabindex="0">
           <div class="landing-tree-node-path"><span class="tok-sec">[profiles.development]</span></div>
-          <div class="landing-tree-node-content"><span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {`{`}</span> <span class="tok-key">default</span> <span class="tok-pun">=</span> <span class="tok-str">"postgresql://localhost/dev"</span> <span class="tok-pun">{`}`}</span></div>
+          <div class="landing-tree-node-content"><span class="tok-key landing-profile-secret">DATABASE_URL</span> <span class="tok-pun">= {`{`}</span> <span class="tok-key">default</span> <span class="tok-pun">=</span> <span class="tok-str landing-profile-value">"postgresql://localhost/dev"</span> <span class="tok-pun">{`}`}</span></div>
         </div>
-        <div class="landing-tree-node">
+        <div class="landing-tree-node landing-profile-node" data-profile-target="production" tabindex="0">
           <div class="landing-tree-node-path"><span class="tok-sec">[profiles.production]</span></div>
-          <div class="landing-tree-node-content"><span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {`{`}</span> <span class="tok-key">providers</span> <span class="tok-pun">= [</span><span class="tok-str">"vault"</span><span class="tok-pun">,</span> <span class="tok-str">"keyring"</span><span class="tok-pun">] {`}`}</span></div>
+          <div class="landing-tree-node-content"><span class="tok-key landing-profile-secret">DATABASE_URL</span> <span class="tok-pun">= {`{`}</span> <span class="tok-key">providers</span> <span class="tok-pun">= [</span><span class="tok-str landing-profile-value">"vault"</span><span class="tok-pun">,</span> <span class="tok-str landing-profile-value">"keyring"</span><span class="tok-pun">] {`}`}</span></div>
         </div>
       </div>
 
       <div class="landing-compose-arrow" aria-hidden="true">→</div>
 
       <div class="landing-merged">
-        <div class="landing-merged-label">Same command. Every profile.</div>
-        <div class="landing-merged-cmd">$ <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--profile</span> <span class="tok-arg">production</span> <span class="tok-flag">--</span> <span class="tok-bin">npm</span> <span class="tok-arg">start</span></div>
+        <div class="landing-merged-label">Resolved profile</div>
+        <div class="landing-merged-cmd">$ <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--profile</span> <span class="tok-arg" data-profile-command-value>development</span> <span class="tok-flag">--</span> <span class="tok-bin">npm</span> <span class="tok-arg">start</span></div>
+        <div class="landing-profile-results">
+          <div class="landing-profile-result" data-profile-target="development" tabindex="0">
+            <span class="landing-profile-result-label">Local default</span>
+            <span class="landing-profile-result-value">DATABASE_URL = postgresql://localhost/dev</span>
+          </div>
+          <div class="landing-profile-result" data-profile-target="production" tabindex="0">
+            <span class="landing-profile-result-label">Managed providers</span>
+            <span class="landing-profile-result-value">DATABASE_URL resolves from vault → keyring</span>
+          </div>
+        </div>
         <div class="landing-merged-list">
-          <span class="landing-merged-chip"><span class="tok-flag">--profile</span> <span class="tok-arg">development</span></span>
-          <span class="landing-merged-chip"><span class="tok-flag">--profile</span> <span class="tok-arg">staging</span></span>
-          <span class="landing-merged-chip"><span class="tok-flag">--profile</span> <span class="tok-arg">production</span></span>
-          <span class="landing-merged-chip">SECRETSPEC_PROFILE=ci</span>
+          <span class="landing-merged-chip landing-profile-chip" data-profile-target="development" tabindex="0"><span class="tok-flag">--profile</span> <span class="tok-arg">development</span></span>
+          <span class="landing-merged-chip landing-profile-chip" data-profile-target="production" tabindex="0"><span class="tok-flag">--profile</span> <span class="tok-arg">production</span></span>
         </div>
       </div>
     </div>
   </div>
 </section>
+
+<script>
+  (() => {
+    const demo = document.querySelector<HTMLElement>('[data-profiles-demo]');
+    if (!demo) return;
+    const demoEl = demo;
+
+    const profiles = ['development', 'production'];
+    const targets = demoEl.querySelectorAll<HTMLElement>('[data-profile-target]');
+    const commandValue = demoEl.querySelector<HTMLElement>('[data-profile-command-value]');
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    let activeIndex = 0;
+    let isPinned = false;
+    let timer: number | undefined;
+
+    function setProfile(profile: string) {
+      const nextIndex = profiles.indexOf(profile);
+      if (nextIndex === -1) return;
+      activeIndex = nextIndex;
+      demoEl.setAttribute('data-active-profile', profile);
+      if (commandValue) {
+        commandValue.textContent = profile;
+      }
+    }
+
+    function stop() {
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    }
+
+    function start() {
+      if (reducedMotion || timer !== undefined) return;
+      timer = window.setInterval(() => {
+        if (isPinned) return;
+        setProfile(profiles[(activeIndex + 1) % profiles.length]);
+      }, 2600);
+    }
+
+    targets.forEach((target) => {
+      const profile = target.getAttribute('data-profile-target');
+      if (!profile) return;
+
+      target.addEventListener('pointerenter', () => {
+        isPinned = true;
+        setProfile(profile);
+      });
+      target.addEventListener('pointerleave', () => {
+        isPinned = false;
+      });
+      target.addEventListener('focus', () => {
+        isPinned = true;
+        setProfile(profile);
+      });
+      target.addEventListener('blur', () => {
+        isPinned = false;
+      });
+    });
+
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            start();
+          } else {
+            stop();
+          }
+        });
+      }, { threshold: 0.2 });
+      observer.observe(demoEl);
+    } else {
+      start();
+    }
+  })();
+</script>
 
 <!-- ============ SHOWCASE: scopes ============ -->
 <section class="landing-showcase landing-scopes-demo" data-scopes-demo data-active-scope="api">
@@ -1549,7 +1689,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
 </section>
 
 <!-- ============ SHOWCASE: Language SDKs ============ -->
-<section class="landing-showcase">
+<section class="landing-showcase landing-sdk-demo" data-sdk-demo data-active-sdk={languageSdkMetadata[0].id}>
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Language SDKs</span>
@@ -1559,132 +1699,39 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       </p>
     </div>
 
-    <div class="landing-fallback">
-      <!-- Rust -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">Rust</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-var">secretspec_derive</span><span class="tok-pun">::</span><span class="tok-fn">declare_secrets!</span><span class="tok-pun">(</span><span class="tok-str">"secretspec.toml"</span><span class="tok-pun">);</span>
-
-<span class="tok-kw">let</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">::</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
-    <span class="tok-pun">.</span><span class="tok-fn">with_provider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
-    <span class="tok-pun">.</span><span class="tok-fn">with_reason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span><span class="tok-pun">()?;</span>
-<span class="tok-fn">println!</span><span class="tok-pun">(</span><span class="tok-str">"{}"</span><span class="tok-pun">,</span> <span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">.</span><span class="tok-var">database_url</span><span class="tok-pun">);</span></code></pre>
+    <div class="landing-sdk-stage">
+      <div class="landing-sdk-logo-belt" aria-label="Language SDK selector">
+        {languageSdkMetadata.map((sdk) => (
+          <button
+            type="button"
+            class="landing-sdk-logo-card"
+            data-sdk-target={sdk.id}
+            style={`--sdk-color:${sdk.color}; --sdk-icon-mask:${simpleIconMask(sdk.icon)}`}
+            aria-label={`Show ${sdk.label} SDK example`}
+            aria-pressed={sdk.id === languageSdkMetadata[0].id ? 'true' : 'false'}
+          >
+            <span class="landing-sdk-logo-mark" aria-hidden="true"></span>
+            <span class="landing-sdk-logo-label">{sdk.label}</span>
+          </button>
+        ))}
       </div>
 
-      <!-- Python -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">Python</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-kw">from</span> <span class="tok-var">secretspec</span> <span class="tok-kw">import</span> <span class="tok-var">SecretSpec</span>
-
-<span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span><span class="tok-pun">()</span> \
-    <span class="tok-pun">.</span><span class="tok-fn">with_provider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span> \
-    <span class="tok-pun">.</span><span class="tok-fn">with_reason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span><span class="tok-pun">()</span>
-<span class="tok-fn">print</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">].</span><span class="tok-var">get</span><span class="tok-pun">)</span></code></pre>
-      </div>
-    </div>
-
-    <div class="landing-fallback" style="margin-top: 1.5rem;">
-      <!-- Node.js / TypeScript -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">Node.js</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-kw">const</span> <span class="tok-pun">{</span> <span class="tok-var">SecretSpec</span> <span class="tok-pun">}</span> <span class="tok-pun">=</span> <span class="tok-fn">require</span><span class="tok-pun">(</span><span class="tok-str">"secretspec"</span><span class="tok-pun">);</span>
-
-<span class="tok-kw">const</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
-  <span class="tok-pun">.</span><span class="tok-fn">withProvider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
-  <span class="tok-pun">.</span><span class="tok-fn">withReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span><span class="tok-pun">();</span>
-<span class="tok-var">console</span><span class="tok-pun">.</span><span class="tok-fn">log</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">.</span><span class="tok-var">DATABASE_URL</span><span class="tok-pun">.</span><span class="tok-fn">get</span><span class="tok-pun">());</span></code></pre>
-      </div>
-
-      <!-- Go -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">Go</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-var">s</span><span class="tok-pun">,</span> <span class="tok-var">_</span> <span class="tok-pun">:=</span> <span class="tok-var">secretspec</span><span class="tok-pun">.</span><span class="tok-fn">New</span><span class="tok-pun">().</span>
-    <span class="tok-fn">WithProvider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">).</span>
-    <span class="tok-fn">WithReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">Load</span><span class="tok-pun">()</span>
-<span class="tok-var">fmt</span><span class="tok-pun">.</span><span class="tok-fn">Println</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">Secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">].</span><span class="tok-fn">Get</span><span class="tok-pun">())</span></code></pre>
-      </div>
-    </div>
-
-    <div class="landing-fallback" style="margin-top: 1.5rem;">
-      <!-- Ruby -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">Ruby</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">Secretspec</span><span class="tok-pun">::</span><span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span>
-      <span class="tok-pun">.</span><span class="tok-fn">with_provider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
-      <span class="tok-pun">.</span><span class="tok-fn">with_reason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span>
-<span class="tok-fn">puts</span> <span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">].</span><span class="tok-var">get</span></code></pre>
-      </div>
-
-      <!-- Haskell -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">Haskell</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-var">s</span> <span class="tok-pun">&lt;-</span> <span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">load</span> <span class="tok-pun">(</span><span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">builder</span>
-      <span class="tok-pun">&amp;</span> <span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">withProvider</span> <span class="tok-str">"keyring://"</span>
-      <span class="tok-pun">&amp;</span> <span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">withReason</span> <span class="tok-str">"boot"</span><span class="tok-pun">)</span>
-<span class="tok-fn">print</span> <span class="tok-pun">(</span><span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">get</span> <span class="tok-pun">=&lt;&lt;</span> <span class="tok-var">Map</span><span class="tok-pun">.</span><span class="tok-fn">lookup</span> <span class="tok-str">"DATABASE_URL"</span> <span class="tok-pun">(</span><span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">resolvedSecrets</span> <span class="tok-var">s</span><span class="tok-pun">))</span></code></pre>
-      </div>
-    </div>
-
-    <div class="landing-fallback" style="margin-top: 1.5rem;">
-      <!-- PHP -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">PHP · Laravel · Symfony</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-kw">use</span> <span class="tok-var">Secretspec\SecretSpec</span><span class="tok-pun">;</span>
-
-<span class="tok-var">$s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">::</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
-    <span class="tok-pun">-&gt;</span><span class="tok-fn">withProvider</span><span class="tok-pun">(</span><span class="tok-str">'keyring://'</span><span class="tok-pun">)</span>
-    <span class="tok-pun">-&gt;</span><span class="tok-fn">withReason</span><span class="tok-pun">(</span><span class="tok-str">'boot web app'</span><span class="tok-pun">)-&gt;</span><span class="tok-fn">load</span><span class="tok-pun">();</span>
-<span class="tok-var">$s</span><span class="tok-pun">-&gt;</span><span class="tok-fn">setAsEnv</span><span class="tok-pun">();</span></code></pre>
-      </div>
-
-      <!-- C# -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">C# / .NET</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-kw">using</span> <span class="tok-var">Cachix</span><span class="tok-pun">.</span><span class="tok-var">SecretSpec</span><span class="tok-pun">;</span>
-
-<span class="tok-kw">using</span> <span class="tok-kw">var</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">Builder</span><span class="tok-pun">()</span>
-    <span class="tok-pun">.</span><span class="tok-fn">WithProvider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
-    <span class="tok-pun">.</span><span class="tok-fn">WithReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">Load</span><span class="tok-pun">();</span>
-<span class="tok-var">Console</span><span class="tok-pun">.</span><span class="tok-fn">WriteLine</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">Secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">].</span><span class="tok-fn">Get</span><span class="tok-pun">());</span></code></pre>
-      </div>
-    </div>
-
-    <div class="landing-fallback" style="margin-top: 1.5rem;">
-      <!-- Swift -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">Swift · macOS (0.18+)</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-kw">let</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-kw">try</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
-    <span class="tok-pun">.</span><span class="tok-fn">withProvider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
-    <span class="tok-pun">.</span><span class="tok-fn">withReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span><span class="tok-pun">()</span>
-<span class="tok-kw">defer</span> <span class="tok-pun">{</span> <span class="tok-kw">try</span><span class="tok-pun">?</span> <span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-fn">close</span><span class="tok-pun">()</span> <span class="tok-pun">}</span>
-<span class="tok-fn">print</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">]?.</span><span class="tok-fn">get</span><span class="tok-pun">()</span> <span class="tok-pun">??</span> <span class="tok-str">""</span><span class="tok-pun">)</span></code></pre>
+      <div class="landing-sdk-feature">
+        {languageSdkMetadata.map((sdk) => (
+          <div class="landing-sdk-panel" data-sdk-panel={sdk.id} aria-hidden={sdk.id === languageSdkMetadata[0].id ? 'false' : 'true'}>
+            <div class="landing-terminal">
+              <div class="landing-terminal-header">
+                <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+                <span class="landing-terminal-title">{sdk.label}</span>
+              </div>
+              <pre class="landing-terminal-body"><code set:html={animatedCodeLines(sdk.code)}></code></pre>
+            </div>
+            <div class="landing-sdk-panel-footer">
+              <span>Same resolver, native API.</span>
+              <a class="landing-link" href={sdk.href}>View {sdk.label} docs →</a>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
 
@@ -1693,6 +1740,110 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
     </p>
   </div>
 </section>
+
+<script>
+  (() => {
+    const demo = document.querySelector<HTMLElement>('[data-sdk-demo]');
+    if (!demo) return;
+    const demoEl = demo;
+
+    const targets = Array.from(demoEl.querySelectorAll<HTMLElement>('[data-sdk-target]'));
+    const panels = Array.from(demoEl.querySelectorAll<HTMLElement>('[data-sdk-panel]'));
+    const feature = demoEl.querySelector<HTMLElement>('.landing-sdk-feature');
+    const sdkIds = targets.map((target) => target.getAttribute('data-sdk-target')).filter(Boolean) as string[];
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    let activeIndex = 0;
+    let isPinned = false;
+    let timer: number | undefined;
+
+    function setSdk(id: string) {
+      const nextIndex = sdkIds.indexOf(id);
+      if (nextIndex === -1) return;
+      activeIndex = nextIndex;
+      demoEl.setAttribute('data-active-sdk', id);
+      targets.forEach((target) => {
+        target.setAttribute('aria-pressed', String(target.getAttribute('data-sdk-target') === id));
+      });
+      panels.forEach((panel) => {
+        panel.setAttribute('aria-hidden', String(panel.getAttribute('data-sdk-panel') !== id));
+      });
+      const activePanel = panels.find((panel) => panel.getAttribute('data-sdk-panel') === id);
+      if (activePanel) {
+        activePanel.classList.remove('is-popping');
+        void activePanel.offsetWidth;
+        activePanel.classList.add('is-popping');
+      }
+    }
+
+    function stop() {
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    }
+
+    function start() {
+      if (reducedMotion || timer !== undefined) return;
+      timer = window.setInterval(() => {
+        if (isPinned || !sdkIds.length) return;
+        setSdk(sdkIds[(activeIndex + 1) % sdkIds.length]);
+      }, 2400);
+    }
+
+    targets.forEach((target) => {
+      const id = target.getAttribute('data-sdk-target');
+      if (!id) return;
+      const sdkId = id;
+
+      function pin() {
+        isPinned = true;
+        setSdk(sdkId);
+      }
+
+      target.addEventListener('pointerenter', pin);
+      target.addEventListener('click', pin);
+      target.addEventListener('pointerleave', () => {
+        isPinned = false;
+      });
+      target.addEventListener('focus', pin);
+      target.addEventListener('blur', () => {
+        isPinned = false;
+      });
+    });
+
+    if (feature) {
+      feature.addEventListener('pointerenter', () => {
+        isPinned = true;
+      });
+      feature.addEventListener('pointerleave', () => {
+        isPinned = false;
+      });
+      feature.addEventListener('focusin', () => {
+        isPinned = true;
+      });
+      feature.addEventListener('focusout', () => {
+        isPinned = false;
+      });
+    }
+
+    setSdk(sdkIds[0] ?? '');
+
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            start();
+          } else {
+            stop();
+          }
+        });
+      }, { threshold: 0.2 });
+      observer.observe(demoEl);
+    } else {
+      start();
+    }
+  })();
+</script>
 
 <!-- ============ SHOWCASE: migration ============ -->
 <section class="landing-showcase">
@@ -1937,41 +2088,6 @@ REDIS_URL=redis://…</code></pre>
       } else {
         startAutoSelect();
       }
-    });
-  })();
-
-  // ── Provider switcher ──
-  (function () {
-    const tabs = document.querySelectorAll('#secret-tabs .landing-provider-tab');
-
-    const name = document.getElementById('secret-provider-name');
-
-    if (!tabs.length || !name) return;
-
-    const labels = {
-      keyring:     'System keyring',
-      onepassword: '1Password vault',
-      vault:       'HashiCorp Vault',
-      openbao:     'OpenBao (0.17+)',
-      awssm:       'AWS Secrets Manager',
-      awsps:        'AWS Parameter Store (0.18+)',
-      gcsm:        'Google Cloud Secret Manager',
-      akv:         'Azure Key Vault',
-      dotenv:      '.env file',
-      env:         'Environment variables',
-      systemdCredential: 'systemd credentials (0.17+)',
-    };
-
-    tabs.forEach(function (tab) {
-      tab.addEventListener('click', function () {
-        tabs.forEach(function (t) { t.classList.remove('is-active'); });
-
-        tab.classList.add('is-active');
-
-        const key = (tab.getAttribute('data-provider') ?? 'keyring') as keyof typeof labels;
-
-        name.textContent = labels[key] ?? key;
-      });
     });
   })();
 </script>

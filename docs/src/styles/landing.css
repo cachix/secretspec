@@ -341,6 +341,23 @@
   color: var(--color-accent-200);
 }
 
+.inline-code .tok-bin,
+.landing-merged-chip .tok-bin {
+  color: var(--syntax-green);
+  font-weight: 600;
+}
+
+.inline-code .tok-flag,
+.landing-merged-chip .tok-flag {
+  color: var(--syntax-comment);
+  font-style: italic;
+}
+
+.inline-code .tok-arg,
+.landing-merged-chip .tok-arg {
+  color: var(--syntax-blue);
+}
+
 /* ── Metric strip ── */
 
 .landing-metrics {
@@ -1160,13 +1177,36 @@
 .landing-terminal-body .tok-sec,
 .landing-bento-mini-code .tok-sec { color: var(--syntax-magenta); }
 
+.landing-terminal-body .tok-bin,
+.landing-bento-mini-code .tok-bin,
+.landing-pipe-code .tok-bin,
+.landing-merged-cmd .tok-bin {
+  color: var(--syntax-green);
+  font-weight: 600;
+}
+
+.landing-terminal-body .tok-flag,
+.landing-bento-mini-code .tok-flag,
+.landing-pipe-code .tok-flag,
+.landing-merged-cmd .tok-flag {
+  color: var(--syntax-comment);
+  font-style: italic;
+}
+
+.landing-terminal-body .tok-arg,
+.landing-bento-mini-code .tok-arg,
+.landing-pipe-code .tok-arg,
+.landing-merged-cmd .tok-arg {
+  color: var(--syntax-blue);
+}
+
 .landing-terminal-run {
-  --run-command: var(--color-accent-100);
-  --run-prompt: var(--color-accent-300);
-  --run-success: var(--color-accent-200);
-  --run-argument: var(--color-accent-300);
+  --run-command: var(--syntax-green);
+  --run-prompt: var(--syntax-blue);
+  --run-success: var(--syntax-green);
+  --run-argument: var(--syntax-blue);
   --run-cursor-idle: rgba(255, 255, 255, 0.55);
-  --run-selected: var(--color-accent-300);
+  --run-selected: var(--syntax-blue);
 }
 
 .landing-terminal-run .tok-com {
@@ -1188,7 +1228,7 @@
 }
 
 .landing-terminal-run .landing-flag {
-  color: var(--color-gray-400);
+  color: var(--syntax-comment);
   font-style: italic;
   font-weight: 500;
 }

@@ -385,12 +385,12 @@ const reelScriptData = {
             <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
             <span class="landing-terminal-title">terminal</span>
           </div>
-          <pre is:raw class="landing-terminal-body"><code><span class="landing-run-step"><span class="tok-com"># 1. Initialize from existing .env</span>
-<span class="landing-prompt">$</span> <span class="landing-cmd">secretspec init <span class="landing-flag">--from</span> <span class="landing-arg">dotenv</span></span>
+<pre is:raw class="landing-terminal-body"><code><span class="landing-run-step"><span class="tok-com"># 1. Initialize from existing .env</span>
+<span class="landing-prompt">$</span> <span class="landing-cmd"><span class="tok-bin">secretspec</span> <span class="landing-arg">init</span> <span class="landing-flag">--from</span> <span class="landing-arg">dotenv</span></span>
 <span class="landing-ok">✓</span> Created secretspec.toml with 5 secrets</span>
 
 <span class="landing-run-step is-provider-list"><span class="tok-com"># 2. Pick a user-global default (0.17+)</span>
-<span class="landing-prompt">$</span> <span class="landing-cmd">secretspec config global init</span>
+<span class="landing-prompt">$</span> <span class="landing-cmd"><span class="tok-bin">secretspec</span> <span class="landing-arg">config global init</span></span>
 ? Select your preferred provider backend:
 <span class="landing-provider-cursor" aria-hidden="true">›</span><a class="landing-provider-line is-selected" href="/providers/keyring/"><span class="provider-name">keyring</span>: Uses system keychain (Recommended)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" href="/providers/bw/"><span class="provider-name">bw</span>: Bitwarden Password Manager (0.18+)</a>
@@ -407,12 +407,12 @@ const reelScriptData = {
 <span class="landing-ok">✓</span> Saved to ~/.config/secretspec/config.toml</span>
 
 <span class="landing-run-step"><span class="tok-com"># 3. Run your app with secrets injected</span>
-<span class="landing-prompt">$</span> <span class="landing-cmd">secretspec run <span class="landing-flag">--profile</span> <span class="landing-arg">production</span> <span class="landing-flag">--</span> npm start</span>
+<span class="landing-prompt">$</span> <span class="landing-cmd"><span class="tok-bin">secretspec</span> <span class="landing-arg">run</span> <span class="landing-flag">--profile</span> <span class="landing-arg">production</span> <span class="landing-flag">--</span> <span class="tok-bin">npm</span> <span class="landing-arg">start</span></span>
 <span class="landing-ok">✓</span> Loaded DATABASE_URL from keyring
 <span class="landing-ok">✓</span> Loaded REDIS_URL    from keyring
 <span class="landing-ok">✓</span> Generated DB_PASSWORD (32 chars)
 <span class="landing-ok">✓</span> Wrote TLS_CERT to /tmp/secretspec-tls-cert
-<span class="tok-pun">›</span> npm start</span></code></pre>
+<span class="tok-pun">›</span> <span class="tok-bin">npm</span> <span class="landing-arg">start</span></span></code></pre>
         </div>
       </div>
     </div>
@@ -880,13 +880,13 @@ println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span cla
       <a href="/reference/cli/" class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">Provider migration</p>
         <p class="landing-bento-desc">Copy values to a new provider without renaming variables or changing application code.</p>
-        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-pun">$</span> <span class="tok-key">secretspec import</span> <span class="tok-str">dotenv://.env</span></code></pre>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">import</span> <span class="tok-str">dotenv://.env</span></code></pre>
       </a>
 
       <a href="/reference/cli/#export" class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">Export for shells and CI</p>
         <p class="landing-bento-desc">Pass a resolved profile to shells, scripts, and CI as dotenv, JSON, shell exports, or GitHub Actions variables.</p>
-        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-pun">$</span> <span class="tok-key">secretspec export</span> <span class="tok-pun">--format</span> <span class="tok-str">json</span></code></pre>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">export</span> <span class="tok-flag">--format</span> <span class="tok-str">json</span></code></pre>
       </a>
     </div>
   </div>
@@ -947,7 +947,7 @@ println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span cla
         <div class="landing-secret-arrow" aria-hidden="true">↓</div>
         <div class="landing-secret-step">
           <span aria-hidden="true">🐚</span>
-          <span><code class="inline-code">$ secretspec run</code> adds it to the process environment</span>
+          <span><code class="inline-code">$ <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span></code> adds it to the process environment</span>
         </div>
         <div class="landing-secret-arrow" aria-hidden="true">↓</div>
         <div class="landing-secret-step">
@@ -990,11 +990,11 @@ println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span cla
 
       <div class="landing-merged">
         <div class="landing-merged-label">Same command. Every profile.</div>
-        <div class="landing-merged-cmd">$ secretspec run --profile production -- npm start</div>
+        <div class="landing-merged-cmd">$ <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--profile</span> <span class="tok-arg">production</span> <span class="tok-flag">--</span> <span class="tok-bin">npm</span> <span class="tok-arg">start</span></div>
         <div class="landing-merged-list">
-          <span class="landing-merged-chip">--profile development</span>
-          <span class="landing-merged-chip">--profile staging</span>
-          <span class="landing-merged-chip">--profile production</span>
+          <span class="landing-merged-chip"><span class="tok-flag">--profile</span> <span class="tok-arg">development</span></span>
+          <span class="landing-merged-chip"><span class="tok-flag">--profile</span> <span class="tok-arg">staging</span></span>
+          <span class="landing-merged-chip"><span class="tok-flag">--profile</span> <span class="tok-arg">production</span></span>
           <span class="landing-merged-chip">SECRETSPEC_PROFILE=ci</span>
         </div>
       </div>
@@ -1036,17 +1036,17 @@ println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span cla
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">terminal</span>
         </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># The API receives its database and API credentials</span>
-$ secretspec run --profile production --scope api -- ./api
+<pre is:raw class="landing-terminal-body"><code><span class="tok-com"># The API receives its database and API credentials</span>
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--profile</span> <span class="tok-arg">production</span> <span class="tok-flag">--scope</span> <span class="tok-arg">api</span> <span class="tok-flag">--</span> <span class="tok-bin">./api</span>
 <span class="tok-str">✓</span> Loaded DATABASE_URL
 <span class="tok-str">✓</span> Loaded API_KEY
-<span class="tok-pun">›</span> ./api
+<span class="tok-pun">›</span> <span class="tok-bin">./api</span>
 
 <span class="tok-com"># The worker receives its database and queue credentials</span>
-$ secretspec run --profile production --scope worker -- ./worker
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--profile</span> <span class="tok-arg">production</span> <span class="tok-flag">--scope</span> <span class="tok-arg">worker</span> <span class="tok-flag">--</span> <span class="tok-bin">./worker</span>
 <span class="tok-str">✓</span> Loaded DATABASE_URL
 <span class="tok-str">✓</span> Loaded QUEUE_TOKEN
-<span class="tok-pun">›</span> ./worker</code></pre>
+<span class="tok-pun">›</span> <span class="tok-bin">./worker</span></code></pre>
       </div>
     </div>
 
@@ -1137,15 +1137,15 @@ $ secretspec run --profile production --scope worker -- ./worker
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">terminal</span>
         </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Store the Bitwarden token in the OS keyring</span>
-$ secretspec config provider login bws
+<pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Store the Bitwarden token in the OS keyring</span>
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">config provider login bws</span>
 Enter access_token for provider 'bws': <span class="tok-str">****</span>
 <span class="tok-str">✓</span> stored access_token in keyring
 
 <span class="tok-com"># SecretSpec authenticates BWS without exporting its token</span>
-$ secretspec run --provider bws -- ./deploy
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--provider</span> <span class="tok-arg">bws</span> <span class="tok-flag">--</span> <span class="tok-bin">./deploy</span>
 <span class="tok-str">✓</span> Loaded DATABASE_URL from bws
-<span class="tok-pun">›</span> ./deploy</code></pre>
+<span class="tok-pun">›</span> <span class="tok-bin">./deploy</span></code></pre>
       </div>
     </div>
 
@@ -1213,16 +1213,16 @@ $ secretspec run --provider bws -- ./deploy
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">detected agent session</span>
         </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># A detected AI agent runs your app without a reason</span>
-$ secretspec run -- ./deploy.sh
+<pre is:raw class="landing-terminal-body"><code><span class="tok-com"># A detected AI agent runs your app without a reason</span>
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--</span> <span class="tok-bin">./deploy.sh</span>
 Error: accessing secrets requires a reason.
-       Provide one with --reason <span class="tok-str">"&lt;why...&gt;"</span>
+       Provide one with <span class="tok-flag">--reason</span> <span class="tok-str">"&lt;why...&gt;"</span>
 
 <span class="tok-com"># State why; required for detected agents by default</span>
-$ secretspec run --reason <span class="tok-str">"Deploy web frontend"</span> \
-    -- ./deploy.sh
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--reason</span> <span class="tok-str">"Deploy web frontend"</span> \
+    <span class="tok-flag">--</span> <span class="tok-bin">./deploy.sh</span>
 <span class="tok-str">✓</span> Loaded DATABASE_URL from keyring
-<span class="tok-pun">›</span> ./deploy.sh</code></pre>
+<span class="tok-pun">›</span> <span class="tok-bin">./deploy.sh</span></code></pre>
       </div>
 
       <div class="landing-terminal">
@@ -1230,8 +1230,8 @@ $ secretspec run --reason <span class="tok-str">"Deploy web frontend"</span> \
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">secretspec audit</span>
         </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Review who accessed what, why, and the outcome</span>
-$ secretspec audit -n 1
+<pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Review who accessed what, why, and the outcome</span>
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">audit</span> <span class="tok-flag">-n</span> <span class="tok-arg">1</span>
 <span class="tok-com">2026-06-04T17:04Z</span>  <span class="tok-key">run</span>  <span class="tok-str">started</span>  ./deploy.sh
   DATABASE_URL  (my-app/production via keyring://)
   reason: <span class="tok-str">Deploy web frontend</span>  <span class="tok-pun">[claude-code]</span></code></pre>
@@ -1261,11 +1261,11 @@ $ secretspec audit -n 1
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">shell and JSON</span>
         </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Load a profile into the current shell</span>
-$ eval "$(secretspec export --profile production)"
+<pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Load a profile into the current shell</span>
+<span class="tok-pun">$</span> <span class="tok-bin">eval</span> <span class="tok-str">"$(</span><span class="tok-bin">secretspec</span> <span class="tok-arg">export</span> <span class="tok-flag">--profile</span> <span class="tok-arg">production</span><span class="tok-str">)"</span>
 
 <span class="tok-com"># Or pass a JSON object to another tool</span>
-$ secretspec export --format json
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">export</span> <span class="tok-flag">--format</span> <span class="tok-str">json</span>
 {<span class="tok-str">"DATABASE_URL"</span>:<span class="tok-str">"postgresql://…"</span>,
  <span class="tok-str">"STRIPE_KEY"</span>:<span class="tok-str">"sk_live_…"</span>}</code></pre>
       </div>
@@ -1464,9 +1464,9 @@ REDIS_URL=redis://…</code></pre>
       <div class="landing-pipe-card is-final">
         <div class="landing-pipe-label">2 · To</div>
         <div class="landing-pipe-title">keyring://</div>
-        <pre is:raw class="landing-pipe-code"><code>$ secretspec import dotenv://.env.production
-✓ Imported 5 secrets to keyring://
-✓ Application code unchanged</code></pre>
+        <pre is:raw class="landing-pipe-code"><code><span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">import</span> <span class="tok-str">dotenv://.env.production</span>
+<span class="tok-str">✓</span> Imported 5 secrets to keyring://
+<span class="tok-str">✓</span> Application code unchanged</code></pre>
       </div>
     </div>
   </div>

@@ -816,11 +816,11 @@
 }
 
 .landing-pipeline-terminal .tok-sec {
-  color: #d7aff0;
+  color: var(--syntax-magenta);
 }
 
 .landing-pipeline-terminal .tok-key {
-  color: #9eb6d6;
+  color: var(--syntax-blue);
 }
 
 .landing-code-line {
@@ -1140,25 +1140,25 @@
 }
 
 .landing-terminal-body .tok-key,
-.landing-bento-mini-code .tok-key { color: #8ea3c0; }
+.landing-bento-mini-code .tok-key { color: var(--syntax-blue); }
 
 .landing-terminal-body .tok-str,
-.landing-bento-mini-code .tok-str { color: #b5d0a6; }
+.landing-bento-mini-code .tok-str { color: var(--syntax-green); }
 
 .landing-terminal-body .tok-com,
 .landing-bento-mini-code .tok-com {
-  color: #6a6f7a;
+  color: var(--syntax-comment);
   font-style: italic;
 }
 
 .landing-terminal-body .tok-num,
-.landing-bento-mini-code .tok-num { color: #d8a162; }
+.landing-bento-mini-code .tok-num { color: var(--syntax-orange); }
 
 .landing-terminal-body .tok-pun,
 .landing-bento-mini-code .tok-pun { color: rgba(255, 255, 255, 0.55); }
 
 .landing-terminal-body .tok-sec,
-.landing-bento-mini-code .tok-sec { color: #c79be0; }
+.landing-bento-mini-code .tok-sec { color: var(--syntax-magenta); }
 
 .landing-terminal-run {
   --run-command: var(--color-accent-100);

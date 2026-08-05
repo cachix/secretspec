@@ -2,6 +2,7 @@
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 import { getCollection } from 'astro:content';
 import sopsLogo from '../assets/sops-logo.svg';
+import { syntaxColorCss, syntaxColorHex, type SyntaxColorName } from '../data/syntax-colors';
 
 const docs = await getCollection('docs');
 
@@ -125,78 +126,64 @@ const consumerMetadata: ConsumerMetadata[] = [
 const providerLoop = [...providerMetadata, ...providerMetadata, ...providerMetadata];
 const consumerLoop = [...consumerMetadata, ...consumerMetadata, ...consumerMetadata];
 
-const syntaxToneHex = {
-  key: '8ea3c0',
-  keyBright: '9eb6d6',
-  string: 'b5d0a6',
-  comment: '6a6f7a',
-  number: 'd8a162',
-  section: 'c79be0',
-  sectionBright: 'd7aff0',
-  red: 'd06f72',
-  yellow: 'd6c57b',
-  cyan: '82c7d8',
-  teal: '89c8ba',
-} as const;
-
-const providerTones: Record<string, keyof typeof syntaxToneHex> = {
-  keyring: 'keyBright',
+const providerColors: Record<string, SyntaxColorName> = {
+  keyring: 'blue',
   kdbx: 'yellow',
   onepassword: 'red',
   keeper: 'yellow',
   lastpass: 'red',
-  dashlane: 'teal',
+  dashlane: 'cyan',
   bw: 'red',
   bws: 'cyan',
-  vault: 'keyBright',
-  openbao: 'teal',
-  awssm: 'number',
-  awsps: 'number',
-  scaleway: 'section',
+  vault: 'blue',
+  openbao: 'cyan',
+  awssm: 'orange',
+  awsps: 'orange',
+  scaleway: 'magenta',
   gcsm: 'red',
-  akv: 'keyBright',
-  infisical: 'teal',
+  akv: 'blue',
+  infisical: 'cyan',
   age: 'yellow',
-  gopass: 'string',
-  protonpass: 'section',
+  gopass: 'green',
+  protonpass: 'magenta',
   pass: 'yellow',
-  dotenv: 'string',
+  dotenv: 'green',
   env: 'comment',
-  'systemd-credential': 'key',
-  sops: 'sectionBright',
+  'systemd-credential': 'blue',
+  sops: 'magenta',
 };
 
-const consumerTones: Record<string, keyof typeof syntaxToneHex> = {
+const consumerColors: Record<string, SyntaxColorName> = {
   Rust: 'red',
   Python: 'yellow',
-  Django: 'string',
-  FastAPI: 'teal',
-  'Node.js': 'string',
+  Django: 'green',
+  FastAPI: 'cyan',
+  'Node.js': 'green',
   'Next.js': 'comment',
   Express: 'comment',
   Go: 'cyan',
   Ruby: 'red',
   Rails: 'red',
-  PHP: 'section',
+  PHP: 'magenta',
   Laravel: 'red',
   Symfony: 'comment',
-  '.NET / C#': 'keyBright',
-  Haskell: 'sectionBright',
+  '.NET / C#': 'blue',
+  Haskell: 'magenta',
   'Swift (0.18+)': 'red',
   'GitHub Actions': 'comment',
-  'Forgejo Actions': 'number',
+  'Forgejo Actions': 'orange',
   'devenv & Nix': 'cyan',
-  systemd: 'key',
+  systemd: 'blue',
   Docker: 'cyan',
-  Kubernetes: 'keyBright',
+  Kubernetes: 'blue',
 };
 
 function providerTone(provider: ProviderMetadata) {
-  return syntaxToneHex[providerTones[provider.slug] ?? 'key'];
+  return syntaxColorHex[providerColors[provider.slug] ?? 'blue'];
 }
 
 function consumerTone(consumer: ConsumerMetadata) {
-  return syntaxToneHex[consumerTones[consumer.label] ?? 'key'];
+  return syntaxColorHex[consumerColors[consumer.label] ?? 'blue'];
 }
 
 const isReelDuplicate = (index: number, itemCount: number) =>
@@ -219,6 +206,7 @@ const reelScriptData = {
   }}
   hasSidebar={false}
 >
+<style is:inline set:html={syntaxColorCss}></style>
 <div class="not-content">
 
 <!-- ============ HERO ============ -->

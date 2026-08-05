@@ -296,9 +296,14 @@ const reelScriptData = {
 <span class="tok-key">HMAC_SECRET</span>       <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">}</span></code></pre>
       </div>
       <p class="landing-pipeline-resolve">
-        <span class="landing-pipeline-resolve-label">Resolving from</span>
-        <span class="landing-pipeline-resolve-provider" data-pipeline-resolving>{providerMetadata[0].label}</span>
+        <span class="landing-pipeline-resolve-provider" data-pipeline-provider>{providerMetadata[0].label}</span>
+        <span class="landing-pipeline-resolve-label">resolving to</span>
+        <span class="landing-pipeline-resolve-provider" data-pipeline-consumer>{consumerMetadata[0].label}</span>
       </p>
+      <div class="landing-hero-lower-actions">
+        <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
+        <a href="/concepts/overview/" class="landing-btn landing-btn-secondary">Concepts</a>
+      </div>
     </div>
 
     <div class="landing-pipeline-side">
@@ -340,10 +345,6 @@ const reelScriptData = {
 
     </div>
 
-    <div class="landing-hero-lower-actions">
-      <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
-      <a href="/concepts/overview/" class="landing-btn landing-btn-secondary">Concepts</a>
-    </div>
   </div>
 </section>
 
@@ -428,9 +429,10 @@ const reelScriptData = {
     const consumerReel = document.querySelector('[data-reel="consumers"]');
     const terminalEl = document.querySelector('[data-pipeline-terminal]');
     const terminalBody = document.querySelector('[data-pipeline-terminal-body]');
-    const resolvingEl = document.querySelector('[data-pipeline-resolving]');
+    const resolvingProviderEl = document.querySelector('[data-pipeline-provider]');
+    const resolvingConsumerEl = document.querySelector('[data-pipeline-consumer]');
 
-    if (!providerReel || !consumerReel || !terminalBody || !resolvingEl || !terminalEl) return;
+    if (!providerReel || !consumerReel || !terminalBody || !resolvingProviderEl || !resolvingConsumerEl || !terminalEl) return;
 
     document.querySelectorAll('[data-reel-icon-img]').forEach((img) => {
       function markMissing() {
@@ -499,15 +501,26 @@ const reelScriptData = {
       restartClass(terminalEl, 'is-popping');
     }
 
-    const resolvePill = resolvingEl.parentElement;
+    const resolvePill = resolvingProviderEl.parentElement;
+    if (!resolvePill) return;
     let resolveWidthTimer = null;
 
-    function updateResolving(label) {
+    function syncResolveSideWidth() {
+      resolvePill.style.setProperty('--resolve-side-width', '0px');
+      const width = Math.ceil(Math.max(
+        resolvingProviderEl.getBoundingClientRect().width,
+        resolvingConsumerEl.getBoundingClientRect().width
+      ));
+      resolvePill.style.setProperty('--resolve-side-width', width + 'px');
+    }
+
+    function updateResolving(part, label) {
       clearTimeout(resolveWidthTimer);
 
       const startWidth = resolvePill.getBoundingClientRect().width + 'px';
       resolvePill.style.width = startWidth;
-      resolvingEl.textContent = label;
+      part.textContent = label;
+      syncResolveSideWidth();
 
       resolvePill.style.width = 'auto';
       const endWidth = resolvePill.getBoundingClientRect().width + 'px';
@@ -524,6 +537,8 @@ const reelScriptData = {
         resolvePill.style.width = '';
       }, 260);
     }
+
+    syncResolveSideWidth();
 
     function makeReel(opts) {
       const { reelEl, itemCount, direction, onActiveChange, phase } = opts;
@@ -752,14 +767,18 @@ const reelScriptData = {
       reelEl: providerReel,
       itemCount: reelData.providerCount,
       direction: providerReel.dataset.direction || 'down',
-      onActiveChange: (idx) => updateResolving(reelData.providerLabels[idx]),
+      onActiveChange: (idx) => updateResolving(resolvingProviderEl, reelData.providerLabels[idx]),
     });
 
     const consumerCtl = makeReel({
       reelEl: consumerReel,
       itemCount: reelData.consumerCount,
       direction: consumerReel.dataset.direction || 'up',
-      onActiveChange: (idx) => updateTerminal(reelData.consumers[idx]),
+      onActiveChange: (idx) => {
+        const consumer = reelData.consumers[idx];
+        updateTerminal(consumer);
+        updateResolving(resolvingConsumerEl, consumer.label);
+      },
       phase: AUTO_TICK_MS / 2,
     });
 

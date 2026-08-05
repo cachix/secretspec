@@ -1332,18 +1332,20 @@
 }
 
 .landing-provider-line.is-selected {
-  color: var(--run-selected);
+  color: var(--syntax-foreground);
   transform: translateX(0.28rem);
 }
 
 .landing-provider-line .provider-name {
-  color: inherit;
-  font-weight: inherit;
+  color: var(--syntax-foreground);
+  font-weight: 700;
 }
 
+.landing-provider-line:hover .provider-name,
+.landing-provider-line:focus-visible .provider-name,
 .landing-provider-line.is-selected .tok-pun,
 .landing-provider-line.is-selected .provider-name {
-  color: var(--run-selected);
+  color: var(--provider-line-color, var(--run-selected));
   font-weight: 700;
 }
 

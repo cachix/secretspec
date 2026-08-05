@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolves to the file you configured instead of a different one.
 - Invalid SOPS path templates are now rejected when loading serialized
   provider configurations instead of being accepted without validation.
+- The LastPass provider now reports its full item template rather than only the
+  first segment. A multi-segment template such as
+  `lastpass://Shared/{project}/{profile}/{key}` used to be reported as plain
+  `lastpass`, which reads back as the default `secretspec/{project}/{profile}/{key}`
+  template — a different folder — and `lastpass://Work/TeamA/{key}` read back as
+  the literal item `Work`, one item for every secret. Templates that differ
+  below their first segment are now distinguished, so repointing a cached route
+  at a new template invalidates its cached values instead of serving the old
+  ones until they expire. Single-segment templates are unaffected; cached
+  entries for a multi-segment template refetch once, silently, on first run.
 
 ## [0.18.0] - 2026-08-03
 

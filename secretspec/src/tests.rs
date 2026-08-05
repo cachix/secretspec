@@ -4817,6 +4817,266 @@ CERT_DATA = { description = "Certificate data", as_path = true }
     fs::remove_file(&cert_path).unwrap();
 }
 
+#[test]
+fn test_secret_encodings_are_independent_of_as_path() {
+    use secrecy::ExposeSecret;
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    fs::write(
+        &env_file,
+        concat!(
+            "BASE64_FILE=AP9LUw==\n",
+            "BASE64URL_FILE=-_8\n",
+            "HEX_FILE=00fF4b53\n",
+            "BASE64_TEXT=ZGVjb2RlZA\n",
+        ),
+    )
+    .unwrap();
+
+    let config_file = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &config_file,
+        r#"[project]
+name = "test-encoding-read"
+revision = "1.0"
+
+[profiles.default]
+BASE64_FILE = { description = "standard base64", encoding = "base64", as_path = true }
+BASE64URL_FILE = { description = "URL-safe base64", encoding = "base64url", as_path = true }
+HEX_FILE = { description = "mixed-case hex", encoding = "hex", as_path = true }
+BASE64_TEXT = { description = "decoded text", encoding = "base64" }
+DEFAULT_TEXT = { description = "logical default", encoding = "hex", default = "default" }
+"#,
+    )
+    .unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+        audit: None,
+    };
+    let spec = Secrets::new(config, Some(global_config), None, None);
+    let validated = spec.validate().unwrap().unwrap();
+
+    assert_eq!(
+        validated.resolved.secrets["BASE64_TEXT"].expose_secret(),
+        "decoded"
+    );
+    assert_eq!(
+        validated.resolved.secrets["DEFAULT_TEXT"].expose_secret(),
+        "default"
+    );
+
+    for (name, expected) in [
+        ("BASE64_FILE", &[0x00, 0xff, b'K', b'S'][..]),
+        ("BASE64URL_FILE", &[0xfb, 0xff][..]),
+        ("HEX_FILE", &[0x00, 0xff, b'K', b'S'][..]),
+    ] {
+        let path = validated.resolved.secrets[name].expose_secret();
+        assert_eq!(fs::read(path).unwrap(), expected, "{name}");
+    }
+}
+
+#[test]
+fn test_set_encodes_logical_values_before_storage() {
+    use secrecy::ExposeSecret;
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    let config_file = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &config_file,
+        r#"[project]
+name = "test-encode-on-set"
+revision = "1.0"
+
+[profiles.default]
+BASE64_TEXT = { description = "standard base64", encoding = "base64" }
+BASE64URL_TEXT = { description = "URL-safe base64", encoding = "base64url" }
+HEX_TEXT = { description = "lowercase hex", encoding = "hex" }
+"#,
+    )
+    .unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+        audit: None,
+    };
+    let spec = Secrets::new(config, Some(global_config), None, None);
+
+    spec.set("BASE64_TEXT", Some("value".to_string())).unwrap();
+    spec.set("BASE64URL_TEXT", Some("hello?".to_string()))
+        .unwrap();
+    spec.set("HEX_TEXT", Some("value".to_string())).unwrap();
+
+    let stored = fs::read_to_string(&env_file).unwrap();
+    let stored_value = |name: &str| {
+        stored
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{name}=")))
+            .map(|value| value.trim_matches('"'))
+            .unwrap_or_else(|| panic!("{name} missing from {stored}"))
+    };
+    assert_eq!(stored_value("BASE64_TEXT"), "dmFsdWU=");
+    assert_eq!(stored_value("BASE64URL_TEXT"), "aGVsbG8_");
+    assert_eq!(stored_value("HEX_TEXT"), "76616c7565");
+
+    let validated = spec.validate().unwrap().unwrap();
+    assert_eq!(
+        validated.resolved.secrets["BASE64_TEXT"].expose_secret(),
+        "value"
+    );
+    assert_eq!(
+        validated.resolved.secrets["BASE64URL_TEXT"].expose_secret(),
+        "hello?"
+    );
+    assert_eq!(
+        validated.resolved.secrets["HEX_TEXT"].expose_secret(),
+        "value"
+    );
+}
+
+#[test]
+fn test_import_copies_encoded_storage_without_double_encoding() {
+    use secrecy::ExposeSecret;
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let source_file = temp_dir.path().join("source.env");
+    let target_file = temp_dir.path().join("target.env");
+    fs::write(&source_file, "VALUE=dmFsdWU=\n").unwrap();
+    let config_file = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &config_file,
+        r#"[project]
+name = "test-encoded-import"
+revision = "1.0"
+
+[profiles.default]
+VALUE = { description = "encoded value", encoding = "base64" }
+"#,
+    )
+    .unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", target_file.display())),
+            profile: None,
+            providers: None,
+        },
+        audit: None,
+    };
+    let spec = Secrets::new(config, Some(global_config), None, None);
+
+    spec.import(&format!("dotenv://{}", source_file.display()))
+        .unwrap();
+    let stored = fs::read_to_string(&target_file).unwrap();
+    let stored_value = stored
+        .lines()
+        .find_map(|line| line.strip_prefix("VALUE="))
+        .map(|value| value.trim_matches('"'))
+        .expect("imported value should be stored");
+    assert_eq!(stored_value, "dmFsdWU=");
+    assert_ne!(stored_value, "ZG1Gc2RXVT0=");
+
+    let validated = spec.validate().unwrap().unwrap();
+    assert_eq!(validated.resolved.secrets["VALUE"].expose_secret(), "value");
+}
+
+#[test]
+fn test_secret_encoding_rejects_invalid_input_without_exposing_it() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, "BAD=%%%\n").unwrap();
+    let config_file = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &config_file,
+        r#"[project]
+name = "test-invalid-encoding"
+revision = "1.0"
+
+[profiles.default]
+BAD = { description = "invalid base64", encoding = "base64" }
+"#,
+    )
+    .unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+        audit: None,
+    };
+    let error = Secrets::new(config, Some(global_config), None, None)
+        .validate()
+        .err()
+        .expect("invalid base64 should fail resolution");
+    assert_eq!(error.kind(), "decode_failed");
+    assert!(
+        error
+            .to_string()
+            .contains("decode secret 'BAD' using base64")
+    );
+    assert!(!error.to_string().contains("%%%"));
+}
+
+#[test]
+fn test_binary_decoded_secret_requires_as_path() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, "BINARY=/w==\n").unwrap();
+    let config_file = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &config_file,
+        r#"[project]
+name = "test-binary-encoding"
+revision = "1.0"
+
+[profiles.default]
+BINARY = { description = "binary value", encoding = "base64" }
+"#,
+    )
+    .unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+        audit: None,
+    };
+    let error = Secrets::new(config, Some(global_config), None, None)
+        .validate()
+        .err()
+        .expect("binary inline output should fail resolution");
+    assert_eq!(error.kind(), "decode_failed");
+    assert!(error.to_string().contains("not valid UTF-8"));
+    assert!(error.to_string().contains("set `as_path = true`"));
+    assert!(!error.to_string().contains("/w=="));
+}
+
 #[cfg(unix)]
 #[test]
 fn test_run_cleans_up_as_path_temp_files() {
@@ -5100,6 +5360,60 @@ DB_PASSWORD = { description = "Database password", type = "password", generate =
     assert!(
         s.chars().all(|c| c.is_alphanumeric()),
         "Default password should be alphanumeric"
+    );
+}
+
+#[test]
+fn test_generation_returns_logical_value_and_stores_encoded_value() {
+    use secrecy::ExposeSecret;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    fs::write(&env_file, "").unwrap();
+
+    let config_file = temp_dir.path().join("secretspec.toml");
+    let toml_content = r#"[project]
+name = "test-gen-encoding"
+revision = "1.0"
+
+[profiles.default]
+DB_PASSWORD = { description = "Database password", type = "password", generate = true, encoding = "base64" }
+"#;
+    fs::write(&config_file, toml_content).unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+        audit: None,
+    };
+
+    let spec = Secrets::new(config.clone(), Some(global_config.clone()), None, None);
+    let validated = spec.validate().unwrap().unwrap();
+    let logical = validated.resolved.secrets["DB_PASSWORD"]
+        .expose_secret()
+        .to_string();
+
+    let contents = fs::read_to_string(&env_file).unwrap();
+    let stored = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("DB_PASSWORD="))
+        .map(|value| value.trim_matches('"'))
+        .expect("generated secret should be stored");
+    let decoded = data_encoding::BASE64.decode(stored.as_bytes()).unwrap();
+    assert_eq!(decoded, logical.as_bytes());
+    assert_ne!(stored, logical);
+
+    let reloaded = Secrets::new(config, Some(global_config), None, None)
+        .validate()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        reloaded.resolved.secrets["DB_PASSWORD"].expose_secret(),
+        logical
     );
 }
 
@@ -5393,6 +5707,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
             providers: None,
             reference: None,
             as_path: None,
+            encoding: None,
             secret_type: Some("password".to_string()),
             generate: Some(crate::config::GenerateConfig::Bool(true)),
         },

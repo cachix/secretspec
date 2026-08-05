@@ -1683,10 +1683,38 @@ struct SecretSerde {
     reference: Option<NativeAddress>,
     #[serde(skip_serializing_if = "Option::is_none")]
     as_path: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    encoding: Option<SecretEncoding>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     secret_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     generate: Option<GenerateConfig>,
+}
+
+/// Text encoding used for a secret's stored representation.
+///
+/// Available since SecretSpec 0.19.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SecretEncoding {
+    /// RFC 4648 Base64. Writes use padding; reads accept padded or unpadded input.
+    Base64,
+    /// RFC 4648 URL- and filename-safe Base64. Writes omit padding; reads
+    /// accept padded or unpadded input.
+    Base64Url,
+    /// RFC 4648 Base16. Writes use lowercase; reads are case-insensitive.
+    Hex,
+}
+
+impl SecretEncoding {
+    /// Stable manifest spelling used in diagnostics.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Base64 => "base64",
+            Self::Base64Url => "base64url",
+            Self::Hex => "hex",
+        }
+    }
 }
 
 /// Configuration for an individual secret.
@@ -1742,6 +1770,13 @@ pub struct Secret {
     /// will contain the path to that file instead of the secret value.
     /// The temporary file will be cleaned up when the resolved secrets are dropped.
     pub as_path: Option<bool>,
+    /// Encoding used for provider and cache storage. Logical values are encoded
+    /// before writes and decoded after reads. Decoded binary values can be
+    /// materialized with `as_path = true`; without `as_path`, the decoded bytes
+    /// must be valid UTF-8.
+    ///
+    /// Available since SecretSpec 0.19.
+    pub encoding: Option<SecretEncoding>,
     /// The type of secret, used for generation (e.g., "password", "hex", "base64", "uuid", "command", "rsa_private_key")
     pub secret_type: Option<String>,
     /// Auto-generation configuration. Either `true` for defaults or a table with options.
@@ -1773,6 +1808,7 @@ impl TryFrom<SecretSerde> for Secret {
             providers: value.providers,
             reference: value.reference,
             as_path: value.as_path,
+            encoding: value.encoding,
             secret_type: value.secret_type,
             generate: value.generate,
         })
@@ -1798,6 +1834,7 @@ impl From<Secret> for SecretSerde {
             providers: value.providers,
             reference: value.reference,
             as_path: value.as_path,
+            encoding: value.encoding,
             secret_type: value.secret_type,
             generate: value.generate,
         }
@@ -1900,11 +1937,12 @@ impl Secret {
             if self.default.is_some()
                 || self.providers.is_some()
                 || self.reference.is_some()
+                || self.encoding.is_some()
                 || self.secret_type.is_some()
                 || self.would_generate()
             {
                 return Err(
-                    "`composed` secrets cannot also set `default`, `providers`, `ref`, `type`, or enabled `generate`"
+                    "`composed` secrets cannot also set `default`, `providers`, `ref`, `encoding`, `type`, or enabled `generate`"
                         .into(),
                 );
             }
@@ -2046,6 +2084,7 @@ impl Secret {
                 .or_else(|| storage_defaults.and_then(|d| d.providers.clone())),
             reference: inherit(current, default, |s| s.reference.clone()),
             as_path: inherit(current, default, |s| s.as_path),
+            encoding: inherit(current, default, |s| s.encoding),
             secret_type: inherit(current, default, |s| s.secret_type.clone()),
             generate: inherit(current, default, |s| s.generate.clone()),
         })
@@ -2947,6 +2986,21 @@ BAD = { description = "bad", composed = "${A}", providers = ["keyring"] }
         .unwrap();
         let error = conflicting.validate().unwrap_err().to_string();
         assert!(error.contains("cannot also set"), "{error}");
+
+        let encoded: Config = toml::from_str(
+            r#"
+[project]
+name = "composed"
+revision = "1.0"
+
+[profiles.default]
+A = { description = "a" }
+BAD = { description = "bad", composed = "${A}", encoding = "base64" }
+"#,
+        )
+        .unwrap();
+        let error = encoded.validate().unwrap_err().to_string();
+        assert!(error.contains("`encoding`"), "{error}");
     }
 
     #[test]
@@ -3310,6 +3364,52 @@ default = "placeholder"
         })
         .unwrap();
         assert!(!toml.contains("ref"));
+    }
+
+    #[test]
+    fn secret_encoding_parses_round_trips_and_inherits() {
+        for (spelling, expected) in [
+            ("base64", SecretEncoding::Base64),
+            ("base64url", SecretEncoding::Base64Url),
+            ("hex", SecretEncoding::Hex),
+        ] {
+            let secret: Secret = toml::from_str(&format!(
+                "description = \"encoded\"\nencoding = \"{spelling}\""
+            ))
+            .unwrap();
+            assert_eq!(secret.encoding, Some(expected));
+            let rendered = toml::to_string(&secret).unwrap();
+            assert!(
+                rendered.contains(&format!("encoding = \"{spelling}\"")),
+                "{rendered}"
+            );
+        }
+
+        let inherited = Secret::resolved(
+            Some(&Secret {
+                description: Some("production".to_string()),
+                ..Default::default()
+            }),
+            Some(&Secret {
+                description: Some("default".to_string()),
+                encoding: Some(SecretEncoding::Base64),
+                ..Default::default()
+            }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(inherited.encoding, Some(SecretEncoding::Base64));
+    }
+
+    #[test]
+    fn secret_encoding_rejects_unknown_name() {
+        let error = toml::from_str::<Secret>(
+            r#"description = "encoded"
+encoding = "rot13""#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("unknown variant `rot13`"), "{error}");
     }
 
     /// All coordinate keys parse from the inline table form.

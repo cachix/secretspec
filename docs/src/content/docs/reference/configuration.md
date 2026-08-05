@@ -133,6 +133,7 @@ Each secret variable is defined as a table with the following fields:
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `ref` | table | No | Coordinates naming an externally managed secret in the provider's store (e.g. `ref = { item = "db", field = "password" }`) |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
+| `encoding` (0.19+) | `"base64"`, `"base64url"`, or `"hex"` | No | Encode logical values before storage writes and decode stored values after reads |
 | `type` | string | No | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
 | `generate` | boolean or table | No | Enable auto-generation when secret is missing |
 
@@ -149,7 +150,7 @@ Field notes:
 - `type` is required when `generate` is enabled.
 - `generate` and `default` cannot both be set.
 
-#### Composed secrets
+#### Composed Secrets
 
 :::caution[Version compatibility]
 Available since SecretSpec 0.16.
@@ -171,7 +172,7 @@ References form a static dependency graph. Declaration order does not matter,
 and composed secrets may reference other composed secrets. SecretSpec rejects
 unknown references, cycles, malformed references, and source conflicts while
 loading the manifest. A composed secret is read-only and cannot also set
-`default`, `providers`, `ref`, `type`, or enabled `generate`.
+`default`, `providers`, `ref`, `type`, enabled `generate`, or `encoding` (0.19+).
 
 Composition intentionally does **not** implement dotenv or shell expansion:
 
@@ -213,9 +214,9 @@ configuration and resolution behavior.
 Scopes name membership-only subsets of a profile's secrets, so a single service
 or task resolves only what it declares instead of the entire profile. They are
 **orthogonal to profiles**: a profile decides how each secret resolves
-(`required`, `default`, providers, references, generation, `as_path`, and the
-storage namespace); a scope only decides *which* secrets take part in a given
-resolution.
+(`required`, `default`, providers, references, generation, `as_path`,
+`encoding` (0.19+), and the storage namespace); a scope only decides *which*
+secrets take part in a given resolution.
 
 ```toml
 [profiles.default]
@@ -553,11 +554,50 @@ TLS_CERT = { description = "TLS certificate", as_path = true }
 GOOGLE_APPLICATION_CREDENTIALS = { description = "GCP service account", as_path = true }
 ```
 
+When combined with `encoding` (0.19+), the file contains the decoded bytes
+rather than the stored textual representation.
+
 | Context | Behavior |
 |---------|----------|
 | CLI (`get`, `check`, `run`) | Files are persisted (not deleted after command exits) |
 | Rust SDK | Files cleaned up when `ValidatedSecrets` is dropped; use `keep_temp_files()` to persist |
 | Rust SDK types | `PathBuf` or `Option<PathBuf>` instead of `String` |
+
+### Secret Encoding (0.19+)
+
+:::caution[Version compatibility]
+Available starting in SecretSpec 0.19.
+:::
+
+`encoding` (0.19+) defines the textual representation stored by providers and
+the cache. It is independent of `as_path`: decoded UTF-8 remains an ordinary
+environment or SDK value, while arbitrary decoded bytes can be materialized to
+a file.
+
+```toml
+[profiles.default]
+# encoding is available in SecretSpec 0.19+
+TEXT_CONFIG = { description = "Encoded text", encoding = "base64" }
+KEYSTORE = { description = "Binary mTLS keystore", encoding = "base64", as_path = true }
+URL_SAFE_KEY = { description = "URL-safe encoded key", encoding = "base64url", as_path = true }
+HEX_KEY = { description = "Hex-encoded key", encoding = "hex", as_path = true }
+```
+
+| Encoding (0.19+) | Written representation | Accepted stored representation |
+|------------------|------------------------|--------------------------------|
+| `base64` | RFC 4648 standard Base64 with padding | Padded or unpadded standard Base64 |
+| `base64url` | RFC 4648 URL-safe Base64 without padding | Padded or unpadded URL-safe Base64 |
+| `hex` | Lowercase RFC 4648 Base16 | Uppercase, lowercase, or mixed-case Base16 |
+
+Exactly one trailing LF or CRLF is accepted so command-captured values work
+without preprocessing. Other whitespace and non-alphabet characters are
+rejected. Without `as_path = true`, decoded bytes must be valid UTF-8.
+
+`secretspec set`, interactive prompts, and generated secrets provide logical
+text; SecretSpec encodes it before writing to a provider or cache. Defaults and
+composed results are already logical and are not transformed. The
+`secretspec import` command copies the stored representation verbatim, avoiding
+double encoding.
 
 ### Secret References
 

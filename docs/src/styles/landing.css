@@ -358,6 +358,10 @@
   color: var(--syntax-blue);
 }
 
+.inline-code .tok-bool {
+  color: var(--syntax-magenta);
+}
+
 /* ── Metric strip ── */
 
 .landing-metrics {
@@ -1157,25 +1161,48 @@
 }
 
 .landing-terminal-body .tok-key,
-.landing-bento-mini-code .tok-key { color: var(--syntax-blue); }
+.landing-bento-mini-code .tok-key,
+.landing-pipe-code .tok-key { color: var(--syntax-blue); }
 
 .landing-terminal-body .tok-str,
-.landing-bento-mini-code .tok-str { color: var(--syntax-green); }
+.landing-bento-mini-code .tok-str,
+.landing-pipe-code .tok-str { color: var(--syntax-green); }
 
 .landing-terminal-body .tok-com,
-.landing-bento-mini-code .tok-com {
+.landing-bento-mini-code .tok-com,
+.landing-pipe-code .tok-com {
   color: var(--syntax-comment);
   font-style: italic;
 }
 
 .landing-terminal-body .tok-num,
-.landing-bento-mini-code .tok-num { color: var(--syntax-orange); }
+.landing-bento-mini-code .tok-num,
+.landing-pipe-code .tok-num { color: var(--syntax-orange); }
+
+.landing-terminal-body .tok-bool,
+.landing-bento-mini-code .tok-bool,
+.landing-pipe-code .tok-bool { color: var(--syntax-magenta); }
 
 .landing-terminal-body .tok-pun,
-.landing-bento-mini-code .tok-pun { color: rgba(255, 255, 255, 0.55); }
+.landing-bento-mini-code .tok-pun,
+.landing-pipe-code .tok-pun,
+.landing-merged-cmd .tok-pun { color: var(--syntax-foreground); }
 
 .landing-terminal-body .tok-sec,
-.landing-bento-mini-code .tok-sec { color: var(--syntax-magenta); }
+.landing-bento-mini-code .tok-sec,
+.landing-pipe-code .tok-sec { color: var(--syntax-magenta); }
+
+.landing-terminal-body .tok-kw,
+.landing-bento-mini-code .tok-kw,
+.landing-pipe-code .tok-kw { color: var(--syntax-red); }
+
+.landing-terminal-body .tok-var,
+.landing-bento-mini-code .tok-var,
+.landing-pipe-code .tok-var { color: var(--syntax-blue); }
+
+.landing-terminal-body .tok-fn,
+.landing-bento-mini-code .tok-fn,
+.landing-pipe-code .tok-fn { color: var(--syntax-green); }
 
 .landing-terminal-body .tok-bin,
 .landing-bento-mini-code .tok-bin,
@@ -1214,7 +1241,7 @@
 }
 
 .landing-terminal-run .tok-pun {
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--syntax-foreground);
 }
 
 .landing-terminal-run .landing-cmd {
@@ -1451,6 +1478,10 @@
 
 [data-theme='dark'] .landing-tree-node-content {
   color: #fff;
+}
+
+.landing-tree-node-content .tok-bool {
+  color: var(--syntax-magenta);
 }
 
 .landing-compose-arrow {

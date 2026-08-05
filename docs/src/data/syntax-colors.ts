@@ -17,6 +17,7 @@ export const syntaxTokenColor: Record<string, SyntaxColorName> = {
   string: 'green',
   comment: 'comment',
   number: 'orange',
+  boolean: 'magenta',
   punctuation: 'foreground',
   section: 'magenta',
 };

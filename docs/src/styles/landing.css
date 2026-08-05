@@ -1590,18 +1590,33 @@
 @media (min-width: 900px) {
   .landing-fallback {
     grid-template-columns: 1fr 1.05fr;
-    align-items: start;
+    align-items: stretch;
   }
+}
+
+.landing-fallback > .landing-terminal,
+.landing-fallback > .landing-chain {
+  height: 100%;
+}
+
+.landing-fallback > .landing-terminal {
+  display: flex;
+  flex-direction: column;
+}
+
+.landing-fallback > .landing-terminal .landing-terminal-body {
+  flex: 1;
 }
 
 .landing-chain {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
-  padding: 1.25rem;
+  gap: 0.8rem;
+  padding: 1.5rem 1.25rem;
   border-radius: 0.875rem;
   background: var(--sl-color-bg-nav);
   border: 1px solid var(--sl-color-hairline);
+  justify-content: center;
 }
 
 .landing-chain-step {
@@ -1647,7 +1662,7 @@
 .landing-chain-result {
   font-size: 0.875rem;
   color: var(--color-gray-500);
-  margin-top: 0.5rem;
+  margin: 0.35rem 0 0;
   text-align: center;
 }
 

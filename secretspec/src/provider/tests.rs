@@ -1403,6 +1403,19 @@ mod integration_tests {
     }
 
     #[test]
+    fn test_lastpass_with_folder_prefix() {
+        let provider =
+            Box::<dyn Provider>::try_from("lastpass://Work/SecretSpec/{profile}/{key}").unwrap();
+        assert_eq!(provider.name(), "lastpass");
+        assert_eq!(provider.uri(), "lastpass://Work/SecretSpec/{profile}/{key}");
+
+        // Without folder_prefix, should use default URI
+        let provider = Box::<dyn Provider>::try_from("lastpass://").unwrap();
+        assert_eq!(provider.name(), "lastpass");
+        assert_eq!(provider.uri(), "lastpass");
+    }
+
+    #[test]
     fn test_pass_with_folder_prefix() {
         let provider =
             Box::<dyn Provider>::try_from("pass://secretspec/shared/{profile}/{key}").unwrap();

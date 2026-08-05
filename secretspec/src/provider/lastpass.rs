@@ -264,23 +264,23 @@ impl Provider for LastPassProvider {
         Some(String::new())
     }
 
+    /// `TryFrom` reads the whole `host` + `path` as the item template, so the
+    /// whole template is emitted here for it to read back. Emitting less names
+    /// a different template: dropping `/{key}` addresses one item for every
+    /// secret.
     fn uri(&self) -> String {
-        // LastPass can be "lastpass" (default) or "lastpass://folder" or "lastpass://Folder/Subfolder"
-        if let Some(ref prefix) = self.config.folder_prefix {
-            // The folder_prefix might be something like "SecretSpec/{project}/{profile}/{key}"
-            // We want to extract just the folder part for the URI
-            if let Some(folder) = prefix.split('/').next() {
-                if folder.is_empty() || folder == "Shared" {
-                    "lastpass".to_string()
-                } else {
-                    format!("lastpass://{}", ProviderUrl::encode(folder))
-                }
-            } else {
-                "lastpass".to_string()
+        match self.config.folder_prefix.as_deref() {
+            Some(prefix) if !prefix.is_empty() => {
+                format!("lastpass://{}", ProviderUrl::encode(prefix))
             }
-        } else {
-            "lastpass".to_string()
+            _ => "lastpass".to_string(),
         }
+    }
+
+    /// The template selects an item inside the account's own vault; it does not
+    /// select another LastPass store.
+    fn entry_container_identity(&self) -> String {
+        "lastpass".to_string()
     }
 
     /// Retrieves a secret from LastPass.
@@ -432,6 +432,89 @@ impl Default for LastPassProvider {
     /// This is equivalent to calling `LastPassProvider::new(LastPassConfig::default())`.
     fn default() -> Self {
         Self::new(LastPassConfig::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider_of(spec: &str) -> Box<dyn Provider> {
+        Box::<dyn Provider>::try_from(spec).expect("the spec must be valid")
+    }
+
+    fn uri_of(spec: &str) -> String {
+        provider_of(spec).uri()
+    }
+
+    /// The item a spec addresses, for comparing two spellings of one store.
+    /// `LastPassConfig` has no `PartialEq`, and the rendered item is what the
+    /// template exists to produce.
+    fn addressed_item(spec: &str) -> String {
+        provider_of(spec)
+            .convention_address("my-app", "production", "API_KEY")
+            .expect("a convention address")
+            .item
+    }
+
+    #[test]
+    fn format_item_name_default_pattern() {
+        let provider = LastPassProvider::new(LastPassConfig::default());
+        assert_eq!(
+            provider.format_item_name("myproj", "API_KEY", "prod"),
+            "secretspec/myproj/prod/API_KEY"
+        );
+    }
+
+    #[test]
+    fn format_item_name_custom_prefix() {
+        let provider = LastPassProvider::new(LastPassConfig {
+            folder_prefix: Some("Work/{profile}/{key}".to_string()),
+        });
+        assert_eq!(
+            provider.format_item_name("myproj", "API_KEY", "prod"),
+            "Work/prod/API_KEY"
+        );
+    }
+
+    #[test]
+    fn uri_round_trips_the_item_template() {
+        // `uri()` is the provider's identity: SecretSpec fingerprints cached
+        // routes with it, names the answering store with it in audit records,
+        // and the derive macro hands it back as a provider spec. Emitting only
+        // the first segment made different templates indistinguishable --
+        // `Shared/{project}/{profile}/{key}` read back as the default
+        // `secretspec/{project}/{profile}/{key}`, a different folder, and
+        // `Work/TeamA/{key}` read back as the literal item `Work`, one item for
+        // every secret in the profile.
+        for spec in [
+            "lastpass",
+            "lastpass://",
+            "lastpass://Work",
+            "lastpass://Shared",
+            "lastpass://Shared/{project}/{profile}/{key}",
+            "lastpass://Shared-SecretSpec/{project}/{profile}/{key}",
+            "lastpass://Work/TeamA/{project}/{profile}/{key}",
+            "lastpass://Shared Items/dev/{key}",
+        ] {
+            let rendered = uri_of(spec);
+            assert_eq!(
+                addressed_item(&rendered),
+                addressed_item(spec),
+                "{spec} rendered as {rendered}, which does not read back as the same item",
+            );
+        }
+    }
+
+    /// Two templates under one folder must stay distinguishable, or the cache
+    /// fingerprints both routes alike and keeps serving the first one's values
+    /// after the source is repointed at the second.
+    #[test]
+    fn uri_distinguishes_two_templates_under_one_folder() {
+        assert_ne!(
+            uri_of("lastpass://Work/TeamA/{project}/{profile}/{key}"),
+            uri_of("lastpass://Work/TeamB/{project}/{profile}/{key}"),
+        );
     }
 }
 

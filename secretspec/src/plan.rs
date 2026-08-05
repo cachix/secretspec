@@ -1109,21 +1109,23 @@ mod tests {
         }
     }
 
+    /// The cache fingerprint of a route reading from `source`.
+    fn fingerprint(source: &str) -> String {
+        let spec = cached_spec_with(
+            vec!["route"],
+            &[("route", cached_alias(&[source], "keyring://", "8h"))],
+        );
+        let plan = plan(&spec);
+        route(find(&plan, "API_KEY"))
+            .cache()
+            .expect("cached route")
+            .route_fingerprint
+            .clone()
+    }
+
     #[test]
     fn vault_compatible_route_configuration_changes_invalidate_the_cache() {
         let _env = scrub_resolution_env();
-        let fingerprint = |source| {
-            let spec = cached_spec_with(
-                vec!["route"],
-                &[("route", cached_alias(&[source], "keyring://", "8h"))],
-            );
-            let plan = plan(&spec);
-            route(find(&plan, "API_KEY"))
-                .cache()
-                .expect("cached route")
-                .route_fingerprint
-                .clone()
-        };
 
         let baseline = fingerprint("vault://bao.example.com:8200/secret");
         for changed in [
@@ -1143,6 +1145,20 @@ mod tests {
             fingerprint("vault://bao.example.com:8200/secret?auth=jwt&role=read"),
             fingerprint("vault://bao.example.com:8200/secret?auth=jwt&role=deploy"),
             "changing the JWT role must invalidate the cache"
+        );
+    }
+
+    /// The fingerprint is built from each source's `uri()`, so a provider that
+    /// reports less than its whole configuration reports two different routes
+    /// as one, and the cache keeps serving the value the old route fetched.
+    #[test]
+    fn lastpass_item_template_changes_invalidate_the_cache() {
+        let _env = scrub_resolution_env();
+
+        assert_ne!(
+            fingerprint("lastpass://Work/TeamA/{project}/{profile}/{key}"),
+            fingerprint("lastpass://Work/TeamB/{project}/{profile}/{key}"),
+            "changing the item template must invalidate the cache"
         );
     }
 

@@ -1125,6 +1125,240 @@
   box-shadow: 0 0 0.45rem color-mix(in srgb, var(--scope-secret-tone) 8%, transparent);
 }
 
+.landing-reference-demo {
+  --reference-variable-color: var(--syntax-green);
+  --reference-pointer-color: var(--syntax-orange);
+  --reference-resolved-color: var(--syntax-green);
+}
+
+.landing-reference-token {
+  display: inline-block;
+  margin: 0 -0.15rem;
+  padding: 0 0.15rem;
+  border-radius: 0.3rem;
+  outline: none;
+  opacity: 0.72;
+  transition:
+    background-color 0.32s ease,
+    color 0.32s ease,
+    opacity 0.32s ease,
+    box-shadow 0.32s ease;
+}
+
+.landing-reference-demo[data-active-reference='variable'] [data-reference-members~='variable'] {
+  --reference-token-color: var(--reference-variable-color);
+}
+
+.landing-reference-demo[data-active-reference='pointer'] [data-reference-members~='pointer'] {
+  --reference-token-color: var(--reference-pointer-color);
+}
+
+.landing-reference-demo[data-active-reference='resolved'] [data-reference-members~='resolved'] {
+  --reference-token-color: var(--reference-resolved-color);
+}
+
+.landing-reference-token[data-reference-target='variable'] {
+  --reference-token-color: var(--reference-variable-color);
+}
+
+.landing-reference-token[data-reference-target='pointer'] {
+  --reference-token-color: var(--reference-pointer-color);
+}
+
+.landing-reference-demo[data-active-reference='variable'] .landing-reference-token[data-reference-members~='variable'],
+.landing-reference-demo[data-active-reference='pointer'] .landing-reference-token[data-reference-members~='pointer'],
+.landing-reference-demo[data-active-reference='resolved'] .landing-reference-token[data-reference-members~='resolved'],
+.landing-reference-token:hover,
+.landing-reference-token:focus-visible {
+  color: var(--reference-token-color);
+  opacity: 1;
+  background: color-mix(in srgb, var(--reference-token-color) 10%, transparent);
+  box-shadow: 0 0 0.45rem color-mix(in srgb, var(--reference-token-color) 8%, transparent);
+}
+
+.landing-reference-map {
+  gap: 0.65rem;
+  padding: 1.25rem;
+  background: var(--sl-color-bg-nav);
+}
+
+.landing-reference-step {
+  --reference-step-color: var(--syntax-foreground);
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.8rem 0.95rem;
+  border-radius: 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--reference-step-color) 14%, var(--sl-color-hairline));
+  background: color-mix(in srgb, var(--reference-step-color) 4%, transparent);
+  font-family: var(--sl-font-mono, monospace);
+  opacity: 0.72;
+  outline: none;
+  transition:
+    opacity 0.32s ease,
+    background-color 0.32s ease,
+    border-color 0.32s ease,
+    box-shadow 0.32s ease,
+    transform 0.32s ease;
+}
+
+.landing-reference-step[data-reference-target='variable'] {
+  --reference-step-color: var(--reference-variable-color);
+}
+
+.landing-reference-step[data-reference-target='pointer'] {
+  --reference-step-color: var(--reference-pointer-color);
+}
+
+.landing-reference-step[data-reference-target='resolved'] {
+  --reference-step-color: var(--reference-resolved-color);
+}
+
+.landing-reference-demo[data-active-reference='variable'] .landing-reference-step[data-reference-target='variable'],
+.landing-reference-demo[data-active-reference='pointer'] .landing-reference-step[data-reference-target='pointer'],
+.landing-reference-demo[data-active-reference='resolved'] .landing-reference-step[data-reference-target='resolved'],
+.landing-reference-step:hover,
+.landing-reference-step:focus-visible {
+  opacity: 1;
+  background: color-mix(in srgb, var(--reference-step-color) 10%, transparent);
+  border-color: color-mix(in srgb, var(--reference-step-color) 38%, var(--sl-color-hairline));
+  box-shadow: 0 0 1.05rem color-mix(in srgb, var(--reference-step-color) 12%, transparent);
+  transform: translateY(-1px);
+}
+
+.landing-reference-label {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-gray-500);
+}
+
+[data-theme='dark'] .landing-reference-label {
+  color: var(--color-gray-400);
+}
+
+.landing-reference-value {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  color: var(--syntax-foreground);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.landing-reference-value span {
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--reference-step-color) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--reference-step-color) 18%, transparent);
+}
+
+.landing-reference-arrow {
+  align-self: center;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-gray-500);
+}
+
+.landing-audit-demo {
+  --audit-denied-color: var(--syntax-red);
+  --audit-approved-color: var(--syntax-green);
+}
+
+.landing-audit-command,
+.landing-audit-entry {
+  --audit-tone: var(--syntax-foreground);
+  display: block;
+  margin: 0 -0.55rem;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: 0.6rem;
+  line-height: inherit;
+  opacity: 0.62;
+  outline: none;
+  transition:
+    opacity 0.32s ease,
+    background-color 0.32s ease,
+    border-color 0.32s ease,
+    box-shadow 0.32s ease,
+    transform 0.32s ease;
+}
+
+.landing-audit-command + .landing-audit-command,
+.landing-audit-entry + .landing-audit-entry {
+  margin-top: 0.45rem;
+}
+
+.landing-audit-command[data-audit-target='denied'],
+.landing-audit-entry[data-audit-target='denied'] {
+  --audit-tone: var(--audit-denied-color);
+}
+
+.landing-audit-command[data-audit-target='approved'],
+.landing-audit-entry[data-audit-target='approved'] {
+  --audit-tone: var(--audit-approved-color);
+}
+
+.landing-audit-demo[data-active-audit='denied'] [data-audit-target='denied'],
+.landing-audit-demo[data-active-audit='approved'] [data-audit-target='approved'],
+.landing-audit-command:hover,
+.landing-audit-command:focus-visible,
+.landing-audit-entry:hover,
+.landing-audit-entry:focus-visible {
+  opacity: 1;
+  background: color-mix(in srgb, var(--audit-tone) 9%, transparent);
+  border-color: color-mix(in srgb, var(--audit-tone) 34%, transparent);
+  box-shadow: 0 0 1rem color-mix(in srgb, var(--audit-tone) 10%, transparent);
+}
+
+.landing-audit-demo[data-active-audit='approved'] .landing-audit-entry[data-audit-target='approved'] {
+  transform: translateY(-1px);
+}
+
+.landing-audit-demo[data-active-audit='denied'] .landing-audit-entry[data-audit-target='approved'] {
+  opacity: 0.18;
+  transform: translateY(0.35rem);
+}
+
+.landing-audit-log {
+  background: none;
+}
+
+.landing-audit-error {
+  color: var(--audit-denied-color);
+  font-weight: 700;
+}
+
+.landing-audit-entry-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.landing-audit-status {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--audit-tone);
+  background: color-mix(in srgb, var(--audit-tone) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--audit-tone) 26%, transparent);
+}
+
+.landing-audit-status.is-denied {
+  --audit-tone: var(--audit-denied-color);
+}
+
+.landing-audit-status.is-approved {
+  --audit-tone: var(--audit-approved-color);
+}
+
 /* ── Bento grid ── */
 
 .landing-bento {

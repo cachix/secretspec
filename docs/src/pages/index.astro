@@ -1256,7 +1256,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
 </section>
 
 <!-- ============ SHOWCASE: secret references ============ -->
-<section class="landing-showcase">
+<section class="landing-showcase landing-reference-demo" data-reference-demo data-active-reference="variable">
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Secret references</span>
@@ -1274,21 +1274,26 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
         </div>
         <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[profiles.production]</span>
 <span class="tok-com"># Point at a secret that already lives in your store</span>
-<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span>
+<span class="tok-key landing-reference-token" data-reference-target="variable" data-reference-members="variable resolved" tabindex="0">DATABASE_URL</span> <span class="tok-pun">= {</span>
   <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"Postgres DSN"</span><span class="tok-pun">,</span>
-  <span class="tok-key">ref</span> <span class="tok-pun">= {</span> <span class="tok-key">item</span> <span class="tok-pun">=</span> <span class="tok-str">"db"</span><span class="tok-pun">,</span> <span class="tok-key">field</span> <span class="tok-pun">=</span> <span class="tok-str">"password"</span> <span class="tok-pun">}</span>
+  <span class="tok-key landing-reference-token" data-reference-target="pointer" data-reference-members="pointer" tabindex="0">ref</span> <span class="tok-pun">= {</span> <span class="tok-key landing-reference-token" data-reference-target="pointer" data-reference-members="pointer" tabindex="0">item</span> <span class="tok-pun">=</span> <span class="tok-str landing-reference-token" data-reference-target="pointer" data-reference-members="pointer" tabindex="0">"db"</span><span class="tok-pun">,</span> <span class="tok-key landing-reference-token" data-reference-target="pointer" data-reference-members="pointer" tabindex="0">field</span> <span class="tok-pun">=</span> <span class="tok-str landing-reference-token" data-reference-target="pointer" data-reference-members="pointer" tabindex="0">"password"</span> <span class="tok-pun">}</span>
 <span class="tok-pun">}</span></code></pre>
       </div>
 
-      <div class="landing-chain">
-        <div class="landing-chain-step">
-          <span aria-hidden="true">🧭</span>
-          <span><code>ref</code> identifies the existing <code>item</code> and optional <code>field</code></span>
+      <div class="landing-chain landing-reference-map">
+        <div class="landing-reference-step" data-reference-target="variable" tabindex="0">
+          <span class="landing-reference-label">Application variable</span>
+          <span class="landing-reference-value">DATABASE_URL</span>
         </div>
-        <div class="landing-chain-arrow" aria-hidden="true">↓ resolves as</div>
-        <div class="landing-chain-step is-hit">
-          <span aria-hidden="true">🔀</span>
-          <span>Your application receives it as <strong>DATABASE_URL</strong></span>
+        <div class="landing-reference-arrow" aria-hidden="true">references</div>
+        <div class="landing-reference-step" data-reference-target="pointer" tabindex="0">
+          <span class="landing-reference-label">Existing store location</span>
+          <span class="landing-reference-value"><span>item: db</span><span>field: password</span></span>
+        </div>
+        <div class="landing-reference-arrow" aria-hidden="true">resolves as</div>
+        <div class="landing-reference-step" data-reference-target="resolved" tabindex="0">
+          <span class="landing-reference-label">Process environment</span>
+          <span class="landing-reference-value">DATABASE_URL</span>
         </div>
         <p class="landing-chain-result">Adopt SecretSpec without moving or renaming existing secrets.</p>
       </div>
@@ -1296,8 +1301,80 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
   </div>
 </section>
 
+<script>
+  (() => {
+    const demo = document.querySelector<HTMLElement>('[data-reference-demo]');
+    if (!demo) return;
+    const demoEl = demo;
+
+    const states = ['variable', 'pointer', 'resolved'];
+    const targets = demoEl.querySelectorAll<HTMLElement>('[data-reference-target]');
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    let activeIndex = 0;
+    let isPinned = false;
+    let timer: number | undefined;
+
+    function setReferenceState(state: string) {
+      const nextIndex = states.indexOf(state);
+      if (nextIndex === -1) return;
+      activeIndex = nextIndex;
+      demoEl.setAttribute('data-active-reference', state);
+    }
+
+    function stop() {
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    }
+
+    function start() {
+      if (reducedMotion || timer !== undefined) return;
+      timer = window.setInterval(() => {
+        if (isPinned) return;
+        setReferenceState(states[(activeIndex + 1) % states.length]);
+      }, 2600);
+    }
+
+    targets.forEach((target) => {
+      const state = target.getAttribute('data-reference-target');
+      if (!state) return;
+
+      target.addEventListener('pointerenter', () => {
+        isPinned = true;
+        setReferenceState(state);
+      });
+      target.addEventListener('pointerleave', () => {
+        isPinned = false;
+      });
+      target.addEventListener('focus', () => {
+        isPinned = true;
+        setReferenceState(state);
+      });
+      target.addEventListener('blur', () => {
+        isPinned = false;
+      });
+    });
+
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            start();
+          } else {
+            stop();
+          }
+        });
+      }, { threshold: 0.2 });
+      observer.observe(demoEl);
+    } else {
+      start();
+    }
+  })();
+</script>
+
 <!-- ============ SHOWCASE: audit & agent reason ============ -->
-<section class="landing-showcase">
+<section class="landing-showcase landing-audit-demo" data-audit-demo data-active-audit="denied">
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Audit &amp; AI agents</span>
@@ -1313,16 +1390,16 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">detected agent session</span>
         </div>
-<pre is:raw class="landing-terminal-body"><code><span class="tok-com"># A detected AI agent runs your app without a reason</span>
+<pre is:raw class="landing-terminal-body"><code><span class="landing-audit-command" data-audit-target="denied" tabindex="0"><span class="tok-com"># A detected AI agent runs your app without a reason</span>
 <span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--</span> <span class="tok-bin">./deploy.sh</span>
-Error: accessing secrets requires a reason.
-       Provide one with <span class="tok-flag">--reason</span> <span class="tok-str">"&lt;why...&gt;"</span>
+<span class="landing-audit-error">Error: accessing secrets requires a reason.</span>
+       Provide one with <span class="tok-flag">--reason</span> <span class="tok-str">"&lt;why...&gt;"</span></span>
 
-<span class="tok-com"># State why; required for detected agents by default</span>
+<span class="landing-audit-command" data-audit-target="approved" tabindex="0"><span class="tok-com"># State why; required for detected agents by default</span>
 <span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--reason</span> <span class="tok-str">"Deploy web frontend"</span> \
     <span class="tok-flag">--</span> <span class="tok-bin">./deploy.sh</span>
 <span class="tok-str">✓</span> Loaded DATABASE_URL from keyring
-<span class="tok-pun">›</span> <span class="tok-bin">./deploy.sh</span></code></pre>
+<span class="tok-pun">›</span> <span class="tok-bin">./deploy.sh</span></span></code></pre>
       </div>
 
       <div class="landing-terminal">
@@ -1330,11 +1407,17 @@ Error: accessing secrets requires a reason.
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">secretspec audit</span>
         </div>
-<pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Review who accessed what, why, and the outcome</span>
-<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">audit</span> <span class="tok-flag">-n</span> <span class="tok-arg">1</span>
-<span class="tok-com">2026-06-04T17:04Z</span>  <span class="tok-key">run</span>  <span class="tok-str">started</span>  ./deploy.sh
-  DATABASE_URL  (my-app/production via keyring://)
-  reason: <span class="tok-str">Deploy web frontend</span>  <span class="tok-pun">[claude-code]</span></code></pre>
+<pre is:raw class="landing-terminal-body landing-audit-log"><code><span class="tok-com"># Review who accessed what, why, and the outcome</span>
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">audit</span> <span class="tok-flag">-n</span> <span class="tok-arg">2</span>
+
+<span class="landing-audit-entry" data-audit-target="denied" tabindex="0"><span class="landing-audit-entry-top"><span class="tok-com">2026-06-04T17:03Z</span> <span class="landing-audit-status is-denied">blocked</span></span>
+  command: <span class="tok-bin">./deploy.sh</span>
+  actor: <span class="tok-pun">[claude-code]</span>
+  reason: <span class="tok-com">missing</span></span>
+<span class="landing-audit-entry" data-audit-target="approved" tabindex="0"><span class="landing-audit-entry-top"><span class="tok-com">2026-06-04T17:04Z</span> <span class="landing-audit-status is-approved">started</span></span>
+  command: <span class="tok-bin">./deploy.sh</span>
+  secret: <span class="tok-key">DATABASE_URL</span> <span class="tok-com">(my-app/production via keyring://)</span>
+  reason: <span class="tok-str">Deploy web frontend</span> <span class="tok-pun">[claude-code]</span></span></code></pre>
       </div>
     </div>
 
@@ -1343,6 +1426,78 @@ Error: accessing secrets requires a reason.
     </p>
   </div>
 </section>
+
+<script>
+  (() => {
+    const demo = document.querySelector<HTMLElement>('[data-audit-demo]');
+    if (!demo) return;
+    const demoEl = demo;
+
+    const states = ['denied', 'approved'];
+    const targets = demoEl.querySelectorAll<HTMLElement>('[data-audit-target]');
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    let activeIndex = 0;
+    let isPinned = false;
+    let timer: number | undefined;
+
+    function setAuditState(state: string) {
+      const nextIndex = states.indexOf(state);
+      if (nextIndex === -1) return;
+      activeIndex = nextIndex;
+      demoEl.setAttribute('data-active-audit', state);
+    }
+
+    function stop() {
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    }
+
+    function start() {
+      if (reducedMotion || timer !== undefined) return;
+      timer = window.setInterval(() => {
+        if (isPinned) return;
+        setAuditState(states[(activeIndex + 1) % states.length]);
+      }, 2800);
+    }
+
+    targets.forEach((target) => {
+      const state = target.getAttribute('data-audit-target');
+      if (!state) return;
+
+      target.addEventListener('pointerenter', () => {
+        isPinned = true;
+        setAuditState(state);
+      });
+      target.addEventListener('pointerleave', () => {
+        isPinned = false;
+      });
+      target.addEventListener('focus', () => {
+        isPinned = true;
+        setAuditState(state);
+      });
+      target.addEventListener('blur', () => {
+        isPinned = false;
+      });
+    });
+
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            start();
+          } else {
+            stop();
+          }
+        });
+      }, { threshold: 0.2 });
+      observer.observe(demoEl);
+    } else {
+      start();
+    }
+  })();
+</script>
 
 <!-- ============ SHOWCASE: export and Actions ============ -->
 <section class="landing-showcase">

@@ -485,13 +485,48 @@ Templates belong on the leaf aliases in a cached route, not on the cached
 alias itself. Bare provider names and literal URIs have no alias identity, so
 they use provider convention naming unless the secret declares legacy `ref`.
 
-#### SecretSpec 0.17 cached alias values
+#### SecretSpec 0.19 inline provider cache
+
+:::caution[Version compatibility]
+Attaching `cache` directly to an alias with `uri` is available starting with
+SecretSpec 0.19.
+:::
+
+Use `uri` and `cache` when one provider is authoritative. `credentials` remains
+optional and configures that same provider:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `uri` | string | Yes | Authoritative provider URI. |
+| `credentials` | table | No | Provider-specific credential sources for `uri`. |
+| `cache` | table | Yes | Local cache policy containing `provider` and `max_age`. |
+| `cache.provider` | string | Yes | Leaf provider spec used to store cache entries. Must support deletion and address a different store from `uri`. |
+| `cache.max_age` | string | Yes | Positive duration with `s`, `m`, `h`, `d`, or `w` units, such as `30m`, `8h`, or `1d`. |
+
+```toml title="secretspec.toml"
+[providers]
+local = "keyring://secretspec/cache/{project}/{profile}/{key}"
+azure = {
+  uri = "akv://team-vault",
+  credentials = { client_secret = "keyring" },
+  cache = { provider = "local", max_age = "8h" }
+}
+
+[profiles.development.defaults]
+providers = ["azure"]
+```
+
+The alias remains both the selected cached route and the build key for its
+authoritative provider, so its configured credentials apply normally.
+
+#### SecretSpec 0.17 cached fallback alias values
 
 :::caution[Version compatibility]
 Cached provider aliases are available starting with SecretSpec 0.17.
 :::
 
-A cached alias uses `fallback` and `cache` instead of `uri` and `credentials`:
+A cached fallback alias uses `fallback` and `cache` when more than one provider
+can answer:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -511,15 +546,15 @@ myprovider = { fallback = ["azure", "env"], cache = { provider = "local", max_ag
 providers = ["myprovider"]
 ```
 
-The cached alias is a complete route and must be the only entry when selected
-through `providers`, in any position. Its fallback entries and cache provider
+Every cached alias is a complete route and must be the only entry when selected
+through `providers`, in any position. Fallback entries and the cache provider
 accept aliases, provider names, and URIs, but must resolve to leaf providers;
-cached aliases cannot be nested, and the cache must resolve to a different store
-than the route's own authoritative providers, since it holds its entries at the
-same logical address. The cache provider must also be one SecretSpec can delete
-from — keyring, pass, gopass, dotenv, or a Vault/OpenBao KV v2 mount — since
-every form of invalidation is a delete. Put credentials on leaf aliases rather
-than the cached alias.
+cached aliases cannot be nested, and the cache must resolve to a different
+store than the route's own authoritative providers, since it holds its entries
+at the same logical address. The cache provider must also be one SecretSpec can
+delete from — keyring, pass, gopass, dotenv, or a Vault/OpenBao KV v2 mount —
+since every form of invalidation is a delete. Put credentials on leaf aliases
+rather than the cached fallback alias.
 See [Provider caching](/concepts/providers/caching/)
 for freshness, failure, invalidation, and clearing behavior.
 

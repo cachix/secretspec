@@ -691,7 +691,7 @@ pub trait Provider: Send + Sync {
     /// since SecretSpec 0.17.
     ///
     /// The default ignores the hint and writes a plain value, which is always
-    /// correct: SecretSpec's own cache envelope carries the write time and
+    /// correct: SecretSpec's own cache envelope carries the expiration time and
     /// remains the freshness authority. A provider whose store can drop a value
     /// on its own overrides this, so a cached secret stops existing even if
     /// SecretSpec never runs again — a store-side bound on how long a copy of

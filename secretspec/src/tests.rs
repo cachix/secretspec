@@ -9251,10 +9251,49 @@ fn expired_cache_entry_falls_back_and_refreshes() {
     let secrets = cached_dotenv_secrets(&[&source], &cache, "8h");
     assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-1");
 
-    backdate_cache_entry(&cache, "resolve-test", "API_KEY");
+    expire_cache_entry(&cache, "resolve-test", "API_KEY");
 
     fs::write(&source, "API_KEY=remote-2\n").unwrap();
     assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-2");
+}
+
+#[test]
+fn changing_cache_max_age_invalidates_the_existing_entry() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote-1\n").unwrap();
+    let long_lived = cached_dotenv_secrets(&[&source], &cache, "8h");
+    assert_eq!(resolved_value(&long_lived, "API_KEY"), "remote-1");
+
+    fs::write(&source, "API_KEY=remote-2\n").unwrap();
+    let shorter = cached_dotenv_secrets(&[&source], &cache, "1h");
+    assert_eq!(
+        resolved_value(&shorter, "API_KEY"),
+        "remote-2",
+        "the active max_age policy must invalidate an entry written under another policy"
+    );
+}
+
+#[test]
+fn fresh_v2_cache_entry_remains_available_during_migration() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "8h");
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote");
+    rewrite_cache_entry_as_v2(&cache, "resolve-test", "API_KEY");
+
+    fs::remove_file(&source).unwrap();
+    fs::create_dir(&source).unwrap();
+    assert_eq!(
+        resolved_value(&secrets, "API_KEY"),
+        "remote",
+        "upgrading must not turn a fresh v2 cache hit into an authoritative read"
+    );
 }
 
 #[test]
@@ -9444,8 +9483,8 @@ fn cache_write_failure_does_not_hide_authoritative_value() {
     assert_eq!(resolved_value(&secrets, "API_KEY"), "remote");
 }
 
-/// Rewrite a dotenv-backed cache entry's write time, so it reads as expired.
-fn backdate_cache_entry(cache: &Path, project: &str, name: &str) {
+/// Rewrite a dotenv-backed cache entry's expiration, so it reads as expired.
+fn expire_cache_entry(cache: &Path, project: &str, name: &str) {
     let marker = crate::cache::CACHE_ENVELOPE_MARKER;
     let (_, stored) = dotenvy::from_path_iter(cache)
         .unwrap()
@@ -9456,12 +9495,41 @@ fn backdate_cache_entry(cache: &Path, project: &str, name: &str) {
         .strip_prefix(marker)
         .expect("a cache entry carries the ownership marker");
     let mut envelope: serde_json::Value = serde_json::from_str(payload).unwrap();
-    envelope["cached_at"] = serde_json::json!(0);
+    envelope["expires_at"] = serde_json::json!(0);
     write_cache_entry(
         cache,
         project,
         name,
         &format!("{marker}{}", serde_json::to_string(&envelope).unwrap()),
+    );
+}
+
+/// Rewrite the current dotenv-backed entry in the released v2 envelope format.
+fn rewrite_cache_entry_as_v2(cache: &Path, project: &str, name: &str) {
+    let marker = crate::cache::CACHE_ENVELOPE_MARKER;
+    let (_, stored) = dotenvy::from_path_iter(cache)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    let payload = stored
+        .strip_prefix(marker)
+        .expect("a cache entry carries the current ownership marker");
+    let mut envelope: serde_json::Value = serde_json::from_str(payload).unwrap();
+    let expires_at = envelope["expires_at"].as_u64().unwrap();
+    let max_age_secs = envelope["max_age_secs"].as_u64().unwrap();
+    envelope["cached_at"] = serde_json::json!(expires_at - max_age_secs);
+    let object = envelope.as_object_mut().unwrap();
+    object.remove("expires_at");
+    object.remove("max_age_secs");
+    write_cache_entry(
+        cache,
+        project,
+        name,
+        &format!(
+            "secretspec-cache-v2:{}",
+            serde_json::to_string(&envelope).unwrap()
+        ),
     );
 }
 
@@ -9495,7 +9563,7 @@ fn an_expired_entry_is_dropped_even_when_nothing_replaces_it() {
     let secrets = cached_dotenv_secrets(&[&source], &cache, "8h");
     assert_eq!(resolved_value(&secrets, "API_KEY"), "remote");
 
-    backdate_cache_entry(&cache, "resolve-test", "API_KEY");
+    expire_cache_entry(&cache, "resolve-test", "API_KEY");
     fs::remove_file(&source).unwrap();
     secrets.report().unwrap();
 
@@ -9678,7 +9746,7 @@ fn a_value_secretspec_did_not_write_is_never_deleted() {
 }
 
 #[test]
-fn another_projects_cache_entry_is_never_deleted() {
+fn another_projects_unexpired_cache_entry_is_never_deleted() {
     let _env = scrub_resolution_env();
     // A flat store gives every project the same key for a given secret name, so
     // an entry found there may be another project's. Clearing must say so rather
@@ -9700,6 +9768,30 @@ fn another_projects_cache_entry_is_never_deleted() {
         stored_cache_entry(&cache).as_deref(),
         Some(entry.as_str()),
         "another project's entry must survive our clear"
+    );
+}
+
+#[test]
+fn another_projects_expired_cache_entry_is_deleted_when_encountered() {
+    let _env = scrub_resolution_env();
+    // Expiration is part of the entry itself, so another project that collides
+    // with it in a flat store can honor that lifetime without knowing the
+    // manifest or max_age that originally created it.
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+
+    let providers = cached_dotenv_providers(&[&source], &cache, "8h");
+    let theirs = cached_secrets_with("their-project", providers.clone());
+    assert_eq!(resolved_value(&theirs, "API_KEY"), "remote");
+    expire_cache_entry(&cache, "their-project", "API_KEY");
+
+    let ours = cached_secrets_with("our-project", providers);
+    ours.report().unwrap();
+    assert!(
+        stored_cache_entry(&cache).is_none(),
+        "an expired SecretSpec entry can be removed by whoever encounters it"
     );
 }
 

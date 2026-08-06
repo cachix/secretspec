@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Cache entries now store their absolute expiration time, allowing SecretSpec
+  to remove an expired entry whenever it encounters one, including at an
+  address previously used by another project or profile. Changing `max_age`
+  invalidates entries written under the previous policy. Fresh v2 entries remain
+  usable during migration, while foreign v2 entries remain untouched.
+  ([#275](https://github.com/cachix/secretspec/issues/275))
 - `run` preserves non-UTF-8 environment values byte-for-byte when launching
   child processes on Unix.
 - SDK pkg-config setup now pins cargo-c's library and metadata install

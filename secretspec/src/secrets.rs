@@ -1002,10 +1002,9 @@ impl Secrets {
     /// Planned execution may unwrap only the inline form into its authoritative
     /// URI; a fallback-based cached alias remains a complete multi-store route.
     fn ensure_provider_use_allowed(&self, spec: &str, allow_inline_cached: bool) -> Result<()> {
-        if self
-            .cached_alias(spec)
-            .is_some_and(|alias| !allow_inline_cached || alias.authoritative_uri().is_none())
-        {
+        if self.cached_alias(spec).is_some_and(|alias| {
+            !allow_inline_cached || alias.authoritative_uri().is_none()
+        }) {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "cached provider alias '{spec}' is a complete route; select it through a \
                  secret's providers list, the default provider, or --provider"
@@ -1066,7 +1065,7 @@ impl Secrets {
         let mut credentials = ProviderCredentials::new();
         let Some(declared) = self
             .lookup_provider_alias_entry(spec)
-            .map(|alias| &alias.credentials)
+            .and_then(ProviderAlias::credentials)
             .filter(|credentials| !credentials.is_empty())
         else {
             return Ok(credentials);
@@ -1143,7 +1142,10 @@ impl Secrets {
         let entry = self
             .lookup_provider_alias_entry(alias)
             .ok_or_else(|| SecretSpecError::ProviderNotFound(alias.to_string()))?;
-        Ok(sorted_credential_entries(&entry.credentials)
+        Ok(entry
+            .credentials()
+            .map(sorted_credential_entries)
+            .unwrap_or_default()
             .into_iter()
             .map(|(name, source)| (name.clone(), source.clone()))
             .collect())
@@ -1203,10 +1205,13 @@ impl Secrets {
         let Some(alias) = self.lookup_provider_alias_entry(spec) else {
             return Ok(());
         };
+        let Some(credentials) = alias.credentials() else {
+            return Ok(());
+        };
         let resolved_target = self.resolve_provider_spec(spec.to_string());
         let supported = crate::provider::credential_names_for_spec(&resolved_target);
         let provider_name = crate::provider::provider_display_name_for_spec(&resolved_target);
-        for (name, source) in sorted_credential_entries(&alias.credentials) {
+        for (name, source) in sorted_credential_entries(credentials) {
             if !supported.contains(&name.as_str()) {
                 let supported_display = if supported.is_empty() {
                     "none".to_string()
@@ -1243,7 +1248,9 @@ impl Secrets {
                 )));
             }
             if let Some(source_alias) = self.lookup_provider_alias_entry(&source.provider)
-                && !source_alias.credentials.is_empty()
+                && source_alias
+                    .credentials()
+                    .is_some_and(|credentials| !credentials.is_empty())
             {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
                     "provider alias '{}' cannot be a credential source for '{spec}' because it \
@@ -6020,14 +6027,13 @@ mod provider_credential_scope_tests {
         // `access_token` is sourced from a writable, profile-namespacing store.
         let providers = HashMap::from([(
             "bws".to_string(),
-            ProviderAlias {
-                uri: "bws://proj".to_string(),
-                credentials: HashMap::from([(
+            ProviderAlias::leaf(
+                "bws://proj",
+                HashMap::from([(
                     "access_token".to_string(),
                     CredentialSource::from("memtest://"),
                 )]),
-                ..Default::default()
-            },
+            ),
         )]);
 
         let mut config =

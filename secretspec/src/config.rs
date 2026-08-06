@@ -357,6 +357,22 @@ impl ProviderAlias {
         }
     }
 
+    /// A leaf alias carrying a URI and its semantic credential sources.
+    pub fn leaf(uri: impl Into<String>, credentials: HashMap<String, CredentialSource>) -> Self {
+        Self {
+            uri: uri.into(),
+            credentials,
+            reference_template: None,
+            fallback: Vec::new(),
+            cache: None,
+        }
+    }
+
+    /// Semantic credential sources for a leaf or inline cached provider.
+    pub fn credentials(&self) -> Option<&HashMap<String, CredentialSource>> {
+        self.fallback.is_empty().then_some(&self.credentials)
+    }
+
     /// A cached route alias: ordered authoritative sources plus the cache they
     /// are cached in (0.17+).
     ///

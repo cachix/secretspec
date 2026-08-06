@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The Rust SDK's `ProviderAlias` now represents leaf, inline-cached, and
+  fallback-cached aliases as distinct non-exhaustive enum variants. Code that
+  constructs credential-bearing aliases should use `ProviderAlias::leaf`;
+  cached fallback aliases continue to use `ProviderAlias::cached`.
+
 ### Added
 
 - Windows ARM64 CLI release artifacts (`aarch64-pc-windows-msvc`).

@@ -6434,14 +6434,16 @@ APP_SECRET = { description = "App", required = true }
         .expect("merged config should carry [providers]");
 
     assert_eq!(
-        providers.get("op_infra").map(|alias| alias.uri.as_str()),
+        providers
+            .get("op_infra")
+            .and_then(ProviderAlias::authoritative_uri),
         Some("onepassword://Shared"),
         "alias defined only in extended config should be inherited"
     );
     assert_eq!(
         providers
             .get("op_overridden")
-            .map(|alias| alias.uri.as_str()),
+            .and_then(ProviderAlias::authoritative_uri),
         Some("onepassword://NewVault"),
         "alias defined in both should resolve to the current (extending) config's value"
     );
@@ -7809,11 +7811,7 @@ fn secrets_with_credential_alias(
     let mut config = resolve_test_config(HashMap::new());
     config.providers = Some(HashMap::from([(
         "target".to_string(),
-        ProviderAlias {
-            uri: target_uri.to_string(),
-            credentials,
-            ..Default::default()
-        },
+        ProviderAlias::leaf(target_uri, credentials),
     )]));
     Secrets::new(config, None, None, None)
 }
@@ -8071,25 +8069,23 @@ fn credential_chain_is_limited_to_one_hop() {
         // `chained` itself declares credentials, so it may not be a source.
         (
             "chained".to_string(),
-            ProviderAlias {
-                uri: "keyring://".to_string(),
-                credentials: HashMap::from([(
+            ProviderAlias::leaf(
+                "keyring://",
+                HashMap::from([(
                     "access_token".to_string(),
                     CredentialSource::from("keyring"),
                 )]),
-                ..Default::default()
-            },
+            ),
         ),
         (
             "target".to_string(),
-            ProviderAlias {
-                uri: "bws://00000000-0000-0000-0000-000000000000".to_string(),
-                credentials: HashMap::from([(
+            ProviderAlias::leaf(
+                "bws://00000000-0000-0000-0000-000000000000",
+                HashMap::from([(
                     "access_token".to_string(),
                     CredentialSource::from("chained"),
                 )]),
-                ..Default::default()
-            },
+            ),
         ),
     ]));
     let secrets = Secrets::new(config, None, None, None);
@@ -9695,10 +9691,13 @@ fn invalid_inline_cached_import_does_not_fetch_provider_credentials() {
     let cache = temp.path().join("cache.env");
     let mut route = ProviderAlias::from("bws://project")
         .with_cache(ProviderCache::new("local", "8h").expect("valid cache policy"));
-    route.credentials.insert(
-        "access_token".to_string(),
-        CredentialSource::from("memtest://"),
-    );
+    route
+        .credentials_mut()
+        .expect("inline cached providers carry credentials")
+        .insert(
+            "access_token".to_string(),
+            CredentialSource::from("memtest://"),
+        );
     let providers = HashMap::from([
         ("myprovider".to_string(), route),
         (
@@ -10169,14 +10168,13 @@ fn cache_construction_failure_drops_the_superseded_entry() {
         let mut providers = cached_providers(&[&source], "memtest://", "8h");
         providers.insert(
             "local".to_string(),
-            ProviderAlias {
-                uri: "memtest://".to_string(),
-                credentials: HashMap::from([(
+            ProviderAlias::leaf(
+                "memtest://",
+                HashMap::from([(
                     "test_token".to_string(),
                     CredentialSource::from(format!("dotenv://{}", credential.display())),
                 )]),
-                ..Default::default()
-            },
+            ),
         );
         providers
     };

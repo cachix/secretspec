@@ -72,7 +72,9 @@ pub use config::{
 
 // Re-export Secret and generation types for secretspec-derive
 #[doc(hidden)]
-pub use config::{GenerateConfig, GenerateOptions, Secret, SecretEncoding};
+pub use config::{
+    ExtractFormat, GenerateConfig, GenerateOptions, Secret, SecretEncoding, SecretExtract,
+};
 
 // Public API exports
 pub use error::{Result, SecretSpecError};

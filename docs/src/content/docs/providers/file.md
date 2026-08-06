@@ -144,6 +144,42 @@ Referenced files are writable when filesystem permissions allow it. Treat
 runtime-managed mounts as read-only unless their owner explicitly permits
 SecretSpec to replace or delete entries.
 
+## Extract from JSON (0.19+)
+
+:::caution[Version compatibility]
+Structured `extract` is available starting in SecretSpec 0.19.
+:::
+
+Several declarations can select values from one JSON file without making JSON
+part of the provider itself:
+
+```toml title="secretspec.toml"
+[providers]
+runtime_files = "file:///run/secrets"
+
+[profiles.production]
+# extract is available in SecretSpec 0.19+
+DATABASE_USER = {
+  description = "Database user",
+  providers = ["runtime_files"],
+  ref = { item = "application.json" },
+  extract = { format = "json", pointer = "/database/user" }
+}
+DATABASE_PASSWORD = {
+  description = "Database password",
+  providers = ["runtime_files"],
+  ref = { item = "application.json" },
+  extract = { format = "json", pointer = "/database/password" }
+}
+```
+
+The file provider returns the complete UTF-8 document; SecretSpec then applies
+the RFC 6901 pointer as a provider-independent stored-value transform. Extracted
+declarations are read-only in 0.19 so `set`, `delete`, generation, prompting,
+and import cannot overwrite or remove the containing file. See
+[Structured Extraction](/reference/configuration/#structured-extraction-019)
+for value rendering, error behavior, and composition with `encoding`.
+
 ## CI/CD and containers
 
 Use a read-only mounted directory with explicit refs when the runtime already

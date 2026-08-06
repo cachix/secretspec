@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `file` provider stores each secret as one plaintext UTF-8 file beneath an
   explicitly configured relative or absolute directory, with project/profile
   isolation and support for existing file-mounted secrets through `ref.item`.
+- Secrets can select values from stored JSON documents with RFC 6901 pointers
+  using `extract`. Extraction composes with provider-native references and
+  storage decoding; selected values are read-only so sibling document data is
+  never overwritten or deleted.
 - Secrets can store values as standard Base64, URL-safe Base64, or hexadecimal
   using `encoding`; writes encode logical text and reads decode stored values,
   while `as_path = true` materializes arbitrary decoded bytes.
@@ -76,6 +80,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   paths without treating separators as TOML escapes.
 - Profile overrides can switch between legacy `ref` and provider-scoped `refs`
   without retaining both inherited address models and failing validation.
+- JSON extraction from file-backed documents now handles Windows store paths
+  without treating path separators as TOML escapes.
 - SDK pkg-config setup now pins cargo-c's library and metadata install
   directories, so Go, Ruby, and Haskell reliably discover
   `secretspec_ffi.pc` across environments.

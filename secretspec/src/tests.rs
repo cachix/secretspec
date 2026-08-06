@@ -5042,6 +5042,119 @@ BAD = { description = "invalid base64", encoding = "base64" }
 }
 
 #[test]
+fn test_json_extract_resolves_structured_values_after_decoding() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let store = temp_dir.path().join("store");
+    fs::create_dir(&store).unwrap();
+    let document_path = store.join("application.json");
+    let document = r#"{
+  "database": {
+    "password": "p@ss\nword",
+    "port": 5432,
+    "enabled": true,
+    "nullable": null,
+    "options": { "ssl": true },
+    "hosts": ["db-a", "db-b"]
+  },
+  "a/b": { "~key": "escaped" }
+}"#;
+    fs::write(&document_path, document).unwrap();
+    fs::write(
+        store.join("encoded.json"),
+        "eyJkYXRhIjp7InRva2VuIjoiYWJjIn19",
+    )
+    .unwrap();
+
+    let config_file = temp_dir.path().join("secretspec.toml");
+    let store_uri = toml::Value::String(format!("file:{}", store.display())).to_string();
+    fs::write(
+        &config_file,
+        format!(
+            r#"[project]
+name = "test-json-extract"
+revision = "1.0"
+require_reason = false
+
+[providers]
+documents = {store_uri}
+
+[profiles.default]
+PASSWORD = {{ description = "password", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/database/password" }} }}
+PORT = {{ description = "port", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/database/port" }} }}
+ENABLED = {{ description = "enabled", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/database/enabled" }} }}
+NULL_VALUE = {{ description = "null", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/database/nullable" }} }}
+OPTIONS = {{ description = "object", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/database/options" }} }}
+HOSTS = {{ description = "array", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/database/hosts" }} }}
+ESCAPED = {{ description = "escaped pointer", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/a~1b/~0key" }} }}
+OPTIONS_FILE = {{ description = "object as file", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/database/options" }}, as_path = true }}
+ENCODED = {{ description = "decoded document", providers = ["documents"], ref = {{ item = "encoded.json" }}, encoding = "base64", extract = {{ format = "json", pointer = "/data/token" }} }}
+FALLBACK = {{ description = "logical default", providers = ["documents"], ref = {{ item = "missing.json" }}, extract = {{ format = "json", pointer = "/ignored" }}, default = "already-logical" }}
+"#
+        ),
+    )
+    .unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let spec = Secrets::new(config, None, None, None);
+    let validated = spec.validate().unwrap().unwrap();
+    let values = &validated.resolved.secrets;
+    assert_eq!(values["PASSWORD"].expose_secret(), "p@ss\nword");
+    assert_eq!(values["PORT"].expose_secret(), "5432");
+    assert_eq!(values["ENABLED"].expose_secret(), "true");
+    assert_eq!(values["NULL_VALUE"].expose_secret(), "null");
+    assert_eq!(values["OPTIONS"].expose_secret(), r#"{"ssl":true}"#);
+    assert_eq!(values["HOSTS"].expose_secret(), r#"["db-a","db-b"]"#);
+    assert_eq!(values["ESCAPED"].expose_secret(), "escaped");
+    assert_eq!(values["ENCODED"].expose_secret(), "abc");
+    assert_eq!(values["FALLBACK"].expose_secret(), "already-logical");
+    assert_eq!(
+        fs::read_to_string(values["OPTIONS_FILE"].expose_secret()).unwrap(),
+        r#"{"ssl":true}"#
+    );
+
+    let original = fs::read_to_string(&document_path).unwrap();
+    let set_error = spec.set("PASSWORD", Some("new".to_string())).unwrap_err();
+    assert!(matches!(
+        set_error,
+        SecretSpecError::ExtractedSecretReadOnly(ref name) if name == "PASSWORD"
+    ));
+    let delete_error = spec.delete("PASSWORD").unwrap_err();
+    assert!(matches!(
+        delete_error,
+        SecretSpecError::ExtractedSecretReadOnly(ref name) if name == "PASSWORD"
+    ));
+    let import_error = spec
+        .import(&format!("file:{}", store.display()))
+        .unwrap_err();
+    assert!(matches!(
+        import_error,
+        SecretSpecError::ExtractedSecretReadOnly(_)
+    ));
+    assert_eq!(fs::read_to_string(document_path).unwrap(), original);
+}
+
+#[test]
+fn test_json_extract_errors_do_not_expose_stored_documents() {
+    use crate::config::{ExtractFormat, SecretExtract};
+
+    let extract = SecretExtract {
+        format: ExtractFormat::Json,
+        pointer: "/database/password".to_string(),
+    };
+    for stored in [
+        r#"{"database":"sensitive-invalid-document""#,
+        r#"{"other":"sensitive-missing-pointer"}"#,
+    ] {
+        let error = Secrets::extract_stored_value(&extract, "PASSWORD", stored).unwrap_err();
+        assert_eq!(error.kind(), "decode_failed");
+        assert!(error.to_string().contains("using json"));
+        assert!(!error.to_string().contains("sensitive"));
+    }
+}
+
+#[test]
 fn test_binary_decoded_secret_requires_as_path() {
     use std::fs;
 
@@ -5712,6 +5825,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
             refs: None,
             as_path: None,
             encoding: None,
+            extract: None,
             secret_type: Some("password".to_string()),
             generate: Some(crate::config::GenerateConfig::Bool(true)),
         },

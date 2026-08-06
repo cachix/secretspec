@@ -1880,9 +1880,12 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
               <path class="landing-remote-arrow-head" d="M 0 0 L 7 3.5 L 0 7 Z"></path>
             </marker>
           </defs>
-          <path data-remote-route="app-core" marker-start="url(#landing-remote-arrow)" marker-end="url(#landing-remote-arrow)"></path>
-          <path data-remote-route="core-azure" marker-start="url(#landing-remote-arrow)" marker-end="url(#landing-remote-arrow)"></path>
-          <path data-remote-route="core-cache" marker-start="url(#landing-remote-arrow)" marker-end="url(#landing-remote-arrow)"></path>
+          <path data-remote-route-base="app-core" marker-start="url(#landing-remote-arrow)" marker-end="url(#landing-remote-arrow)"></path>
+          <path data-remote-route-base="core-azure" marker-start="url(#landing-remote-arrow)" marker-end="url(#landing-remote-arrow)"></path>
+          <path data-remote-route-base="core-cache" marker-start="url(#landing-remote-arrow)" marker-end="url(#landing-remote-arrow)"></path>
+          <path data-remote-route="app-core"></path>
+          <path data-remote-route="core-azure"></path>
+          <path data-remote-route="core-cache"></path>
         </svg>
 
         <div class="landing-remote-node is-app" data-remote-node="app">
@@ -1897,7 +1900,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
         <div class="landing-remote-node is-core" data-remote-node="core">
           <span class="landing-remote-core-mark" aria-hidden="true"></span>
           <span class="landing-remote-node-copy">
-            <strong>remote</strong>
+            <strong>cached_azure</strong>
           </span>
         </div>
 
@@ -1942,13 +1945,13 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
 <span class="tok-key landing-remote-config-token is-cache">local_cache</span> <span class="tok-pun">=</span> <span class="tok-str">"keyring://secretspec/cache/{project}/{profile}/{key}"</span>
 <span class="tok-key landing-remote-config-token is-azure">azure</span> <span class="tok-pun">=</span> <span class="tok-str">"akv://team-vault"</span>
 
-<span class="tok-key landing-remote-config-token is-core">remote</span> <span class="tok-pun">= {</span>
+<span class="tok-key landing-remote-config-token is-core">cached_azure</span> <span class="tok-pun">= {</span>
   <span class="tok-key">fallback</span> <span class="tok-pun">= [</span><span class="tok-str landing-remote-config-token is-azure">"azure"</span><span class="tok-pun">],</span>
   <span class="tok-key">cache</span> <span class="tok-pun">= {</span> <span class="tok-key">provider</span> <span class="tok-pun">=</span> <span class="tok-str landing-remote-config-token is-cache">"local_cache"</span><span class="tok-pun">,</span> <span class="tok-key">max_age</span> <span class="tok-pun">=</span> <span class="tok-str">"8h"</span> <span class="tok-pun">}</span>
 <span class="tok-pun">}</span>
 
 <span class="tok-sec">[profiles.default]</span>
-<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">providers</span> <span class="tok-pun">= [</span><span class="tok-str landing-remote-config-token is-core">"remote"</span><span class="tok-pun">] }</span></code></pre>
+<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">providers</span> <span class="tok-pun">= [</span><span class="tok-str landing-remote-config-token is-core">"cached_azure"</span><span class="tok-pun">] }</span></code></pre>
     </div>
   </div>
 </section>
@@ -1987,9 +1990,12 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
               <path class="landing-remote-arrow-head" d="M 0 0 L 7 3.5 L 0 7 Z"></path>
             </marker>
           </defs>
-          <path data-remote-route="bootstrap-onepassword" marker-end="url(#landing-bootstrap-arrow)"></path>
-          <path data-remote-route="onepassword-core" marker-end="url(#landing-bootstrap-arrow)"></path>
-          <path data-remote-route="core-app" marker-start="url(#landing-bootstrap-arrow)" marker-end="url(#landing-bootstrap-arrow)"></path>
+          <path data-remote-route-base="bootstrap-onepassword" marker-end="url(#landing-bootstrap-arrow)"></path>
+          <path data-remote-route-base="onepassword-core" marker-end="url(#landing-bootstrap-arrow)"></path>
+          <path data-remote-route-base="core-app" marker-start="url(#landing-bootstrap-arrow)" marker-end="url(#landing-bootstrap-arrow)"></path>
+          <path data-remote-route="bootstrap-onepassword"></path>
+          <path data-remote-route="onepassword-core"></path>
+          <path data-remote-route="core-app"></path>
         </svg>
 
         <div class="landing-remote-node is-bootstrap" data-remote-node="bootstrap">
@@ -2063,6 +2069,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       const nodes = new Map<string, HTMLElement>();
       const routes = new Map<string, SVGPathElement>();
+      const routeBases = new Map<string, SVGPathElement>();
       const codeTokens = Array.from(demoEl.querySelectorAll<HTMLElement>('.landing-remote-config-token'));
       const routePoints = new Map<string, Array<{ x: number; y: number }>>();
       const animations = new Set<Animation>();
@@ -2080,6 +2087,10 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       demoEl.querySelectorAll<SVGPathElement>('[data-remote-route]').forEach((route) => {
         const name = route.dataset.remoteRoute;
         if (name) routes.set(name, route);
+      });
+      demoEl.querySelectorAll<SVGPathElement>('[data-remote-route-base]').forEach((route) => {
+        const name = route.dataset.remoteRouteBase;
+        if (name) routeBases.set(name, route);
       });
 
       const routeEnds: Record<string, [string, string]> = kind === 'cache'
@@ -2131,7 +2142,9 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
 
       Object.entries(definitions).forEach(([name, points]) => {
         routePoints.set(name, points);
-        routes.get(name)?.setAttribute('d', points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' '));
+        const path = points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ');
+        routes.get(name)?.setAttribute('d', path);
+        routeBases.get(name)?.setAttribute('d', path);
       });
       }
 
@@ -2141,7 +2154,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       statusDotEl.style.boxShadow = `0 0 0 0.25rem color-mix(in srgb, ${color} 12%, transparent)`;
       }
 
-      function setActive(nodeNames: string[], routeName?: string, color?: string) {
+      function setActive(nodeNames: string[], routeNames?: string | string[], color?: string) {
         nodes.forEach((node) => node.classList.remove('is-active'));
         routes.forEach((route) => route.classList.remove('is-active'));
         codeTokens.forEach((token) => token.classList.remove('is-active'));
@@ -2149,11 +2162,12 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
         codeTokens.forEach((token) => {
           token.classList.toggle('is-active', nodeNames.some((name) => token.classList.contains(`is-${name}`)));
         });
-        if (routeName) {
+        const activeRoutes = typeof routeNames === 'string' ? [routeNames] : routeNames ?? [];
+        activeRoutes.forEach((routeName) => {
           const route = routes.get(routeName);
           route?.classList.add('is-active');
           if (color) route?.style.setProperty('--remote-path-color', color);
-        }
+        });
       }
 
       function setFresh(fresh: boolean) {
@@ -2188,6 +2202,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       async function travel(options: {
       route: string;
       from: string;
+      via?: Array<{ route: string; from: string }>;
       label: string;
       color: string;
       packet: number;
@@ -2196,9 +2211,14 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
     }) {
       if (!running || options.id !== cycleId) return false;
       drawRoutes();
-      const points = [...(routePoints.get(options.route) ?? [])];
-      const ends = routeEnds[options.route];
-      if (!ends || ends[0] !== options.from) points.reverse();
+      const points: Array<{ x: number; y: number }> = [];
+      const legs = [{ route: options.route, from: options.from }, ...(options.via ?? [])];
+      legs.forEach((leg) => {
+        const legPoints = [...(routePoints.get(leg.route) ?? [])];
+        const ends = routeEnds[leg.route];
+        if (!ends || ends[0] !== leg.from) legPoints.reverse();
+        points.push(...legPoints);
+      });
       if (points.length < 2) return false;
 
       const packet = packets[options.packet];
@@ -2207,23 +2227,42 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       packet.style.opacity = '0';
       const firstPoint = points[0];
       const lastPoint = points[points.length - 1];
-      const deltaX = lastPoint.x - firstPoint.x;
-      const deltaY = lastPoint.y - firstPoint.y;
-      const distance = Math.hypot(deltaX, deltaY);
-      const horizontal = Math.abs(deltaX) >= Math.abs(deltaY);
-      const packetClearance = (horizontal ? packet.offsetWidth : packet.offsetHeight) / 2 + 8;
-      const clearance = Math.min(packetClearance, distance * 0.2);
-      const unitX = distance ? deltaX / distance : 0;
-      const unitY = distance ? deltaY / distance : 0;
-      points[0] = { x: firstPoint.x + unitX * clearance, y: firstPoint.y + unitY * clearance };
-      points[points.length - 1] = { x: lastPoint.x - unitX * clearance, y: lastPoint.y - unitY * clearance };
+      const secondPoint = points[1];
+      const penultimatePoint = points[points.length - 2];
+      const startDelta = { x: secondPoint.x - firstPoint.x, y: secondPoint.y - firstPoint.y };
+      const endDelta = { x: lastPoint.x - penultimatePoint.x, y: lastPoint.y - penultimatePoint.y };
+      const startDistance = Math.hypot(startDelta.x, startDelta.y);
+      const endDistance = Math.hypot(endDelta.x, endDelta.y);
+      const startHorizontal = Math.abs(startDelta.x) >= Math.abs(startDelta.y);
+      const endHorizontal = Math.abs(endDelta.x) >= Math.abs(endDelta.y);
+      const startClearance = Math.min((startHorizontal ? packet.offsetWidth : packet.offsetHeight) / 2 + 8, startDistance * 0.2);
+      const endClearance = Math.min((endHorizontal ? packet.offsetWidth : packet.offsetHeight) / 2 + 8, endDistance * 0.2);
+      points[0] = {
+        x: firstPoint.x + (startDistance ? startDelta.x / startDistance : 0) * startClearance,
+        y: firstPoint.y + (startDistance ? startDelta.y / startDistance : 0) * startClearance,
+      };
+      points[points.length - 1] = {
+        x: lastPoint.x - (endDistance ? endDelta.x / endDistance : 0) * endClearance,
+        y: lastPoint.y - (endDistance ? endDelta.y / endDistance : 0) * endClearance,
+      };
       const transform = (point: { x: number; y: number }) => `translate(${point.x}px, ${point.y}px) translate(-50%, -50%)`;
       const first = points[0];
       const last = points[points.length - 1];
+      const distances = [0];
+      for (let index = 1; index < points.length; index += 1) {
+        distances.push(distances[index - 1] + Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y));
+      }
+      const totalDistance = distances[distances.length - 1] || 1;
+      const pathFrames = points.slice(1, -1).map((point, index) => ({
+        transform: transform(point),
+        opacity: 1,
+        offset: 0.08 + (distances[index + 1] / totalDistance) * 0.84,
+      }));
       const animation = packet.animate([
         { transform: transform(first), opacity: 0 },
-        { transform: transform(first), opacity: 1, offset: 0.1 },
-        { transform: transform(last), opacity: 1, offset: 0.88 },
+        { transform: transform(first), opacity: 1, offset: 0.08 },
+        ...pathFrames,
+        { transform: transform(last), opacity: 1, offset: 0.92 },
         { transform: transform(last), opacity: 0 },
       ], {
         duration: options.duration ?? 820,
@@ -2267,23 +2306,24 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       async function firstRead(id: number) {
       setFresh(false);
       resetTimer();
-      setStatus('Your App asks SecretSpec for DATABASE_URL', 'var(--remote-app)');
+      setStatus('Your App asks cached_azure for DATABASE_URL', 'var(--remote-app)');
       setActive(['app', 'core'], 'app-core', 'var(--remote-app)');
       if (!await travel({ route: 'app-core', from: 'app', label: 'DATABASE_URL?', color: 'var(--remote-app)', packet: 0, id })) return false;
       if (!await delay(260, id)) return false;
 
-      setStatus('remote fetches DATABASE_URL from azure', 'var(--remote-azure)');
+      setStatus('cached_azure fetches DATABASE_URL from azure', 'var(--remote-azure)');
       setActive(['core', 'azure'], 'core-azure', 'var(--remote-azure)');
       if (!await travel({ route: 'core-azure', from: 'core', label: 'DATABASE_URL?', color: 'var(--remote-azure)', packet: 0, duration: 760, id })) return false;
       if (!await delay(180, id)) return false;
 
-      setStatus('azure returns DATABASE_URL to SecretSpec', 'var(--remote-azure)');
+      setStatus('azure returns DATABASE_URL to cached_azure', 'var(--remote-azure)');
       setActive(['azure', 'core'], 'core-azure', 'var(--remote-azure)');
       if (!await travel({ route: 'core-azure', from: 'azure', label: 'DATABASE_URL', color: 'var(--remote-azure)', packet: 0, duration: 940, id })) return false;
       if (!await delay(220, id)) return false;
 
-      setStatus('remote sends DATABASE_URL to Your App and local_cache', 'var(--remote-cache)');
+      setStatus('cached_azure sends DATABASE_URL to Your App and local_cache', 'var(--remote-cache)');
       nodes.forEach((node) => node.classList.remove('is-active'));
+      routes.forEach((route) => route.classList.remove('is-active'));
       nodes.get('core')?.classList.add('is-active');
       nodes.get('app')?.classList.add('is-active');
       nodes.get('cache')?.classList.add('is-active');
@@ -2305,13 +2345,31 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
     }
 
       async function cachedRead(id: number) {
-      setStatus('Repeat read comes from local_cache', 'var(--remote-cache)');
-      setActive(['cache', 'core'], 'core-cache', 'var(--remote-cache)');
-      if (!await travel({ route: 'core-cache', from: 'cache', label: 'DATABASE_URL', color: 'var(--remote-cache)', packet: 0, duration: 700, id })) return false;
+      setStatus('Your App requests DATABASE_URL from local_cache', 'var(--remote-app)');
+      setActive(['app', 'core', 'cache'], ['app-core', 'core-cache'], 'var(--remote-app)');
+      if (!await travel({
+        route: 'app-core',
+        from: 'app',
+        via: [{ route: 'core-cache', from: 'core' }],
+        label: 'DATABASE_URL?',
+        color: 'var(--remote-app)',
+        packet: 0,
+        duration: 560,
+        id,
+      })) return false;
 
-      setStatus('Your App receives DATABASE_URL without contacting azure', 'var(--remote-app)');
-      setActive(['core', 'app'], 'app-core', 'var(--remote-cache)');
-      if (!await travel({ route: 'app-core', from: 'core', label: 'DATABASE_URL', color: 'var(--remote-cache)', packet: 0, duration: 700, id })) return false;
+      setStatus('local_cache returns DATABASE_URL to Your App', 'var(--remote-cache)');
+      setActive(['cache', 'core', 'app'], ['core-cache', 'app-core'], 'var(--remote-cache)');
+      if (!await travel({
+        route: 'core-cache',
+        from: 'cache',
+        via: [{ route: 'app-core', from: 'core' }],
+        label: 'DATABASE_URL',
+        color: 'var(--remote-cache)',
+        packet: 0,
+        duration: 680,
+        id,
+      })) return false;
       nodes.forEach((node) => node.classList.remove('is-active'));
       routes.forEach((route) => route.classList.remove('is-active'));
       codeTokens.forEach((token) => token.classList.remove('is-active'));

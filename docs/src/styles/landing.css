@@ -1626,13 +1626,25 @@
   pointer-events: none;
 }
 
+.landing-remote-routes [data-remote-route-base],
 .landing-remote-routes [data-remote-route] {
   fill: none;
-  stroke: color-mix(in srgb, var(--color-gray-400) 48%, transparent);
   stroke-width: 1.5;
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
-  transition: stroke 0.18s ease, stroke-width 0.18s ease, opacity 0.25s ease;
+}
+
+.landing-remote-routes [data-remote-route-base] {
+  stroke: color-mix(in srgb, var(--color-gray-400) 48%, transparent);
+  transition: opacity 0.25s ease;
+}
+
+.landing-remote-routes [data-remote-route] {
+  opacity: 0;
+  stroke: var(--remote-path-color, var(--remote-core));
+  stroke-width: 1.75;
+  stroke-dasharray: 5 7;
+  transition: opacity 0.25s ease;
 }
 
 .landing-remote-arrow-head {
@@ -1640,12 +1652,11 @@
 }
 
 .landing-remote-routes [data-remote-route].is-active {
-  stroke: var(--remote-path-color, var(--remote-core));
-  stroke-width: 2.5;
-  stroke-dasharray: 5 7;
+  opacity: 1;
   animation: landing-remote-route-flow 0.65s linear infinite;
 }
 
+.landing-remote-map.is-cache-fresh [data-remote-route-base='core-azure'],
 .landing-remote-map.is-cache-fresh [data-remote-route='core-azure'] {
   opacity: 0.22;
 }
@@ -1727,7 +1738,7 @@
 
 .landing-remote-node.is-cache {
   --remote-node-color: var(--remote-cache);
-  padding-right: 4.6rem;
+  padding-right: 4.9rem;
 }
 
 .landing-remote-map.is-cache-map .landing-remote-node.is-azure {
@@ -1862,7 +1873,7 @@
 .landing-remote-timer {
   --remote-progress: 0deg;
   position: absolute;
-  right: 0.7rem;
+  right: 1rem;
   top: 50%;
   display: grid;
   place-content: center;
@@ -2096,8 +2107,8 @@
   }
 
   .landing-remote-timer {
-    right: 0.45rem;
-    top: 0.45rem;
+    right: 0.65rem;
+    top: 0.65rem;
     width: 2.85rem;
     height: 2.85rem;
     transform: none;
@@ -2115,6 +2126,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .landing-remote-node,
+  .landing-remote-routes [data-remote-route-base],
   .landing-remote-routes [data-remote-route] {
     transition: none;
     animation: none;

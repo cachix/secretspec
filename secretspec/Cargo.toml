@@ -56,7 +56,7 @@ detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
 
 [features]
-default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "infisical", "bw", "age", "scaleway", "sops"]
+default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "infisical", "bw", "age", "scaleway", "sops", "bt-pws"]
 cli = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
@@ -78,6 +78,7 @@ bw = ["dep:base64"]
 akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secrets"]
 age = ["dep:age"]
 sops = []
+bt-pws = ["dep:reqwest"]
 
 [dev-dependencies]
 # Validates serialized resolution reports against the committed JSON Schema.

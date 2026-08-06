@@ -52,7 +52,7 @@ aws-sdk-ssm = "1"
 azure_core = "1.0.0"
 azure_identity = "1.0.0"
 azure_security_keyvault_secrets = "1.0.0"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls-native-roots"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 secretspec-derive = { version = "0.18.0", path = "./secretspec-derive" }
 secretspec = { version = "0.18.0", path = "./secretspec" }

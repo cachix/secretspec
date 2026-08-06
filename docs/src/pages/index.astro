@@ -1,6 +1,7 @@
 ---
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 import { getCollection } from 'astro:content';
+import azureLogo from '../assets/microsoft-azure.svg';
 import sopsLogo from '../assets/sops-logo.svg';
 import type { SyntaxColorName } from '../data/syntax-colors';
 
@@ -1842,6 +1843,592 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
     } else {
       start();
     }
+  })();
+</script>
+
+<!-- ============ SHOWCASE: remote secrets with a local cache ============ -->
+<section id="remote-secrets" class="landing-showcase landing-remote-demo" data-flow-demo="cache">
+  <div class="landing-container">
+    <div class="landing-showcase-head">
+      <span class="landing-showcase-eyebrow">Remote secrets · 0.17+</span>
+      <h2 class="landing-section-title">Remote secrets, local speed.</h2>
+      <p class="landing-section-lead landing-section-lead-narrow">
+        Fetch from Azure once. Serve every read locally until the cache expires. <a href="/concepts/providers/caching/" class="landing-link">Provider caching →</a>
+      </p>
+    </div>
+
+    <div class="landing-remote-shell">
+      <div class="landing-remote-toolbar">
+        <div class="landing-remote-status" aria-hidden="true">
+          <span class="landing-remote-status-dot" aria-hidden="true"></span>
+          <span data-remote-status>App requests DATABASE_URL</span>
+        </div>
+        <button class="landing-remote-motion" type="button" data-remote-motion aria-label="Pause animation" title="Pause animation">
+          <span class="landing-remote-pause-icon" aria-hidden="true"></span>
+          <span class="landing-remote-play-icon" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <p id="remote-secrets-description" class="sr-only">
+        Your App requests DATABASE_URL from SecretSpec. Azure Key Vault returns it once, then SecretSpec sends one copy to your app and one to the local keyring cache. For the next eight hours, Azure remains inactive while repeat reads are served locally. When the cache expires, SecretSpec contacts Azure again.
+      </p>
+
+      <div class="landing-remote-map is-cache-map" data-remote-map aria-hidden="true">
+        <svg class="landing-remote-routes" aria-hidden="true">
+          <defs>
+            <marker id="landing-remote-arrow" viewBox="0 0 7 7" refX="6" refY="3.5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+              <path class="landing-remote-arrow-head" d="M 0 0 L 7 3.5 L 0 7 Z"></path>
+            </marker>
+          </defs>
+          <path data-remote-route="app-core" marker-start="url(#landing-remote-arrow)" marker-end="url(#landing-remote-arrow)"></path>
+          <path data-remote-route="core-azure" marker-start="url(#landing-remote-arrow)" marker-end="url(#landing-remote-arrow)"></path>
+          <path data-remote-route="core-cache" marker-start="url(#landing-remote-arrow)" marker-end="url(#landing-remote-arrow)"></path>
+        </svg>
+
+        <div class="landing-remote-node is-app" data-remote-node="app">
+          <span class="landing-remote-node-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="m8 9-3 3 3 3M16 9l3 3-3 3M14 5l-4 14"></path></svg>
+          </span>
+          <span class="landing-remote-node-copy">
+            <strong>Your App</strong>
+          </span>
+        </div>
+
+        <div class="landing-remote-node is-core" data-remote-node="core">
+          <span class="landing-remote-core-mark" aria-hidden="true"></span>
+          <span class="landing-remote-node-copy">
+            <strong>remote</strong>
+          </span>
+        </div>
+
+        <div class="landing-remote-node is-azure" data-remote-node="azure">
+          <span class="landing-remote-node-icon is-azure-icon" aria-hidden="true">
+            <img src={azureLogo.src} alt="" width="24" height="24" />
+          </span>
+          <span class="landing-remote-node-copy">
+            <strong>azure</strong>
+          </span>
+        </div>
+
+        <div class="landing-remote-node is-cache is-dimmed" data-remote-node="cache">
+          <span class="landing-remote-node-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path></svg>
+          </span>
+          <span class="landing-remote-node-copy">
+            <strong>local_cache</strong>
+          </span>
+          <div class="landing-remote-timer" data-remote-timer style="--remote-progress: 0deg;" aria-label="Cache freshness: empty">
+            <span data-remote-timer-value>—</span>
+            <small data-remote-timer-label>empty</small>
+          </div>
+        </div>
+
+        <span class="landing-remote-packet" data-remote-packet aria-hidden="true">DATABASE_URL</span>
+        <span class="landing-remote-packet" data-remote-packet aria-hidden="true">DATABASE_URL</span>
+      </div>
+
+      <div class="landing-remote-outcome">
+        <span><strong>Azure contacted</strong> once per freshness window</span>
+        <span><strong>Fresh reads</strong> stay on this machine</span>
+      </div>
+    </div>
+
+    <div class="landing-remote-config landing-terminal">
+      <div class="landing-terminal-header">
+        <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+        <span class="landing-terminal-title">secretspec.toml</span>
+      </div>
+      <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[providers]</span>
+<span class="tok-key landing-remote-config-token is-cache">local_cache</span> <span class="tok-pun">=</span> <span class="tok-str">"keyring://secretspec/cache/{project}/{profile}/{key}"</span>
+<span class="tok-key landing-remote-config-token is-azure">azure</span> <span class="tok-pun">=</span> <span class="tok-str">"akv://team-vault"</span>
+
+<span class="tok-key landing-remote-config-token is-core">remote</span> <span class="tok-pun">= {</span>
+  <span class="tok-key">fallback</span> <span class="tok-pun">= [</span><span class="tok-str landing-remote-config-token is-azure">"azure"</span><span class="tok-pun">],</span>
+  <span class="tok-key">cache</span> <span class="tok-pun">= {</span> <span class="tok-key">provider</span> <span class="tok-pun">=</span> <span class="tok-str landing-remote-config-token is-cache">"local_cache"</span><span class="tok-pun">,</span> <span class="tok-key">max_age</span> <span class="tok-pun">=</span> <span class="tok-str">"8h"</span> <span class="tok-pun">}</span>
+<span class="tok-pun">}</span>
+
+<span class="tok-sec">[profiles.default]</span>
+<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">providers</span> <span class="tok-pun">= [</span><span class="tok-str landing-remote-config-token is-core">"remote"</span><span class="tok-pun">] }</span></code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SHOWCASE: provider credential bootstrapping ============ -->
+<section id="credential-bootstrapping" class="landing-showcase landing-remote-demo" data-flow-demo="bootstrap">
+  <div class="landing-container">
+    <div class="landing-showcase-head">
+      <span class="landing-showcase-eyebrow">Credential bootstrapping · 0.15+</span>
+      <h2 class="landing-section-title">Start local. Unlock remote.</h2>
+      <p class="landing-section-lead landing-section-lead-narrow">
+        Keep provider credentials in a trusted local store. SecretSpec uses them to unlock remote providers, while your app receives only the secrets it asks for. <a href="/reference/provider-credentials/" class="landing-link">Provider credentials →</a>
+      </p>
+    </div>
+
+    <div class="landing-remote-shell">
+      <div class="landing-remote-toolbar">
+        <div class="landing-remote-status" aria-hidden="true">
+          <span class="landing-remote-status-dot" aria-hidden="true"></span>
+          <span data-remote-status>App requests DATABASE_URL</span>
+        </div>
+        <button class="landing-remote-motion" type="button" data-remote-motion aria-label="Pause animation" title="Pause animation">
+          <span class="landing-remote-pause-icon" aria-hidden="true"></span>
+          <span class="landing-remote-play-icon" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <p class="sr-only">
+        Your App asks SecretSpec for DATABASE_URL. SecretSpec resolves a 1Password service account token from the local keyring provider named bootstrap and uses it to unlock the 1Password vault. 1Password returns DATABASE_URL through SecretSpec to your app. Your app receives DATABASE_URL but never receives the 1Password credential.
+      </p>
+
+      <div class="landing-remote-map is-bootstrap-map" data-remote-map aria-hidden="true">
+        <svg class="landing-remote-routes" aria-hidden="true">
+          <defs>
+            <marker id="landing-bootstrap-arrow" viewBox="0 0 7 7" refX="6" refY="3.5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+              <path class="landing-remote-arrow-head" d="M 0 0 L 7 3.5 L 0 7 Z"></path>
+            </marker>
+          </defs>
+          <path data-remote-route="bootstrap-onepassword" marker-end="url(#landing-bootstrap-arrow)"></path>
+          <path data-remote-route="onepassword-core" marker-end="url(#landing-bootstrap-arrow)"></path>
+          <path data-remote-route="core-app" marker-start="url(#landing-bootstrap-arrow)" marker-end="url(#landing-bootstrap-arrow)"></path>
+        </svg>
+
+        <div class="landing-remote-node is-bootstrap" data-remote-node="bootstrap">
+          <span class="landing-remote-node-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v2"></path></svg>
+          </span>
+          <span class="landing-remote-node-copy"><strong>bootstrap</strong></span>
+        </div>
+
+        <div class="landing-remote-node is-onepassword" data-remote-node="onepassword">
+          <span class="landing-remote-node-icon is-onepassword-icon" aria-hidden="true">
+            <span class="landing-remote-provider-mark" style={`--remote-provider-icon-mask:${simpleIconMask('1password')}`}></span>
+          </span>
+          <span class="landing-remote-node-copy"><strong>onepassword</strong></span>
+        </div>
+
+        <div class="landing-remote-node is-core" data-remote-node="core">
+          <span class="landing-remote-core-mark" aria-hidden="true"></span>
+          <span class="landing-remote-node-copy"><strong>SecretSpec</strong></span>
+        </div>
+
+        <div class="landing-remote-node is-app" data-remote-node="app">
+          <span class="landing-remote-node-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="m8 9-3 3 3 3M16 9l3 3-3 3M14 5l-4 14"></path></svg>
+          </span>
+          <span class="landing-remote-node-copy"><strong>Your App</strong></span>
+        </div>
+
+        <span class="landing-remote-packet" data-remote-packet aria-hidden="true">DATABASE_URL</span>
+      </div>
+
+      <div class="landing-remote-outcome">
+        <span><strong>Your App receives</strong> DATABASE_URL</span>
+        <span><strong>Your App never receives</strong> the 1Password credential</span>
+      </div>
+    </div>
+
+    <div class="landing-remote-config landing-terminal">
+      <div class="landing-terminal-header">
+        <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+        <span class="landing-terminal-title">secretspec.toml</span>
+      </div>
+      <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[providers]</span>
+<span class="tok-key landing-remote-config-token is-bootstrap">bootstrap</span> <span class="tok-pun">=</span> <span class="tok-str">"keyring://"</span>
+<span class="tok-key landing-remote-config-token is-onepassword">onepassword</span> <span class="tok-pun">= {</span>
+  <span class="tok-key">uri</span> <span class="tok-pun">=</span> <span class="tok-str">"onepassword://Production"</span><span class="tok-pun">,</span>
+  <span class="tok-key">credentials</span> <span class="tok-pun">= {</span> <span class="tok-key">service_account_token</span> <span class="tok-pun">=</span> <span class="tok-str landing-remote-config-token is-bootstrap">"bootstrap"</span> <span class="tok-pun">}</span>
+<span class="tok-pun">}</span>
+
+<span class="tok-sec">[profiles.default]</span>
+<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">providers</span> <span class="tok-pun">= [</span><span class="tok-str landing-remote-config-token is-onepassword">"onepassword"</span><span class="tok-pun">] }</span></code></pre>
+    </div>
+  </div>
+</section>
+
+<script>
+  (function () {
+    document.querySelectorAll<HTMLElement>('[data-flow-demo]').forEach((demoEl) => {
+      const kind = demoEl.dataset.flowDemo;
+      const mapEl = demoEl.querySelector<HTMLElement>('[data-remote-map]')!;
+      const statusEl = demoEl.querySelector<HTMLElement>('[data-remote-status]')!;
+      const statusDotEl = demoEl.querySelector<HTMLElement>('.landing-remote-status-dot')!;
+      const motionButtonEl = demoEl.querySelector<HTMLButtonElement>('[data-remote-motion]')!;
+      const timerEl = demoEl.querySelector<HTMLElement>('[data-remote-timer]');
+      const timerValueEl = demoEl.querySelector<HTMLElement>('[data-remote-timer-value]');
+      const timerLabelEl = demoEl.querySelector<HTMLElement>('[data-remote-timer-label]');
+      const packets = Array.from(demoEl.querySelectorAll<HTMLElement>('[data-remote-packet]'));
+
+      if (!kind || !mapEl || !statusEl || !statusDotEl || !motionButtonEl || packets.length === 0) return;
+
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const nodes = new Map<string, HTMLElement>();
+      const routes = new Map<string, SVGPathElement>();
+      const codeTokens = Array.from(demoEl.querySelectorAll<HTMLElement>('.landing-remote-config-token'));
+      const routePoints = new Map<string, Array<{ x: number; y: number }>>();
+      const animations = new Set<Animation>();
+      let timerFrame: number | undefined;
+      let timerResolve: ((completed: boolean) => void) | undefined;
+      let cycleId = 0;
+      let running = false;
+      let inView = false;
+      let userPaused = false;
+
+      demoEl.querySelectorAll<HTMLElement>('[data-remote-node]').forEach((node) => {
+        const name = node.dataset.remoteNode;
+        if (name) nodes.set(name, node);
+      });
+      demoEl.querySelectorAll<SVGPathElement>('[data-remote-route]').forEach((route) => {
+        const name = route.dataset.remoteRoute;
+        if (name) routes.set(name, route);
+      });
+
+      const routeEnds: Record<string, [string, string]> = kind === 'cache'
+        ? {
+            'app-core': ['core', 'app'],
+            'core-azure': ['azure', 'core'],
+            'core-cache': ['core', 'cache'],
+          }
+        : {
+            'bootstrap-onepassword': ['bootstrap', 'onepassword'],
+            'onepassword-core': ['onepassword', 'core'],
+            'core-app': ['core', 'app'],
+          };
+
+      function port(name: string, side: 'left' | 'right' | 'top' | 'bottom') {
+      const node = nodes.get(name);
+      if (!node) return { x: 0, y: 0 };
+      const nodeRect = node.getBoundingClientRect();
+      const mapRect = mapEl.getBoundingClientRect();
+      const centerX = nodeRect.left - mapRect.left + nodeRect.width / 2;
+      const centerY = nodeRect.top - mapRect.top + nodeRect.height / 2;
+      if (side === 'left') return { x: nodeRect.left - mapRect.left, y: centerY };
+      if (side === 'right') return { x: nodeRect.right - mapRect.left, y: centerY };
+      if (side === 'top') return { x: centerX, y: nodeRect.top - mapRect.top };
+      return { x: centerX, y: nodeRect.bottom - mapRect.top };
+      }
+
+      function drawRoutes() {
+        const compact = window.matchMedia('(max-width: 820px)').matches;
+        const definitions: Record<string, Array<{ x: number; y: number }>> = kind === 'cache'
+          ? {
+              'app-core': compact
+                ? [port('core', 'left'), port('app', 'right')]
+                : [port('core', 'right'), port('app', 'left')],
+              'core-azure': compact
+                ? [port('azure', 'top'), port('core', 'bottom')]
+                : [port('azure', 'right'), port('core', 'left')],
+              'core-cache': compact
+                ? [port('core', 'bottom'), port('cache', 'top')]
+                : [port('core', 'right'), port('cache', 'left')],
+            }
+          : {
+              'bootstrap-onepassword': [port('bootstrap', 'right'), port('onepassword', 'left')],
+              'onepassword-core': compact
+                ? [port('onepassword', 'bottom'), port('core', 'top')]
+                : [port('onepassword', 'right'), port('core', 'left')],
+              'core-app': [port('core', 'right'), port('app', 'left')],
+            };
+
+      Object.entries(definitions).forEach(([name, points]) => {
+        routePoints.set(name, points);
+        routes.get(name)?.setAttribute('d', points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' '));
+      });
+      }
+
+      function setStatus(message: string, color: string) {
+      statusEl.textContent = message;
+      statusDotEl.style.backgroundColor = color;
+      statusDotEl.style.boxShadow = `0 0 0 0.25rem color-mix(in srgb, ${color} 12%, transparent)`;
+      }
+
+      function setActive(nodeNames: string[], routeName?: string, color?: string) {
+        nodes.forEach((node) => node.classList.remove('is-active'));
+        routes.forEach((route) => route.classList.remove('is-active'));
+        codeTokens.forEach((token) => token.classList.remove('is-active'));
+        nodeNames.forEach((name) => nodes.get(name)?.classList.add('is-active'));
+        codeTokens.forEach((token) => {
+          token.classList.toggle('is-active', nodeNames.some((name) => token.classList.contains(`is-${name}`)));
+        });
+        if (routeName) {
+          const route = routes.get(routeName);
+          route?.classList.add('is-active');
+          if (color) route?.style.setProperty('--remote-path-color', color);
+        }
+      }
+
+      function setFresh(fresh: boolean) {
+        mapEl.classList.toggle('is-cache-fresh', fresh);
+        nodes.get('azure')?.classList.toggle('is-dimmed', fresh);
+        nodes.get('cache')?.classList.toggle('is-dimmed', !fresh);
+      }
+
+      function updateTimer(hours: number, progress: number, label = 'fresh') {
+        if (!timerEl || !timerValueEl || !timerLabelEl) return;
+      const displayHours = Math.max(0, Math.ceil(hours));
+      timerEl.style.setProperty('--remote-progress', `${Math.max(0, progress) * 360}deg`);
+      timerValueEl.textContent = `${displayHours}h`;
+      timerLabelEl.textContent = label;
+      timerEl.setAttribute('aria-label', `Cache freshness: ${displayHours} hours remaining`);
+      }
+
+      function resetTimer() {
+        if (!timerEl || !timerValueEl || !timerLabelEl) return;
+      timerEl.style.setProperty('--remote-progress', '0deg');
+      timerValueEl.textContent = '—';
+      timerLabelEl.textContent = 'empty';
+      timerEl.setAttribute('aria-label', 'Cache freshness: empty');
+      }
+
+      function delay(milliseconds: number, id: number) {
+      return new Promise<boolean>((resolve) => {
+        window.setTimeout(() => resolve(running && id === cycleId), milliseconds);
+      });
+      }
+
+      async function travel(options: {
+      route: string;
+      from: string;
+      label: string;
+      color: string;
+      packet: number;
+      duration?: number;
+      id: number;
+    }) {
+      if (!running || options.id !== cycleId) return false;
+      drawRoutes();
+      const points = [...(routePoints.get(options.route) ?? [])];
+      const ends = routeEnds[options.route];
+      if (!ends || ends[0] !== options.from) points.reverse();
+      if (points.length < 2) return false;
+
+      const packet = packets[options.packet];
+      packet.textContent = options.label;
+      packet.style.setProperty('--remote-packet-color', options.color);
+      packet.style.opacity = '0';
+      const firstPoint = points[0];
+      const lastPoint = points[points.length - 1];
+      const deltaX = lastPoint.x - firstPoint.x;
+      const deltaY = lastPoint.y - firstPoint.y;
+      const distance = Math.hypot(deltaX, deltaY);
+      const horizontal = Math.abs(deltaX) >= Math.abs(deltaY);
+      const packetClearance = (horizontal ? packet.offsetWidth : packet.offsetHeight) / 2 + 8;
+      const clearance = Math.min(packetClearance, distance * 0.2);
+      const unitX = distance ? deltaX / distance : 0;
+      const unitY = distance ? deltaY / distance : 0;
+      points[0] = { x: firstPoint.x + unitX * clearance, y: firstPoint.y + unitY * clearance };
+      points[points.length - 1] = { x: lastPoint.x - unitX * clearance, y: lastPoint.y - unitY * clearance };
+      const transform = (point: { x: number; y: number }) => `translate(${point.x}px, ${point.y}px) translate(-50%, -50%)`;
+      const first = points[0];
+      const last = points[points.length - 1];
+      const animation = packet.animate([
+        { transform: transform(first), opacity: 0 },
+        { transform: transform(first), opacity: 1, offset: 0.1 },
+        { transform: transform(last), opacity: 1, offset: 0.88 },
+        { transform: transform(last), opacity: 0 },
+      ], {
+        duration: options.duration ?? 820,
+        easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
+      });
+      animations.add(animation);
+      try {
+        await animation.finished;
+      } catch {
+        return false;
+      } finally {
+        animations.delete(animation);
+      }
+      return running && options.id === cycleId;
+      }
+
+      function startTimer(id: number, duration: number) {
+      const startedAt = performance.now();
+      return new Promise<boolean>((resolve) => {
+        timerResolve = resolve;
+        function frame(now: number) {
+          if (!running || id !== cycleId) {
+            timerResolve = undefined;
+            resolve(false);
+            return;
+          }
+          const elapsed = Math.min(1, (now - startedAt) / duration);
+          updateTimer(8 * (1 - elapsed), 1 - elapsed);
+          if (elapsed >= 1) {
+            timerFrame = undefined;
+            timerResolve = undefined;
+            resolve(true);
+            return;
+          }
+          timerFrame = window.requestAnimationFrame(frame);
+        }
+        timerFrame = window.requestAnimationFrame(frame);
+      });
+      }
+
+      async function firstRead(id: number) {
+      setFresh(false);
+      resetTimer();
+      setStatus('Your App asks SecretSpec for DATABASE_URL', 'var(--remote-app)');
+      setActive(['app', 'core'], 'app-core', 'var(--remote-app)');
+      if (!await travel({ route: 'app-core', from: 'app', label: 'DATABASE_URL?', color: 'var(--remote-app)', packet: 0, id })) return false;
+      if (!await delay(260, id)) return false;
+
+      setStatus('remote fetches DATABASE_URL from azure', 'var(--remote-azure)');
+      setActive(['core', 'azure'], 'core-azure', 'var(--remote-azure)');
+      if (!await travel({ route: 'core-azure', from: 'core', label: 'DATABASE_URL?', color: 'var(--remote-azure)', packet: 0, duration: 760, id })) return false;
+      if (!await delay(180, id)) return false;
+
+      setStatus('azure returns DATABASE_URL to SecretSpec', 'var(--remote-azure)');
+      setActive(['azure', 'core'], 'core-azure', 'var(--remote-azure)');
+      if (!await travel({ route: 'core-azure', from: 'azure', label: 'DATABASE_URL', color: 'var(--remote-azure)', packet: 0, duration: 940, id })) return false;
+      if (!await delay(220, id)) return false;
+
+      setStatus('remote sends DATABASE_URL to Your App and local_cache', 'var(--remote-cache)');
+      nodes.forEach((node) => node.classList.remove('is-active'));
+      nodes.get('core')?.classList.add('is-active');
+      nodes.get('app')?.classList.add('is-active');
+      nodes.get('cache')?.classList.add('is-active');
+      codeTokens.forEach((token) => token.classList.toggle('is-active', token.classList.contains('is-core') || token.classList.contains('is-cache')));
+      routes.get('app-core')?.classList.add('is-active');
+      routes.get('core-cache')?.classList.add('is-active');
+      routes.get('app-core')?.style.setProperty('--remote-path-color', 'var(--remote-app)');
+      routes.get('core-cache')?.style.setProperty('--remote-path-color', 'var(--remote-cache)');
+      nodes.get('core')?.classList.add('is-splitting');
+      const delivered = await Promise.all([
+        travel({ route: 'app-core', from: 'core', label: 'DATABASE_URL', color: 'var(--remote-app)', packet: 0, duration: 980, id }),
+        travel({ route: 'core-cache', from: 'core', label: 'DATABASE_URL', color: 'var(--remote-cache)', packet: 1, duration: 980, id }),
+      ]);
+      nodes.get('core')?.classList.remove('is-splitting');
+      if (!delivered.every(Boolean)) return false;
+      setFresh(true);
+      updateTimer(8, 1);
+      return true;
+    }
+
+      async function cachedRead(id: number) {
+      setStatus('Repeat read comes from local_cache', 'var(--remote-cache)');
+      setActive(['cache', 'core'], 'core-cache', 'var(--remote-cache)');
+      if (!await travel({ route: 'core-cache', from: 'cache', label: 'DATABASE_URL', color: 'var(--remote-cache)', packet: 0, duration: 700, id })) return false;
+
+      setStatus('Your App receives DATABASE_URL without contacting azure', 'var(--remote-app)');
+      setActive(['core', 'app'], 'app-core', 'var(--remote-cache)');
+      if (!await travel({ route: 'app-core', from: 'core', label: 'DATABASE_URL', color: 'var(--remote-cache)', packet: 0, duration: 700, id })) return false;
+      nodes.forEach((node) => node.classList.remove('is-active'));
+      routes.forEach((route) => route.classList.remove('is-active'));
+      codeTokens.forEach((token) => token.classList.remove('is-active'));
+      return true;
+    }
+
+      async function runCacheLoop(id: number) {
+      while (running && id === cycleId) {
+        if (!await firstRead(id)) return;
+        setStatus('local_cache is fresh · azure rests for 8h', 'var(--remote-cache)');
+        const countdown = startTimer(id, 8200);
+
+        if (!await delay(700, id) || !await cachedRead(id)) return;
+        if (!await delay(900, id) || !await cachedRead(id)) return;
+        if (!await delay(900, id) || !await cachedRead(id)) return;
+        if (!await countdown) return;
+
+        setFresh(false);
+        updateTimer(0, 0, 'expired');
+        setStatus('local_cache expired · azure is active again', 'var(--remote-azure)');
+        setActive(['azure']);
+        if (!await delay(900, id)) return;
+      }
+      }
+
+      async function runBootstrapLoop(id: number) {
+        while (running && id === cycleId) {
+          setStatus('Your App asks SecretSpec for DATABASE_URL', 'var(--remote-app)');
+          setActive(['app', 'core'], 'core-app', 'var(--remote-app)');
+          if (!await travel({ route: 'core-app', from: 'app', label: 'DATABASE_URL?', color: 'var(--remote-app)', packet: 0, id })) return;
+          if (!await delay(320, id)) return;
+
+          setStatus('SecretSpec uses bootstrap to unlock onepassword', 'var(--remote-bootstrap)');
+          setActive(['bootstrap', 'onepassword'], 'bootstrap-onepassword', 'var(--remote-bootstrap)');
+          if (!await travel({ route: 'bootstrap-onepassword', from: 'bootstrap', label: 'service_account_token', color: 'var(--remote-bootstrap)', packet: 0, duration: 1050, id })) return;
+          if (!await delay(360, id)) return;
+
+          setStatus('onepassword returns DATABASE_URL to SecretSpec', 'var(--remote-onepassword)');
+          setActive(['onepassword', 'core'], 'onepassword-core', 'var(--remote-onepassword)');
+          if (!await travel({ route: 'onepassword-core', from: 'onepassword', label: 'DATABASE_URL', color: 'var(--remote-onepassword)', packet: 0, duration: 900, id })) return;
+          if (!await delay(320, id)) return;
+
+          setStatus('Your App receives DATABASE_URL, never the 1Password token', 'var(--remote-app)');
+          setActive(['core', 'app'], 'core-app', 'var(--remote-app)');
+          if (!await travel({ route: 'core-app', from: 'core', label: 'DATABASE_URL', color: 'var(--remote-app)', packet: 0, duration: 900, id })) return;
+          nodes.forEach((node) => node.classList.remove('is-active'));
+          routes.forEach((route) => route.classList.remove('is-active'));
+          codeTokens.forEach((token) => token.classList.remove('is-active'));
+          if (!await delay(1600, id)) return;
+        }
+      }
+
+      function stop() {
+      running = false;
+      cycleId += 1;
+      animations.forEach((animation) => animation.cancel());
+      animations.clear();
+      if (timerFrame !== undefined) window.cancelAnimationFrame(timerFrame);
+      timerFrame = undefined;
+      timerResolve?.(false);
+      timerResolve = undefined;
+      nodes.get('core')?.classList.remove('is-splitting');
+      }
+
+      function start() {
+      if (running || reduceMotion || userPaused || !inView) return;
+      running = true;
+      cycleId += 1;
+        if (kind === 'cache') void runCacheLoop(cycleId);
+        else void runBootstrapLoop(cycleId);
+      }
+
+      drawRoutes();
+      const resizeObserver = new ResizeObserver(drawRoutes);
+      resizeObserver.observe(mapEl);
+
+      motionButtonEl.addEventListener('click', () => {
+      userPaused = !userPaused;
+      motionButtonEl.classList.toggle('is-paused', userPaused);
+      motionButtonEl.setAttribute('aria-label', userPaused ? 'Resume animation' : 'Pause animation');
+      motionButtonEl.title = userPaused ? 'Resume animation' : 'Pause animation';
+      if (userPaused) {
+        stop();
+        setStatus('Animation paused', 'var(--color-gray-400)');
+      } else {
+        start();
+      }
+      });
+
+      if (reduceMotion) {
+        motionButtonEl.hidden = true;
+        if (kind === 'cache') {
+          setFresh(true);
+          updateTimer(6, 0.75);
+          setStatus('Fresh DATABASE_URL reads come from local_cache', 'var(--remote-cache)');
+          setActive(['cache', 'core', 'app']);
+        } else {
+          setStatus('bootstrap unlocks onepassword; Your App receives only DATABASE_URL', 'var(--remote-bootstrap)');
+          setActive(['bootstrap', 'onepassword', 'core', 'app']);
+        }
+        return;
+      }
+
+      if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            inView = entry.isIntersecting;
+            if (inView) start();
+            else stop();
+          });
+        }, { threshold: 0.25 });
+        observer.observe(demoEl);
+      } else {
+        inView = true;
+        start();
+      }
+    });
   })();
 </script>
 

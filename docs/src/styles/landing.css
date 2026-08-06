@@ -10,6 +10,11 @@
   --syntax-magenta: #d7aff0;
   --syntax-cyan: #82c7d8;
   --syntax-orange: #d8a162;
+  --landing-active-fill: 9%;
+  --landing-active-border: 36%;
+  --landing-active-glow: 10%;
+  --landing-token-glow: 8%;
+  --landing-active-duration: 0.28s;
 }
 
 /* Remove Starlight's content panel constraints on the landing page only.
@@ -32,6 +37,7 @@
 .landing-pipeline > *,
 .landing-pipeline-grid > *,
 .landing-fallback > *,
+.landing-remote-shell > *,
 .landing-bento > *,
 .landing-hero-split > *,
 .landing-community > *,
@@ -1058,10 +1064,10 @@
   opacity: 0.68;
   outline: none;
   transition:
-    opacity 0.32s ease,
-    background-color 0.32s ease,
-    border-color 0.32s ease,
-    box-shadow 0.32s ease;
+    opacity var(--landing-active-duration) ease,
+    background-color var(--landing-active-duration) ease,
+    border-color var(--landing-active-duration) ease,
+    box-shadow var(--landing-active-duration) ease;
 }
 
 .landing-scope-block + .landing-scope-block,
@@ -1080,10 +1086,10 @@
   border-radius: 0.3rem;
   opacity: 0.68;
   transition:
-    background-color 0.32s ease,
-    color 0.32s ease,
-    opacity 0.32s ease,
-    box-shadow 0.32s ease;
+    background-color var(--landing-active-duration) ease,
+    color var(--landing-active-duration) ease,
+    opacity var(--landing-active-duration) ease,
+    box-shadow var(--landing-active-duration) ease;
 }
 
 .landing-scope-block[data-scope-target='api'],
@@ -1103,9 +1109,9 @@
 .landing-scope-command:hover,
 .landing-scope-command:focus-visible {
   opacity: 1;
-  background: color-mix(in srgb, var(--scope-tone) 10%, transparent);
-  border-color: color-mix(in srgb, var(--scope-tone) 28%, transparent);
-  box-shadow: 0 0 0.95rem color-mix(in srgb, var(--scope-tone) 10%, transparent);
+  background: color-mix(in srgb, var(--scope-tone) var(--landing-active-fill), transparent);
+  border-color: color-mix(in srgb, var(--scope-tone) var(--landing-active-border), transparent);
+  box-shadow: 0 0 1rem color-mix(in srgb, var(--scope-tone) var(--landing-active-glow), transparent);
 }
 
 .landing-scopes-demo[data-active-scope='api'] [data-scope-members~='api'] {
@@ -1120,8 +1126,8 @@
 .landing-scopes-demo[data-active-scope='worker'] .landing-scope-secret-name[data-scope-members~='worker'] {
   color: var(--scope-secret-tone);
   opacity: 1;
-  background: color-mix(in srgb, var(--scope-secret-tone) 9%, transparent);
-  box-shadow: 0 0 0.45rem color-mix(in srgb, var(--scope-secret-tone) 8%, transparent);
+  background: color-mix(in srgb, var(--scope-secret-tone) var(--landing-active-fill), transparent);
+  box-shadow: 0 0 0.45rem color-mix(in srgb, var(--scope-secret-tone) var(--landing-token-glow), transparent);
 }
 
 .landing-reference-demo {
@@ -1136,12 +1142,12 @@
   padding: 0 0.15rem;
   border-radius: 0.3rem;
   outline: none;
-  opacity: 0.72;
+  opacity: 0.68;
   transition:
-    background-color 0.32s ease,
-    color 0.32s ease,
-    opacity 0.32s ease,
-    box-shadow 0.32s ease;
+    background-color var(--landing-active-duration) ease,
+    color var(--landing-active-duration) ease,
+    opacity var(--landing-active-duration) ease,
+    box-shadow var(--landing-active-duration) ease;
 }
 
 .landing-reference-demo[data-active-reference='variable'] [data-reference-members~='variable'] {
@@ -1171,8 +1177,8 @@
 .landing-reference-token:focus-visible {
   color: var(--reference-token-color);
   opacity: 1;
-  background: color-mix(in srgb, var(--reference-token-color) 10%, transparent);
-  box-shadow: 0 0 0.45rem color-mix(in srgb, var(--reference-token-color) 8%, transparent);
+  background: color-mix(in srgb, var(--reference-token-color) var(--landing-active-fill), transparent);
+  box-shadow: 0 0 0.45rem color-mix(in srgb, var(--reference-token-color) var(--landing-token-glow), transparent);
 }
 
 .landing-reference-map {
@@ -1190,14 +1196,13 @@
   border: 1px solid color-mix(in srgb, var(--reference-step-color) 14%, var(--sl-color-hairline));
   background: color-mix(in srgb, var(--reference-step-color) 4%, transparent);
   font-family: var(--sl-font-mono, monospace);
-  opacity: 0.72;
+  opacity: 0.68;
   outline: none;
   transition:
-    opacity 0.32s ease,
-    background-color 0.32s ease,
-    border-color 0.32s ease,
-    box-shadow 0.32s ease,
-    transform 0.32s ease;
+    opacity var(--landing-active-duration) ease,
+    background-color var(--landing-active-duration) ease,
+    border-color var(--landing-active-duration) ease,
+    box-shadow var(--landing-active-duration) ease;
 }
 
 .landing-reference-step[data-reference-target='variable'] {
@@ -1218,10 +1223,9 @@
 .landing-reference-step:hover,
 .landing-reference-step:focus-visible {
   opacity: 1;
-  background: color-mix(in srgb, var(--reference-step-color) 10%, transparent);
-  border-color: color-mix(in srgb, var(--reference-step-color) 38%, var(--sl-color-hairline));
-  box-shadow: 0 0 1.05rem color-mix(in srgb, var(--reference-step-color) 12%, transparent);
-  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--reference-step-color) var(--landing-active-fill), transparent);
+  border-color: color-mix(in srgb, var(--reference-step-color) var(--landing-active-border), var(--sl-color-hairline));
+  box-shadow: 0 0 1rem color-mix(in srgb, var(--reference-step-color) var(--landing-active-glow), transparent);
 }
 
 .landing-reference-label {
@@ -1275,14 +1279,13 @@
   border: 1px solid transparent;
   border-radius: 0.6rem;
   line-height: inherit;
-  opacity: 0.62;
+  opacity: 0.68;
   outline: none;
   transition:
-    opacity 0.32s ease,
-    background-color 0.32s ease,
-    border-color 0.32s ease,
-    box-shadow 0.32s ease,
-    transform 0.32s ease;
+    opacity var(--landing-active-duration) ease,
+    background-color var(--landing-active-duration) ease,
+    border-color var(--landing-active-duration) ease,
+    box-shadow var(--landing-active-duration) ease;
 }
 
 .landing-audit-command + .landing-audit-command,
@@ -1307,18 +1310,13 @@
 .landing-audit-entry:hover,
 .landing-audit-entry:focus-visible {
   opacity: 1;
-  background: color-mix(in srgb, var(--audit-tone) 9%, transparent);
-  border-color: color-mix(in srgb, var(--audit-tone) 34%, transparent);
-  box-shadow: 0 0 1rem color-mix(in srgb, var(--audit-tone) 10%, transparent);
-}
-
-.landing-audit-demo[data-active-audit='approved'] .landing-audit-entry[data-audit-target='approved'] {
-  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--audit-tone) var(--landing-active-fill), transparent);
+  border-color: color-mix(in srgb, var(--audit-tone) var(--landing-active-border), transparent);
+  box-shadow: 0 0 1rem color-mix(in srgb, var(--audit-tone) var(--landing-active-glow), transparent);
 }
 
 .landing-audit-demo[data-active-audit='denied'] .landing-audit-entry[data-audit-target='approved'] {
   opacity: 0.18;
-  transform: translateY(0.35rem);
 }
 
 .landing-audit-log {
@@ -1388,12 +1386,11 @@
   cursor: pointer;
   opacity: 0.68;
   transition:
-    opacity 0.32s ease,
-    background-color 0.32s ease,
-    border-color 0.32s ease,
-    box-shadow 0.32s ease,
-    color 0.32s ease,
-    transform 0.32s ease;
+    opacity var(--landing-active-duration) ease,
+    background-color var(--landing-active-duration) ease,
+    border-color var(--landing-active-duration) ease,
+    box-shadow var(--landing-active-duration) ease,
+    color var(--landing-active-duration) ease;
 }
 
 [data-theme='dark'] .landing-sdk-logo-card {
@@ -1405,10 +1402,9 @@
 .landing-sdk-logo-card[aria-pressed='true'] {
   opacity: 1;
   color: var(--sdk-color);
-  background: color-mix(in srgb, var(--sdk-color) 8%, var(--sl-color-bg-nav));
-  border-color: color-mix(in srgb, var(--sdk-color) 42%, var(--sl-color-hairline));
-  box-shadow: 0 0 0.95rem color-mix(in srgb, var(--sdk-color) 10%, transparent);
-  transform: translateY(-2px);
+  background: color-mix(in srgb, var(--sdk-color) var(--landing-active-fill), var(--sl-color-bg-nav));
+  border-color: color-mix(in srgb, var(--sdk-color) var(--landing-active-border), var(--sl-color-hairline));
+  box-shadow: 0 0 1rem color-mix(in srgb, var(--sdk-color) var(--landing-active-glow), transparent);
 }
 
 .landing-sdk-logo-card:focus-visible {
@@ -1486,6 +1482,530 @@
   color: var(--color-gray-300);
 }
 
+.landing-remote-demo {
+  --remote-app: var(--syntax-green);
+  --remote-core: var(--syntax-magenta);
+  --remote-azure: var(--syntax-blue);
+  --remote-onepassword: var(--syntax-blue);
+  --remote-bootstrap: var(--syntax-yellow);
+  --remote-cache: var(--syntax-cyan);
+}
+
+.landing-remote-shell {
+  max-width: 68rem;
+  margin: 0 auto;
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 8px;
+  background: var(--sl-color-bg-nav);
+  overflow: hidden;
+  box-shadow: 0 1.5rem 3.5rem rgba(15, 23, 42, 0.06);
+}
+
+[data-theme='dark'] .landing-remote-shell {
+  box-shadow: 0 1.5rem 3.5rem rgba(0, 0, 0, 0.2);
+}
+
+.landing-remote-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 3.5rem;
+  padding: 0.65rem 0.75rem 0.65rem 1rem;
+  border-bottom: 1px solid var(--sl-color-hairline);
+}
+
+.landing-remote-status {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  color: var(--color-gray-700);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+[data-theme='dark'] .landing-remote-status {
+  color: var(--color-gray-200);
+}
+
+.landing-remote-status-dot {
+  flex: 0 0 auto;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--remote-core);
+  box-shadow: 0 0 0 0.25rem color-mix(in srgb, var(--remote-core) 12%, transparent);
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.landing-remote-motion {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 5px;
+  background: var(--sl-color-bg);
+  color: var(--color-gray-500);
+  cursor: pointer;
+}
+
+.landing-remote-motion:hover {
+  border-color: color-mix(in srgb, var(--remote-cache) 45%, var(--sl-color-hairline));
+  color: var(--color-gray-900);
+}
+
+.landing-remote-motion:focus-visible {
+  outline: 2px solid var(--remote-cache);
+  outline-offset: 2px;
+}
+
+[data-theme='dark'] .landing-remote-motion:hover {
+  color: #fff;
+}
+
+.landing-remote-pause-icon {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.landing-remote-pause-icon::before,
+.landing-remote-pause-icon::after {
+  content: '';
+  width: 0.18rem;
+  height: 0.7rem;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.landing-remote-play-icon {
+  display: none;
+  width: 0;
+  height: 0;
+  margin-left: 0.12rem;
+  border-top: 0.38rem solid transparent;
+  border-bottom: 0.38rem solid transparent;
+  border-left: 0.58rem solid currentColor;
+}
+
+.landing-remote-motion.is-paused .landing-remote-pause-icon {
+  display: none;
+}
+
+.landing-remote-motion.is-paused .landing-remote-play-icon {
+  display: block;
+}
+
+.landing-remote-map {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(10rem, 0.9fr) minmax(11rem, 1fr) minmax(13rem, 1.1fr);
+  grid-template-rows: 1fr 1fr;
+  align-items: center;
+  gap: 3rem clamp(3.25rem, 7vw, 5.5rem);
+  min-height: 22rem;
+  padding: 2.5rem clamp(1.25rem, 4vw, 3rem);
+  isolation: isolate;
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--sl-color-hairline) 52%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--sl-color-hairline) 52%, transparent) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.landing-remote-routes {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.landing-remote-routes [data-remote-route] {
+  fill: none;
+  stroke: color-mix(in srgb, var(--color-gray-400) 48%, transparent);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  transition: stroke 0.18s ease, stroke-width 0.18s ease, opacity 0.25s ease;
+}
+
+.landing-remote-arrow-head {
+  fill: color-mix(in srgb, var(--color-gray-400) 62%, transparent);
+}
+
+.landing-remote-routes [data-remote-route].is-active {
+  stroke: var(--remote-path-color, var(--remote-core));
+  stroke-width: 2.5;
+  stroke-dasharray: 5 7;
+  animation: landing-remote-route-flow 0.65s linear infinite;
+}
+
+.landing-remote-map.is-cache-fresh [data-remote-route='core-azure'] {
+  opacity: 0.22;
+}
+
+.landing-remote-node {
+  --remote-node-color: var(--remote-core);
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-width: 0;
+  min-height: 6.25rem;
+  padding: 1rem;
+  border: 1px solid color-mix(in srgb, var(--remote-node-color) 27%, var(--sl-color-hairline));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--remote-node-color) 5%, var(--sl-color-bg-nav));
+  box-shadow: 0 0.75rem 1.75rem rgba(15, 23, 42, 0.05);
+  transition:
+    opacity var(--landing-active-duration) ease,
+    filter var(--landing-active-duration) ease,
+    background-color var(--landing-active-duration) ease,
+    border-color var(--landing-active-duration) ease,
+    box-shadow var(--landing-active-duration) ease;
+}
+
+[data-theme='dark'] .landing-remote-node {
+  box-shadow: 0 0.75rem 1.75rem rgba(0, 0, 0, 0.16);
+}
+
+.landing-remote-node.is-active {
+  border-color: color-mix(in srgb, var(--remote-node-color) var(--landing-active-border), var(--sl-color-hairline));
+  background: color-mix(in srgb, var(--remote-node-color) var(--landing-active-fill), var(--sl-color-bg-nav));
+  box-shadow: 0 0 1rem color-mix(in srgb, var(--remote-node-color) var(--landing-active-glow), transparent), 0 0.75rem 1.75rem rgba(15, 23, 42, 0.08);
+}
+
+[data-theme='dark'] .landing-remote-node.is-active {
+  box-shadow: 0 0 1rem color-mix(in srgb, var(--remote-node-color) var(--landing-active-glow), transparent), 0 0.75rem 1.75rem rgba(0, 0, 0, 0.18);
+}
+
+.landing-remote-node.is-dimmed {
+  filter: grayscale(0.75);
+  opacity: 0.32;
+}
+
+.landing-remote-node.is-app {
+  --remote-node-color: var(--remote-app);
+}
+
+.landing-remote-node.is-core {
+  --remote-node-color: var(--remote-core);
+  border-color: color-mix(in srgb, var(--remote-core) 40%, var(--sl-color-hairline));
+  background: color-mix(in srgb, var(--remote-core) 8%, var(--sl-color-bg-nav));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--remote-core) 8%, transparent), 0 1rem 2rem rgba(15, 23, 42, 0.08);
+}
+
+.landing-remote-node.is-core.is-splitting::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border: 1px solid var(--remote-core);
+  border-radius: inherit;
+  pointer-events: none;
+  animation: landing-remote-split-pulse 0.9s ease-out;
+}
+
+.landing-remote-node.is-azure {
+  --remote-node-color: var(--remote-azure);
+}
+
+.landing-remote-node.is-bootstrap {
+  --remote-node-color: var(--remote-bootstrap);
+}
+
+.landing-remote-node.is-onepassword {
+  --remote-node-color: var(--remote-onepassword);
+}
+
+.landing-remote-node.is-cache {
+  --remote-node-color: var(--remote-cache);
+  padding-right: 4.6rem;
+}
+
+.landing-remote-map.is-cache-map .landing-remote-node.is-azure {
+  grid-column: 1;
+  grid-row: 1 / 3;
+}
+
+.landing-remote-map.is-cache-map .landing-remote-node.is-core {
+  grid-column: 2;
+  grid-row: 1 / 3;
+}
+
+.landing-remote-map.is-cache-map .landing-remote-node.is-app {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.landing-remote-map.is-cache-map .landing-remote-node.is-cache {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.landing-remote-map.is-bootstrap-map {
+  grid-template-columns: repeat(4, minmax(9rem, 1fr));
+  grid-template-rows: 1fr;
+  gap: clamp(2rem, 4vw, 3.75rem);
+  min-height: 18rem;
+}
+
+.landing-remote-map.is-bootstrap-map .landing-remote-node.is-bootstrap {
+  grid-column: 1;
+}
+
+.landing-remote-map.is-bootstrap-map .landing-remote-node.is-onepassword {
+  grid-column: 2;
+}
+
+.landing-remote-map.is-bootstrap-map .landing-remote-node.is-core {
+  grid-column: 3;
+}
+
+.landing-remote-map.is-bootstrap-map .landing-remote-node.is-app {
+  grid-column: 4;
+}
+
+.landing-remote-node.is-cache .landing-remote-node-icon {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+.landing-remote-node.is-cache .landing-remote-node-copy strong {
+  font-size: 0.875rem;
+}
+
+.landing-remote-node-icon,
+.landing-remote-core-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 3rem;
+  height: 3rem;
+  border: 1px solid color-mix(in srgb, var(--remote-node-color) 35%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--remote-node-color) 12%, transparent);
+  color: var(--remote-node-color);
+}
+
+.landing-remote-node-icon svg {
+  width: 1.5rem;
+  height: 1.5rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.landing-remote-core-mark {
+  color: var(--remote-core);
+}
+
+.landing-remote-core-mark::before {
+  content: '';
+  width: 1.65rem;
+  height: 2rem;
+  background: currentColor;
+  mask: url('/favicon.svg') center / contain no-repeat;
+}
+
+.landing-remote-node-icon.is-azure-icon {
+  border-color: color-mix(in srgb, var(--remote-azure) 35%, transparent);
+  background: color-mix(in srgb, var(--remote-azure) 12%, transparent);
+}
+
+.landing-remote-node-icon.is-azure-icon img {
+  display: block;
+  width: 1.6rem;
+  height: 1.6rem;
+}
+
+.landing-remote-node-icon.is-onepassword-icon {
+  border-color: color-mix(in srgb, var(--remote-onepassword) 35%, transparent);
+  background: color-mix(in srgb, var(--remote-onepassword) 12%, transparent);
+}
+
+.landing-remote-provider-mark {
+  display: block;
+  width: 1.65rem;
+  height: 1.65rem;
+  background: currentColor;
+  -webkit-mask: var(--remote-provider-icon-mask) center / contain no-repeat;
+  mask: var(--remote-provider-icon-mask) center / contain no-repeat;
+}
+
+.landing-remote-node-copy {
+  display: block;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.landing-remote-node-copy strong {
+  overflow-wrap: anywhere;
+  color: var(--color-gray-900);
+  font-family: var(--sl-font-mono, monospace);
+  font-size: 1rem;
+}
+
+[data-theme='dark'] .landing-remote-node-copy strong {
+  color: #fff;
+}
+
+.landing-remote-timer {
+  --remote-progress: 0deg;
+  position: absolute;
+  right: 0.7rem;
+  top: 50%;
+  display: grid;
+  place-content: center;
+  width: 3.35rem;
+  height: 3.35rem;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, var(--sl-color-bg-nav) 57%, transparent 59%),
+    conic-gradient(var(--remote-cache) var(--remote-progress), color-mix(in srgb, var(--color-gray-300) 45%, transparent) 0);
+  text-align: center;
+  transform: translateY(-50%);
+}
+
+.landing-remote-timer span {
+  color: var(--color-gray-900);
+  font-family: var(--sl-font-mono, monospace);
+  font-size: 0.6875rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.landing-remote-timer small {
+  margin-top: 0.15rem;
+  color: var(--color-gray-500);
+  font-size: 0.5625rem;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+[data-theme='dark'] .landing-remote-timer span {
+  color: #fff;
+}
+
+.landing-remote-packet {
+  --remote-packet-color: var(--remote-core);
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 8.5rem;
+  min-height: 1.65rem;
+  padding: 0.25rem 0.48rem;
+  border: 1px solid color-mix(in srgb, var(--remote-packet-color) 58%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--remote-packet-color) 13%, var(--sl-color-bg-nav));
+  color: var(--remote-packet-color);
+  font-family: var(--sl-font-mono, monospace);
+  font-size: 0.625rem;
+  font-weight: 900;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 0 1rem color-mix(in srgb, var(--remote-packet-color) 24%, transparent);
+}
+
+.landing-remote-outcome {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-top: 1px solid var(--sl-color-hairline);
+  color: var(--color-gray-500);
+  font-family: var(--sl-font-mono, monospace);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.landing-remote-outcome span {
+  padding: 0.9rem 1rem;
+  text-align: center;
+}
+
+.landing-remote-outcome span + span {
+  border-left: 1px solid var(--sl-color-hairline);
+}
+
+.landing-remote-outcome strong {
+  color: var(--color-gray-900);
+}
+
+[data-theme='dark'] .landing-remote-outcome strong {
+  color: #fff;
+}
+
+.landing-remote-config {
+  max-width: 56rem;
+  margin: 1.25rem auto 0;
+}
+
+.landing-remote-config .landing-terminal-body {
+  min-height: 0;
+  padding: 1.25rem;
+  font-size: 0.8125rem;
+  line-height: 1.65;
+}
+
+.landing-remote-config-token {
+  border-radius: 3px;
+  opacity: 0.72;
+  transition:
+    opacity var(--landing-active-duration) ease,
+    background-color var(--landing-active-duration) ease,
+    box-shadow var(--landing-active-duration) ease;
+}
+
+.landing-remote-config-token.is-active {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor var(--landing-active-fill), transparent);
+  box-shadow: 0 0 0.45rem color-mix(in srgb, currentColor var(--landing-token-glow), transparent);
+}
+
+.landing-remote-config-token.is-bootstrap {
+  color: var(--remote-bootstrap);
+}
+
+.landing-remote-config-token.is-cache {
+  color: var(--remote-cache);
+}
+
+.landing-remote-config-token.is-azure {
+  color: var(--remote-azure);
+}
+
+.landing-remote-config-token.is-onepassword {
+  color: var(--remote-onepassword);
+}
+
+.landing-remote-config-token.is-core {
+  color: var(--remote-core);
+}
+
+@keyframes landing-remote-route-flow {
+  to { stroke-dashoffset: -12; }
+}
+
+@keyframes landing-remote-split-pulse {
+  0% { opacity: 0.9; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.08); }
+}
+
 @media (max-width: 820px) {
   .landing-sdk-logo-belt {
     display: flex;
@@ -1497,6 +2017,107 @@
   .landing-sdk-logo-card {
     flex: 0 0 5.75rem;
     scroll-snap-align: center;
+  }
+
+  .landing-remote-map.is-cache-map,
+  .landing-remote-map.is-bootstrap-map {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: repeat(2, 1fr);
+    gap: 3.25rem 1rem;
+    min-height: 23rem;
+    padding: 2.25rem 1rem;
+  }
+
+  .landing-remote-map.is-cache-map .landing-remote-node.is-app {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .landing-remote-map.is-cache-map .landing-remote-node.is-core {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .landing-remote-map.is-cache-map .landing-remote-node.is-cache {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .landing-remote-map.is-cache-map .landing-remote-node.is-azure {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .landing-remote-map.is-bootstrap-map .landing-remote-node.is-bootstrap {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .landing-remote-map.is-bootstrap-map .landing-remote-node.is-onepassword {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .landing-remote-map.is-bootstrap-map .landing-remote-node.is-core {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .landing-remote-map.is-bootstrap-map .landing-remote-node.is-app {
+    grid-column: 2;
+    grid-row: 2;
+  }
+}
+
+@media (max-width: 560px) {
+  .landing-remote-toolbar {
+    padding: 0.75rem;
+  }
+
+  .landing-remote-node {
+    align-items: flex-start;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.55rem;
+    min-height: 7.25rem;
+    padding: 0.65rem;
+  }
+
+  .landing-remote-node-icon,
+  .landing-remote-core-mark {
+    display: grid;
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  .landing-remote-node.is-cache {
+    padding-right: 0.65rem;
+    padding-bottom: 0.65rem;
+  }
+
+  .landing-remote-timer {
+    right: 0.45rem;
+    top: 0.45rem;
+    width: 2.85rem;
+    height: 2.85rem;
+    transform: none;
+  }
+
+  .landing-remote-outcome {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-remote-outcome span + span {
+    border-top: 1px solid var(--sl-color-hairline);
+    border-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-remote-node,
+  .landing-remote-routes [data-remote-route] {
+    transition: none;
+    animation: none;
   }
 }
 
@@ -1925,16 +2546,15 @@
   --profile-tone: var(--syntax-foreground);
   outline: none;
   transition:
-    opacity 0.32s ease,
-    background-color 0.32s ease,
-    border-color 0.32s ease,
-    box-shadow 0.32s ease,
-    transform 0.32s ease;
+    opacity var(--landing-active-duration) ease,
+    background-color var(--landing-active-duration) ease,
+    border-color var(--landing-active-duration) ease,
+    box-shadow var(--landing-active-duration) ease;
 }
 
 .landing-profile-node,
 .landing-profile-result {
-  opacity: 0.66;
+  opacity: 0.68;
 }
 
 .landing-profile-node[data-profile-target='development'],
@@ -1958,16 +2578,9 @@
 .landing-profile-result:hover,
 .landing-profile-result:focus-visible {
   opacity: 1;
-  background: color-mix(in srgb, var(--profile-tone) 9%, var(--sl-color-bg-nav));
-  border-color: color-mix(in srgb, var(--profile-tone) 34%, var(--sl-color-hairline));
-  box-shadow: 0 0 0.95rem color-mix(in srgb, var(--profile-tone) 9%, transparent);
-}
-
-.landing-profiles-demo[data-active-profile='development'] .landing-profile-node[data-profile-target='development'],
-.landing-profiles-demo[data-active-profile='production'] .landing-profile-node[data-profile-target='production'],
-.landing-profiles-demo[data-active-profile='development'] .landing-profile-result[data-profile-target='development'],
-.landing-profiles-demo[data-active-profile='production'] .landing-profile-result[data-profile-target='production'] {
-  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--profile-tone) var(--landing-active-fill), var(--sl-color-bg-nav));
+  border-color: color-mix(in srgb, var(--profile-tone) var(--landing-active-border), var(--sl-color-hairline));
+  box-shadow: 0 0 1rem color-mix(in srgb, var(--profile-tone) var(--landing-active-glow), transparent);
 }
 
 .landing-profile-secret {
@@ -1988,8 +2601,8 @@
 .landing-profiles-demo[data-active-profile='development'] .landing-profile-node[data-profile-target='development'] .landing-profile-value,
 .landing-profiles-demo[data-active-profile='production'] .landing-profile-node[data-profile-target='production'] .landing-profile-value {
   color: var(--profile-tone);
-  background: color-mix(in srgb, var(--profile-tone) 10%, transparent);
-  box-shadow: 0 0 0.45rem color-mix(in srgb, var(--profile-tone) 8%, transparent);
+  background: color-mix(in srgb, var(--profile-tone) var(--landing-active-fill), transparent);
+  box-shadow: 0 0 0.45rem color-mix(in srgb, var(--profile-tone) var(--landing-token-glow), transparent);
 }
 
 .landing-compose-arrow {

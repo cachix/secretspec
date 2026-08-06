@@ -28,6 +28,7 @@ const otherLinks = (config.social || []).filter((l) => l.icon !== 'github');
     <Icon name={link.icon} />
   </a>
 ))}
+<a href="/quick-start/" class="header-docs-link">Docs</a>
 
 <script>
   // Populate the release and star pills from our own edge-cached GitHub proxy.
@@ -97,6 +98,23 @@ const otherLinks = (config.social || []).filter((l) => l.icon !== 'github');
   }
   .social-link:hover {
     opacity: 0.66;
+  }
+  .header-docs-link {
+    display: none;
+    color: var(--sl-color-text-accent);
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .header-docs-link:hover {
+    opacity: 0.66;
+  }
+  @media (min-width: 50rem) {
+    .header-docs-link {
+      display: inline-flex;
+    }
+    :global(.header .social-icons::after) {
+      display: none;
+    }
   }
   /* Mobile menu wraps SocialIcons in `.social-icons` (no `sl-flex` modifier)
      and uses :empty to hide the row when no social links are configured. The

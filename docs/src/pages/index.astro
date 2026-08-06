@@ -318,8 +318,7 @@ const isReelDuplicate = (index: number, itemCount: number) =>
   index < itemCount || index >= itemCount * 2;
 
 const reelScriptData = {
-  providerLabels: providerMetadata.map((p) => p.label),
-  consumers: consumerMetadata.map((c) => ({ label: c.label, secrets: c.secrets })),
+  consumers: consumerMetadata.map((c) => ({ secrets: c.secrets })),
   providerCount: providerMetadata.length,
   consumerCount: consumerMetadata.length,
 };
@@ -404,6 +403,8 @@ const reelScriptData = {
       </div>
     </div>
 
+    <div class="landing-pipeline-flow-arrow landing-pipeline-flow-arrow-in" aria-hidden="true"></div>
+
     <div class="landing-pipeline-center">
       <div class="landing-terminal landing-pipeline-terminal" data-pipeline-terminal>
         <div class="landing-terminal-header">
@@ -419,16 +420,13 @@ const reelScriptData = {
 <span class="tok-key">API_TOKEN</span>         <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">}</span>
 <span class="tok-key">HMAC_SECRET</span>       <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">}</span></code></pre>
       </div>
-      <p class="landing-pipeline-resolve">
-        <span class="landing-pipeline-resolve-provider" data-pipeline-provider>{providerMetadata[0].label}</span>
-        <span class="landing-pipeline-resolve-label">resolving to</span>
-        <span class="landing-pipeline-resolve-provider" data-pipeline-consumer>{consumerMetadata[0].label}</span>
-      </p>
       <div class="landing-hero-lower-actions">
         <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
         <a href="/concepts/overview/" class="landing-btn landing-btn-secondary">Concepts</a>
       </div>
     </div>
+
+    <div class="landing-pipeline-flow-arrow landing-pipeline-flow-arrow-out" aria-hidden="true"></div>
 
     <div class="landing-pipeline-side">
       <div class="landing-pipeline-action landing-pipeline-action-right">
@@ -553,10 +551,8 @@ const reelScriptData = {
     const consumerReel = document.querySelector('[data-reel="consumers"]');
     const terminalEl = document.querySelector('[data-pipeline-terminal]');
     const terminalBody = document.querySelector('[data-pipeline-terminal-body]');
-    const resolvingProviderEl = document.querySelector('[data-pipeline-provider]');
-    const resolvingConsumerEl = document.querySelector('[data-pipeline-consumer]');
 
-    if (!providerReel || !consumerReel || !terminalBody || !resolvingProviderEl || !resolvingConsumerEl || !terminalEl) return;
+    if (!providerReel || !consumerReel || !terminalBody || !terminalEl) return;
 
     document.querySelectorAll('[data-reel-icon-img]').forEach((img) => {
       function markMissing() {
@@ -625,45 +621,6 @@ const reelScriptData = {
       restartClass(terminalEl, 'is-popping');
     }
 
-    const resolvePill = resolvingProviderEl.parentElement;
-    if (!resolvePill) return;
-    let resolveWidthTimer = null;
-
-    function syncResolveSideWidth() {
-      resolvePill.style.setProperty('--resolve-side-width', '0px');
-      const width = Math.ceil(Math.max(
-        resolvingProviderEl.getBoundingClientRect().width,
-        resolvingConsumerEl.getBoundingClientRect().width
-      ));
-      resolvePill.style.setProperty('--resolve-side-width', width + 'px');
-    }
-
-    function updateResolving(part, label) {
-      clearTimeout(resolveWidthTimer);
-
-      const startWidth = resolvePill.getBoundingClientRect().width + 'px';
-      resolvePill.style.width = startWidth;
-      part.textContent = label;
-      syncResolveSideWidth();
-
-      resolvePill.style.width = 'auto';
-      const endWidth = resolvePill.getBoundingClientRect().width + 'px';
-      resolvePill.style.width = startWidth;
-      void resolvePill.offsetWidth;
-
-      resolvePill.classList.add('is-tweening');
-      resolvePill.style.width = endWidth;
-      restartClass(resolvePill, 'is-pulsing');
-
-      resolveWidthTimer = setTimeout(() => {
-        resolvePill.classList.remove('is-tweening');
-        resolvePill.classList.remove('is-pulsing');
-        resolvePill.style.width = '';
-      }, 260);
-    }
-
-    syncResolveSideWidth();
-
     function makeReel(opts) {
       const { reelEl, itemCount, direction, onActiveChange, phase } = opts;
       const trackEl = reelEl.querySelector('.landing-reel-track');
@@ -687,7 +644,7 @@ const reelScriptData = {
         const active = ((rounded % itemCount) + itemCount) % itemCount;
         if (active !== currentActive) {
           currentActive = active;
-          onActiveChange(active);
+          if (onActiveChange) onActiveChange(active);
         }
       }
 
@@ -891,7 +848,6 @@ const reelScriptData = {
       reelEl: providerReel,
       itemCount: reelData.providerCount,
       direction: providerReel.dataset.direction || 'down',
-      onActiveChange: (idx) => updateResolving(resolvingProviderEl, reelData.providerLabels[idx]),
     });
 
     const consumerCtl = makeReel({
@@ -901,7 +857,6 @@ const reelScriptData = {
       onActiveChange: (idx) => {
         const consumer = reelData.consumers[idx];
         updateTerminal(consumer);
-        updateResolving(resolvingConsumerEl, consumer.label);
       },
       phase: AUTO_TICK_MS / 2,
     });

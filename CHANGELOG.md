@@ -8,11 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - Secrets can store values as standard Base64, URL-safe Base64, or hexadecimal
   using `encoding`; writes encode logical text and reads decode stored values,
   while `as_path = true` materializes arbitrary decoded bytes.
+- `secretspec-ffi` installs (via `cargo cinstall`) together with its C header
+  and a `secretspec_ffi.pc`, so consumers can link it — statically or
+  dynamically — without hand-written linker flags.
+- The Haskell SDK's new `use-pkg-config` cabal flag
+  (`cabal build -f use-pkg-config`) resolves the archive through pkg-config.
+- The Ruby SDK's native extension accepts a new `--enable-pkg-config` build
+  flag (`gem install secretspec -- --enable-pkg-config`) that resolves the
+  archive through pkg-config.
+- The Go SDK's `-tags static` build accepts a new `pkgconfig` build tag
+  (`go build -tags static,pkgconfig`) that resolves the archive through
+  pkg-config, so it also works for a `go get` dependency.
+- The Haskell SDK declares the archive's macOS system frameworks
+  (`SystemConfiguration`, `Security`, `CoreFoundation`) in its cabal file, so
+  GHC passes them to every link on macOS.
 
 ### Fixed
+
+- SDK pkg-config setup now pins cargo-c's library and metadata install
+  directories, so Go, Ruby, and Haskell reliably discover
+  `secretspec_ffi.pc` across environments.
 - The keyring provider no longer intermittently fails with a "No default store
   has been set" error when resolving multiple secrets concurrently.
 - The SOPS provider no longer substitutes a second time into a rendered path
@@ -42,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.18.0] - 2026-08-03
 
 ### Changed
+
 - The keyring provider now uses keyring 4's Rust-native Secret Service
   transport on Linux, so source builds and binaries no longer require system
   libdbus.
@@ -54,6 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   profile namespace.
 
 ### Fixed
+
 - The Bitwarden provider now treats a locked vault or a missing session as a
   clear authentication failure on `get`/`set`, with the same "run `bw login`
   and `bw unlock`, then set `BW_SESSION`" guidance in both cases, instead of
@@ -80,6 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failures also report the full service error instead of a shortened message.
 
 ### Added
+
 - The dotenv provider accepts a leading `~` in custom paths, such as
   `dotenv:~/.config/my-project/.env`, and resolves it to the user's home
   directory.
@@ -144,6 +166,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.17.1] - 2026-08-01
 
 ### Fixed
+
 - Vault and OpenBao AppRole and JWT authentication methods now reuse login
   tokens within each provider operation up to each token's reported use and
   lease limits, including time spent completing authentication, avoiding
@@ -172,6 +195,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.17.0] - 2026-07-26
 
 ### Fixed
+
 - Cache reads, refreshes, and clears now share one ownership and freshness
   policy, consistently handling expiration boundaries, clock rollback,
   corrupted SecretSpec entries, and values owned by another project or profile.
@@ -188,6 +212,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (not on HTTP 4xx/5xx), with a short backoff between attempts.
 
 ### Added
+
 - SOPS provider (`sops://`, `sops` build feature) for reading and writing
   YAML, JSON, dotenv, and INI files through the SOPS CLI, including templated
   per-project/profile paths and provider-credential injection for encryption
@@ -311,6 +336,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Linux and macOS builds on each release.
 
 ### Changed
+
 - The Bitwarden Secrets Manager provider now invokes the separately installed
   official `bws` CLI instead of linking the Bitwarden SDK. This removes the
   SDK's restricted-license dependency from SecretSpec distributions while
@@ -322,6 +348,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#139](https://github.com/cachix/secretspec/issues/139))
 
 ### Fixed
+
 - BWS CLI writes preserve secret keys and values that begin with `-`, and
   hostless BWS provider URIs stay pinned to Bitwarden's default server even
   when ambient BWS profiles or server settings are configured.
@@ -334,6 +361,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.16.0] - 2026-07-17
 
 ### Added
+
 - Composed secrets derive read-only values such as connection strings from
   other declared secrets using strict `${UPPERCASE_NAME}` templates; names must
   match `[A-Z][A-Z0-9_]*`, `$$` produces a literal dollar sign, and ordinary
@@ -369,6 +397,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.15.0] - 2026-07-16
 
 ### Added
+
 - Gopass provider (`gopass://`) for GPG-based password manager with git-synced password store.
 - `secretspec export` command that resolves every secret for the active profile
   and writes them to stdout without running a command, in a chosen `--format`:
@@ -429,6 +458,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "secret_id" } },
   } }
   ```
+
 - `secretspec config provider login <alias>` prompts for each provider
   credential a provider alias declares and stores it in its source provider, so
   it can be read back on the next resolution. `secretspec config provider add`
@@ -436,6 +466,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sources from the command line.
 
 ### Changed
+
 - Rust SDK validation errors now store their detailed report out of line,
   reducing the size of `SecretSpecError` values while preserving diagnostics.
 - Generated types now describe the values resolution can actually return:
@@ -465,12 +496,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an alias without credentials cannot diverge.
 
 ### Removed
+
 - The unused public `Config::merge_with` and `Profile::merge_with` methods.
   Configuration inheritance (`extends`) is now applied entirely through the
   internal overlay used by the loader, so these self-wins merge helpers no
   longer had any callers.
 
 ### Fixed
+
 - Configuration inheritance now loads an `extends` hierarchy as a DAG. Shared
   ancestors in diamond-shaped graphs are applied once instead of being reported
   as cycles, later entries in `extends` correctly override earlier entries, and
@@ -520,6 +553,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.14.0] - 2026-07-09
 
 ### Added
+
 - **`ref`: native secret references on secrets**: a secret can name one
   externally managed secret by its store's own coordinates, instead of
   SecretSpec's `{project}/{profile}/{key}` naming:
@@ -554,6 +588,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pass through without declaring a `[providers]` alias first.
 
 ### Changed
+
 - **Faster multi-provider resolution**: `check`, `run`, and SDK resolution now
   group secrets by store and fetch the groups concurrently instead of one
   after another; within a group, `ref` secrets batch through the store's bulk
@@ -579,6 +614,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previously will now fail with a pointed error.
 
 ### Fixed
+
 - **onepassword**: URIs carrying an item path (e.g. the
   `onepassword://vault/Production` form some older docs showed) previously
   discarded the path silently and targeted a vault literally named `vault`.
@@ -593,6 +629,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.13.0] - 2026-07-03
 
 ### Added
+
 - **Language SDKs for Python, Go, Ruby, Node.js / TypeScript, and Haskell**
   (`secretspec-py`, `secretspec-go`, `secretspec-rb`, `secretspec-node`,
   `secretspec-hs`). Resolve the secrets declared in your `secretspec.toml` from
@@ -623,6 +660,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ValidatedSecrets::report()` / `ValidationErrors::report()`.
 
 ### Fixed
+
 - A per-secret provider chain whose primary provider errors (e.g. an unreachable
   vault) and whose fallback chain yields no value now surfaces that provider error
   instead of silently reporting the secret as `missing_required`, so a provider
@@ -631,12 +669,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.12.2] - 2026-06-22
 
 ### Added
+
 - The `pass` provider accepts a `store_dir` query parameter (e.g.
   `pass://?store_dir=/path/to/store`) to use a password store directory other
   than the default `~/.password-store`. It is applied as `PASSWORD_STORE_DIR`
   scoped to each `pass` invocation.
 
 ### Fixed
+
 - Provider URIs now correctly round-trip query parameters whose values contain
   characters that are significant in a query string (`&`, `+`, `#`, `%`, and
   spaces). Previously such characters in the `awssm` `prefix` (and the new `pass`
@@ -649,6 +689,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.12.1] - 2026-06-15
 
 ### Fixed
+
 - Windows: a `dotenv://` provider URI built from an absolute path (e.g.
   `dotenv://C:\path\.env`) no longer fails to parse with "invalid port number".
   The drive-letter colon was being read as a `host:port` separator; such paths
@@ -672,6 +713,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.12.0] - 2026-06-08
 
 ### Added
+
 - Audit logging for secret access, on by default. Every secret read and write,
   from both the CLI and the Rust SDK, is appended to a local per-user log as JSON
   Lines. Only metadata is recorded (secret names, the serving provider with any
@@ -718,10 +760,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps the `bitwarden.com` US cloud default.
 
 ### Changed
+
 - Minimum supported Rust version raised to 1.92 (required by the
   `detect-coding-agent` dependency). The devenv toolchain is pinned accordingly.
 
 ### Fixed
+
 - Proton Pass provider now works with `pass-cli` >= 2.1.0 agent sessions. Since
   2.1.0, audited item operations (`item view`, `item create`, `item delete`)
   fail unless `PROTON_PASS_AGENT_REASON` is set, which made existing secrets
@@ -747,6 +791,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.11.0] - 2026-05-22
 
 ### Added
+
 - AWS Secrets Manager (`awssm`) provider: support for a `?prefix=` query
   parameter in the provider URI (e.g., `awssm://us-east-1?prefix=myteam`).
   The prefix is prepended to all secret names
@@ -763,6 +808,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#90](https://github.com/cachix/secretspec/issues/90).
 
 ### Fixed
+
 - Profile-not-found errors no longer surface as the confusing
   `Secret 'Profile 'X' not found' not found`. They now use the dedicated
   `InvalidProfile` variant and include the list of profiles defined in
@@ -774,6 +820,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.10.1] - 2026-05-11
 
 ### Fixed
+
 - `secretspec check`: optional secrets that aren't set no longer render with a
   green `✓` and aren't counted as "found" in the trailing summary. They now
   display with the same blue `○ (optional)` styling already used in the
@@ -786,12 +833,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.10.0] - 2026-05-11
 
 ### Added
+
 - Proton Pass provider that stores secrets in a Proton Pass vault via the
   `proton-pass` CLI. Configured as `protonpass://<vault>`; items are
   organized per project / profile and read / write both go through the
   CLI.
 
 ### Fixed
+
 - OnePassword provider: the auth preflight now probes `op vault list` instead
   of `op whoami`. Under the 1Password desktop app's delegated-session
   integration, `op whoami` reports `account is not signed in` even when
@@ -816,6 +865,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.1] - 2026-05-07
 
 ### Changed
+
 - Dropped the `serde-envfile` dependency in favor of a small in-tree
   `.env` serializer. The previous git-pinned fork blocked publishing to
   crates.io; the new serializer applies the same escapes (backslash,
@@ -825,6 +875,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.0] - 2026-05-07
 
 ### Fixed
+
 - The `--provider` CLI flag now correctly takes precedence over the
   `SECRETSPEC_PROVIDER` environment variable. Previously the env var was
   consulted before the value forwarded from `--provider` (via `set_provider`),
@@ -865,14 +916,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--provider`. Fixes [#81](https://github.com/cachix/secretspec/issues/81).
 
 ### Added
+
 - BWS (Bitwarden Secrets Manager) provider with async SDK integration, secret caching, and full read-write support (requires `--features bws`)
 
 ### Changed
+
 - `secretspec-derive` now depends on `secretspec` with `default-features = false`, avoiding pulling in CLI and provider features when only the derive macro is used.
 
 ## [0.8.2] - 2026-03-19
 
 ### Changed
+
 - All provider features (`gcsm`, `awssm`, `vault`) are now enabled by default
 - AWS Secrets Manager (`awssm`) provider: batch fetching via `BatchGetSecretValue` API,
   reducing N sequential API calls to ceil(N/20) batched calls. For 30 secrets this means
@@ -882,10 +936,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.8.1] - 2026-03-15
 
 ### Added
+
 - `rsa_private_key` secret generation type: generates RSA private keys in PKCS1 PEM format,
   defaults to 2048 bits, configurable via `generate = { bits = 4096 }`
 
 ### Fixed
+
 - Check provider authentication (e.g. OnePassword, LastPass) before prompting
   user for secrets, via a `PreflightGuard` that runs the check exactly once
   per provider instance
@@ -893,48 +949,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.8.0] - 2026-03-11
 
 ### Added
+
 - HashiCorp Vault / OpenBao (`vault`) provider for Vault KV v1/v2 secret storage, with support
   for namespaces, TLS configuration, and OpenBao compatibility (requires `--features vault`)
 - AWS Secrets Manager (`awssm`) provider for AWS secret storage integration (requires `--features awssm`)
 - Support running secretspec from subdirectories: the CLI now walks up the directory tree to find the nearest `secretspec.toml`, similar to `cargo` and `git`. Also adds a `-f`/`--file` flag (and `SECRETSPEC_FILE` env var) to explicitly specify the config file path (#59)
 
 ### Changed
+
 - Extract shared `block_on` async helper from AWSSM and GCSM providers into `provider::block_on`
 
 ### Fixed
+
 - GCSM provider no longer panics when called from within an existing tokio runtime
 
 ## [0.7.2] - 2026-02-24
 
 ### Added
+
 - Keyring and pass providers now support `folder_prefix` via URI (e.g., `keyring://secretspec/shared/{profile}/{key}`)
   to share secrets across projects, matching the existing OnePassword and LastPass behavior
 
 ### Changed
+
 - Support `XDG_CONFIG_HOME` on macOS by switching from `directories` to `etcetera` crate.
   Existing macOS configs at `~/Library/Application Support/secretspec/` are automatically
   migrated to `~/.config/secretspec/` (#28)
 
 ### Fixed
+
 - Reject empty values when setting a secret
 
 ## [0.7.1] - 2026-02-08
 
 ### Changed
+
 - Improved interactive prompt for missing secrets: lists all missing secrets upfront with descriptions, adds step counter (`[1/3]`), and uses `inquire::Password` for consistent masked input. Removed `rpassword` dependency.
 
 ### Fixed
+
 - Use a fork of inquire to support setting multi-line secrets (#32)
 
 ## [0.7.0] - 2026-02-08
 
 ### Added
+
 - Declarative secret generation: secrets can now be auto-generated when missing by adding
   `type` and `generate` fields to secret config. Supported types: `password`, `hex`, `base64`,
   `uuid`, and `command` (for arbitrary shell commands). Generation triggers during `check`/`run`
   when a secret is missing, and the generated value is stored via the configured provider.
 
 ### Changed
+
 - OnePassword provider: Significant performance improvement by caching authentication status
   and using batch fetching with parallel threads. Reduces CLI calls from 2N sequential to
   ~2 sequential + N parallel for N secrets.
@@ -942,6 +1008,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.2] - 2026-01-27
 
 ### Added
+
 - CLI: Add `--no-prompt` (`-n`) flag to `secretspec check` command for non-interactive mode.
   When used, the command exits with non-zero status if secrets are missing instead of prompting for values.
   Useful for CI/CD pipelines, scripts, and automation. (#55)
@@ -949,6 +1016,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.1] - 2026-01-15
 
 ### Fixed
+
 - OnePassword provider: Fix duplicate item creation when existing item has no extractable value.
   Now uses `op item list` for existence checks and updates by item ID to avoid ambiguity.
 - OnePassword provider: Handle "More than one item matches" error gracefully by falling back to ID-based lookup.
@@ -956,52 +1024,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.0] - 2026-01-12
 
 ### Added
+
 - Google Cloud Secret Manager (GCSM) provider for GCP secret storage integration (#53)
 
 ### Fixed
+
 - LastPass provider: Fix creating new secrets by using correct `lpass add` command instead of non-existent `lpass set` (#54)
 
 ## [0.5.1] - 2026-01-02
 
 ### Changed
+
 - CI: Updated macOS runners from deprecated macos-13 to macos-15 (Intel) and macos-latest (ARM)
 
 ## [0.5.0] - 2026-01-02
 
 ### Added
+
 - Pass (password-store) provider for Unix password manager integration
 - `ensure_secrets()` method is now public in the Rust SDK
 - Support specifying full file paths (ending in `.toml`) in `extends` field, in addition to directory paths
 
 ### Changed
+
 - Performance: avoid double validation in `check()` for happy path
 
 ### Fixed
+
 - Display correct error message when extended config file is not found, instead of the misleading "No secretspec.toml found in current directory" error
 
 ## [0.4.1] - 2025-11-27
 
 ### Added
+
 - OnePassword provider: Support for `SECRETSPEC_OPCLI_PATH` environment variable to specify custom path to the OnePassword CLI
 - OnePassword provider: Automatic detection of Windows Subsystem for Linux 2 (WSL2) and use of `op.exe` on that platform
 - Documentation for `as_path` option in configuration reference, Rust SDK docs, and landing page
 - Documentation for per-secret providers with fallback chains on landing page
 
 ### Changed
+
 - OnePassword provider: Use stdin instead of temporary files when creating items for WSL2 compatibility (WSL paths are invalid when passed to Windows executables)
 
 ### Fixed
+
 - Output status/progress messages to stderr instead of stdout, fixing direnv integration where stdout was evaluated as shell code
 
 ## [0.4.0] - 2025-11-24
 
 ### Added
+
 - Profile-level default configuration: `profiles.<name>.defaults` section for shared settings across secrets in a profile
 - Default providers for profiles: define common providers once and have all secrets use them unless overridden
 - Default values and required settings can now be specified at profile level to reduce repetition
 - `as_path` option for secrets: write secret values to temporary files and return the file path instead of the value. Temporary files are automatically cleaned up when the resolved secrets are dropped in Rust SDK usage. For CLI commands (`get` and `check`), temporary files are persisted and NOT deleted after the command exits. In the Rust SDK, fields with `as_path = true` are generated as `PathBuf` or `Option<PathBuf>` instead of `String`
 
 ### Changed
+
 - Secret `required` field is now `Option<bool>` to allow profile-level defaults to apply when not explicitly set
 - Secret `default` field can now inherit from profile-level defaults if not specified per-secret
 - Secret `providers` field can now inherit from profile-level defaults if not specified per-secret
@@ -1010,51 +1089,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.4] - 2025-11-09
 
 ### Changed
+
 - `Secrets::check()` now returns `Result<ValidatedSecrets>` instead of `Result<()>`, allowing callers to access the validated secrets
 
 ## [0.3.3] - 2025-09-10
 
 ### Fixed
+
 - CLI: Count optional secrets as "found" in the summary
 
 ## [0.3.2] - 2025-09-10
 
 ### Added
+
 - Support for piping multi-line secrets via stdin
 
 ### Fixed
+
 - Import command now resolves secrets from all profiles, not just the active profile (fixes issue #36)
 - Fix incorrect stats in the summary for certain configurations
 
 ## [0.3.1] - 2025-07-28
 
 ### Fixed
+
 - Installers for arm/linux
 
 ## [0.3.0] - 2025-07-25
 
 ### Added
+
 - Integrate `secrecy` crate for secure secret handling with automatic memory zeroing
 - Add `reflect()` method to Provider trait for provider introspection
 - Export `Provider` trait from secretspec crate for use in derived code
 
 ### Changed
+
 - Made keyring provider optional via `keyring` feature flag (enabled by default)
 - Unified provider parsing logic in init command to support all provider formats consistently
 - Downgraded keyring dependency to 3.6.2
 - Updated `with_provider` in derive macro to accept `TryInto<Box<dyn Provider>>` for consistent provider handling
 
 ### Fixed
+
 - Fixed secret optionality logic: having a default value no longer makes a secret optional in generated types
 
 ## [0.2.0] - 2025-07-17
 
 ### Changed
+
 - SDK: Added `set_provider()` and `set_profile()` methods for configuration
 - SDK: Removed provider/profile parameters from `set()`, `get()`, `check()`, `validate()`, and `run()` methods
 - SDK: Embedded Resolved inside ValidatedSecrets
 
 ### Fixed
+
 - Fix stdin handling for piped input in set/check commands
 - Fix SECRETSPEC_PROFILE and SECRETSPEC_PROVIDER environment variable resolution
 - Ensure CLI arguments take precedence over environment variables
@@ -1064,14 +1153,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.2] - 2025-01-17
 
 ### Fixed
+
 - SDK: Hide internal functions
 
 ## [0.1.1] - 2025-07-16
 
 ### Added
+
 - `secretspec --version`
 
 ### Fixed
+
 - Profile inheritance: fields are merged with current profile taking precedence
 
 ## [0.1.0] - 2025-07-16

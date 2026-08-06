@@ -4,13 +4,12 @@ package secretspec
 
 // Static binding: cgo links libsecretspec_ffi.a directly into the Go binary, so
 // the Rust resolver is embedded (fully static on Linux/musl with
-// `-ldflags '-linkmode external -extldflags "-static"'`). The archive path and
-// its transitive native deps come from the generated, per-platform
-// cgo_ldflags_<os>_<arch>.go (produced by scripts/stage-staticlib.sh); the header
-// is vendored under include/.
+// `-ldflags '-linkmode external -extldflags "-static"'`). The link inputs come
+// from files staged by scripts/stage-staticlib.sh (cgo_vendored.go and the
+// generated cgo_ldflags_<os>_<arch>.go), or from secretspec_ffi.pc when the
+// pkgconfig tag is also set (cgo_pkgconfig.go).
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/include
 #include <stdlib.h>
 #include "secretspec.h"
 */

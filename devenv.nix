@@ -80,6 +80,9 @@
     pkgs.rustPlatform.bindgenHook
     # For development of the SOPS provider
     pkgs.sops
+    pkgs.pkg-config
+    # Installs the secretspec-ffi archive with its header and pkg-config file
+    pkgs.cargo-c
   ];
 
   # Fully-static musl build of the Go SDK (-tags static + -extldflags -static).

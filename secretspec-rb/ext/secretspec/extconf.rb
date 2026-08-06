@@ -5,8 +5,25 @@
 # not carry its own native dependency closure, so the archive's transitive system
 # libs (captured from `rustc --print native-static-libs`, never hardcoded) are
 # appended to the link line after it.
+#
+# With --enable-pkg-config every link input comes from secretspec_ffi.pc
+# instead (installed by `cargo cinstall -p secretspec-ffi --library-type
+# staticlib`), and the discovery tiers below are skipped entirely.
 
 require "mkmf"
+
+if enable_config("pkg-config", false)
+  # The .pc's Libs line orders the archive before its native deps; mkmf routes
+  # its -l flags to $libs and the rest (-L, macOS -framework) to $LDFLAGS.
+  unless pkg_config("secretspec_ffi")
+    abort("secretspec: pkg-config could not find secretspec_ffi; point " \
+          "PKG_CONFIG_PATH at the prefix installed by " \
+          "`cargo cinstall -p secretspec-ffi --library-type staticlib`")
+  end
+
+  create_makefile("secretspec/secretspec_ext")
+  return
+end
 
 ext_dir = __dir__
 pkg_dir = File.expand_path("../..", ext_dir) # secretspec-rb
@@ -44,9 +61,12 @@ end
 staticlib = find_staticlib(vendor, repo_root)
 abort("secretspec: could not locate libsecretspec_ffi.a; set SECRETSPEC_FFI_STATICLIB") unless staticlib
 
-# Header: the bundled vendor copy (platform gem) or the ffi crate's include dir.
+# Header: explicit contract, the bundled vendor copy (platform gem), or the
+# ffi crate's include dir.
 include_dir =
-  if File.exist?(File.join(vendor, "secretspec.h"))
+  if (env = ENV["SECRETSPEC_FFI_INCLUDE"]) && !env.empty? && File.directory?(env)
+    env
+  elsif File.exist?(File.join(vendor, "secretspec.h"))
     vendor
   else
     File.join(repo_root, "secretspec-ffi", "include")

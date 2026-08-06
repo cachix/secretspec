@@ -109,3 +109,20 @@ CGO_ENABLED=1 go build -tags static \
 macOS links the archive in but stays self-contained-except-system-frameworks (no
 static libSystem). Windows stays on the default purego path. The prebuilt
 archives are attached to GitHub releases (`go-static.yml`).
+
+### pkg-config (0.19+)
+
+Install the library with [cargo-c](https://github.com/lu-zero/cargo-c) and add
+the `pkgconfig` tag instead of staging:
+
+```bash
+bash secretspec-ffi/scripts/cinstall.sh "$PREFIX"
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" CGO_ENABLED=1 go build -tags static,pkgconfig ./...
+```
+
+Unlike staging, this also works for a `go get` dependency.
+
+### Dynamic linking (0.19+)
+
+Drop `--library-type staticlib` from the install and the binary links the
+shared library instead.

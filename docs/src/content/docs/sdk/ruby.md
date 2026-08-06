@@ -4,9 +4,8 @@ description: Resolve SecretSpec secrets from Ruby
 ---
 
 The Ruby SDK (`secretspec`) is a thin client over the `secretspec-ffi` C ABI,
-statically linked into a native C extension at build time (no runtime library to
-locate). Resolution happens in the Rust core, so the SDK inherits every provider
-with no Ruby-side logic.
+linked into a native C extension at build time. Resolution happens in the Rust
+core, so the SDK inherits every provider with no Ruby-side logic.
 
 ## Quick start
 
@@ -53,6 +52,20 @@ puts typed.database_url
 
 ## Native library
 
-The resolver is statically linked into a native C extension built by mkmf, so the
-published platform gem is self-contained — there is no separate `cdylib` to
-locate and no `SECRETSPEC_FFI_LIB` to set at runtime.
+The published platform gems bundle the `secretspec-ffi` archive and statically
+link it into the mkmf extension at install time.
+
+### pkg-config (0.19+)
+
+To build against your own `secretspec-ffi` install instead, install it with
+[cargo-c](https://github.com/lu-zero/cargo-c) and pass `--enable-pkg-config`:
+
+```bash
+bash secretspec-ffi/scripts/cinstall.sh "$PREFIX"
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" gem install secretspec -- --enable-pkg-config
+```
+
+### Dynamic linking (0.19+)
+
+Drop `--library-type staticlib` from the install and the extension links the
+shared library instead.

@@ -24,17 +24,24 @@ export SECRETSPEC_FFI_LIB="$target_dir/debug/$lib_name"
 export SECRETSPEC_BIN="$target_dir/debug/secretspec"
 
 # Static-link contract: SDKs link libsecretspec_ffi.a (the resolver compiled in)
-# instead of dlopening the cdylib. A Rust staticlib does not carry its own native
-# dependency closure, so capture the transitive system libs the archive needs and
-# hand them to every consumer's linker. NEVER hardcode this list -- it drifts as
-# providers change.
-export SECRETSPEC_FFI_STATICLIB="$target_dir/debug/libsecretspec_ffi.a"
-export SECRETSPEC_FFI_INCLUDE="$repo_root/secretspec-ffi/include"
+# instead of dlopening the cdylib. Every leg resolves the archive, its header,
+# and its secretspec_ffi.pc from this one installed prefix.
+echo "==> Installing staticlib + header + pkg-config file"
+SECRETSPEC_FFI_PREFIX="$(mktemp -d)"
+export SECRETSPEC_FFI_PREFIX
+bash secretspec-ffi/scripts/cinstall.sh "$SECRETSPEC_FFI_PREFIX"
+export PKG_CONFIG_PATH="$SECRETSPEC_FFI_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+pkg-config --print-errors --exists secretspec_ffi
+export SECRETSPEC_FFI_STATICLIB="$SECRETSPEC_FFI_PREFIX/lib/libsecretspec_ffi.a"
+export SECRETSPEC_FFI_INCLUDE="$SECRETSPEC_FFI_PREFIX/include"
+# Raw linker flags for the legs that do not call pkg-config. A Rust staticlib
+# does not carry its own native dependency closure; NEVER hardcode this list --
+# it drifts as providers change.
 SECRETSPEC_FFI_NATIVE_LIBS="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
   --print native-static-libs 2>&1 | sed -n 's/^note: native-static-libs: //p' | tail -1)"
 export SECRETSPEC_FFI_NATIVE_LIBS
 echo "==> SECRETSPEC_FFI_LIB=$SECRETSPEC_FFI_LIB"
-echo "==> SECRETSPEC_FFI_STATICLIB=$SECRETSPEC_FFI_STATICLIB"
+echo "==> SECRETSPEC_FFI_PREFIX=$SECRETSPEC_FFI_PREFIX"
 echo "==> SECRETSPEC_FFI_NATIVE_LIBS=$SECRETSPEC_FFI_NATIVE_LIBS"
 
 echo "==> Python"
@@ -50,10 +57,19 @@ echo "==> Go (-tags static: cgo links the archive in)"
 ( cd secretspec-go && SECRETSPEC_FFI_PROFILE=debug bash scripts/stage-staticlib.sh )
 ( cd secretspec-go && CGO_ENABLED=1 go test -tags static ./... )
 
+echo "==> Go (-tags static,pkgconfig: link inputs from secretspec_ffi.pc)"
+( cd secretspec-go && CGO_ENABLED=1 go test -tags static,pkgconfig ./... )
+
 echo "==> Ruby"
 # The Ruby SDK compiles an mkmf C extension that statically links the archive
 # (using the SECRETSPEC_FFI_* contract above); build it once up front.
 bash secretspec-rb/scripts/build-ext.sh
+( cd secretspec-rb && ruby -e 'Dir["test/test_*.rb"].sort.each { |f| require File.expand_path(f) }' )
+
+echo "==> Ruby (pkg-config discovery)"
+# The same link inputs read from secretspec_ffi.pc in the installed prefix
+# (PKG_CONFIG_PATH above); rebuild the extension and rerun the tests.
+bash secretspec-rb/scripts/build-ext.sh --enable-pkg-config
 ( cd secretspec-rb && ruby -e 'Dir["test/test_*.rb"].sort.each { |f| require File.expand_path(f) }' )
 
 echo "==> Node"
@@ -75,14 +91,21 @@ echo "==> Haskell"
   cd secretspec-hs
   hs_lib_dir="$(mktemp -d)"
   cp "$SECRETSPEC_FFI_STATICLIB" "$hs_lib_dir/"
-  ghc_optl=()
-  for l in $SECRETSPEC_FFI_NATIVE_LIBS; do ghc_optl+=("--ghc-options=-optl$l"); done
   cabal update
   # --write-ghc-environment-files lets the codegen test's runghc see aeson and
   # the quicktype-generated module's transitive imports; SECRETSPEC_BIN (set
-  # above) lets it run `secretspec schema`.
-  cabal test --extra-lib-dirs="$hs_lib_dir" "${ghc_optl[@]}" \
+  # above) lets it run `secretspec schema`. All -optl flags go in ONE
+  # --ghc-options occurrence: cabal reverses the order of repeated occurrences,
+  # which breaks two-token `-framework X` pairs on macOS.
+  cabal test --extra-lib-dirs="$hs_lib_dir" \
+    --ghc-options="-optl${SECRETSPEC_FFI_NATIVE_LIBS// / -optl}" \
     --write-ghc-environment-files=always
+)
+
+echo "==> Haskell (pkg-config discovery)"
+(
+  cd secretspec-hs
+  cabal test -f use-pkg-config --write-ghc-environment-files=always
 )
 
 echo "==> C# / .NET"

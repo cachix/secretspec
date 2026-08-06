@@ -1,10 +1,9 @@
 # secretspec (Ruby SDK)
 
 Ruby bindings for [SecretSpec](https://secretspec.dev/), a declarative secrets
-manager. A thin client over the `secretspec-ffi` C ABI, statically linked into a
-native C extension at build time (no runtime library to locate). Resolution
-happens in the Rust core, so the SDK inherits every provider with no Ruby-side
-logic.
+manager. A thin client over the `secretspec-ffi` C ABI, linked into a native C
+extension at build time. Resolution happens in the Rust core, so the SDK
+inherits every provider with no Ruby-side logic.
 
 ```ruby
 require "secretspec"
@@ -50,7 +49,28 @@ report = Secretspec::SecretSpec.builder.with_profile("production").report
 report.secrets.each { |s| puts [s.name, s.status, s.required].join(" ") }
 ```
 
-## Library discovery
+## Building
 
-The native library is found via the `SECRETSPEC_FFI_LIB` environment variable,
-or a Cargo `target` directory found by searching up from the working directory.
+The extension links the `secretspec-ffi` archive statically. In a development
+checkout:
+
+```bash
+bash scripts/build-ext.sh
+```
+
+### pkg-config (0.19+)
+
+Install the library with [cargo-c](https://github.com/lu-zero/cargo-c) and pass
+`--enable-pkg-config` to the build:
+
+```bash
+bash secretspec-ffi/scripts/cinstall.sh "$PREFIX"
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" gem install secretspec -- --enable-pkg-config
+```
+
+The same flag works in a checkout: `bash scripts/build-ext.sh --enable-pkg-config`.
+
+### Dynamic linking (0.19+)
+
+Drop `--library-type staticlib` from the install and the extension links the
+shared library instead.

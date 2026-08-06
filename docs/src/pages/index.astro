@@ -63,6 +63,7 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'gnuprivacyguard', slug: 'pass', label: 'Pass (GPG)' },
   { icon: 'dotenv', slug: 'dotenv', label: '.env files' },
   { slug: 'env', label: 'Environment variables' },
+  { slug: 'null', label: 'Manifest defaults (null, 0.19+)' },
   { icon: 'systemd', slug: 'systemd-credential', label: 'systemd credentials (0.17+)' },
   { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden Secrets Manager' },
   { icon: 'linux', slug: 'keyring', label: 'Secret Service' },
@@ -520,6 +521,7 @@ const reelScriptData = {
 <span class="landing-prompt">$</span> <span class="landing-cmd"><span class="tok-bin">secretspec</span> <span class="landing-arg">config global init</span></span>
 ? Select your preferred provider backend:
 <span class="landing-provider-cursor" aria-hidden="true">›</span><a class="landing-provider-line is-selected" style="--provider-line-color: var(--syntax-blue)" href="/providers/keyring/"><span class="provider-name">keyring</span>: Uses system keychain (Recommended)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/null/"><span class="provider-name">null</span>: Use manifest defaults without storage (0.19+)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-red)" href="/providers/bw/"><span class="provider-name">bw</span>: Bitwarden Password Manager (0.18+)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/kdbx/"><span class="provider-name">kdbx</span>: KeePass KDBX databases (0.17+)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/keeper/"><span class="provider-name">keeper</span>: Keeper Secrets Manager (0.18+) via official Rust SDK</a>

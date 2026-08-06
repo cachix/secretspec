@@ -20,6 +20,7 @@
 //! - [`keeper::KeeperProvider`]: Keeper Secrets Manager integration (0.18+)
 //! - [`dotenv::DotEnvProvider`]: `.env` file support
 //! - [`env::EnvProvider`]: Environment variables (read-only)
+//! - [`null::NullProvider`]: Always missing, for manifest defaults (0.19+)
 //! - [`pass::PassProvider`]: Pass integration
 //! - [`gopass::GoPassProvider`]: Gopass integration
 //! - [`systemd_credential::SystemdCredentialProvider`]: systemd service credentials (0.17+)
@@ -45,6 +46,7 @@
 //! ```text
 //! keyring://
 //! dotenv://.env.production
+//! null://  # Use manifest defaults, 0.19+
 //! onepassword://vault
 //! lastpass://folder
 //! keeper://SHARED_FOLDER_UID  # Keeper, 0.18+
@@ -306,6 +308,7 @@ pub mod keeper;
 #[cfg(feature = "keyring")]
 pub mod keyring;
 pub mod lastpass;
+pub mod null;
 pub mod onepassword;
 #[cfg(feature = "openbao")]
 pub mod openbao;

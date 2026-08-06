@@ -9491,6 +9491,25 @@ fn cached_dotenv_secrets(source_paths: &[&Path], cache_path: &Path, max_age: &st
     )
 }
 
+/// One authoritative dotenv provider with its cache attached directly to the
+/// same alias (0.19+ shorthand).
+fn inline_cached_dotenv_secrets(source_path: &Path, cache_path: &Path, max_age: &str) -> Secrets {
+    cached_secrets_with(
+        "resolve-test",
+        HashMap::from([
+            (
+                "myprovider".to_string(),
+                ProviderAlias::from(format!("dotenv://{}", source_path.display()))
+                    .with_cache(ProviderCache::new("local", max_age).expect("valid cache policy")),
+            ),
+            (
+                "local".to_string(),
+                ProviderAlias::from(format!("dotenv://{}", cache_path.display())),
+            ),
+        ]),
+    )
+}
+
 /// A profile-aware in-memory authoritative store with a shared flat dotenv
 /// cache. This combination exercises the namespace the cache envelope itself
 /// must preserve.
@@ -9618,6 +9637,86 @@ fn cached_route_hits_cache_refreshes_after_clear_and_survives_source_loss() {
         resolved_value(&secrets, "API_KEY"),
         "remote-2",
         "a fresh hit must not contact the now-broken authoritative provider"
+    );
+}
+
+#[test]
+fn inline_cached_uri_reads_refreshes_and_clears_like_a_cached_route() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote-1\n").unwrap();
+    let secrets = inline_cached_dotenv_secrets(&source, &cache, "8h");
+
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-1");
+    fs::write(&source, "API_KEY=remote-2\n").unwrap();
+    assert_eq!(
+        resolved_value(&secrets, "API_KEY"),
+        "remote-1",
+        "the inline alias must consult its fresh cache first"
+    );
+
+    assert_eq!(secrets.clear_cache(Some("API_KEY")).unwrap(), 1);
+    assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-2");
+}
+
+#[test]
+fn inline_cached_uri_single_get_populates_an_empty_cache() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+    let secrets = inline_cached_dotenv_secrets(&source, &cache, "8h");
+
+    secrets
+        .get("API_KEY")
+        .expect("single-secret reads must build the planned inline primary");
+    assert!(cache.exists(), "the source hit should populate the cache");
+}
+
+#[test]
+fn inline_cached_alias_is_not_silently_unwrapped_as_an_import_source() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    let secrets = inline_cached_dotenv_secrets(&source, &cache, "8h");
+
+    let error = secrets.import("myprovider").unwrap_err();
+    assert!(error.to_string().contains("complete route"), "{error}");
+}
+
+#[test]
+fn invalid_inline_cached_import_does_not_fetch_provider_credentials() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let cache = temp.path().join("cache.env");
+    let mut route = ProviderAlias::from("bws://project")
+        .with_cache(ProviderCache::new("local", "8h").expect("valid cache policy"));
+    route.credentials.insert(
+        "access_token".to_string(),
+        CredentialSource::from("memtest://"),
+    );
+    let providers = HashMap::from([
+        ("myprovider".to_string(), route),
+        (
+            "local".to_string(),
+            ProviderAlias::from(format!("dotenv://{}", cache.display())),
+        ),
+    ]);
+    let mut secrets = cached_secrets_with("inline-import-test", providers);
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    secrets.set_audit_for_test(logger);
+
+    let error = secrets.import("myprovider").unwrap_err();
+    assert!(error.to_string().contains("complete route"), "{error}");
+    assert!(
+        audit_events(&lines)
+            .iter()
+            .all(|event| event["command"] != "credential"),
+        "rejecting a route as an import source must not read its credential stores"
     );
 }
 

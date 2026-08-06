@@ -561,12 +561,16 @@ impl Secrets {
                 "provider alias '{name}' does not declare a cache policy"
             ))
         })?;
-        let (first, fallback) = alias.fallback().split_first().ok_or_else(|| {
-            SecretSpecError::ProviderOperationFailed(format!(
-                "cached provider alias '{name}' requires at least one authoritative source"
-            ))
-        })?;
 
+        if alias.authoritative_uri().is_some() && !alias.fallback().is_empty() {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "cached provider alias '{name}' cannot declare both uri and fallback"
+            )));
+        }
+
+        // A cache provider is always a leaf. Explicit fallback entries are too;
+        // the inline form names its own leaf URI and is handled below without
+        // treating the alias as nested inside itself.
         for spec in alias
             .fallback()
             .iter()
@@ -581,11 +585,22 @@ impl Secrets {
             }
         }
 
-        let mut source_uris = Vec::with_capacity(alias.fallback().len());
-        for spec in alias.fallback() {
-            source_uris.push(self.resolve_one_provider(spec)?);
-            self.validate_credential_sources(spec)?;
-        }
+        // The inline form builds under the alias name itself, so the alias's
+        // credentials apply; its label in errors is the authoritative URI.
+        let (source_specs, source_uris) = if let Some(uri) = alias.authoritative_uri() {
+            self.validate_credential_sources(name)?;
+            (
+                vec![name.to_string()],
+                vec![self.resolve_one_provider(uri)?],
+            )
+        } else {
+            let mut source_uris = Vec::with_capacity(alias.fallback().len());
+            for spec in alias.fallback() {
+                source_uris.push(self.resolve_one_provider(spec)?);
+                self.validate_credential_sources(spec)?;
+            }
+            (alias.fallback().to_vec(), source_uris)
+        };
         let cache_uri = self.resolve_one_provider(cache.provider())?;
         self.validate_credential_sources(cache.provider())?;
 
@@ -631,7 +646,11 @@ impl Secrets {
                  authoritative source '{source}'. A cache must be a distinct store, otherwise \
                  refreshing it overwrites the secret it caches.",
                 uri = crate::audit::redact_uri_strict(&cache_uri),
-                source = alias.fallback()[shared],
+                source = crate::audit::redact_uri_strict(
+                    alias
+                        .authoritative_uri()
+                        .unwrap_or_else(|| alias.fallback()[shared].as_str()),
+                ),
             )));
         }
 
@@ -649,12 +668,18 @@ impl Secrets {
             )));
         }
 
+        let mut specs = source_specs.into_iter();
+        let first = specs.next().ok_or_else(|| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "cached provider alias '{name}' requires at least one authoritative source"
+            ))
+        })?;
         Ok(Route {
             primary: Some(ResolvedPrimary {
-                spec: first.clone(),
+                spec: first,
                 uri: source_uris[0].clone(),
             }),
-            fallback: fallback.to_vec(),
+            fallback: specs.collect(),
             cache: Some(ResolvedCache {
                 spec: cache.provider().to_string(),
                 uri: cache_uri,
@@ -697,6 +722,9 @@ impl Secrets {
     pub(crate) fn override_display_uri(&self, spec: &str) -> Result<String> {
         match self.cached_alias(spec) {
             Some(alias) => {
+                if let Some(uri) = alias.authoritative_uri() {
+                    return self.resolve_one_provider(uri);
+                }
                 let first = alias.fallback().first().ok_or_else(|| {
                     SecretSpecError::ProviderOperationFailed(format!(
                         "cached provider alias '{spec}' requires at least one authoritative source"
@@ -1173,6 +1201,25 @@ mod tests {
     }
 
     #[test]
+    fn inline_cached_uri_keeps_alias_as_the_authoritative_build_key() {
+        let _env = scrub_resolution_env();
+        let inline = ProviderAlias::from("akv://team-vault")
+            .with_cache(ProviderCache::new("local", "5m").expect("valid cache policy"));
+        let spec = cached_spec_with(vec!["inline"], &[("inline", inline)]);
+        let plan = plan(&spec);
+        let route = route(find(&plan, "API_KEY"));
+
+        // The alias remains the build key so inline provider credentials are
+        // available when the authoritative provider is constructed.
+        assert_eq!(route.group_key(), Some("inline"));
+        assert_eq!(route.primary(), Some("akv://team-vault"));
+        assert!(route.fallback.is_empty());
+        let cache = route.cache().expect("cached route");
+        assert_eq!(cache.spec, "local");
+        assert_eq!(cache.max_age_secs, 5 * 60);
+    }
+
+    #[test]
     fn cached_alias_is_a_complete_route_not_a_chain_link() {
         let _env = scrub_resolution_env();
         // A cached alias is a whole route, so it cannot be a link in a chain in
@@ -1213,6 +1260,24 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("distinct store"), "{message}");
         assert!(message.contains("mirror"), "{message}");
+    }
+
+    #[test]
+    fn same_store_error_redacts_inline_authoritative_credentials() {
+        let _env = scrub_resolution_env();
+        let source = "vault://team-user:super-sensitive-password@127.0.0.1:8200/secret?tls=false";
+        let inline = ProviderAlias::from(source)
+            .with_cache(ProviderCache::new(source, "8h").expect("valid cache policy"));
+        let spec = cached_spec_with(vec!["route"], &[("route", inline)]);
+
+        let message = spec.build_plan(None).unwrap_err().to_string();
+        assert!(message.contains("distinct store"), "{message}");
+        assert!(
+            message.contains("vault://127.0.0.1:8200/secret"),
+            "{message}"
+        );
+        assert!(!message.contains("team-user"), "{message}");
+        assert!(!message.contains("super-sensitive-password"), "{message}");
     }
 
     #[test]
@@ -1265,7 +1330,10 @@ mod tests {
                 message.contains("distinct store"),
                 "{source} / {cache}: {message}"
             );
-            assert!(message.contains(source), "{source} / {cache}: {message}");
+            assert!(
+                message.contains(&crate::audit::redact_uri_strict(source)),
+                "{source} / {cache}: {message}"
+            );
         }
     }
 

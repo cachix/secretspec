@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Haskell SDK declares the archive's macOS system frameworks
   (`SystemConfiguration`, `Security`, `CoreFoundation`) in its cabal file, so
   GHC passes them to every link on macOS.
+- A single provider can now attach its cache directly to the same alias with
+  `uri` and `cache`, avoiding a second wrapper alias while retaining provider
+  credentials. Cached `fallback` routes remain available for multiple
+  authoritative providers.
 
 ### Fixed
 

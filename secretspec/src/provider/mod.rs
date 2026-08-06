@@ -21,6 +21,7 @@
 //! - [`dotenv::DotEnvProvider`]: `.env` file support
 //! - [`env::EnvProvider`]: Environment variables (read-only)
 //! - [`null::NullProvider`]: Defaults or ephemeral generation without storage (0.19+)
+//! - [`file::FileProvider`]: Plaintext file-per-secret storage (0.19+)
 //! - [`pass::PassProvider`]: Pass integration
 //! - [`gopass::GoPassProvider`]: Gopass integration
 //! - [`systemd_credential::SystemdCredentialProvider`]: systemd service credentials (0.17+)
@@ -47,6 +48,7 @@
 //! keyring://
 //! dotenv://.env.production
 //! null://  # Use defaults or ephemeral generation without storage, 0.19+
+//! file:./.secrets  # One plaintext file per secret, 0.19+
 //! onepassword://vault
 //! lastpass://folder
 //! keeper://SHARED_FOLDER_UID  # Keeper, 0.18+
@@ -296,6 +298,7 @@ pub mod bws;
 pub mod dashlane;
 pub mod dotenv;
 pub mod env;
+pub mod file;
 #[cfg(feature = "gcsm")]
 pub mod gcsm;
 pub mod gopass;
@@ -560,11 +563,20 @@ fn registration_for_scheme(scheme: &str) -> Option<&'static ProviderRegistration
 /// URI parser and alias resolution gate specs through here, so the correction
 /// fires in one place no matter which path first sees the spec.
 pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
-    let (scheme, _) = split_spec(spec);
+    let (scheme, rest) = split_spec(spec);
     if scheme == "1password" {
         return Err(SecretSpecError::ProviderOperationFailed(
             "Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault)"
                 .to_string(),
+        ));
+    }
+    // The URL parser normalizes `file://` to `file:///`, making an omitted
+    // path indistinguishable from an explicitly selected filesystem root.
+    // Reject pathless spellings before parsing so only `file:/` or `file:///`
+    // can intentionally select the absolute root.
+    if scheme == "file" && (rest.is_empty() || rest == "//") {
+        return Err(SecretSpecError::ProviderOperationFailed(
+            file::MISSING_DIRECTORY_ERROR.to_string(),
         ));
     }
     Ok(registration_for_scheme(scheme).is_some())
@@ -1596,17 +1608,28 @@ pub(crate) fn provider_from_spec(
     //
     // Windows absolute paths (e.g. `dotenv://C:\path\.env`) need special care:
     // the drive-letter colon looks like a `host:port` separator and parsing
-    // fails with "invalid port number". Encode the whole path (drive colon and
-    // backslashes included) into an opaque host so it round-trips back out via
-    // `ProviderUrl::host()`. A Unix absolute path stays in the authority-less
-    // `scheme:///abs/path` form, which already parses cleanly.
+    // fails with "invalid port number". Custom schemes carry the encoded path
+    // in an opaque host so it round-trips through `ProviderUrl::host()`; the
+    // special `file` scheme uses its standard `file:///C:/...` form instead. A
+    // Unix absolute path already parses cleanly as `scheme:///abs/path`.
     let path_candidate = rest.trim_start_matches('/');
     let url_string = if is_windows_abs_path(path_candidate) {
-        format!(
-            "{}://{}",
-            scheme,
-            percent_encode(path_candidate.as_bytes(), WINDOWS_PATH_ENCODE_SET)
-        )
+        if scheme == "file" {
+            // `file` is a special URL scheme, so an encoded drive path cannot
+            // live in its host as it does for custom schemes. Use the standard
+            // authority-less file URL and normalize Windows separators.
+            let path = path_candidate.replace('\\', "/");
+            format!(
+                "file:///{}",
+                percent_encode(path.as_bytes(), URI_ENCODE_SET)
+            )
+        } else {
+            format!(
+                "{}://{}",
+                scheme,
+                percent_encode(path_candidate.as_bytes(), WINDOWS_PATH_ENCODE_SET)
+            )
+        }
     } else {
         let url_string = match rest {
             // Just scheme name (e.g., "keyring")
@@ -1778,6 +1801,13 @@ mod url_tests {
             "Windows dotenv path should parse, got {:?}",
             provider.err()
         );
+    }
+
+    #[test]
+    fn windows_file_path_uses_a_standard_file_url() {
+        let provider = Box::<dyn Provider>::try_from(r"file://C:\Users\foo\secrets").unwrap();
+        assert_eq!(provider.name(), "file");
+        assert_eq!(provider.uri(), "file:///C:/Users/foo/secrets");
     }
 
     #[test]

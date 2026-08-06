@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `secretspec set` and interactive `secretspec check` now preview the resolved
   write destination before reading the value, including the exact file and
   selector for SOPS.
+- A `file` provider stores each secret as one plaintext UTF-8 file beneath an
+  explicitly configured relative or absolute directory, with project/profile
+  isolation and support for existing file-mounted secrets through `ref.item`.
 - Secrets can store values as standard Base64, URL-safe Base64, or hexadecimal
   using `encoding`; writes encode logical text and reads decode stored values,
   while `as_path = true` materializes arbitrary decoded bytes.

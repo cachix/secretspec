@@ -854,6 +854,15 @@ fn test_create_from_string_with_plain_names() {
     let provider = Box::<dyn Provider>::try_from("dotenv").unwrap();
     assert_eq!(provider.name(), "dotenv");
 
+    let Err(error) = Box::<dyn Provider>::try_from("file") else {
+        panic!("file should require an explicit directory");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("requires an explicit relative or absolute directory path")
+    );
+
     // Test onepassword separately to debug the issue
     match Box::<dyn Provider>::try_from("onepassword") {
         Ok(provider) => assert_eq!(provider.name(), "onepassword"),
@@ -957,6 +966,11 @@ fn test_documentation_examples() {
     // Test dotenv examples from provider list
     let provider = Box::<dyn Provider>::try_from("dotenv://path").unwrap();
     assert_eq!(provider.name(), "dotenv");
+
+    // File provider examples
+    let provider = Box::<dyn Provider>::try_from("file:./.secrets").unwrap();
+    assert_eq!(provider.name(), "file");
+    assert_eq!(provider.uri(), "file://./.secrets");
 
     // Test pass examples
     let provider = Box::<dyn Provider>::try_from("pass://").unwrap();
@@ -1094,6 +1108,13 @@ mod integration_tests {
                 let provider_spec = format!("dotenv:{}", dotenv_path.to_str().unwrap());
                 let provider = Box::<dyn Provider>::try_from(provider_spec.as_str())
                     .expect("Should create dotenv provider with path");
+                (provider, Some(temp_dir))
+            }
+            "file" => {
+                let temp_dir = TempDir::new().expect("Create temp directory");
+                let provider_spec = format!("file:{}", temp_dir.path().display());
+                let provider = Box::<dyn Provider>::try_from(provider_spec.as_str())
+                    .expect("Should create file provider with path");
                 (provider, Some(temp_dir))
             }
             "pass" => {
@@ -2159,6 +2180,17 @@ fn dotenv_write_read_symmetry() {
     let dir = TempDir::new().unwrap();
     let provider = DotEnvProvider::new(DotEnvConfig {
         path: dir.path().join(".env"),
+    });
+    assert_write_read_symmetry(&provider);
+}
+
+#[test]
+fn file_write_read_symmetry() {
+    use super::file::{FileConfig, FileProvider};
+
+    let dir = TempDir::new().unwrap();
+    let provider = FileProvider::new(FileConfig {
+        directory: dir.path().to_path_buf(),
     });
     assert_write_read_symmetry(&provider);
 }

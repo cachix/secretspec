@@ -24,6 +24,29 @@ dotenv://~/.config/app/.env  # Home-relative path (0.18+)
 
 **Features**: Read/write, profiles, human-readable, no encryption
 
+## File Provider (0.19+)
+
+:::caution[Version compatibility]
+The `file` provider is added in SecretSpec 0.19.
+:::
+
+**URI**: `file:ROOT` - Stores one plaintext UTF-8 file per secret beneath an
+explicitly configured local directory
+
+`ROOT` is required. The bare `file` provider name is rejected.
+
+```bash
+file:./.secrets              # Relative to secretspec.toml
+file:///run/secrets          # Absolute directory
+```
+
+**Features**: Read/write/delete, project and profile isolation, exact UTF-8
+text, atomic writes, nested relative `ref.item` paths
+**Storage**: `ROOT/{project}/{profile}/{key}` by convention. A `ref.item`
+replaces the convention path with a relative path beneath `ROOT`.
+**Security**: No encryption. New files use mode `0600` on Unix; traversal and
+symbolic links inside the configured store are rejected.
+
 ## Environment Provider
 
 **URI**: `env://` - Read-only access to system environment variables
@@ -539,6 +562,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Provider | Encryption | Storage Location | Network Access |
 |----------|------------|------------------|----------------|
 | DotEnv | ❌ Plain text | Local filesystem | ❌ No |
+| File (0.19+) | ❌ Plain text | Local filesystem | ❌ No |
 | Environment | ❌ Plain text | Process memory | ❌ No |
 | Null (0.19+) | N/A — no stored value | None | ❌ No |
 | systemd Credential (0.17+) | Depends on unit source | systemd-managed runtime memory | ❌ No |

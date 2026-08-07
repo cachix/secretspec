@@ -1,8 +1,9 @@
 ---
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
-import { Image } from 'astro:assets';
 import { getCollection } from 'astro:content';
+import azureLogo from '../assets/microsoft-azure.svg';
 import sopsLogo from '../assets/sops-logo.svg';
+import type { SyntaxColorName } from '../data/syntax-colors';
 
 const docs = await getCollection('docs');
 
@@ -48,7 +49,6 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'lastpass', slug: 'lastpass', label: 'LastPass' },
   { slug: 'dashlane', label: 'Dashlane (0.18+)' },
   { icon: 'bitwarden', slug: 'bw', label: 'Bitwarden Password Manager (0.18+)' },
-  { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden' },
   { icon: 'vault', slug: 'vault', label: 'Vault' },
   { slug: 'openbao', label: 'OpenBao (0.17+)' },
   { slug: 'awssm', label: 'AWS Secrets Manager' },
@@ -64,13 +64,264 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'dotenv', slug: 'dotenv', label: '.env files' },
   { slug: 'env', label: 'Environment variables' },
   { icon: 'systemd', slug: 'systemd-credential', label: 'systemd credentials (0.17+)' },
+  { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden Secrets Manager' },
   { icon: 'linux', slug: 'keyring', label: 'Secret Service' },
   { slug: 'keyring', label: 'Credential Manager' },
   { icon: { src: sopsLogo, type: 'bundled' }, slug: 'sops', label: 'SOPS (0.17+)' },
 ];
 
+type ConsumerMetadata = {
+  icon?: string;
+  label: string;
+  href: string;
+  secrets: string[];
+};
 
-const dup = <T,>(arr: T[]) => [...arr, ...arr];
+const consumerMetadata: ConsumerMetadata[] = [
+  { icon: 'rust', label: 'Rust', href: '/sdk/rust/',
+    secrets: ['DATABASE_URL', 'API_TOKEN', 'HMAC_SECRET'] },
+  { icon: 'python', label: 'Python', href: '/sdk/python/',
+    secrets: ['DATABASE_URL', 'SECRET_KEY', 'REDIS_URL'] },
+  { icon: 'django', label: 'Django', href: '/sdk/python/',
+    secrets: ['DJANGO_SECRET_KEY', 'DATABASE_URL', 'EMAIL_HOST_PASSWORD'] },
+  { icon: 'fastapi', label: 'FastAPI', href: '/sdk/python/',
+    secrets: ['DATABASE_URL', 'JWT_SECRET', 'OPENAI_API_KEY'] },
+  { icon: 'nodedotjs', label: 'Node.js', href: '/sdk/nodejs/',
+    secrets: ['DATABASE_URL', 'SESSION_SECRET', 'STRIPE_SECRET_KEY'] },
+  { icon: 'nextdotjs', label: 'Next.js', href: '/sdk/nodejs/',
+    secrets: ['AUTH_SECRET', 'DATABASE_URL', 'STRIPE_SECRET_KEY'] },
+  { icon: 'express', label: 'Express', href: '/sdk/nodejs/',
+    secrets: ['DATABASE_URL', 'SESSION_SECRET', 'JWT_SECRET'] },
+  { icon: 'go', label: 'Go', href: '/sdk/go/',
+    secrets: ['DATABASE_URL', 'API_KEY', 'REDIS_URL'] },
+  { icon: 'ruby', label: 'Ruby', href: '/sdk/ruby/',
+    secrets: ['DATABASE_URL', 'SECRET_KEY_BASE', 'REDIS_URL'] },
+  { icon: 'rubyonrails', label: 'Rails', href: '/sdk/ruby/',
+    secrets: ['SECRET_KEY_BASE', 'DATABASE_URL', 'RAILS_MASTER_KEY'] },
+  { icon: 'php', label: 'PHP', href: '/sdk/php/',
+    secrets: ['DATABASE_URL', 'APP_KEY', 'MAIL_PASSWORD'] },
+  { icon: 'laravel', label: 'Laravel', href: '/sdk/php/',
+    secrets: ['APP_KEY', 'DB_PASSWORD', 'PUSHER_APP_SECRET'] },
+  { icon: 'symfony', label: 'Symfony', href: '/sdk/php/',
+    secrets: ['APP_SECRET', 'DATABASE_URL', 'MAILER_DSN'] },
+  { icon: 'dotnet', label: '.NET / C#', href: '/sdk/csharp/',
+    secrets: ['CONNECTIONSTRINGS__DEFAULT', 'JWT__SECRET', 'API_KEY'] },
+  { icon: 'haskell', label: 'Haskell', href: '/sdk/haskell/',
+    secrets: ['DATABASE_URL', 'API_KEY', 'SIGNING_KEY'] },
+  { icon: 'swift', label: 'Swift (0.18+)', href: '/sdk/swift/',
+    secrets: ['DATABASE_URL', 'API_KEY', 'SENTRY_DSN'] },
+  { icon: 'githubactions', label: 'GitHub Actions', href: '/ci/github-actions/',
+    secrets: ['NPM_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'CODECOV_TOKEN'] },
+  { label: 'Forgejo Actions', href: '/ci/github-actions/',
+    secrets: ['NPM_TOKEN', 'FORGEJO_TOKEN', 'DEPLOY_KEY'] },
+  { icon: 'nixos', label: 'devenv & Nix', href: 'https://devenv.sh/integrations/secretspec/',
+    secrets: ['DATABASE_URL', 'CACHIX_AUTH_TOKEN', 'REDIS_URL'] },
+  { icon: 'systemd', label: 'systemd', href: '/providers/systemd-credential/',
+    secrets: ['TLS_CERT', 'DB_PASSWORD', 'SERVICE_TOKEN'] },
+  { icon: 'docker', label: 'Docker', href: '/reference/cli/#export',
+    secrets: ['POSTGRES_PASSWORD', 'REDIS_URL', 'REGISTRY_AUTH'] },
+  { icon: 'kubernetes', label: 'Kubernetes', href: '/reference/cli/#export',
+    secrets: ['DATABASE_URL', 'TLS_CERT', 'HELM_REGISTRY_TOKEN'] },
+];
+
+const providerLoop = [...providerMetadata, ...providerMetadata, ...providerMetadata];
+const consumerLoop = [...consumerMetadata, ...consumerMetadata, ...consumerMetadata];
+
+const providerColors: Record<string, SyntaxColorName> = {
+  keyring: 'blue',
+  kdbx: 'yellow',
+  onepassword: 'red',
+  keeper: 'yellow',
+  lastpass: 'red',
+  dashlane: 'cyan',
+  bw: 'red',
+  bws: 'cyan',
+  vault: 'blue',
+  openbao: 'cyan',
+  awssm: 'orange',
+  awsps: 'orange',
+  scaleway: 'magenta',
+  gcsm: 'red',
+  akv: 'blue',
+  infisical: 'cyan',
+  age: 'yellow',
+  gopass: 'green',
+  protonpass: 'magenta',
+  pass: 'yellow',
+  dotenv: 'green',
+  env: 'comment',
+  'systemd-credential': 'blue',
+  sops: 'magenta',
+};
+
+const consumerColors: Record<string, SyntaxColorName> = {
+  Rust: 'red',
+  Python: 'yellow',
+  Django: 'green',
+  FastAPI: 'cyan',
+  'Node.js': 'green',
+  'Next.js': 'comment',
+  Express: 'comment',
+  Go: 'cyan',
+  Ruby: 'red',
+  Rails: 'red',
+  PHP: 'magenta',
+  Laravel: 'red',
+  Symfony: 'comment',
+  '.NET / C#': 'blue',
+  Haskell: 'magenta',
+  'Swift (0.18+)': 'red',
+  'GitHub Actions': 'comment',
+  'Forgejo Actions': 'orange',
+  'devenv & Nix': 'cyan',
+  systemd: 'blue',
+  Docker: 'cyan',
+  Kubernetes: 'blue',
+};
+
+const languageSdkMetadata = [
+  {
+    id: 'rust',
+    icon: 'rust',
+    label: 'Rust',
+    href: '/sdk/rust/',
+    color: consumerTone({ label: 'Rust', href: '/sdk/rust/', secrets: [] }),
+    code: `<span class="tok-var">secretspec_derive</span><span class="tok-pun">::</span><span class="tok-fn">declare_secrets!</span><span class="tok-pun">(</span><span class="tok-str">"secretspec.toml"</span><span class="tok-pun">);</span>
+
+<span class="tok-kw">let</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">::</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
+    <span class="tok-pun">.</span><span class="tok-fn">with_provider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
+    <span class="tok-pun">.</span><span class="tok-fn">with_reason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span><span class="tok-pun">()?;</span>
+<span class="tok-fn">println!</span><span class="tok-pun">(</span><span class="tok-str">"{}"</span><span class="tok-pun">,</span> <span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">.</span><span class="tok-var">database_url</span><span class="tok-pun">);</span>`,
+  },
+  {
+    id: 'python',
+    icon: 'python',
+    label: 'Python',
+    href: '/sdk/python/',
+    color: consumerTone({ label: 'Python', href: '/sdk/python/', secrets: [] }),
+    code: `<span class="tok-kw">from</span> <span class="tok-var">secretspec</span> <span class="tok-kw">import</span> <span class="tok-var">SecretSpec</span>
+
+<span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span><span class="tok-pun">()</span> \\
+    <span class="tok-pun">.</span><span class="tok-fn">with_provider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span> \\
+    <span class="tok-pun">.</span><span class="tok-fn">with_reason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span><span class="tok-pun">()</span>
+<span class="tok-fn">print</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">].</span><span class="tok-var">get</span><span class="tok-pun">)</span>`,
+  },
+  {
+    id: 'nodejs',
+    icon: 'nodedotjs',
+    label: 'Node.js',
+    href: '/sdk/nodejs/',
+    color: consumerTone({ label: 'Node.js', href: '/sdk/nodejs/', secrets: [] }),
+    code: `<span class="tok-kw">const</span> <span class="tok-pun">{</span> <span class="tok-var">SecretSpec</span> <span class="tok-pun">}</span> <span class="tok-pun">=</span> <span class="tok-fn">require</span><span class="tok-pun">(</span><span class="tok-str">"secretspec"</span><span class="tok-pun">);</span>
+
+<span class="tok-kw">const</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
+  <span class="tok-pun">.</span><span class="tok-fn">withProvider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
+  <span class="tok-pun">.</span><span class="tok-fn">withReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span><span class="tok-pun">();</span>
+<span class="tok-var">console</span><span class="tok-pun">.</span><span class="tok-fn">log</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">.</span><span class="tok-var">DATABASE_URL</span><span class="tok-pun">.</span><span class="tok-fn">get</span><span class="tok-pun">());</span>`,
+  },
+  {
+    id: 'go',
+    icon: 'go',
+    label: 'Go',
+    href: '/sdk/go/',
+    color: consumerTone({ label: 'Go', href: '/sdk/go/', secrets: [] }),
+    code: `<span class="tok-var">s</span><span class="tok-pun">,</span> <span class="tok-var">_</span> <span class="tok-pun">:=</span> <span class="tok-var">secretspec</span><span class="tok-pun">.</span><span class="tok-fn">New</span><span class="tok-pun">().</span>
+    <span class="tok-fn">WithProvider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">).</span>
+    <span class="tok-fn">WithReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">Load</span><span class="tok-pun">()</span>
+<span class="tok-var">fmt</span><span class="tok-pun">.</span><span class="tok-fn">Println</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">Secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">].</span><span class="tok-fn">Get</span><span class="tok-pun">())</span>`,
+  },
+  {
+    id: 'ruby',
+    icon: 'ruby',
+    label: 'Ruby',
+    href: '/sdk/ruby/',
+    color: consumerTone({ label: 'Ruby', href: '/sdk/ruby/', secrets: [] }),
+    code: `<span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">Secretspec</span><span class="tok-pun">::</span><span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span>
+      <span class="tok-pun">.</span><span class="tok-fn">with_provider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
+      <span class="tok-pun">.</span><span class="tok-fn">with_reason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span>
+<span class="tok-fn">puts</span> <span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">].</span><span class="tok-var">get</span>`,
+  },
+  {
+    id: 'haskell',
+    icon: 'haskell',
+    label: 'Haskell',
+    href: '/sdk/haskell/',
+    color: consumerTone({ label: 'Haskell', href: '/sdk/haskell/', secrets: [] }),
+    code: `<span class="tok-var">s</span> <span class="tok-pun">&lt;-</span> <span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">load</span> <span class="tok-pun">(</span><span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">builder</span>
+      <span class="tok-pun">&amp;</span> <span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">withProvider</span> <span class="tok-str">"keyring://"</span>
+      <span class="tok-pun">&amp;</span> <span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">withReason</span> <span class="tok-str">"boot"</span><span class="tok-pun">)</span>
+<span class="tok-fn">print</span> <span class="tok-pun">(</span><span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">get</span> <span class="tok-pun">=&lt;&lt;</span> <span class="tok-var">Map</span><span class="tok-pun">.</span><span class="tok-fn">lookup</span> <span class="tok-str">"DATABASE_URL"</span> <span class="tok-pun">(</span><span class="tok-var">S</span><span class="tok-pun">.</span><span class="tok-fn">resolvedSecrets</span> <span class="tok-var">s</span><span class="tok-pun">))</span>`,
+  },
+  {
+    id: 'php',
+    icon: 'php',
+    label: 'PHP',
+    href: '/sdk/php/',
+    color: consumerTone({ label: 'PHP', href: '/sdk/php/', secrets: [] }),
+    code: `<span class="tok-kw">use</span> <span class="tok-var">Secretspec\\SecretSpec</span><span class="tok-pun">;</span>
+
+<span class="tok-var">$s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">::</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
+    <span class="tok-pun">-&gt;</span><span class="tok-fn">withProvider</span><span class="tok-pun">(</span><span class="tok-str">'keyring://'</span><span class="tok-pun">)</span>
+    <span class="tok-pun">-&gt;</span><span class="tok-fn">withReason</span><span class="tok-pun">(</span><span class="tok-str">'boot web app'</span><span class="tok-pun">)-&gt;</span><span class="tok-fn">load</span><span class="tok-pun">();</span>
+<span class="tok-var">$s</span><span class="tok-pun">-&gt;</span><span class="tok-fn">setAsEnv</span><span class="tok-pun">();</span>`,
+  },
+  {
+    id: 'csharp',
+    icon: 'dotnet',
+    label: 'C# / .NET',
+    href: '/sdk/csharp/',
+    color: consumerTone({ label: '.NET / C#', href: '/sdk/csharp/', secrets: [] }),
+    code: `<span class="tok-kw">using</span> <span class="tok-var">Cachix</span><span class="tok-pun">.</span><span class="tok-var">SecretSpec</span><span class="tok-pun">;</span>
+
+<span class="tok-kw">using</span> <span class="tok-kw">var</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">Builder</span><span class="tok-pun">()</span>
+    <span class="tok-pun">.</span><span class="tok-fn">WithProvider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
+    <span class="tok-pun">.</span><span class="tok-fn">WithReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">Load</span><span class="tok-pun">();</span>
+<span class="tok-var">Console</span><span class="tok-pun">.</span><span class="tok-fn">WriteLine</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">Secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">].</span><span class="tok-fn">Get</span><span class="tok-pun">());</span>`,
+  },
+  {
+    id: 'swift',
+    icon: 'swift',
+    label: 'Swift (0.18+)',
+    href: '/sdk/swift/',
+    color: consumerTone({ label: 'Swift (0.18+)', href: '/sdk/swift/', secrets: [] }),
+    code: `<span class="tok-kw">let</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-kw">try</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
+    <span class="tok-pun">.</span><span class="tok-fn">withProvider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
+    <span class="tok-pun">.</span><span class="tok-fn">withReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span><span class="tok-pun">()</span>
+<span class="tok-kw">defer</span> <span class="tok-pun">{</span> <span class="tok-kw">try</span><span class="tok-pun">?</span> <span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-fn">close</span><span class="tok-pun">()</span> <span class="tok-pun">}</span>
+<span class="tok-fn">print</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">]?.</span><span class="tok-fn">get</span><span class="tok-pun">()</span> <span class="tok-pun">??</span> <span class="tok-str">""</span><span class="tok-pun">)</span>`,
+  },
+];
+
+function providerTone(provider: ProviderMetadata) {
+  return `var(--syntax-${providerColors[provider.slug] ?? 'blue'})`;
+}
+
+function consumerTone(consumer: ConsumerMetadata) {
+  return `var(--syntax-${consumerColors[consumer.label] ?? 'blue'})`;
+}
+
+function simpleIconMask(icon: string) {
+  return `url("https://cdn.simpleicons.org/${icon}/000000")`;
+}
+
+function animatedCodeLines(html: string) {
+  return html
+    .split('\n')
+    .map((line, index) => {
+      const content = line.length ? line : '&nbsp;';
+      return `<span class="landing-code-line" style="--line:${index}">${content}</span>`;
+    })
+    .join('');
+}
+
+const isReelDuplicate = (index: number, itemCount: number) =>
+  index < itemCount || index >= itemCount * 2;
+
+const reelScriptData = {
+  consumers: consumerMetadata.map((c) => ({ secrets: c.secrets })),
+  providerCount: providerMetadata.length,
+  consumerCount: consumerMetadata.length,
+};
 ---
 
 <StarlightPage
@@ -104,20 +355,132 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
     </a>
     )}
 
-    <div class="landing-hero-head">
+    <div class="landing-hero-head landing-hero-head-interface">
       <h1 id="_top" class="landing-hero-title">A declarative interface<br>for every secret provider.</h1>
       <p class="landing-hero-subtitle">
-        Stop leaking <code class="inline-code">.env</code> files. Commit what your application expects in <code class="inline-code">secretspec.toml</code>, never the values. Developers, CI, and production can each resolve the same declaration from any of {providerCount} providers.
+        Stop leaking <code class="inline-code">.env</code> files. Commit what your application expects in <code class="inline-code">secretspec.toml</code>, never the values.<br class="landing-wide-break"> Developers, CI, and production can each resolve the same declaration from any of {providerCount} providers.
       </p>
-      <div class="landing-hero-actions">
-        <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
-        <a href="/concepts/overview/" class="landing-btn landing-btn-secondary">Concepts</a>
-        <a href="/concepts/providers/" class="landing-btn landing-btn-secondary">Providers ({providerCount})</a>
-        <a href="/sdk/overview/" class="landing-btn landing-btn-secondary">SDKs ({sdkCount})</a>
+    </div>
+
+    <div class="landing-pipeline-grid">
+
+    <div class="landing-pipeline-side">
+      <div class="landing-pipeline-action landing-pipeline-action-left">
+        <a href="/concepts/providers/" class="landing-btn landing-btn-secondary landing-btn-flow">Providers ({providerCount})</a>
+      </div>
+      <div class="landing-reel" data-reel="providers" data-direction="down"
+           data-item-count={providerMetadata.length}
+           aria-label="Scrollable list of secret providers">
+        <div class="landing-reel-track" style={`--scroll:${providerMetadata.length}`}>
+          {providerLoop.map((p, i) => (
+            <a
+              href={`/providers/${p.slug}`}
+              class="landing-reel-slot"
+              data-index={i}
+              style={`--i:${i};--reel-color:${providerTone(p)}`}
+              draggable="false"
+              aria-hidden={isReelDuplicate(i, providerMetadata.length) ? 'true' : undefined}
+              tabindex={isReelDuplicate(i, providerMetadata.length) ? -1 : undefined}
+            >
+              <div class="landing-reel-slot-inner">
+                <div class="landing-reel-item">
+                  {typeof p.icon === 'string' ? (
+                    <>
+                      <span data-reel-icon-img class="landing-reel-icon landing-reel-icon-mask" style={`--reel-icon-mask:${simpleIconMask(p.icon)}`} aria-hidden="true"></span>
+                      <svg class="landing-reel-icon landing-reel-icon-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    </>
+                  ) : typeof p.icon === 'object' && p.icon.type === 'bundled' ? (
+                    <img class="landing-reel-icon" src={p.icon.src.src} alt="" width="20" height="20" loading="lazy" />
+                  ) : (
+                    <svg class="landing-reel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  )}
+                  <span>{p.label}</span>
+                </div>
+              </div>
+            </a>
+          ))}
+        </div>
       </div>
     </div>
 
-    <div class="landing-hero-split">
+    <div class="landing-pipeline-flow-arrow landing-pipeline-flow-arrow-in" aria-hidden="true"></div>
+
+    <div class="landing-pipeline-center">
+      <div class="landing-terminal landing-pipeline-terminal" data-pipeline-terminal>
+        <div class="landing-terminal-header">
+          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+          <span class="landing-terminal-title">secretspec.toml</span>
+        </div>
+        <pre is:raw class="landing-terminal-body"><code data-pipeline-terminal-body><span class="tok-sec">[project]</span>
+<span class="tok-key">name</span> <span class="tok-pun">=</span> <span class="tok-str">"my-app"</span>
+<span class="tok-key">revision</span> <span class="tok-pun">=</span> <span class="tok-str">"1.0"</span>
+
+<span class="tok-sec">[profiles.default]</span>
+<span class="tok-key">DATABASE_URL</span>      <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">}</span>
+<span class="tok-key">API_TOKEN</span>         <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">}</span>
+<span class="tok-key">HMAC_SECRET</span>       <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">}</span></code></pre>
+      </div>
+      <div class="landing-hero-lower-actions">
+        <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>
+        <a href="/concepts/overview/" class="landing-btn landing-btn-secondary">Concepts</a>
+      </div>
+    </div>
+
+    <div class="landing-pipeline-flow-arrow landing-pipeline-flow-arrow-out" aria-hidden="true"></div>
+
+    <div class="landing-pipeline-side">
+      <div class="landing-pipeline-action landing-pipeline-action-right">
+        <a href="/sdk/overview/" class="landing-btn landing-btn-secondary landing-btn-flow">SDKs ({sdkCount})</a>
+      </div>
+      <div class="landing-reel" data-reel="consumers" data-direction="up"
+           data-item-count={consumerMetadata.length}
+           aria-label="Scrollable list of SDKs and integrations">
+        <div class="landing-reel-track" style={`--scroll:${consumerMetadata.length}`}>
+          {consumerLoop.map((c, i) => (
+            <a
+              href={c.href}
+              class="landing-reel-slot"
+              data-index={i}
+              style={`--i:${i};--reel-color:${consumerTone(c)}`}
+              draggable="false"
+              aria-hidden={isReelDuplicate(i, consumerMetadata.length) ? 'true' : undefined}
+              tabindex={isReelDuplicate(i, consumerMetadata.length) ? -1 : undefined}
+            >
+              <div class="landing-reel-slot-inner">
+                <div class="landing-reel-item">
+                  {c.icon ? (
+                    <>
+                      <span data-reel-icon-img class="landing-reel-icon landing-reel-icon-mask" style={`--reel-icon-mask:${simpleIconMask(c.icon)}`} aria-hidden="true"></span>
+                      <svg class="landing-reel-icon landing-reel-icon-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    </>
+                  ) : (
+                    <svg class="landing-reel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  )}
+                  <span>{c.label}</span>
+                </div>
+              </div>
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
+
+    </div>
+
+  </div>
+</section>
+
+<!-- ============ DECLARATIVE INTRO ============ -->
+<section class="landing-section landing-declarative-section">
+  <div class="landing-container">
+    <div class="landing-section-centered">
+      <h2 class="landing-section-title">Set up SecretSpec in three steps.</h2>
+      <p class="landing-section-lead landing-section-lead-narrow">
+        Create a shared contract for the secrets your application needs, choose a provider for the values, and run.
+      </p>
+    </div>
+
+    <div class="landing-hero-split landing-declarative-split">
       <!-- Left: secretspec.toml preview -->
       <div class="landing-hero-preview">
         <div class="landing-terminal">
@@ -130,10 +493,10 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
 <span class="tok-key">revision</span> <span class="tok-pun">=</span> <span class="tok-str">"1.0"</span>
 
 <span class="tok-sec">[profiles.default]</span>
-<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"PostgreSQL"</span><span class="tok-pun">,</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span>
+<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"PostgreSQL"</span><span class="tok-pun">,</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">}</span>
 <span class="tok-key">REDIS_URL</span>    <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"Redis cache"</span> <span class="tok-pun">}</span>
-<span class="tok-key">TLS_CERT</span>     <span class="tok-pun">= {</span> <span class="tok-key">as_path</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span>
-<span class="tok-key">DB_PASSWORD</span>  <span class="tok-pun">= {</span> <span class="tok-key">type</span> <span class="tok-pun">=</span> <span class="tok-str">"password"</span><span class="tok-pun">,</span> <span class="tok-key">generate</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span>
+<span class="tok-key">TLS_CERT</span>     <span class="tok-pun">= {</span> <span class="tok-key">as_path</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">}</span>
+<span class="tok-key">DB_PASSWORD</span>  <span class="tok-pun">= {</span> <span class="tok-key">type</span> <span class="tok-pun">=</span> <span class="tok-str">"password"</span><span class="tok-pun">,</span> <span class="tok-key">generate</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">}</span>
 
 <span class="tok-sec">[profiles.development]</span>
 <span class="tok-com"># Inherits from default; override what changes</span>
@@ -143,129 +506,386 @@ const dup = <T,>(arr: T[]) => [...arr, ...arr];
 
       <!-- Right: runtime/terminal -->
       <div class="landing-hero-preview">
-        <div class="landing-terminal">
+        <div class="landing-terminal landing-terminal-run">
           <div class="landing-terminal-header">
             <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
             <span class="landing-terminal-title">terminal</span>
           </div>
-          <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># 1. Initialize from existing .env</span>
-$ secretspec init --from dotenv
-<span class="tok-str">✓</span> Created secretspec.toml with 5 secrets
+<pre is:raw class="landing-terminal-body"><code><span class="landing-run-step"><span class="tok-com"># 1. Initialize from existing .env</span>
+<span class="landing-prompt">$</span> <span class="landing-cmd"><span class="tok-bin">secretspec</span> <span class="landing-arg">init</span> <span class="landing-flag">--from</span> <span class="landing-arg">dotenv</span></span>
+<span class="landing-ok">✓</span> Created secretspec.toml with 5 secrets</span>
 
-<span class="tok-com"># 2. Pick a user-global default (0.17+)</span>
-$ secretspec config global init
+<span class="landing-run-step is-provider-list"><span class="tok-com"># 2. Pick a user-global default (0.17+)</span>
+<span class="landing-prompt">$</span> <span class="landing-cmd"><span class="tok-bin">secretspec</span> <span class="landing-arg">config global init</span></span>
 ? Select your preferred provider backend:
-<span class="tok-pun">›</span> keyring: Uses system keychain (Recommended)
-  bw: Bitwarden Password Manager (0.18+)
-  kdbx: KeePass KDBX databases (0.17+)
-  keeper: Keeper Secrets Manager (0.18+) via official Rust SDK
-  infisical: Infisical secret management
-  openbao: OpenBao secret management (0.17+)
-  age: age-encrypted file (0.17+)
-  sops: SOPS encrypted files (0.17+)
-  systemd-credential: Read-only systemd service credentials (0.17+)
-  awsps: AWS Systems Manager Parameter Store (0.18+)
-  scaleway: Scaleway Secret Manager (0.17+)
-  dashlane: Dashlane password manager, read-only (0.18+)
-<span class="tok-str">✓</span> Saved to ~/.config/secretspec/config.toml
+<span class="landing-provider-cursor" aria-hidden="true">›</span><a class="landing-provider-line is-selected" style="--provider-line-color: var(--syntax-blue)" href="/providers/keyring/"><span class="provider-name">keyring</span>: Uses system keychain (Recommended)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-red)" href="/providers/bw/"><span class="provider-name">bw</span>: Bitwarden Password Manager (0.18+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/kdbx/"><span class="provider-name">kdbx</span>: KeePass KDBX databases (0.17+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/keeper/"><span class="provider-name">keeper</span>: Keeper Secrets Manager (0.18+) via official Rust SDK</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/infisical/"><span class="provider-name">infisical</span>: Infisical secret management</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/openbao/"><span class="provider-name">openbao</span>: OpenBao secret management (0.17+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/age/"><span class="provider-name">age</span>: age-encrypted file (0.17+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-magenta)" href="/providers/sops/"><span class="provider-name">sops</span>: SOPS encrypted files (0.17+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-blue)" href="/providers/systemd-credential/"><span class="provider-name">systemd-credential</span>: Read-only systemd service credentials (0.17+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-orange)" href="/providers/awsps/"><span class="provider-name">awsps</span>: AWS Systems Manager Parameter Store (0.18+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-magenta)" href="/providers/scaleway/"><span class="provider-name">scaleway</span>: Scaleway Secret Manager (0.17+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/dashlane/"><span class="provider-name">dashlane</span>: Dashlane password manager, read-only (0.18+)</a>
+<span class="landing-ok">✓</span> Saved to ~/.config/secretspec/config.toml</span>
 
-<span class="tok-com"># 3. Run your app with secrets injected</span>
-$ secretspec run --profile production -- npm start
-<span class="tok-str">✓</span> Loaded DATABASE_URL from keyring
-<span class="tok-str">✓</span> Loaded REDIS_URL    from keyring
-<span class="tok-str">✓</span> Generated DB_PASSWORD (32 chars)
-<span class="tok-str">✓</span> Wrote TLS_CERT to /tmp/secretspec-tls-cert
-<span class="tok-pun">›</span> npm start</code></pre>
+<span class="landing-run-step"><span class="tok-com"># 3. Run your app with secrets injected</span>
+<span class="landing-prompt">$</span> <span class="landing-cmd"><span class="tok-bin">secretspec</span> <span class="landing-arg">run</span> <span class="landing-flag">--profile</span> <span class="landing-arg">production</span> <span class="landing-flag">--</span> <span class="tok-bin">npm</span> <span class="landing-arg">start</span></span>
+<span class="landing-ok">✓</span> Loaded DATABASE_URL from keyring
+<span class="landing-ok">✓</span> Loaded REDIS_URL    from keyring
+<span class="landing-ok">✓</span> Generated DB_PASSWORD (32 chars)
+<span class="landing-ok">✓</span> Wrote TLS_CERT to /tmp/secretspec-tls-cert
+<span class="tok-pun">›</span> <span class="tok-bin">npm</span> <span class="landing-arg">start</span></span></code></pre>
         </div>
-      </div>
-    </div>
-
-  </div>
-</section>
-
-<!-- ============ PROVIDER MARQUEE ============ -->
-<section class="landing-marquee-section">
-  <p class="landing-marquee-heading">One declaration · Any provider</p>
-
-  <div class="landing-marquee">
-    <div class="landing-marquee-track">
-      {dup(providerMetadata).map(({ icon, label, slug }: ProviderMetadata) => (
-        <a href={`/providers/${slug}`} class="landing-marquee-item">
-          {typeof icon === 'string' ? (
-            <img class="landing-marquee-icon" src={`https://cdn.simpleicons.org/${icon}/888888`} alt="" loading="lazy" width="18" height="18" onerror="this.outerHTML='<svg class=&quot;landing-marquee-icon&quot; viewBox=&quot;0 0 24 24&quot; fill=&quot;none&quot; stroke=&quot;currentColor&quot; stroke-width=&quot;2&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; aria-hidden=&quot;true&quot;><rect x=&quot;3&quot; y=&quot;11&quot; width=&quot;18&quot; height=&quot;11&quot; rx=&quot;2&quot;/><path d=&quot;M7 11V7a5 5 0 0 1 10 0v4&quot;/></svg>'" />
-          ) : typeof icon === 'object' && icon.type === 'bundled' ? (
-            <Image
-              alt="provider logo"
-              class="landing-marquee-icon"
-              decoding="async"
-              height="18"
-              loading="lazy"
-              src={icon.src}
-              width="18"
-            />
-          ) : (
-            <svg class="landing-marquee-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          )}
-          <span>{label}</span>
-        </a>
-      ))}
-    </div>
-  </div>
-
-</section>
-
-<!-- ============ THREE STEPS ============ -->
-<section class="landing-section">
-  <div class="landing-container">
-    <div class="landing-section-centered">
-      <h2 class="landing-section-title">Set up SecretSpec in three steps.</h2>
-      <p class="landing-section-lead landing-section-lead-narrow">
-        Create a shared contract for the secrets your application needs, choose a provider for the values, and run.
-      </p>
-    </div>
-
-    <div class="landing-steps">
-      <div class="landing-step">
-        <div class="landing-step-head">
-          <span class="landing-step-num">1</span>
-          <p class="landing-step-title">Declare</p>
-        </div>
-        <p class="landing-step-desc">Create <code class="inline-code">secretspec.toml</code> from an existing <code class="inline-code">.env</code> or by hand. Commit secret names and requirements, not their values.</p>
-        <pre is:raw class="landing-step-code"><code>$ secretspec init --from dotenv</code></pre>
-      </div>
-
-      <div class="landing-step">
-        <div class="landing-step-head">
-          <span class="landing-step-num">2</span>
-          <p class="landing-step-title">Provider</p>
-        </div>
-        <p class="landing-step-desc">Choose where this machine looks for values: a system keyring, password manager, cloud secret store, or one of {providerCount} providers.</p>
-        <pre is:raw class="landing-step-code"><code>$ secretspec config global init <span class="tok-com"># 0.17+</span>
-? Select your preferred provider backend:
-> keyring: Uses system keychain (Recommended)
-  bw: Bitwarden Password Manager (0.18+)
-  kdbx: KeePass KDBX databases (0.17+)
-  keeper: Keeper Secrets Manager (0.18+) via official Rust SDK
-  infisical: Infisical secret management
-  openbao: OpenBao secret management (0.17+)
-  age: age-encrypted file (0.17+)
-  sops: SOPS encrypted files (0.17+)
-  systemd-credential: Read-only systemd service credentials (0.17+)
-  awsps: AWS Systems Manager Parameter Store (0.18+)
-  scaleway: Scaleway Secret Manager (0.17+)</code></pre>
-      </div>
-
-      <div class="landing-step">
-        <div class="landing-step-head">
-          <span class="landing-step-num">3</span>
-          <p class="landing-step-title">Run</p>
-        </div>
-        <p class="landing-step-desc">SecretSpec validates the active profile, resolves its values, and launches your application with them in the environment.</p>
-        <pre is:raw class="landing-step-code"><code>$ secretspec run -- npm start</code></pre>
       </div>
     </div>
   </div>
 </section>
+
+<script is:inline define:vars={{ reelData: reelScriptData }}>
+  (function () {
+    const providerReel = document.querySelector('[data-reel="providers"]');
+    const consumerReel = document.querySelector('[data-reel="consumers"]');
+    const terminalEl = document.querySelector('[data-pipeline-terminal]');
+    const terminalBody = document.querySelector('[data-pipeline-terminal-body]');
+
+    if (!providerReel || !consumerReel || !terminalBody || !terminalEl) return;
+
+    document.querySelectorAll('[data-reel-icon-img]').forEach((img) => {
+      function markMissing() {
+        const item = img.closest('.landing-reel-item');
+        if (item) item.classList.add('is-icon-missing');
+      }
+
+      img.addEventListener('error', markMissing, { once: true });
+      if (img.complete && img.naturalWidth === 0) markMissing();
+    });
+
+    const SLOT_H = 76;
+    const SLOT_W_MOBILE = 216;
+    const MOBILE_QUERY = window.matchMedia('(max-width: 900px)');
+    const AUTO_TICK_MS = 2600;
+    const AUTO_ANIM_MS = 760;
+    const SNAP_ANIM_MS = 320;
+    const RESUME_AFTER_MS = 4200;
+    const DRAG_THRESHOLD_PX = 5;
+    const INERTIA_MIN_VELOCITY = 0.00075;
+    const INERTIA_FRICTION = 0.000055;
+    const INERTIA_MAX_VELOCITY = 0.05;
+    const AUTO_EPOCH = performance.now();
+
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    function codeLine(html, index) {
+      return '<span class="landing-code-line" style="--line:' + index + '">' + html + '</span>';
+    }
+
+    function restartClass(el, className) {
+      el.classList.remove(className);
+      void el.offsetWidth;
+      el.classList.add(className);
+    }
+
+    function updateTerminal(consumer) {
+      terminalEl.classList.remove('is-popping');
+
+      const maxLen = Math.max.apply(null, consumer.secrets.map((s) => s.length));
+      const rows = consumer.secrets.map((name, index) => {
+        const pad = ' '.repeat(Math.max(1, maxLen - name.length + 1));
+        const row =
+          '<span class="tok-key">' + esc(name) + '</span>' + pad +
+          '<span class="tok-pun">= {</span> ' +
+          '<span class="tok-key">required</span> ' +
+          '<span class="tok-pun">=</span> ' +
+          '<span class="tok-bool">true</span> ' +
+          '<span class="tok-pun">}</span>';
+        return codeLine(row, index + 5);
+      }).join('');
+
+      terminalBody.innerHTML = [
+        codeLine('<span class="tok-sec">[project]</span>', 0),
+        codeLine('<span class="tok-key">name</span> <span class="tok-pun">=</span> <span class="tok-str">"my-app"</span>', 1),
+        codeLine('<span class="tok-key">revision</span> <span class="tok-pun">=</span> <span class="tok-str">"1.0"</span>', 2),
+        codeLine('&nbsp;', 3),
+        codeLine('<span class="tok-sec">[profiles.default]</span>', 4),
+        rows,
+      ].join('');
+
+      restartClass(terminalEl, 'is-popping');
+    }
+
+    function makeReel(opts) {
+      const { reelEl, itemCount, direction, onActiveChange, phase } = opts;
+      const trackEl = reelEl.querySelector('.landing-reel-track');
+      let scroll = itemCount;
+      let currentActive = -1;
+      let rafId = null;
+      let autoTimerId = null;
+      let autoStartId = null;
+      let resumeTimerId = null;
+      let dragState = null;
+      let suppressNextClick = false;
+
+      function applyScroll() {
+        const min = itemCount * 0.5;
+        const max = itemCount * 2.5;
+        while (scroll < min) scroll += itemCount;
+        while (scroll > max) scroll -= itemCount;
+        trackEl.style.setProperty('--scroll', String(scroll));
+
+        const rounded = Math.round(scroll);
+        const active = ((rounded % itemCount) + itemCount) % itemCount;
+        if (active !== currentActive) {
+          currentActive = active;
+          if (onActiveChange) onActiveChange(active);
+        }
+      }
+
+      function stopAnim() {
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+
+      function startInertia(initialVelocity) {
+        stopAnim();
+        let velocity = Math.max(-INERTIA_MAX_VELOCITY, Math.min(INERTIA_MAX_VELOCITY, initialVelocity));
+        let lastTime = performance.now();
+
+        if (Math.abs(velocity) < INERTIA_MIN_VELOCITY) {
+          snapToNearest();
+          return;
+        }
+
+        const step = (now) => {
+          const dt = Math.min(48, now - lastTime);
+          lastTime = now;
+          scroll += velocity * dt;
+          applyScroll();
+
+          const drag = INERTIA_FRICTION * dt;
+          if (velocity > 0) {
+            velocity = Math.max(0, velocity - drag);
+          } else {
+            velocity = Math.min(0, velocity + drag);
+          }
+
+          if (Math.abs(velocity) >= INERTIA_MIN_VELOCITY) {
+            rafId = requestAnimationFrame(step);
+          } else {
+            rafId = null;
+            snapToNearest(420);
+          }
+        };
+
+        rafId = requestAnimationFrame(step);
+      }
+
+      function animateTo(target, duration) {
+        stopAnim();
+        const start = scroll;
+        const startTime = performance.now();
+        const step = (now) => {
+          const t = Math.min(1, (now - startTime) / duration);
+          const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+          scroll = start + (target - start) * e;
+          applyScroll();
+          if (t < 1) {
+            rafId = requestAnimationFrame(step);
+          } else {
+            rafId = null;
+          }
+        };
+        rafId = requestAnimationFrame(step);
+      }
+
+      function snapToNearest(duration) {
+        const target = Math.round(scroll);
+        if (Math.abs(target - scroll) < 0.001) return;
+        animateTo(target, duration || SNAP_ANIM_MS);
+      }
+
+      function autoTick() {
+        const base = Math.round(scroll);
+        const target = direction === 'up' ? base + 1 : base - 1;
+        animateTo(target, AUTO_ANIM_MS);
+      }
+
+      function startAuto() {
+        if (autoTimerId || autoStartId) return;
+        const elapsed = performance.now() - AUTO_EPOCH;
+        const cyclePos = ((elapsed - (phase || 0)) % AUTO_TICK_MS + AUTO_TICK_MS) % AUTO_TICK_MS;
+        const delay = (AUTO_TICK_MS - cyclePos) % AUTO_TICK_MS;
+        autoStartId = setTimeout(function () {
+          autoStartId = null;
+          autoTick();
+          autoTimerId = setInterval(autoTick, AUTO_TICK_MS);
+        }, delay);
+      }
+      function stopAuto() {
+        if (autoTimerId) { clearInterval(autoTimerId); autoTimerId = null; }
+        if (autoStartId) { clearTimeout(autoStartId); autoStartId = null; }
+      }
+      function scheduleResume() {
+        clearTimeout(resumeTimerId);
+        resumeTimerId = setTimeout(startAuto, RESUME_AFTER_MS);
+      }
+
+      function onPointerDown(e) {
+        if (e.button !== undefined && e.button !== 0) return;
+        stopAuto();
+        stopAnim();
+        clearTimeout(resumeTimerId);
+        dragState = {
+          startX: e.clientX,
+          startY: e.clientY,
+          startScroll: scroll,
+          moved: false,
+          pointerId: e.pointerId,
+          lastPos: MOBILE_QUERY.matches ? e.clientX : e.clientY,
+          lastTime: performance.now(),
+          velocity: 0,
+        };
+        try { reelEl.setPointerCapture(e.pointerId); } catch (_) {}
+        reelEl.classList.add('is-dragging');
+      }
+      function onPointerMove(e) {
+        if (!dragState) return;
+        const horizontal = MOBILE_QUERY.matches;
+        const now = performance.now();
+        const pos = horizontal ? e.clientX : e.clientY;
+        const dt = Math.max(1, now - dragState.lastTime);
+        const slotSize = horizontal ? SLOT_W_MOBILE : SLOT_H;
+        const instantVelocity = -((pos - dragState.lastPos) / slotSize) / dt;
+        dragState.velocity = dragState.velocity * 0.25 + instantVelocity * 0.75;
+        dragState.lastPos = pos;
+        dragState.lastTime = now;
+
+        const d = horizontal ? (e.clientX - dragState.startX) : (e.clientY - dragState.startY);
+        if (Math.abs(d) > DRAG_THRESHOLD_PX) dragState.moved = true;
+        scroll = dragState.startScroll - d / slotSize;
+        applyScroll();
+      }
+      function onPointerUp(e) {
+        if (!dragState) return;
+        try { reelEl.releasePointerCapture(dragState.pointerId); } catch (_) {}
+        const moved = dragState.moved;
+        const staleMs = performance.now() - dragState.lastTime;
+        const releaseVelocity = staleMs > 80 ? dragState.velocity * 0.35 : dragState.velocity;
+        dragState = null;
+        reelEl.classList.remove('is-dragging');
+
+        if (moved) {
+          startInertia(releaseVelocity);
+          suppressNextClick = true;
+        } else {
+          const hit = document.elementFromPoint(e.clientX, e.clientY);
+          const slot = hit && hit.closest && hit.closest('.landing-reel-slot');
+          const idx = slot ? Number(slot.dataset.index) : NaN;
+          if (Number.isFinite(idx) && idx !== Math.round(scroll)) {
+            stopAuto();
+            clearTimeout(resumeTimerId);
+            animateTo(idx, SNAP_ANIM_MS);
+            suppressNextClick = true;
+          }
+        }
+        scheduleResume();
+      }
+      function onPointerCancel() {
+        if (!dragState) return;
+        try { reelEl.releasePointerCapture(dragState.pointerId); } catch (_) {}
+        dragState = null;
+        reelEl.classList.remove('is-dragging');
+        snapToNearest();
+        scheduleResume();
+      }
+      function onClickCapture(e) {
+        if (suppressNextClick) {
+          e.preventDefault();
+          e.stopPropagation();
+          suppressNextClick = false;
+        }
+      }
+
+      reelEl.addEventListener('pointerdown', onPointerDown);
+      reelEl.addEventListener('pointermove', onPointerMove);
+      reelEl.addEventListener('pointerup', onPointerUp);
+      reelEl.addEventListener('pointercancel', onPointerCancel);
+      reelEl.addEventListener('click', onClickCapture, true);
+      reelEl.addEventListener('dragstart', (e) => e.preventDefault());
+
+      let hovering = false;
+      reelEl.addEventListener('mouseenter', () => {
+        hovering = true;
+        stopAuto();
+      });
+      reelEl.addEventListener('mouseleave', () => {
+        hovering = false;
+        scheduleResume();
+      });
+      reelEl.addEventListener('focusin', () => {
+        stopAuto();
+      });
+      reelEl.addEventListener('focusout', () => {
+        scheduleResume();
+      });
+
+      applyScroll();
+
+      return {
+        start: () => { if (!hovering && !dragState) startAuto(); },
+        stop: () => { stopAuto(); stopAnim(); },
+      };
+    }
+
+    const providerCtl = makeReel({
+      reelEl: providerReel,
+      itemCount: reelData.providerCount,
+      direction: providerReel.dataset.direction || 'down',
+    });
+
+    const consumerCtl = makeReel({
+      reelEl: consumerReel,
+      itemCount: reelData.consumerCount,
+      direction: consumerReel.dataset.direction || 'up',
+      onActiveChange: (idx) => {
+        const consumer = reelData.consumers[idx];
+        updateTerminal(consumer);
+      },
+      phase: AUTO_TICK_MS / 2,
+    });
+
+    const section = document.querySelector('.landing-hero');
+    if (section && 'IntersectionObserver' in window) {
+      const io = new IntersectionObserver((entries) => {
+        entries.forEach((e) => {
+          if (e.isIntersecting) {
+            providerCtl.start();
+            consumerCtl.start();
+          } else {
+            providerCtl.stop();
+            consumerCtl.stop();
+          }
+        });
+      }, { threshold: 0.15 });
+      io.observe(section);
+    } else {
+      providerCtl.start();
+      consumerCtl.start();
+    }
+
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      providerCtl.stop();
+      consumerCtl.stop();
+    }
+  })();
+</script>
 
 <!-- ============ BENTO ============ -->
 <section class="landing-section">
@@ -290,13 +910,16 @@ $ secretspec run --profile production -- npm start
         <p class="landing-bento-title">Profiles</p>
         <p class="landing-bento-desc">Use convenient local defaults while requiring managed values in production, without changing application code.</p>
         <pre is:raw class="landing-bento-mini-code"><code><span class="tok-sec">[profiles.production]</span>
-<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span></code></pre>
+<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">}</span></code></pre>
       </a>
 
       <a href="/concepts/generation/" class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">Auto-generation</p>
         <p class="landing-bento-desc">Create a password, token, or key automatically when a required value does not exist yet.</p>
-        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">DB_PASSWORD</span> <span class="tok-pun">= {</span> <span class="tok-key">type</span> <span class="tok-pun">=</span> <span class="tok-str">"password"</span><span class="tok-pun">,</span> <span class="tok-key">generate</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span></code></pre>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">DB_PASSWORD</span> <span class="tok-pun">= {</span>
+  <span class="tok-key">type</span> <span class="tok-pun">=</span> <span class="tok-str">"password"</span><span class="tok-pun">,</span>
+  <span class="tok-key">generate</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span>
+<span class="tok-pun">}</span></code></pre>
       </a>
 
       <a href="/concepts/scopes/" class="landing-bento-card is-link landing-bento-2">
@@ -311,7 +934,10 @@ $ secretspec run --profile production -- npm start
         <p class="landing-bento-desc">Reuse a fresh local copy of a slow provider route for a configured window, with explicit invalidation.</p>
         <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">fast_vault</span> <span class="tok-pun">= {</span>
   <span class="tok-key">fallback</span> <span class="tok-pun">= [</span><span class="tok-str">"vault"</span><span class="tok-pun">],</span>
-  <span class="tok-key">cache</span> <span class="tok-pun">= {</span> <span class="tok-key">provider</span> <span class="tok-pun">=</span> <span class="tok-str">"local"</span><span class="tok-pun">,</span> <span class="tok-key">max_age</span> <span class="tok-pun">=</span> <span class="tok-str">"8h"</span> <span class="tok-pun">}</span>
+  <span class="tok-key">cache</span> <span class="tok-pun">= {</span>
+    <span class="tok-key">provider</span> <span class="tok-pun">=</span> <span class="tok-str">"local"</span><span class="tok-pun">,</span>
+    <span class="tok-key">max_age</span> <span class="tok-pun">=</span> <span class="tok-str">"8h"</span>
+  <span class="tok-pun">}</span>
 <span class="tok-pun">}</span></code></pre>
       </a>
 
@@ -329,7 +955,9 @@ $ secretspec run --profile production -- npm start
       <a href="/concepts/composed-secrets/" class="landing-bento-card is-link landing-bento-3">
         <p class="landing-bento-title">Composed secrets</p>
         <p class="landing-bento-desc">Store credentials separately, then assemble connection strings and other application-ready values during resolution.</p>
-        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">composed</span> <span class="tok-pun">=</span> <span class="tok-str">"postgres://${USER}:${PASSWORD}@${HOST}/app"</span> <span class="tok-pun">}</span></code></pre>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span>
+  <span class="tok-key">composed</span> <span class="tok-pun">=</span> <span class="tok-str">"postgres://${USER}:${PASSWORD}@${HOST}/app"</span>
+<span class="tok-pun">}</span></code></pre>
       </a>
 
       <a href="/concepts/providers/" class="landing-bento-card is-link landing-bento-3">
@@ -341,9 +969,9 @@ $ secretspec run --profile production -- npm start
       <a href="/sdk/rust/" class="landing-bento-card is-link landing-bento-3">
         <p class="landing-bento-title">Type-safe Rust SDK</p>
         <p class="landing-bento-desc">Generate typed Rust fields from <code class="inline-code">secretspec.toml</code> so misspelled secret names fail at compile time.</p>
-        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">secretspec_derive</span><span class="tok-pun">::</span><span class="tok-key">declare_secrets!</span><span class="tok-pun">(</span><span class="tok-str">"secretspec.toml"</span><span class="tok-pun">);</span>
-<span class="tok-key">let</span> s <span class="tok-pun">=</span> Secrets<span class="tok-pun">::</span>builder<span class="tok-pun">().</span>load<span class="tok-pun">()?;</span>
-println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span class="tok-pun">,</span> s<span class="tok-pun">.</span>secrets<span class="tok-pun">.</span>database_url<span class="tok-pun">);</span></code></pre>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-var">secretspec_derive</span><span class="tok-pun">::</span><span class="tok-fn">declare_secrets!</span><span class="tok-pun">(</span><span class="tok-str">"secretspec.toml"</span><span class="tok-pun">);</span>
+<span class="tok-kw">let</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">Secrets</span><span class="tok-pun">::</span><span class="tok-fn">builder</span><span class="tok-pun">().</span><span class="tok-fn">load</span><span class="tok-pun">()?;</span>
+<span class="tok-fn">println!</span><span class="tok-pun">(</span><span class="tok-str">"{}"</span><span class="tok-pun">,</span> <span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">.</span><span class="tok-var">database_url</span><span class="tok-pun">);</span></code></pre>
       </a>
 
       <a href="/concepts/inheritance/" class="landing-bento-card is-link landing-bento-3">
@@ -355,92 +983,26 @@ println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span cla
       <a href="/reference/cli/" class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">File-path secrets</p>
         <p class="landing-bento-desc">Materialize certificates and service account keys as temporary files for applications that expect a path.</p>
-        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">TLS_CERT</span> <span class="tok-pun">= {</span> <span class="tok-key">as_path</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span></code></pre>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">TLS_CERT</span> <span class="tok-pun">= {</span> <span class="tok-key">as_path</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">}</span></code></pre>
       </a>
 
       <a href="/reference/cli/" class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">Provider migration</p>
         <p class="landing-bento-desc">Copy values to a new provider without renaming variables or changing application code.</p>
-        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-pun">$</span> <span class="tok-key">secretspec import</span> <span class="tok-str">dotenv://.env</span></code></pre>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">import</span> <span class="tok-str">dotenv://.env</span></code></pre>
       </a>
 
       <a href="/reference/cli/#export" class="landing-bento-card is-link landing-bento-2">
         <p class="landing-bento-title">Export for shells and CI</p>
         <p class="landing-bento-desc">Pass a resolved profile to shells, scripts, and CI as dotenv, JSON, shell exports, or GitHub Actions variables.</p>
-        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-pun">$</span> <span class="tok-key">secretspec export</span> <span class="tok-pun">--format</span> <span class="tok-str">json</span></code></pre>
+        <pre is:raw class="landing-bento-mini-code"><code><span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">export</span> <span class="tok-flag">--format</span> <span class="tok-str">json</span></code></pre>
       </a>
     </div>
   </div>
 </section>
 
-<!-- ============ SHOWCASE: provider switcher ============ -->
-<section class="landing-showcase">
-  <div class="landing-container">
-    <div class="landing-showcase-head">
-      <span class="landing-showcase-eyebrow">Declaration vs storage</span>
-      <h2 class="landing-section-title">Keep secret names separate from storage.</h2>
-      <p class="landing-section-lead landing-section-lead-narrow">
-        Keep the declaration in your repository while each developer, CI job, or deployment chooses an appropriate provider. The application still receives the same variables.
-      </p>
-    </div>
-
-    <div class="landing-secret">
-      <div>
-        <div class="landing-provider-tabs" id="secret-tabs">
-          <button type="button" class="landing-provider-tab is-active" data-provider="keyring">Keyring</button>
-          <button type="button" class="landing-provider-tab" data-provider="onepassword">1Password</button>
-          <button type="button" class="landing-provider-tab" data-provider="vault">Vault</button>
-          <button type="button" class="landing-provider-tab" data-provider="openbao">OpenBao (0.17+)</button>
-          <button type="button" class="landing-provider-tab" data-provider="awssm">AWS</button>
-          <button type="button" class="landing-provider-tab" data-provider="awsps">AWS PS (0.18+)</button>
-          <button type="button" class="landing-provider-tab" data-provider="gcsm">GCP</button>
-          <button type="button" class="landing-provider-tab" data-provider="akv">Azure</button>
-          <button type="button" class="landing-provider-tab" data-provider="dotenv">.env</button>
-          <button type="button" class="landing-provider-tab" data-provider="env">env</button>
-          <button type="button" class="landing-provider-tab" data-provider="systemdCredential">systemd (0.17+)</button>
-        </div>
-
-        <div class="landing-terminal">
-          <div class="landing-terminal-header">
-            <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-            <span class="landing-terminal-title">secretspec.toml</span>
-          </div>
-          <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[project]</span>
-<span class="tok-key">name</span> <span class="tok-pun">=</span> <span class="tok-str">"my-app"</span>
-
-<span class="tok-sec">[profiles.default]</span>
-<span class="tok-key">DATABASE_URL</span>      <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span>
-<span class="tok-key">STRIPE_SECRET_KEY</span> <span class="tok-pun">= {</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-num">true</span> <span class="tok-pun">}</span></code></pre>
-        </div>
-      </div>
-
-      <div class="landing-secret-flow">
-        <div class="landing-secret-step">
-          <span aria-hidden="true">📄</span>
-          <span><strong>secretspec.toml</strong> says the app requires <code class="inline-code">DATABASE_URL</code></span>
-        </div>
-        <div class="landing-secret-arrow" aria-hidden="true">↓</div>
-        <div class="landing-secret-step is-source">
-          <span aria-hidden="true">🔐</span>
-          <span>SecretSpec resolves it from <strong id="secret-provider-name">System keyring</strong></span>
-        </div>
-        <div class="landing-secret-arrow" aria-hidden="true">↓</div>
-        <div class="landing-secret-step">
-          <span aria-hidden="true">🐚</span>
-          <span><code class="inline-code">$ secretspec run</code> adds it to the process environment</span>
-        </div>
-        <div class="landing-secret-arrow" aria-hidden="true">↓</div>
-        <div class="landing-secret-step">
-          <span aria-hidden="true">🚀</span>
-          <span>Your app reads <code class="inline-code">DATABASE_URL</code> as usual</span>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
 <!-- ============ SHOWCASE: profiles ============ -->
-<section class="landing-showcase">
+<section class="landing-showcase landing-profiles-demo" data-profiles-demo data-active-profile="development">
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Profiles</span>
@@ -452,38 +1014,122 @@ println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span cla
 
     <div class="landing-compose">
       <div class="landing-tree">
-        <div class="landing-tree-node">
-          <div class="landing-tree-node-path">[profiles.default]</div>
-          <div class="landing-tree-node-content">DATABASE_URL = {`{ required = true }`}</div>
+        <div class="landing-tree-node landing-profile-base">
+          <div class="landing-tree-node-path"><span class="tok-sec">[profiles.default]</span></div>
+          <div class="landing-tree-node-content"><span class="tok-key landing-profile-secret">DATABASE_URL</span> <span class="tok-pun">= {`{`}</span> <span class="tok-key">required</span> <span class="tok-pun">=</span> <span class="tok-bool">true</span> <span class="tok-pun">{`}`}</span></div>
         </div>
-        <div class="landing-tree-node">
-          <div class="landing-tree-node-path">[profiles.development]</div>
-          <div class="landing-tree-node-content">DATABASE_URL = {`{ default = "postgresql://localhost/dev" }`}</div>
+        <div class="landing-tree-node landing-profile-node" data-profile-target="development" tabindex="0">
+          <div class="landing-tree-node-path"><span class="tok-sec">[profiles.development]</span></div>
+          <div class="landing-tree-node-content"><span class="tok-key landing-profile-secret">DATABASE_URL</span> <span class="tok-pun">= {`{`}</span> <span class="tok-key">default</span> <span class="tok-pun">=</span> <span class="tok-str landing-profile-value">"postgresql://localhost/dev"</span> <span class="tok-pun">{`}`}</span></div>
         </div>
-        <div class="landing-tree-node">
-          <div class="landing-tree-node-path">[profiles.production]</div>
-          <div class="landing-tree-node-content">DATABASE_URL = {`{ providers = ["vault", "keyring"] }`}</div>
+        <div class="landing-tree-node landing-profile-node" data-profile-target="production" tabindex="0">
+          <div class="landing-tree-node-path"><span class="tok-sec">[profiles.production]</span></div>
+          <div class="landing-tree-node-content"><span class="tok-key landing-profile-secret">DATABASE_URL</span> <span class="tok-pun">= {`{`}</span> <span class="tok-key">providers</span> <span class="tok-pun">= [</span><span class="tok-str landing-profile-value">"vault"</span><span class="tok-pun">,</span> <span class="tok-str landing-profile-value">"keyring"</span><span class="tok-pun">] {`}`}</span></div>
         </div>
       </div>
 
       <div class="landing-compose-arrow" aria-hidden="true">→</div>
 
       <div class="landing-merged">
-        <div class="landing-merged-label">Same command. Every profile.</div>
-        <div class="landing-merged-cmd">$ secretspec run --profile production -- npm start</div>
+        <div class="landing-merged-label">Resolved profile</div>
+        <div class="landing-merged-cmd">$ <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--profile</span> <span class="tok-arg" data-profile-command-value>development</span> <span class="tok-flag">--</span> <span class="tok-bin">npm</span> <span class="tok-arg">start</span></div>
+        <div class="landing-profile-results">
+          <div class="landing-profile-result" data-profile-target="development" tabindex="0">
+            <span class="landing-profile-result-label">Local default</span>
+            <span class="landing-profile-result-value">DATABASE_URL = postgresql://localhost/dev</span>
+          </div>
+          <div class="landing-profile-result" data-profile-target="production" tabindex="0">
+            <span class="landing-profile-result-label">Managed providers</span>
+            <span class="landing-profile-result-value">DATABASE_URL resolves from vault → keyring</span>
+          </div>
+        </div>
         <div class="landing-merged-list">
-          <span class="landing-merged-chip">--profile development</span>
-          <span class="landing-merged-chip">--profile staging</span>
-          <span class="landing-merged-chip">--profile production</span>
-          <span class="landing-merged-chip">SECRETSPEC_PROFILE=ci</span>
+          <span class="landing-merged-chip landing-profile-chip" data-profile-target="development" tabindex="0"><span class="tok-flag">--profile</span> <span class="tok-arg">development</span></span>
+          <span class="landing-merged-chip landing-profile-chip" data-profile-target="production" tabindex="0"><span class="tok-flag">--profile</span> <span class="tok-arg">production</span></span>
         </div>
       </div>
     </div>
   </div>
 </section>
 
+<script>
+  (() => {
+    const demo = document.querySelector<HTMLElement>('[data-profiles-demo]');
+    if (!demo) return;
+    const demoEl = demo;
+
+    const profiles = ['development', 'production'];
+    const targets = demoEl.querySelectorAll<HTMLElement>('[data-profile-target]');
+    const commandValue = demoEl.querySelector<HTMLElement>('[data-profile-command-value]');
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    let activeIndex = 0;
+    let isPinned = false;
+    let timer: number | undefined;
+
+    function setProfile(profile: string) {
+      const nextIndex = profiles.indexOf(profile);
+      if (nextIndex === -1) return;
+      activeIndex = nextIndex;
+      demoEl.setAttribute('data-active-profile', profile);
+      if (commandValue) {
+        commandValue.textContent = profile;
+      }
+    }
+
+    function stop() {
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    }
+
+    function start() {
+      if (reducedMotion || timer !== undefined) return;
+      timer = window.setInterval(() => {
+        if (isPinned) return;
+        setProfile(profiles[(activeIndex + 1) % profiles.length]);
+      }, 2600);
+    }
+
+    targets.forEach((target) => {
+      const profile = target.getAttribute('data-profile-target');
+      if (!profile) return;
+
+      target.addEventListener('pointerenter', () => {
+        isPinned = true;
+        setProfile(profile);
+      });
+      target.addEventListener('pointerleave', () => {
+        isPinned = false;
+      });
+      target.addEventListener('focus', () => {
+        isPinned = true;
+        setProfile(profile);
+      });
+      target.addEventListener('blur', () => {
+        isPinned = false;
+      });
+    });
+
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            start();
+          } else {
+            stop();
+          }
+        });
+      }, { threshold: 0.2 });
+      observer.observe(demoEl);
+    } else {
+      start();
+    }
+  })();
+</script>
+
 <!-- ============ SHOWCASE: scopes ============ -->
-<section class="landing-showcase">
+<section class="landing-showcase landing-scopes-demo" data-scopes-demo data-active-scope="api">
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Scopes · 0.17+</span>
@@ -500,15 +1146,13 @@ println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span cla
           <span class="landing-terminal-title">secretspec.toml</span>
         </div>
         <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[profiles.default]</span>
-<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"Database"</span> <span class="tok-pun">}</span>
-<span class="tok-key">API_KEY</span>      <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"API key"</span> <span class="tok-pun">}</span>
-<span class="tok-key">QUEUE_TOKEN</span>  <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"Queue token"</span> <span class="tok-pun">}</span>
-
-<span class="tok-sec">[scopes.api]</span>
-<span class="tok-key">secrets</span> <span class="tok-pun">= [</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">,</span> <span class="tok-str">"API_KEY"</span><span class="tok-pun">]</span>
-
-<span class="tok-sec">[scopes.worker]</span>
-<span class="tok-key">secrets</span> <span class="tok-pun">= [</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">,</span> <span class="tok-str">"QUEUE_TOKEN"</span><span class="tok-pun">]</span></code></pre>
+<span class="tok-key landing-scope-secret-name" data-scope-members="api worker">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"Database"</span> <span class="tok-pun">}</span>
+<span class="tok-key landing-scope-secret-name" data-scope-members="api">API_KEY</span>      <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"API key"</span> <span class="tok-pun">}</span>
+<span class="tok-key landing-scope-secret-name" data-scope-members="worker">QUEUE_TOKEN</span>  <span class="tok-pun">= {</span> <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"Queue token"</span> <span class="tok-pun">}</span>
+<span class="landing-scope-block is-first-scope" data-scope-target="api" tabindex="0"><span class="tok-sec">[scopes.api]</span>
+<span class="tok-key">secrets</span> <span class="tok-pun">= [</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">,</span> <span class="tok-str">"API_KEY"</span><span class="tok-pun">]</span></span>
+<span class="landing-scope-block" data-scope-target="worker" tabindex="0"><span class="tok-sec">[scopes.worker]</span>
+<span class="tok-key">secrets</span> <span class="tok-pun">= [</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">,</span> <span class="tok-str">"QUEUE_TOKEN"</span><span class="tok-pun">]</span></span></code></pre>
       </div>
 
       <div class="landing-terminal">
@@ -516,17 +1160,17 @@ println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span cla
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">terminal</span>
         </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># The API receives its database and API credentials</span>
-$ secretspec run --profile production --scope api -- ./api
-<span class="tok-str">✓</span> Loaded DATABASE_URL
-<span class="tok-str">✓</span> Loaded API_KEY
-<span class="tok-pun">›</span> ./api
+<pre is:raw class="landing-terminal-body"><code><span class="landing-scope-command" data-scope-target="api" tabindex="0"><span class="tok-com"># The API receives its database and API credentials</span>
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--profile</span> <span class="tok-arg">production</span> <span class="tok-flag">--scope</span> <span class="tok-arg">api</span> <span class="tok-flag">--</span> <span class="tok-bin">./api</span>
+<span class="tok-str">✓</span> Loaded <span class="landing-scope-secret-name" data-scope-members="api worker">DATABASE_URL</span>
+<span class="tok-str">✓</span> Loaded <span class="landing-scope-secret-name" data-scope-members="api">API_KEY</span>
+<span class="tok-pun">›</span> <span class="tok-bin">./api</span></span>
 
-<span class="tok-com"># The worker receives its database and queue credentials</span>
-$ secretspec run --profile production --scope worker -- ./worker
-<span class="tok-str">✓</span> Loaded DATABASE_URL
-<span class="tok-str">✓</span> Loaded QUEUE_TOKEN
-<span class="tok-pun">›</span> ./worker</code></pre>
+<span class="landing-scope-command" data-scope-target="worker" tabindex="0"><span class="tok-com"># The worker receives its database and queue credentials</span>
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--profile</span> <span class="tok-arg">production</span> <span class="tok-flag">--scope</span> <span class="tok-arg">worker</span> <span class="tok-flag">--</span> <span class="tok-bin">./worker</span>
+<span class="tok-str">✓</span> Loaded <span class="landing-scope-secret-name" data-scope-members="api worker">DATABASE_URL</span>
+<span class="tok-str">✓</span> Loaded <span class="landing-scope-secret-name" data-scope-members="worker">QUEUE_TOKEN</span>
+<span class="tok-pun">›</span> <span class="tok-bin">./worker</span></span></code></pre>
       </div>
     </div>
 
@@ -535,6 +1179,78 @@ $ secretspec run --profile production --scope worker -- ./worker
     </p>
   </div>
 </section>
+
+<script>
+  (() => {
+    const demo = document.querySelector<HTMLElement>('[data-scopes-demo]');
+    if (!demo) return;
+    const demoEl = demo;
+
+    const scopes = ['api', 'worker'];
+    const targets = demoEl.querySelectorAll<HTMLElement>('[data-scope-target]');
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    let activeIndex = 0;
+    let isPinned = false;
+    let timer: number | undefined;
+
+    function setScope(scope: string) {
+      const nextIndex = scopes.indexOf(scope);
+      if (nextIndex === -1) return;
+      activeIndex = nextIndex;
+      demoEl.setAttribute('data-active-scope', scope);
+    }
+
+    function stop() {
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    }
+
+    function start() {
+      if (reducedMotion || timer !== undefined) return;
+      timer = window.setInterval(() => {
+        if (isPinned) return;
+        setScope(scopes[(activeIndex + 1) % scopes.length]);
+      }, 2600);
+    }
+
+    targets.forEach((target) => {
+      const scope = target.getAttribute('data-scope-target');
+      if (!scope) return;
+
+      target.addEventListener('pointerenter', () => {
+        isPinned = true;
+        setScope(scope);
+      });
+      target.addEventListener('pointerleave', () => {
+        isPinned = false;
+      });
+      target.addEventListener('focus', () => {
+        isPinned = true;
+        setScope(scope);
+      });
+      target.addEventListener('blur', () => {
+        isPinned = false;
+      });
+    });
+
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            start();
+          } else {
+            stop();
+          }
+        });
+      }, { threshold: 0.2 });
+      observer.observe(demoEl);
+    } else {
+      start();
+    }
+  })();
+</script>
 
 <!-- ============ SHOWCASE: fallback chains ============ -->
 <section class="landing-showcase">
@@ -617,15 +1333,15 @@ $ secretspec run --profile production --scope worker -- ./worker
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">terminal</span>
         </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Store the Bitwarden token in the OS keyring</span>
-$ secretspec config provider login bws
+<pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Store the Bitwarden token in the OS keyring</span>
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">config provider login bws</span>
 Enter access_token for provider 'bws': <span class="tok-str">****</span>
 <span class="tok-str">✓</span> stored access_token in keyring
 
 <span class="tok-com"># SecretSpec authenticates BWS without exporting its token</span>
-$ secretspec run --provider bws -- ./deploy
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--provider</span> <span class="tok-arg">bws</span> <span class="tok-flag">--</span> <span class="tok-bin">./deploy</span>
 <span class="tok-str">✓</span> Loaded DATABASE_URL from bws
-<span class="tok-pun">›</span> ./deploy</code></pre>
+<span class="tok-pun">›</span> <span class="tok-bin">./deploy</span></code></pre>
       </div>
     </div>
 
@@ -636,7 +1352,7 @@ $ secretspec run --provider bws -- ./deploy
 </section>
 
 <!-- ============ SHOWCASE: secret references ============ -->
-<section class="landing-showcase">
+<section class="landing-showcase landing-reference-demo" data-reference-demo data-active-reference="variable">
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Secret references</span>
@@ -654,21 +1370,26 @@ $ secretspec run --provider bws -- ./deploy
         </div>
         <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[profiles.production]</span>
 <span class="tok-com"># Point at a secret that already lives in your store</span>
-<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span>
+<span class="tok-key landing-reference-token" data-reference-target="variable" data-reference-members="variable resolved" tabindex="0">DATABASE_URL</span> <span class="tok-pun">= {</span>
   <span class="tok-key">description</span> <span class="tok-pun">=</span> <span class="tok-str">"Postgres DSN"</span><span class="tok-pun">,</span>
-  <span class="tok-key">ref</span> <span class="tok-pun">= {</span> <span class="tok-key">item</span> <span class="tok-pun">=</span> <span class="tok-str">"db"</span><span class="tok-pun">,</span> <span class="tok-key">field</span> <span class="tok-pun">=</span> <span class="tok-str">"password"</span> <span class="tok-pun">}</span>
+  <span class="tok-key landing-reference-token" data-reference-target="pointer" data-reference-members="pointer" tabindex="0">ref</span> <span class="tok-pun">= {</span> <span class="tok-key landing-reference-token" data-reference-target="pointer" data-reference-members="pointer" tabindex="0">item</span> <span class="tok-pun">=</span> <span class="tok-str landing-reference-token" data-reference-target="pointer" data-reference-members="pointer" tabindex="0">"db"</span><span class="tok-pun">,</span> <span class="tok-key landing-reference-token" data-reference-target="pointer" data-reference-members="pointer" tabindex="0">field</span> <span class="tok-pun">=</span> <span class="tok-str landing-reference-token" data-reference-target="pointer" data-reference-members="pointer" tabindex="0">"password"</span> <span class="tok-pun">}</span>
 <span class="tok-pun">}</span></code></pre>
       </div>
 
-      <div class="landing-chain">
-        <div class="landing-chain-step">
-          <span aria-hidden="true">🧭</span>
-          <span><code>ref</code> identifies the existing <code>item</code> and optional <code>field</code></span>
+      <div class="landing-chain landing-reference-map">
+        <div class="landing-reference-step" data-reference-target="variable" tabindex="0">
+          <span class="landing-reference-label">Application variable</span>
+          <span class="landing-reference-value">DATABASE_URL</span>
         </div>
-        <div class="landing-chain-arrow" aria-hidden="true">↓ resolves as</div>
-        <div class="landing-chain-step is-hit">
-          <span aria-hidden="true">🔀</span>
-          <span>Your application receives it as <strong>DATABASE_URL</strong></span>
+        <div class="landing-reference-arrow" aria-hidden="true">references</div>
+        <div class="landing-reference-step" data-reference-target="pointer" tabindex="0">
+          <span class="landing-reference-label">Existing store location</span>
+          <span class="landing-reference-value"><span>item: db</span><span>field: password</span></span>
+        </div>
+        <div class="landing-reference-arrow" aria-hidden="true">resolves as</div>
+        <div class="landing-reference-step" data-reference-target="resolved" tabindex="0">
+          <span class="landing-reference-label">Process environment</span>
+          <span class="landing-reference-value">DATABASE_URL</span>
         </div>
         <p class="landing-chain-result">Adopt SecretSpec without moving or renaming existing secrets.</p>
       </div>
@@ -676,8 +1397,80 @@ $ secretspec run --provider bws -- ./deploy
   </div>
 </section>
 
+<script>
+  (() => {
+    const demo = document.querySelector<HTMLElement>('[data-reference-demo]');
+    if (!demo) return;
+    const demoEl = demo;
+
+    const states = ['variable', 'pointer', 'resolved'];
+    const targets = demoEl.querySelectorAll<HTMLElement>('[data-reference-target]');
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    let activeIndex = 0;
+    let isPinned = false;
+    let timer: number | undefined;
+
+    function setReferenceState(state: string) {
+      const nextIndex = states.indexOf(state);
+      if (nextIndex === -1) return;
+      activeIndex = nextIndex;
+      demoEl.setAttribute('data-active-reference', state);
+    }
+
+    function stop() {
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    }
+
+    function start() {
+      if (reducedMotion || timer !== undefined) return;
+      timer = window.setInterval(() => {
+        if (isPinned) return;
+        setReferenceState(states[(activeIndex + 1) % states.length]);
+      }, 2600);
+    }
+
+    targets.forEach((target) => {
+      const state = target.getAttribute('data-reference-target');
+      if (!state) return;
+
+      target.addEventListener('pointerenter', () => {
+        isPinned = true;
+        setReferenceState(state);
+      });
+      target.addEventListener('pointerleave', () => {
+        isPinned = false;
+      });
+      target.addEventListener('focus', () => {
+        isPinned = true;
+        setReferenceState(state);
+      });
+      target.addEventListener('blur', () => {
+        isPinned = false;
+      });
+    });
+
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            start();
+          } else {
+            stop();
+          }
+        });
+      }, { threshold: 0.2 });
+      observer.observe(demoEl);
+    } else {
+      start();
+    }
+  })();
+</script>
+
 <!-- ============ SHOWCASE: audit & agent reason ============ -->
-<section class="landing-showcase">
+<section class="landing-showcase landing-audit-demo" data-audit-demo data-active-audit="denied">
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Audit &amp; AI agents</span>
@@ -693,16 +1486,16 @@ $ secretspec run --provider bws -- ./deploy
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">detected agent session</span>
         </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># A detected AI agent runs your app without a reason</span>
-$ secretspec run -- ./deploy.sh
-Error: accessing secrets requires a reason.
-       Provide one with --reason <span class="tok-str">"&lt;why...&gt;"</span>
+<pre is:raw class="landing-terminal-body"><code><span class="landing-audit-command" data-audit-target="denied" tabindex="0"><span class="tok-com"># A detected AI agent runs your app without a reason</span>
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--</span> <span class="tok-bin">./deploy.sh</span>
+<span class="landing-audit-error">Error: accessing secrets requires a reason.</span>
+       Provide one with <span class="tok-flag">--reason</span> <span class="tok-str">"&lt;why...&gt;"</span></span>
 
-<span class="tok-com"># State why; required for detected agents by default</span>
-$ secretspec run --reason <span class="tok-str">"Deploy web frontend"</span> \
-    -- ./deploy.sh
+<span class="landing-audit-command" data-audit-target="approved" tabindex="0"><span class="tok-com"># State why; required for detected agents by default</span>
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">run</span> <span class="tok-flag">--reason</span> <span class="tok-str">"Deploy web frontend"</span> \
+    <span class="tok-flag">--</span> <span class="tok-bin">./deploy.sh</span>
 <span class="tok-str">✓</span> Loaded DATABASE_URL from keyring
-<span class="tok-pun">›</span> ./deploy.sh</code></pre>
+<span class="tok-pun">›</span> <span class="tok-bin">./deploy.sh</span></span></code></pre>
       </div>
 
       <div class="landing-terminal">
@@ -710,19 +1503,97 @@ $ secretspec run --reason <span class="tok-str">"Deploy web frontend"</span> \
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">secretspec audit</span>
         </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Review who accessed what, why, and the outcome</span>
-$ secretspec audit -n 1
-<span class="tok-com">2026-06-04T17:04Z</span>  <span class="tok-key">run</span>  <span class="tok-str">started</span>  ./deploy.sh
-  DATABASE_URL  (my-app/production via keyring://)
-  reason: <span class="tok-str">Deploy web frontend</span>  <span class="tok-pun">[claude-code]</span></code></pre>
+<pre is:raw class="landing-terminal-body landing-audit-log"><code><span class="tok-com"># Review who accessed what, why, and the outcome</span>
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">audit</span> <span class="tok-flag">-n</span> <span class="tok-arg">2</span>
+
+<span class="landing-audit-entry" data-audit-target="denied" tabindex="0"><span class="landing-audit-entry-top"><span class="tok-com">2026-06-04T17:03Z</span> <span class="landing-audit-status is-denied">blocked</span></span>
+  command: <span class="tok-bin">./deploy.sh</span>
+  actor: <span class="tok-pun">[claude-code]</span>
+  reason: <span class="tok-com">missing</span></span>
+<span class="landing-audit-entry" data-audit-target="approved" tabindex="0"><span class="landing-audit-entry-top"><span class="tok-com">2026-06-04T17:04Z</span> <span class="landing-audit-status is-approved">started</span></span>
+  command: <span class="tok-bin">./deploy.sh</span>
+  secret: <span class="tok-key">DATABASE_URL</span> <span class="tok-com">(my-app/production via keyring://)</span>
+  reason: <span class="tok-str">Deploy web frontend</span> <span class="tok-pun">[claude-code]</span></span></code></pre>
       </div>
     </div>
 
     <p class="landing-chain-result" style="margin-top: 1.5rem;">
-      Commit <code class="inline-code">require_reason = "agents"</code> to require reasons in sessions SecretSpec detects as agents. Detection is heuristic; use <code class="inline-code">require_reason = true</code> to require every SecretSpec caller to supply one. <a href="/reference/configuration/#requiring-a-reason-for-secret-access" class="landing-link">Configure the policy →</a>
+      Commit <code class="inline-code">require_reason = "agents"</code> to require reasons in sessions SecretSpec detects as agents. Detection is heuristic; use <code class="inline-code">require_reason = <span class="tok-bool">true</span></code> to require every SecretSpec caller to supply one. <a href="/reference/configuration/#requiring-a-reason-for-secret-access" class="landing-link">Configure the policy →</a>
     </p>
   </div>
 </section>
+
+<script>
+  (() => {
+    const demo = document.querySelector<HTMLElement>('[data-audit-demo]');
+    if (!demo) return;
+    const demoEl = demo;
+
+    const states = ['denied', 'approved'];
+    const targets = demoEl.querySelectorAll<HTMLElement>('[data-audit-target]');
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    let activeIndex = 0;
+    let isPinned = false;
+    let timer: number | undefined;
+
+    function setAuditState(state: string) {
+      const nextIndex = states.indexOf(state);
+      if (nextIndex === -1) return;
+      activeIndex = nextIndex;
+      demoEl.setAttribute('data-active-audit', state);
+    }
+
+    function stop() {
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    }
+
+    function start() {
+      if (reducedMotion || timer !== undefined) return;
+      timer = window.setInterval(() => {
+        if (isPinned) return;
+        setAuditState(states[(activeIndex + 1) % states.length]);
+      }, 2800);
+    }
+
+    targets.forEach((target) => {
+      const state = target.getAttribute('data-audit-target');
+      if (!state) return;
+
+      target.addEventListener('pointerenter', () => {
+        isPinned = true;
+        setAuditState(state);
+      });
+      target.addEventListener('pointerleave', () => {
+        isPinned = false;
+      });
+      target.addEventListener('focus', () => {
+        isPinned = true;
+        setAuditState(state);
+      });
+      target.addEventListener('blur', () => {
+        isPinned = false;
+      });
+    });
+
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            start();
+          } else {
+            stop();
+          }
+        });
+      }, { threshold: 0.2 });
+      observer.observe(demoEl);
+    } else {
+      start();
+    }
+  })();
+</script>
 
 <!-- ============ SHOWCASE: export and Actions ============ -->
 <section class="landing-showcase">
@@ -741,11 +1612,11 @@ $ secretspec audit -n 1
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
           <span class="landing-terminal-title">shell and JSON</span>
         </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Load a profile into the current shell</span>
-$ eval "$(secretspec export --profile production)"
+<pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Load a profile into the current shell</span>
+<span class="tok-pun">$</span> <span class="tok-bin">eval</span> <span class="tok-str">"$(</span><span class="tok-bin">secretspec</span> <span class="tok-arg">export</span> <span class="tok-flag">--profile</span> <span class="tok-arg">production</span><span class="tok-str">)"</span>
 
 <span class="tok-com"># Or pass a JSON object to another tool</span>
-$ secretspec export --format json
+<span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">export</span> <span class="tok-flag">--format</span> <span class="tok-str">json</span>
 {<span class="tok-str">"DATABASE_URL"</span>:<span class="tok-str">"postgresql://…"</span>,
  <span class="tok-str">"STRIPE_KEY"</span>:<span class="tok-str">"sk_live_…"</span>}</code></pre>
       </div>
@@ -774,7 +1645,7 @@ $ secretspec export --format json
 </section>
 
 <!-- ============ SHOWCASE: Language SDKs ============ -->
-<section class="landing-showcase">
+<section class="landing-showcase landing-sdk-demo" data-sdk-demo data-active-sdk={languageSdkMetadata[0].id}>
   <div class="landing-container">
     <div class="landing-showcase-head">
       <span class="landing-showcase-eyebrow">Language SDKs</span>
@@ -784,132 +1655,39 @@ $ secretspec export --format json
       </p>
     </div>
 
-    <div class="landing-fallback">
-      <!-- Rust -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">Rust</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-key">secretspec_derive</span><span class="tok-pun">::</span><span class="tok-key">declare_secrets!</span><span class="tok-pun">(</span><span class="tok-str">"secretspec.toml"</span><span class="tok-pun">);</span>
-
-<span class="tok-key">let</span> s <span class="tok-pun">=</span> SecretSpec<span class="tok-pun">::</span>builder<span class="tok-pun">()</span>
-    <span class="tok-pun">.</span>with_provider<span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
-    <span class="tok-pun">.</span>with_reason<span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span>load<span class="tok-pun">()?;</span>
-println<span class="tok-pun">!(</span><span class="tok-str">"{}"</span><span class="tok-pun">,</span> s<span class="tok-pun">.</span>secrets<span class="tok-pun">.</span>database_url<span class="tok-pun">);</span></code></pre>
+    <div class="landing-sdk-stage">
+      <div class="landing-sdk-logo-belt" aria-label="Language SDK selector">
+        {languageSdkMetadata.map((sdk) => (
+          <button
+            type="button"
+            class="landing-sdk-logo-card"
+            data-sdk-target={sdk.id}
+            style={`--sdk-color:${sdk.color}; --sdk-icon-mask:${simpleIconMask(sdk.icon)}`}
+            aria-label={`Show ${sdk.label} SDK example`}
+            aria-pressed={sdk.id === languageSdkMetadata[0].id ? 'true' : 'false'}
+          >
+            <span class="landing-sdk-logo-mark" aria-hidden="true"></span>
+            <span class="landing-sdk-logo-label">{sdk.label}</span>
+          </button>
+        ))}
       </div>
 
-      <!-- Python -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">Python</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-key">from</span> secretspec <span class="tok-key">import</span> SecretSpec
-
-s <span class="tok-pun">=</span> SecretSpec.builder() \
-    .with_provider(<span class="tok-str">"keyring://"</span>) \
-    .with_reason(<span class="tok-str">"boot"</span>).load()
-print(s.secrets[<span class="tok-str">"DATABASE_URL"</span>].get)</code></pre>
-      </div>
-    </div>
-
-    <div class="landing-fallback" style="margin-top: 1.5rem;">
-      <!-- Node.js / TypeScript -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">Node.js</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-key">const</span> { SecretSpec } <span class="tok-pun">=</span> require(<span class="tok-str">"secretspec"</span>);
-
-<span class="tok-key">const</span> s <span class="tok-pun">=</span> SecretSpec.builder()
-  .withProvider(<span class="tok-str">"keyring://"</span>)
-  .withReason(<span class="tok-str">"boot"</span>).load();
-console.log(s.secrets.DATABASE_URL.get());</code></pre>
-      </div>
-
-      <!-- Go -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">Go</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code>s<span class="tok-pun">,</span> _ <span class="tok-pun">:=</span> secretspec.New().
-    WithProvider(<span class="tok-str">"keyring://"</span>).
-    WithReason(<span class="tok-str">"boot"</span>).Load()
-fmt.Println(s.Secrets[<span class="tok-str">"DATABASE_URL"</span>].Get())</code></pre>
-      </div>
-    </div>
-
-    <div class="landing-fallback" style="margin-top: 1.5rem;">
-      <!-- Ruby -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">Ruby</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code>s <span class="tok-pun">=</span> Secretspec::SecretSpec.builder
-      .with_provider(<span class="tok-str">"keyring://"</span>)
-      .with_reason(<span class="tok-str">"boot"</span>).load
-puts s.secrets[<span class="tok-str">"DATABASE_URL"</span>].get</code></pre>
-      </div>
-
-      <!-- Haskell -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">Haskell</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code>s <span class="tok-pun">&lt;-</span> S.load (S.builder
-      <span class="tok-pun">&amp;</span> S.withProvider <span class="tok-str">"keyring://"</span>
-      <span class="tok-pun">&amp;</span> S.withReason <span class="tok-str">"boot"</span>)
-print (S.get <span class="tok-pun">=&lt;&lt;</span> Map.lookup <span class="tok-str">"DATABASE_URL"</span> (S.resolvedSecrets s))</code></pre>
-      </div>
-    </div>
-
-    <div class="landing-fallback" style="margin-top: 1.5rem;">
-      <!-- PHP -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">PHP · Laravel · Symfony</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-key">use</span> Secretspec\SecretSpec<span class="tok-pun">;</span>
-
-<span class="tok-key">$s</span> <span class="tok-pun">=</span> SecretSpec<span class="tok-pun">::</span>builder<span class="tok-pun">()</span>
-    <span class="tok-pun">-&gt;</span>withProvider<span class="tok-pun">(</span><span class="tok-str">'keyring://'</span><span class="tok-pun">)</span>
-    <span class="tok-pun">-&gt;</span>withReason<span class="tok-pun">(</span><span class="tok-str">'boot web app'</span><span class="tok-pun">)-&gt;</span>load<span class="tok-pun">();</span>
-<span class="tok-key">$s</span><span class="tok-pun">-&gt;</span>setAsEnv<span class="tok-pun">();</span></code></pre>
-      </div>
-
-      <!-- C# -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">C# / .NET</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-key">using</span> Cachix.SecretSpec<span class="tok-pun">;</span>
-
-<span class="tok-key">using var</span> s <span class="tok-pun">=</span> SecretSpec.Builder()
-    .WithProvider(<span class="tok-str">"keyring://"</span>)
-    .WithReason(<span class="tok-str">"boot"</span>).Load();
-Console.WriteLine(s.Secrets[<span class="tok-str">"DATABASE_URL"</span>].Get());</code></pre>
-      </div>
-    </div>
-
-    <div class="landing-fallback" style="margin-top: 1.5rem;">
-      <!-- Swift -->
-      <div class="landing-terminal">
-        <div class="landing-terminal-header">
-          <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">Swift · macOS (0.18+)</span>
-        </div>
-        <pre is:raw class="landing-terminal-body"><code><span class="tok-key">let</span> s <span class="tok-pun">=</span> <span class="tok-key">try</span> SecretSpec<span class="tok-pun">.</span>builder<span class="tok-pun">()</span>
-    <span class="tok-pun">.</span>withProvider<span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
-    <span class="tok-pun">.</span>withReason<span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span>load<span class="tok-pun">()</span>
-<span class="tok-key">defer</span> <span class="tok-pun">{</span> <span class="tok-key">try</span><span class="tok-pun">?</span> s<span class="tok-pun">.</span>close<span class="tok-pun">()</span> <span class="tok-pun">}</span>
-print<span class="tok-pun">(</span>s<span class="tok-pun">.</span>secrets<span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">]?.</span>get<span class="tok-pun">()</span> <span class="tok-pun">??</span> <span class="tok-str">""</span><span class="tok-pun">)</span></code></pre>
+      <div class="landing-sdk-feature">
+        {languageSdkMetadata.map((sdk) => (
+          <div class="landing-sdk-panel" data-sdk-panel={sdk.id} aria-hidden={sdk.id === languageSdkMetadata[0].id ? 'false' : 'true'}>
+            <div class="landing-terminal">
+              <div class="landing-terminal-header">
+                <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+                <span class="landing-terminal-title">{sdk.label}</span>
+              </div>
+              <pre class="landing-terminal-body"><code set:html={animatedCodeLines(sdk.code)}></code></pre>
+            </div>
+            <div class="landing-sdk-panel-footer">
+              <span>Same resolver, native API.</span>
+              <a class="landing-link" href={sdk.href}>View {sdk.label} docs →</a>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
 
@@ -918,6 +1696,754 @@ print<span class="tok-pun">(</span>s<span class="tok-pun">.</span>secrets<span c
     </p>
   </div>
 </section>
+
+<script>
+  (() => {
+    const demo = document.querySelector<HTMLElement>('[data-sdk-demo]');
+    if (!demo) return;
+    const demoEl = demo;
+
+    const targets = Array.from(demoEl.querySelectorAll<HTMLElement>('[data-sdk-target]'));
+    const panels = Array.from(demoEl.querySelectorAll<HTMLElement>('[data-sdk-panel]'));
+    const feature = demoEl.querySelector<HTMLElement>('.landing-sdk-feature');
+    const sdkIds = targets.map((target) => target.getAttribute('data-sdk-target')).filter(Boolean) as string[];
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    let activeIndex = 0;
+    let isPinned = false;
+    let timer: number | undefined;
+
+    function setSdk(id: string) {
+      const nextIndex = sdkIds.indexOf(id);
+      if (nextIndex === -1) return;
+      activeIndex = nextIndex;
+      demoEl.setAttribute('data-active-sdk', id);
+      targets.forEach((target) => {
+        target.setAttribute('aria-pressed', String(target.getAttribute('data-sdk-target') === id));
+      });
+      panels.forEach((panel) => {
+        panel.setAttribute('aria-hidden', String(panel.getAttribute('data-sdk-panel') !== id));
+      });
+      const activePanel = panels.find((panel) => panel.getAttribute('data-sdk-panel') === id);
+      if (activePanel) {
+        activePanel.classList.remove('is-popping');
+        void activePanel.offsetWidth;
+        activePanel.classList.add('is-popping');
+      }
+    }
+
+    function stop() {
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    }
+
+    function start() {
+      if (reducedMotion || timer !== undefined) return;
+      timer = window.setInterval(() => {
+        if (isPinned || !sdkIds.length) return;
+        setSdk(sdkIds[(activeIndex + 1) % sdkIds.length]);
+      }, 2400);
+    }
+
+    targets.forEach((target) => {
+      const id = target.getAttribute('data-sdk-target');
+      if (!id) return;
+      const sdkId = id;
+
+      function pin() {
+        isPinned = true;
+        setSdk(sdkId);
+      }
+
+      target.addEventListener('pointerenter', pin);
+      target.addEventListener('click', pin);
+      target.addEventListener('pointerleave', () => {
+        isPinned = false;
+      });
+      target.addEventListener('focus', pin);
+      target.addEventListener('blur', () => {
+        isPinned = false;
+      });
+    });
+
+    if (feature) {
+      feature.addEventListener('pointerenter', () => {
+        isPinned = true;
+      });
+      feature.addEventListener('pointerleave', () => {
+        isPinned = false;
+      });
+      feature.addEventListener('focusin', () => {
+        isPinned = true;
+      });
+      feature.addEventListener('focusout', () => {
+        isPinned = false;
+      });
+    }
+
+    setSdk(sdkIds[0] ?? '');
+
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            start();
+          } else {
+            stop();
+          }
+        });
+      }, { threshold: 0.2 });
+      observer.observe(demoEl);
+    } else {
+      start();
+    }
+  })();
+</script>
+
+<!-- ============ SHOWCASE: remote secrets with a local cache ============ -->
+<section id="remote-secrets" class="landing-showcase landing-remote-demo" data-flow-demo="cache">
+  <div class="landing-container">
+    <div class="landing-showcase-head">
+      <span class="landing-showcase-eyebrow">Remote secrets · 0.17+</span>
+      <h2 class="landing-section-title">Remote secrets, local speed.</h2>
+      <p class="landing-section-lead landing-section-lead-narrow">
+        Fetch from Azure once. Serve every read locally until the cache expires. <a href="/concepts/providers/caching/" class="landing-link">Provider caching →</a>
+      </p>
+    </div>
+
+    <div class="landing-remote-shell">
+      <div class="landing-remote-toolbar">
+        <div class="landing-remote-status" aria-hidden="true">
+          <span class="landing-remote-status-dot" aria-hidden="true"></span>
+          <span data-remote-status>App requests DATABASE_URL</span>
+        </div>
+        <button class="landing-remote-motion" type="button" data-remote-motion aria-label="Pause animation" title="Pause animation">
+          <span class="landing-remote-pause-icon" aria-hidden="true"></span>
+          <span class="landing-remote-play-icon" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <p id="remote-secrets-description" class="sr-only">
+        Your App requests DATABASE_URL from SecretSpec. Azure Key Vault returns it once, then SecretSpec sends one copy to your app and one to the local keyring cache. For the next eight hours, Azure remains inactive while repeat reads are served locally. When the cache expires, SecretSpec contacts Azure again.
+      </p>
+
+      <div class="landing-remote-map is-cache-map" data-remote-map aria-hidden="true">
+        <svg class="landing-remote-routes" aria-hidden="true">
+          <defs>
+            <marker id="landing-remote-arrow" viewBox="0 0 7 7" refX="6" refY="3.5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+              <path class="landing-remote-arrow-head" d="M 0 0 L 7 3.5 L 0 7 Z"></path>
+            </marker>
+          </defs>
+          <path data-remote-route-base="app-core" marker-start="url(#landing-remote-arrow)" marker-end="url(#landing-remote-arrow)"></path>
+          <path data-remote-route-base="core-azure" marker-start="url(#landing-remote-arrow)" marker-end="url(#landing-remote-arrow)"></path>
+          <path data-remote-route-base="core-cache" marker-start="url(#landing-remote-arrow)" marker-end="url(#landing-remote-arrow)"></path>
+          <path data-remote-route="app-core"></path>
+          <path data-remote-route="core-azure"></path>
+          <path data-remote-route="core-cache"></path>
+        </svg>
+
+        <div class="landing-remote-node is-app" data-remote-node="app">
+          <span class="landing-remote-node-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="m8 9-3 3 3 3M16 9l3 3-3 3M14 5l-4 14"></path></svg>
+          </span>
+          <span class="landing-remote-node-copy">
+            <strong>Your App</strong>
+          </span>
+        </div>
+
+        <div class="landing-remote-node is-core" data-remote-node="core">
+          <span class="landing-remote-core-mark" aria-hidden="true"></span>
+          <span class="landing-remote-node-copy">
+            <strong>cached_azure</strong>
+          </span>
+        </div>
+
+        <div class="landing-remote-node is-azure" data-remote-node="azure">
+          <span class="landing-remote-node-icon is-azure-icon" aria-hidden="true">
+            <img src={azureLogo.src} alt="" width="24" height="24" />
+          </span>
+          <span class="landing-remote-node-copy">
+            <strong>azure</strong>
+          </span>
+        </div>
+
+        <div class="landing-remote-node is-cache is-dimmed" data-remote-node="cache">
+          <span class="landing-remote-node-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path></svg>
+          </span>
+          <span class="landing-remote-node-copy">
+            <strong>local_cache</strong>
+          </span>
+          <div class="landing-remote-timer" data-remote-timer style="--remote-progress: 0deg;" aria-label="Cache freshness: empty">
+            <span data-remote-timer-value>—</span>
+            <small data-remote-timer-label>empty</small>
+          </div>
+        </div>
+
+        <span class="landing-remote-packet" data-remote-packet aria-hidden="true">DATABASE_URL</span>
+        <span class="landing-remote-packet" data-remote-packet aria-hidden="true">DATABASE_URL</span>
+      </div>
+
+      <div class="landing-remote-outcome">
+        <span><strong>Azure contacted</strong> once per freshness window</span>
+        <span><strong>Fresh reads</strong> stay on this machine</span>
+      </div>
+    </div>
+
+    <div class="landing-remote-config landing-terminal">
+      <div class="landing-terminal-header">
+        <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+        <span class="landing-terminal-title">secretspec.toml</span>
+      </div>
+      <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[providers]</span>
+<span class="tok-key landing-remote-config-token is-cache">local_cache</span> <span class="tok-pun">=</span> <span class="tok-str">"keyring://secretspec/cache/{project}/{profile}/{key}"</span>
+<span class="tok-key landing-remote-config-token is-azure">azure</span> <span class="tok-pun">=</span> <span class="tok-str">"akv://team-vault"</span>
+
+<span class="tok-key landing-remote-config-token is-core">cached_azure</span> <span class="tok-pun">= {</span>
+  <span class="tok-key">fallback</span> <span class="tok-pun">= [</span><span class="tok-str landing-remote-config-token is-azure">"azure"</span><span class="tok-pun">],</span>
+  <span class="tok-key">cache</span> <span class="tok-pun">= {</span> <span class="tok-key">provider</span> <span class="tok-pun">=</span> <span class="tok-str landing-remote-config-token is-cache">"local_cache"</span><span class="tok-pun">,</span> <span class="tok-key">max_age</span> <span class="tok-pun">=</span> <span class="tok-str">"8h"</span> <span class="tok-pun">}</span>
+<span class="tok-pun">}</span>
+
+<span class="tok-sec">[profiles.default]</span>
+<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">providers</span> <span class="tok-pun">= [</span><span class="tok-str landing-remote-config-token is-core">"cached_azure"</span><span class="tok-pun">] }</span></code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SHOWCASE: provider credential bootstrapping ============ -->
+<section id="credential-bootstrapping" class="landing-showcase landing-remote-demo" data-flow-demo="bootstrap">
+  <div class="landing-container">
+    <div class="landing-showcase-head">
+      <span class="landing-showcase-eyebrow">Credential bootstrapping · 0.15+</span>
+      <h2 class="landing-section-title">Start local. Unlock remote.</h2>
+      <p class="landing-section-lead landing-section-lead-narrow">
+        Keep provider credentials in a trusted local store. SecretSpec uses them to unlock remote providers, while your app receives only the secrets it asks for. <a href="/reference/provider-credentials/" class="landing-link">Provider credentials →</a>
+      </p>
+    </div>
+
+    <div class="landing-remote-shell">
+      <div class="landing-remote-toolbar">
+        <div class="landing-remote-status" aria-hidden="true">
+          <span class="landing-remote-status-dot" aria-hidden="true"></span>
+          <span data-remote-status>App requests DATABASE_URL</span>
+        </div>
+        <button class="landing-remote-motion" type="button" data-remote-motion aria-label="Pause animation" title="Pause animation">
+          <span class="landing-remote-pause-icon" aria-hidden="true"></span>
+          <span class="landing-remote-play-icon" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <p class="sr-only">
+        Your App asks SecretSpec for DATABASE_URL. SecretSpec resolves a 1Password service account token from the local keyring provider named bootstrap and uses it to unlock the 1Password vault. 1Password returns DATABASE_URL through SecretSpec to your app. Your app receives DATABASE_URL but never receives the 1Password credential.
+      </p>
+
+      <div class="landing-remote-map is-bootstrap-map" data-remote-map aria-hidden="true">
+        <svg class="landing-remote-routes" aria-hidden="true">
+          <defs>
+            <marker id="landing-bootstrap-arrow" viewBox="0 0 7 7" refX="6" refY="3.5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+              <path class="landing-remote-arrow-head" d="M 0 0 L 7 3.5 L 0 7 Z"></path>
+            </marker>
+          </defs>
+          <path data-remote-route-base="bootstrap-onepassword" marker-end="url(#landing-bootstrap-arrow)"></path>
+          <path data-remote-route-base="onepassword-core" marker-end="url(#landing-bootstrap-arrow)"></path>
+          <path data-remote-route-base="core-app" marker-start="url(#landing-bootstrap-arrow)" marker-end="url(#landing-bootstrap-arrow)"></path>
+          <path data-remote-route="bootstrap-onepassword"></path>
+          <path data-remote-route="onepassword-core"></path>
+          <path data-remote-route="core-app"></path>
+        </svg>
+
+        <div class="landing-remote-node is-bootstrap" data-remote-node="bootstrap">
+          <span class="landing-remote-node-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v2"></path></svg>
+          </span>
+          <span class="landing-remote-node-copy"><strong>bootstrap</strong></span>
+        </div>
+
+        <div class="landing-remote-node is-onepassword" data-remote-node="onepassword">
+          <span class="landing-remote-node-icon is-onepassword-icon" aria-hidden="true">
+            <span class="landing-remote-provider-mark" style={`--remote-provider-icon-mask:${simpleIconMask('1password')}`}></span>
+          </span>
+          <span class="landing-remote-node-copy"><strong>onepassword</strong></span>
+        </div>
+
+        <div class="landing-remote-node is-core" data-remote-node="core">
+          <span class="landing-remote-core-mark" aria-hidden="true"></span>
+          <span class="landing-remote-node-copy"><strong>SecretSpec</strong></span>
+        </div>
+
+        <div class="landing-remote-node is-app" data-remote-node="app">
+          <span class="landing-remote-node-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="m8 9-3 3 3 3M16 9l3 3-3 3M14 5l-4 14"></path></svg>
+          </span>
+          <span class="landing-remote-node-copy"><strong>Your App</strong></span>
+        </div>
+
+        <span class="landing-remote-packet" data-remote-packet aria-hidden="true">DATABASE_URL</span>
+      </div>
+
+      <div class="landing-remote-outcome">
+        <span><strong>Your App receives</strong> DATABASE_URL</span>
+        <span><strong>Your App never receives</strong> the 1Password credential</span>
+      </div>
+    </div>
+
+    <div class="landing-remote-config landing-terminal">
+      <div class="landing-terminal-header">
+        <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
+        <span class="landing-terminal-title">secretspec.toml</span>
+      </div>
+      <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[providers]</span>
+<span class="tok-key landing-remote-config-token is-bootstrap">bootstrap</span> <span class="tok-pun">=</span> <span class="tok-str">"keyring://"</span>
+<span class="tok-key landing-remote-config-token is-onepassword">onepassword</span> <span class="tok-pun">= {</span>
+  <span class="tok-key">uri</span> <span class="tok-pun">=</span> <span class="tok-str">"onepassword://Production"</span><span class="tok-pun">,</span>
+  <span class="tok-key">credentials</span> <span class="tok-pun">= {</span> <span class="tok-key">service_account_token</span> <span class="tok-pun">=</span> <span class="tok-str landing-remote-config-token is-bootstrap">"bootstrap"</span> <span class="tok-pun">}</span>
+<span class="tok-pun">}</span>
+
+<span class="tok-sec">[profiles.default]</span>
+<span class="tok-key">DATABASE_URL</span> <span class="tok-pun">= {</span> <span class="tok-key">providers</span> <span class="tok-pun">= [</span><span class="tok-str landing-remote-config-token is-onepassword">"onepassword"</span><span class="tok-pun">] }</span></code></pre>
+    </div>
+  </div>
+</section>
+
+<script>
+  (function () {
+    document.querySelectorAll<HTMLElement>('[data-flow-demo]').forEach((demoEl) => {
+      const kind = demoEl.dataset.flowDemo;
+      const mapEl = demoEl.querySelector<HTMLElement>('[data-remote-map]')!;
+      const statusEl = demoEl.querySelector<HTMLElement>('[data-remote-status]')!;
+      const statusDotEl = demoEl.querySelector<HTMLElement>('.landing-remote-status-dot')!;
+      const motionButtonEl = demoEl.querySelector<HTMLButtonElement>('[data-remote-motion]')!;
+      const timerEl = demoEl.querySelector<HTMLElement>('[data-remote-timer]');
+      const timerValueEl = demoEl.querySelector<HTMLElement>('[data-remote-timer-value]');
+      const timerLabelEl = demoEl.querySelector<HTMLElement>('[data-remote-timer-label]');
+      const packets = Array.from(demoEl.querySelectorAll<HTMLElement>('[data-remote-packet]'));
+
+      if (!kind || !mapEl || !statusEl || !statusDotEl || !motionButtonEl || packets.length === 0) return;
+
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const nodes = new Map<string, HTMLElement>();
+      const routes = new Map<string, SVGPathElement>();
+      const routeBases = new Map<string, SVGPathElement>();
+      const codeTokens = Array.from(demoEl.querySelectorAll<HTMLElement>('.landing-remote-config-token'));
+      const routePoints = new Map<string, Array<{ x: number; y: number }>>();
+      const animations = new Set<Animation>();
+      let timerFrame: number | undefined;
+      let timerResolve: ((completed: boolean) => void) | undefined;
+      let cycleId = 0;
+      let running = false;
+      let inView = false;
+      let userPaused = false;
+
+      demoEl.querySelectorAll<HTMLElement>('[data-remote-node]').forEach((node) => {
+        const name = node.dataset.remoteNode;
+        if (name) nodes.set(name, node);
+      });
+      demoEl.querySelectorAll<SVGPathElement>('[data-remote-route]').forEach((route) => {
+        const name = route.dataset.remoteRoute;
+        if (name) routes.set(name, route);
+      });
+      demoEl.querySelectorAll<SVGPathElement>('[data-remote-route-base]').forEach((route) => {
+        const name = route.dataset.remoteRouteBase;
+        if (name) routeBases.set(name, route);
+      });
+
+      const routeEnds: Record<string, [string, string]> = kind === 'cache'
+        ? {
+            'app-core': ['core', 'app'],
+            'core-azure': ['azure', 'core'],
+            'core-cache': ['core', 'cache'],
+          }
+        : {
+            'bootstrap-onepassword': ['bootstrap', 'onepassword'],
+            'onepassword-core': ['onepassword', 'core'],
+            'core-app': ['core', 'app'],
+          };
+
+      function port(name: string, side: 'left' | 'right' | 'top' | 'bottom') {
+      const node = nodes.get(name);
+      if (!node) return { x: 0, y: 0 };
+      const nodeRect = node.getBoundingClientRect();
+      const mapRect = mapEl.getBoundingClientRect();
+      const centerX = nodeRect.left - mapRect.left + nodeRect.width / 2;
+      const centerY = nodeRect.top - mapRect.top + nodeRect.height / 2;
+      if (side === 'left') return { x: nodeRect.left - mapRect.left, y: centerY };
+      if (side === 'right') return { x: nodeRect.right - mapRect.left, y: centerY };
+      if (side === 'top') return { x: centerX, y: nodeRect.top - mapRect.top };
+      return { x: centerX, y: nodeRect.bottom - mapRect.top };
+      }
+
+      function drawRoutes() {
+        const compact = window.matchMedia('(max-width: 820px)').matches;
+        const definitions: Record<string, Array<{ x: number; y: number }>> = kind === 'cache'
+          ? {
+              'app-core': compact
+                ? [port('core', 'left'), port('app', 'right')]
+                : [port('core', 'right'), port('app', 'left')],
+              'core-azure': compact
+                ? [port('azure', 'top'), port('core', 'bottom')]
+                : [port('azure', 'right'), port('core', 'left')],
+              'core-cache': compact
+                ? [port('core', 'bottom'), port('cache', 'top')]
+                : [port('core', 'right'), port('cache', 'left')],
+            }
+          : {
+              'bootstrap-onepassword': [port('bootstrap', 'right'), port('onepassword', 'left')],
+              'onepassword-core': compact
+                ? [port('onepassword', 'bottom'), port('core', 'top')]
+                : [port('onepassword', 'right'), port('core', 'left')],
+              'core-app': [port('core', 'right'), port('app', 'left')],
+            };
+
+      Object.entries(definitions).forEach(([name, points]) => {
+        routePoints.set(name, points);
+        const path = points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ');
+        routes.get(name)?.setAttribute('d', path);
+        routeBases.get(name)?.setAttribute('d', path);
+      });
+      }
+
+      function setStatus(message: string, color: string) {
+      statusEl.textContent = message;
+      statusDotEl.style.backgroundColor = color;
+      statusDotEl.style.boxShadow = `0 0 0 0.25rem color-mix(in srgb, ${color} 12%, transparent)`;
+      }
+
+      function setActive(nodeNames: string[], routeNames?: string | string[], color?: string) {
+        nodes.forEach((node) => node.classList.remove('is-active'));
+        routes.forEach((route) => route.classList.remove('is-active'));
+        codeTokens.forEach((token) => token.classList.remove('is-active'));
+        nodeNames.forEach((name) => nodes.get(name)?.classList.add('is-active'));
+        codeTokens.forEach((token) => {
+          token.classList.toggle('is-active', nodeNames.some((name) => token.classList.contains(`is-${name}`)));
+        });
+        const activeRoutes = typeof routeNames === 'string' ? [routeNames] : routeNames ?? [];
+        activeRoutes.forEach((routeName) => {
+          const route = routes.get(routeName);
+          route?.classList.add('is-active');
+          if (color) route?.style.setProperty('--remote-path-color', color);
+        });
+      }
+
+      function setFresh(fresh: boolean) {
+        mapEl.classList.toggle('is-cache-fresh', fresh);
+        nodes.get('azure')?.classList.toggle('is-dimmed', fresh);
+        nodes.get('cache')?.classList.toggle('is-dimmed', !fresh);
+      }
+
+      function updateTimer(hours: number, progress: number, label = 'fresh') {
+        if (!timerEl || !timerValueEl || !timerLabelEl) return;
+      const displayHours = Math.max(0, Math.ceil(hours));
+      timerEl.style.setProperty('--remote-progress', `${Math.max(0, progress) * 360}deg`);
+      timerValueEl.textContent = `${displayHours}h`;
+      timerLabelEl.textContent = label;
+      timerEl.setAttribute('aria-label', `Cache freshness: ${displayHours} hours remaining`);
+      }
+
+      function resetTimer() {
+        if (!timerEl || !timerValueEl || !timerLabelEl) return;
+      timerEl.style.setProperty('--remote-progress', '0deg');
+      timerValueEl.textContent = '—';
+      timerLabelEl.textContent = 'empty';
+      timerEl.setAttribute('aria-label', 'Cache freshness: empty');
+      }
+
+      function delay(milliseconds: number, id: number) {
+      return new Promise<boolean>((resolve) => {
+        window.setTimeout(() => resolve(running && id === cycleId), milliseconds);
+      });
+      }
+
+      async function travel(options: {
+      route: string;
+      from: string;
+      via?: Array<{ route: string; from: string }>;
+      label: string;
+      color: string;
+      packet: number;
+      duration?: number;
+      id: number;
+    }) {
+      if (!running || options.id !== cycleId) return false;
+      drawRoutes();
+      const points: Array<{ x: number; y: number }> = [];
+      const legs = [{ route: options.route, from: options.from }, ...(options.via ?? [])];
+      legs.forEach((leg) => {
+        const legPoints = [...(routePoints.get(leg.route) ?? [])];
+        const ends = routeEnds[leg.route];
+        if (!ends || ends[0] !== leg.from) legPoints.reverse();
+        points.push(...legPoints);
+      });
+      if (points.length < 2) return false;
+
+      const packet = packets[options.packet];
+      packet.textContent = options.label;
+      packet.style.setProperty('--remote-packet-color', options.color);
+      packet.style.opacity = '0';
+      const firstPoint = points[0];
+      const lastPoint = points[points.length - 1];
+      const secondPoint = points[1];
+      const penultimatePoint = points[points.length - 2];
+      const startDelta = { x: secondPoint.x - firstPoint.x, y: secondPoint.y - firstPoint.y };
+      const endDelta = { x: lastPoint.x - penultimatePoint.x, y: lastPoint.y - penultimatePoint.y };
+      const startDistance = Math.hypot(startDelta.x, startDelta.y);
+      const endDistance = Math.hypot(endDelta.x, endDelta.y);
+      const startHorizontal = Math.abs(startDelta.x) >= Math.abs(startDelta.y);
+      const endHorizontal = Math.abs(endDelta.x) >= Math.abs(endDelta.y);
+      const startClearance = Math.min((startHorizontal ? packet.offsetWidth : packet.offsetHeight) / 2 + 8, startDistance * 0.2);
+      const endClearance = Math.min((endHorizontal ? packet.offsetWidth : packet.offsetHeight) / 2 + 8, endDistance * 0.2);
+      points[0] = {
+        x: firstPoint.x + (startDistance ? startDelta.x / startDistance : 0) * startClearance,
+        y: firstPoint.y + (startDistance ? startDelta.y / startDistance : 0) * startClearance,
+      };
+      points[points.length - 1] = {
+        x: lastPoint.x - (endDistance ? endDelta.x / endDistance : 0) * endClearance,
+        y: lastPoint.y - (endDistance ? endDelta.y / endDistance : 0) * endClearance,
+      };
+      const transform = (point: { x: number; y: number }) => `translate(${point.x}px, ${point.y}px) translate(-50%, -50%)`;
+      const first = points[0];
+      const last = points[points.length - 1];
+      const distances = [0];
+      for (let index = 1; index < points.length; index += 1) {
+        distances.push(distances[index - 1] + Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y));
+      }
+      const totalDistance = distances[distances.length - 1] || 1;
+      const pathFrames = points.slice(1, -1).map((point, index) => ({
+        transform: transform(point),
+        opacity: 1,
+        offset: 0.08 + (distances[index + 1] / totalDistance) * 0.84,
+      }));
+      const animation = packet.animate([
+        { transform: transform(first), opacity: 0 },
+        { transform: transform(first), opacity: 1, offset: 0.08 },
+        ...pathFrames,
+        { transform: transform(last), opacity: 1, offset: 0.92 },
+        { transform: transform(last), opacity: 0 },
+      ], {
+        duration: options.duration ?? 820,
+        easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
+      });
+      animations.add(animation);
+      try {
+        await animation.finished;
+      } catch {
+        return false;
+      } finally {
+        animations.delete(animation);
+      }
+      return running && options.id === cycleId;
+      }
+
+      function startTimer(id: number, duration: number) {
+      const startedAt = performance.now();
+      return new Promise<boolean>((resolve) => {
+        timerResolve = resolve;
+        function frame(now: number) {
+          if (!running || id !== cycleId) {
+            timerResolve = undefined;
+            resolve(false);
+            return;
+          }
+          const elapsed = Math.min(1, (now - startedAt) / duration);
+          updateTimer(8 * (1 - elapsed), 1 - elapsed);
+          if (elapsed >= 1) {
+            timerFrame = undefined;
+            timerResolve = undefined;
+            resolve(true);
+            return;
+          }
+          timerFrame = window.requestAnimationFrame(frame);
+        }
+        timerFrame = window.requestAnimationFrame(frame);
+      });
+      }
+
+      async function firstRead(id: number) {
+      setFresh(false);
+      resetTimer();
+      setStatus('Your App asks cached_azure for DATABASE_URL', 'var(--remote-app)');
+      setActive(['app', 'core'], 'app-core', 'var(--remote-app)');
+      if (!await travel({ route: 'app-core', from: 'app', label: 'DATABASE_URL?', color: 'var(--remote-app)', packet: 0, id })) return false;
+      if (!await delay(260, id)) return false;
+
+      setStatus('cached_azure fetches DATABASE_URL from azure', 'var(--remote-azure)');
+      setActive(['core', 'azure'], 'core-azure', 'var(--remote-azure)');
+      if (!await travel({ route: 'core-azure', from: 'core', label: 'DATABASE_URL?', color: 'var(--remote-azure)', packet: 0, duration: 760, id })) return false;
+      if (!await delay(180, id)) return false;
+
+      setStatus('azure returns DATABASE_URL to cached_azure', 'var(--remote-azure)');
+      setActive(['azure', 'core'], 'core-azure', 'var(--remote-azure)');
+      if (!await travel({ route: 'core-azure', from: 'azure', label: 'DATABASE_URL', color: 'var(--remote-azure)', packet: 0, duration: 940, id })) return false;
+      if (!await delay(220, id)) return false;
+
+      setStatus('cached_azure sends DATABASE_URL to Your App and local_cache', 'var(--remote-cache)');
+      nodes.forEach((node) => node.classList.remove('is-active'));
+      routes.forEach((route) => route.classList.remove('is-active'));
+      nodes.get('core')?.classList.add('is-active');
+      nodes.get('app')?.classList.add('is-active');
+      nodes.get('cache')?.classList.add('is-active');
+      codeTokens.forEach((token) => token.classList.toggle('is-active', token.classList.contains('is-core') || token.classList.contains('is-cache')));
+      routes.get('app-core')?.classList.add('is-active');
+      routes.get('core-cache')?.classList.add('is-active');
+      routes.get('app-core')?.style.setProperty('--remote-path-color', 'var(--remote-app)');
+      routes.get('core-cache')?.style.setProperty('--remote-path-color', 'var(--remote-cache)');
+      nodes.get('core')?.classList.add('is-splitting');
+      const delivered = await Promise.all([
+        travel({ route: 'app-core', from: 'core', label: 'DATABASE_URL', color: 'var(--remote-app)', packet: 0, duration: 980, id }),
+        travel({ route: 'core-cache', from: 'core', label: 'DATABASE_URL', color: 'var(--remote-cache)', packet: 1, duration: 980, id }),
+      ]);
+      nodes.get('core')?.classList.remove('is-splitting');
+      if (!delivered.every(Boolean)) return false;
+      setFresh(true);
+      updateTimer(8, 1);
+      return true;
+    }
+
+      async function cachedRead(id: number) {
+      setStatus('Your App requests DATABASE_URL from local_cache', 'var(--remote-app)');
+      setActive(['app', 'core', 'cache'], ['app-core', 'core-cache'], 'var(--remote-app)');
+      if (!await travel({
+        route: 'app-core',
+        from: 'app',
+        via: [{ route: 'core-cache', from: 'core' }],
+        label: 'DATABASE_URL?',
+        color: 'var(--remote-app)',
+        packet: 0,
+        duration: 560,
+        id,
+      })) return false;
+
+      setStatus('local_cache returns DATABASE_URL to Your App', 'var(--remote-cache)');
+      setActive(['cache', 'core', 'app'], ['core-cache', 'app-core'], 'var(--remote-cache)');
+      if (!await travel({
+        route: 'core-cache',
+        from: 'cache',
+        via: [{ route: 'app-core', from: 'core' }],
+        label: 'DATABASE_URL',
+        color: 'var(--remote-cache)',
+        packet: 0,
+        duration: 680,
+        id,
+      })) return false;
+      nodes.forEach((node) => node.classList.remove('is-active'));
+      routes.forEach((route) => route.classList.remove('is-active'));
+      codeTokens.forEach((token) => token.classList.remove('is-active'));
+      return true;
+    }
+
+      async function runCacheLoop(id: number) {
+      while (running && id === cycleId) {
+        if (!await firstRead(id)) return;
+        setStatus('local_cache is fresh · azure rests for 8h', 'var(--remote-cache)');
+        const countdown = startTimer(id, 8200);
+
+        if (!await delay(700, id) || !await cachedRead(id)) return;
+        if (!await delay(900, id) || !await cachedRead(id)) return;
+        if (!await delay(900, id) || !await cachedRead(id)) return;
+        if (!await countdown) return;
+
+        setFresh(false);
+        updateTimer(0, 0, 'expired');
+        setStatus('local_cache expired · azure is active again', 'var(--remote-azure)');
+        setActive(['azure']);
+        if (!await delay(900, id)) return;
+      }
+      }
+
+      async function runBootstrapLoop(id: number) {
+        while (running && id === cycleId) {
+          setStatus('Your App asks SecretSpec for DATABASE_URL', 'var(--remote-app)');
+          setActive(['app', 'core'], 'core-app', 'var(--remote-app)');
+          if (!await travel({ route: 'core-app', from: 'app', label: 'DATABASE_URL?', color: 'var(--remote-app)', packet: 0, id })) return;
+          if (!await delay(320, id)) return;
+
+          setStatus('SecretSpec uses bootstrap to unlock onepassword', 'var(--remote-bootstrap)');
+          setActive(['bootstrap', 'onepassword'], 'bootstrap-onepassword', 'var(--remote-bootstrap)');
+          if (!await travel({ route: 'bootstrap-onepassword', from: 'bootstrap', label: 'service_account_token', color: 'var(--remote-bootstrap)', packet: 0, duration: 1050, id })) return;
+          if (!await delay(360, id)) return;
+
+          setStatus('onepassword returns DATABASE_URL to SecretSpec', 'var(--remote-onepassword)');
+          setActive(['onepassword', 'core'], 'onepassword-core', 'var(--remote-onepassword)');
+          if (!await travel({ route: 'onepassword-core', from: 'onepassword', label: 'DATABASE_URL', color: 'var(--remote-onepassword)', packet: 0, duration: 900, id })) return;
+          if (!await delay(320, id)) return;
+
+          setStatus('Your App receives DATABASE_URL, never the 1Password token', 'var(--remote-app)');
+          setActive(['core', 'app'], 'core-app', 'var(--remote-app)');
+          if (!await travel({ route: 'core-app', from: 'core', label: 'DATABASE_URL', color: 'var(--remote-app)', packet: 0, duration: 900, id })) return;
+          nodes.forEach((node) => node.classList.remove('is-active'));
+          routes.forEach((route) => route.classList.remove('is-active'));
+          codeTokens.forEach((token) => token.classList.remove('is-active'));
+          if (!await delay(1600, id)) return;
+        }
+      }
+
+      function stop() {
+      running = false;
+      cycleId += 1;
+      animations.forEach((animation) => animation.cancel());
+      animations.clear();
+      if (timerFrame !== undefined) window.cancelAnimationFrame(timerFrame);
+      timerFrame = undefined;
+      timerResolve?.(false);
+      timerResolve = undefined;
+      nodes.get('core')?.classList.remove('is-splitting');
+      }
+
+      function start() {
+      if (running || reduceMotion || userPaused || !inView) return;
+      running = true;
+      cycleId += 1;
+        if (kind === 'cache') void runCacheLoop(cycleId);
+        else void runBootstrapLoop(cycleId);
+      }
+
+      drawRoutes();
+      const resizeObserver = new ResizeObserver(drawRoutes);
+      resizeObserver.observe(mapEl);
+
+      motionButtonEl.addEventListener('click', () => {
+      userPaused = !userPaused;
+      motionButtonEl.classList.toggle('is-paused', userPaused);
+      motionButtonEl.setAttribute('aria-label', userPaused ? 'Resume animation' : 'Pause animation');
+      motionButtonEl.title = userPaused ? 'Resume animation' : 'Pause animation';
+      if (userPaused) {
+        stop();
+        setStatus('Animation paused', 'var(--color-gray-400)');
+      } else {
+        start();
+      }
+      });
+
+      if (reduceMotion) {
+        motionButtonEl.hidden = true;
+        if (kind === 'cache') {
+          setFresh(true);
+          updateTimer(6, 0.75);
+          setStatus('Fresh DATABASE_URL reads come from local_cache', 'var(--remote-cache)');
+          setActive(['cache', 'core', 'app']);
+        } else {
+          setStatus('bootstrap unlocks onepassword; Your App receives only DATABASE_URL', 'var(--remote-bootstrap)');
+          setActive(['bootstrap', 'onepassword', 'core', 'app']);
+        }
+        return;
+      }
+
+      if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            inView = entry.isIntersecting;
+            if (inView) start();
+            else stop();
+          });
+        }, { threshold: 0.25 });
+        observer.observe(demoEl);
+      } else {
+        inView = true;
+        start();
+      }
+    });
+  })();
+</script>
 
 <!-- ============ SHOWCASE: migration ============ -->
 <section class="landing-showcase">
@@ -944,9 +2470,9 @@ REDIS_URL=redis://…</code></pre>
       <div class="landing-pipe-card is-final">
         <div class="landing-pipe-label">2 · To</div>
         <div class="landing-pipe-title">keyring://</div>
-        <pre is:raw class="landing-pipe-code"><code>$ secretspec import dotenv://.env.production
-✓ Imported 5 secrets to keyring://
-✓ Application code unchanged</code></pre>
+        <pre is:raw class="landing-pipe-code"><code><span class="tok-pun">$</span> <span class="tok-bin">secretspec</span> <span class="tok-arg">import</span> <span class="tok-str">dotenv://.env.production</span>
+<span class="tok-str">✓</span> Imported 5 secrets to keyring://
+<span class="tok-str">✓</span> Application code unchanged</code></pre>
       </div>
     </div>
   </div>
@@ -970,7 +2496,7 @@ REDIS_URL=redis://…</code></pre>
           <span class="landing-terminal-title">devenv.yaml</span>
         </div>
         <pre is:raw class="landing-terminal-body"><code><span class="tok-key">secretspec</span><span class="tok-pun">:</span>
-  <span class="tok-key">enable</span><span class="tok-pun">:</span> <span class="tok-num">true</span>
+  <span class="tok-key">enable</span><span class="tok-pun">:</span> <span class="tok-bool">true</span>
   <span class="tok-key">provider</span><span class="tok-pun">:</span> <span class="tok-str">keyring</span>   <span class="tok-com"># keyring, dotenv, env, 1password, …</span>
   <span class="tok-key">profile</span><span class="tok-pun">:</span> <span class="tok-str">default</span></code></pre>
       </div>
@@ -1050,38 +2576,118 @@ REDIS_URL=redis://…</code></pre>
 <img referrerpolicy="no-referrer-when-downgrade" src="https://static.scarf.sh/a.png?x-pxid=ddbe4178-cff6-4549-9365-facbc08f3b6f" alt="" width="1" height="1" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden" />
 
 <script>
-  // ── Provider switcher ──
   (function () {
-    const tabs = document.querySelectorAll('#secret-tabs .landing-provider-tab');
+    const providerList = document.querySelector<HTMLElement>('.landing-run-step.is-provider-list');
+    const cursor = providerList?.querySelector<HTMLElement>('.landing-provider-cursor');
+    const lines = Array.from(providerList?.querySelectorAll<HTMLElement>('.landing-provider-line') ?? []);
+    const firstLine = lines[0];
 
-    const name = document.getElementById('secret-provider-name');
+    if (!providerList || !cursor || !firstLine) return;
 
-    if (!tabs.length || !name) return;
+    const providerListEl = providerList;
+    const cursorEl = cursor;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const selectionDelay = 1500;
 
-    const labels = {
-      keyring:     'System keyring',
-      onepassword: '1Password vault',
-      vault:       'HashiCorp Vault',
-      openbao:     'OpenBao (0.17+)',
-      awssm:       'AWS Secrets Manager',
-      awsps:        'AWS Parameter Store (0.18+)',
-      gcsm:        'Google Cloud Secret Manager',
-      akv:         'Azure Key Vault',
-      dotenv:      '.env file',
-      env:         'Environment variables',
-      systemdCredential: 'systemd credentials (0.17+)',
-    };
+    function greatestCommonDivisor(left: number, right: number): number {
+      while (right !== 0) {
+        const next = left % right;
+        left = right;
+        right = next;
+      }
 
-    tabs.forEach(function (tab) {
-      tab.addEventListener('click', function () {
-        tabs.forEach(function (t) { t.classList.remove('is-active'); });
+      return left;
+    }
 
-        tab.classList.add('is-active');
+    function coprimeStep(total: number): number {
+      for (let candidate = Math.max(1, Math.floor(total / 2)); candidate > 1; candidate -= 1) {
+        if (greatestCommonDivisor(candidate, total) === 1) return candidate;
+      }
 
-        const key = (tab.getAttribute('data-provider') ?? 'keyring') as keyof typeof labels;
+      return 1;
+    }
 
-        name.textContent = labels[key] ?? key;
+    const selectionStep = coprimeStep(lines.length);
+    const selectionOrder = lines.map(function (_, index) {
+      return (index * selectionStep) % lines.length;
+    });
+
+    let nextOrderIndex = 1;
+    let autoSelectTimer: number | undefined;
+
+    function lineOffset(line: HTMLElement) {
+      return line.getBoundingClientRect().top - firstLine.getBoundingClientRect().top;
+    }
+
+    function selectLine(line: HTMLElement) {
+      lines.forEach(function (line) {
+        line.classList.remove('is-selected');
       });
+      line.classList.add('is-selected');
+      cursorEl.style.setProperty(
+        '--landing-provider-cursor-transform',
+        `translate(0.28rem, ${lineOffset(line)}px)`
+      );
+      providerListEl.style.setProperty(
+        '--run-selected',
+        line.style.getPropertyValue('--provider-line-color') || 'var(--syntax-blue)'
+      );
+    }
+
+    function stopAutoSelect() {
+      if (autoSelectTimer !== undefined) {
+        window.clearInterval(autoSelectTimer);
+        autoSelectTimer = undefined;
+      }
+    }
+
+    function selectNextLine() {
+      const nextLineIndex = selectionOrder[nextOrderIndex];
+      nextOrderIndex = (nextOrderIndex + 1) % selectionOrder.length;
+      const nextLine = lines[nextLineIndex];
+
+      if (nextLine) selectLine(nextLine);
+    }
+
+    function startAutoSelect() {
+      stopAutoSelect();
+      if (reduceMotion.matches) return;
+      autoSelectTimer = window.setInterval(selectNextLine, selectionDelay);
+    }
+
+    function resumeAutoSelect(line: HTMLElement) {
+      if (line.matches(':hover') || document.activeElement === line) return;
+      startAutoSelect();
+    }
+
+    function selectInteractiveLine(line: HTMLElement) {
+      const lineIndex = lines.indexOf(line);
+
+      if (lineIndex !== -1) {
+        const orderIndex = selectionOrder.indexOf(lineIndex);
+        nextOrderIndex = orderIndex === -1 ? 0 : (orderIndex + 1) % selectionOrder.length;
+      }
+
+      stopAutoSelect();
+      selectLine(line);
+    }
+
+    lines.forEach(function (line) {
+      line.addEventListener('pointerenter', function () { selectInteractiveLine(line); });
+      line.addEventListener('pointerleave', function () { resumeAutoSelect(line); });
+      line.addEventListener('focus', function () { selectInteractiveLine(line); });
+      line.addEventListener('blur', function () { resumeAutoSelect(line); });
+    });
+
+    selectLine(firstLine);
+    startAutoSelect();
+
+    reduceMotion.addEventListener('change', function () {
+      if (reduceMotion.matches) {
+        stopAutoSelect();
+      } else {
+        startAutoSelect();
+      }
     });
   })();
 </script>

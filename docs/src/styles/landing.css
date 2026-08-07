@@ -954,24 +954,29 @@
     --pipeline-flow-end: calc(100% - 0.55rem);
     display: block;
     align-self: auto;
-    width: 100%;
-    height: 3rem;
-    min-height: 3rem;
+    justify-self: center;
+    width: 1.5rem;
+    height: 2rem;
+    min-height: 0;
+    margin-block: 0;
+  }
+
+  .landing-pipeline-flow-arrow::before,
+  .landing-pipeline-flow-arrow::after {
+    top: auto;
+    left: 50%;
   }
 
   .landing-pipeline-flow-arrow::before {
     top: 0;
     bottom: 0.55rem;
-    left: 50%;
     right: auto;
     width: 1px;
     height: auto;
   }
 
   .landing-pipeline-flow-arrow::after {
-    top: auto;
     bottom: 0.5rem;
-    left: 50%;
     right: auto;
     transform: translateX(-50%) rotate(135deg);
   }
@@ -1004,6 +1009,41 @@
       top: var(--pipeline-flow-end);
       opacity: 0;
     }
+  }
+
+  .landing-pipeline-side:first-child {
+    order: 1;
+  }
+
+  .landing-pipeline-flow-arrow-in {
+    order: 2;
+    margin-block: 0.5rem 0.75rem;
+  }
+
+  .landing-pipeline-center {
+    display: contents;
+  }
+
+  .landing-pipeline-terminal {
+    order: 3;
+    justify-self: center;
+    box-sizing: border-box;
+    width: min(100%, calc(100vw - 2rem));
+  }
+
+  .landing-pipeline-flow-arrow-out {
+    order: 4;
+    margin-block: 1rem 0;
+  }
+
+  .landing-pipeline-side:last-child {
+    order: 5;
+    flex-direction: column-reverse;
+  }
+
+  .landing-hero .landing-pipeline-grid .landing-hero-lower-actions {
+    order: 6;
+    margin-top: 2rem;
   }
 
   .landing-pipeline-action,

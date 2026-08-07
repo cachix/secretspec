@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preflights the whole migration, verifies all writes before cleanup, and can
   safely move between distinct entries in the same physical store.
 - A `null` provider lets non-sensitive, version-controlled environment values
-  use their manifest defaults without reading from or writing to secret storage.
+  use their manifest defaults and lets generated secrets stay ephemeral, with a
+  fresh value returned for each resolution and nothing written to provider
+  storage.
 - Secrets can store values as standard Base64, URL-safe Base64, or hexadecimal
   using `encoding`; writes encode logical text and reads decode stored values,
   while `as_path = true` materializes arbitrary decoded bytes.

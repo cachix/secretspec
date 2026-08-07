@@ -1,4 +1,4 @@
-use super::{Address, Provider, ProviderUrl};
+use super::{Address, GeneratedValuePersistence, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 /// Configuration for the null provider.
 ///
 /// The provider takes no options because it never reads or stores values. It
-/// exists to let SecretSpec continue to a declaration's `default` value.
+/// exists to let SecretSpec continue to a declaration's `default` or ephemeral
+/// generated value.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NullConfig {}
 
@@ -37,18 +38,19 @@ impl TryFrom<&ProviderUrl> for NullConfig {
     }
 }
 
-/// A provider that never contains a value.
+/// A provider that never contains or stores a value.
 ///
 /// A miss lets normal resolution continue to the secret's committed `default`,
-/// making this provider useful for non-sensitive environment configuration that
-/// belongs in `secretspec.toml` but should not be stored in a secret backend.
+/// or lets a configured generator mint a value for only the current resolution.
+/// This makes the provider useful for non-sensitive environment configuration
+/// committed to `secretspec.toml` and for ephemeral generated secrets.
 pub struct NullProvider;
 
 crate::register_provider! {
     struct: NullProvider,
     config: NullConfig,
     name: "null",
-    description: "Use manifest defaults without storage (0.19+)",
+    description: "Use defaults or ephemeral generation without storage (0.19+)",
     schemes: ["null"],
     examples: ["null://"],
 }
@@ -92,9 +94,13 @@ impl Provider for NullProvider {
 
     fn check_writable(&self, _addr: Address<'_>) -> Result<()> {
         Err(SecretSpecError::ProviderOperationFailed(
-            "null provider never stores values; configure a manifest default or choose a writable provider"
+            "null provider never stores values; configure a manifest default or automatic generation, or choose a writable provider"
                 .to_string(),
         ))
+    }
+
+    fn generated_value_persistence(&self) -> GeneratedValuePersistence {
+        GeneratedValuePersistence::Ephemeral
     }
 
     fn name(&self) -> &'static str {
@@ -109,9 +115,12 @@ impl Provider for NullProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Secret;
+    use crate::config::{GenerateConfig, Secret};
+    use crate::resolve::ResolvedSource;
     use secrecy::ExposeSecret;
     use std::collections::HashMap;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn always_misses_and_rejects_writes() {
@@ -119,6 +128,10 @@ mod tests {
         let addr = Address::convention("project", "development", "LOCAL_PORT");
 
         assert!(provider.get(addr).unwrap().is_none());
+        assert_eq!(
+            provider.generated_value_persistence(),
+            GeneratedValuePersistence::Ephemeral
+        );
         let error = provider
             .set(addr, &SecretString::new("8090".into()))
             .unwrap_err();
@@ -161,6 +174,88 @@ mod tests {
         assert_eq!(
             resolved.with_defaults,
             vec![("LOCAL_PORT".to_string(), "8090".to_string())]
+        );
+    }
+
+    #[test]
+    fn generated_values_are_fresh_and_never_stored() {
+        let _env = crate::tests::scrub_resolution_env();
+        let config = crate::tests::resolve_test_config(HashMap::from([(
+            "SESSION_ID".to_string(),
+            Secret {
+                description: Some("Ephemeral session identifier".to_string()),
+                secret_type: Some("uuid".to_string()),
+                generate: Some(GenerateConfig::Bool(true)),
+                providers: Some(vec!["null".to_string()]),
+                ..Default::default()
+            },
+        )]));
+        let spec = crate::Secrets::new(config, None, None, None);
+
+        let value_free = spec.resolve_without_values().unwrap();
+        assert_eq!(
+            value_free.secrets["SESSION_ID"].source,
+            ResolvedSource::Generated
+        );
+        assert!(value_free.secrets["SESSION_ID"].value.is_none());
+
+        let first = spec.resolve().unwrap();
+        let second = spec.resolve().unwrap();
+        assert_eq!(
+            first.secrets["SESSION_ID"].source,
+            ResolvedSource::Generated
+        );
+        assert_eq!(
+            second.secrets["SESSION_ID"].source,
+            ResolvedSource::Generated
+        );
+        assert_ne!(
+            first.secrets["SESSION_ID"].value, second.secrets["SESSION_ID"].value,
+            "null-backed generation must mint a fresh value for each resolution"
+        );
+
+        // `get` uses the same materializing executor as `run` and SDK resolve.
+        assert!(spec.get("SESSION_ID").is_ok());
+    }
+
+    #[test]
+    fn boxed_provider_wrapper_preserves_ephemeral_capability() {
+        let provider = Box::<dyn Provider>::try_from("null://").unwrap();
+        assert_eq!(
+            provider.generated_value_persistence(),
+            GeneratedValuePersistence::Ephemeral
+        );
+    }
+
+    #[test]
+    fn stored_fallback_wins_before_ephemeral_generation() {
+        let _env = crate::tests::scrub_resolution_env();
+        let temp_dir = TempDir::new().unwrap();
+        let env_file = temp_dir.path().join("fallback.env");
+        fs::write(&env_file, "SESSION_ID=stored-value\n").unwrap();
+        let config = crate::tests::resolve_test_config(HashMap::from([(
+            "SESSION_ID".to_string(),
+            Secret {
+                description: Some("Session identifier".to_string()),
+                secret_type: Some("uuid".to_string()),
+                generate: Some(GenerateConfig::Bool(true)),
+                providers: Some(vec![
+                    "null".to_string(),
+                    format!("dotenv://{}", env_file.display()),
+                ]),
+                ..Default::default()
+            },
+        )]));
+        let spec = crate::Secrets::new(config, None, None, None);
+
+        let resolved = spec.resolve().unwrap();
+        assert_eq!(
+            resolved.secrets["SESSION_ID"].value.as_deref(),
+            Some("stored-value")
+        );
+        assert_eq!(
+            resolved.secrets["SESSION_ID"].source,
+            ResolvedSource::Provider
         );
     }
 

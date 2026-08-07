@@ -41,15 +41,16 @@ The `null` provider is added in SecretSpec 0.19.
 :::
 
 **URI**: `null://` - Always reports a missing value so the declaration's
-committed `default` applies
+committed `default` or configured generator supplies the value
 
 ```bash
 null://                      # No configuration or storage
 ```
 
-**Features**: No I/O, no authentication, no persistence, writes rejected
-**Use case**: Non-sensitive environment configuration that should come from
-the version-controlled manifest rather than a secret backend
+**Features**: No I/O, no authentication, no persistence, ordinary writes
+rejected; generated values are returned only for the current resolution
+**Use case**: Non-sensitive configuration from the version-controlled manifest,
+or ephemeral generated values that should be fresh for every resolution
 
 ## systemd Credential Provider (0.17+)
 

@@ -33,6 +33,13 @@ pub trait Provider: Send + Sync {
     /// the reason: it is what the user sees.
     fn check_writable(&self, addr: Address<'_>) -> Result<()> { Ok(()) }
 
+    /// SecretSpec 0.19+: optional, defaults to Persist. Return Ephemeral only
+    /// when generated values should be returned for one resolution without
+    /// calling `set`; ordinary writes remain governed by `check_writable`.
+    fn generated_value_persistence(&self) -> GeneratedValuePersistence {
+        GeneratedValuePersistence::Persist
+    }
+
     /// Optional batch read. The default resolves each request's address and
     /// fetches every unique address once, concurrently; override it when the
     /// store has a real bulk surface (one listing, a batch API).
@@ -55,6 +62,13 @@ written for another store fails loudly instead of resolving something else —
 you declare the set, you never write the check. Have `set` call
 `self.check_writable(addr)?` first, so the pre-check and the write agree on
 one refusal message.
+
+SecretSpec 0.19+ also exposes `generated_value_persistence`. Leave its default
+of `Persist` for storage providers. `Ephemeral` is an explicit generation-only
+capability: after a healthy read miss, SecretSpec returns the generated logical
+value for the current materializing resolution without calling `set` or
+refreshing a cache. It does not make ordinary writes succeed and must be a pure,
+I/O-free capability check.
 
 ### Convention templates
 

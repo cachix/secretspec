@@ -50,51 +50,78 @@ $ nix-env -iA secretspec -f https://github.com/NixOS/nixpkgs/tarball/nixpkgs-uns
 </TabItem>
 </Tabs>
 
-## Getting Started
+## Getting started
 
-Follow these steps to get started with SecretSpec:
+Start with one project and the system keyring. You will declare the secrets the
+application expects, store one value, and run the application with that value
+in its environment.
 
-## 1. Initialize `secretspec.toml`
+### 1. Initialize `secretspec.toml`
 
-Discover secrets from existing `.env` files:
+From your project directory, create a manifest:
 
 ```bash
 $ secretspec init
+```
+
+<div class="muted-code-output">
+
+```text
 ✓ Created secretspec.toml with 0 secrets
 
 Next steps:
   1. secretspec config global init    # Set up user defaults (0.17+)
-  2. secretspec check          # Verify all secrets are set
-  3. secretspec run -- your-command  # Run with secrets
+  2. secretspec check                 # Verify all secrets are set
+  3. secretspec run -- your-command   # Run with secrets
 ```
 
-If you have an existing `.env` file, you can import secrets from it:
+</div>
 
-```bash
-$ secretspec init --from .env
-```
+### 2. Declare your secrets
 
-Now edit `secretspec.toml` to define the secrets your application needs:
+Edit `secretspec.toml` so it describes what your application expects:
 
-```toml
+```toml title="secretspec.toml"
 [project]
 name = "my-app"
 revision = "1.0"
 
 [profiles.default]
 DATABASE_URL = { description = "PostgreSQL connection string", required = true }
-REDIS_URL = { description = "Redis connection string", required = false }
-
-[profiles.development]
-DATABASE_URL = { default = "sqlite://./dev.db" }
-
-[profiles.production]
-REDIS_URL = { required = true }
+SENTRY_DSN = { description = "Error reporting endpoint", required = false }
 ```
 
-## 2. Set up provider backend
+`DATABASE_URL` must be available before the application can run. `SENTRY_DSN`
+is optional, so leaving it unset does not block resolution. The manifest
+contains declarations, not secret values, and is safe to commit.
 
-Configure your preferred secrets storage backend:
+### 3. Store and use a secret
+
+Store the required value in your system keyring:
+
+```bash
+$ secretspec set DATABASE_URL --provider keyring
+```
+
+<div class="muted-code-output">
+
+```text
+Enter value for DATABASE_URL: postgresql://localhost/myapp
+✓ Secret DATABASE_URL saved
+```
+
+</div>
+
+Start your application with the resolved values in its environment:
+
+```bash
+$ secretspec run --provider keyring -- npm start
+```
+
+### 4. Initialize your default backend
+
+The commands above use `--provider keyring` explicitly. SecretSpec 0.17+ can
+save your preferred backend and default profile as preferences for your user:
 
 ```bash
 $ secretspec config global init  # 0.17+
@@ -133,59 +160,22 @@ $ secretspec config global init  # 0.17+
 ✓ Configuration saved to /home/user/.config/secretspec/config.toml
 ```
 
-## 3. Import existing secrets (optional)
+These preferences are stored in `~/.config/secretspec/config.toml`. They are
+not written to the project, committed to version control, or shared with other
+users. They become your personal defaults across projects and can still be
+overridden by project configuration or command-line options.
 
-If you have existing secrets in environment variables or another `.env` file, you can import them:
-
-```bash
-# Import from current environment variables
-$ secretspec import env
-
-# Import from another .env file
-$ secretspec import dotenv:/path/to/old/.env
-```
-
-## 4. Check and configure secrets
-
-Verify that all required secrets are configured:
-
-```bash
-$ secretspec check
-```
-
-If any secrets are missing, you'll be prompted to set them. You can also set secrets manually:
+You can now omit the provider from everyday commands:
 
 ```bash
 $ secretspec set DATABASE_URL
-# SecretSpec 0.19+ previews the exact destination before prompting:
-Writing secret 'DATABASE_URL' to keyring (profile: default)
-  target: item=secretspec/my-app/default/DATABASE_URL
-Enter value for DATABASE_URL (profile: default): postgresql://localhost/myapp
-✓ Secret 'DATABASE_URL' saved to keyring (profile: default)
-```
-
-SecretSpec 0.18+ can also declare a new secret without hand-editing
-the manifest, then store its value:
-
-```bash
-$ secretspec add API_KEY --description "API access token" # 0.18+
-
-$ secretspec set API_KEY
-```
-
-## 5. Run your application
-
-Run your application with secrets injected as environment variables:
-
-```bash
+$ secretspec check
 $ secretspec run -- npm start
-
-# Or with a specific profile and provider
-$ secretspec run --profile production --provider dotenv -- npm start
 ```
 
 ## Next Steps
 
+- Bring existing values into SecretSpec with the [Migration guide](/migration/)
 - Learn about [Profiles](/concepts/profiles/) to manage environment-specific configurations
 - Explore different [Providers](/concepts/providers/) for secret storage
-- Set up the [Rust SDK](/sdk/rust/) for type-safe secret access in your code
+- Choose an [SDK](/sdk/overview/) to resolve secrets from your application

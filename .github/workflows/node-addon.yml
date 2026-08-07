@@ -38,6 +38,7 @@ on:
     paths:
       - "secretspec-node/**"
       - ".github/workflows/node-addon.yml"
+      - "scripts/install-rustup.sh"
       - "scripts/sync-sdk-versions.sh"
 
 permissions:
@@ -73,10 +74,10 @@ jobs:
       - name: Sync SDK package versions
         run: bash scripts/sync-sdk-versions.sh
 
-      - name: Install rustup (the manylinux container ships none)
+      - name: Install verified rustup (the manylinux container ships none)
         if: matrix.container
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+          bash scripts/install-rustup.sh
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Install Rust (pinned by rust-toolchain.toml)

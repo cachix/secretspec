@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # The full workspace debug build (AWS/GCP/Bitwarden providers) plus the
       # Nix store overflows the ~14GB free on a hosted runner.
       # /usr/share/dotnet is safe to purge: the C# suite uses devenv's dotnet.
@@ -43,6 +45,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
       - name: Build the native resolver

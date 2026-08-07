@@ -27,6 +27,7 @@ on:
       - "secretspec-dotnet/**"
       - "secretspec-ffi/**"
       - ".github/workflows/dotnet-package.yml"
+      - "scripts/install-rustup.sh"
       - "scripts/sync-sdk-versions.sh"
 
 permissions:
@@ -89,12 +90,11 @@ jobs:
         shell: bash
         run: yum install -y libicu
 
-      - name: Install rustup in manylinux
+      - name: Install verified rustup in manylinux
         if: matrix.container
         shell: bash
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
-            sh -s -- -y --default-toolchain none
+          bash scripts/install-rustup.sh
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Install Rust
@@ -189,8 +189,7 @@ jobs:
             "${{ matrix.image }}" \
             bash -c '
               set -euo pipefail
-              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs |
-                sh -s -- -y --default-toolchain none
+              bash scripts/install-rustup.sh
               export PATH="$HOME/.cargo/bin:$PATH"
               rustup toolchain install
               cargo build -p secretspec-ffi --release \

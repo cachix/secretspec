@@ -36,6 +36,7 @@ on:
       - "secretspec-ffi/**"
       - ".github/workflows/go-embed.yml"
       - "scripts/check-linux-portability.sh"
+      - "scripts/install-rustup.sh"
 
 permissions:
   contents: read
@@ -63,11 +64,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install rustup (the manylinux container ships none)
+      - name: Install verified rustup (the manylinux container ships none)
         if: matrix.container
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
-            sh -s -- -y --default-toolchain none
+          bash scripts/install-rustup.sh
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Install Rust (pinned by rust-toolchain.toml)

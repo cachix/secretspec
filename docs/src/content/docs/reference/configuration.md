@@ -804,6 +804,7 @@ MANUAL_SECRET = { description = "Manually managed", type = "password" }
 
 - Generation only triggers when a secret is **missing** — existing secrets are never overwritten
 - Generated values are stored via the secret's configured provider (or the default provider)
+- With `providers = ["null"]` (0.19+), a fresh generated value is returned only for the current resolution and is not written to provider storage
 - Subsequent runs find the stored value and skip generation (idempotent)
 - `generate` and `default` cannot both be set on the same secret
 - `type = "command"` requires `generate = { command = "..." }` (not just `generate = true`)

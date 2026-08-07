@@ -9,7 +9,10 @@ use crate::config::{
 use crate::error::{Result, SecretSpecError};
 use crate::manifest::{CompiledManifest, MissingPolicy};
 use crate::plan::{PlannedSecret, ResolutionPlan, ResolvedCache, Route};
-use crate::provider::{Address, OwnedAddress, Provider as ProviderTrait, ProviderCredentials};
+use crate::provider::{
+    Address, GeneratedValuePersistence, OwnedAddress, Provider as ProviderTrait,
+    ProviderCredentials,
+};
 use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
 use crate::resolve::{RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource};
 use crate::validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
@@ -3063,10 +3066,15 @@ impl Secrets {
                 return Err(err);
             }
         };
-        // A composed secret plans no route: resolve its dependency closure
-        // through the batch executor and print the rendered value.
-        let Some(route) = &planned.route else {
-            let names = self.composed_dependency_names(name, &profile_name);
+        // Composed values and generated-on-miss values need the batch executor:
+        // it renders dependency closures and owns the generation policy,
+        // including providers that return a value without storing it.
+        if planned.is_composed() || planned.secret.missing == MissingPolicy::Generate {
+            let names = if planned.is_composed() {
+                self.composed_dependency_names(name, &profile_name)
+            } else {
+                vec![name.to_string()]
+            };
             let plan = self.build_plan_from_names(profile_name.clone(), names)?;
             // No output filter: the closure resolves the target's dependencies
             // and this caller reads only the target from the result.
@@ -3086,12 +3094,22 @@ impl Secrets {
                     }
                     validated.keep_temp_files()?;
                     let value = &validated.resolved.secrets[name];
+                    let source_provider = validated
+                        .resolution
+                        .iter()
+                        .find(|entry| entry.name == name)
+                        .and_then(|entry| entry.source_provider.clone());
                     self.record(
                         AuditAction::Get,
                         &profile_name,
                         AuditOutcome::Found,
                         AuditFields {
                             key: Some(name),
+                            provider_uri: source_provider.clone(),
+                            reference: source_provider
+                                .is_some()
+                                .then(|| planned.reference())
+                                .flatten(),
                             ..Default::default()
                         },
                     );
@@ -3104,7 +3122,11 @@ impl Secrets {
                     Err(err)
                 }
             };
-        };
+        }
+        let route = planned
+            .route
+            .as_ref()
+            .expect("non-composed secrets have a provider route");
         let default = planned.config().default.clone();
         // A fresh cache hit completes the read without constructing or
         // contacting any authoritative provider. Misses and invalid entries
@@ -3993,6 +4015,17 @@ impl Secrets {
         )?;
         let addr = address.as_address();
         let backend = self.write_provider_for_route(route, Some(profile_name))?;
+
+        if backend.generated_value_persistence() == GeneratedValuePersistence::Ephemeral {
+            eprintln!(
+                "{} {} - generated for this resolution without provider storage (profile: {})",
+                "✓".green(),
+                name,
+                profile_name
+            );
+            return Ok(Some(value));
+        }
+
         // The provider states why a write is refused; wrapping it here would
         // only nest a second "Provider operation failed" prefix.
         backend.check_writable(addr)?;

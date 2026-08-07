@@ -123,7 +123,7 @@ $ secretspec import dotenv://.env.production
 
 ## Providers
 
-Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files, environment variables, systemd service credentials (0.17+), 1Password, Gopass (0.15+), LastPass, Dashlane (0.18+, read-only), Pass, Proton Pass, Keeper Secrets Manager (0.18+), Google Cloud Secret Manager, AWS Secrets Manager, AWS Systems Manager Parameter Store (0.18+), Scaleway Secret Manager (0.17+), HashiCorp Vault, OpenBao (0.17+), Bitwarden Password Manager (0.18+), Bitwarden Secrets Manager, Azure Key Vault, Infisical (0.16+), age (0.17+), or SOPS (0.17+).`,
+Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv files, environment variables, systemd service credentials (0.17+), 1Password, Gopass (0.15+), LastPass, Dashlane (0.18+, read-only), Pass, Proton Pass, Keeper Secrets Manager (0.18+), Google Cloud Secret Manager, AWS Secrets Manager, AWS Systems Manager Parameter Store (0.18+), Scaleway Secret Manager (0.17+), HashiCorp Vault, OpenBao (0.17+), Bitwarden Password Manager (0.18+), Bitwarden Secrets Manager, Azure Key Vault, Infisical (0.16+), age (0.17+), or SOPS (0.17+). The null provider (0.19+) uses manifest defaults or ephemeral generation without storage.`,
         }),
       ],
       title: "SecretSpec",
@@ -224,6 +224,11 @@ Secrets can be stored in: keyring (default), KeePass KDBX (0.17+), dotenv files,
             },
             { label: "Dotenv", slug: "providers/dotenv" },
             { label: "Environment Variables", slug: "providers/env" },
+            {
+              label: "Null",
+              slug: "providers/null",
+              badge: { text: "0.19+", variant: "note" },
+            },
             {
               label: "systemd Credentials",
               slug: "providers/systemd-credential",

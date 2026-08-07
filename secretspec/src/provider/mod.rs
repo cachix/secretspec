@@ -20,6 +20,7 @@
 //! - [`keeper::KeeperProvider`]: Keeper Secrets Manager integration (0.18+)
 //! - [`dotenv::DotEnvProvider`]: `.env` file support
 //! - [`env::EnvProvider`]: Environment variables (read-only)
+//! - [`null::NullProvider`]: Defaults or ephemeral generation without storage (0.19+)
 //! - [`pass::PassProvider`]: Pass integration
 //! - [`gopass::GoPassProvider`]: Gopass integration
 //! - [`systemd_credential::SystemdCredentialProvider`]: systemd service credentials (0.17+)
@@ -45,6 +46,7 @@
 //! ```text
 //! keyring://
 //! dotenv://.env.production
+//! null://  # Use defaults or ephemeral generation without storage, 0.19+
 //! onepassword://vault
 //! lastpass://folder
 //! keeper://SHARED_FOLDER_UID  # Keeper, 0.18+
@@ -306,6 +308,7 @@ pub mod keeper;
 #[cfg(feature = "keyring")]
 pub mod keyring;
 pub mod lastpass;
+pub mod null;
 pub mod onepassword;
 #[cfg(feature = "openbao")]
 pub mod openbao;
@@ -627,6 +630,23 @@ impl<'a> DiscoveryContext<'a> {
     }
 }
 
+/// Whether a value minted by a secret's `generate` configuration is written
+/// back to its primary provider.
+///
+/// This capability is available since SecretSpec 0.19. It is deliberately
+/// separate from read and write support: a provider may reject ordinary writes
+/// while explicitly allowing SecretSpec to return a freshly generated value
+/// for the current resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeneratedValuePersistence {
+    /// Store the generated value through [`Provider::set`] and reuse it on
+    /// subsequent resolutions. This is the default for storage providers.
+    Persist,
+    /// Return the generated value only from the current materializing
+    /// resolution. No provider write or cache refresh is performed.
+    Ephemeral,
+}
+
 /// Trait defining the interface for secret storage providers.
 ///
 /// All secret storage backends must implement this trait to integrate with SecretSpec.
@@ -823,6 +843,19 @@ pub trait Provider: Send + Sync {
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         let _ = addr;
         Ok(())
+    }
+
+    /// Controls whether SecretSpec persists a value produced by a declaration's
+    /// `generate` configuration after this provider's read route misses.
+    /// Available since SecretSpec 0.19.
+    ///
+    /// [`GeneratedValuePersistence::Ephemeral`] affects only automatic
+    /// generation. Ordinary [`set`](Provider::set), deletion, imports, and
+    /// provider reads keep their usual behavior. The capability must be pure:
+    /// callers may inspect it without running authentication preflight or other
+    /// provider I/O.
+    fn generated_value_persistence(&self) -> GeneratedValuePersistence {
+        GeneratedValuePersistence::Persist
     }
 
     /// Identifies the shared authentication state this instance's preflight
@@ -1191,6 +1224,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         (**self).check_writable(addr)
     }
+    fn generated_value_persistence(&self) -> GeneratedValuePersistence {
+        (**self).generated_value_persistence()
+    }
     fn auth_scope_key(&self) -> Option<String> {
         (**self).auth_scope_key()
     }
@@ -1397,6 +1433,11 @@ impl Provider for PreflightGuard {
 
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         self.inner.check_writable(addr)
+    }
+
+    fn generated_value_persistence(&self) -> GeneratedValuePersistence {
+        // Capability inspection is pure and must not trigger authentication.
+        self.inner.generated_value_persistence()
     }
 
     fn auth_scope_key(&self) -> Option<String> {

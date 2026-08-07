@@ -34,6 +34,24 @@ env://                       # Current process environment
 
 **Features**: Read-only, no setup required, no persistence
 
+## Null Provider (0.19+)
+
+:::caution[Version compatibility]
+The `null` provider is added in SecretSpec 0.19.
+:::
+
+**URI**: `null://` - Always reports a missing value so the declaration's
+committed `default` or configured generator supplies the value
+
+```bash
+null://                      # No configuration or storage
+```
+
+**Features**: No I/O, no authentication, no persistence, ordinary writes
+rejected; generated values are returned only for the current resolution
+**Use case**: Non-sensitive configuration from the version-controlled manifest,
+or ephemeral generated values that should be fresh for every resolution
+
 ## systemd Credential Provider (0.17+)
 
 :::caution[Version compatibility]
@@ -519,6 +537,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 |----------|------------|------------------|----------------|
 | DotEnv | ❌ Plain text | Local filesystem | ❌ No |
 | Environment | ❌ Plain text | Process memory | ❌ No |
+| Null (0.19+) | N/A — no stored value | None | ❌ No |
 | systemd Credential (0.17+) | Depends on unit source | systemd-managed runtime memory | ❌ No |
 | Keyring | ✅ System encryption | System keychain | ❌ No |
 | KeePass KDBX (0.17+) | ✅ KDBX encryption | Local filesystem | ❌ No |

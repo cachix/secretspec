@@ -49,6 +49,8 @@ jobs:
           - { arch: aarch64, target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Sync SDK package versions
         run: bash scripts/sync-sdk-versions.sh
       - name: Build wheel (manylinux)
@@ -78,6 +80,8 @@ jobs:
           - { target: windows-x86_64, runner: windows-latest }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Sync SDK package versions
         run: bash scripts/sync-sdk-versions.sh
       - name: Install Rust (pinned by rust-toolchain.toml)

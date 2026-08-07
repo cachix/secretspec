@@ -50,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collisions and retain the attempted native location in audit events when a
   provider read fails. Same-store import validation handles Windows provider
   paths without treating separators as TOML escapes.
+- Profile overrides can switch between legacy `ref` and provider-scoped `refs`
+  without retaining both inherited address models and failing validation.
 - SDK pkg-config setup now pins cargo-c's library and metadata install
   directories, so Go, Ruby, and Haskell reliably discover
   `secretspec_ffi.pc` across environments.

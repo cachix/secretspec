@@ -44,11 +44,11 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
-            container: quay.io/pypa/manylinux_2_28_x86_64
+            container: quay.io/pypa/manylinux_2_28_x86_64:2026.08.05-1@sha256:e0b40ace8e818e96026eb47714b01998cbca022a6995797d0905474ce3e82ae8
             artifact: libsecretspec_ffi.so
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
-            container: quay.io/pypa/manylinux_2_28_aarch64
+            container: quay.io/pypa/manylinux_2_28_aarch64:2026.08.05-1@sha256:f766b402889e40f439e7a3ee5788eef1aa3ef399d0110107d27419fa2ba9d905
             artifact: libsecretspec_ffi.so
           - target: aarch64-apple-darwin
             runner: macos-latest

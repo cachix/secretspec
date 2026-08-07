@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use their manifest defaults and lets generated secrets stay ephemeral, with a
   fresh value returned for each resolution and nothing written to provider
   storage.
+- `secretspec set` and interactive `secretspec check` now preview the resolved
+  write destination before reading the value, including the exact file and
+  selector for SOPS.
 - Secrets can store values as standard Base64, URL-safe Base64, or hexadecimal
   using `encoding`; writes encode logical text and reads decode stored values,
   while `as_path = true` materializes arbitrary decoded bytes.

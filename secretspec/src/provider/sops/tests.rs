@@ -129,6 +129,99 @@ fn test_sops_dotenv_writes_use_a_flat_key() {
 }
 
 #[test]
+fn test_sops_write_target_describes_file_and_nested_selector() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("secrets.enc.yaml");
+    let provider = SopsProvider::new(SopsConfig {
+        format: SopsFormat::Yaml,
+        mode: SopsMode::SingleFile(path.clone()),
+        ..Default::default()
+    });
+
+    let target = provider
+        .describe_write_target(Address::convention("my-app", "production", "API_KEY"))
+        .unwrap();
+    assert_eq!(
+        target,
+        format!(r#"{} ["my-app"]["production"]["API_KEY"]"#, path.display())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_sops_write_target_resolves_existing_file_symlink() {
+    let temp = TempDir::new().unwrap();
+    let physical_path = temp.path().join("physical.enc.yaml");
+    fs::write(&physical_path, "").unwrap();
+    let configured_path = temp.path().join("configured.enc.yaml");
+    std::os::unix::fs::symlink(&physical_path, &configured_path).unwrap();
+    let provider = SopsProvider::new(SopsConfig {
+        format: SopsFormat::Yaml,
+        mode: SopsMode::SingleFile(configured_path),
+        ..Default::default()
+    });
+
+    let target = provider
+        .describe_write_target(Address::convention("my-app", "production", "API_KEY"))
+        .unwrap();
+    assert_eq!(
+        target,
+        format!(
+            r#"{} ["my-app"]["production"]["API_KEY"]"#,
+            physical_path.canonicalize().unwrap().display()
+        )
+    );
+}
+
+#[test]
+fn test_sops_templated_write_target_describes_flat_selector() {
+    let temp = TempDir::new().unwrap();
+    let provider = SopsProvider::new(SopsConfig {
+        format: SopsFormat::Json,
+        mode: SopsMode::Directory {
+            path: temp.path().to_path_buf(),
+            pattern: SopsPathPattern::try_from("{project}/{profile}.enc.json").unwrap(),
+            format: SopsFormat::Json,
+        },
+        ..Default::default()
+    });
+
+    let target = provider
+        .describe_write_target(Address::convention("my-app", "production", "API_KEY"))
+        .unwrap();
+    assert_eq!(
+        target,
+        format!(
+            r#"{} ["API_KEY"]"#,
+            temp.path().join("my-app/production.enc.json").display()
+        )
+    );
+}
+
+#[test]
+fn test_sops_ini_ref_write_target_describes_default_section() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("secrets.enc.ini");
+    let provider = SopsProvider::new(SopsConfig {
+        format: SopsFormat::Ini,
+        mode: SopsMode::SingleFile(path.clone()),
+        ..Default::default()
+    });
+    let native = NativeAddress {
+        item: "existing_token".to_string(),
+        ..Default::default()
+    };
+
+    let target = provider
+        .describe_write_target(Address::Native(&native))
+        .unwrap();
+    assert_eq!(
+        target,
+        format!(r#"{} ["DEFAULT"]["existing_token"]"#, path.display())
+    );
+}
+
+#[test]
 fn test_sops_set_reads_the_value_from_stdin() {
     let provider = SopsProvider::new(SopsConfig {
         format: SopsFormat::Json,

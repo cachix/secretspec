@@ -155,8 +155,11 @@ If any secrets are missing, you'll be prompted to set them. You can also set sec
 
 ```bash
 $ secretspec set DATABASE_URL
-Enter value for DATABASE_URL: postgresql://localhost/myapp
-✓ Secret DATABASE_URL saved
+# SecretSpec 0.19+ previews the exact destination before prompting:
+Writing secret 'DATABASE_URL' to keyring (profile: default)
+  target: item=secretspec/my-app/default/DATABASE_URL
+Enter value for DATABASE_URL (profile: default): postgresql://localhost/myapp
+✓ Secret 'DATABASE_URL' saved to keyring (profile: default)
 ```
 
 SecretSpec 0.18+ can also declare a new secret without hand-editing

@@ -156,6 +156,54 @@ providers = ["sops_age"]
 When a credential is not declared on the alias, SOPS can still use its normal
 environment variable.
 
+## Storage layout
+
+The URI shape determines the on-disk layout. This matters when editing a file
+with `sops` directly and when diagnosing a value set under the wrong profile.
+
+For a **single YAML or JSON file**, convention-addressed secrets are written at
+`[project][profile][key]`. For example,
+`secretspec set API_KEY --profile production` in project `my-app` writes:
+
+```yaml title="secrets.enc.yaml (decrypted view)"
+my-app:
+  production:
+    API_KEY: secret-value
+```
+
+The equivalent selector passed to `sops set` is
+`["my-app"]["production"]["API_KEY"]`. Reads also retain compatibility with
+older `[profile][key]` and root `[key]` layouts, but new convention writes use
+the fully namespaced path.
+
+For a **templated YAML or JSON URI**, `{project}` and `{profile}` already select
+the file, so the key is flat inside it:
+
+```toml
+[providers]
+prod_sops = "sops://secrets/{project}/{profile}.enc.yaml"
+```
+
+```yaml title="secrets/my-app/production.enc.yaml (decrypted view)"
+API_KEY: secret-value
+```
+
+Single-file dotenv is always a flat `API_KEY=value` document. Single-file INI
+uses the selected profile as its section; templated INI uses `[DEFAULT]` because
+the profile is already represented by the filename. The following table is the
+write layout:
+
+| Format | Single file | Templated path |
+|--------|-------------|----------------|
+| YAML / JSON | `[project][profile][key]` | root `[key]` |
+| dotenv | root `[key]` | root `[key]` |
+| INI | `[profile][key]` | `[DEFAULT][key]` |
+
+In SecretSpec 0.19+, `secretspec set` and interactive `secretspec check` print
+the resolved provider URI, profile, file, and selector before prompting for or
+writing the value. This makes an accidentally omitted `--profile` visible
+before the encrypted file changes.
+
 ## Format handling
 
 SecretSpec asks SOPS to emit JSON when decrypting, then uses one lookup path
@@ -168,12 +216,33 @@ when the filename itself ends in `.ini`. Without `?format=`, the filename must
 end in `.yaml`, `.yml`, `.json`, `.env`, `.dotenv`, or `.ini`; an unrecognized
 extension is reported as a configuration error.
 
-YAML and JSON single-file layouts can nest values by project and profile. INI
-uses profile sections, while dotenv is always flat; in a single dotenv file,
-the same key therefore cannot hold different values for different profiles.
-Use a templated path such as
+In a single dotenv file, the same key cannot hold different values for
+different profiles. Use a templated path such as
 `secrets/{project}/.env.{profile}.enc?format=dotenv` when profiles need
 separate dotenv values.
+
+## Secret references
+
+SOPS supports `ref = { item = "..." }` against a **single-file** provider URI.
+For YAML, JSON, and dotenv, the item names a root key and does not add the
+project/profile convention path. For INI, it names a key in the `[DEFAULT]`
+section:
+
+```toml title="secretspec.toml"
+[providers]
+shared_sops = "sops://shared.enc.yaml"
+
+[profiles.production]
+EXTERNAL_TOKEN = { description = "Token already managed in shared.enc.yaml", ref = { item = "existing_token" }, providers = ["shared_sops"] }
+```
+
+This YAML example reads or writes root selector `["existing_token"]`; the INI
+equivalent is `["DEFAULT"]["existing_token"]`. SOPS documents hold single
+values at each key, so `field` and other extra ref coordinates are rejected. A
+templated SOPS URI also rejects refs: without convention
+`project`/`profile` inputs, SecretSpec cannot choose which templated file the
+external item belongs to. See [Secret References](/concepts/references/) for
+the general model.
 
 ## Usage
 

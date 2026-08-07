@@ -362,19 +362,11 @@ impl SopsProvider {
             .join(""))
     }
 
-    fn writable_target_path(&self, project: &str, profile: &str) -> Result<PathBuf> {
+    /// Resolves the filesystem entry a write will replace without creating it
+    /// or any of its parents. Existing symlinks are resolved so the preview and
+    /// the atomic replacement name the same physical target.
+    fn resolved_write_target_path(&self, project: &str, profile: &str) -> Result<PathBuf> {
         let configured = self.new_file_path(project, profile)?;
-        let parent = configured
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        std::fs::create_dir_all(parent).map_err(|error| {
-            Self::provider_error(format!(
-                "Failed to create SOPS directory {}: {error}",
-                parent.display()
-            ))
-        })?;
-
         if configured.is_file() {
             return configured.canonicalize().map_err(Into::into);
         }
@@ -391,7 +383,71 @@ impl SopsProvider {
                 configured.display()
             ))
         })?;
-        Ok(parent.canonicalize()?.join(filename))
+        let parent = configured
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+
+        // The full parent may not exist yet. Canonicalize the deepest existing
+        // ancestor, then append and lexically normalize the missing suffix.
+        // This still resolves a symlinked project directory without mutating
+        // the backing store merely to produce a preview.
+        for ancestor in parent
+            .ancestors()
+            .filter(|ancestor| !ancestor.as_os_str().is_empty())
+        {
+            if !ancestor.try_exists()? {
+                continue;
+            }
+            if !ancestor.is_dir() {
+                return Err(Self::provider_error(format!(
+                    "SOPS target parent {} is not a directory",
+                    ancestor.display()
+                )));
+            }
+            let canonical = ancestor.canonicalize()?;
+            let suffix = parent.strip_prefix(ancestor).map_err(|error| {
+                Self::provider_error(format!(
+                    "Failed to resolve SOPS target parent {}: {error}",
+                    parent.display()
+                ))
+            })?;
+            return Ok(Self::normalize_path(canonical.join(suffix)).join(filename));
+        }
+
+        // Relative paths with no existing component are resolved from the
+        // current directory; absolute paths always find their root above.
+        let current = std::env::current_dir()?.canonicalize()?;
+        Ok(Self::normalize_path(current.join(parent)).join(filename))
+    }
+
+    fn normalize_path(path: PathBuf) -> PathBuf {
+        let mut normalized = PathBuf::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                _ => normalized.push(component.as_os_str()),
+            }
+        }
+        normalized
+    }
+
+    fn writable_target_path(&self, project: &str, profile: &str) -> Result<PathBuf> {
+        let target = self.resolved_write_target_path(project, profile)?;
+        let parent = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent).map_err(|error| {
+            Self::provider_error(format!(
+                "Failed to create SOPS directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+        Ok(target)
     }
 
     fn acquire_write_lock(path: &Path) -> Result<File> {
@@ -569,6 +625,12 @@ impl Provider for SopsProvider {
 
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         self.address_parts(addr).map(|_| ())
+    }
+
+    fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
+        let parts = self.address_parts(addr)?;
+        let path = self.resolved_write_target_path(parts.project, parts.profile)?;
+        Ok(format!("{} {}", path.display(), self.set_path(&parts)?))
     }
 
     fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {

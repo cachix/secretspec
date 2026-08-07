@@ -679,12 +679,22 @@ fn add_follow_up_command(name: &str, profile: &str, file: Option<&Path>) -> Stri
 /// Loads secrets using an explicit path or auto-detection, applying the optional
 /// session reason (from `--reason`/`SECRETSPEC_REASON`).
 fn load_secrets(file: &Option<PathBuf>, reason: &Option<String>) -> miette::Result<Secrets> {
-    let secrets = match file {
+    let mut secrets = match file {
         Some(path) => Secrets::load_from(path),
         None => Secrets::load(),
     }
     .into_diagnostic()
     .wrap_err("Failed to load secretspec configuration")?;
+
+    // Destination previews are CLI presentation. The core computes the
+    // provider-specific metadata and invokes this observer only when a CLI
+    // caller installs it; SDK/library writes remain free of preview output.
+    secrets.set_write_target_reporter(|target| {
+        eprintln!(
+            "Writing secret '{}' to {} (profile: {})\n  target: {}",
+            target.name, target.provider_uri, target.profile, target.target
+        );
+    });
 
     Ok(match reason {
         Some(reason) => secrets.with_reason(reason.clone()),

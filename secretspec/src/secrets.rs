@@ -517,7 +517,23 @@ pub struct Secrets {
     /// read. Cleared by [`Secrets::store_provider_credential`] so a freshly
     /// stored credential is re-read.
     provider_credentials_cache: ProviderCredentialsCache,
+    /// Optional CLI-owned observer for writes that are about to prompt for or
+    /// consume a value. Library and SDK instances leave this unset, so planning
+    /// a write never produces unsolicited output outside the CLI.
+    write_target_reporter: Option<WriteTargetReporter>,
 }
+
+/// Credential-free description of one provider write, computed after routing
+/// and writability checks but before the value is read or prompted for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WriteTarget {
+    pub name: String,
+    pub provider_uri: String,
+    pub profile: String,
+    pub target: String,
+}
+
+type WriteTargetReporter = Arc<dyn Fn(&WriteTarget) + Send + Sync>;
 
 /// secretspec's own opt-in for marking the current process as an agent. Lets any
 /// harness that the `detect-coding-agent` crate does not recognize identify itself.
@@ -700,6 +716,7 @@ impl Secrets {
             require_reason: RequireReason::Never,
             audit: None,
             provider_credentials_cache: ProviderCredentialsCache::default(),
+            write_target_reporter: None,
         }
     }
 
@@ -781,7 +798,19 @@ impl Secrets {
             reason: env_reason(),
             audit,
             provider_credentials_cache: ProviderCredentialsCache::default(),
+            write_target_reporter: None,
         })
+    }
+
+    /// Installs the CLI's write-target observer. The provider and core library
+    /// only compute credential-free target metadata; presentation stays with
+    /// the caller that explicitly opts in.
+    #[cfg(any(feature = "cli", test))]
+    pub(crate) fn set_write_target_reporter(
+        &mut self,
+        reporter: impl Fn(&WriteTarget) + Send + Sync + 'static,
+    ) {
+        self.write_target_reporter = Some(Arc::new(reporter));
     }
 
     /// Sets the provider to use for secret operations
@@ -2548,6 +2577,37 @@ impl Secrets {
         self.get_route_provider(route.group_key(), profile)
     }
 
+    /// Refuses an invalid write before the value is requested, then reports
+    /// its credential-free destination when the caller installed a reporter.
+    /// Both `set` and interactive `check` use this one pre-write path so their
+    /// target preview and refusal behavior cannot drift apart.
+    fn preflight_write(
+        &self,
+        planned: &PlannedSecret,
+        profile: &str,
+        backend: &dyn ProviderTrait,
+    ) -> Result<()> {
+        let address = self.address_for_spec(
+            planned,
+            planned.route.as_ref().and_then(Route::group_key),
+            &self.config.project.name,
+            profile,
+        )?;
+        let addr = address.as_address();
+        backend.check_writable(addr)?;
+
+        let Some(reporter) = &self.write_target_reporter else {
+            return Ok(());
+        };
+        reporter(&WriteTarget {
+            name: planned.name.clone(),
+            provider_uri: backend.uri(),
+            profile: profile.to_string(),
+            target: backend.describe_write_target(addr)?,
+        });
+        Ok(())
+    }
+
     /// Gets the provider instance to use for secret operations
     ///
     /// Provider resolution order:
@@ -2974,8 +3034,9 @@ impl Secrets {
         let addr = address.as_address();
         // Refuse before prompting for a value. The provider states the reason:
         // a store may be writable through the convention layout yet reject the
-        // `ref` this secret names.
-        if let Err(err) = backend.check_writable(addr) {
+        // `ref` this secret names. A CLI-owned reporter also previews the
+        // resolved destination here; SDK/library callers install none.
+        if let Err(err) = self.preflight_write(&planned, &profile_name, backend.as_ref()) {
             self.record_key_error(
                 AuditAction::Set,
                 &profile_name,
@@ -3440,18 +3501,32 @@ impl Secrets {
                             &profile_display,
                             provider_arg.as_deref(),
                         )? {
-                            let prompt_msg =
-                                format!("[{}/{}] Enter value for {}:", i + 1, total, secret_name,);
-                            let prompt = inquire::Password::new(&prompt_msg).without_confirmation();
-
-                            let value = SecretString::new(prompt.prompt()?.into());
-
                             let route = planned
                                 .route
                                 .as_ref()
                                 .expect("prompted names are provider-backed leaves");
                             let backend =
                                 self.write_provider_for_route(route, Some(&profile_display))?;
+                            if let Err(error) =
+                                self.preflight_write(&planned, &profile_display, backend.as_ref())
+                            {
+                                self.record_key_error(
+                                    AuditAction::Set,
+                                    &profile_display,
+                                    secret_name,
+                                    Some(backend.uri()),
+                                    planned.reference(),
+                                    &error,
+                                );
+                                return Err(error);
+                            }
+
+                            let prompt_msg =
+                                format!("[{}/{}] Enter value for {}:", i + 1, total, secret_name,);
+                            let prompt = inquire::Password::new(&prompt_msg).without_confirmation();
+
+                            let value = SecretString::new(prompt.prompt()?.into());
+
                             let encoded_value = Self::encoded_for_storage(&planned, &value);
                             let stored_value = encoded_value.as_ref().unwrap_or(&value);
                             let address = self.address_for_spec(
@@ -5669,6 +5744,83 @@ fn gha_heredoc_delimiter(value: &str) -> String {
         if !value.lines().any(|line| line == delimiter) {
             return delimiter;
         }
+    }
+}
+
+#[cfg(test)]
+mod write_target_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingProvider {
+        writability_checks: AtomicUsize,
+        descriptions: AtomicUsize,
+    }
+
+    impl ProviderTrait for CountingProvider {
+        fn convention_address(
+            &self,
+            _project: &str,
+            _profile: &str,
+            key: &str,
+        ) -> Result<NativeAddress> {
+            Ok(NativeAddress {
+                item: key.to_string(),
+                ..Default::default()
+            })
+        }
+
+        fn get(&self, _addr: Address<'_>) -> Result<Option<SecretString>> {
+            Ok(None)
+        }
+
+        fn set(&self, _addr: Address<'_>, _value: &SecretString) -> Result<()> {
+            Ok(())
+        }
+
+        fn check_writable(&self, _addr: Address<'_>) -> Result<()> {
+            self.writability_checks.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn describe_write_target(&self, _addr: Address<'_>) -> Result<String> {
+            self.descriptions.fetch_add(1, Ordering::SeqCst);
+            Ok("described".to_string())
+        }
+
+        fn name(&self) -> &'static str {
+            "counting"
+        }
+
+        fn uri(&self) -> String {
+            "counting".to_string()
+        }
+    }
+
+    #[test]
+    fn library_preflight_skips_target_description_without_a_reporter() {
+        let config = crate::tests::resolve_test_config(HashMap::from([(
+            "API_KEY".to_string(),
+            crate::config::Secret {
+                description: Some("API key".to_string()),
+                ..Default::default()
+            },
+        )]));
+        let spec = Secrets::new(config, None, None, None);
+        let planned = spec
+            .plan_secret("API_KEY", "default", None)
+            .unwrap()
+            .unwrap();
+        let provider = CountingProvider {
+            writability_checks: AtomicUsize::new(0),
+            descriptions: AtomicUsize::new(0),
+        };
+
+        spec.preflight_write(&planned, "default", &provider)
+            .unwrap();
+
+        assert_eq!(provider.writability_checks.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.descriptions.load(Ordering::SeqCst), 0);
     }
 }
 

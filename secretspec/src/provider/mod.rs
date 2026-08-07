@@ -858,6 +858,18 @@ pub trait Provider: Send + Sync {
         GeneratedValuePersistence::Persist
     }
 
+    /// Describes the provider-native destination that a write to `addr` will
+    /// change. Available since SecretSpec 0.19.
+    ///
+    /// The description is intended for a pre-write CLI preview and must not
+    /// contain credentials. Providers with file-backed or otherwise structured
+    /// storage should override this when their URI plus native coordinates do
+    /// not identify the resolved file/container and selector clearly. The
+    /// default renders the provider-native coordinates.
+    fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
+        Ok(self.resolve_coords(addr)?.render())
+    }
+
     /// Identifies the shared authentication state this instance's preflight
     /// check probes, when that state outlives the instance.
     ///
@@ -1227,6 +1239,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn generated_value_persistence(&self) -> GeneratedValuePersistence {
         (**self).generated_value_persistence()
     }
+    fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
+        (**self).describe_write_target(addr)
+    }
     fn auth_scope_key(&self) -> Option<String> {
         (**self).auth_scope_key()
     }
@@ -1438,6 +1453,10 @@ impl Provider for PreflightGuard {
     fn generated_value_persistence(&self) -> GeneratedValuePersistence {
         // Capability inspection is pure and must not trigger authentication.
         self.inner.generated_value_persistence()
+    }
+
+    fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
+        self.inner.describe_write_target(addr)
     }
 
     fn auth_scope_key(&self) -> Option<String> {

@@ -222,7 +222,10 @@ secretspec check [OPTIONS]
 $ secretspec check --profile production
 ✓ DATABASE_URL - Database connection string
 ✗ API_KEY - API key for external service (required)
-Enter value for API_KEY (profile: production): ****
+# SecretSpec 0.19+: the exact write destination is shown before prompting.
+Writing secret 'API_KEY' to keyring (profile: production)
+  target: item=secretspec/my-app/production/API_KEY
+[1/1] Enter value for API_KEY: ****
 ✓ Secret 'API_KEY' saved to keyring (profile: production)
 ```
 
@@ -369,9 +372,17 @@ secretspec set [OPTIONS] <NAME> [VALUE]
 
 **Example:**
 ```bash
-$ secretspec set API_KEY sk-1234567890
-✓ Secret 'API_KEY' saved to keyring (profile: development)
+$ secretspec set API_KEY sk-1234567890 --profile production --provider sops://secrets.enc.yaml
+# SecretSpec 0.19+:
+Writing secret 'API_KEY' to sops://secrets.enc.yaml?format=yaml (profile: production)
+  target: /work/my-app/secrets.enc.yaml ["my-app"]["production"]["API_KEY"]
+✓ Secret 'API_KEY' saved to sops (profile: production)
 ```
+
+In SecretSpec 0.19+, `set` shows the resolved provider, profile, and native
+write target before reading a piped value or opening the password prompt. For
+SOPS this includes the exact encrypted file and `sops set` selector, making a
+missing `--profile` visible before the write.
 
 `set` rejects composed secrets because their values are derived and read-only.
 Available since SecretSpec 0.16.

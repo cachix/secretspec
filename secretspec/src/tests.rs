@@ -9,6 +9,7 @@ use secrecy::ExposeSecret;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::{fs, io};
 use tempfile::TempDir;
 
@@ -7285,6 +7286,28 @@ fn dotenv_spec(
         None,
         None,
     )
+}
+
+#[test]
+fn write_target_reporting_is_opt_in_and_uses_resolved_provider_metadata() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec("", required_secret_profile("REQUIRED"), &temp_dir);
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&reports);
+    spec.set_write_target_reporter(move |target| {
+        captured.lock().unwrap().push(target.clone());
+    });
+
+    spec.set("REQUIRED", Some("secret_value".to_string()))
+        .unwrap();
+
+    let reports = reports.lock().unwrap();
+    assert_eq!(reports.len(), 1);
+    let report = &reports[0];
+    assert_eq!(report.name, "REQUIRED");
+    assert_eq!(report.profile, "default");
+    assert!(report.provider_uri.starts_with("dotenv:"));
+    assert_eq!(report.target, "item=REQUIRED");
 }
 
 fn required_secret_profile(name: &str) -> HashMap<String, Profile> {

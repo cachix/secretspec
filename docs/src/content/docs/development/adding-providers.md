@@ -40,6 +40,13 @@ pub trait Provider: Send + Sync {
         GeneratedValuePersistence::Persist
     }
 
+    /// SecretSpec 0.19+: optional pre-write description. The default renders
+    /// native coordinates; file-backed providers should include the resolved
+    /// file/container and selector. Never include credentials.
+    fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
+        /* default */
+    }
+
     /// Optional batch read. The default resolves each request's address and
     /// fetches every unique address once, concurrently; override it when the
     /// store has a real bulk surface (one listing, a batch API).
@@ -69,6 +76,14 @@ capability: after a healthy read miss, SecretSpec returns the generated logical
 value for the current materializing resolution without calling `set` or
 refreshing a cache. It does not make ordinary writes succeed and must be a pure,
 I/O-free capability check.
+
+In SecretSpec 0.19+, override `describe_write_target` when the provider URI and
+native coordinates do not identify the physical destination clearly. The
+`secretspec set` and interactive `secretspec check` commands print this
+description before they read or prompt for a value; SDK and library writes do
+not print it. The method must be pure with respect to the backing store:
+resolving and formatting a path is fine, but it must not create the file or
+directory. Keep the description credential-free, just like `uri()`.
 
 ### Convention templates
 

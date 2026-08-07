@@ -49,6 +49,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [Azure Key Vault](https://secretspec.dev/providers/akv)
   - [Infisical](https://secretspec.dev/providers/infisical) (0.16+)
   - [age](https://secretspec.dev/providers/age) (0.17+)
+  - [SOPS](https://secretspec.dev/providers/sops) (0.17+)
 - **[Type-Safe Rust SDK](https://secretspec.dev/sdk/rust/)**: Generate strongly-typed structs from your `secretspec.toml` for compile-time safety
 - **[Profile Support](https://secretspec.dev/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
 - **[Secret Generation](https://secretspec.dev/concepts/generation/)**: Auto-generate passwords, tokens, UUIDs, and more when secrets are missing — declarative "generate if absent"

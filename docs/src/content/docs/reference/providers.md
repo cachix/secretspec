@@ -505,9 +505,12 @@ support, and profile-aware templated paths
 build with `--features sops` (0.17+)
 **Authentication**: SOPS environment variables or the
 [supported provider credentials](/providers/sops/#provider-credentials)
-**Storage**: Single-file YAML and JSON can namespace convention secrets by
-project and profile; INI uses profile sections and dotenv is flat. Templated
-paths contain flat keys in one file per project/profile.
+**Storage**: Single-file YAML and JSON convention writes use
+`[project][profile][key]`; single-file INI uses `[profile][key]`, and dotenv is
+flat. Templated paths use a root key (or `[DEFAULT][key]` for INI) in one file
+per project/profile. A single-file provider supports `ref = { item = "..." }`
+as a root key (or a key in `[DEFAULT]` for INI); extra coordinates and refs
+through templated paths are rejected.
 
 ## Provider Selection
 

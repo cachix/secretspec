@@ -38,6 +38,11 @@ let package = Package(
             dependencies: ["CSecretSpec"],
             path: "secretspec-swift/Sources/SecretSpec"
         ),
+        .executableTarget(
+            name: "SecretSpecExamples",
+            dependencies: ["SecretSpec"],
+            path: "secretspec-swift/Examples"
+        ),
         .testTarget(
             name: "SecretSpecTests",
             dependencies: ["SecretSpec"],

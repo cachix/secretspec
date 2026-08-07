@@ -727,11 +727,11 @@ impl Config {
         profile_names.sort();
 
         for profile_name in profile_names {
-            self.profiles[profile_name]
-                .validate_raw(default_profile.is_some())
-                .map_err(|e| {
-                    ParseError::Validation(format!("Profile '{}': {}", profile_name, e))
-                })?;
+            let profile = &self.profiles[profile_name];
+            let can_inherit_secrets = default_profile.is_some() && profile.inherits_default();
+            profile.validate_raw(can_inherit_secrets).map_err(|e| {
+                ParseError::Validation(format!("Profile '{}': {}", profile_name, e))
+            })?;
             validate_compiled_profile(&compiled, profile_name)?;
         }
 
@@ -1355,6 +1355,12 @@ pub struct Scope {
 /// Individual secrets can override any of these defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileDefaults {
+    /// Whether this non-default profile inherits declarations and omitted
+    /// fields from `[profiles.default]`. Omitted means `true`. Available since
+    /// SecretSpec 0.19.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inherit: Option<bool>,
+
     /// Default value for the required field of secrets in this profile.
     /// If not specified, secrets default to required=true.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1377,6 +1383,7 @@ impl ProfileDefaults {
     /// defaults table. Lets `extends` inherit `[profiles.*.defaults]` field by
     /// field, with the later (more specific) document winning.
     fn inherit_missing_from(&mut self, earlier: &ProfileDefaults) {
+        self.inherit = self.inherit.or(earlier.inherit);
         self.required = self.required.or(earlier.required);
         if self.default.is_none() {
             self.default = earlier.default.clone();
@@ -1394,6 +1401,15 @@ impl Profile {
             defaults: None,
             secrets: HashMap::new(),
         }
+    }
+
+    /// Whether this profile inherits declarations and omitted secret fields
+    /// from `[profiles.default]`.
+    pub(crate) fn inherits_default(&self) -> bool {
+        self.defaults
+            .as_ref()
+            .and_then(|defaults| defaults.inherit)
+            .unwrap_or(true)
     }
 
     /// Validate declarations before profile/default inheritance is compiled.
@@ -3064,6 +3080,85 @@ ADMIN_PASSWORD = { description = "Password securing the admin page", required = 
         );
         assert_eq!(resolved.required, Some(true));
         assert_eq!(resolved.secret_type.as_deref(), Some("password"));
+    }
+
+    #[test]
+    fn profile_can_disable_default_inheritance() {
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "standalone"
+revision = "1.0"
+
+[profiles.default]
+SHARED_TOKEN = { description = "Shared token", default = "shared" }
+
+[profiles.deployment.defaults]
+inherit = false
+
+[profiles.deployment]
+DEPLOY_TOKEN = { description = "Deployment token" }
+"#,
+        )
+        .unwrap();
+
+        let compiled = config.validate_and_compile().unwrap();
+        let deployment = compiled.profile("deployment").unwrap();
+        assert!(deployment.secrets.contains_key("DEPLOY_TOKEN"));
+        assert!(!deployment.secrets.contains_key("SHARED_TOKEN"));
+    }
+
+    #[test]
+    fn standalone_profile_does_not_inherit_fields_from_matching_default_secret() {
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "standalone"
+revision = "1.0"
+
+[profiles.default]
+API_KEY = { description = "Shared API key", default = "shared" }
+
+[profiles.deployment.defaults]
+inherit = false
+
+[profiles.deployment]
+API_KEY = { description = "Deployment API key" }
+"#,
+        )
+        .unwrap();
+
+        let compiled = config.validate_and_compile().unwrap();
+        let api_key = &compiled.profile("deployment").unwrap().secrets["API_KEY"];
+        assert_eq!(
+            api_key.config.description.as_deref(),
+            Some("Deployment API key")
+        );
+        assert_eq!(api_key.config.default, None);
+    }
+
+    #[test]
+    fn empty_standalone_profile_is_rejected() {
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "standalone"
+revision = "1.0"
+
+[profiles.default]
+SHARED_TOKEN = { description = "Shared token" }
+
+[profiles.deployment.defaults]
+inherit = false
+
+[profiles.deployment]
+"#,
+        )
+        .unwrap();
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("Profile 'deployment'"), "{error}");
+        assert!(error.contains("at least one secret"), "{error}");
     }
 
     #[test]

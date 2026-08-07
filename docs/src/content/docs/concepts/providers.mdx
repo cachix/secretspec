@@ -121,6 +121,16 @@ $ export SECRETSPEC_PROVIDER=env
 $ secretspec check
 ```
 
+`SECRETSPEC_PROVIDER` is a whole-resolution override: it replaces every
+per-secret fallback chain. Integrations such as devenv should only export it
+when the user explicitly configures a whole-resolution provider override.
+
+When consuming a JSON or SDK resolution, do not feed its top-level `provider`
+display label back into `SECRETSPEC_PROVIDER`; mixed per-secret routes cannot be
+represented by one provider string. Only export `SECRETSPEC_PROVIDER` when the
+user explicitly selected a whole-resolution override. Per-secret
+`source_provider` remains the authoritative provenance.
+
 A provider URI can configure the selected backend more precisely:
 
 ```bash

@@ -136,17 +136,24 @@ revision = "1.0"
 extends = ["../shared/common", "../shared/auth"]
 
 [profiles.default]
-DATABASE_URL = { description = "PostgreSQL connection string", required = true }
-REDIS_URL = { description = "Redis connection string", required = false, default = "redis://localhost:6379" }
+DATABASE_URL = { description = "PostgreSQL connection string" }
+REDIS_URL = { description = "Redis connection string" }
 
 # Profile-specific configurations
 [profiles.development]
-DATABASE_URL = { description = "PostgreSQL connection string", required = false, default = "sqlite://./dev.db" }
-REDIS_URL = { description = "Redis connection string", required = false, default = "redis://localhost:6379" }
+DATABASE_URL = { required = false, default = "sqlite://./dev.db" }
+REDIS_URL = { required = false, default = "redis://localhost:6379" }
 
 [profiles.production]
-DATABASE_URL = { description = "PostgreSQL connection string", required = true }
-REDIS_URL = { description = "Redis connection string", required = true }
+DATABASE_URL = { required = true }
+REDIS_URL = { required = true }
+
+# SecretSpec 0.19+: a profile can use an independent secret set.
+[profiles.deployment.defaults]
+inherit = false
+
+[profiles.deployment]
+DEPLOY_TOKEN = { description = "Deployment credential", required = true }
 ```
 
 SecretSpec 0.19+ can map one logical secret to different native coordinates per

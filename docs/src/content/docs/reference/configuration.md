@@ -81,17 +81,46 @@ also forwarded to providers that support auditing (e.g. the
 
 ### [profiles.*] Section
 
-Defines secret variables for different environments. At least a `[profiles.default]` section is required.
+Defines secret variables for different environments. At least one profile is
+required. A `default` profile is optional; when present, other profiles inherit
+from it unless they opt out in SecretSpec 0.19+.
 
 ```toml
-[profiles.default]           # Default profile (required)
+[profiles.default]           # Optional shared base profile
 DATABASE_URL = { description = "PostgreSQL connection", required = true }
 API_KEY = { description = "External API key", required = true }
 REDIS_URL = { description = "Redis cache", required = false, default = "redis://localhost:6379" }
 
 [profiles.production]        # Additional profile (optional)
-DATABASE_URL = { description = "Production database", required = true }
+DATABASE_URL = { required = true } # description inherited from default
 ```
+
+#### Profile defaults
+
+`[profiles.<name>.defaults]` supplies settings for secrets declared in that
+profile:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `inherit` (0.19+) | boolean | No | For a non-default profile, whether to inherit declarations and omitted fields from `[profiles.default]` (default: true) |
+| `required` | boolean | No | Default requiredness for secrets declared in this profile |
+| `default` | string | No | Default value for secrets declared in this profile |
+| `providers` | array[string] | No | Default provider chain for secrets declared in this profile |
+
+In SecretSpec 0.19+, set `inherit = false` for a standalone profile:
+
+```toml
+[profiles.deployment.defaults]
+inherit = false
+
+[profiles.deployment]
+DEPLOY_TOKEN = { description = "Deployment credential", required = true }
+```
+
+This excludes every `[profiles.default]` declaration and prevents explicitly
+redeclared secrets from inheriting omitted fields. The setting has no effect on
+the `default` profile itself. A standalone profile must declare at least one
+secret.
 
 #### Cross-secret presence constraints (0.17+)
 
@@ -140,9 +169,9 @@ Each secret variable is defined as a table with the following fields:
 
 Field notes:
 
-- `description` is required in the `default` profile. A secret overriding one
-  that the default profile already declares inherits its `description` (and
-  other omitted fields) and may leave it out.
+- `description` is required on the effective secret. An inheriting profile may
+  omit it when a matching default declaration supplies it. A standalone
+  profile using `inherit = false` (0.19+) must supply its own description.
 - `required` defaults to false when `default` is provided. In 0.17+, its table
   form accepts `at_least_one` and `exactly_one` as a group name or array of names.
 - `default` is invalid with an explicit `required = true`. A defaulted secret is
@@ -852,7 +881,9 @@ MANUAL_SECRET = { description = "Manually managed", type = "password" }
 
 ## Profile Inheritance
 
-- All profiles automatically inherit from `[profiles.default]`
+- Non-default profiles inherit from `[profiles.default]` when it exists;
+  `profiles.<name>.defaults.inherit = false` makes a profile standalone in
+  SecretSpec 0.19+
 - Profile-specific values override default values
 - `ref` and `refs` (0.19+) are alternative forms of one setting: declaring
   either in a profile replaces the form inherited from `[profiles.default]`,

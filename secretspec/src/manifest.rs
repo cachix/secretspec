@@ -148,7 +148,7 @@ impl CompiledManifest {
         let mut profiles = BTreeMap::new();
 
         for (profile_name, profile) in &config.profiles {
-            let inherited = (profile_name != "default")
+            let inherited = (profile_name != "default" && profile.inherits_default())
                 .then_some(default_profile)
                 .flatten();
             // A `BTreeSet` unions the profile's own names with the inherited

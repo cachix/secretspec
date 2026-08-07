@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Profiles can opt out of inheriting `[profiles.default]` by setting
+  `inherit = false` in their profile defaults (0.19+), allowing standalone
+  secret sets alongside profiles that still share the default declarations.
 - Windows ARM64 CLI release artifacts (`aarch64-pc-windows-msvc`).
 - Provider aliases can define native `ref` templates and secrets can override
   coordinates per leaf alias with `refs`, so fallback providers and import

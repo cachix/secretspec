@@ -358,7 +358,7 @@ const reelScriptData = {
     <div class="landing-hero-head landing-hero-head-interface">
       <h1 id="_top" class="landing-hero-title">A declarative interface<br>for every secret provider.</h1>
       <p class="landing-hero-subtitle">
-        Stop leaking <code class="inline-code">.env</code> files. Commit what your application expects in <code class="inline-code">secretspec.toml</code>, never the values.<br class="landing-wide-break"> Developers, CI, and production can each resolve the same declaration from any of {providerCount} providers.
+        Manage secrets without hard-wiring your app to a secrets provider or leaking them through environment variables.<br class="landing-wide-break"> One contract. Any of {providerCount} providers. Development, CI, and production.
       </p>
     </div>
 
@@ -478,9 +478,9 @@ const reelScriptData = {
 <section class="landing-section landing-declarative-section">
   <div class="landing-container">
     <div class="landing-section-centered">
-      <h2 class="landing-section-title">Set up SecretSpec in three steps.</h2>
+      <h2 class="landing-section-title">Eliminate secrets from environment variables and configuration files.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Create a shared contract for the secrets your application needs, choose a provider for the values, and run.
+        Read <a href="/blog/where-env-went-wrong/" class="landing-link">Where .env Went Wrong</a> and <a href="/blog/secrets-dont-belong-in-config/" class="landing-link">Secrets Don’t Belong in Config</a>.
       </p>
     </div>
 
@@ -886,7 +886,7 @@ const reelScriptData = {
     <div class="landing-section-centered">
       <h2 class="landing-section-title">Make the declaration your source of truth.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        The manifest describes <strong>what</strong> your application needs. Profiles describe <strong>when</strong> it is required. Providers decide <strong>where</strong> each value comes from. Scopes (0.17+) decide <strong>which consumer receives it</strong>.
+        One manifest defines what your app needs. Profiles choose when, providers where, and scopes (0.17+) which consumer receives it.
       </p>
     </div>
 
@@ -1001,7 +1001,7 @@ const reelScriptData = {
       <span class="landing-showcase-eyebrow">Profiles</span>
       <h2 class="landing-section-title">Change requirements by environment.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Start with shared requirements, then override only what changes. A secret can use a local default in development and a managed provider in production. <a href="/concepts/profiles/" class="landing-link">How profiles work →</a>
+        Share requirements. Use local defaults in development and managed providers in production. <a href="/concepts/profiles/" class="landing-link">Profiles →</a>
       </p>
     </div>
 
@@ -1128,7 +1128,7 @@ const reelScriptData = {
       <span class="landing-showcase-eyebrow">Scopes · 0.17+</span>
       <h2 class="landing-section-title">Give each service only the secrets it needs.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Keep one profile for an environment, then select an allowlist for each service, command, or task. Secrets outside the selected scope are not exposed to the child process. <a href="/concepts/scopes/" class="landing-link">How scopes work →</a>
+        Allowlist secrets for each service, command, or task. Everything else stays out of the child process. <a href="/concepts/scopes/" class="landing-link">Scopes →</a>
       </p>
     </div>
 
@@ -1252,7 +1252,7 @@ const reelScriptData = {
       <span class="landing-showcase-eyebrow">Per-secret providers</span>
       <h2 class="landing-section-title">Give each secret its own fallback.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Give a secret an ordered provider list. SecretSpec can use the shared team vault when a value exists there, then fall back to a personal keyring or CI environment.
+        Order providers per secret: team vault first, then a personal keyring or CI environment.
       </p>
     </div>
 
@@ -1297,7 +1297,7 @@ const reelScriptData = {
       <span class="landing-showcase-eyebrow">Provider credentials</span>
       <h2 class="landing-section-title">Keep provider credentials out of your app.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Store a provider token or machine credential in another provider, such as the OS keyring. SecretSpec uses it to connect to the destination store without adding it to your application's environment. <a href="/concepts/providers/#provider-credentials" class="landing-link">How provider credentials work →</a>
+        Keep provider credentials in a trusted store such as the OS keyring. Unlock remote providers without adding credentials to your app's environment. <a href="/concepts/providers/#provider-credentials" class="landing-link">Provider credentials →</a>
       </p>
     </div>
 
@@ -1351,7 +1351,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       <span class="landing-showcase-eyebrow">Secret references</span>
       <h2 class="landing-section-title">Use secrets where they already live.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Map an application variable to an existing item or field in 1Password, Vault, or another provider. You do not need to rename or copy the stored secret. <a href="/concepts/references/" class="landing-link">How references work →</a>
+        Point a variable at an existing item or field in 1Password, Vault, or another provider. No renaming. No copying. <a href="/concepts/references/" class="landing-link">References →</a>
       </p>
     </div>
 
@@ -1469,7 +1469,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       <span class="landing-showcase-eyebrow">Audit &amp; AI agents</span>
       <h2 class="landing-section-title">See which secrets were accessed, by whom, and why.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        SecretSpec records access metadata in a local append-only log without recording secret values. You can require sessions SecretSpec detects as AI agents—or every caller—to provide a reason before SecretSpec proceeds. <a href="/concepts/audit/" class="landing-link">How auditing works →</a>
+        Record access in a local, append-only log—never secret values. Require AI agents, or every caller, to provide a reason. <a href="/concepts/audit/" class="landing-link">Audit logs →</a>
       </p>
     </div>
 
@@ -1595,7 +1595,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       <span class="landing-showcase-eyebrow">Export &amp; Actions</span>
       <h2 class="landing-section-title">Send secrets to shells, tools, and CI.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Export the active profile for a shell or another tool, or resolve it in GitHub and Forgejo Actions with one workflow step. Required secrets are validated before any output is produced. <a href="/reference/cli/#export" class="landing-link">Export command reference →</a>
+        Export a profile to any shell or tool. Resolve it in GitHub or Forgejo Actions with one step. Required secrets are validated first. <a href="/reference/cli/#export" class="landing-link">Export →</a>
       </p>
     </div>
 
@@ -1644,7 +1644,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       <span class="landing-showcase-eyebrow">Language SDKs</span>
       <h2 class="landing-section-title">Resolve secrets directly from your language.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        All {sdkCount} SDKs—Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, C#, and Swift (0.18+)—use the same resolver as the CLI, so provider and profile behavior stays consistent. <a href="/sdk/overview/" class="landing-link">Explore the SDKs →</a>
+        One resolver across {sdkCount} SDKs—Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, C#, and Swift (0.18+). Same profiles. Same providers. <a href="/sdk/overview/" class="landing-link">SDKs →</a>
       </p>
     </div>
 
@@ -1801,7 +1801,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       <span class="landing-showcase-eyebrow">Remote secrets · 0.17+</span>
       <h2 class="landing-section-title">Remote secrets, local speed.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Fetch from Azure once. Serve every read locally until the cache expires. <a href="/concepts/providers/caching/" class="landing-link">Provider caching →</a>
+        Fetch from Azure once. Serve reads locally until the cache expires. <a href="/concepts/providers/caching/" class="landing-link">Provider caching →</a>
       </p>
     </div>
 
@@ -1911,7 +1911,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       <span class="landing-showcase-eyebrow">Credential bootstrapping · 0.15+</span>
       <h2 class="landing-section-title">Start local. Unlock remote.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Keep provider credentials in a trusted local store. SecretSpec uses them to unlock remote providers, while your app receives only the secrets it asks for. <a href="/reference/provider-credentials/" class="landing-link">Provider credentials →</a>
+        Store credentials locally. Unlock remote providers. Deliver only the secrets your app requests. <a href="/reference/provider-credentials/" class="landing-link">Provider credentials →</a>
       </p>
     </div>
 
@@ -2445,7 +2445,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       <span class="landing-showcase-eyebrow">Migration</span>
       <h2 class="landing-section-title">Move secrets without changing your application.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Copy values from dotenv or another provider into the provider you use now. The declared names and the way your application reads them stay the same.
+        Move values from <code class="inline-code">.env</code> or any provider—without renaming secrets or changing your app.
       </p>
     </div>
 
@@ -2478,7 +2478,7 @@ REDIS_URL=redis://…</code></pre>
       <span class="landing-showcase-eyebrow">devenv &amp; Nix</span>
       <h2 class="landing-section-title">Use SecretSpec with devenv and Nix.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Enable the integration, choose a provider and profile, then use resolved values in your development shell, services, and processes. <a href="https://devenv.sh/integrations/secretspec/" class="landing-link">devenv docs →</a>
+        Enable the integration. Choose a provider and profile. Use resolved values in shells, services, and processes. <a href="https://devenv.sh/integrations/secretspec/" class="landing-link">devenv docs →</a>
       </p>
     </div>
 
@@ -2519,7 +2519,7 @@ REDIS_URL=redis://…</code></pre>
     <div class="landing-section-centered">
       <h2 class="landing-section-title">Built in the open</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        SecretSpec is an Apache 2.0 project built by <a href="https://cachix.org" class="landing-link">Cachix</a> for <a href="https://devenv.sh" class="landing-link">devenv.sh</a>, with development happening in public.
+        Apache 2.0. Built by <a href="https://cachix.org" class="landing-link">Cachix</a> for <a href="https://devenv.sh" class="landing-link">devenv.sh</a>. Developed in public.
       </p>
     </div>
 
@@ -2554,7 +2554,7 @@ REDIS_URL=redis://…</code></pre>
     <div class="landing-cta-card">
       <h2 class="landing-section-title">Stop leaking <code class="inline-code">.env</code> files.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Start from your existing <code class="inline-code">.env</code>, commit the declaration, and let every environment choose where its values live.
+        Import <code class="inline-code">.env</code>. Commit the declaration. Let each environment choose its provider.
       </p>
       <div class="landing-hero-actions" style="justify-content: center;">
         <a href="/quick-start/" class="landing-btn landing-btn-primary">Get Started</a>

@@ -1020,11 +1020,8 @@ pub fn main() -> Result<()> {
                             );
                         }
                         // An empty map keeps the compact bare-string alias form.
-                        let alias_value = crate::config::ProviderAlias {
-                            uri: uri.clone(),
-                            credentials,
-                            ..Default::default()
-                        };
+                        let alias_value =
+                            crate::config::ProviderAlias::leaf(uri.clone(), credentials);
 
                         // Load or create config
                         let mut config =

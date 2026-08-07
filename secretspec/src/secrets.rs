@@ -926,10 +926,10 @@ impl Secrets {
         Ok(())
     }
 
-    /// Builds a provider from a spec (name or URI) and applies the session reason.
+    /// Builds a provider from a generic leaf spec (name or URI).
     ///
-    /// All provider construction in this module goes through here so that the
-    /// reason set via [`Secrets::with_reason`] reaches every provider instance.
+    /// Provider construction converges in [`Self::build_provider_with_credentials`]
+    /// so the reason set via [`Secrets::with_reason`] reaches every instance.
     ///
     /// `profile` is the profile the caller resolved for the surrounding
     /// operation (`None` falls back to the session profile): an alias's
@@ -941,6 +941,36 @@ impl Secrets {
         spec: String,
         profile: Option<&str>,
     ) -> Result<Box<dyn ProviderTrait>> {
+        self.build_provider_for_use(spec, profile, false)
+    }
+
+    /// Builds the authoritative leaf selected by a planned route.
+    ///
+    /// The 0.19+ inline cache form is both a complete route and the alias for
+    /// its one authoritative URI. Only planned route execution may unwrap that
+    /// alias into the leaf; generic provider inputs (for example an import
+    /// source) must still reject cached aliases as routes rather than silently
+    /// bypassing their cache policy.
+    fn build_route_provider(
+        &self,
+        spec: String,
+        profile: Option<&str>,
+    ) -> Result<Box<dyn ProviderTrait>> {
+        self.build_provider_for_use(spec, profile, true)
+    }
+
+    fn build_provider_for_use(
+        &self,
+        spec: String,
+        profile: Option<&str>,
+        allow_inline_cached: bool,
+    ) -> Result<Box<dyn ProviderTrait>> {
+        // Reject a route where a leaf is required before resolving any of the
+        // alias's credentials. Besides producing the route-specific error
+        // consistently, this keeps an invalid import/source use from touching
+        // credential stores merely to discover that it cannot build the alias.
+        self.ensure_provider_use_allowed(&spec, allow_inline_cached)?;
+
         // When `spec` names an alias with a `credentials` map, resolve those
         // values from their source providers and hand them to the built provider.
         // Memoized per (profile, spec) so rebuilding a provider (per-secret chain walks,
@@ -952,7 +982,7 @@ impl Secrets {
         let credentials = self
             .provider_credentials_cache
             .get_or_try_init(key, || self.resolve_provider_credentials(&spec, &profile))?;
-        self.build_provider_with_credentials(&spec, credentials)
+        self.build_provider_with_credentials(&spec, credentials, allow_inline_cached)
     }
 
     /// [`Self::build_provider`], memoized within one resolution so repeated
@@ -964,31 +994,49 @@ impl Secrets {
         cache: &ProviderCache,
         spec: &str,
         profile: Option<&str>,
+        allow_inline_cached: bool,
     ) -> Result<Arc<dyn ProviderTrait>> {
         let key = (self.resolve_profile_name(profile), spec.to_string());
-        cache.get_or_try_init(key, || self.build_provider(spec.to_string(), profile))
+        cache.get_or_try_init(key, || {
+            self.build_provider_for_use(spec.to_string(), profile, allow_inline_cached)
+        })
     }
-
-    /// Builds a credential source provider without resolving credentials for it,
-    /// so credential-source chains are at most one hop and cannot recurse.
-    fn build_source_provider(&self, spec: &str) -> Result<Box<dyn ProviderTrait>> {
-        self.build_provider_with_credentials(spec, ProviderCredentials::new())
-    }
-
-    /// The shared construction body behind [`Self::build_provider`] and
-    /// [`Self::build_source_provider`]: alias expansion, error enrichment, and
-    /// the base-dir/reason hooks live only here, so the two paths cannot drift.
-    fn build_provider_with_credentials(
-        &self,
-        spec: &str,
-        credentials: ProviderCredentials,
-    ) -> Result<Box<dyn ProviderTrait>> {
-        if self.cached_alias(spec).is_some() {
+    /// Rejects cached routes in construction contexts that require one leaf.
+    /// Planned execution may unwrap only the inline form into its authoritative
+    /// URI; a fallback-based cached alias remains a complete multi-store route.
+    fn ensure_provider_use_allowed(&self, spec: &str, allow_inline_cached: bool) -> Result<()> {
+        if self
+            .cached_alias(spec)
+            .is_some_and(|alias| !allow_inline_cached || alias.authoritative_uri().is_none())
+        {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "cached provider alias '{spec}' is a complete route; select it through a \
                  secret's providers list, the default provider, or --provider"
             )));
         }
+        Ok(())
+    }
+
+    /// Builds a leaf provider without resolving its declared credentials: for a
+    /// credential source, so credential-source chains are at most one hop and
+    /// cannot recurse, and for cache remediation, where the credential source
+    /// itself may be what failed.
+    fn build_source_provider(&self, spec: &str) -> Result<Box<dyn ProviderTrait>> {
+        self.build_provider_with_credentials(spec, ProviderCredentials::new(), false)
+    }
+
+    /// The shared construction body behind generic, routed, and credential
+    /// source providers: alias expansion, error enrichment, and the
+    /// base-dir/reason hooks live only here, so those paths cannot drift.
+    fn build_provider_with_credentials(
+        &self,
+        spec: &str,
+        credentials: ProviderCredentials,
+        allow_inline_cached: bool,
+    ) -> Result<Box<dyn ProviderTrait>> {
+        // `build_source_provider` calls this body directly, so retain the guard
+        // here as well as before credential initialization in the generic path.
+        self.ensure_provider_use_allowed(spec, allow_inline_cached)?;
         // Resolve provider aliases here, at the single construction chokepoint, so
         // every caller that hands us a user-supplied spec gets alias expansion for
         // free and no new entry point can forget it. Resolution is a no-op on an
@@ -1021,7 +1069,7 @@ impl Secrets {
         let mut credentials = ProviderCredentials::new();
         let Some(declared) = self
             .lookup_provider_alias_entry(spec)
-            .map(|alias| &alias.credentials)
+            .and_then(ProviderAlias::credentials)
             .filter(|credentials| !credentials.is_empty())
         else {
             return Ok(credentials);
@@ -1098,7 +1146,10 @@ impl Secrets {
         let entry = self
             .lookup_provider_alias_entry(alias)
             .ok_or_else(|| SecretSpecError::ProviderNotFound(alias.to_string()))?;
-        Ok(sorted_credential_entries(&entry.credentials)
+        Ok(entry
+            .credentials()
+            .map(sorted_credential_entries)
+            .unwrap_or_default()
             .into_iter()
             .map(|(name, source)| (name.clone(), source.clone()))
             .collect())
@@ -1158,10 +1209,13 @@ impl Secrets {
         let Some(alias) = self.lookup_provider_alias_entry(spec) else {
             return Ok(());
         };
+        let Some(credentials) = alias.credentials() else {
+            return Ok(());
+        };
         let resolved_target = self.resolve_provider_spec(spec.to_string());
         let supported = crate::provider::credential_names_for_spec(&resolved_target);
         let provider_name = crate::provider::provider_display_name_for_spec(&resolved_target);
-        for (name, source) in sorted_credential_entries(&alias.credentials) {
+        for (name, source) in sorted_credential_entries(credentials) {
             if !supported.contains(&name.as_str()) {
                 let supported_display = if supported.is_empty() {
                     "none".to_string()
@@ -1198,7 +1252,9 @@ impl Secrets {
                 )));
             }
             if let Some(source_alias) = self.lookup_provider_alias_entry(&source.provider)
-                && !source_alias.credentials.is_empty()
+                && source_alias
+                    .credentials()
+                    .is_some_and(|credentials| !credentials.is_empty())
             {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
                     "provider alias '{}' cannot be a credential source for '{spec}' because it \
@@ -1893,8 +1949,11 @@ impl Secrets {
     /// [`Self::provider_alias_sources`] in order.
     fn lookup_provider_alias(&self, alias: &str) -> Option<String> {
         self.lookup_provider_alias_entry(alias)
-            .filter(|alias| !alias.is_cached())
-            .map(|alias| alias.uri.clone())
+            // An inline cached alias still names one leaf URI. Route planning
+            // sees its cache policy first; provider construction resolves the
+            // same alias to this URI so its credentials remain available.
+            .and_then(|alias| alias.authoritative_uri())
+            .map(str::to_string)
     }
 
     /// The cached route `spec` names, if it names one at all.
@@ -2243,7 +2302,7 @@ impl Secrets {
         let result = match provider {
             Some(provider) => self.delete_cache_entry(provider, &planned.name, profile),
             None => self
-                .build_provider_with_credentials(&cache.spec, ProviderCredentials::new())
+                .build_source_provider(&cache.spec)
                 .and_then(|provider| {
                     self.delete_cache_entry(provider.as_ref(), &planned.name, profile)
                 }),
@@ -2486,7 +2545,7 @@ impl Secrets {
     ) -> Result<Box<dyn ProviderTrait>> {
         // Build from the primary spec (not the resolved URI) so an alias's
         // `credentials` is applied to the write target too.
-        self.get_provider(route.group_key(), profile)
+        self.get_route_provider(route.group_key(), profile)
     }
 
     /// Gets the provider instance to use for secret operations
@@ -2525,6 +2584,19 @@ impl Secrets {
         let provider = self.build_provider(provider_spec, profile)?;
 
         Ok(provider)
+    }
+
+    /// The routed sibling of [`Self::get_provider`]: resolves `provider_arg`
+    /// against the default provider, then builds it as a planned route's
+    /// primary, so an inline cached alias (0.19+) unwraps to its authoritative
+    /// leaf instead of being rejected as a route.
+    fn get_route_provider(
+        &self,
+        provider_arg: Option<&str>,
+        profile: Option<&str>,
+    ) -> Result<Box<dyn ProviderTrait>> {
+        let provider_spec = self.default_provider_spec(provider_arg)?;
+        self.build_route_provider(provider_spec, profile)
     }
 
     /// The raw provider spec [`Self::get_provider`] would build for
@@ -2613,6 +2685,9 @@ impl Secrets {
     ///   each endpoint's address
     /// * `provider_specs` - Optional chain of provider specs (aliases or inline
     ///   URIs) to try in order, resolved lazily per entry
+    /// * `planned_primary_uri` - The already-resolved URI of the first entry
+    ///   when it is a planned route primary. Its presence selects route-aware
+    ///   construction for that entry; fallback-only walks pass `None`.
     /// * `profile` - The profile the read is addressed under; scopes any
     ///   provider credentials fetched when a chain link is built
     ///
@@ -2630,6 +2705,7 @@ impl Secrets {
         provider_specs: Option<&[String]>,
         project: &str,
         profile: &str,
+        planned_primary_uri: Option<&str>,
     ) -> Result<(Option<SecretString>, Option<String>, Option<NativeAddress>)> {
         // If a provider chain is supplied, try it in order.
         if let Some(specs) = provider_specs {
@@ -2637,12 +2713,20 @@ impl Secrets {
             let mut any_healthy = false;
             let mut last_uri: Option<String> = None;
             let mut last_reference: Option<NativeAddress> = None;
-            for spec in specs {
+            for (index, spec) in specs.iter().enumerate() {
+                let is_planned_primary = index == 0 && planned_primary_uri.is_some();
                 // Resolve this link only now, as the chain reaches it. An
                 // undefined alias is one broken link, treated exactly like a
                 // provider that fails to construct or read: warn and try the
                 // next, so a working provider later in the chain still answers.
-                let uri = match self.resolve_one_provider(spec) {
+                // A planned primary was already resolved and validated while
+                // building the route. Reuse that URI: an inline cached alias is
+                // deliberately rejected by the generic leaf-only resolver.
+                let resolved = match planned_primary_uri.filter(|_| is_planned_primary) {
+                    Some(uri) => Ok(uri.to_string()),
+                    None => self.resolve_one_provider(spec),
+                };
+                let uri = match resolved {
                     Ok(uri) => uri,
                     Err(e) => {
                         // Resolution failed, so only the raw spec exists; redact it.
@@ -2656,9 +2740,17 @@ impl Secrets {
                     }
                 };
                 // Build from the raw spec (not the resolved URI) so an alias's
-                // `credentials` is applied to this chain link too. Shared, not
-                // rebuilt: this walk runs per secret (see [`ProviderCache`]).
-                let provider = match self.shared_provider(provider_cache, spec, Some(profile)) {
+                // `credentials` is applied to this chain link too. A planned
+                // primary uses the same route-aware construction as batch
+                // execution, allowing an inline cached alias to unwrap to its
+                // authoritative leaf while keeping generic uses leaf-only. The
+                // provider is shared across this operation's per-secret walks.
+                let provider = match self.shared_provider(
+                    provider_cache,
+                    spec,
+                    Some(profile),
+                    is_planned_primary,
+                ) {
                     Ok(p) => p,
                     Err(e) => {
                         // Construction failed after resolution, so redact the
@@ -3147,6 +3239,7 @@ impl Secrets {
                     read_specs.as_deref(),
                     &self.config.project.name,
                     &profile_name,
+                    route.primary(),
                 );
                 if let Ok((Some(value), _, _)) = &result {
                     self.write_cached_secret(&planned, route, &profile_name, value);
@@ -4673,7 +4766,7 @@ impl Secrets {
             if group.is_empty() {
                 continue;
             }
-            match self.get_provider(provider_uri, Some(&plan.profile)) {
+            match self.get_route_provider(provider_uri, Some(&plan.profile)) {
                 Ok(provider) => {
                     // Attribute primary hits to the provider's own credential-free
                     // `uri()`, never the raw configured alias (which may embed a
@@ -4788,6 +4881,7 @@ impl Secrets {
                         Some(fallback),
                         project,
                         profile,
+                        None,
                     );
                     (planned.name.clone(), result)
                 },
@@ -5967,14 +6061,13 @@ mod provider_credential_scope_tests {
         // `access_token` is sourced from a writable, profile-namespacing store.
         let providers = HashMap::from([(
             "bws".to_string(),
-            ProviderAlias {
-                uri: "bws://proj".to_string(),
-                credentials: HashMap::from([(
+            ProviderAlias::leaf(
+                "bws://proj",
+                HashMap::from([(
                     "access_token".to_string(),
                     CredentialSource::from("memtest://"),
                 )]),
-                ..Default::default()
-            },
+            ),
         )]);
 
         let mut config =
@@ -6321,7 +6414,7 @@ mod reference_routing_tests {
         let spec = Secrets::new(crate::tests::resolve_test_config(secrets), None, None, None);
         let plan = spec.build_plan(None).unwrap();
         for (primary, group) in plan.groups() {
-            let provider = spec.get_provider(primary, None).unwrap();
+            let provider = spec.get_route_provider(primary, None).unwrap();
             spec.check_single_store_ref_coords(
                 primary,
                 &group,

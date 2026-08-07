@@ -299,8 +299,16 @@ pub(crate) fn parse_cache_max_age(value: &str) -> std::result::Result<u64, Strin
 /// bws = { uri = "bws://project-uuid", credentials = { access_token = "keyring" } }
 /// ```
 ///
-/// A cached route names its authoritative sources in fallback order and a leaf
-/// provider used for the local cache:
+/// SecretSpec 0.19+ can cache one provider directly on its alias:
+///
+/// ```toml
+/// [providers]
+/// azure = { uri = "akv://team-vault", cache = { provider = "local", max_age = "8h" } }
+/// local = "keyring://secretspec/cache/{project}/{profile}/{key}"
+/// ```
+///
+/// A cached fallback route names multiple authoritative sources in order and a
+/// leaf provider used for the local cache:
 ///
 /// ```toml
 /// [providers]
@@ -318,7 +326,8 @@ pub(crate) fn parse_cache_max_age(value: &str) -> std::result::Result<u64, Strin
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct ProviderAlias {
-    /// The provider URI (e.g. `keyring://`, `bws://project-uuid`).
+    /// The provider URI (e.g. `keyring://`, `bws://project-uuid`). Also the
+    /// authoritative source when `cache` is set without `fallback` (0.19+).
     pub uri: String,
     /// Semantic credential name to the [`CredentialSource`] that supplies it.
     /// Empty for a bare string alias, so "declares no credentials" has exactly
@@ -328,10 +337,11 @@ pub struct ProviderAlias {
     /// logical `{project}/{profile}/{key}` address into this alias's own
     /// coordinates before the provider is contacted.
     pub reference_template: Option<NativeAddressTemplate>,
-    /// Ordered authoritative sources for a cached alias (0.17+). Empty for a
-    /// leaf alias.
+    /// Ordered authoritative sources for a cached fallback alias (0.17+).
+    /// Empty for a leaf alias and for an inline URI cache (0.19+).
     pub(crate) fallback: Vec<String>,
-    /// Cache policy for a cached alias (0.17+). `None` for a leaf alias.
+    /// Cache policy for a cached alias (0.17+). `None` for an uncached leaf
+    /// alias.
     pub(crate) cache: Option<ProviderCache>,
 }
 
@@ -345,6 +355,27 @@ impl ProviderAlias {
             fallback: Vec::new(),
             cache: None,
         }
+    }
+
+    /// A leaf alias carrying a URI and its semantic credential sources.
+    pub fn leaf(uri: impl Into<String>, credentials: HashMap<String, CredentialSource>) -> Self {
+        Self {
+            uri: uri.into(),
+            credentials,
+            reference_template: None,
+            fallback: Vec::new(),
+            cache: None,
+        }
+    }
+
+    /// Semantic credential sources for a leaf or inline cached provider.
+    pub fn credentials(&self) -> Option<&HashMap<String, CredentialSource>> {
+        self.fallback.is_empty().then_some(&self.credentials)
+    }
+
+    /// Mutable semantic credential sources for a leaf or inline cached provider.
+    pub fn credentials_mut(&mut self) -> Option<&mut HashMap<String, CredentialSource>> {
+        self.fallback.is_empty().then_some(&mut self.credentials)
     }
 
     /// A cached route alias: ordered authoritative sources plus the cache they
@@ -370,15 +401,33 @@ impl ProviderAlias {
         })
     }
 
+    /// Adds a cache policy to this alias (inline URI form available in 0.19+).
+    ///
+    /// A URI alias retains its URI and credentials as the authoritative
+    /// provider. An existing fallback alias retains its ordered route.
+    pub fn with_cache(mut self, cache: ProviderCache) -> Self {
+        self.cache = Some(cache);
+        self
+    }
+
     /// Whether this alias describes a cached route rather than a leaf provider
     /// (0.17+).
     pub fn is_cached(&self) -> bool {
         self.cache.is_some()
     }
 
+    /// The single authoritative URI this alias names, if it names one.
+    ///
+    /// `Some` for a leaf alias and for the inline cache form (0.19+), where
+    /// the alias itself remains the authoritative provider. `None` for a
+    /// cached fallback alias, whose ordered sources are in [`Self::fallback`].
+    pub fn authoritative_uri(&self) -> Option<&str> {
+        (!self.uri.is_empty()).then_some(self.uri.as_str())
+    }
+
     /// The ordered authoritative sources of a cached alias.
     ///
-    /// Empty for a leaf alias.
+    /// Empty for an uncached leaf alias and for an inline URI cache (0.19+).
     pub fn fallback(&self) -> &[String] {
         &self.fallback
     }
@@ -427,15 +476,27 @@ impl From<&str> for ProviderAlias {
 impl std::fmt::Display for ProviderAlias {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(cache) = &self.cache {
-            return write!(
-                f,
-                "fallback [{}], cached in {} for {}",
-                self.fallback.join(", "),
-                cache.provider,
-                cache.max_age
-            );
+            match self.authoritative_uri() {
+                None => {
+                    // A fallback alias never carries credentials, so the shared
+                    // suffix below does not apply to it.
+                    return write!(
+                        f,
+                        "fallback [{}], cached in {} for {}",
+                        self.fallback.join(", "),
+                        cache.provider,
+                        cache.max_age
+                    );
+                }
+                Some(uri) => write!(
+                    f,
+                    "{}, cached in {} for {}",
+                    uri, cache.provider, cache.max_age
+                )?,
+            }
+        } else {
+            write!(f, "{}", self.uri)?;
         }
-        write!(f, "{}", self.uri)?;
         if !self.credentials.is_empty() {
             let mut names: Vec<&str> = self.credentials.keys().map(String::as_str).collect();
             names.sort();
@@ -452,10 +513,24 @@ impl Serialize for ProviderAlias {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if let Some(cache) = &self.cache {
             use serde::ser::SerializeStruct;
-            let mut table = serializer.serialize_struct("ProviderAlias", 2)?;
-            table.serialize_field("fallback", &self.fallback)?;
-            table.serialize_field("cache", cache)?;
-            return table.end();
+            return match self.authoritative_uri() {
+                Some(uri) => {
+                    let fields = if self.credentials.is_empty() { 2 } else { 3 };
+                    let mut table = serializer.serialize_struct("ProviderAlias", fields)?;
+                    table.serialize_field("uri", uri)?;
+                    if !self.credentials.is_empty() {
+                        table.serialize_field("credentials", &self.credentials)?;
+                    }
+                    table.serialize_field("cache", cache)?;
+                    table.end()
+                }
+                None => {
+                    let mut table = serializer.serialize_struct("ProviderAlias", 2)?;
+                    table.serialize_field("fallback", &self.fallback)?;
+                    table.serialize_field("cache", cache)?;
+                    table.end()
+                }
+            };
         }
         if self.credentials.is_empty() && self.reference_template.is_none() {
             // A bare alias serializes back to the plain-string form, so an alias
@@ -485,7 +560,7 @@ impl<'de> Deserialize<'de> for ProviderAlias {
 
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str(
-                    "a provider URI string, a { uri, credentials } table, or a \
+                    "a provider URI string, a { uri, credentials, cache } table, or a \
                      { fallback, cache } table",
                 )
             }
@@ -517,16 +592,21 @@ impl<'de> Deserialize<'de> for ProviderAlias {
                 }
                 let table = Table::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
                 match (table.uri, table.fallback, table.cache) {
-                    (Some(uri), None, None) => {
+                    (Some(uri), None, cache) => {
                         if let Some(template) = &table.reference_template {
                             template.validate().map_err(serde::de::Error::custom)?;
+                        }
+                        if cache.is_some() && table.reference_template.is_some() {
+                            return Err(serde::de::Error::custom(
+                                "an inline cached provider alias cannot declare a ref template",
+                            ));
                         }
                         Ok(ProviderAlias {
                             uri,
                             credentials: table.credentials.unwrap_or_default(),
                             reference_template: table.reference_template,
                             fallback: Vec::new(),
-                            cache: None,
+                            cache,
                         })
                     }
                     (None, Some(fallback), Some(cache)) => {
@@ -546,15 +626,15 @@ impl<'de> Deserialize<'de> for ProviderAlias {
                         // TOML enforce exactly the same invariants.
                         ProviderAlias::cached(fallback, cache).map_err(serde::de::Error::custom)
                     }
-                    (Some(_), Some(_), _) | (Some(_), _, Some(_)) => Err(serde::de::Error::custom(
-                        "a provider alias must use either { uri, credentials, ref } or \
+                    (Some(_), Some(_), _) => Err(serde::de::Error::custom(
+                        "a provider alias must use either { uri, credentials, ref, cache } or \
                              { fallback, cache }, not both",
                     )),
                     (None, Some(_), None) => Err(serde::de::Error::custom(
                         "a cached provider alias with fallback also requires cache",
                     )),
                     (None, None, Some(_)) => Err(serde::de::Error::custom(
-                        "a cached provider alias with cache also requires fallback",
+                        "a cached provider alias with cache also requires uri or fallback",
                     )),
                     (None, None, None) => Err(serde::de::Error::custom(
                         "a provider alias table requires uri or fallback plus cache",
@@ -3906,6 +3986,29 @@ mod provider_alias_tests {
         assert_eq!(alias.cache.as_ref().unwrap().max_age_secs(), 8 * 60 * 60);
 
         let serialized = toml::to_string(&map).unwrap();
+        assert_eq!(parse(&serialized), map);
+    }
+
+    #[test]
+    fn inline_cached_uri_parses_and_round_trips_with_credentials() {
+        let map = parse(
+            r#"azure = { uri = "akv://team-vault", credentials = { client_secret = "keyring" }, cache = { provider = "local", max_age = "5m" } }"#,
+        );
+        let alias = &map["azure"];
+        assert_eq!(alias.uri, "akv://team-vault");
+        assert_eq!(
+            alias.credentials.get("client_secret"),
+            Some(&CredentialSource::from("keyring"))
+        );
+        assert!(alias.fallback.is_empty());
+        assert_eq!(
+            alias.cache.as_ref(),
+            Some(&ProviderCache::new("local", "5m").unwrap())
+        );
+
+        let serialized = toml::to_string(&map).unwrap();
+        assert!(serialized.contains("uri = \"akv://team-vault\""));
+        assert!(!serialized.contains("fallback"));
         assert_eq!(parse(&serialized), map);
     }
 

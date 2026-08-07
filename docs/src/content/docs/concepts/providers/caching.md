@@ -8,37 +8,78 @@ Provider caching and `secretspec cache clear` are available starting with
 SecretSpec 0.17.
 :::
 
-Remote providers add network, authentication, or external-CLI latency to every
-read, even when values rarely change. Provider caching stores a time-limited
-copy in a faster local store. Fresh entries return immediately; misses and
-expired entries use the authoritative providers and refill the cache.
+## The problem
 
-Configure caching with a cached alias. `fallback` lists the authoritative
-providers in read order, and `cache.provider` selects the local leaf provider:
+A remote secret read can include authentication, external-process startup,
+DNS, TCP and TLS setup, and one or more network requests. Those fixed costs can
+dominate a command that resolves only a few secrets. Separate SecretSpec CLI
+invocations may pay them again even when the values rarely change.
+
+Latency can also scale with the number of distinct secret addresses. SecretSpec
+groups compatible reads and providers can batch or parallelize them, but the
+remote service, proxy, or provider CLI still determines the cost of each read.
+
+## Cache one provider (0.19+)
+
+Provider caching places a faster local secret store in front of an
+authoritative provider. A fresh cache entry returns without constructing or
+contacting the remote provider; a miss reads the remote value and stores it
+locally for later SecretSpec invocations.
+
+:::caution[Version compatibility]
+Attaching `cache` directly to a provider URI is available starting with
+SecretSpec 0.19. Use a cached fallback alias on SecretSpec 0.17 and 0.18.
+:::
+
+Add `cache` to the remote provider alias and select that same alias normally:
 
 ```toml title="secretspec.toml"
 [providers]
-azure = { uri = "akv://team-vault", credentials = { client_secret = "keyring" } }
+local = "keyring://secretspec/cache/{project}/{profile}/{key}"
+azure = {
+  uri = "akv://team-vault",
+  credentials = { client_secret = "keyring" },
+  cache = { provider = "local", max_age = "8h" }
+}
+
+[profiles.development.defaults]
+providers = ["azure"]
+```
+
+The alias remains the authoritative provider, so its [provider
+credentials](/concepts/providers/#provider-credentials) stay next to `uri` and
+`cache`.
+
+## Cache a fallback route (0.17+)
+
+When more than one provider can authoritatively answer, use a route alias.
+`fallback` lists its providers in read order and `cache.provider` selects the
+local leaf provider:
+
+```toml title="secretspec.toml"
+[providers]
+azure = "akv://team-vault?auth=cli"
 env = "env://"
 local = "keyring://secretspec/cache/{project}/{profile}/{key}"
 
-myprovider = {
+remote = {
   fallback = ["azure", "env"],
   cache = { provider = "local", max_age = "8h" }
 }
 
 [profiles.development.defaults]
-providers = ["myprovider"]
+providers = ["remote"]
 ```
 
 ## Read behavior
 
 SecretSpec reads a cached route in this order:
 
-1. returns a fresh cache entry without constructing or contacting `azure` or
-   `env`;
-2. on a miss, unusable entry, or cache error, tries `azure` and then `env`;
-3. caches the value returned by whichever fallback answers.
+1. returns a fresh cache entry without constructing or contacting an
+   authoritative provider;
+2. on a miss, unusable entry, or cache error, reads the provider URI or tries
+   each `fallback` entry in order;
+3. caches the value returned by the authoritative provider that answers.
 
 Cache failures produce warnings but never block the authoritative route.
 SecretSpec never returns an expired value when all fallbacks fail. It deletes
@@ -51,19 +92,21 @@ or refresh one.
 
 ## Writes
 
-Writes and generated values go to the first fallback (`azure` above), then
-refresh the cache. If the refresh fails, the authoritative write still
-succeeds and SecretSpec deletes the old cache entry. If deletion also fails,
-the warning identifies the `cache clear` command to run.
+Writes and generated values go to the provider URI or the first fallback, then
+refresh the cache. If the refresh fails, the authoritative write still succeeds
+and SecretSpec deletes the old cache entry. If deletion also fails, the warning
+identifies the `cache clear` command to run.
 
-Select a leaf provider to bypass the cache for one command:
+For a cached fallback route, select a leaf provider to bypass the cache for one
+command:
 
 ```bash
 $ secretspec check --provider azure
 ```
 
-A direct write, such as `secretspec set API_KEY --provider azure`, invalidates
-the corresponding cache entry.
+In the fallback example, a direct write such as
+`secretspec set API_KEY --provider azure` invalidates the corresponding cache
+entry.
 
 ## Freshness and invalidation
 
@@ -76,9 +119,9 @@ the value, absolute expiration time, originating `max_age`, format version, and
 a fingerprint of the fallback route and secret reference. Changing the route,
 reference, or `max_age` invalidates it.
 
-The cache must use a distinct store from every provider in `fallback`;
+The cache must use a distinct store from every authoritative provider;
 otherwise, a refresh could overwrite the authoritative secret. SecretSpec
-rejects such routes during planning. The example uses a separate keyring
+rejects such routes during planning. The examples use a separate keyring
 namespace for `local`.
 
 The cache provider must also support deletion: keyring, pass, gopass, dotenv,
@@ -125,7 +168,8 @@ place. Give each project a separate store or path, such as the
 
 ## Where cached aliases can be used
 
-A cached alias works anywhere a complete route is selected:
+An inline cached provider alias or cached fallback alias works anywhere a
+complete route is selected:
 
 - a secret or profile-default `providers` list;
 - the user-global default provider;
@@ -133,12 +177,13 @@ A cached alias works anywhere a complete route is selected:
 - `--provider`.
 
 Because a cached alias defines a complete route, it must be the only entry in a
-`providers` list. Its fallback entries and cache provider may be aliases,
+`providers` list. Fallback entries and the cache provider may be aliases,
 provider names, or URIs, but must resolve to leaf providers; cached aliases
 cannot be nested.
 
-Credentials belong on leaf aliases, such as `azure` above, rather than on
-`myprovider`.
+An inline cached alias can declare credentials next to its `uri`. For a cached
+fallback route, credentials belong on its leaf aliases rather than on the route
+alias.
 
 ## Security
 
@@ -147,10 +192,131 @@ provider such as keyring, pass, or gopass when values must be encrypted at rest.
 Dotenv stores entries as plaintext. Native expiry limits how long a copy exists
 without another SecretSpec run.
 
-## Next steps
+## Reference
 
+- See [`cache clear`](/reference/cli/#cache-clear-017) in the CLI reference.
+- Review the [inline cache fields](/reference/configuration/#secretspec-019-inline-provider-cache)
+  (0.19+) or [cached fallback fields](/reference/configuration/#secretspec-017-cached-fallback-alias-values)
+  in the configuration reference.
 - Review [Provider fallback](/concepts/providers/fallback/) for authoritative
   route and write semantics.
-- See [`cache clear`](/reference/cli/#cache-clear-017) in the CLI reference.
-- Review the [cached alias fields](/reference/configuration/#secretspec-017-cached-alias-values)
-  in the configuration reference.
+
+## Diagnose and improve provider performance
+
+Use these checks when the first cache fill is too slow, the route cannot be
+cached, or you need to understand a platform-specific difference.
+
+### Establish a baseline
+
+Benchmark the same command, profile, and set of secrets each time. `check`
+resolves values without printing them:
+
+```bash
+time secretspec get SECRET_NAME >/dev/null
+time secretspec check --no-prompt
+```
+
+The redirected `get` prevents the value from appearing in the terminal. Compare
+it with the complete profile: similar times suggest a fixed authentication or
+connection cost, while time that grows with the number of secrets points to
+per-secret round trips, provider grouping, or concurrency.
+
+If you have [hyperfine](https://github.com/sharkdp/hyperfine), compare repeated
+runs:
+
+```bash
+hyperfine --warmup 1 'secretspec check --no-prompt'
+```
+
+Record the first run separately. A warmup can hide cold authentication or an
+external CLI's startup cost, while repeated one-shot SecretSpec commands still
+pay that cost in normal use.
+
+### Isolate authentication and network cost
+
+When a provider uses an external CLI, time a harmless authentication command
+without printing its token. For Azure CLI, for example:
+
+```bash
+time az account get-access-token \
+  --scope https://vault.azure.net/.default \
+  --output none
+```
+
+If this takes most of a cache miss, consider another supported authentication
+mode. External CLI sessions are convenient for local development, but direct
+service-principal, managed-identity, workload-identity, token, or SDK
+authentication can avoid the process boundary where appropriate.
+
+For example, the [Azure Key Vault provider](/providers/akv/#authentication)
+supports Azure CLI sessions as well as service principals, managed identity,
+and workload identity. Prefer the identity mode that matches the environment;
+do not replace short-lived or workload-bound credentials with long-lived
+credentials solely to reduce latency.
+
+To distinguish connection setup from the secret API itself, probe the remote
+endpoint without requesting a real secret. This Azure Key Vault example is
+expected to return an authorization error, but still reports DNS, TCP, TLS, and
+time to first byte:
+
+```bash
+curl --silent --show-error --output /dev/null \
+  --write-out 'dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total}\n' \
+  'https://VAULT.vault.azure.net/secrets/__probe__?api-version=7.5'
+```
+
+Run the same probe from the host and from WSL or a container to expose a
+platform-specific DNS, VPN, proxy, or TLS delay.
+
+### Keep related secrets on one route
+
+Secrets that use the same store and authentication configuration should select
+the same provider alias. SecretSpec groups those reads into one provider
+operation, deduplicates identical references, and lets providers use a bulk API
+or bounded parallel reads where supported.
+
+Do not merge aliases that intentionally use different identities, endpoints,
+namespaces, or other security settings. Those are distinct routes even if they
+use the same provider type.
+
+### Tune per-address concurrency (0.17+)
+
+Providers using SecretSpec's default per-address fetch path read up to eight
+unique addresses concurrently. Test a few caps when latency grows with the
+number of secrets:
+
+```bash
+SECRETSPEC_PROVIDER_CONCURRENCY=1 secretspec check --no-prompt
+SECRETSPEC_PROVIDER_CONCURRENCY=4 secretspec check --no-prompt
+SECRETSPEC_PROVIDER_CONCURRENCY=16 secretspec check --no-prompt
+```
+
+More concurrency is not always faster. It can increase rate limiting, overload
+a reverse proxy, or create more simultaneous connections. The setting does not
+remove a provider's cold authentication floor, and providers with a true bulk
+API may not use it for their batched reads.
+
+### Check WSL and container overhead
+
+If the same manifest is slower under WSL or in a container:
+
+- use the Linux build of each provider CLI instead of invoking a Windows
+  executable through interoperability;
+- keep the project and provider CLI's configuration and credential cache on
+  the Linux filesystem rather than under `/mnt/c`;
+- compare the endpoint probe with and without `curl -4` to identify an
+  address-family or VPN routing delay before changing system-wide networking;
+- check whether a proxy, VPN, antivirus product, or certificate helper is only
+  active on one side of the host boundary;
+- remember that short-lived containers repeat process startup, authentication,
+  DNS, and TLS setup on every invocation.
+
+### Interpret the results
+
+| Observation | Likely cost | First thing to try |
+| --- | --- | --- |
+| One secret and the full profile take about the same time | Authentication or process startup | Use direct authentication where appropriate, or cache the route |
+| Every SecretSpec invocation has the same fixed delay | External CLI or cold connection setup | Time the auth command and endpoint probe separately |
+| Time grows with the number of secrets | Per-secret network reads | Consolidate equivalent routes and benchmark concurrency |
+| A warm run is much faster than the first | Provider CLI, token, DNS, or connection cache | Preserve the relevant cache and benchmark cold runs separately |
+| Only WSL or a container is slower | Filesystem, DNS, VPN, proxy, or executable interoperability | Compare the host/container probes and move hot files off mounted host paths |

@@ -403,7 +403,9 @@ const reelScriptData = {
       </div>
     </div>
 
-    <div class="landing-pipeline-flow-arrow landing-pipeline-flow-arrow-in" aria-hidden="true"></div>
+    <div class="landing-pipeline-flow-arrow landing-pipeline-flow-arrow-in" aria-hidden="true">
+      <span class="landing-pipeline-flow-pulse"></span>
+    </div>
 
     <div class="landing-pipeline-center">
       <div class="landing-terminal landing-pipeline-terminal" data-pipeline-terminal>
@@ -426,7 +428,9 @@ const reelScriptData = {
       </div>
     </div>
 
-    <div class="landing-pipeline-flow-arrow landing-pipeline-flow-arrow-out" aria-hidden="true"></div>
+    <div class="landing-pipeline-flow-arrow landing-pipeline-flow-arrow-out" aria-hidden="true">
+      <span class="landing-pipeline-flow-pulse"></span>
+    </div>
 
     <div class="landing-pipeline-side">
       <div class="landing-pipeline-action landing-pipeline-action-right">
@@ -549,10 +553,9 @@ const reelScriptData = {
   (function () {
     const providerReel = document.querySelector('[data-reel="providers"]');
     const consumerReel = document.querySelector('[data-reel="consumers"]');
-    const terminalEl = document.querySelector('[data-pipeline-terminal]');
     const terminalBody = document.querySelector('[data-pipeline-terminal-body]');
 
-    if (!providerReel || !consumerReel || !terminalBody || !terminalEl) return;
+    if (!providerReel || !consumerReel || !terminalBody) return;
 
     document.querySelectorAll('[data-reel-icon-img]').forEach((img) => {
       function markMissing() {
@@ -587,15 +590,7 @@ const reelScriptData = {
       return '<span class="landing-code-line" style="--line:' + index + '">' + html + '</span>';
     }
 
-    function restartClass(el, className) {
-      el.classList.remove(className);
-      void el.offsetWidth;
-      el.classList.add(className);
-    }
-
     function updateTerminal(consumer) {
-      terminalEl.classList.remove('is-popping');
-
       const maxLen = Math.max.apply(null, consumer.secrets.map((s) => s.length));
       const rows = consumer.secrets.map((name, index) => {
         const pad = ' '.repeat(Math.max(1, maxLen - name.length + 1));
@@ -617,8 +612,6 @@ const reelScriptData = {
         codeLine('<span class="tok-sec">[profiles.default]</span>', 4),
         rows,
       ].join('');
-
-      restartClass(terminalEl, 'is-popping');
     }
 
     function makeReel(opts) {

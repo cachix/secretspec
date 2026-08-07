@@ -278,6 +278,7 @@
   border-radius: 0.5rem;
   transition: all 0.15s;
   text-decoration: none;
+  white-space: nowrap;
   cursor: pointer;
   border: none;
 }
@@ -787,6 +788,7 @@
   border-top: 1.5px solid currentColor;
   border-right: 1.5px solid currentColor;
   transform: translateY(calc(-50% + 0.5px)) rotate(45deg);
+  animation: landing-pipeline-arrowhead-glow 3.2s ease-in-out infinite;
 }
 
 .landing-pipeline-flow-arrow-in::before {
@@ -798,6 +800,11 @@
   right: 0.5rem;
 }
 
+.landing-pipeline-flow-arrow-in {
+  --pipeline-flow-start: 0rem;
+  --pipeline-flow-end: calc(100% - 0.55rem);
+}
+
 .landing-pipeline-flow-arrow-out::before {
   left: 0.55rem;
   right: 0;
@@ -807,18 +814,62 @@
   right: -0.05rem;
 }
 
+.landing-pipeline-flow-arrow-out {
+  --pipeline-flow-start: 0.55rem;
+  --pipeline-flow-end: 100%;
+}
+
+.landing-pipeline-flow-pulse {
+  position: absolute;
+  top: calc(var(--pipeline-control-row-height) + 0.75rem + 114px);
+  left: var(--pipeline-flow-start);
+  width: 0.42rem;
+  height: 0.12rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-accent-300) 58%, white);
+  box-shadow:
+    0 0 0.24rem 0.08rem color-mix(in srgb, var(--color-accent-400) 72%, transparent),
+    -0.3rem 0 0.4rem color-mix(in srgb, var(--color-accent-500) 38%, transparent);
+  opacity: 0;
+  transform: translate(-50%, calc(-50% + 0.5px));
+  animation: landing-pipeline-flow 3.2s ease-in-out infinite;
+}
+
+.landing-pipeline-flow-arrow-out .landing-pipeline-flow-pulse,
+.landing-pipeline-flow-arrow-out::after {
+  animation-delay: 0.8s;
+}
+
+@keyframes landing-pipeline-flow {
+  0%, 10% {
+    left: var(--pipeline-flow-start);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  72% {
+    left: var(--pipeline-flow-end);
+    opacity: 1;
+  }
+  80%, 100% {
+    left: var(--pipeline-flow-end);
+    opacity: 0;
+  }
+}
+
+@keyframes landing-pipeline-arrowhead-glow {
+  0%, 62%, 82%, 100% {
+    filter: drop-shadow(0 0 0 transparent);
+  }
+  72% {
+    filter: drop-shadow(0 0 0.3rem color-mix(in srgb, var(--color-accent-300) 80%, white));
+  }
+}
+
 .landing-pipeline-terminal .landing-terminal-header {
   box-sizing: border-box;
   height: var(--pipeline-control-row-height);
-}
-
-.landing-pipeline-terminal.is-popping .landing-terminal-body {
-  animation: landing-terminal-glow 0.28s ease;
-}
-
-.landing-pipeline-terminal.is-popping .landing-code-line {
-  animation: landing-code-line-in 0.24s ease both;
-  animation-delay: calc(var(--line) * 18ms);
 }
 
 @keyframes landing-terminal-glow {
@@ -835,6 +886,13 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-pipeline-flow-pulse,
+  .landing-pipeline-flow-arrow::after {
+    animation: none;
   }
 }
 

@@ -34,6 +34,9 @@ on:
       - ".github/workflows/python-wheels.yml"
       - "scripts/sync-sdk-versions.sh"
 
+permissions:
+  contents: read
+
 jobs:
   linux:
     name: wheel ${{ matrix.arch }} (manylinux)

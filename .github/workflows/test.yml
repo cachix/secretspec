@@ -7,6 +7,9 @@ on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 # Do not let superseded revisions occupy the limited macOS runner pool.
 concurrency:
   group: ${{ github.workflow }}-test-${{ github.event.pull_request.number || github.ref }}

@@ -37,6 +37,9 @@ on:
       - "scripts/sync-sdk-versions.sh"
       - "scripts/copy-mingw-import-libs.sh"
 
+permissions:
+  contents: read
+
 jobs:
   gems:
     name: ${{ matrix.target }}

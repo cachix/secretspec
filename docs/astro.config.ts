@@ -1,8 +1,14 @@
 import type {PluginOption} from "vite";
+import { readFileSync } from "node:fs";
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import starlightLlmsTxt from "starlight-llms-txt";
 import starlightBlog from "starlight-blog";
+
+const rustSdkBasicExample = readFileSync(
+  new URL("../secretspec-derive/examples/basic.rs", import.meta.url),
+  "utf8",
+).trim();
 
 // Dev-only: `astro dev` (what `devenv up` runs) does not execute worker.js, so
 // /api/github would 404 and the release/star pills would stay hidden locally.
@@ -104,17 +110,7 @@ recursive expansion.
 ## Type-safe Rust SDK
 
 \`\`\`rust
-secretspec_derive::declare_secrets!("secretspec.toml");
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let secrets = Secrets::builder()
-        .with_provider("keyring")
-        .with_profile(Profile::Production)
-        .load()?;
-    println!("{}", secrets.secrets.database_url);
-    secrets.secrets.set_as_env_vars();
-    Ok(())
-}
+${rustSdkBasicExample}
 \`\`\`
 
 ## Migration

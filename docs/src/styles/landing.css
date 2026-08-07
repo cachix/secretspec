@@ -3096,19 +3096,6 @@
   color: #fff;
 }
 
-.landing-blog-desc {
-  font-size: 0.8125rem;
-  line-height: 1.5;
-  color: var(--color-gray-500);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-[data-theme='dark'] .landing-blog-desc {
-  color: var(--color-gray-400);
-}
-
 .landing-blog-date {
   flex-shrink: 0;
   font-family: var(--sl-font-mono, monospace);
@@ -3149,9 +3136,6 @@
     align-items: center;
     justify-content: space-between;
     margin-bottom: 0.75rem;
-  }
-  .landing-blog-desc {
-    display: none;
   }
   .landing-blog-main,
   .landing-blog-title {

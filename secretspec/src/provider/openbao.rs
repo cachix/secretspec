@@ -194,6 +194,10 @@ impl Provider for OpenBaoProvider {
         self.core.delete(&coords)
     }
 
+    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        self.core.check_deletable(addr)
+    }
+
     /// Refuses native writes because replacing a KV entry to change one field
     /// would silently discard every sibling field.
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {

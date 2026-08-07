@@ -285,6 +285,17 @@ impl Provider for KdbxProvider {
         &["field"]
     }
 
+    fn entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, NativeAddress>> {
+        let mut coords = self.resolve_coords(addr)?.into_owned();
+        if coords.field.is_none() {
+            coords.field = Some(fields::PASSWORD.to_string());
+        }
+        Ok(std::borrow::Cow::Owned(coords))
+    }
+
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
         let _guard = KDBX_IO_LOCK
             .lock()
@@ -389,6 +400,10 @@ impl Provider for KdbxProvider {
             uri.push_str(&ProviderUrl::encode_query(&self.config.prefix));
         }
         uri
+    }
+
+    fn physical_store_path(&self) -> Option<&Path> {
+        Some(&self.config.path)
     }
 
     fn with_base_dir(&mut self, base_dir: &Path) {
@@ -634,6 +649,52 @@ mod tests {
                 .unwrap()
                 .field,
             "UserName"
+        );
+    }
+
+    #[test]
+    fn same_entries_treats_an_implicit_field_as_the_password_field() {
+        let provider = KdbxProvider::new(config(PathBuf::from("vault.kdbx")));
+        let implicit = NativeAddress {
+            item: "shared/login".into(),
+            ..Default::default()
+        };
+        let explicit = NativeAddress {
+            item: "shared/login".into(),
+            field: Some(fields::PASSWORD.into()),
+            ..Default::default()
+        };
+
+        assert!(
+            provider
+                .same_entries(
+                    Address::Native(&implicit),
+                    &provider,
+                    Address::Native(&explicit),
+                )
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn same_entries_ignores_prefixes_overridden_by_native_refs() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("vault.kdbx");
+        let mut left_config = config(path.clone());
+        left_config.prefix = "left/{key}".into();
+        let mut right_config = config(path);
+        right_config.prefix = "right/{key}".into();
+        let left = KdbxProvider::new(left_config);
+        let right = KdbxProvider::new(right_config);
+        let address = NativeAddress {
+            item: "shared/login".into(),
+            field: Some("UserName".into()),
+            ..Default::default()
+        };
+
+        assert!(
+            left.same_entries(Address::Native(&address), &right, Address::Native(&address),)
+                .unwrap()
         );
     }
 

@@ -394,7 +394,8 @@ impl ProviderInfo {
 ///
 /// Which stores are consulted is decided entirely by provider resolution
 /// (chains, overrides, defaults); the address only supplies the name to look
-/// up in each.
+/// up in one selected endpoint. SecretSpec may derive a different address for
+/// another provider alias in the same logical route.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Address<'a> {
     /// SecretSpec's `{project}/{profile}/{key}` naming convention.
@@ -405,6 +406,50 @@ pub enum Address<'a> {
     },
     /// Native coordinates of one externally managed secret (a `ref`).
     Native(&'a NativeAddress),
+}
+
+/// Owned counterpart to [`Address`], used by plans that must retain distinct
+/// source and destination addresses before provider operations begin.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum OwnedAddress {
+    Convention {
+        project: String,
+        profile: String,
+        key: String,
+    },
+    Native(NativeAddress),
+}
+
+impl OwnedAddress {
+    pub(crate) fn convention(project: &str, profile: &str, key: &str) -> Self {
+        Self::Convention {
+            project: project.to_string(),
+            profile: profile.to_string(),
+            key: key.to_string(),
+        }
+    }
+
+    pub(crate) fn as_address(&self) -> Address<'_> {
+        match self {
+            Self::Convention {
+                project,
+                profile,
+                key,
+            } => Address::Convention {
+                project,
+                profile,
+                key,
+            },
+            Self::Native(reference) => Address::Native(reference),
+        }
+    }
+
+    pub(crate) fn native(&self) -> Option<&NativeAddress> {
+        match self {
+            Self::Native(reference) => Some(reference),
+            Self::Convention { .. } => None,
+        }
+    }
 }
 
 impl<'a> Address<'a> {
@@ -650,6 +695,18 @@ pub trait Provider: Send + Sync {
         Ok(coords)
     }
 
+    /// Resolves the canonical coordinates an operation uses to identify one
+    /// physical entry. Available since SecretSpec 0.19.
+    ///
+    /// The default is the validated address returned by
+    /// [`resolve_coords`](Provider::resolve_coords). Providers that interpret
+    /// an omitted coordinate as a concrete default must override this method
+    /// and fill that default, so destructive preflight compares the same
+    /// identity that `get`, `set`, and `delete` operate on.
+    fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
+        self.resolve_coords(addr)
+    }
+
     /// Retrieves the secret named by `addr`.
     ///
     /// See [`Address`] for the two naming schemes. A provider that cannot
@@ -729,6 +786,18 @@ pub trait Provider: Send + Sync {
             "provider '{}' does not support deleting secrets",
             self.name()
         )))
+    }
+
+    /// Reports whether this provider can delete `addr`, without changing the
+    /// store. Available since SecretSpec 0.19.
+    ///
+    /// Destructive multi-secret operations use this during preflight so an
+    /// unsupported native address cannot be discovered only after earlier
+    /// source entries have already been removed. Providers with deletion
+    /// policies beyond coordinate support must override this method and have
+    /// [`delete`](Provider::delete) enforce the same policy.
+    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        self.resolve_coords(addr).map(|_| ())
     }
 
     /// Reports whether this provider can write to `addr`, and why not when it
@@ -824,18 +893,33 @@ pub trait Provider: Send + Sync {
     /// Returns whether `self` and `other` resolve `addr` to the same physical
     /// secret entry. Available since SecretSpec 0.18.
     ///
+    /// This compatibility method applies one address to both providers. New
+    /// cross-endpoint operations should use [`Self::same_entries`] when source
+    /// and destination can have independent refs.
+    fn same_entry(&self, other: &dyn Provider, addr: Address<'_>) -> Result<bool> {
+        self.same_entries(addr, other, addr)
+    }
+
+    /// Returns whether `self` and `other` resolve their respective addresses to
+    /// the same physical secret entry. Available since SecretSpec 0.19.
+    ///
     /// Destructive cross-provider operations must use this instead of comparing
     /// [`uri`](Provider::uri) strings: one store may have multiple equivalent
     /// spellings, and provider URIs can include convention templates that are
     /// only meaningful after resolving a concrete address. The physical store
     /// and the resolved native coordinates must both match before an entry is
     /// considered shared.
-    fn same_entry(&self, other: &dyn Provider, addr: Address<'_>) -> Result<bool> {
+    fn same_entries(
+        &self,
+        self_addr: Address<'_>,
+        other: &dyn Provider,
+        other_addr: Address<'_>,
+    ) -> Result<bool> {
         let same_store = match (self.physical_store_path(), other.physical_store_path()) {
             (Some(left), Some(right)) => {
                 same_file::is_same_file(left, right).unwrap_or_else(|_| {
-                    let left = std::path::absolute(left).unwrap_or_else(|_| left.to_path_buf());
-                    let right = std::path::absolute(right).unwrap_or_else(|_| right.to_path_buf());
+                    let left = comparable_missing_file_path(left);
+                    let right = comparable_missing_file_path(right);
                     left == right
                 })
             }
@@ -846,7 +930,7 @@ pub trait Provider: Send + Sync {
             return Ok(false);
         }
 
-        Ok(self.resolve_coords(addr)? == other.resolve_coords(addr)?)
+        Ok(self.entry_coordinates(self_addr)? == other.entry_coordinates(other_addr)?)
     }
 
     /// Returns the path that identifies a filesystem-backed store, if any.
@@ -949,6 +1033,23 @@ pub trait Provider: Send + Sync {
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
         get_each(self, requests)
     }
+}
+
+/// Returns a stable lexical identity for a filesystem store that may not exist
+/// yet. Canonicalizing the parent resolves symlink aliases without requiring
+/// the destination file itself to exist.
+fn comparable_missing_file_path(path: &std::path::Path) -> std::path::PathBuf {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let Some(parent) = absolute.parent() else {
+        return absolute;
+    };
+    let Some(file_name) = absolute.file_name() else {
+        return absolute;
+    };
+
+    std::fs::canonicalize(parent)
+        .map(|parent| parent.join(file_name))
+        .unwrap_or(absolute)
 }
 
 /// Default max concurrent unique-address fetches in [`get_each`].
@@ -1064,6 +1165,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn resolve_coords<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
         (**self).resolve_coords(addr)
     }
+    fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
+        (**self).entry_coordinates(addr)
+    }
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
         (**self).get(addr)
     }
@@ -1081,6 +1185,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn delete(&self, addr: Address<'_>) -> Result<bool> {
         (**self).delete(addr)
     }
+    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        (**self).check_deletable(addr)
+    }
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         (**self).check_writable(addr)
     }
@@ -1095,6 +1202,14 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     }
     fn same_entry(&self, other: &dyn Provider, addr: Address<'_>) -> Result<bool> {
         (**self).same_entry(other, addr)
+    }
+    fn same_entries(
+        &self,
+        self_addr: Address<'_>,
+        other: &dyn Provider,
+        other_addr: Address<'_>,
+    ) -> Result<bool> {
+        (**self).same_entries(self_addr, other, other_addr)
     }
     fn storage_identity(&self) -> String {
         (**self).storage_identity()
@@ -1244,6 +1359,11 @@ impl Provider for PreflightGuard {
         self.inner.resolve_coords(addr)
     }
 
+    fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
+        // Pure naming, no I/O: needs no auth preflight.
+        self.inner.entry_coordinates(addr)
+    }
+
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
         self.check()?;
         self.inner.get(addr)
@@ -1271,6 +1391,10 @@ impl Provider for PreflightGuard {
         self.inner.delete(addr)
     }
 
+    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        self.inner.check_deletable(addr)
+    }
+
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         self.inner.check_writable(addr)
     }
@@ -1289,6 +1413,15 @@ impl Provider for PreflightGuard {
 
     fn same_entry(&self, other: &dyn Provider, addr: Address<'_>) -> Result<bool> {
         self.inner.same_entry(other, addr)
+    }
+
+    fn same_entries(
+        &self,
+        self_addr: Address<'_>,
+        other: &dyn Provider,
+        other_addr: Address<'_>,
+    ) -> Result<bool> {
+        self.inner.same_entries(self_addr, other, other_addr)
     }
 
     fn storage_identity(&self) -> String {

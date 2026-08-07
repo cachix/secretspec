@@ -8,7 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - Windows ARM64 CLI release artifacts (`aarch64-pc-windows-msvc`).
+- Provider aliases can define native `ref` templates and secrets can override
+  coordinates per leaf alias with `refs`, so fallback providers and import
+  sources/destinations resolve independently. `import --delete-source` now
+  preflights the whole migration, verifies all writes before cleanup, and can
+  safely move between distinct entries in the same physical store.
 - Secrets can store values as standard Base64, URL-safe Base64, or hexadecimal
   using `encoding`; writes encode logical text and reads decode stored values,
   while `as_path = true` materializes arbitrary decoded bytes.
@@ -37,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#275](https://github.com/cachix/secretspec/issues/275))
 - `run` preserves non-UTF-8 environment values byte-for-byte when launching
   child processes on Unix.
+- Provider-scoped references now compare provider-defaulted coordinates before
+  destructive imports, apply scoped address overrides before comparing stores,
+  and recognize missing file destinations reached through symlinked parents.
+  They also invalidate caches for every coordinate change without display-format
+  collisions and retain the attempted native location in audit events when a
+  provider read fails. Same-store import validation handles Windows provider
+  paths without treating separators as TOML escapes.
 - SDK pkg-config setup now pins cargo-c's library and metadata install
   directories, so Go, Ruby, and Haskell reliably discover
   `secretspec_ffi.pc` across environments.

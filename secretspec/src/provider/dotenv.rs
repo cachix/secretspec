@@ -380,6 +380,10 @@ impl Provider for DotEnvProvider {
         Ok(true)
     }
 
+    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        self.check_writable(addr)
+    }
+
     fn reflect(
         &self,
         _context: DiscoveryContext<'_>,

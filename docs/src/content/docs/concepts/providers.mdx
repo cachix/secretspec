@@ -161,6 +161,30 @@ Provider lists may combine aliases, provider names, and inline provider URIs:
 DATABASE_URL = { description = "Production database", providers = ["onepassword://Production", "keyring"] }
 ```
 
+### Alias ref templates (0.19+)
+
+:::caution[Version compatibility]
+Provider-alias `ref` templates and per-secret `refs` are available starting
+with SecretSpec 0.19.
+:::
+
+A leaf alias can map the logical `{project}`, `{profile}`, and `{key}` into its
+provider's native coordinates. This lets every link in a fallback chain—and
+each side of an import—use a different address:
+
+```toml title="secretspec.toml"
+[providers]
+remote = { uri = "onepassword://Production", ref = { item = "{project}-{profile}", field = "{key}" } }
+local = { uri = "dotenv://.env", ref = { item = "{key}" } }
+
+[profiles.production]
+API_KEY = { description = "API key", providers = ["remote", "local"] }
+```
+
+Use per-secret `refs = { alias = { item = "..." } }` for exceptions. See
+[Secret References](/concepts/references/#different-coordinates-per-provider-019)
+for precedence, import-only source aliases, and cached-route restrictions.
+
 Use the CLI to manage user-level aliases:
 
 ```bash

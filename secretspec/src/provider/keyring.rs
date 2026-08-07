@@ -106,11 +106,11 @@ impl KeyringProvider {
     /// service, `field` the account, defaulting to the current system
     /// username (the account convention entries live under).
     fn entry_target(&self, addr: Address<'_>) -> Result<(String, String)> {
-        let coords = self.resolve_coords(addr)?;
-        let account = match &coords.field {
-            Some(account) => account.clone(),
-            None => Self::current_username()?,
-        };
+        let coords = self.entry_coordinates(addr)?;
+        let account = coords
+            .field
+            .clone()
+            .expect("entry coordinates always contain the keyring account");
         Ok((coords.item.clone(), account))
     }
 
@@ -144,6 +144,17 @@ impl Provider for KeyringProvider {
     /// `field` is the keyring account within the service entry.
     fn supported_coords(&self) -> &'static [&'static str] {
         &["field"]
+    }
+
+    fn entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, crate::config::NativeAddress>> {
+        let mut coords = self.resolve_coords(addr)?.into_owned();
+        if coords.field.is_none() {
+            coords.field = Some(Self::current_username()?);
+        }
+        Ok(std::borrow::Cow::Owned(coords))
     }
 
     fn name(&self) -> &'static str {
@@ -297,6 +308,31 @@ mod tests {
         let (service, account) = p.entry_target(Address::Native(&addr)).unwrap();
         assert_eq!(service, "com.example.app");
         assert_eq!(account, whoami::username().unwrap());
+    }
+
+    #[test]
+    fn same_entries_treats_the_implicit_account_as_the_current_username() {
+        let provider = KeyringProvider::new(KeyringConfig::default());
+        let implicit = crate::config::NativeAddress {
+            item: "com.example.app".into(),
+            ..Default::default()
+        };
+        let explicit = crate::config::NativeAddress {
+            item: "com.example.app".into(),
+            field: Some(whoami::username().unwrap()),
+            ..Default::default()
+        };
+
+        assert!(
+            provider
+                .same_entries(
+                    Address::Native(&implicit),
+                    &provider,
+                    Address::Native(&explicit),
+                )
+                .unwrap(),
+            "addresses that operations send to one keyring entry must compare equal"
+        );
     }
 
     /// Keyring entries have no versions; the coordinate is rejected.

@@ -19,7 +19,7 @@ use crate::composition::Template;
 use crate::config::{NativeAddress, Secret, SecretEncoding};
 use crate::error::{Result, SecretSpecError};
 use crate::manifest::CompiledSecret;
-use crate::provider::Address;
+use crate::provider::OwnedAddress;
 use crate::secrets::Secrets;
 use std::collections::HashMap;
 
@@ -141,17 +141,6 @@ impl PlannedSecret {
         &self.secret.config
     }
 
-    /// The provider [`Address`] this secret's operations resolve: its native
-    /// `ref` coordinates when it has them, otherwise SecretSpec's own
-    /// `{project}/{profile}/{key}` naming convention. Naming is orthogonal to
-    /// routing: the same address is asked of whichever store [`Route`] selects.
-    pub(crate) fn as_address<'a>(&'a self, project: &'a str, profile: &'a str) -> Address<'a> {
-        match &self.secret.config.reference {
-            Some(native) => Address::Native(native),
-            None => Address::convention(project, profile, &self.name),
-        }
-    }
-
     /// The native `ref` coordinates this secret addresses, if any.
     pub(crate) fn reference(&self) -> Option<&NativeAddress> {
         self.secret.config.reference.as_ref()
@@ -169,10 +158,20 @@ impl PlannedSecret {
         project: &str,
         profile: &str,
     ) -> String {
-        let address = self
-            .reference()
-            .map(NativeAddress::render)
-            .unwrap_or_else(|| "convention".to_string());
+        let address = if let Some(reference) = self.reference() {
+            coordinate_fingerprint("legacy-ref", reference.coordinates())
+        } else if let Some(references) = &self.config().refs {
+            let mut entries = references.iter().collect::<Vec<_>>();
+            entries.sort_by_key(|(alias, _)| alias.as_str());
+            let mut fingerprints = vec!["scoped-refs".to_string()];
+            fingerprints.extend(entries.into_iter().map(|(alias, reference)| {
+                let coordinates = coordinate_fingerprint("native-ref", reference.coordinates());
+                stable_fingerprint(["scoped-ref", alias.as_str(), coordinates.as_str()])
+            }));
+            stable_fingerprint(fingerprints.iter().map(String::as_str))
+        } else {
+            "convention".to_string()
+        };
         stable_fingerprint([
             project,
             profile,
@@ -250,6 +249,76 @@ impl ResolutionPlan {
 }
 
 impl Secrets {
+    /// Resolve one secret's address for one concrete provider endpoint.
+    ///
+    /// Legacy `ref` remains route-wide. The 0.19+ scoped model is deliberately
+    /// different: a concrete `refs.<alias>` wins for that alias, then the
+    /// alias's ref template, then the provider's ordinary convention address.
+    /// Literal provider specs have no alias identity and therefore use
+    /// convention naming. `ref` and `refs` are rejected together by config
+    /// validation, so these two modes never merge implicitly.
+    pub(crate) fn address_for_spec(
+        &self,
+        planned: &PlannedSecret,
+        provider_spec: Option<&str>,
+        project: &str,
+        profile: &str,
+    ) -> Result<OwnedAddress> {
+        if let Some(reference) = planned.reference() {
+            return Ok(OwnedAddress::Native(reference.clone()));
+        }
+
+        let effective_spec = provider_spec
+            .map(str::to_string)
+            .or_else(|| self.configured_default_provider_spec());
+        if let Some(spec) = effective_spec.as_deref()
+            && let Some(alias) = self.lookup_provider_alias_entry(spec)
+            && !alias.is_cached()
+        {
+            if let Some(reference) = planned
+                .config()
+                .refs
+                .as_ref()
+                .and_then(|refs| refs.get(spec))
+            {
+                return Ok(OwnedAddress::Native(reference.clone()));
+            }
+            if let Some(template) = alias.reference_template() {
+                let reference = template.expand(project, profile, &planned.name).map_err(|error| {
+                    SecretSpecError::ProviderOperationFailed(format!(
+                        "provider alias '{spec}' could not expand its ref template for '{}': {error}",
+                        planned.name
+                    ))
+                })?;
+                return Ok(OwnedAddress::Native(reference));
+            }
+        }
+
+        Ok(OwnedAddress::convention(project, profile, &planned.name))
+    }
+
+    /// Validate all provider-scoped refs on a secret, including source-only
+    /// aliases used later by `import`. Validation belongs in planning because
+    /// user-global aliases are unavailable to the standalone `Config` parser.
+    fn validate_scoped_refs(&self, name: &str, secret: &Secret) -> Result<()> {
+        let Some(references) = &secret.refs else {
+            return Ok(());
+        };
+        for alias_name in references.keys() {
+            let Some(alias) = self.lookup_provider_alias_entry(alias_name) else {
+                return Err(SecretSpecError::ProviderNotFound(format!(
+                    "Secret '{name}' defines `refs.{alias_name}`, but provider alias '{alias_name}' is not defined"
+                )));
+            };
+            if alias.is_cached() {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "Secret '{name}' defines `refs.{alias_name}`, but '{alias_name}' is a cached route; scoped refs must name leaf provider aliases"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Resolve a whole profile into an immutable [`ResolutionPlan`] without any
     /// I/O: merge the profile, compute each secret's effective config, and
     /// derive its resolved route.
@@ -376,6 +445,7 @@ impl Secrets {
         secret: &CompiledSecret,
         override_spec: &Option<String>,
     ) -> Result<PlannedSecret> {
+        self.validate_scoped_refs(&name, &secret.config)?;
         // A composed secret's value is derived by the executor, so it routes
         // to no store, including an explicit `--provider` override.
         let route = if secret.composition.is_some() {
@@ -527,6 +597,19 @@ impl Secrets {
             .iter()
             .map(|uri| self.canonical_provider_uri(uri))
             .collect::<Result<Vec<_>>>()?;
+        let source_route_fingerprints = alias
+            .fallback()
+            .iter()
+            .zip(&source_route_uris)
+            .map(|(spec, uri)| {
+                let template = self
+                    .lookup_provider_alias_entry(spec)
+                    .and_then(|alias| alias.reference_template())
+                    .map(|template| coordinate_fingerprint("ref-template", template.coordinates()))
+                    .unwrap_or_else(|| "convention".to_string());
+                stable_fingerprint(["source-route", spec, uri, template.as_str()])
+            })
+            .collect::<Vec<_>>();
         let cache_identity = self.canonical_storage_identity(&cache_uri)?;
 
         // The cache entry lives at the same logical address the authoritative
@@ -576,7 +659,9 @@ impl Secrets {
                 spec: cache.provider().to_string(),
                 uri: cache_uri,
                 max_age_secs: cache.max_age_secs(),
-                route_fingerprint: stable_fingerprint(source_route_uris.iter().map(String::as_str)),
+                route_fingerprint: stable_fingerprint(
+                    source_route_fingerprints.iter().map(String::as_str),
+                ),
             }),
         })
     }
@@ -636,10 +721,32 @@ fn stable_fingerprint<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
     format!("v1-{hash:016x}")
 }
 
+/// Fingerprint native coordinates without routing them through their
+/// human-readable rendering. Each coordinate name, presence marker, and value
+/// is a separately length-delimited hash part, so delimiter-like text inside an
+/// item cannot collide with a real adjacent coordinate.
+fn coordinate_fingerprint<'a>(
+    kind: &'static str,
+    coordinates: impl IntoIterator<Item = (&'static str, Option<&'a str>)>,
+) -> String {
+    let mut parts = vec![kind];
+    for (name, value) in coordinates {
+        parts.push(name);
+        match value {
+            Some(value) => {
+                parts.push("present");
+                parts.push(value);
+            }
+            None => parts.push("absent"),
+        }
+    }
+    stable_fingerprint(parts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ProviderAlias, ProviderCache};
+    use crate::config::{NativeAddressTemplate, ProviderAlias, ProviderCache};
     use crate::error::SecretSpecError;
     use crate::tests::{global_config_with_aliases, scrub_resolution_env};
     use std::collections::HashMap;
@@ -840,19 +947,96 @@ mod tests {
             ("REFERENCED".to_string(), referenced),
             ("PLAIN".to_string(), secret(None)),
         ]);
-        let plan = plan(&spec(secrets, None, &[]));
-
-        match find(&plan, "REFERENCED").as_address("proj", "default") {
-            Address::Native(native) => {
+        let spec = spec(secrets, None, &[]);
+        let plan = plan(&spec);
+        let referenced = find(&plan, "REFERENCED");
+        let referenced_address = spec
+            .address_for_spec(
+                referenced,
+                referenced.route.as_ref().and_then(Route::group_key),
+                "proj",
+                "default",
+            )
+            .unwrap();
+        match referenced_address {
+            OwnedAddress::Native(native) => {
                 assert_eq!(native.item, "db");
                 assert_eq!(native.field.as_deref(), Some("password"));
             }
-            Address::Convention { .. } => panic!("a ref should address native coordinates"),
+            OwnedAddress::Convention { .. } => {
+                panic!("a ref should address native coordinates")
+            }
         }
-        match find(&plan, "PLAIN").as_address("proj", "default") {
-            Address::Convention { key, .. } => assert_eq!(key, "PLAIN"),
-            Address::Native(_) => panic!("no ref should address the naming convention"),
+        let plain = find(&plan, "PLAIN");
+        let plain_address = spec
+            .address_for_spec(
+                plain,
+                plain.route.as_ref().and_then(Route::group_key),
+                "proj",
+                "default",
+            )
+            .unwrap();
+        match plain_address {
+            OwnedAddress::Convention { key, .. } => assert_eq!(key, "PLAIN"),
+            OwnedAddress::Native(_) => panic!("no ref should address the naming convention"),
         }
+    }
+
+    #[test]
+    fn endpoint_address_prefers_scoped_ref_then_alias_template_then_convention() {
+        let _env = scrub_resolution_env();
+        let mut configured = secret(Some(vec!["local"]));
+        configured.refs = Some(HashMap::from([(
+            "remote".to_string(),
+            NativeAddress {
+                item: "legacy-source".to_string(),
+                field: Some("token".to_string()),
+                ..Default::default()
+            },
+        )]));
+        let mut config =
+            crate::tests::resolve_test_config(HashMap::from([("API_KEY".to_string(), configured)]));
+        config.providers = Some(HashMap::from([
+            (
+                "remote".to_string(),
+                ProviderAlias::from("onepassword://Production"),
+            ),
+            (
+                "local".to_string(),
+                ProviderAlias::from("dotenv://.env")
+                    .with_reference_template(NativeAddressTemplate {
+                        item: "{project}_{profile}_{key}".to_string(),
+                        ..Default::default()
+                    })
+                    .unwrap(),
+            ),
+        ]));
+        let spec = Secrets::new(config, None, None, None);
+
+        let plan = spec.build_plan(None).unwrap();
+        let planned = find(&plan, "API_KEY");
+        assert_eq!(
+            spec.address_for_spec(planned, Some("remote"), "app", "prod")
+                .unwrap(),
+            OwnedAddress::Native(NativeAddress {
+                item: "legacy-source".to_string(),
+                field: Some("token".to_string()),
+                ..Default::default()
+            })
+        );
+        assert_eq!(
+            spec.address_for_spec(planned, Some("local"), "app", "prod")
+                .unwrap(),
+            OwnedAddress::Native(NativeAddress {
+                item: "app_prod_API_KEY".to_string(),
+                ..Default::default()
+            })
+        );
+        assert_eq!(
+            spec.address_for_spec(planned, Some("dotenv://other.env"), "app", "prod")
+                .unwrap(),
+            OwnedAddress::convention("app", "prod", "API_KEY")
+        );
     }
 
     #[test]
@@ -1164,6 +1348,88 @@ mod tests {
             fingerprint("lastpass://Work/TeamA/{project}/{profile}/{key}"),
             fingerprint("lastpass://Work/TeamB/{project}/{profile}/{key}"),
             "changing the item template must invalidate the cache"
+        );
+    }
+
+    fn template_fingerprint(template: NativeAddressTemplate) -> String {
+        let source = ProviderAlias::from("env://")
+            .with_reference_template(template)
+            .unwrap();
+        let spec = cached_spec_with(
+            vec!["route"],
+            &[
+                ("source", source),
+                ("route", cached_alias(&["source"], "keyring://", "8h")),
+            ],
+        );
+        let plan = plan(&spec);
+        route(find(&plan, "API_KEY"))
+            .cache()
+            .expect("cached route")
+            .route_fingerprint
+            .clone()
+    }
+
+    #[test]
+    fn coordinate_boundaries_distinguish_alias_template_fingerprints() {
+        let _env = scrub_resolution_env();
+        let embedded_field = NativeAddressTemplate {
+            item: "foo field={key}".to_string(),
+            ..Default::default()
+        };
+        let separate_field = NativeAddressTemplate {
+            item: "foo".to_string(),
+            field: Some("{key}".to_string()),
+            ..Default::default()
+        };
+
+        assert_ne!(
+            template_fingerprint(embedded_field),
+            template_fingerprint(separate_field),
+            "different template coordinates must not collide through display rendering"
+        );
+    }
+
+    fn scoped_ref_cache_fingerprint(reference: NativeAddress) -> String {
+        let mut configured = secret(Some(vec!["route"]));
+        configured.refs = Some(HashMap::from([("source".to_string(), reference)]));
+        let mut config =
+            crate::tests::resolve_test_config(HashMap::from([("API_KEY".to_string(), configured)]));
+        config.providers = Some(HashMap::from([
+            ("source".to_string(), ProviderAlias::from("env://")),
+            ("local".to_string(), ProviderAlias::from("keyring://")),
+            (
+                "route".to_string(),
+                cached_alias(&["source"], "local", "8h"),
+            ),
+        ]));
+        let spec = Secrets::new(config, None, None, None);
+        let plan = plan(&spec);
+        let planned = find(&plan, "API_KEY");
+        planned.cache_fingerprint(
+            route(planned).cache().expect("cached route"),
+            &spec.config().project.name,
+            "default",
+        )
+    }
+
+    #[test]
+    fn coordinate_boundaries_distinguish_scoped_ref_fingerprints() {
+        let _env = scrub_resolution_env();
+        let embedded_field = NativeAddress {
+            item: "foo field=API_KEY".to_string(),
+            ..Default::default()
+        };
+        let separate_field = NativeAddress {
+            item: "foo".to_string(),
+            field: Some("API_KEY".to_string()),
+            ..Default::default()
+        };
+
+        assert_ne!(
+            scoped_ref_cache_fingerprint(embedded_field),
+            scoped_ref_cache_fingerprint(separate_field),
+            "different scoped-ref coordinates must not collide through display rendering"
         );
     }
 

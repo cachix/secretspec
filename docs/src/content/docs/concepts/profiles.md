@@ -56,8 +56,38 @@ When using profiles, inheritance works as follows:
 
 1. **Base definition in default**: Define all your secrets with their descriptions and base requirements in the `default` profile
 2. **Override only what changes**: Other profiles only need to specify the properties that differ from default
-3. **Complete override**: When a profile defines a secret, it can override any or all properties (`required`, `default`, `description`)
+3. **Field-level overrides**: Most explicitly set properties replace the corresponding property from `default`, while omitted properties continue to inherit
 4. **Profile-specific secrets**: Secrets not in the default profile can be added to any profile
+
+### Switching reference models (0.19+)
+
+:::caution[Version compatibility]
+Provider-scoped `refs` are available starting with SecretSpec 0.19.
+:::
+
+Legacy `ref` and provider-scoped `refs` are alternative forms of one inherited
+address-model setting. Declaring either one in a profile replaces both forms
+from `[profiles.default]`; omitting both continues to inherit the default
+profile's form. This lets a profile switch from one route-wide address to
+provider-specific addresses without retaining an invalid mixture of both:
+
+```toml
+[providers]
+legacy = "onepassword://Legacy"
+production = "onepassword://Production"
+
+[profiles.default]
+API_KEY = { description = "API key", providers = ["legacy"], ref = { item = "shared-api", field = "token" } }
+
+[profiles.production]
+# Inherits the description, but replaces providers and the complete ref/refs choice.
+API_KEY = { providers = ["production"], refs = { production = { item = "production-api", field = "credential" } } }
+```
+
+The reverse switch also works: a profile's `ref` replaces inherited `refs`.
+Within one effective secret, `ref` and `refs` remain mutually exclusive. See
+[Secret References](/concepts/references/#different-coordinates-per-provider-019)
+for how each model addresses providers.
 
 ## Profile-Level Defaults
 

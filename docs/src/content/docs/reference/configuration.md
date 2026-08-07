@@ -707,6 +707,12 @@ must name a defined leaf alias; cached route aliases cannot own templates or be
 used as scoped-ref keys. A literal URI or bare provider name has no alias key,
 so only legacy `ref` or convention naming applies to it.
 
+During profile inheritance, `ref` and `refs` (0.19+) form one setting rather
+than two independently inherited fields. The most specific profile entry that
+declares either form supplies the whole setting: an explicit `refs` replaces an
+inherited `ref`, and an explicit `ref` replaces inherited `refs`. If the profile
+entry declares neither, it inherits whichever form `[profiles.default]` uses.
+
 #### How providers interpret the coordinates
 
 | Provider | `item` | `field` | Without `field` | Writes via ref |
@@ -813,4 +819,7 @@ MANUAL_SECRET = { description = "Manually managed", type = "password" }
 
 - All profiles automatically inherit from `[profiles.default]`
 - Profile-specific values override default values
+- `ref` and `refs` (0.19+) are alternative forms of one setting: declaring
+  either in a profile replaces the form inherited from `[profiles.default]`,
+  while declaring neither inherits it
 - Use the `extends` field in `[project]` to inherit from other secretspec.toml files

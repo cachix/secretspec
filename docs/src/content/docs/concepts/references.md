@@ -113,6 +113,13 @@ identity. Cached route aliases cannot own a template or scoped ref; configure
 their individual leaf aliases instead. `refs` and legacy route-wide `ref` are
 mutually exclusive.
 
+For profile inheritance, `ref` and `refs` (0.19+) are two forms of one address
+model. A profile that explicitly declares either form replaces the form
+inherited from `[profiles.default]`: `refs` can replace an inherited `ref`, and
+`ref` can replace inherited `refs`. A profile entry that declares neither keeps
+the inherited form. See [Profiles: Switching reference
+models](/concepts/profiles/#switching-reference-models-019) for an example.
+
 ## How it works
 
 - `item` is required; `field`, `vault`, `section`, and `version` are optional and

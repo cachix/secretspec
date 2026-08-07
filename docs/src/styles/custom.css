@@ -58,6 +58,17 @@
   color: var(--sl-color-accent-high);
 }
 
+/* Keep captured command output visually quieter than commands readers run. */
+.sl-markdown-content .muted-code-output code,
+.sl-markdown-content .muted-code-output code span {
+  color: var(--color-gray-400) !important;
+}
+
+:root[data-theme="light"] .sl-markdown-content .muted-code-output code,
+:root[data-theme="light"] .sl-markdown-content .muted-code-output code span {
+  color: var(--color-gray-500) !important;
+}
+
 /* Swap the release-post logo artwork with the active documentation theme. */
 :root[data-theme="dark"]
   img[alt="The new SecretSpec document-and-keyhole logo"] {

@@ -72,8 +72,9 @@ as `1h30m` are accepted.
 
 Entries use SecretSpec's logical `{project}/{profile}/{secret}` address, even
 when the authoritative secret has a provider-native `ref`. Each entry contains
-the value, write time, format version, and a fingerprint of the fallback route
-and secret reference. Changing the route or reference invalidates it.
+the value, absolute expiration time, originating `max_age`, format version, and
+a fingerprint of the fallback route and secret reference. Changing the route,
+reference, or `max_age` invalidates it.
 
 The cache must use a distinct store from every provider in `fallback`;
 otherwise, a refresh could overwrite the authoritative secret. SecretSpec
@@ -98,9 +99,10 @@ SecretSpec requests native expiry where supported, using `max_age`.
 `delete_version_after` metadata. This removes the copy on time even if
 SecretSpec never runs again.
 
-The entry's write time remains the source of truth for freshness on every
-store; a read deletes an entry older than `max_age`. If native expiry cannot be
-configured, for example because a Vault token lacks metadata access or the
+The entry's absolute expiration time remains the source of truth for freshness
+on every store; a read at or after that time deletes the entry. Machines sharing
+a cache should keep their system clocks synchronized. If native expiry cannot
+be configured, for example because a Vault token lacks metadata access or the
 mount uses KV v1, SecretSpec refuses the cache write and uses the authoritative
 route.
 
@@ -110,10 +112,12 @@ Each cache entry records a marker, project, and profile. Because addresses can
 collide in flat stores such as dotenv, SecretSpec changes only entries whose
 ownership it can verify.
 
-Unmarked entries and entries owned by another project or profile are bypassed,
-not overwritten or deleted. [`cache clear`](/reference/cli/#cache-clear-017)
-reports them. A marked but unreadable entry, such as a partial write, can be
-identified as SecretSpec's and replaced.
+Unmarked entries and unexpired entries owned by another project or profile are
+bypassed, not overwritten or deleted.
+[`cache clear`](/reference/cli/#cache-clear-017) reports them. Any expired
+SecretSpec entry can be deleted by the project that encounters it because its
+stored lifetime has ended. A marked but unreadable entry, such as a partial
+write, can be identified as SecretSpec's and replaced.
 
 If clearing reports a foreign entry, two configurations are addressing the same
 place. Give each project a separate store or path, such as the

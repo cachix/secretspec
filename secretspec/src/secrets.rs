@@ -137,8 +137,9 @@ fn group_names(group: &[&PlannedSecret]) -> String {
 enum CachedEntry {
     /// Fresh, and written for this route: serve it.
     Fresh(SecretString),
-    /// Ours, but no read will serve it: an unreadable format, a different
-    /// authoritative route, or older than the route's `max_age`. Ours to drop.
+    /// A SecretSpec entry no read will serve: expired regardless of owner, or
+    /// ours but unreadable or written for another route or freshness policy.
+    /// Safe to drop.
     Stale,
     /// Not ours to serve *or* to drop: another project's entry, or a value
     /// SecretSpec never wrote.
@@ -148,10 +149,10 @@ enum CachedEntry {
 /// Decide what a stored entry is worth to this read.
 ///
 /// Most cache stores cannot expire a value on their own, so this check *is* the
-/// expiry: the envelope records when it was written and the route carries how
-/// long that stays valid. An entry that merely no longer applies (route change,
-/// expiry) is a silent miss; one that belongs to someone else is warned about,
-/// since it means this route is addressing a store something else writes to.
+/// expiry: the envelope records its absolute expiration time. An entry that
+/// merely no longer applies (route change, expiry) is a silent miss; one that
+/// belongs to someone else is warned about, since it means this route is
+/// addressing a store something else writes to.
 fn cached_entry(
     planned: &PlannedSecret,
     cache: &ResolvedCache,
@@ -2119,6 +2120,7 @@ impl Secrets {
         let serialized = match cache::encode_entry(
             &self.config.project.name,
             profile,
+            cache.max_age_secs,
             planned.cache_fingerprint(cache, &self.config.project.name, profile),
             value,
         ) {
@@ -2137,7 +2139,7 @@ impl Secrets {
         let address = self.cache_address(profile, &planned.name);
         // Ask the store to expire the entry at the same age the envelope does.
         // Providers that cannot expire a value write it plainly; the envelope's
-        // own `cached_at` is the freshness authority either way. A store that
+        // own `expires_at` is the freshness authority either way. A store that
         // *can* expire but fails to arrange it refuses the write, which lands
         // here as a warning and drops the entry — no unexpiring copy is left.
         let result = provider.check_writable(address).and_then(|()| {
@@ -2250,7 +2252,9 @@ impl Secrets {
             return Ok(());
         };
         match cache::ownership(&stored, &self.config.project.name, profile) {
-            CacheOwnership::Ours | CacheOwnership::OursUnreadable => Ok(()),
+            CacheOwnership::Ours | CacheOwnership::Expired | CacheOwnership::OursUnreadable => {
+                Ok(())
+            }
             CacheOwnership::Foreign { project, profile } => {
                 Err(SecretSpecError::ProviderOperationFailed(format!(
                     "the cache holds {project}/{profile}'s entry for '{name}' at this address, so \

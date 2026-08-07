@@ -373,6 +373,11 @@ impl ProviderAlias {
         self.fallback.is_empty().then_some(&self.credentials)
     }
 
+    /// Mutable semantic credential sources for a leaf or inline cached provider.
+    pub fn credentials_mut(&mut self) -> Option<&mut HashMap<String, CredentialSource>> {
+        self.fallback.is_empty().then_some(&mut self.credentials)
+    }
+
     /// A cached route alias: ordered authoritative sources plus the cache they
     /// are cached in (0.17+).
     ///

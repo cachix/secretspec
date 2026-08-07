@@ -1002,9 +1002,10 @@ impl Secrets {
     /// Planned execution may unwrap only the inline form into its authoritative
     /// URI; a fallback-based cached alias remains a complete multi-store route.
     fn ensure_provider_use_allowed(&self, spec: &str, allow_inline_cached: bool) -> Result<()> {
-        if self.cached_alias(spec).is_some_and(|alias| {
-            !allow_inline_cached || alias.authoritative_uri().is_none()
-        }) {
+        if self
+            .cached_alias(spec)
+            .is_some_and(|alias| !allow_inline_cached || alias.authoritative_uri().is_none())
+        {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "cached provider alias '{spec}' is a complete route; select it through a \
                  secret's providers list, the default provider, or --provider"

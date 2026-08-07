@@ -239,13 +239,13 @@ impl KeeperProvider {
 
     fn target(&self, addr: Address<'_>) -> Result<KeeperTarget> {
         let native = matches!(addr, Address::Native(_));
-        let coords = self.resolve_coords(addr)?;
+        let coords = self.entry_coordinates(addr)?;
         Ok(KeeperTarget {
             item: coords.item.clone(),
             field: coords
                 .field
                 .clone()
-                .unwrap_or_else(|| DEFAULT_FIELD.to_string()),
+                .expect("entry coordinates always contain the Keeper field"),
             native,
         })
     }
@@ -423,6 +423,17 @@ impl Provider for KeeperProvider {
         &["field"]
     }
 
+    fn entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, NativeAddress>> {
+        let mut coords = self.resolve_coords(addr)?.into_owned();
+        if coords.field.is_none() {
+            coords.field = Some(DEFAULT_FIELD.to_string());
+        }
+        Ok(std::borrow::Cow::Owned(coords))
+    }
+
     fn with_credentials(&mut self, credentials: ProviderCredentials) {
         self.credentials = credentials;
     }
@@ -481,7 +492,7 @@ impl Provider for KeeperProvider {
     }
 
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
-        self.resolve_coords(addr).map(|_| ())
+        self.entry_coordinates(addr).map(|_| ())
     }
 
     fn delete(&self, addr: Address<'_>) -> Result<bool> {
@@ -507,6 +518,26 @@ impl Provider for KeeperProvider {
             client.delete_secret(&record.uid)
         })?;
         Ok(true)
+    }
+
+    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        if matches!(addr, Address::Native(_)) {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "Keeper secret references cannot be deleted: a reference names a record managed outside SecretSpec, and deleting it would remove the whole record"
+                    .to_string(),
+            ));
+        }
+        let target = self.target(addr)?;
+        let records = self.records()?;
+        if let Some(index) = self.record_index(&records, &target)?
+            && !records[index].is_editable
+        {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Keeper record '{}' is not editable by this application",
+                records[index].title
+            )));
+        }
+        Ok(())
     }
 
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
@@ -685,6 +716,34 @@ mod tests {
             .unwrap();
         assert_eq!(address.item, "secretspec/demo/production/DATABASE_URL");
         assert_eq!(address.field.as_deref(), Some("password"));
+    }
+
+    #[test]
+    fn same_entries_treats_an_implicit_field_as_the_password_field() {
+        let provider = KeeperProvider::new(KeeperConfig {
+            folder_uid: "folder".to_string(),
+            config_file: None,
+        });
+        let implicit = NativeAddress {
+            item: "RecordUID".to_string(),
+            ..Default::default()
+        };
+        let explicit = NativeAddress {
+            item: "RecordUID".to_string(),
+            field: Some(DEFAULT_FIELD.to_string()),
+            ..Default::default()
+        };
+
+        assert!(
+            provider
+                .same_entries(
+                    Address::Native(&implicit),
+                    &provider,
+                    Address::Native(&explicit),
+                )
+                .unwrap(),
+            "addresses that operations send to one Keeper field must compare equal"
+        );
     }
 
     #[test]

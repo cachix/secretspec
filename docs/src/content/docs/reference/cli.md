@@ -522,6 +522,11 @@ secretspec import <FROM_PROVIDER> [--delete-source]
 
 The destination provider and profile are determined from your configuration. Secrets that already exist in the destination provider will not be overwritten.
 
+In SecretSpec 0.19+, the source and destination resolve their addresses
+independently. A source alias can use its own [provider `ref` template or
+per-secret scoped ref](/concepts/references/#different-coordinates-per-provider-019),
+while the destination uses its selected alias's mapping.
+
 **Arguments:**
 - `<FROM_PROVIDER>` - Provider to import from (e.g., `env`, `dotenv:/path/to/.env`)
 - `--delete-source` - After copying, delete a source value only when the
@@ -556,12 +561,15 @@ $ secretspec import dotenv:/home/user/old-project/.env --delete-source
 component secrets are imported normally. Available since SecretSpec 0.16.
 
 With `--delete-source`, source and destination must resolve to different
-providers. A value copied during this run is read back before its source is
-deleted. If the destination already contains an identical value, the source is
-also safe to delete; if it differs, SecretSpec retains the source and reports
-the conflict. A source provider that does not support deletion fails explicitly
-instead of pretending the migration completed. This behavior is available
-starting with SecretSpec 0.18.
+physical entries. In SecretSpec 0.19+, distinct scoped refs in the same store
+are allowed. SecretSpec preflights every source and destination, performs all
+writes, reads back and validates every copied value, and only then begins
+source cleanup. If a destination already contains an identical value, the
+source is also safe to delete; if it differs, SecretSpec retains the source and
+reports the conflict. A source provider that does not support deletion fails
+explicitly instead of pretending the migration completed. Source deletion was
+introduced in SecretSpec 0.18; independent endpoint refs and operation-wide
+preflight are available in 0.19+.
 
 ### cache clear (0.17+)
 

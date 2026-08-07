@@ -1,6 +1,6 @@
 use crate::config::{
-    Config, CredentialSource, GlobalConfig, GlobalDefaults, NativeAddress, ParseError, Profile,
-    Project, ProviderAlias, ProviderCache, RequireReason, Resolved, Secret,
+    Config, CredentialSource, GlobalConfig, GlobalDefaults, NativeAddress, NativeAddressTemplate,
+    ParseError, Profile, Project, ProviderAlias, ProviderCache, RequireReason, Resolved, Secret,
 };
 use crate::error::{Result, SecretSpecError};
 use crate::secrets::Secrets;
@@ -5706,6 +5706,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
             composed: None,
             providers: None,
             reference: None,
+            refs: None,
             as_path: None,
             encoding: None,
             secret_type: Some("password".to_string()),
@@ -6910,6 +6911,262 @@ Z_SAME = {{ description = "Unsafe same-store route", providers = ["source"] }}
 }
 
 #[test]
+fn import_rejects_duplicate_destinations_before_writing() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let target = temp.path().join("target.env");
+    fs::write(&source, "A_FIRST=one\nB_SECOND=two\n").unwrap();
+    let target_uri = toml::Value::String(format!("dotenv://{}", target.display())).to_string();
+    let config: Config = toml::from_str(&format!(
+        r#"
+[project]
+name = "duplicate-import-destination"
+revision = "1.0"
+
+[providers]
+target = {{ uri = {target_uri}, ref = {{ item = "SHARED" }} }}
+
+[profiles.default]
+A_FIRST = {{ description = "First", providers = ["target"] }}
+B_SECOND = {{ description = "Second", providers = ["target"] }}
+"#
+    ))
+    .unwrap();
+    let spec = Secrets::new(config, None, None, None);
+
+    let error = spec
+        .import(&format!("dotenv://{}", source.display()))
+        .expect_err("two secrets must not silently overwrite one destination");
+
+    assert!(error.to_string().contains("same destination"), "{error}");
+    assert_eq!(
+        read_env_var(&target, "SHARED"),
+        None,
+        "destination collisions must fail before the first write"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn import_rejects_missing_destinations_reached_through_symlinked_parents() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let real_parent = temp.path().join("real");
+    let linked_parent = temp.path().join("linked");
+    fs::create_dir(&real_parent).unwrap();
+    std::os::unix::fs::symlink(&real_parent, &linked_parent).unwrap();
+    fs::write(&source, "A_FIRST=one\nB_SECOND=two\n").unwrap();
+    let real_target = real_parent.join("new.env");
+    let linked_target = linked_parent.join("new.env");
+    let config: Config = toml::from_str(&format!(
+        r#"
+[project]
+name = "symlinked-import-destination"
+revision = "1.0"
+
+[providers]
+real = {{ uri = "dotenv://{}", ref = {{ item = "SHARED" }} }}
+linked = {{ uri = "dotenv://{}", ref = {{ item = "SHARED" }} }}
+
+[profiles.default]
+A_FIRST = {{ description = "First", providers = ["real"] }}
+B_SECOND = {{ description = "Second", providers = ["linked"] }}
+"#,
+        real_target.display(),
+        linked_target.display(),
+    ))
+    .unwrap();
+    let spec = Secrets::new(config, None, None, None);
+
+    let error = spec
+        .import(&format!("dotenv://{}", source.display()))
+        .expect_err("symlinked parents must not hide one missing destination file");
+
+    assert!(error.to_string().contains("same destination"), "{error}");
+    assert!(
+        !real_target.exists(),
+        "the collision must be found before creating the destination"
+    );
+}
+
+#[test]
+fn import_delete_source_rejects_a_source_used_by_another_destination() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let store = temp.path().join("store.env");
+    fs::write(&store, "A_SOURCE=one\nB_SOURCE=two\n").unwrap();
+    let uri = toml::Value::String(format!("dotenv://{}", store.display())).to_string();
+    let config: Config = toml::from_str(&format!(
+        r#"
+[project]
+name = "cross-secret-import-collision"
+revision = "1.0"
+
+[providers]
+source = {uri}
+target = {uri}
+
+[profiles.default]
+A_FIRST = {{ description = "First", providers = ["target"], refs = {{ source = {{ item = "A_SOURCE" }}, target = {{ item = "A_TARGET" }} }} }}
+B_SECOND = {{ description = "Second", providers = ["target"], refs = {{ source = {{ item = "B_SOURCE" }}, target = {{ item = "A_SOURCE" }} }} }}
+"#
+    ))
+    .unwrap();
+    let spec = Secrets::new(config, None, None, None);
+
+    let error = spec
+        .import_with_delete_source("source")
+        .expect_err("deleting A's source would delete B's destination");
+
+    assert!(error.to_string().contains("destination"), "{error}");
+    assert_eq!(read_env_var(&store, "A_SOURCE").as_deref(), Some("one"));
+    assert_eq!(
+        read_env_var(&store, "A_TARGET"),
+        None,
+        "cross-secret collisions must fail before copying or deleting"
+    );
+}
+
+#[test]
+fn import_resolves_source_and_destination_alias_templates_independently() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let target = temp.path().join("target.env");
+    fs::write(&source, "web_default_API_KEY=from-source\n").unwrap();
+    let config: Config = toml::from_str(&format!(
+        r#"
+[project]
+name = "web"
+revision = "1.0"
+
+[providers]
+source = {{ uri = 'dotenv://{}', ref = {{ item = "{{project}}_{{profile}}_{{key}}" }} }}
+target = {{ uri = 'dotenv://{}', ref = {{ item = "target_{{key}}" }} }}
+
+[profiles.default]
+API_KEY = {{ description = "API key", providers = ["target"] }}
+"#,
+        source.display(),
+        target.display()
+    ))
+    .unwrap();
+    let spec = Secrets::new(config, None, None, None);
+
+    spec.import("source").unwrap();
+
+    assert_eq!(
+        read_env_var(&target, "target_API_KEY").as_deref(),
+        Some("from-source")
+    );
+    assert_eq!(
+        read_env_var(&target, "API_KEY"),
+        None,
+        "the destination must use its own alias template"
+    );
+}
+
+#[test]
+fn import_delete_source_allows_one_store_when_scoped_refs_name_distinct_entries() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let store = temp.path().join("store.env");
+    fs::write(&store, "FROM_TOKEN=move-me\n").unwrap();
+    let uri = format!("dotenv://{}", store.display());
+    let config: Config = toml::from_str(&format!(
+        r#"
+[project]
+name = "same-store-distinct-entry"
+revision = "1.0"
+
+[providers]
+source = '{uri}'
+target = '{uri}'
+
+[profiles.default]
+API_KEY = {{ description = "API key", providers = ["target"], refs = {{ source = {{ item = "FROM_TOKEN" }}, target = {{ item = "TO_TOKEN" }} }} }}
+"#
+    ))
+    .unwrap();
+    let spec = Secrets::new(config, None, None, None);
+
+    spec.import_with_delete_source("source").unwrap();
+
+    assert_eq!(read_env_var(&store, "FROM_TOKEN"), None);
+    assert_eq!(read_env_var(&store, "TO_TOKEN").as_deref(), Some("move-me"));
+}
+
+#[test]
+fn import_delete_source_validates_all_encoded_values_before_writing() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let target = temp.path().join("target.env");
+    fs::write(&source, "A_FIRST=keep\nZ_BAD=not-base64!\n").unwrap();
+    let config: Config = toml::from_str(
+        r#"
+[project]
+name = "import-encoding-preflight"
+revision = "1.0"
+
+[profiles.default]
+A_FIRST = { description = "Would otherwise move" }
+Z_BAD = { description = "Invalid encoded source", encoding = "base64" }
+"#,
+    )
+    .unwrap();
+    let spec = Secrets::new(
+        config,
+        None,
+        Some(format!("dotenv://{}", target.display())),
+        None,
+    );
+
+    let error = spec
+        .import_with_delete_source(&format!("dotenv://{}", source.display()))
+        .expect_err("invalid stored encoding must fail the whole preflight");
+    assert!(matches!(error, SecretSpecError::DecodeFailed { .. }));
+    assert_eq!(read_env_var(&source, "A_FIRST").as_deref(), Some("keep"));
+    assert_eq!(
+        read_env_var(&target, "A_FIRST"),
+        None,
+        "a later invalid value must fail before an earlier target write"
+    );
+}
+
+#[test]
+fn fallback_reads_use_each_alias_ref_template() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let primary = temp.path().join("primary.env");
+    let fallback = temp.path().join("fallback.env");
+    fs::write(&primary, "OTHER=miss\n").unwrap();
+    fs::write(&fallback, "FALLBACK_API_KEY=answer\n").unwrap();
+    let config: Config = toml::from_str(&format!(
+        r#"
+[project]
+name = "fallback-ref-templates"
+revision = "1.0"
+
+[providers]
+primary = {{ uri = 'dotenv://{}', ref = {{ item = "PRIMARY_{{key}}" }} }}
+fallback = {{ uri = 'dotenv://{}', ref = {{ item = "FALLBACK_{{key}}" }} }}
+
+[profiles.default]
+API_KEY = {{ description = "API key", providers = ["primary", "fallback"] }}
+"#,
+        primary.display(),
+        fallback.display()
+    ))
+    .unwrap();
+    let spec = Secrets::new(config, None, None, None);
+
+    assert_eq!(resolved_value(&spec, "API_KEY"), "answer");
+}
+
+#[test]
 fn test_import_unknown_source_lists_available_aliases() {
     let temp_dir = TempDir::new().unwrap();
     let source_uri = format!("dotenv://{}", temp_dir.path().join(".env.source").display());
@@ -7211,6 +7468,94 @@ fn audit_get_present_records_found_without_value() {
     assert!(events[0]["provider"].as_str().unwrap().contains("dotenv"));
     // The retrieved value never reaches the log.
     assert!(!lines.lock().unwrap()[0].contains("hunter2"));
+}
+
+#[test]
+fn audit_get_records_the_selected_alias_expanded_ref() {
+    let _env = scrub_resolution_env();
+    let temp_dir = TempDir::new().unwrap();
+    let store = temp_dir.path().join("store.env");
+    fs::write(&store, "prod_REQUIRED=hunter2\n").unwrap();
+    let config: Config = toml::from_str(&format!(
+        r#"
+[project]
+name = "audit-template"
+revision = "1.0"
+
+[providers]
+target = {{ uri = 'dotenv://{}', ref = {{ item = "{{profile}}_{{key}}" }} }}
+
+[profiles.default]
+REQUIRED = {{ description = "required", providers = ["target"] }}
+
+[profiles.prod]
+"#,
+        store.display()
+    ))
+    .unwrap();
+    let mut spec = Secrets::new(config, None, None, Some("prod".to_string()));
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    spec.get("REQUIRED").unwrap();
+
+    let events = audit_events(&lines);
+    assert_eq!(events[0]["ref"], "item=prod_REQUIRED");
+    assert!(!lines.lock().unwrap()[0].contains("hunter2"));
+}
+
+#[test]
+fn audit_failed_get_records_scoped_and_alias_template_refs() {
+    let _env = scrub_resolution_env();
+    let temp_dir = TempDir::new().unwrap();
+    let uri = format!("dotenv://{}", temp_dir.path().join("missing.env").display());
+
+    let cases = [
+        (
+            ProviderAlias::from(uri.clone())
+                .with_reference_template(NativeAddressTemplate {
+                    item: "invalid-{key}".to_string(),
+                    ..Default::default()
+                })
+                .unwrap(),
+            None,
+            "item=invalid-REQUIRED",
+        ),
+        (
+            ProviderAlias::from(uri),
+            Some(NativeAddress {
+                item: "invalid-scoped".to_string(),
+                ..Default::default()
+            }),
+            "item=invalid-scoped",
+        ),
+    ];
+
+    for (provider, scoped_ref, expected_ref) in cases {
+        let mut secret = Secret {
+            description: Some("required".to_string()),
+            providers: Some(vec!["target".to_string()]),
+            ..Default::default()
+        };
+        if let Some(reference) = scoped_ref {
+            secret.refs = Some(HashMap::from([("target".to_string(), reference)]));
+        }
+        let mut config = resolve_test_config(HashMap::from([("REQUIRED".to_string(), secret)]));
+        config.providers = Some(HashMap::from([("target".to_string(), provider)]));
+        let mut spec = Secrets::new(config, None, None, None);
+        let (logger, lines) = crate::audit::test_support::collecting_logger();
+        spec.set_audit_for_test(logger);
+
+        assert!(matches!(
+            spec.get("REQUIRED"),
+            Err(SecretSpecError::ProviderOperationFailed(_))
+        ));
+
+        let events = audit_events(&lines);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["outcome"], "error");
+        assert_eq!(events[0]["ref"], expected_ref);
+    }
 }
 
 #[test]
@@ -9193,6 +9538,56 @@ fn a_cached_default_provider_reports_the_store_it_reads_first() {
 
     let report = secrets.report().unwrap();
     assert_eq!(report.provider, format!("dotenv://{}", source.display()));
+}
+
+#[test]
+fn audit_cache_hit_omits_the_authoritative_legacy_ref() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "REMOTE_API_KEY=remote\n").unwrap();
+    let mut config = resolve_test_config(HashMap::from([(
+        "API_KEY".to_string(),
+        Secret {
+            providers: Some(vec!["myprovider".to_string()]),
+            reference: Some(NativeAddress {
+                item: "REMOTE_API_KEY".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )]));
+    config.providers = Some(cached_dotenv_providers(&[&source], &cache, "8h"));
+    let mut secrets = Secrets::new(config, None, None, None);
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    secrets.set_audit_for_test(logger);
+
+    secrets.get("API_KEY").unwrap();
+    secrets.get("API_KEY").unwrap();
+
+    let events: Vec<_> = audit_events(&lines)
+        .into_iter()
+        .filter(|event| event["action"] == "get")
+        .collect();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0]["ref"], "item=REMOTE_API_KEY");
+    assert!(
+        events[0]["provider"]
+            .as_str()
+            .unwrap()
+            .contains("source.env")
+    );
+    assert!(
+        events[1]["provider"]
+            .as_str()
+            .unwrap()
+            .contains("cache.env")
+    );
+    assert!(
+        events[1].get("ref").is_none(),
+        "the cache store was addressed by SecretSpec convention, not the authoritative ref"
+    );
 }
 
 #[test]

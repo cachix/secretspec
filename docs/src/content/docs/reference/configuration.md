@@ -132,6 +132,7 @@ Each secret variable is defined as a table with the following fields:
 | `composed` (0.16+) | string | No | Derive a read-only value from other declared secrets using `${UPPERCASE_NAME}` references |
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `ref` | table | No | Coordinates naming an externally managed secret in the provider's store (e.g. `ref = { item = "db", field = "password" }`) |
+| `refs` (0.19+) | table | No | Provider-alias-scoped coordinates, keyed by leaf alias (e.g. `refs = { source = { item = "old" }, target = { item = "new" } }`); mutually exclusive with `ref` |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
 | `encoding` (0.19+) | `"base64"`, `"base64url"`, or `"hex"` | No | Encode logical values before storage writes and decode stored values after reads |
 | `type` | string | No | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
@@ -172,7 +173,8 @@ References form a static dependency graph. Declaration order does not matter,
 and composed secrets may reference other composed secrets. SecretSpec rejects
 unknown references, cycles, malformed references, and source conflicts while
 loading the manifest. A composed secret is read-only and cannot also set
-`default`, `providers`, `ref`, `type`, enabled `generate`, or `encoding` (0.19+).
+`default`, `providers`, `ref`, `refs` (0.19+), `type`, enabled `generate`, or
+`encoding` (0.19+).
 
 Composition intentionally does **not** implement dotenv or shell expansion:
 
@@ -393,6 +395,7 @@ Provider alias tables with `uri` and `credentials` are available since
 SecretSpec 0.15. SecretSpec 0.14 accepts only bare URI strings; when using
 0.14, configure provider credentials through the provider's existing
 environment variables, such as `BWS_ACCESS_TOKEN`.
+Provider alias `ref` templates are available starting with SecretSpec 0.19.
 Cached alias tables with `fallback` and `cache` are available since SecretSpec
 0.17.
 :::
@@ -446,6 +449,7 @@ forms are accepted in the project `[providers]` and user
 |-------|------|----------|-------------|
 | `uri` | string | Yes (table form) | The provider URI. A bare-string alias is shorthand for `{ uri = "..." }`. |
 | `credentials` | table | No | Maps a semantic [provider credential](/reference/provider-credentials/) name to its source. |
+| `ref` (0.19+) | table | No | Native-address template for this leaf alias. Coordinate strings may contain `{project}`, `{profile}`, and `{key}`. |
 
 Each `credentials` value is either a bare provider spec — read at the convention path for the active project and profile — or a table `{ provider = "...", ref = { ... } }` that pins the exact location with the same `ref` coordinates a secret uses.
 
@@ -462,6 +466,24 @@ credentials = { role_id   = { provider = "onepassword", ref = { vault = "Infra",
 ```
 
 Configured credentials take precedence over provider environment fallbacks, credential chains are limited to one hop, and a fetched credential is never written to the environment. Store the credentials with [`secretspec config provider login`](/reference/cli/#config-provider-login). See [Provider credentials](/concepts/providers/#provider-credentials) for the full behavior.
+
+Starting with SecretSpec 0.19, a leaf alias may also compile logical secret
+names into that provider's native coordinates. Templates expand each
+placeholder once; text inserted from a project, profile, or key is never
+interpreted as another placeholder.
+
+```toml title="secretspec.toml"
+[providers]
+remote = { uri = "onepassword://Production", ref = { item = "{project}-{profile}", field = "{key}" } }
+local = { uri = "dotenv://.env", ref = { item = "{key}" } }
+
+[profiles.production]
+API_KEY = { description = "API key", providers = ["remote", "local"] }
+```
+
+Templates belong on the leaf aliases in a cached route, not on the cached
+alias itself. Bare provider names and literal URIs have no alias identity, so
+they use provider convention naming unless the secret declares legacy `ref`.
 
 #### SecretSpec 0.17 cached alias values
 
@@ -649,6 +671,41 @@ TOKEN = { description = "Token", ref = { vault = "Production", item = "infra", f
 Which provider resolves a `ref` follows the ordinary [provider resolution
 order](/concepts/providers/fallback/); a `ref` composes with the `providers` fallback
 chain, and each provider is asked for the same coordinates.
+
+#### Provider-scoped references (0.19+)
+
+:::caution[Version compatibility]
+Provider-scoped `refs` and provider-alias `ref` templates are available
+starting with SecretSpec 0.19.
+:::
+
+Use `refs` when one logical secret already has different native coordinates in
+different providers. Keys are leaf provider aliases; they are identity, not a
+URI lookup, so aliases that happen to resolve to the same URI remain distinct.
+An entry may name an import-only source alias that is absent from the secret's
+ordinary `providers` route.
+
+```toml
+[providers]
+old = "onepassword://Legacy"
+new = { uri = "onepassword://Production", ref = { item = "{project}-{profile}", field = "{key}" } }
+local = "keyring://"
+
+[profiles.production]
+API_KEY = { description = "API key", providers = ["new", "local"], refs = { old = { item = "legacy-api", field = "token" } } }
+```
+
+For each selected endpoint, address resolution is:
+
+1. Legacy route-wide `ref`, when present (for compatibility).
+2. The matching `refs.<alias>` entry.
+3. The matching alias's `ref` template.
+4. The provider's ordinary `{project}/{profile}/{key}` convention.
+
+`ref` and `refs` cannot be combined on one effective secret. Every `refs` key
+must name a defined leaf alias; cached route aliases cannot own templates or be
+used as scoped-ref keys. A literal URI or bare provider name has no alias key,
+so only legacy `ref` or convention naming applies to it.
 
 #### How providers interpret the coordinates
 

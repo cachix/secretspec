@@ -80,6 +80,39 @@ file without touching the manifest.
 $ secretspec run --provider dotenv:.env.fixtures -- cargo test
 ```
 
+## Different coordinates per provider (0.19+)
+
+:::caution[Version compatibility]
+Provider-scoped `refs` and provider-alias `ref` templates are available
+starting with SecretSpec 0.19.
+:::
+
+The original `ref` remains useful when every provider understands one address.
+When endpoints organize the same logical secret differently, attach a template
+to each leaf alias and use `refs` only for exceptions:
+
+```toml
+[providers]
+remote = { uri = "onepassword://Production", ref = { item = "{project}-{profile}", field = "{key}" } }
+local = { uri = "dotenv://.env", ref = { item = "{key}" } }
+legacy = "onepassword://Legacy"
+
+[profiles.production]
+API_KEY = { description = "API key", providers = ["remote", "local"], refs = { legacy = { item = "old-api-item", field = "token" } } }
+```
+
+SecretSpec resolves each endpoint independently: `refs.<selected-alias>` wins,
+then that alias's template, then convention naming. This applies to primary and
+fallback reads, writes, and both sides of `import`; the `legacy` ref above can
+therefore describe an import source without adding it to the normal read route.
+Templates support `{project}`, `{profile}`, and `{key}` in every coordinate.
+
+Scoped refs deliberately key on aliases, not resolved URIs. Literal provider
+URIs and bare provider names use convention naming because they have no alias
+identity. Cached route aliases cannot own a template or scoped ref; configure
+their individual leaf aliases instead. `refs` and legacy route-wide `ref` are
+mutually exclusive.
+
 ## How it works
 
 - `item` is required; `field`, `vault`, `section`, and `version` are optional and
@@ -87,8 +120,9 @@ $ secretspec run --provider dotenv:.env.fixtures -- cargo test
 - Reads and writes are symmetric: `secretspec set` and interactive `check` write
   through the coordinates in place wherever the store supports writes. Read-only
   stores fail with a clear error.
-- `ref` is always a table. String and URI forms (`ref = "op://vault/item/field"`)
-  are rejected, with an error that spells out the equivalent table.
+- `ref` and every provider-scoped `refs.<alias>` value are tables. String and
+  URI forms (`ref = "op://vault/item/field"`) are rejected, with an error that
+  spells out the equivalent table.
 - Secrets sharing identical coordinates and store are fetched once, and
   [audit log](/concepts/audit/) events carry the coordinates.
 

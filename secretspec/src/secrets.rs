@@ -9,7 +9,7 @@ use crate::config::{
 use crate::error::{Result, SecretSpecError};
 use crate::manifest::{CompiledManifest, MissingPolicy};
 use crate::plan::{PlannedSecret, ResolutionPlan, ResolvedCache, Route};
-use crate::provider::{Address, Provider as ProviderTrait, ProviderCredentials};
+use crate::provider::{Address, OwnedAddress, Provider as ProviderTrait, ProviderCredentials};
 use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
 use crate::resolve::{RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource};
 use crate::validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
@@ -246,7 +246,18 @@ type GroupFetch<'a> = (
     Vec<&'a PlannedSecret>,
     Box<dyn ProviderTrait>,
 );
-type FallbackReadResult = Result<(Option<SecretString>, Option<String>)>;
+type FallbackReadResult = Result<(Option<SecretString>, Option<String>, Option<NativeAddress>)>;
+
+struct PreparedImport {
+    planned: PlannedSecret,
+    target_provider: Box<dyn ProviderTrait>,
+    source_address: OwnedAddress,
+    target_address: OwnedAddress,
+    source_value: Option<SecretString>,
+    target_value: Option<SecretString>,
+    copied: bool,
+    source_deleted: bool,
+}
 
 /// Memoized provider credentials with single-flight population per key.
 ///
@@ -1445,6 +1456,33 @@ impl Secrets {
             .map(|encoding| Self::encode_logical_value(encoding, value))
     }
 
+    /// Validate a stored value before import copies it into another provider.
+    /// Import moves the stored representation verbatim, so an invalid encoded
+    /// source must fail before any target write (and especially before source
+    /// cleanup) instead of creating an unreadable destination.
+    fn validate_import_value(
+        planned: &PlannedSecret,
+        diagnostic_name: &str,
+        value: &SecretString,
+    ) -> Result<()> {
+        let Some(encoding) = planned.encoding() else {
+            return Ok(());
+        };
+        let decoded = Self::decode_stored_value(encoding, diagnostic_name, value)?;
+        if !planned.as_path() {
+            std::str::from_utf8(decoded.expose_secret()).map_err(|error| {
+                SecretSpecError::DecodeFailed {
+                    name: diagnostic_name.to_string(),
+                    encoding: encoding.as_str(),
+                    reason: format!(
+                        "decoded bytes are not valid UTF-8 ({error}); set `as_path = true` to expose binary data"
+                    ),
+                }
+            })?;
+        }
+        Ok(())
+    }
+
     /// Decode a stored representation independently of its exposure shape, then
     /// either return UTF-8 text or materialize the bytes to an owner-only file.
     fn prepare_resolved(
@@ -1954,14 +1992,21 @@ impl Secrets {
     /// coordinates and batches or parallelizes as the store allows. The address
     /// is the one the plan already derived, so naming lives in exactly one place.
     fn fetch_group(
+        &self,
         provider: &dyn ProviderTrait,
+        provider_spec: Option<&str>,
         group: &[&PlannedSecret],
         project: &str,
         profile: &str,
     ) -> Result<HashMap<String, SecretString>> {
+        let addresses = group
+            .iter()
+            .map(|planned| self.address_for_spec(planned, provider_spec, project, profile))
+            .collect::<Result<Vec<_>>>()?;
         let requests: Vec<(&str, Address<'_>)> = group
             .iter()
-            .map(|planned| (planned.name.as_str(), planned.as_address(project, profile)))
+            .zip(&addresses)
+            .map(|(planned, address)| (planned.name.as_str(), address.as_address()))
             .collect();
         provider.get_many(&requests)
     }
@@ -2557,11 +2602,12 @@ impl Secrets {
     /// # Arguments
     ///
     /// * `secret_name` - What a warning may call this secret. Diagnostics only —
-    ///   the read is addressed by `addr` — so a caller resolving a secret the
+    ///   the read is addressed from `planned` and each selected provider spec —
+    ///   so a caller resolving a secret the
     ///   active scope hides passes [`HIDDEN_SECRET_LABEL`] instead of the real
     ///   name (see [`Secrets::diagnostic_secret_name`])
-    /// * `addr` - The secret's [`Address`] (see [`PlannedSecret::as_address`]);
-    ///   the same address is asked of every provider in the chain
+    /// * `planned` - The logical secret and provider-scoped refs used to derive
+    ///   each endpoint's address
     /// * `provider_specs` - Optional chain of provider specs (aliases or inline
     ///   URIs) to try in order, resolved lazily per entry
     /// * `profile` - The profile the read is addressed under; scopes any
@@ -2569,23 +2615,25 @@ impl Secrets {
     ///
     /// # Returns
     ///
-    /// A tuple of the secret value (or `None` if not found in any provider) and
-    /// the URI of the provider to attribute the access to: on a hit, the serving
-    /// provider; on a chain miss/error, the last provider tried. The URI lets
-    /// callers (e.g. the audit log) record which provider actually answered.
+    /// A tuple of the secret value (or `None` if not found in any provider), the
+    /// URI of the provider to attribute the access to, and that endpoint's
+    /// expanded native ref (if any). On a hit, attribution names the serving
+    /// provider; on a chain miss/error, the last provider tried.
     fn get_secret_from_providers(
         &self,
         provider_cache: &ProviderCache,
+        planned: &PlannedSecret,
         secret_name: &str,
-        addr: Address<'_>,
         provider_specs: Option<&[String]>,
-        profile: Option<&str>,
-    ) -> Result<(Option<SecretString>, Option<String>)> {
+        project: &str,
+        profile: &str,
+    ) -> Result<(Option<SecretString>, Option<String>, Option<NativeAddress>)> {
         // If a provider chain is supplied, try it in order.
         if let Some(specs) = provider_specs {
             let mut last_error: Option<SecretSpecError> = None;
             let mut any_healthy = false;
             let mut last_uri: Option<String> = None;
+            let mut last_reference: Option<NativeAddress> = None;
             for spec in specs {
                 // Resolve this link only now, as the chain reaches it. An
                 // undefined alias is one broken link, treated exactly like a
@@ -2607,7 +2655,7 @@ impl Secrets {
                 // Build from the raw spec (not the resolved URI) so an alias's
                 // `credentials` is applied to this chain link too. Shared, not
                 // rebuilt: this walk runs per secret (see [`ProviderCache`]).
-                let provider = match self.shared_provider(provider_cache, spec, profile) {
+                let provider = match self.shared_provider(provider_cache, spec, Some(profile)) {
                     Ok(p) => p,
                     Err(e) => {
                         // Construction failed after resolution, so redact the
@@ -2627,8 +2675,12 @@ impl Secrets {
                 // `uri()` but that `redact_uri` cannot remove from an opaque URI.
                 let provider_uri = provider.uri();
                 last_uri = Some(provider_uri.clone());
-                match provider.get(addr) {
-                    Ok(Some(value)) => return Ok((Some(value), Some(provider_uri))),
+                let address = self.address_for_spec(planned, Some(spec), project, profile)?;
+                last_reference = address.native().cloned();
+                match provider.get(address.as_address()) {
+                    Ok(Some(value)) => {
+                        return Ok((Some(value), Some(provider_uri), last_reference));
+                    }
                     Ok(None) => {
                         any_healthy = true;
                         continue;
@@ -2646,13 +2698,16 @@ impl Secrets {
             // a healthy "not found" — otherwise the secret is genuinely missing.
             match last_error {
                 Some(e) if !any_healthy => Err(e),
-                _ => Ok((None, last_uri)),
+                _ => Ok((None, last_uri, last_reference)),
             }
         } else {
             // No per-secret providers, use default provider
-            let backend = self.get_provider(None, profile)?;
+            let backend = self.get_provider(None, Some(profile))?;
             let uri = backend.uri();
-            backend.get(addr).map(|opt| (opt, Some(uri)))
+            let address = self.address_for_spec(planned, None, project, profile)?;
+            backend
+                .get(address.as_address())
+                .map(|opt| (opt, Some(uri), address.native().cloned()))
         }
     }
 
@@ -2815,7 +2870,13 @@ impl Secrets {
             }
         };
 
-        let addr = planned.as_address(&self.config.project.name, &profile_name);
+        let address = self.address_for_spec(
+            &planned,
+            route.group_key(),
+            &self.config.project.name,
+            &profile_name,
+        )?;
+        let addr = address.as_address();
         // Refuse before prompting for a value. The provider states the reason:
         // a store may be writable through the convention layout yet reject the
         // `ref` this secret names.
@@ -2870,7 +2931,7 @@ impl Secrets {
             name,
             &profile_name,
             Some(backend.uri()),
-            planned.reference(),
+            address.native(),
             None,
         );
         result?;
@@ -2937,13 +2998,19 @@ impl Secrets {
             }
         };
 
-        let result = backend.delete(planned.as_address(&self.config.project.name, &profile_name));
+        let address = self.address_for_spec(
+            &planned,
+            route.group_key(),
+            &self.config.project.name,
+            &profile_name,
+        )?;
+        let result = backend.delete(address.as_address());
         self.audit_delete_result(
             &result,
             name,
             &profile_name,
             Some(backend.uri()),
-            planned.reference(),
+            address.native(),
         );
         let deleted = result?;
         // Even a no-op authoritative delete must invalidate the cache: the
@@ -3042,11 +3109,9 @@ impl Secrets {
         // A fresh cache hit completes the read without constructing or
         // contacting any authoritative provider. Misses and invalid entries
         // fall through to the ordinary ordered provider route.
-        let mut cache_hit = false;
-        let result =
+        let (result, cache_hit) =
             if let Some((value, uri)) = self.read_cached_secret(&planned, route, &profile_name) {
-                cache_hit = true;
-                Ok((Some(value), Some(uri)))
+                (Ok((Some(value), Some(uri), None)), true)
             } else {
                 // Walk the route's chain in order; each entry is resolved lazily and a
                 // broken link is skipped with a warning, so an undefined alias never
@@ -3055,15 +3120,16 @@ impl Secrets {
                 let provider_cache = ProviderCache::default();
                 let result = self.get_secret_from_providers(
                     &provider_cache,
+                    &planned,
                     name,
-                    planned.as_address(&self.config.project.name, &profile_name),
                     read_specs.as_deref(),
-                    Some(&profile_name),
+                    &self.config.project.name,
+                    &profile_name,
                 );
-                if let Ok((Some(value), _)) = &result {
+                if let Ok((Some(value), _, _)) = &result {
                     self.write_cached_secret(&planned, route, &profile_name, value);
                 }
-                result
+                (result, false)
             };
 
         // Audit the access at the provider boundary, before defaults are applied.
@@ -3071,9 +3137,33 @@ impl Secrets {
         // attributes to the last provider tried rather than guessing. The native
         // coordinates (if any) are recorded alongside, since the provider URI
         // names only the store.
-        let reference = (!cache_hit).then(|| planned.reference()).flatten();
+        let attempted_address = if !cache_hit && result.is_err() {
+            let read_specs = route.specs();
+            let provider_spec = read_specs
+                .as_deref()
+                .and_then(|specs| specs.last().map(String::as_str));
+            self.address_for_spec(
+                &planned,
+                provider_spec,
+                &self.config.project.name,
+                &profile_name,
+            )
+            .ok()
+        } else {
+            None
+        };
+        let reference = if cache_hit {
+            None
+        } else {
+            result
+                .as_ref()
+                .ok()
+                .and_then(|(_, _, reference)| reference.as_ref())
+                .or_else(|| attempted_address.as_ref().and_then(OwnedAddress::native))
+                .or_else(|| planned.reference())
+        };
         match &result {
-            Ok((Some(_), uri)) => self.record(
+            Ok((Some(_), uri, _)) => self.record(
                 AuditAction::Get,
                 &profile_name,
                 AuditOutcome::Found,
@@ -3084,7 +3174,7 @@ impl Secrets {
                     ..Default::default()
                 },
             ),
-            Ok((None, uri)) if default.is_some() => self.record(
+            Ok((None, uri, _)) if default.is_some() => self.record(
                 AuditAction::Get,
                 &profile_name,
                 AuditOutcome::Default,
@@ -3095,7 +3185,7 @@ impl Secrets {
                     ..Default::default()
                 },
             ),
-            Ok((None, uri)) => self.record(
+            Ok((None, uri, _)) => self.record(
                 AuditAction::Get,
                 &profile_name,
                 AuditOutcome::Missing,
@@ -3249,16 +3339,19 @@ impl Secrets {
                                 self.write_provider_for_route(route, Some(&profile_display))?;
                             let encoded_value = Self::encoded_for_storage(&planned, &value);
                             let stored_value = encoded_value.as_ref().unwrap_or(&value);
-                            let set_result = backend.set(
-                                planned.as_address(&self.config.project.name, &profile_display),
-                                stored_value,
-                            );
+                            let address = self.address_for_spec(
+                                &planned,
+                                route.group_key(),
+                                &self.config.project.name,
+                                &profile_display,
+                            )?;
+                            let set_result = backend.set(address.as_address(), stored_value);
                             self.audit_write_result(
                                 &set_result,
                                 secret_name,
                                 &profile_display,
                                 Some(backend.uri()),
-                                planned.reference(),
+                                address.native(),
                                 None,
                             );
                             set_result?;
@@ -3484,7 +3577,6 @@ impl Secrets {
 
     fn import_internal(&self, from_provider: &str, delete_source: bool) -> Result<()> {
         self.ensure_reason_for(AuditAction::Import, None)?;
-        // Resolve profile (checks env var, then global config, then defaults to "default")
         let profile_display = self.resolve_profile_name(None);
 
         let mut imported = 0;
@@ -3492,29 +3584,14 @@ impl Secrets {
         let mut not_found = 0;
         let mut deleted_from_source = 0;
         let mut kept_in_source = 0;
-        // Every secret the import reads from the source/target, in iteration
-        // order. An import is one bulk action over this whole set, so it is the
-        // `keys` recorded in the audit log — independent of how many were copied,
-        // so a no-op import (nothing to copy) is still recorded as a read.
         let mut read_names: Vec<String> = Vec::new();
-
-        // Run the copy in an inner closure so that any early error (provider
-        // build, profile resolution, a per-secret get/set) can be audited with
-        // the secrets read so far before the error propagates. `source_uri`
-        // is filled in once the source provider is built.
         let mut source_uri: Option<String> = None;
+
         let copy_result = (|| -> Result<()> {
-            // Create the "from" provider and check availability. `build_provider`
-            // expands a provider alias used as the import source.
             let from_provider_instance =
                 self.build_provider(from_provider.to_string(), Some(&profile_display))?;
             source_uri = Some(from_provider_instance.uri());
 
-            // Deletion support is a registered provider capability. Reject a
-            // source that cannot delete before planning or touching any target;
-            // otherwise the first copied value would leave a partial import
-            // when the trait's default `delete` implementation inevitably
-            // failed.
             if delete_source
                 && !crate::provider::spec_provider_deletes(
                     &self.resolve_provider_spec(from_provider.to_string()),
@@ -3528,195 +3605,287 @@ impl Secrets {
 
             eprintln!(
                 "Importing secrets from {} (profile: {})...\n",
-                from_provider.blue(),
+                from_provider_instance.uri().blue(),
                 profile_display.cyan()
             );
 
-            // Current + default profile secrets. Unscoped: `import` has no
-            // `--scope`, so an ambient SECRETSPEC_SCOPE must not narrow the copy.
             let import_names = self.profile_secret_names_unscoped(Some(&profile_display))?;
+            let mut prepared = Vec::new();
 
-            // Plan every provider-backed secret before copying anything. With
-            // source cleanup enabled this is also a destructive-operation
-            // preflight: reject any same-store destination before an earlier
-            // item can be copied and removed from the source.
-            let mut import_plans = Vec::new();
+            // Resolve and read every endpoint before mutating either store.
+            // This makes failures in a later secret harmless to earlier source
+            // entries and gives --delete-source one destructive preflight.
             for name in import_names {
                 let planned = self
                     .plan_secret(&name, &profile_display, None)?
                     .expect("Secret should exist since we're iterating over it");
-                // A composed secret has no stored value to copy.
-                if planned.route.is_none() {
+                let Some(route) = planned.route.as_ref() else {
                     continue;
+                };
+
+                read_names.push(name.clone());
+                let source_address = self.address_for_spec(
+                    &planned,
+                    Some(from_provider),
+                    &self.config.project.name,
+                    &profile_display,
+                )?;
+                let target_address = self.address_for_spec(
+                    &planned,
+                    route.group_key(),
+                    &self.config.project.name,
+                    &profile_display,
+                )?;
+                let target_provider =
+                    self.write_provider_for_route(route, Some(&profile_display))?;
+
+                if delete_source
+                    && from_provider_instance.same_entries(
+                        source_address.as_address(),
+                        target_provider.as_ref(),
+                        target_address.as_address(),
+                    )?
+                {
+                    return Err(SecretSpecError::ProviderOperationFailed(format!(
+                        "refusing to delete '{}' from the import source because source and destination resolve to the same provider entry ({})",
+                        planned.name,
+                        from_provider_instance.uri()
+                    )));
                 }
-                import_plans.push(planned);
-            }
-            if delete_source {
-                for planned in &import_plans {
-                    let route = planned
-                        .route
+
+                let source_value = from_provider_instance.get(source_address.as_address())?;
+                let target_value = target_provider.get(target_address.as_address())?;
+
+                if let Some(value) = &source_value {
+                    Self::validate_import_value(&planned, &planned.name, value)?;
+                    if target_value.is_none() {
+                        target_provider.check_writable(target_address.as_address())?;
+                    }
+                    let target_will_match = target_value
                         .as_ref()
-                        .expect("composed secrets were filtered above");
-                    let to_provider =
-                        self.write_provider_for_route(route, Some(&profile_display))?;
-                    let addr = planned.as_address(&self.config.project.name, &profile_display);
-                    if from_provider_instance.same_entry(to_provider.as_ref(), addr)? {
+                        .is_none_or(|existing| existing.expose_secret() == value.expose_secret());
+                    if delete_source && target_will_match {
+                        from_provider_instance.check_deletable(source_address.as_address())?;
+                    }
+                }
+
+                prepared.push(PreparedImport {
+                    planned,
+                    target_provider,
+                    source_address,
+                    target_address,
+                    source_value,
+                    target_value,
+                    copied: false,
+                    source_deleted: false,
+                });
+            }
+
+            // A destination is one physical entry, even when aliases, URI
+            // spellings, or templates make the configured endpoints look
+            // different. Reject collisions before copying so two logical
+            // secrets cannot both act on the same stale target snapshot.
+            for left_index in 0..prepared.len() {
+                let left = &prepared[left_index];
+                for right in &prepared[left_index + 1..] {
+                    if left.target_provider.same_entries(
+                        left.target_address.as_address(),
+                        right.target_provider.as_ref(),
+                        right.target_address.as_address(),
+                    )? {
                         return Err(SecretSpecError::ProviderOperationFailed(format!(
-                            "refusing to delete '{}' from the import source because source and destination resolve to the same provider ({})",
-                            planned.name,
-                            from_provider_instance.uri()
+                            "refusing to import '{}' and '{}' because they resolve to the same destination provider entry ({})",
+                            left.planned.name,
+                            right.planned.name,
+                            left.target_provider.uri()
                         )));
                     }
                 }
             }
 
-            // Process each plan using the same write route and address `set`
-            // executes. Sorted names keep the per-secret summary lines stable.
-            for planned in import_plans {
-                let name = planned.name.clone();
-                let route = planned
-                    .route
-                    .as_ref()
-                    .expect("composed secrets were filtered above");
-                read_names.push(name.clone());
-                let description = planned.config().description.as_deref();
-                let label = format_secret_label(&name, description);
+            if delete_source {
+                // Cleanup must not remove any destination in this import. The
+                // per-secret check above protects each source from its own
+                // destination; this cross-product protects it from every other
+                // secret's destination before the first write or deletion.
+                for (source_index, source) in prepared.iter().enumerate() {
+                    let Some(source_value) = &source.source_value else {
+                        continue;
+                    };
+                    let source_will_be_deleted =
+                        source.target_value.as_ref().is_none_or(|target_value| {
+                            source_value.expose_secret() == target_value.expose_secret()
+                        });
+                    if !source_will_be_deleted {
+                        continue;
+                    }
 
-                let to_provider = self.write_provider_for_route(route, Some(&profile_display))?;
-
-                // The secret's address (native `ref` coordinates or convention
-                // naming) applies to both stores: naming is orthogonal to
-                // which store holds the value.
-                let addr = planned.as_address(&self.config.project.name, &profile_display);
-                // First check if the secret exists in the "from" provider
-                match from_provider_instance.get(addr)? {
-                    Some(value) => {
-                        // Secret exists in "from" provider, check if it exists in "to" provider
-                        match to_provider.get(addr)? {
-                            Some(existing) => {
-                                already_exists += 1;
-                                if delete_source
-                                    && existing.expose_secret() == value.expose_secret()
-                                {
-                                    let delete_result = from_provider_instance.delete(addr);
-                                    self.audit_delete_result(
-                                        &delete_result,
-                                        &name,
-                                        &profile_display,
-                                        Some(from_provider_instance.uri()),
-                                        planned.reference(),
-                                    );
-                                    deleted_from_source += usize::from(delete_result?);
-                                    eprintln!(
-                                        "{} {} {} (→ {}; deleted from source)",
-                                        "✓".green(),
-                                        label,
-                                        "(already exists in target)".yellow(),
-                                        to_provider.name().blue()
-                                    );
-                                } else if delete_source {
-                                    kept_in_source += 1;
-                                    eprintln!(
-                                        "{} {} {} (→ {}; source retained)",
-                                        "○".yellow(),
-                                        label,
-                                        "(target value differs)".yellow(),
-                                        to_provider.name().blue()
-                                    );
-                                } else {
-                                    eprintln!(
-                                        "{} {} {} (→ {})",
-                                        "○".yellow(),
-                                        label,
-                                        "(already exists in target)".yellow(),
-                                        to_provider.name().blue()
-                                    );
-                                }
-                            }
-                            None => {
-                                // Secret doesn't exist in "to" provider, import it.
-                                let set_result = to_provider.set(addr, &value);
-                                // Audit each copied secret as a write attributed to the
-                                // target provider, so import writes are recorded like
-                                // `set`/generate/prompt. The bulk Import event below only
-                                // captures the source read, not where secrets were copied.
-                                self.audit_write_result(
-                                    &set_result,
-                                    &name,
-                                    &profile_display,
-                                    Some(to_provider.uri()),
-                                    planned.reference(),
-                                    None,
-                                );
-                                set_result?;
-                                self.sync_cache_after_write(
-                                    &planned,
-                                    route,
-                                    &profile_display,
-                                    &value,
-                                );
-                                imported += 1;
-                                if delete_source {
-                                    let verified = to_provider.get(addr)?.is_some_and(|stored| {
-                                        stored.expose_secret() == value.expose_secret()
-                                    });
-                                    if !verified {
-                                        return Err(SecretSpecError::ProviderOperationFailed(
-                                            format!(
-                                                "destination verification failed for '{name}'; the source value was retained"
-                                            ),
-                                        ));
-                                    }
-                                    let delete_result = from_provider_instance.delete(addr);
-                                    self.audit_delete_result(
-                                        &delete_result,
-                                        &name,
-                                        &profile_display,
-                                        Some(from_provider_instance.uri()),
-                                        planned.reference(),
-                                    );
-                                    deleted_from_source += usize::from(delete_result?);
-                                    eprintln!(
-                                        "{} {} (→ {}; deleted from source)",
-                                        "✓".green(),
-                                        label,
-                                        to_provider.name().blue()
-                                    );
-                                } else {
-                                    eprintln!(
-                                        "{} {} (→ {})",
-                                        "✓".green(),
-                                        label,
-                                        to_provider.name().blue()
-                                    );
-                                }
-                            }
+                    for (target_index, target) in prepared.iter().enumerate() {
+                        if source_index == target_index {
+                            continue;
+                        }
+                        if from_provider_instance.same_entries(
+                            source.source_address.as_address(),
+                            target.target_provider.as_ref(),
+                            target.target_address.as_address(),
+                        )? {
+                            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                                "refusing to delete '{}' from the import source because it resolves to the destination provider entry for '{}' ({})",
+                                source.planned.name,
+                                target.planned.name,
+                                target.target_provider.uri()
+                            )));
                         }
                     }
-                    None => {
-                        // Secret doesn't exist in "from" provider
-                        // Check if it exists in the "to" provider
-                        match to_provider.get(addr)? {
-                            Some(_) => {
-                                eprintln!(
-                                    "{} {} {} (→ {})",
-                                    "○".blue(),
-                                    label,
-                                    "(already in target, not in source)".blue(),
-                                    to_provider.name().blue()
-                                );
-                                already_exists += 1;
-                            }
-                            None => {
-                                eprintln!(
-                                    "{} {} {}",
-                                    "✗".red(),
-                                    label,
-                                    "(not found in source)".red()
-                                );
-                                not_found += 1;
-                            }
+                }
+            }
+
+            // Copy every missing target. No source is deleted in this phase.
+            for entry in &mut prepared {
+                let (Some(value), None) = (&entry.source_value, &entry.target_value) else {
+                    continue;
+                };
+                let route = entry
+                    .planned
+                    .route
+                    .as_ref()
+                    .expect("prepared imports are provider-backed");
+                let set_result = entry
+                    .target_provider
+                    .set(entry.target_address.as_address(), value);
+                self.audit_write_result(
+                    &set_result,
+                    &entry.planned.name,
+                    &profile_display,
+                    Some(entry.target_provider.uri()),
+                    entry.target_address.native(),
+                    None,
+                );
+                set_result?;
+                self.sync_cache_after_write(&entry.planned, route, &profile_display, value);
+                entry.copied = true;
+                imported += 1;
+            }
+
+            // Verify all writes and validate their readable representation
+            // before beginning source cleanup.
+            if delete_source {
+                for entry in prepared.iter_mut().filter(|entry| entry.copied) {
+                    let expected = entry
+                        .source_value
+                        .as_ref()
+                        .expect("copied entries have source values");
+                    let stored = entry
+                        .target_provider
+                        .get(entry.target_address.as_address())?
+                        .ok_or_else(|| {
+                            SecretSpecError::ProviderOperationFailed(format!(
+                                "destination verification failed for '{}'; the source value was retained",
+                                entry.planned.name
+                            ))
+                        })?;
+                    if stored.expose_secret() != expected.expose_secret() {
+                        return Err(SecretSpecError::ProviderOperationFailed(format!(
+                            "destination verification failed for '{}'; the source value was retained",
+                            entry.planned.name
+                        )));
+                    }
+                    Self::validate_import_value(&entry.planned, &entry.planned.name, &stored)?;
+                    entry.target_value = Some(stored);
+                }
+
+                // Deletion is last: every planned target write has succeeded and
+                // every copied value has been read back successfully.
+                for entry in &mut prepared {
+                    let (Some(source), Some(target)) = (&entry.source_value, &entry.target_value)
+                    else {
+                        continue;
+                    };
+                    if source.expose_secret() != target.expose_secret() {
+                        continue;
+                    }
+                    let delete_result =
+                        from_provider_instance.delete(entry.source_address.as_address());
+                    self.audit_delete_result(
+                        &delete_result,
+                        &entry.planned.name,
+                        &profile_display,
+                        Some(from_provider_instance.uri()),
+                        entry.source_address.native(),
+                    );
+                    entry.source_deleted = delete_result?;
+                    deleted_from_source += usize::from(entry.source_deleted);
+                }
+            }
+
+            // Emit stable per-secret results only after the operation phases
+            // above have completed.
+            for entry in &prepared {
+                let name = &entry.planned.name;
+                let label =
+                    format_secret_label(name, entry.planned.config().description.as_deref());
+                let target_name = entry.target_provider.name().blue();
+
+                if entry.copied {
+                    if delete_source && entry.source_deleted {
+                        eprintln!(
+                            "{} {} (→ {}; deleted from source)",
+                            "✓".green(),
+                            label,
+                            target_name
+                        );
+                    } else {
+                        eprintln!("{} {} (→ {})", "✓".green(), label, target_name);
+                    }
+                    continue;
+                }
+
+                match (&entry.source_value, &entry.target_value) {
+                    (Some(source), Some(target)) => {
+                        already_exists += 1;
+                        if delete_source && source.expose_secret() != target.expose_secret() {
+                            kept_in_source += 1;
+                            eprintln!(
+                                "{} {} {} (→ {}; source retained)",
+                                "○".yellow(),
+                                label,
+                                "(target value differs)".yellow(),
+                                target_name
+                            );
+                        } else if delete_source && entry.source_deleted {
+                            eprintln!(
+                                "{} {} {} (→ {}; deleted from source)",
+                                "✓".green(),
+                                label,
+                                "(already exists in target)".yellow(),
+                                target_name
+                            );
+                        } else {
+                            eprintln!(
+                                "{} {} {} (→ {})",
+                                "○".yellow(),
+                                label,
+                                "(already exists in target)".yellow(),
+                                target_name
+                            );
                         }
+                    }
+                    (None, Some(_)) => {
+                        already_exists += 1;
+                        eprintln!(
+                            "{} {} {} (→ {})",
+                            "○".blue(),
+                            label,
+                            "(already in target, not in source)".blue(),
+                            target_name
+                        );
+                    }
+                    (None, None) => {
+                        not_found += 1;
+                        eprintln!("{} {} {}", "✗".red(), label, "(not found in source)".red());
+                    }
+                    (Some(_), None) => {
+                        unreachable!("a prepared missing target was copied or returned an error")
                     }
                 }
             }
@@ -3724,8 +3893,6 @@ impl Secrets {
         })();
 
         if let Err(e) = copy_result {
-            // Record a failed/partial import with the secrets read before the
-            // error (already in sorted order, from the import loop).
             self.record(
                 AuditAction::Import,
                 &profile_display,
@@ -3759,18 +3926,10 @@ impl Secrets {
                 "\n{} Successfully imported {} secrets from {}",
                 "✓".green(),
                 imported,
-                from_provider,
+                source_uri.as_deref().unwrap_or("configured provider"),
             );
         }
 
-        // Always record the import: it read every declared secret from the
-        // source (and target), so the access is logged even when nothing was
-        // copied. Outcome reflects what the read found: `Written` when at least
-        // one secret was copied, `Found` when nothing was copied but secrets were
-        // already present (in source or target), and `Missing` when nothing was
-        // copied and nothing was found anywhere — so a "found nothing" import is
-        // not mislabeled as a successful retrieval. Per-secret copies are also
-        // recorded individually as `Set`/`Written` events above.
         let outcome = if imported > 0 {
             AuditOutcome::Written
         } else if already_exists > 0 {
@@ -3822,14 +3981,18 @@ impl Secrets {
 
         // Store the generated value at the plan's address, through the plan's
         // write route: the same decisions every other write path executes.
-        let addr = planned.as_address(&self.config.project.name, profile_name);
-        let backend = self.write_provider_for_route(
-            planned
-                .route
-                .as_ref()
-                .expect("a generating secret is provider-backed"),
-            Some(profile_name),
+        let route = planned
+            .route
+            .as_ref()
+            .expect("a generating secret is provider-backed");
+        let address = self.address_for_spec(
+            planned,
+            route.group_key(),
+            &self.config.project.name,
+            profile_name,
         )?;
+        let addr = address.as_address();
+        let backend = self.write_provider_for_route(route, Some(profile_name))?;
         // The provider states why a write is refused; wrapping it here would
         // only nest a second "Provider operation failed" prefix.
         backend.check_writable(addr)?;
@@ -3843,7 +4006,7 @@ impl Secrets {
             name,
             profile_name,
             Some(backend.uri()),
-            planned.reference(),
+            address.native(),
             None,
         );
         set_result?;
@@ -4362,8 +4525,12 @@ impl Secrets {
     /// reads the provider's declared supported coordinates and does no I/O for
     /// a native address.
     fn check_single_store_ref_coords(
+        &self,
+        provider_spec: Option<&str>,
         group: &[&PlannedSecret],
         provider: &dyn ProviderTrait,
+        project: &str,
+        profile: &str,
     ) -> Result<()> {
         for planned in group {
             // Only the routes that consult exactly one store; a chain with a
@@ -4375,8 +4542,9 @@ impl Secrets {
             if route.fallback_specs().is_some() {
                 continue;
             }
-            if let Some(native) = planned.reference() {
-                provider.resolve_coords(Address::Native(native))?;
+            let address = self.address_for_spec(planned, provider_spec, project, profile)?;
+            if address.native().is_some() {
+                provider.resolve_coords(address.as_address())?;
             }
         }
         Ok(())
@@ -4494,8 +4662,14 @@ impl Secrets {
         // exactly one store that cannot honor its coordinates: with no fallback
         // to answer instead, the failure is definite and better surfaced now
         // than mid-fetch.
-        for (_, group, provider) in &group_fetches {
-            Self::check_single_store_ref_coords(group, provider.as_ref())?;
+        for (provider_spec, group, provider) in &group_fetches {
+            self.check_single_store_ref_coords(
+                *provider_spec,
+                group,
+                provider.as_ref(),
+                project,
+                profile,
+            )?;
         }
 
         // Fetch the groups concurrently: each group is at least one provider
@@ -4503,24 +4677,25 @@ impl Secrets {
         // providers already do inside `get_many`. A single group (the common
         // case) stays on this thread.
         fn fetch_group<'a>(
+            secrets: &Secrets,
             (provider_uri, group, provider): GroupFetch<'a>,
             project: &str,
             profile: &str,
         ) -> (Option<&'a str>, Result<HashMap<String, SecretString>>) {
-            let result = Secrets::fetch_group(&*provider, &group, project, profile);
+            let result = secrets.fetch_group(&*provider, provider_uri, &group, project, profile);
             (provider_uri, result)
         }
 
         let fetch_results: Vec<(Option<&str>, Result<_>)> = if group_fetches.len() <= 1 {
             group_fetches
                 .into_iter()
-                .map(|group| fetch_group(group, project, profile))
+                .map(|group| fetch_group(self, group, project, profile))
                 .collect()
         } else {
             std::thread::scope(|scope| {
                 let handles: Vec<_> = group_fetches
                     .into_iter()
-                    .map(|group| scope.spawn(|| fetch_group(group, project, profile)))
+                    .map(|group| scope.spawn(|| fetch_group(self, group, project, profile)))
                     .collect();
                 handles
                     .into_iter()
@@ -4575,10 +4750,11 @@ impl Secrets {
                         .expect("pending fallback has fallback specs");
                     let result = self.get_secret_from_providers(
                         &provider_cache,
+                        planned,
                         Self::diagnostic_secret_name(&planned.name, output_filter),
-                        planned.as_address(project, profile),
                         Some(fallback),
-                        Some(profile),
+                        project,
+                        profile,
                     );
                     (planned.name.clone(), result)
                 },
@@ -4639,7 +4815,7 @@ impl Secrets {
                     // concurrently above. Each chain was still tried in order
                     // and received the diagnostic label rather than a hidden
                     // composition input's raw name.
-                    let (fallback_value, fallback_uri) = match route.fallback_specs() {
+                    let (fallback_value, fallback_uri, _) = match route.fallback_specs() {
                         Some(_) => {
                             let resolved = fallback_results
                                 .remove(name)
@@ -4664,7 +4840,7 @@ impl Secrets {
                                 .expect("primary_failed implies entry present");
                             return Err(err);
                         }
-                        None => (None, None),
+                        None => (None, None, None),
                     };
 
                     if let Some(value) = fallback_value {
@@ -6113,7 +6289,13 @@ mod reference_routing_tests {
         let plan = spec.build_plan(None).unwrap();
         for (primary, group) in plan.groups() {
             let provider = spec.get_provider(primary, None).unwrap();
-            Secrets::check_single_store_ref_coords(&group, provider.as_ref())?;
+            spec.check_single_store_ref_coords(
+                primary,
+                &group,
+                provider.as_ref(),
+                &spec.config.project.name,
+                "default",
+            )?;
         }
         Ok(())
     }

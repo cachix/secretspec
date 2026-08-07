@@ -146,6 +146,18 @@ DATABASE_URL = { description = "PostgreSQL connection string", required = true }
 REDIS_URL = { description = "Redis connection string", required = true }
 ```
 
+SecretSpec 0.19+ can map one logical secret to different native coordinates per
+provider alias, including independent import source and destination refs:
+
+```toml
+[providers]
+remote = { uri = "onepassword://Production", ref = { item = "{project}-{profile}", field = "{key}" } }
+local = "keyring://"
+
+[profiles.production]
+API_KEY = { description = "API key", providers = ["local"], refs = { remote = { item = "legacy-api", field = "token" } } }
+```
+
 See the [configuration reference](https://secretspec.dev/reference/configuration/) for all available options.
 
 ## Profiles

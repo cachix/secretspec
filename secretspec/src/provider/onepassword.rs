@@ -508,6 +508,16 @@ impl OnePasswordProvider {
             .unwrap_or_else(|| "Private".to_string())
     }
 
+    /// Resolves the vault used by operations without turning a whole-item read
+    /// into a field read. Entry identity adds the write field separately.
+    fn operation_coordinates(&self, addr: Address<'_>) -> Result<crate::config::NativeAddress> {
+        let mut coords = self.resolve_coords(addr)?.into_owned();
+        if coords.vault.is_none() {
+            coords.vault = Some(self.get_vault_name());
+        }
+        Ok(coords)
+    }
+
     /// Renders the full `op://` reference string for `op read`.
     ///
     /// Names are rendered decoded (spaces and all): the reference is passed to
@@ -832,6 +842,17 @@ impl Provider for OnePasswordProvider {
         &["field", "vault", "section"]
     }
 
+    fn entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, crate::config::NativeAddress>> {
+        let mut coords = self.operation_coordinates(addr)?;
+        if coords.field.is_none() && coords.section.is_none() {
+            coords.field = Some("value".to_string());
+        }
+        Ok(std::borrow::Cow::Owned(coords))
+    }
+
     fn with_credentials(&mut self, credentials: ProviderCredentials) {
         // Stored, not folded into the config: the token is resolved where it is
         // consumed (`execute_op_command`, `auth_scope_key`), and `uri()` keeps
@@ -899,6 +920,16 @@ impl Provider for OnePasswordProvider {
         uri
     }
 
+    /// The vault is part of the resolved entry coordinates, not the account
+    /// container identity. Omitting it here lets an explicit `ref.vault`
+    /// override two aliases with different URI defaults.
+    fn entry_container_identity(&self) -> String {
+        match &self.config.account {
+            Some(account) => format!("onepassword://{}@", ProviderUrl::encode(account)),
+            None => "onepassword://".to_string(),
+        }
+    }
+
     /// Retrieves a secret from OnePassword.
     ///
     /// If multiple items exist with the same title, falls back to ID-based
@@ -910,7 +941,7 @@ impl Provider for OnePasswordProvider {
     /// * `Ok(None)` - No secret found at the address
     /// * `Err(_)` - Authentication or retrieval error
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
-        let coords = self.resolve_coords(addr)?;
+        let coords = self.operation_coordinates(addr)?;
         let (vault, reference) = self.native_reference(&coords)?;
         match reference {
             // A field-addressed reference goes through `op read`.
@@ -947,7 +978,7 @@ impl Provider for OnePasswordProvider {
     fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
         let (project, profile, key) = match addr {
             Address::Native(native) => {
-                let coords = self.resolve_coords(addr)?;
+                let coords = self.entry_coordinates(addr)?;
                 let (vault, reference) = self.native_reference(&coords)?;
                 // Writes through a native address go to the existing item in
                 // place (`op item edit` adds a missing field but never creates
@@ -1013,7 +1044,7 @@ impl Provider for OnePasswordProvider {
         let mut whole_items: HashMap<String, Vec<(String, String)>> = HashMap::new();
         let mut field_refs: Vec<(&str, Address<'_>)> = Vec::new();
         for (name, addr) in requests {
-            let coords = self.resolve_coords(*addr)?;
+            let coords = self.operation_coordinates(*addr)?;
             let (vault, reference) = self.native_reference(&coords)?;
             match reference {
                 Some(_) => field_refs.push((name, *addr)),
@@ -1121,6 +1152,79 @@ mod tests {
         let c = config("onepassword://Production");
         assert_eq!(c.account, None);
         assert_eq!(c.default_vault.as_deref(), Some("Production"));
+    }
+
+    #[test]
+    fn same_entries_treats_an_implicit_vault_as_the_configured_default() {
+        let provider = OnePasswordProvider::new(config("onepassword://Production"));
+        let implicit = crate::config::NativeAddress {
+            item: "API Key".to_string(),
+            field: Some("credential".to_string()),
+            ..Default::default()
+        };
+        let explicit = crate::config::NativeAddress {
+            item: "API Key".to_string(),
+            field: Some("credential".to_string()),
+            vault: Some("Production".to_string()),
+            ..Default::default()
+        };
+
+        assert!(
+            provider
+                .same_entries(
+                    Address::Native(&implicit),
+                    &provider,
+                    Address::Native(&explicit),
+                )
+                .unwrap(),
+            "addresses that operations send to one 1Password field must compare equal"
+        );
+    }
+
+    #[test]
+    fn same_entries_treats_an_implicit_field_as_the_value_field() {
+        let provider = OnePasswordProvider::new(config("onepassword://Production"));
+        let implicit = crate::config::NativeAddress {
+            item: "API Key".to_string(),
+            ..Default::default()
+        };
+        let explicit = crate::config::NativeAddress {
+            item: "API Key".to_string(),
+            field: Some("value".to_string()),
+            ..Default::default()
+        };
+
+        assert!(
+            provider
+                .same_entries(
+                    Address::Native(&implicit),
+                    &provider,
+                    Address::Native(&explicit),
+                )
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn same_entries_uses_explicit_vaults_instead_of_provider_defaults() {
+        let production = OnePasswordProvider::new(config("onepassword://work@Production"));
+        let development = OnePasswordProvider::new(config("onepassword://work@Development"));
+        let address = crate::config::NativeAddress {
+            item: "API Key".to_string(),
+            field: Some("credential".to_string()),
+            vault: Some("Shared".to_string()),
+            ..Default::default()
+        };
+
+        assert!(
+            production
+                .same_entries(
+                    Address::Native(&address),
+                    &development,
+                    Address::Native(&address),
+                )
+                .unwrap()
+        );
     }
 
     #[test]

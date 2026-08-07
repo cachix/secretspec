@@ -2577,6 +2577,29 @@ impl Provider for BitwardenProvider {
         &["field"]
     }
 
+    fn entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, crate::config::NativeAddress>> {
+        let mut coords = self.resolve_coords(addr)?.into_owned();
+        if coords.field.is_none() {
+            coords.field = Some(
+                match std::env::var("BITWARDEN_DEFAULT_FIELD")
+                    .ok()
+                    .or_else(|| self.config.default_field.clone())
+                {
+                    Some(field) => field,
+                    None => self
+                        .resolved_item_type()?
+                        .unwrap_or(BitwardenItemType::Login)
+                        .default_field()
+                        .to_string(),
+                },
+            );
+        }
+        Ok(std::borrow::Cow::Owned(coords))
+    }
+
     fn with_credentials(&mut self, credentials: ProviderCredentials) {
         self.credentials = credentials;
     }
@@ -2635,6 +2658,22 @@ impl Provider for BitwardenProvider {
             uri.push_str(&params.join("&"));
         }
         uri
+    }
+
+    /// Defaults that compile into native coordinates do not identify the
+    /// Bitwarden vault itself. In particular, a scoped ref can override the
+    /// URI's default field, and the resolved field is compared separately by
+    /// `same_entries`.
+    fn entry_container_identity(&self) -> String {
+        format!(
+            "bw:{:?}",
+            (
+                self.requested_org(),
+                self.requested_collection(),
+                self.resolved_item_type().ok().flatten(),
+                self.config.server.as_deref().map(normalize_server),
+            )
+        )
     }
 
     /// Retrieves a secret from Bitwarden.
@@ -4152,6 +4191,7 @@ mod tests {
             "BITWARDEN_ORGANIZATION",
             "BITWARDEN_COLLECTION",
             "BITWARDEN_DEFAULT_TYPE",
+            "BITWARDEN_DEFAULT_FIELD",
         ]
         .map(|key| (key, std::env::var(key).ok()));
         for (key, _) in &saved {
@@ -5739,6 +5779,59 @@ mod tests {
     fn items_support_field_coordinates() {
         let provider = BitwardenProvider::new(BitwardenConfig::default());
         assert_eq!(provider.supported_coords(), &["field"]);
+    }
+
+    #[test]
+    fn same_entries_treats_an_implicit_login_field_as_password() {
+        with_clean_env(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig {
+                default_item_type: Some(BitwardenItemType::Login),
+                ..Default::default()
+            });
+            let implicit = crate::config::NativeAddress {
+                item: "shared".into(),
+                ..Default::default()
+            };
+            let explicit = crate::config::NativeAddress {
+                item: "shared".into(),
+                field: Some("password".into()),
+                ..Default::default()
+            };
+
+            assert!(
+                provider
+                    .same_entries(
+                        Address::Native(&implicit),
+                        &provider,
+                        Address::Native(&explicit),
+                    )
+                    .unwrap()
+            );
+        });
+    }
+
+    #[test]
+    fn same_entries_uses_explicit_fields_instead_of_provider_defaults() {
+        with_clean_env(|| {
+            let left = BitwardenProvider::new(BitwardenConfig {
+                default_field: Some("left".into()),
+                ..Default::default()
+            });
+            let right = BitwardenProvider::new(BitwardenConfig {
+                default_field: Some("right".into()),
+                ..Default::default()
+            });
+            let address = crate::config::NativeAddress {
+                item: "shared".into(),
+                field: Some("password".into()),
+                ..Default::default()
+            };
+
+            assert!(
+                left.same_entries(Address::Native(&address), &right, Address::Native(&address),)
+                    .unwrap()
+            );
+        });
     }
 
     #[test]

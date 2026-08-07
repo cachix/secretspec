@@ -309,8 +309,8 @@ pub(crate) fn parse_cache_max_age(value: &str) -> std::result::Result<u64, Strin
 /// myprovider = { fallback = ["azure", "env"], cache = { provider = "local", max_age = "8h" } }
 /// ```
 ///
-/// Leaf aliases round-trip as before: an alias with no credentials serializes
-/// back to a bare string, so existing configs are untouched.
+/// Leaf aliases round-trip as before: an alias with no credentials or ref
+/// template serializes back to a bare string, so existing configs are untouched.
 ///
 /// Construct one through [`ProviderAlias::from_uri`] or
 /// [`ProviderAlias::cached`]; the struct is `#[non_exhaustive]` so a future
@@ -324,6 +324,10 @@ pub struct ProviderAlias {
     /// Empty for a bare string alias, so "declares no credentials" has exactly
     /// one representation.
     pub credentials: HashMap<String, CredentialSource>,
+    /// Provider-scoped native-address template (0.19+). Placeholders compile a
+    /// logical `{project}/{profile}/{key}` address into this alias's own
+    /// coordinates before the provider is contacted.
+    pub reference_template: Option<NativeAddressTemplate>,
     /// Ordered authoritative sources for a cached alias (0.17+). Empty for a
     /// leaf alias.
     pub(crate) fallback: Vec<String>,
@@ -337,6 +341,7 @@ impl ProviderAlias {
         Self {
             uri: uri.into(),
             credentials: HashMap::new(),
+            reference_template: None,
             fallback: Vec::new(),
             cache: None,
         }
@@ -359,6 +364,7 @@ impl ProviderAlias {
         Ok(Self {
             uri: String::new(),
             credentials: HashMap::new(),
+            reference_template: None,
             fallback,
             cache: Some(cache),
         })
@@ -382,6 +388,27 @@ impl ProviderAlias {
     /// `None` for a leaf alias.
     pub fn cache(&self) -> Option<&ProviderCache> {
         self.cache.as_ref()
+    }
+
+    /// The native-address template attached to this leaf alias, if any.
+    pub fn reference_template(&self) -> Option<&NativeAddressTemplate> {
+        self.reference_template.as_ref()
+    }
+
+    /// Attach a validated native-address template to a leaf alias.
+    pub fn with_reference_template(
+        mut self,
+        template: NativeAddressTemplate,
+    ) -> std::result::Result<Self, String> {
+        if self.is_cached() {
+            return Err(
+                "a cached provider alias cannot declare a ref template; put templates on its leaf aliases"
+                    .to_string(),
+            );
+        }
+        template.validate()?;
+        self.reference_template = Some(template);
+        Ok(self)
     }
 }
 
@@ -414,6 +441,9 @@ impl std::fmt::Display for ProviderAlias {
             names.sort();
             write!(f, " (credentials: {})", names.join(", "))?;
         }
+        if let Some(template) = &self.reference_template {
+            write!(f, " (ref template: {})", template.render_description())?;
+        }
         Ok(())
     }
 }
@@ -427,15 +457,20 @@ impl Serialize for ProviderAlias {
             table.serialize_field("cache", cache)?;
             return table.end();
         }
-        if self.credentials.is_empty() {
+        if self.credentials.is_empty() && self.reference_template.is_none() {
             // A bare alias serializes back to the plain-string form, so an alias
             // that was written as a string round-trips unchanged.
             serializer.serialize_str(&self.uri)
         } else {
             use serde::ser::SerializeStruct;
-            let mut table = serializer.serialize_struct("ProviderAlias", 2)?;
+            let mut table = serializer.serialize_struct("ProviderAlias", 3)?;
             table.serialize_field("uri", &self.uri)?;
-            table.serialize_field("credentials", &self.credentials)?;
+            if !self.credentials.is_empty() {
+                table.serialize_field("credentials", &self.credentials)?;
+            }
+            if let Some(template) = &self.reference_template {
+                table.serialize_field("ref", template)?;
+            }
             table.end()
         }
     }
@@ -473,6 +508,8 @@ impl<'de> Deserialize<'de> for ProviderAlias {
                     uri: Option<String>,
                     #[serde(default)]
                     credentials: Option<HashMap<String, CredentialSource>>,
+                    #[serde(default, rename = "ref")]
+                    reference_template: Option<NativeAddressTemplate>,
                     #[serde(default)]
                     fallback: Option<Vec<String>>,
                     #[serde(default)]
@@ -480,17 +517,28 @@ impl<'de> Deserialize<'de> for ProviderAlias {
                 }
                 let table = Table::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
                 match (table.uri, table.fallback, table.cache) {
-                    (Some(uri), None, None) => Ok(ProviderAlias {
-                        uri,
-                        credentials: table.credentials.unwrap_or_default(),
-                        fallback: Vec::new(),
-                        cache: None,
-                    }),
+                    (Some(uri), None, None) => {
+                        if let Some(template) = &table.reference_template {
+                            template.validate().map_err(serde::de::Error::custom)?;
+                        }
+                        Ok(ProviderAlias {
+                            uri,
+                            credentials: table.credentials.unwrap_or_default(),
+                            reference_template: table.reference_template,
+                            fallback: Vec::new(),
+                            cache: None,
+                        })
+                    }
                     (None, Some(fallback), Some(cache)) => {
                         if table.credentials.is_some() {
                             return Err(serde::de::Error::custom(
                                 "a cached provider alias cannot declare credentials; \
                                  put credentials on its leaf fallback aliases",
+                            ));
+                        }
+                        if table.reference_template.is_some() {
+                            return Err(serde::de::Error::custom(
+                                "a cached provider alias cannot declare a ref template; put templates on its leaf aliases",
                             ));
                         }
                         // The remaining shape checks live in the constructor,
@@ -499,7 +547,7 @@ impl<'de> Deserialize<'de> for ProviderAlias {
                         ProviderAlias::cached(fallback, cache).map_err(serde::de::Error::custom)
                     }
                     (Some(_), Some(_), _) | (Some(_), _, Some(_)) => Err(serde::de::Error::custom(
-                        "a provider alias must use either { uri, credentials } or \
+                        "a provider alias must use either { uri, credentials, ref } or \
                              { fallback, cache }, not both",
                     )),
                     (None, Some(_), None) => Err(serde::de::Error::custom(
@@ -1478,6 +1526,139 @@ impl NativeAddress {
     }
 }
 
+/// A provider-alias template for native secret coordinates (0.19+).
+///
+/// Each coordinate accepts the logical placeholders `{project}`, `{profile}`,
+/// and `{key}`. The template belongs to one provider alias, so fallback links
+/// and import endpoints can map the same logical secret into different native
+/// address shapes without sharing provider-specific coordinates.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeAddressTemplate {
+    /// Template for the provider's required `item` coordinate.
+    pub item: String,
+    /// Optional template for a component within the item.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// Optional container template.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault: Option<String>,
+    /// Optional section template.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    /// Optional version template.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+impl NativeAddressTemplate {
+    pub(crate) fn coordinates(&self) -> [(&'static str, Option<&str>); 5] {
+        [
+            ("vault", self.vault.as_deref()),
+            ("item", Some(self.item.as_str())),
+            ("section", self.section.as_deref()),
+            ("field", self.field.as_deref()),
+            ("version", self.version.as_deref()),
+        ]
+    }
+
+    /// Validate every coordinate and placeholder without provider I/O.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        for (name, value) in self.coordinates() {
+            let Some(value) = value else {
+                continue;
+            };
+            if value.trim().is_empty() {
+                return Err(format!(
+                    "provider ref template coordinate `{name}` cannot be empty or whitespace"
+                ));
+            }
+            expand_address_template(value, "project", "profile", "KEY").map_err(|error| {
+                format!("invalid provider ref template coordinate `{name}`: {error}")
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Expand this alias template for one logical secret.
+    pub fn expand(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> std::result::Result<NativeAddress, String> {
+        self.validate()?;
+        let expand = |value: &str| expand_address_template(value, project, profile, key);
+        Ok(NativeAddress {
+            item: expand(&self.item)?,
+            field: self.field.as_deref().map(expand).transpose()?,
+            vault: self.vault.as_deref().map(expand).transpose()?,
+            section: self.section.as_deref().map(expand).transpose()?,
+            version: self.version.as_deref().map(expand).transpose()?,
+        })
+    }
+
+    pub(crate) fn render_description(&self) -> String {
+        let mut out = String::new();
+        for (name, value) in self.coordinates() {
+            if let Some(value) = value {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(name);
+                out.push('=');
+                out.push_str(value);
+            }
+        }
+        out
+    }
+}
+
+/// Expand one address-template coordinate in a single pass. A compiled parser
+/// is intentionally used instead of chained `replace` calls: logical names may
+/// themselves contain brace-like text and must never be interpreted as another
+/// placeholder after insertion.
+fn expand_address_template(
+    template: &str,
+    project: &str,
+    profile: &str,
+    key: &str,
+) -> std::result::Result<String, String> {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    loop {
+        let Some(open) = rest.find('{') else {
+            if rest.contains('}') {
+                return Err(format!("template '{template}' contains an unmatched `}}`"));
+            }
+            out.push_str(rest);
+            break;
+        };
+        let prefix = &rest[..open];
+        if prefix.contains('}') {
+            return Err(format!("template '{template}' contains an unmatched `}}`"));
+        }
+        out.push_str(prefix);
+        let after_open = &rest[open + 1..];
+        let Some(close) = after_open.find('}') else {
+            return Err(format!("template '{template}' contains an unmatched `{{`"));
+        };
+        let placeholder = &after_open[..close];
+        out.push_str(match placeholder {
+            "project" => project,
+            "profile" => profile,
+            "key" => key,
+            _ => {
+                return Err(format!(
+                    "unknown placeholder `{{{placeholder}}}` in template '{template}'; expected {{project}}, {{profile}}, or {{key}}"
+                ));
+            }
+        });
+        rest = &after_open[close + 1..];
+    }
+    Ok(out)
+}
+
 /// Derived deserialization target for [`NativeAddress`]. The manual
 /// [`Deserialize`] below delegates table input here so serde's precise
 /// `deny_unknown_fields` messages ("unknown field \`filed\`, expected one of
@@ -1682,6 +1863,8 @@ struct SecretSerde {
     #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
     reference: Option<NativeAddress>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    refs: Option<HashMap<String, NativeAddress>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     as_path: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     encoding: Option<SecretEncoding>,
@@ -1765,6 +1948,11 @@ pub struct Secret {
     /// with `generate`: a missing referenced secret is minted and written to
     /// its coordinates. Serialized as `ref` in TOML.
     pub reference: Option<NativeAddress>,
+    /// Provider-alias-scoped native coordinates (0.19+). The selected alias's
+    /// entry overrides its alias-level ref template; aliases absent from this
+    /// map use their template or ordinary convention address. Mutually
+    /// exclusive with the legacy route-wide `ref` field.
+    pub refs: Option<HashMap<String, NativeAddress>>,
     /// Whether to write the secret value to a temporary file and return the path.
     /// If true, the secret will be written to a temporary file and the field
     /// will contain the path to that file instead of the secret value.
@@ -1787,6 +1975,9 @@ impl TryFrom<SecretSerde> for Secret {
     type Error = String;
 
     fn try_from(value: SecretSerde) -> Result<Self, Self::Error> {
+        if value.reference.is_some() && value.refs.is_some() {
+            return Err("`ref` and `refs` cannot both be set; use `refs` for provider-scoped addresses or keep the legacy route-wide `ref`".into());
+        }
         let (required, at_least_one, exactly_one) = match value.required {
             Some(RequiredSetting::Bool(required)) => (Some(required), None, None),
             Some(RequiredSetting::Groups(groups)) => {
@@ -1807,6 +1998,7 @@ impl TryFrom<SecretSerde> for Secret {
             composed: value.composed,
             providers: value.providers,
             reference: value.reference,
+            refs: value.refs,
             as_path: value.as_path,
             encoding: value.encoding,
             secret_type: value.secret_type,
@@ -1833,6 +2025,7 @@ impl From<Secret> for SecretSerde {
             composed: value.composed,
             providers: value.providers,
             reference: value.reference,
+            refs: value.refs,
             as_path: value.as_path,
             encoding: value.encoding,
             secret_type: value.secret_type,
@@ -1937,12 +2130,13 @@ impl Secret {
             if self.default.is_some()
                 || self.providers.is_some()
                 || self.reference.is_some()
+                || self.refs.is_some()
                 || self.encoding.is_some()
                 || self.secret_type.is_some()
                 || self.would_generate()
             {
                 return Err(
-                    "`composed` secrets cannot also set `default`, `providers`, `ref`, `encoding`, `type`, or enabled `generate`"
+                    "`composed` secrets cannot also set `default`, `providers`, `ref`, `refs`, `encoding`, `type`, or enabled `generate`"
                         .into(),
                 );
             }
@@ -1961,6 +2155,27 @@ impl Secret {
                         "`ref` coordinate `{}` cannot be empty or whitespace",
                         name
                     ));
+                }
+            }
+        }
+
+        if self.reference.is_some() && self.refs.is_some() {
+            return Err("`ref` and `refs` cannot both be set; use `refs` for provider-scoped addresses or keep the legacy route-wide `ref`".into());
+        }
+        if let Some(references) = &self.refs {
+            if references.is_empty() {
+                return Err("`refs` must name at least one provider alias".into());
+            }
+            for (alias, reference) in references {
+                if alias.trim().is_empty() {
+                    return Err("`refs` provider alias cannot be empty or whitespace".into());
+                }
+                for (name, value) in reference.coordinates() {
+                    if value.is_some_and(|v| v.trim().is_empty()) {
+                        return Err(format!(
+                            "`refs.{alias}` coordinate `{name}` cannot be empty or whitespace"
+                        ));
+                    }
                 }
             }
         }
@@ -2083,6 +2298,7 @@ impl Secret {
             providers: inherit(current, default, |s| s.providers.clone())
                 .or_else(|| storage_defaults.and_then(|d| d.providers.clone())),
             reference: inherit(current, default, |s| s.reference.clone()),
+            refs: inherit(current, default, |s| s.refs.clone()),
             as_path: inherit(current, default, |s| s.as_path),
             encoding: inherit(current, default, |s| s.encoding),
             secret_type: inherit(current, default, |s| s.secret_type.clone()),
@@ -3266,6 +3482,28 @@ default = "placeholder"
         assert!(s.validate().is_ok());
     }
 
+    #[test]
+    fn scoped_refs_parse_and_cannot_mix_with_legacy_ref() {
+        let secret: Secret = toml::from_str(
+            r#"description = "token"
+providers = ["remote", "local"]
+refs = { remote = { vault = "Production", item = "shared", field = "token" }, local = { item = "TOKEN" } }"#,
+        )
+        .unwrap();
+        let refs = secret.refs.expect("scoped refs present");
+        assert_eq!(refs["remote"].item, "shared");
+        assert_eq!(refs["remote"].field.as_deref(), Some("token"));
+        assert_eq!(refs["local"].item, "TOKEN");
+
+        let error = toml::from_str::<Secret>(
+            r#"description = "token"
+ref = { item = "legacy" }
+refs = { remote = { item = "scoped" } }"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("cannot both be set"), "{error}");
+    }
+
     /// A `ref` supplies naming and `providers` supplies routing; they compose.
     #[test]
     fn secret_validate_accepts_ref_with_providers() {
@@ -3515,6 +3753,48 @@ mod provider_alias_tests {
             .get("access_token")
             .expect("credentials carries the semantic name");
         assert_eq!(source, &CredentialSource::from("keyring"));
+    }
+
+    #[test]
+    fn alias_ref_template_parses_expands_and_round_trips() {
+        let map = parse(
+            r#"op = { uri = "onepassword://Production", ref = { vault = "{profile}", item = "{project}-{key}", field = "password" } }"#,
+        );
+        let alias = &map["op"];
+        let template = alias.reference_template().expect("template present");
+        let expanded = template.expand("web", "prod", "DATABASE_URL").unwrap();
+        assert_eq!(expanded.vault.as_deref(), Some("prod"));
+        assert_eq!(expanded.item, "web-DATABASE_URL");
+        assert_eq!(expanded.field.as_deref(), Some("password"));
+        assert_eq!(
+            template
+                .expand("{key}", "prod", "DATABASE_URL")
+                .unwrap()
+                .item,
+            "{key}-DATABASE_URL",
+            "inserted values must not be interpreted as placeholders"
+        );
+
+        let serialized = toml::to_string(&map).unwrap();
+        assert_eq!(parse(&serialized), map);
+    }
+
+    #[test]
+    fn alias_ref_template_rejects_invalid_placeholders_and_cached_aliases() {
+        let error = toml::from_str::<HashMap<String, ProviderAlias>>(
+            r#"op = { uri = "onepassword://Production", ref = { item = "{secret}" } }"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown placeholder"), "{error}");
+
+        let error = toml::from_str::<HashMap<String, ProviderAlias>>(
+            r#"route = { fallback = ["remote"], cache = { provider = "local", max_age = "1h" }, ref = { item = "{key}" } }"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("cached provider alias"),
+            "{error}"
+        );
     }
 
     #[test]

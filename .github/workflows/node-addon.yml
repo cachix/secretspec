@@ -40,6 +40,9 @@ on:
       - ".github/workflows/node-addon.yml"
       - "scripts/sync-sdk-versions.sh"
 
+permissions:
+  contents: read
+
 jobs:
   addon:
     name: ${{ matrix.target }}

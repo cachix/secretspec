@@ -37,6 +37,9 @@ on:
       - "secretspec-ffi/**"
       - ".github/workflows/go-static.yml"
 
+permissions:
+  contents: read
+
 jobs:
   static:
     name: x86_64-linux-musl (fully static)

@@ -54,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- SOPS write-target previews consistently use canonical physical paths on macOS
+  and Windows, matching the files used for writes.
 - Cache entries now store their absolute expiration time, allowing SecretSpec
   to remove an expired entry whenever it encounters one, including at an
   address previously used by another project or profile. Changing `max_age`

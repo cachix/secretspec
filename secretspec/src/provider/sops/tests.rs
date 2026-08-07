@@ -141,9 +141,13 @@ fn test_sops_write_target_describes_file_and_nested_selector() {
     let target = provider
         .describe_write_target(Address::convention("my-app", "production", "API_KEY"))
         .unwrap();
+    let expected_path = temp.path().canonicalize().unwrap().join("secrets.enc.yaml");
     assert_eq!(
         target,
-        format!(r#"{} ["my-app"]["production"]["API_KEY"]"#, path.display())
+        format!(
+            r#"{} ["my-app"]["production"]["API_KEY"]"#,
+            expected_path.display()
+        )
     );
 }
 
@@ -189,12 +193,15 @@ fn test_sops_templated_write_target_describes_flat_selector() {
     let target = provider
         .describe_write_target(Address::convention("my-app", "production", "API_KEY"))
         .unwrap();
+    let expected_path = temp
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("my-app")
+        .join("production.enc.json");
     assert_eq!(
         target,
-        format!(
-            r#"{} ["API_KEY"]"#,
-            temp.path().join("my-app/production.enc.json").display()
-        )
+        format!(r#"{} ["API_KEY"]"#, expected_path.display())
     );
 }
 
@@ -215,9 +222,13 @@ fn test_sops_ini_ref_write_target_describes_default_section() {
     let target = provider
         .describe_write_target(Address::Native(&native))
         .unwrap();
+    let expected_path = temp.path().canonicalize().unwrap().join("secrets.enc.ini");
     assert_eq!(
         target,
-        format!(r#"{} ["DEFAULT"]["existing_token"]"#, path.display())
+        format!(
+            r#"{} ["DEFAULT"]["existing_token"]"#,
+            expected_path.display()
+        )
     );
 }
 

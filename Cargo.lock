@@ -5267,16 +5267,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "secretspec-derive-example"
-version = "0.1.0"
-dependencies = [
- "secrecy",
- "secretspec",
- "secretspec-derive",
- "serde",
-]
-
-[[package]]
 name = "secretspec-ffi"
 version = "0.18.0"
 dependencies = [

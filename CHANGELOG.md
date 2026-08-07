@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `run` preserves non-UTF-8 environment values byte-for-byte when launching
+  child processes on Unix.
 - SDK pkg-config setup now pins cargo-c's library and metadata install
   directories, so Go, Ruby, and Haskell reliably discover
   `secretspec_ffi.pc` across environments.

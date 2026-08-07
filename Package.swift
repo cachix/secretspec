@@ -7,7 +7,7 @@ import PackageDescription
 // scripts/sync-sdk-versions.sh. Release preparation replaces the checksum
 // after building the versioned XCFramework; see RELEASE.md.
 let secretSpecBinaryVersion = "0.18.0"
-let secretSpecBinaryChecksum = "3384bb29e60d06aa9a6bf9bbb0eec39e98437fcff10379a5bbf62fd59a6923f1"
+let secretSpecBinaryChecksum = "dddbd69db7f134d69ca0b4ffc6566dedd7d78577203d554c38a56bf370bf01ba"
 
 let localBinaryPath = "secretspec-swift/Artifacts/CSecretSpec.xcframework"
 let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()

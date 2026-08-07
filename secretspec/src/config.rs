@@ -2287,6 +2287,18 @@ impl Secret {
         // A composed secret's source is its dependency graph, so the
         // `[defaults]` storage fields (`default`, `providers`) do not apply.
         let storage_defaults = if composed.is_some() { None } else { defaults };
+        // `ref` and `refs` are two serialized forms of one address-model
+        // setting. Select the pair from one profile entry so an explicit switch
+        // in either direction replaces, rather than combines with, the inherited
+        // form. A profile entry that sets neither still inherits the pair.
+        let reference_source = current
+            .filter(|secret| secret.reference.is_some() || secret.refs.is_some())
+            .or_else(|| {
+                default.filter(|secret| secret.reference.is_some() || secret.refs.is_some())
+            });
+        let (reference, refs) = reference_source.map_or((None, None), |secret| {
+            (secret.reference.clone(), secret.refs.clone())
+        });
         Some(Secret {
             description: inherit(current, default, |s| s.description.clone()),
             required,
@@ -2297,8 +2309,8 @@ impl Secret {
             composed,
             providers: inherit(current, default, |s| s.providers.clone())
                 .or_else(|| storage_defaults.and_then(|d| d.providers.clone())),
-            reference: inherit(current, default, |s| s.reference.clone()),
-            refs: inherit(current, default, |s| s.refs.clone()),
+            reference,
+            refs,
             as_path: inherit(current, default, |s| s.as_path),
             encoding: inherit(current, default, |s| s.encoding),
             secret_type: inherit(current, default, |s| s.secret_type.clone()),
@@ -3502,6 +3514,38 @@ refs = { remote = { item = "scoped" } }"#,
         )
         .unwrap_err();
         assert!(error.to_string().contains("cannot both be set"), "{error}");
+    }
+
+    #[test]
+    fn profile_ref_override_replaces_the_inherited_address_model() {
+        let legacy = Secret {
+            description: Some("token".to_string()),
+            reference: Some(addr("legacy-token", None)),
+            ..Default::default()
+        };
+        let scoped = Secret {
+            refs: Some(HashMap::from([(
+                "remote".to_string(),
+                addr("scoped-token", None),
+            )])),
+            ..Default::default()
+        };
+
+        let resolved = Secret::resolved(Some(&scoped), Some(&legacy), None).unwrap();
+        assert!(
+            resolved.reference.is_none(),
+            "an explicit `refs` override must replace an inherited legacy `ref`"
+        );
+        assert_eq!(resolved.refs, scoped.refs);
+        resolved.validate().unwrap();
+
+        let resolved = Secret::resolved(Some(&legacy), Some(&scoped), None).unwrap();
+        assert_eq!(resolved.reference, legacy.reference);
+        assert!(
+            resolved.refs.is_none(),
+            "an explicit legacy `ref` override must replace inherited `refs`"
+        );
+        resolved.validate().unwrap();
     }
 
     /// A `ref` supplies naming and `providers` supplies routing; they compose.

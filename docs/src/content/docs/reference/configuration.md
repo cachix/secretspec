@@ -164,6 +164,7 @@ Each secret variable is defined as a table with the following fields:
 | `refs` (0.19+) | table | No | Provider-alias-scoped coordinates, keyed by leaf alias (e.g. `refs = { source = { item = "old" }, target = { item = "new" } }`); mutually exclusive with `ref` |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
 | `encoding` (0.19+) | `"base64"`, `"base64url"`, or `"hex"` | No | Encode logical values before storage writes and decode stored values after reads |
+| `extract` (0.19+) | table | No | Select one logical value from stored structured data, for example `extract = { format = "json", pointer = "/database/password" }` |
 | `type` | string | No | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
 | `generate` | boolean or table | No | Enable auto-generation when secret is missing |
 
@@ -179,6 +180,8 @@ Field notes:
   though the provider does not have to supply it.
 - `type` is required when `generate` is enabled.
 - `generate` and `default` cannot both be set.
+- `extract` (0.19+) is read-only and cannot be combined with enabled
+  `generate`.
 
 #### Composed Secrets
 
@@ -202,8 +205,8 @@ References form a static dependency graph. Declaration order does not matter,
 and composed secrets may reference other composed secrets. SecretSpec rejects
 unknown references, cycles, malformed references, and source conflicts while
 loading the manifest. A composed secret is read-only and cannot also set
-`default`, `providers`, `ref`, `refs` (0.19+), `type`, enabled `generate`, or
-`encoding` (0.19+).
+`default`, `providers`, `ref`, `refs` (0.19+), `type`, enabled `generate`,
+`encoding` (0.19+), or `extract` (0.19+).
 
 Composition intentionally does **not** implement dotenv or shell expansion:
 
@@ -246,8 +249,8 @@ Scopes name membership-only subsets of a profile's secrets, so a single service
 or task resolves only what it declares instead of the entire profile. They are
 **orthogonal to profiles**: a profile decides how each secret resolves
 (`required`, `default`, providers, references, generation, `as_path`,
-`encoding` (0.19+), and the storage namespace); a scope only decides *which*
-secrets take part in a given resolution.
+`encoding` (0.19+), `extract` (0.19+), and the storage namespace); a scope only
+decides *which* secrets take part in a given resolution.
 
 ```toml
 [profiles.default]
@@ -641,7 +644,8 @@ GOOGLE_APPLICATION_CREDENTIALS = { description = "GCP service account", as_path 
 ```
 
 When combined with `encoding` (0.19+), the file contains the decoded bytes
-rather than the stored textual representation.
+rather than the stored textual representation. When combined with `extract`
+(0.19+), it contains only the selected logical value.
 
 | Context | Behavior |
 |---------|----------|
@@ -685,6 +689,63 @@ composed results are already logical and are not transformed. The
 `secretspec import` command copies the stored representation verbatim, avoiding
 double encoding.
 
+### Structured Extraction (0.19+)
+
+:::caution[Version compatibility]
+Available starting in SecretSpec 0.19.
+:::
+
+`extract` (0.19+) selects one logical secret from structured text read from a
+provider or cache. JSON is the initial supported format, and `pointer` is an
+[RFC 6901 JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901):
+
+```toml
+[providers]
+documents = "file:./secrets"
+
+[profiles.default]
+# extract is available in SecretSpec 0.19+
+DB_USER = {
+  description = "Database user",
+  providers = ["documents"],
+  ref = { item = "application.json" },
+  extract = { format = "json", pointer = "/database/user" }
+}
+DB_PASSWORD = {
+  description = "Database password",
+  providers = ["documents"],
+  ref = { item = "application.json" },
+  extract = { format = "json", pointer = "/database/password" }
+}
+```
+
+Both declarations read the same document. `/database/password` walks nested
+objects, `/hosts/0` selects an array element, and `/a~1b/~0key` selects the key
+`~key` beneath an `a/b` object. The empty pointer selects the complete document.
+
+JSON strings become their unquoted contents. Numbers, booleans, and `null` use
+their JSON spelling; objects and arrays become compact JSON. Invalid JSON or a
+pointer that does not match is a decoding error. Once a provider returns a
+document, extraction failure is not treated as a provider miss and does not
+continue along a fallback chain.
+
+Stored-value transforms run in this order:
+
+```text
+provider or cache → encoding decode → structured extraction → as_path
+```
+
+This makes a Base64-encoded JSON document valid input when a declaration sets
+both `encoding = "base64"` (0.19+) and `extract` (0.19+). A provider-native
+`ref.field` is also resolved first, so a field whose contents are JSON can be
+selected further. Defaults and composed values are already logical and are not
+extracted.
+
+Extracted secrets are read-only in 0.19. `set`, `delete`, interactive prompting,
+generation, and `import` reject them rather than replacing or removing the
+containing document and its sibling values. Update the document through its
+owning system instead.
+
 ### Secret References
 
 The `ref` field names one externally managed secret by the store's own
@@ -718,7 +779,7 @@ Stores fall into two groups for `field`:
 
 | Store | Shape of one secret | `field` |
 |-------|---------------------|---------|
-| dotenv, env, pass, LastPass, Proton Pass, Bitwarden, AWS Parameter Store (0.18+) | a single value | Rejected: there is nothing to select |
+| dotenv, file (0.19+), env, pass, LastPass, Proton Pass, Bitwarden, AWS Parameter Store (0.18+) | a single value | Rejected: there is nothing to select |
 | 1Password, Keeper (0.18+), Vault KV, AWS Secrets Manager, keyring | a record of named parts | Selects the part: field label, map key, JSON key, account |
 
 `vault` is the only container coordinate. For every store except 1Password the
@@ -785,6 +846,7 @@ entry declares neither, it inherits whichever form `[profiles.default]` uses.
 | [Keeper (0.18+)](/providers/keeper/#use-existing-records) | Record UID or exact title | Standard field type/label or custom field label | Reads `password` | ✅ for existing records and fields |
 | [keyring](/providers/keyring/#use-existing-secrets) | Service | Account (defaults to the current system username) | Current user's entry | ✅ |
 | [dotenv](/providers/dotenv/#use-existing-secrets) | `.env` key | Rejected | Reads the key | ✅ |
+| [file (0.19+)](/providers/file/#use-existing-files) | Relative file path beneath the configured root | Rejected | Reads the complete UTF-8 file | ✅ |
 | [env](/providers/env/#use-existing-secrets) | Variable name | Rejected | Reads the variable | — (read-only) |
 | [systemd credentials (0.17+)](/providers/systemd-credential/#use-an-existing-credential-name) | Credential filename | Rejected | Reads the credential | — (read-only) |
 | [pass](/providers/pass/#use-existing-secrets) | Entry path | Rejected | Reads the entry | ✅ |

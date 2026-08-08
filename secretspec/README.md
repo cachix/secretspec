@@ -28,6 +28,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [Keyring](https://secretspec.dev/providers/keyring)
   - [KeePass KDBX](https://secretspec.dev/providers/kdbx) (0.17+)
   - [.env](https://secretspec.dev/providers/dotenv)
+  - [plaintext files](https://secretspec.dev/providers/file) (0.19+)
   - [OnePassword](https://secretspec.dev/providers/onepassword)
   - [Keeper Secrets Manager](https://secretspec.dev/providers/keeper) (0.18+)
   - [LastPass](https://secretspec.dev/providers/lastpass)
@@ -78,6 +79,7 @@ $ secretspec config global init  # 0.17+
   onepassword: OnePassword password manager
   keeper: Keeper Secrets Manager (0.18+) via official Rust SDK
   dotenv: Traditional .env files
+  file: Plaintext files, one per secret (0.19+)
   env: Read-only environment variables
   null: Use defaults or ephemeral generation without storage (0.19+)
   systemd-credential: Read-only systemd service credentials (0.17+)
@@ -194,6 +196,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Keyring](https://secretspec.dev/providers/keyring)** - System credential store (recommended)
 - **[KeePass KDBX](https://secretspec.dev/providers/kdbx)** (0.17+) - Local KeePass-compatible encrypted database
 - **[.env files](https://secretspec.dev/providers/dotenv)** - Traditional dotenv files
+- **[Plaintext files](https://secretspec.dev/providers/file)** (0.19+) - One UTF-8 file per secret in a local directory tree
 - **[Environment variables](https://secretspec.dev/providers/env)** - Read-only for CI/CD
 - **[Null](https://secretspec.dev/providers/null)** (0.19+) - Use committed defaults or ephemeral generation without secret storage
 - **[systemd credentials](https://secretspec.dev/providers/systemd-credential)** (0.17+) - Read-only credentials passed to the current service

@@ -743,6 +743,9 @@ fn select_config_init_provider(provider: Option<String>) -> Result<String> {
                 available.join(", ")
             ));
         }
+        if provider.split(':').next() == Some("file") {
+            Box::<dyn Provider>::try_from(provider).into_diagnostic()?;
+        }
         return Ok(provider.to_string());
     }
 
@@ -756,11 +759,27 @@ fn select_config_init_provider(provider: Option<String>) -> Result<String> {
         .prompt()
         .into_diagnostic()?;
 
-    Ok(selected_choice
+    let selected_provider = selected_choice
         .split(':')
         .next()
         .unwrap_or("keyring")
-        .to_string())
+        .to_string();
+
+    if selected_provider == "file" {
+        use inquire::Text;
+
+        let directory = Text::new("File provider root directory:")
+            .with_help_message("Use a relative path such as ./.secrets or an absolute path")
+            .prompt()
+            .into_diagnostic()?;
+        let spec = format!("file:{}", directory.trim());
+        Box::<dyn Provider>::try_from(spec.as_str())
+            .into_diagnostic()
+            .wrap_err("Invalid file provider configuration")?;
+        Ok(spec)
+    } else {
+        Ok(selected_provider)
+    }
 }
 
 /// Resolves an explicitly supplied config-init profile or prompts for one.
@@ -2388,6 +2407,16 @@ API_KEY = { description = "Existing" }
                 .unwrap_err()
                 .to_string()
                 .contains("Provider backend 'unknown' not found")
+        );
+        assert_eq!(
+            select_config_init_provider(Some("file:./.secrets".to_string())).unwrap(),
+            "file:./.secrets"
+        );
+        assert!(
+            select_config_init_provider(Some("file".to_string()))
+                .unwrap_err()
+                .to_string()
+                .contains("requires an explicit relative or absolute directory path")
         );
 
         assert_eq!(

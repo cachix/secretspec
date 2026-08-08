@@ -3,8 +3,8 @@
 use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
 use crate::cache::{self, CacheEntryStatus, CacheOwnership};
 use crate::config::{
-    Config, CredentialSource, GlobalConfig, NativeAddress, Profile, ProviderAlias, RequireReason,
-    Resolved, SecretEncoding,
+    Config, CredentialSource, ExtractFormat, GlobalConfig, NativeAddress, Profile, ProviderAlias,
+    RequireReason, Resolved, SecretEncoding, SecretExtract,
 };
 use crate::error::{Result, SecretSpecError};
 use crate::manifest::{CompiledManifest, MissingPolicy};
@@ -1571,8 +1571,47 @@ impl Secrets {
         Ok(())
     }
 
-    /// Decode a stored representation independently of its exposure shape, then
-    /// either return UTF-8 text or materialize the bytes to an owner-only file.
+    /// Select one logical value from a structured stored representation.
+    /// Diagnostics deliberately include only the secret name, format, pointer,
+    /// and parser location — never the stored document or selected value.
+    pub(crate) fn extract_stored_value(
+        extract: &SecretExtract,
+        diagnostic_name: &str,
+        value: &str,
+    ) -> Result<SecretString> {
+        match extract.format {
+            ExtractFormat::Json => {
+                let document: serde_json::Value =
+                    serde_json::from_str(value).map_err(|error| SecretSpecError::DecodeFailed {
+                        name: diagnostic_name.to_string(),
+                        encoding: extract.format.as_str(),
+                        reason: format!("stored value is not valid JSON: {error}"),
+                    })?;
+                let selected = document.pointer(&extract.pointer).ok_or_else(|| {
+                    SecretSpecError::DecodeFailed {
+                        name: diagnostic_name.to_string(),
+                        encoding: extract.format.as_str(),
+                        reason: format!(
+                            "JSON Pointer '{}' did not match the stored document",
+                            extract.pointer
+                        ),
+                    }
+                })?;
+                let selected = match selected {
+                    serde_json::Value::String(value) => value.clone(),
+                    value => {
+                        serde_json::to_string(value).expect("serializing JSON value cannot fail")
+                    }
+                };
+                Ok(SecretString::new(selected.into()))
+            }
+        }
+    }
+
+    /// Decode and extract a stored representation independently of its exposure
+    /// shape, then either return UTF-8 text or materialize the bytes to an
+    /// owner-only file. Extraction follows decoding and applies only across a
+    /// storage boundary; defaults and generated values are already logical.
     fn prepare_resolved(
         &self,
         planned: &PlannedSecret,
@@ -1588,13 +1627,38 @@ impl Secrets {
             _ => None,
         };
 
+        let extracted = match (representation, planned.extract()) {
+            (ResolvedRepresentation::Stored, Some(extract)) => {
+                let text = match &decoded {
+                    Some((encoding, decoded)) => {
+                        std::str::from_utf8(decoded.expose_secret()).map_err(|error| {
+                            SecretSpecError::DecodeFailed {
+                                name: diagnostic_name.to_string(),
+                                encoding: encoding.as_str(),
+                                reason: format!(
+                                    "decoded bytes are not valid UTF-8 and cannot be extracted as {} ({error})",
+                                    extract.format.as_str()
+                                ),
+                            }
+                        })?
+                    }
+                    None => value.expose_secret(),
+                };
+                Some(Self::extract_stored_value(extract, diagnostic_name, text)?)
+            }
+            _ => None,
+        };
+
         if planned.as_path() {
-            let bytes = decoded
+            let bytes = extracted
                 .as_ref()
-                .map(|(_, decoded)| decoded.expose_secret())
+                .map(|value| value.expose_secret().as_bytes())
+                .or_else(|| decoded.as_ref().map(|(_, decoded)| decoded.expose_secret()))
                 .unwrap_or_else(|| value.expose_secret().as_bytes());
             let (owner, path) = self.write_secret_to_temp_file(bytes)?;
             Ok(PreparedSecret::File { owner, path })
+        } else if let Some(extracted) = extracted {
+            Ok(PreparedSecret::Inline(extracted))
         } else if let Some((encoding, decoded)) = decoded {
             let text = std::str::from_utf8(decoded.expose_secret()).map_err(|error| {
                 SecretSpecError::DecodeFailed {
@@ -1613,11 +1677,11 @@ impl Secrets {
         }
     }
 
-    /// Inserts a resolved secret into the working set, decoding its optional
-    /// storage encoding when the value crossed a storage boundary, then
-    /// transparently materializing an `as_path` value to an owner-only temp
-    /// file whose lifetime is tied to `temp_files`. Shared by every resolution
-    /// branch so decoding and temp-file handling cannot drift.
+    /// Inserts a resolved secret into the working set, applying its optional
+    /// storage decoding and extraction when the value crossed a storage
+    /// boundary, then transparently materializing an `as_path` value to an
+    /// owner-only temp file whose lifetime is tied to `temp_files`. Shared by
+    /// every resolution branch so stored-value transforms cannot drift.
     fn insert_resolved(
         &self,
         secrets: &mut HashMap<String, SecretString>,
@@ -3017,6 +3081,19 @@ impl Secrets {
             return Err(err);
         };
 
+        if planned.extract().is_some() {
+            let err = SecretSpecError::ExtractedSecretReadOnly(name.to_string());
+            self.record_key_error(
+                AuditAction::Set,
+                &profile_name,
+                name,
+                route.primary().map(str::to_string),
+                planned.reference(),
+                &err,
+            );
+            return Err(err);
+        }
+
         let backend = match self.write_provider_for_route(route, Some(&profile_name)) {
             Ok(backend) => backend,
             Err(err) => {
@@ -3139,6 +3216,18 @@ impl Secrets {
             self.record_key_error(AuditAction::Delete, &profile_name, name, None, None, &error);
             return Err(error);
         };
+        if planned.extract().is_some() {
+            let error = SecretSpecError::ExtractedSecretReadOnly(name.to_string());
+            self.record_key_error(
+                AuditAction::Delete,
+                &profile_name,
+                name,
+                route.primary().map(str::to_string),
+                planned.reference(),
+                &error,
+            );
+            return Err(error);
+        }
         let backend = match self.write_provider_for_route(route, Some(&profile_name)) {
             Ok(backend) => backend,
             Err(error) => {
@@ -3450,6 +3539,15 @@ impl Secrets {
                         self.scoped_promptable_missing(&validation_errors, &profile_display)?;
                     if missing.is_empty() {
                         return Err(validation_failure(validation_errors));
+                    }
+                    // Extraction cannot be inverted into a containing document.
+                    // Reject the whole interactive write pass before prompting
+                    // for (and possibly storing) any earlier secret.
+                    if let Some(name) = missing.iter().find(|name| {
+                        self.resolve_secret_config(name, Some(&profile_display))
+                            .is_some_and(|secret| secret.extract.is_some())
+                    }) {
+                        return Err(SecretSpecError::ExtractedSecretReadOnly(name.clone()));
                     }
                     let total = missing.len();
                     // Name the provider without constructing it: this value is
@@ -3813,6 +3911,12 @@ impl Secrets {
                     continue;
                 };
 
+                if planned.extract().is_some() {
+                    return Err(SecretSpecError::ExtractedSecretReadOnly(
+                        planned.name.clone(),
+                    ));
+                }
+
                 read_names.push(name.clone());
                 let source_address = self.address_for_spec(
                     &planned,
@@ -3842,7 +3946,6 @@ impl Secrets {
                         from_provider_instance.uri()
                     )));
                 }
-
                 let source_value = from_provider_instance.get(source_address.as_address())?;
                 let target_value = target_provider.get(target_address.as_address())?;
 
@@ -4156,6 +4259,11 @@ impl Secrets {
             Some(config) if config.is_enabled() => config,
             _ => return Ok(None),
         };
+        if planned.extract().is_some() {
+            return Err(SecretSpecError::ExtractedSecretReadOnly(
+                planned.name.clone(),
+            ));
+        }
 
         let secret_type = match &planned.config().secret_type {
             Some(t) => t.as_str(),

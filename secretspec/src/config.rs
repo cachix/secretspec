@@ -1964,6 +1964,8 @@ struct SecretSerde {
     as_path: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     encoding: Option<SecretEncoding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extract: Option<SecretExtract>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     secret_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1994,6 +1996,76 @@ impl SecretEncoding {
             Self::Hex => "hex",
         }
     }
+}
+
+/// A structured-data format from which one logical secret can be extracted.
+///
+/// Available since SecretSpec 0.19.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExtractFormat {
+    /// A JSON document selected with an RFC 6901 JSON Pointer.
+    Json,
+}
+
+impl ExtractFormat {
+    /// Stable manifest spelling used in diagnostics.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+        }
+    }
+}
+
+/// Selects one logical secret from a structured stored value.
+///
+/// Extraction is applied after [`SecretEncoding`] is decoded and only to
+/// values read from providers or caches. Defaults and composed values are
+/// already logical and are not extracted.
+///
+/// Available since SecretSpec 0.19.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretExtract {
+    /// The structured-data format of the stored value.
+    pub format: ExtractFormat,
+    /// RFC 6901 JSON Pointer selecting the logical value.
+    pub pointer: String,
+}
+
+impl SecretExtract {
+    fn validate(&self) -> Result<(), String> {
+        match self.format {
+            ExtractFormat::Json => validate_json_pointer(&self.pointer),
+        }
+    }
+}
+
+/// Validate the JSON Pointer grammar independently of any particular document.
+/// An empty pointer selects the whole document; every non-empty pointer starts
+/// with `/`, and `~` escapes only `~0` and `~1`.
+fn validate_json_pointer(pointer: &str) -> Result<(), String> {
+    if pointer.is_empty() {
+        return Ok(());
+    }
+    if !pointer.starts_with('/') {
+        return Err("`extract.pointer` must be empty or start with `/` (RFC 6901)".into());
+    }
+
+    let mut chars = pointer.char_indices();
+    while let Some((index, ch)) = chars.next() {
+        if ch == '~' {
+            match chars.next() {
+                Some((_, '0' | '1')) => {}
+                _ => {
+                    return Err(format!(
+                        "`extract.pointer` has an invalid `~` escape at byte {index}; use `~0` for `~` or `~1` for `/`"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Configuration for an individual secret.
@@ -2061,6 +2133,13 @@ pub struct Secret {
     ///
     /// Available since SecretSpec 0.19.
     pub encoding: Option<SecretEncoding>,
+    /// Structured stored-value extraction applied after optional decoding.
+    /// JSON extraction uses an RFC 6901 pointer. Extracted secrets are
+    /// read-only because a selected value cannot reconstruct its containing
+    /// document for a storage write.
+    ///
+    /// Available since SecretSpec 0.19.
+    pub extract: Option<SecretExtract>,
     /// The type of secret, used for generation (e.g., "password", "hex", "base64", "uuid", "command", "rsa_private_key")
     pub secret_type: Option<String>,
     /// Auto-generation configuration. Either `true` for defaults or a table with options.
@@ -2097,6 +2176,7 @@ impl TryFrom<SecretSerde> for Secret {
             refs: value.refs,
             as_path: value.as_path,
             encoding: value.encoding,
+            extract: value.extract,
             secret_type: value.secret_type,
             generate: value.generate,
         })
@@ -2124,6 +2204,7 @@ impl From<Secret> for SecretSerde {
             refs: value.refs,
             as_path: value.as_path,
             encoding: value.encoding,
+            extract: value.extract,
             secret_type: value.secret_type,
             generate: value.generate,
         }
@@ -2228,11 +2309,22 @@ impl Secret {
                 || self.reference.is_some()
                 || self.refs.is_some()
                 || self.encoding.is_some()
+                || self.extract.is_some()
                 || self.secret_type.is_some()
                 || self.would_generate()
             {
                 return Err(
-                    "`composed` secrets cannot also set `default`, `providers`, `ref`, `refs`, `encoding`, `type`, or enabled `generate`"
+                    "`composed` secrets cannot also set `default`, `providers`, `ref`, `refs`, `encoding`, `extract`, `type`, or enabled `generate`"
+                        .into(),
+                );
+            }
+        }
+
+        if let Some(extract) = &self.extract {
+            extract.validate()?;
+            if self.would_generate() {
+                return Err(
+                    "`extract` cannot be combined with enabled `generate`; extracted secrets are read-only"
                         .into(),
                 );
             }
@@ -2409,6 +2501,7 @@ impl Secret {
             refs,
             as_path: inherit(current, default, |s| s.as_path),
             encoding: inherit(current, default, |s| s.encoding),
+            extract: inherit(current, default, |s| s.extract.clone()),
             secret_type: inherit(current, default, |s| s.secret_type.clone()),
             generate: inherit(current, default, |s| s.generate.clone()),
         })
@@ -3404,6 +3497,21 @@ BAD = { description = "bad", composed = "${A}", encoding = "base64" }
         .unwrap();
         let error = encoded.validate().unwrap_err().to_string();
         assert!(error.contains("`encoding`"), "{error}");
+
+        let extracted: Config = toml::from_str(
+            r#"
+[project]
+name = "composed"
+revision = "1.0"
+
+[profiles.default]
+A = { description = "a" }
+BAD = { description = "bad", composed = "${A}", extract = { format = "json", pointer = "/value" } }
+"#,
+        )
+        .unwrap();
+        let error = extracted.validate().unwrap_err().to_string();
+        assert!(error.contains("`extract`"), "{error}");
     }
 
     #[test]
@@ -3867,6 +3975,95 @@ encoding = "rot13""#,
         .unwrap_err()
         .to_string();
         assert!(error.contains("unknown variant `rot13`"), "{error}");
+    }
+
+    #[test]
+    fn secret_extract_parses_round_trips_and_inherits() {
+        let secret: Secret = toml::from_str(
+            r#"description = "selected"
+extract = { format = "json", pointer = "/database/password" }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            secret.extract,
+            Some(SecretExtract {
+                format: ExtractFormat::Json,
+                pointer: "/database/password".to_string(),
+            })
+        );
+        let rendered = toml::to_string(&secret).unwrap();
+        assert!(rendered.contains("format = \"json\""), "{rendered}");
+        assert!(
+            rendered.contains("pointer = \"/database/password\""),
+            "{rendered}"
+        );
+
+        let inherited = Secret::resolved(
+            Some(&Secret {
+                description: Some("production".to_string()),
+                ..Default::default()
+            }),
+            Some(&Secret {
+                description: Some("default".to_string()),
+                extract: secret.extract.clone(),
+                ..Default::default()
+            }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(inherited.extract, secret.extract);
+    }
+
+    #[test]
+    fn secret_extract_validates_json_pointer_and_table_shape() {
+        for pointer in ["database/password", "/bad~", "/bad~2escape"] {
+            let secret: Secret = toml::from_str(&format!(
+                "description = \"selected\"\nextract = {{ format = \"json\", pointer = \"{pointer}\" }}"
+            ))
+            .unwrap();
+            let error = secret.validate().unwrap_err();
+            assert!(error.contains("`extract.pointer`"), "{error}");
+        }
+
+        let error = toml::from_str::<Secret>(
+            r#"description = "selected"
+extract = { format = "json", pointer = "/x", unknown = true }"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("unknown field"), "{error}");
+
+        let error = toml::from_str::<Secret>(
+            r#"description = "selected"
+extract = { format = "yaml", pointer = "/x" }"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("unknown variant `yaml`"), "{error}");
+    }
+
+    #[test]
+    fn secret_extract_accepts_root_and_escaped_json_pointers() {
+        for pointer in ["", "/a~1b/~0key", "/items/0"] {
+            let secret: Secret = toml::from_str(&format!(
+                "description = \"selected\"\nextract = {{ format = \"json\", pointer = \"{pointer}\" }}"
+            ))
+            .unwrap();
+            secret.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn secret_extract_rejects_generation() {
+        let secret: Secret = toml::from_str(
+            r#"description = "selected"
+type = "password"
+generate = true
+extract = { format = "json", pointer = "/password" }"#,
+        )
+        .unwrap();
+        let error = secret.validate().unwrap_err();
+        assert!(error.contains("extracted secrets are read-only"), "{error}");
     }
 
     /// All coordinate keys parse from the inline table form.

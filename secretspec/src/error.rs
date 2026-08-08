@@ -65,6 +65,10 @@ pub enum SecretSpecError {
         "Composed secret '{0}' is derived from other secrets and has no stored value to change"
     )]
     ComposedSecretReadOnly(String),
+    #[error(
+        "Secret '{0}' uses `extract` and is read-only; update its containing document in the source provider instead"
+    )]
+    ExtractedSecretReadOnly(String),
     #[error("Failed to compose secret: {0}")]
     CompositionFailed(String),
     #[error("No secretspec.toml found in current or any parent directory")]
@@ -122,6 +126,7 @@ impl SecretSpecError {
             SecretSpecError::SecretNotFound(_) => "secret_not_found",
             SecretSpecError::RequiredSecretMissing(_) => "required_secret_missing",
             SecretSpecError::ComposedSecretReadOnly(_) => "composed_secret_read_only",
+            SecretSpecError::ExtractedSecretReadOnly(_) => "extracted_secret_read_only",
             SecretSpecError::CompositionFailed(_) => "composition_failed",
             SecretSpecError::NoManifest => "no_manifest",
             SecretSpecError::ExtendedConfigNotFound(_) => "extended_config_not_found",
@@ -224,6 +229,10 @@ mod tests {
             (
                 SecretSpecError::ComposedSecretReadOnly("X".into()),
                 "composed_secret_read_only",
+            ),
+            (
+                SecretSpecError::ExtractedSecretReadOnly("X".into()),
+                "extracted_secret_read_only",
             ),
             (
                 SecretSpecError::CompositionFailed("too large".into()),

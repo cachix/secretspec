@@ -263,6 +263,27 @@ protonpass://Work/{project}/{profile}/{key}        # Custom vault and title temp
 **Prerequisites**: `pass-cli`, authenticated with `pass-cli login` (or `pass-cli login --pat $PAT` for CI)
 **Storage**: Note item titled `{project}/{profile}/{key}` inside the configured vault
 
+## Passbolt provider (0.19+)
+
+**Availability**: Added in SecretSpec 0.19.
+
+**URI**: `passbolt://[?server=URL][&folder=ID][&template=PATTERN]` - Reads and writes resources in a self-hosted Passbolt server through `go-passbolt-cli`
+
+```text
+passbolt://                                           # Default resource template
+passbolt://?server=https://pass.example.com           # Select a server
+passbolt://?folder=<folder-id>                         # Scope lookup and creation
+passbolt://?template=teams/{project}/{profile}/{key}   # Replace the convention template
+```
+
+**Features**: Read/write, self-hosted, provider credentials, `init --from`, and `ref` by resource UUID or exact name (standard fields: `password`/`username`/`uri`/`description`; custom resource-type fields are not addressable)
+
+**Prerequisites**: `go-passbolt-cli`, an OpenPGP private key, and its passphrase. Use the `private_key` and `passphrase` provider credentials, their `SECRETSPEC_PASSBOLT_*` environment fallbacks, or the CLI configuration. For MFA, the CLI supports TOTP only.
+
+**Storage**: Resource `secretspec/{project}/{profile}/{key}`, field `password`. Missing resources named through `ref` are never created.
+
+**Write limitation**: `go-passbolt-cli` accepts created/updated values only as flags, so a value being written is visible in the child process argv until it exits. See the [Passbolt provider security notes](/providers/passbolt/#security-considerations-and-limitations).
+
 ## Google Cloud Secret Manager Provider
 
 **URI**: `gcsm://PROJECT_ID` - Stores secrets in Google Cloud Secret Manager
@@ -571,6 +592,7 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Pass | ✅ GPG encryption | Local filesystem | ❌ No |
 | GoPass | ✅ GPG encryption | Local filesystem | ❌ No |
 | Proton Pass | ✅ End-to-end | Cloud (Proton) | ✅ Yes |
+| Passbolt (0.19+) | ✅ End-to-end | Self-hosted (Passbolt server) | ✅ Yes |
 | LastPass | ✅ End-to-end | Cloud (LastPass) | ✅ Yes |
 | Dashlane (0.18+) | ✅ End-to-end | Cloud (Dashlane), synced locally | Yes — `dcli` auto-syncs hourly |
 | OnePassword | ✅ End-to-end | Cloud (OnePassword) | ✅ Yes |

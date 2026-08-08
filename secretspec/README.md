@@ -36,6 +36,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [Pass](https://secretspec.dev/providers/pass)
   - [Gopass](https://secretspec.dev/providers/gopass) (0.15+)
   - [Proton Pass](https://secretspec.dev/providers/protonpass)
+  - [Passbolt](https://secretspec.dev/providers/passbolt) (0.19+)
   - [environment variables](https://secretspec.dev/providers/env)
   - [null](https://secretspec.dev/providers/null) (0.19+)
   - [systemd credentials](https://secretspec.dev/providers/systemd-credential) (0.17+)
@@ -86,6 +87,7 @@ $ secretspec config global init  # 0.17+
   pass: Unix password manager with GPG encryption
   gopass: Gopass CLI password manager with GPG encryption (0.15+)
   protonpass: Proton Pass via official pass-cli
+  passbolt: Passbolt self-hosted password manager (0.19+) via go-passbolt-cli
   lastpass: LastPass password manager
   dashlane: Dashlane password manager, read-only (0.18+)
   gcsm: Google Cloud Secret Manager
@@ -203,6 +205,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Pass](https://secretspec.dev/providers/pass)** - Unix password manager with GPG encryption
 - **[Gopass](https://secretspec.dev/providers/gopass)** (0.15+) - GPG-based password manager with git-synced password store
 - **[Proton Pass](https://secretspec.dev/providers/protonpass)** - End-to-end encrypted via Proton's official pass-cli
+- **[Passbolt](https://secretspec.dev/providers/passbolt)** (0.19+) - Self-hosted Passbolt through go-passbolt-cli
 - **[OnePassword](https://secretspec.dev/providers/onepassword)** - Team secret management
 - **[Keeper Secrets Manager](https://secretspec.dev/providers/keeper)** (0.18+) - Machine secrets through Keeper's official Rust SDK
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager

@@ -3,6 +3,11 @@ title: Go SDK
 description: Resolve SecretSpec secrets from Go
 ---
 
+import { Code } from 'astro:components';
+import quickStartExample from '../../../../../secretspec-go/examples/quick_start/main.go?raw';
+import scopesExample from '../../../../../secretspec-go/examples/scopes/main.go?raw';
+import typedAccessExample from '../../../../../secretspec-go/examples/typed_access/main.go?raw';
+
 The Go SDK (`secretspec-go`) is a thin client over the `secretspec-ffi` C ABI,
 loaded via [purego](https://github.com/ebitengine/purego) (dlopen, no cgo).
 Resolution happens in the Rust core, so the SDK inherits every provider with no
@@ -10,23 +15,7 @@ Go-side logic.
 
 ## Quick start
 
-```go
-import secretspec "github.com/cachix/secretspec/secretspec-go"
-
-resolved, err := secretspec.New().
-    WithProvider("keyring://").
-    WithProfile("production").
-    WithReason("boot web app").
-    Load()
-if err != nil {
-    log.Fatal(err)
-}
-
-fmt.Println(resolved.Provider, resolved.Profile)
-db := resolved.Secrets["DATABASE_URL"]
-fmt.Println(db.Get()) // the value, or the file path for as_path secrets
-resolved.SetAsEnv()   // export everything into the process environment
-```
+<Code code={quickStartExample} lang="go" meta='title="quick_start/main.go"' />
 
 A missing required secret returns `*MissingRequiredError`; any other failure
 returns `*Error` (with a stable `.Kind`).
@@ -36,9 +25,7 @@ returns `*Error` (with a stable `.Kind`).
 Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. The
 selected name is available as `Resolved.Scope` and `Report.Scope`:
 
-```go
-resolved, err := secretspec.New().WithScope("api").Load()
-```
+<Code code={scopesExample} lang="go" meta='title="scopes/main.go"' />
 
 ## Typed access (codegen)
 
@@ -49,11 +36,7 @@ Generate typed structs with `secretspec schema` plus
 secretspec schema | quicktype -s schema --top-level SecretSpec --lang go -o secrets_gen.go
 ```
 
-```go
-data, _ := resolved.FieldsJSON()
-typed, _ := UnmarshalSecretSpec(data) // typed, generated
-fmt.Println(typed.DatabaseURL)
-```
+<Code code={typedAccessExample} lang="go" meta='title="typed_access/main.go"' />
 
 ## Library discovery
 

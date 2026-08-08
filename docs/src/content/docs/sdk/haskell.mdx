@@ -3,33 +3,18 @@ title: Haskell SDK
 description: Resolve SecretSpec secrets from Haskell
 ---
 
+import { Code } from 'astro:components';
+import quickStartExample from '../../../../../secretspec-hs/examples/QuickStart.hs?raw';
+import scopesExample from '../../../../../secretspec-hs/examples/Scopes.hs?raw';
+import reportExample from '../../../../../secretspec-hs/examples/Report.hs?raw';
+
 The Haskell SDK (`secretspec-hs`) is a thin client over the `secretspec-ffi` C
 ABI, linked at build time via the Haskell FFI. Resolution happens in the Rust
 core, so the SDK inherits every provider with no Haskell-side logic.
 
 ## Quick start
 
-```haskell
-import qualified SecretSpec as S
-import qualified Data.Map.Strict as Map
-import Data.Function ((&))
-
-main :: IO ()
-main = do
-  resolved <-
-    S.load
-      ( S.builder
-          & S.withProvider "keyring://"
-          & S.withProfile "production"
-          & S.withReason "boot web app"
-      )
-
-  print (S.resolvedProvider resolved, S.resolvedProfile resolved)
-  case Map.lookup "DATABASE_URL" (S.resolvedSecrets resolved) of
-    Just db -> print (S.get db) -- the value, or the file path for as_path secrets
-    Nothing -> pure ()
-  S.setAsEnv resolved           -- export everything into the process environment
-```
+<Code code={quickStartExample} lang="haskell" meta='title="QuickStart.hs"' />
 
 A missing required secret throws `MissingRequiredError`; any other failure
 throws `SecretSpecError` (with a stable `errorKind`).
@@ -42,9 +27,7 @@ throws `SecretSpecError` (with a stable `errorKind`).
 Use `withScope "api"` to resolve only a named `[scopes.api]` subset. The
 selected name is available through `resolvedScope` and `reportScope`:
 
-```haskell
-resolved <- S.load (S.builder & S.withScope "api")
-```
+<Code code={scopesExample} lang="haskell" meta='title="Scopes.hs"' />
 
 ## Value-free report
 
@@ -53,10 +36,7 @@ provenance, never a value. Unlike `load`, it does not throw when a required
 secret is missing — that secret appears as a `SecretReport` with `srStatus`
 `"missing_required"`.
 
-```haskell
-rep <- S.report (S.builder & S.withProfile "production")
-mapM_ (\s -> print (S.srName s, S.srStatus s, S.srRequired s)) (S.reportSecrets rep)
-```
+<Code code={reportExample} lang="haskell" meta='title="Report.hs"' />
 
 ## Typed access (codegen)
 

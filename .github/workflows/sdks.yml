@@ -60,5 +60,6 @@ jobs:
           target/debug/libsecretspec_ffi.dylib
       - name: Run the Swift SDK and conformance tests
         run: |
+          swift build --target SecretSpecExamples
           swift test --parallel
           swift test --filter SecretSpecTests.testCrossLanguageConformance

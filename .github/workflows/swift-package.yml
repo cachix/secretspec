@@ -137,6 +137,8 @@ jobs:
           name: swift-xcframework
           path: CSecretSpec.xcframework.zip
       - name: Validate the committed SwiftPM checksum
+        # PRs build current source, while Package.swift pins a published release.
+        if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         env:
           ACTUAL_CHECKSUM: ${{ steps.checksum.outputs.checksum }}

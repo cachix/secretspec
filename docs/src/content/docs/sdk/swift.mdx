@@ -3,6 +3,14 @@ title: Swift SDK
 description: Resolve SecretSpec secrets from Swift on macOS
 ---
 
+import { Code } from 'astro:components';
+import quickStartExample from '../../../../../secretspec-swift/Examples/QuickStart.swift?raw';
+import errorsExample from '../../../../../secretspec-swift/Examples/Errors.swift?raw';
+import oneShotExample from '../../../../../secretspec-swift/Examples/OneShot.swift?raw';
+import scopesExample from '../../../../../secretspec-swift/Examples/Scopes.swift?raw';
+import reportExample from '../../../../../secretspec-swift/Examples/Report.swift?raw';
+import typedAccessExample from '../../../../../secretspec-swift/Examples/TypedAccess.swift?raw';
+
 > **Version compatibility:** The Swift SDK is available in SecretSpec 0.18+.
 
 The Swift SDK is a thin `Codable` wrapper over the same Rust resolver and
@@ -46,56 +54,25 @@ visionOS.
 
 ## Quick start
 
-```swift
-import SecretSpec
-
-let resolved = try SecretSpec.builder()
-    .withProvider("keyring://")
-    .withProfile("production")
-    .withReason("boot web app")
-    .load()
-defer { try? resolved.close() }
-
-print(resolved.provider, resolved.profile)
-print(resolved.secrets["DATABASE_URL"]?.get() ?? "")
-try resolved.setAsEnvironment()
-```
+<Code code={quickStartExample} lang="swift" meta='title="QuickStart.swift"' />
 
 `get()` returns the inline value, or the readable file path for an `as_path`
 secret. A missing required secret throws `MissingRequiredError`; its `missing`
 property contains the unresolved names. Other failures throw
 `SecretSpecError`, whose `kind` property is a stable error category:
 
-```swift
-do {
-    let resolved = try SecretSpec.builder().load()
-    defer { try? resolved.close() }
-    // Use resolved.
-} catch let error as MissingRequiredError {
-    print("Missing:", error.missing.joined(separator: ", "))
-} catch let error as SecretSpecError {
-    print("\(error.kind): \(error.message)")
-}
-```
+<Code code={errorsExample} lang="swift" meta='title="Errors.swift"' />
 
 A one-shot form is also available:
 
-```swift
-let resolved = try SecretSpec.resolve(
-    provider: "keyring://",
-    profile: "production",
-    reason: "boot web app"
-)
-```
+<Code code={oneShotExample} lang="swift" meta='title="OneShot.swift"' />
 
 ## Scopes
 
 Use `withScope("api")` to resolve only a named `[scopes.api]` subset. The
 selected name is available through `resolved.scope` and `report.scope`:
 
-```swift
-let resolved = try SecretSpec.builder().withScope("api").load()
-```
+<Code code={scopesExample} lang="swift" meta='title="Scopes.swift"' />
 
 ## Value-free preflight
 
@@ -104,16 +81,7 @@ never carries values. A missing required secret appears with
 `status == "missing_required"` rather than throwing, so an incomplete
 deployment can still be inspected.
 
-```swift
-let report = try SecretSpec.builder()
-    .withProfile("production")
-    .withReason("deployment preflight")
-    .report()
-
-for secret in report.secrets {
-    print("\(secret.name): \(secret.status)")
-}
-```
+<Code code={reportExample} lang="swift" meta='title="Report.swift"' />
 
 ## Typed access
 
@@ -126,13 +94,7 @@ secretspec schema |
 
 Then decode the SDK's flat field map:
 
-```swift
-let typed = try JSONDecoder().decode(
-    AppSecrets.self,
-    from: resolved.fieldsJSON()
-)
-print(typed.databaseURL)
-```
+<Code code={typedAccessExample} lang="swift" meta='title="TypedAccess.swift"' />
 
 The schema models successful resolution: required, defaulted, and generated
 secrets are non-nullable, and profile schemas include inherited

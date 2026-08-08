@@ -3,6 +3,16 @@ title: PHP SDK
 description: Resolve SecretSpec secrets from PHP, Laravel, and Symfony
 ---
 
+import { Code } from 'astro:components';
+import quickStartExample from '../../../../../secretspec-php/examples/quick_start.php?raw';
+import oneShotExample from '../../../../../secretspec-php/examples/one_shot.php?raw';
+import scopesExample from '../../../../../secretspec-php/examples/scopes.php?raw';
+import laravelExample from '../../../../../secretspec-php/examples/laravel.php?raw';
+import symfonyExample from '../../../../../secretspec-php/examples/symfony.php?raw';
+import plainPhpExample from '../../../../../secretspec-php/examples/plain_php.php?raw';
+import typedAccessExample from '../../../../../secretspec-php/examples/typed_access.php?raw';
+import asPathExample from '../../../../../secretspec-php/examples/as_path.php?raw';
+
 The PHP SDK (`cachix/secretspec`) is a thin client over the same Rust resolver
 every other SecretSpec SDK uses, so it inherits every provider, chain, profile,
 and generator with no PHP-side logic. It reaches the resolver through one of two
@@ -81,24 +91,7 @@ the downloaded copy, then a local Cargo `target/` directory.
 
 ## Quick start
 
-```php
-<?php
-
-use Secretspec\SecretSpec;
-
-$resolved = SecretSpec::builder()
-    ->withProvider('keyring://')
-    ->withProfile('production')
-    ->withReason('boot web app')
-    ->load();
-
-echo $resolved->provider, ' ', $resolved->profile, PHP_EOL;
-
-$db = $resolved->secrets['DATABASE_URL'];
-echo $db->get();        // the value, or the file path for as_path secrets
-
-$resolved->setAsEnv();  // export everything into getenv()/$_ENV/$_SERVER
-```
+<Code code={quickStartExample} lang="php" meta='title="quick_start.php"' />
 
 A missing required secret throws `Secretspec\MissingRequiredException` (with a
 `->missing` list); any other failure throws `Secretspec\SecretSpecException`
@@ -106,44 +99,21 @@ A missing required secret throws `Secretspec\MissingRequiredException` (with a
 
 There is also a one-shot form using named arguments:
 
-```php
-$resolved = SecretSpec::resolve(provider: 'keyring://', reason: 'boot');
-```
+<Code code={oneShotExample} lang="php" meta='title="one_shot.php"' />
 
 ## Scopes (0.17+)
 
 Use `withScope('api')` to resolve only a named `[scopes.api]` subset. The
 selected name is available as `$resolved->scope` and `$report->scope`:
 
-```php
-$resolved = SecretSpec::builder()->withScope('api')->load();
-```
+<Code code={scopesExample} lang="php" meta='title="scopes.php"' />
 
 ## Laravel
 
 Resolve your secrets early and export them so Laravel's `env()` and config see
 them. A service provider is a natural home:
 
-```php
-<?php
-
-namespace App\Providers;
-
-use Illuminate\Support\ServiceProvider;
-use Secretspec\SecretSpec;
-
-class SecretSpecServiceProvider extends ServiceProvider
-{
-    public function register(): void
-    {
-        SecretSpec::builder()
-            ->withProfile(app()->environment())   // "production", "local", ...
-            ->withReason('laravel boot')
-            ->load()
-            ->setAsEnv();
-    }
-}
-```
+<Code code={laravelExample} lang="php" meta='title="laravel.php"' />
 
 Register it first in `bootstrap/providers.php` so the secrets are present before
 other providers read configuration. Because `setAsEnv()` also populates `$_ENV`
@@ -160,18 +130,7 @@ resolve normally.
 Export the secrets in the front controller and `bin/console`, before the kernel
 boots, so `%env(DATABASE_URL)%` in your config resolves:
 
-```php
-// public/index.php (and bin/console)
-use Secretspec\SecretSpec;
-
-require_once dirname(__DIR__).'/vendor/autoload.php';
-
-SecretSpec::builder()
-    ->withProfile($_SERVER['APP_ENV'] ?? 'dev')
-    ->withReason('symfony boot')
-    ->load()
-    ->setAsEnv();
-```
+<Code code={symfonyExample} lang="php" meta='title="symfony.php"' />
 
 `setAsEnv()` sets `$_ENV`, `$_SERVER`, and `putenv()`, all three of which
 Symfony's env-var processors read, so no bundle or extra configuration is needed.
@@ -180,20 +139,7 @@ Symfony's env-var processors read, so no bundle or extra configuration is needed
 
 Point the builder at a specific manifest and provider and read the values back:
 
-```php
-use Secretspec\SecretSpec;
-
-$resolved = SecretSpec::builder()
-    ->withPath(__DIR__.'/secretspec.toml')
-    ->withProvider('dotenv://.env.production')
-    ->withReason('cron job')
-    ->load();
-
-foreach ($resolved->secrets as $name => $secret) {
-    // $secret->get() is the value, or a readable file path for as_path secrets.
-    printf("%s=%s\n", $name, $secret->get());
-}
-```
+<Code code={plainPhpExample} lang="php" meta='title="plain_php.php"' />
 
 ## Typed access (codegen)
 
@@ -204,12 +150,7 @@ Generate a typed class with `secretspec schema` plus
 secretspec schema | quicktype -s schema --top-level SecretSpec --lang php -o SecretSpecTyped.php
 ```
 
-```php
-// $resolved->fields() is a [SECRET_NAME => value] map; quicktype's `from`
-// wants an object, so cast it.
-$typed = SecretSpec::from((object) $resolved->fields());
-echo $typed->getDatabaseURL();
-```
+<Code code={typedAccessExample} lang="php" meta='title="typed_access.php"' />
 
 ## Files (`as_path`)
 
@@ -218,15 +159,7 @@ a readable path; `$secret->get()` returns the path. The SDK persists the file
 (mode 0400) so the path stays valid after `load()` returns — you own its
 lifetime. Call `$resolved->close()` when done to remove those temp files:
 
-```php
-$resolved = SecretSpec::builder()->withReason('tls')->load();
-try {
-    $certPath = $resolved->secrets['TLS_CERT']->get();
-    // ... use the file ...
-} finally {
-    $resolved->close();
-}
-```
+<Code code={asPathExample} lang="php" meta='title="as_path.php"' />
 
 ## Native backends
 

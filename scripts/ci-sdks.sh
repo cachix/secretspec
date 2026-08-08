@@ -46,6 +46,7 @@ echo "==> SECRETSPEC_FFI_NATIVE_LIBS=$SECRETSPEC_FFI_NATIVE_LIBS"
 
 echo "==> Python"
 ( cd secretspec-py && python -m pytest -q )
+( cd secretspec-py && python -m compileall -q examples )
 
 echo "==> Go (default purego/dlopen path)"
 ( cd secretspec-go && go test ./... )
@@ -65,6 +66,7 @@ echo "==> Ruby"
 # (using the SECRETSPEC_FFI_* contract above); build it once up front.
 bash secretspec-rb/scripts/build-ext.sh
 ( cd secretspec-rb && ruby -e 'Dir["test/test_*.rb"].sort.each { |f| require File.expand_path(f) }' )
+( cd secretspec-rb && find examples -name '*.rb' -exec ruby -c {} \; )
 
 echo "==> Ruby (pkg-config discovery)"
 # The same link inputs read from secretspec_ffi.pc in the installed prefix
@@ -80,6 +82,7 @@ echo "==> Node"
 ( cd secretspec-node && npm ci )
 bash secretspec-node/scripts/build-addon.sh
 ( cd secretspec-node && node --test )
+( cd secretspec-node && find examples -type f \( -name '*.js' -o -name '*.ts' \) -exec node --check {} \; )
 
 echo "==> Haskell"
 # The Haskell SDK statically links the secretspec-ffi archive at build time: the
@@ -100,6 +103,11 @@ echo "==> Haskell"
   cabal test --extra-lib-dirs="$hs_lib_dir" \
     --ghc-options="-optl${SECRETSPEC_FFI_NATIVE_LIBS// / -optl}" \
     --write-ghc-environment-files=always
+  cabal build exe:secretspec-quick-start-example \
+    exe:secretspec-scopes-example \
+    exe:secretspec-report-example \
+    --extra-lib-dirs="$hs_lib_dir" \
+    --ghc-options="-optl${SECRETSPEC_FFI_NATIVE_LIBS// / -optl}"
 )
 
 echo "==> Haskell (pkg-config discovery)"
@@ -110,6 +118,7 @@ echo "==> Haskell (pkg-config discovery)"
 
 echo "==> C# / .NET"
 ( cd secretspec-dotnet && dotnet run --project tests/SecretSpec.Tests --configuration Release )
+( cd secretspec-dotnet && find examples -name '*.csproj' -exec dotnet build {} \; )
 
 echo "==> PHP"
 # The PHP SDK has two native backends over the same resolver; exercise both.
@@ -120,6 +129,7 @@ composer install --no-interaction --no-progress
 
 echo "==> PHP (ext-ffi fallback, dlopens the cdylib via SECRETSPEC_FFI_LIB)"
 ( cd secretspec-php && php ./vendor/bin/phpunit )
+( cd secretspec-php && find examples -name '*.php' -exec php -l {} \; )
 
 echo "==> PHP (secretspec-php-native extension, ext-php-rs)"
 # Build the extension in debug and load it directly; when it is present the SDK

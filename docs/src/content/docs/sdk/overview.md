@@ -35,6 +35,8 @@ that core rather than a reimplementation:
 - **PHP** prefers an [ext-php-rs](https://github.com/davidcole1340/ext-php-rs)
   extension that embeds the resolver (working under FPM with no `ffi.enable`),
   and falls back to loading the same C ABI at runtime through `ext-ffi`.
+- **JVM (0.XX+)** loads the same C ABI with JNA from a runtime-specific
+  native asset in the Jar package.
 
 Because resolution happens in one place, every provider, chain, profile, and
 generator works the same in every language, and a new provider added to the core
@@ -60,7 +62,8 @@ print(resolved.secrets["DATABASE_URL"].get)
 See each language's page for the idiomatic spelling: [Rust](/sdk/rust),
 [Python](/sdk/python), [Go](/sdk/go), [Ruby](/sdk/ruby),
 [Node.js](/sdk/nodejs), [Haskell](/sdk/haskell), [PHP](/sdk/php),
-[C# (0.16+)](/sdk/csharp), and [Swift (0.18+)](/sdk/swift).
+[C# (0.16+)](/sdk/csharp), [Swift (0.18+)](/sdk/swift)
+and [JVM languages (0.XX+)](/sdk/jvm).
 
 Every builder also takes a [scope (0.17+)](/concepts/scopes/),
 resolving only a named subset of the profile and returning the selected name on
@@ -108,6 +111,8 @@ no runtime library path to set:
 - **Node.js** builds the resolver into a napi-rs addon.
 - **PHP** ships as a normal PHP extension (provisioned like `ext-redis`), with an
   `ext-ffi` fallback that dlopens the bundled `cdylib`.
+- **JVM** ships the `cdylib` as runtime-specific native assets in one
+  Jar package and loads the matching asset through JNA. 
 
 Because the resolver is linked or embedded directly, the SDKs do not depend on a
 separately installed `cdylib` or an `LD_LIBRARY_PATH`/`SECRETSPEC_FFI_LIB`
@@ -131,6 +136,7 @@ SecretSpec 0.17.
 | Swift (0.18+) | — | — | ✓ | ✓ | — | — |
 | PHP | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
 | Haskell (source) | ✓ | — | — | — | ✓ (0.17+) | — |
+| JVM (0.XX+) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 Most Linux packages build against a manylinux_2_28 baseline (glibc 2.28 or
 newer); the C# package additionally ships musl Linux assets. Hackage

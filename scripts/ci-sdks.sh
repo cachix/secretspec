@@ -186,6 +186,11 @@ run_dotnet() {
   ( cd secretspec-dotnet && find examples -name '*.csproj' -exec dotnet build {} \; )
 }
 
+run_jvm() {
+  echo "==> JVM"
+  ( cd secretspec-jvm && ./gradlew build )
+}
+
 run_php() {
   echo "==> PHP"
   # The PHP SDK has two native backends over the same resolver; exercise both.
@@ -236,6 +241,7 @@ start_suite Ruby run_ruby
 start_suite Node run_node
 start_suite Haskell run_haskell
 start_suite .NET run_dotnet
+start_suite JVM run_jvm
 start_suite PHP run_php
 
 failed_suites=()

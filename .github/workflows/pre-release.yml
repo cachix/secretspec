@@ -128,6 +128,14 @@ jobs:
       contents: write
     uses: ./.github/workflows/swift-package.yml
 
+  jvm:
+    name: JVM package
+    needs: authorize
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/jvm-package.yml
+  
   release-artifacts:
     name: CLI release artifacts
     needs: authorize

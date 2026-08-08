@@ -22,6 +22,33 @@ const DEFAULT_AGENT_REASON: &str = concat!(
     " (https://secretspec.dev)"
 );
 
+/// Session checks tried in order, so one build works across pass-cli releases
+/// that disagree about which of them exists.
+///
+/// `pass-cli info` runs behind the CLI's authentication gate, so it fails with
+/// "This operation requires an authenticated client" when no valid session is
+/// present. `pass-cli test` is the fallback for older releases: pass-cli 2.2.4
+/// removed it, and it only ever proved server connectivity rather than session
+/// validity, so it is a weaker check and deliberately second.
+const SESSION_PROBES: [&str; 2] = ["info", "test"];
+
+/// Whether a failed pass-cli call means the subcommand does not exist on this
+/// build, as opposed to the subcommand having run and reported a problem.
+///
+/// Only the first case may fall through to the next probe. pass-cli 2.2.4+
+/// rejects a removed subcommand with clap's `unrecognized subcommand 'test'`;
+/// the other spellings cover the clap 3 era wording, since the provider cannot
+/// assume which clap generation an old pass-cli was built against.
+fn is_unknown_subcommand(error: &SecretSpecError) -> bool {
+    let SecretSpecError::ProviderOperationFailed(message) = error else {
+        return false;
+    };
+    let message = message.to_lowercase();
+    message.contains("unrecognized subcommand")
+        || message.contains("unknown subcommand")
+        || message.contains("wasn't expected")
+}
+
 // You can get the shape of pass-cli data with commands such as:
 // $ pass-cli item view --output json
 //   {"item": {"id": "...", "share_id": "...", "content": {"title": "...", "note": "..."}}}
@@ -141,7 +168,8 @@ impl TryFrom<&ProviderUrl> for ProtonPassConfig {
 /// Interactive: `pass-cli login`
 /// CI with a personal access token: `pass-cli login --pat $PROTON_PASS_PAT`
 ///
-/// The provider checks session validity via `pass-cli test` before operations.
+/// The provider checks session validity before operations, via `pass-cli info`
+/// or, on releases predating it, `pass-cli test`.
 ///
 /// # Storage
 ///
@@ -183,9 +211,35 @@ impl ProtonPassProvider {
         }
     }
 
+    /// Probes the CLI session once before the first read or write, trying each
+    /// [`SESSION_PROBES`] entry until one exists on the installed pass-cli.
+    ///
+    /// Only a missing subcommand advances to the next probe. Any other failure
+    /// is the probe's answer (an unauthenticated session, an absent binary) and
+    /// is returned as-is, so a definitive "log in first" is never retried as if
+    /// the CLI were simply too old.
     pub(crate) fn test_authentication(&self) -> Result<()> {
-        self.run_pass_cli(&["test"], None)?;
-        Ok(())
+        for probe in SESSION_PROBES {
+            match self.run_pass_cli(&[probe], None) {
+                Ok(_) => return Ok(()),
+                Err(e) if is_unknown_subcommand(&e) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+
+        Err(SecretSpecError::ProviderOperationFailed(format!(
+            "Proton Pass CLI at '{}' has none of the session checks SecretSpec knows ({}), \
+             so it is not compatible with this SecretSpec release.\n\n\
+             Install a pass-cli version this release supports, or select one with \
+             SECRETSPEC_PROTONPASS_CLI_PATH:\n\
+             https://secretspec.dev/providers/protonpass/#pass-cli-compatibility",
+            self.cli_binary_path,
+            SESSION_PROBES
+                .iter()
+                .map(|probe| format!("`pass-cli {probe}`"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        )))
     }
 
     /// Resolves the reason passed to `pass-cli` for agent-session audit logging.
@@ -334,7 +388,7 @@ impl Provider for ProtonPassProvider {
         }
     }
 
-    /// `pass-cli test` probes the CLI's login session, which every instance
+    /// The session probe reads the CLI's login session, which every instance
     /// using the same binary shares, so they share one preflight probe.
     fn auth_scope_key(&self) -> Option<String> {
         Some(self.cli_binary_path.clone())
@@ -586,6 +640,154 @@ mod tests {
             k.to_str() == Some(AGENT_REASON_ENV) && v.and_then(|v| v.to_str()) == Some("deploy web")
         });
         assert!(found, "PROTON_PASS_AGENT_REASON must be set on the command");
+    }
+
+    /// Writes an executable stand-in for `pass-cli` into `dir` and returns its
+    /// path.
+    ///
+    /// The script is renamed into place only after its write descriptor is
+    /// closed, so a subprocess forked by a concurrent test can never hold a
+    /// write descriptor to the file we are about to execute (`ETXTBSY`). The
+    /// same helper in [`crate::provider::bws`] documents that reasoning in full.
+    #[cfg(unix)]
+    fn install_fake_cli(dir: &std::path::Path, script: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let scratch = dir.join("pass-cli.script");
+        std::fs::write(&scratch, script).unwrap();
+
+        let cli = dir.join("pass-cli");
+        std::fs::rename(&scratch, &cli).expect("install fake pass-cli script");
+
+        let mut permissions = std::fs::metadata(&cli).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&cli, permissions).unwrap();
+        cli
+    }
+
+    /// Builds a provider driving `cli`, bypassing the environment lookup in
+    /// [`ProtonPassProvider::new`] so tests never race over a shared variable.
+    #[cfg(unix)]
+    fn provider_using_cli(cli: &std::path::Path) -> ProtonPassProvider {
+        ProtonPassProvider {
+            config: ProtonPassConfig::default(),
+            cli_binary_path: cli.to_string_lossy().into_owned(),
+            session_reason: Mutex::new(None),
+        }
+    }
+
+    /// A fake pass-cli that logs each subcommand it is asked for and rejects
+    /// the ones absent from `known` the way clap does.
+    #[cfg(unix)]
+    fn fake_cli_script(args_log: &std::path::Path, known: &[&str]) -> String {
+        // With nothing known, match a word no subcommand can equal so every
+        // call falls through to the rejection arm.
+        let recognized = if known.is_empty() {
+            "__no_subcommand__".to_string()
+        } else {
+            known.join("|")
+        };
+        format!(
+            "#!/bin/sh\n\
+             printf '%s\\n' \"$1\" >> '{}'\n\
+             case \"$1\" in\n\
+             {recognized}) exit 0 ;;\n\
+             *) printf \"error: unrecognized subcommand '%s'\\n\" \"$1\" >&2; exit 2 ;;\n\
+             esac\n",
+            args_log.display(),
+        )
+    }
+
+    /// On a current pass-cli the probe is `info` and nothing else runs.
+    ///
+    /// pass-cli 2.2.4 removed `test`, and the probe runs before every read and
+    /// write, so continuing to invoke it failed all Proton Pass operations
+    /// (issue #279).
+    #[cfg(unix)]
+    #[test]
+    fn preflight_probes_a_current_cli_with_info() {
+        let temp = tempfile::tempdir().unwrap();
+        let args_log = temp.path().join("args");
+        let cli = install_fake_cli(temp.path(), &fake_cli_script(&args_log, &["info"]));
+
+        provider_using_cli(&cli).test_authentication().unwrap();
+
+        assert_eq!(std::fs::read_to_string(args_log).unwrap(), "info\n");
+    }
+
+    /// A pass-cli without `info` falls through to `test`, so one build keeps
+    /// working across releases that disagree about which check exists.
+    #[cfg(unix)]
+    #[test]
+    fn preflight_falls_back_to_test_when_info_is_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let args_log = temp.path().join("args");
+        let cli = install_fake_cli(temp.path(), &fake_cli_script(&args_log, &["test"]));
+
+        provider_using_cli(&cli).test_authentication().unwrap();
+
+        assert_eq!(std::fs::read_to_string(args_log).unwrap(), "info\ntest\n");
+    }
+
+    /// A CLI with neither check is reported as incompatible, naming both
+    /// attempts, rather than passing clap's usage text through.
+    #[cfg(unix)]
+    #[test]
+    fn preflight_reports_a_cli_with_no_known_session_check() {
+        let temp = tempfile::tempdir().unwrap();
+        let args_log = temp.path().join("args");
+        let cli = install_fake_cli(temp.path(), &fake_cli_script(&args_log, &[]));
+
+        let err = provider_using_cli(&cli).test_authentication().unwrap_err();
+
+        assert_eq!(std::fs::read_to_string(args_log).unwrap(), "info\ntest\n");
+        let message = err.to_string();
+        assert!(message.contains("not compatible"), "{message}");
+        assert!(message.contains("`pass-cli info`"), "{message}");
+        assert!(message.contains("`pass-cli test`"), "{message}");
+    }
+
+    /// An unauthenticated session is the probe's answer, not a reason to try
+    /// the next one: `test` must not run, and the login hint must survive.
+    #[cfg(unix)]
+    #[test]
+    fn preflight_stops_at_an_authentication_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let args_log = temp.path().join("args");
+        let cli = install_fake_cli(
+            temp.path(),
+            &format!(
+                "#!/bin/sh\n\
+                 printf '%s\\n' \"$1\" >> '{}'\n\
+                 printf 'This operation requires an authenticated client\\n' >&2\n\
+                 exit 1\n",
+                args_log.display()
+            ),
+        );
+
+        let err = provider_using_cli(&cli).test_authentication().unwrap_err();
+
+        assert_eq!(std::fs::read_to_string(args_log).unwrap(), "info\n");
+        assert!(err.to_string().contains("pass-cli login"), "{err}");
+    }
+
+    /// Only a missing subcommand may advance the probe chain.
+    #[test]
+    fn unknown_subcommand_is_distinguished_from_a_real_failure() {
+        let failed = |m: &str| SecretSpecError::ProviderOperationFailed(m.to_string());
+        // Verbatim from pass-cli 2.2.5.
+        assert!(is_unknown_subcommand(&failed(
+            "error: unrecognized subcommand 'test'\n\n  tip: a similar subcommand exists: 'settings'"
+        )));
+        assert!(is_unknown_subcommand(&failed(
+            "error: unknown subcommand 'info'"
+        )));
+        assert!(!is_unknown_subcommand(&failed(
+            "Proton Pass authentication required. Please run 'pass-cli login' first."
+        )));
+        assert!(!is_unknown_subcommand(&failed(
+            "error: no vault named 'secretspec'"
+        )));
     }
 
     #[test]

@@ -263,6 +263,16 @@ protonpass://Work/{project}/{profile}/{key}        # Custom vault and title temp
 **Prerequisites**: `pass-cli`, authenticated with `pass-cli login` (or `pass-cli login --pat $PAT` for CI)
 **Storage**: Note item titled `{project}/{profile}/{key}` inside the configured vault
 
+`pass-cli` ships backward incompatible changes in patch releases without
+advance notice, so a CLI upgrade can break secret resolution on its own.
+`pass-cli` 2.2.4 removed `pass-cli test`, which SecretSpec 0.18.0 and earlier
+use to check the session before every read and write; those releases need
+`pass-cli` 2.2.3 or earlier, while SecretSpec 0.19+ tries `pass-cli info` and
+falls back to `pass-cli test`, working with either. Pin a tested build and
+select it with
+`SECRETSPEC_PROTONPASS_CLI_PATH`. See
+[`pass-cli` compatibility](/providers/protonpass/#pass-cli-compatibility).
+
 ## Passbolt provider (0.19+)
 
 **Availability**: Added in SecretSpec 0.19.

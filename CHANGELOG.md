@@ -67,6 +67,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Proton Pass provider works with `pass-cli` 2.2.4 and later, which removed
+  the `pass-cli test` subcommand the provider ran to check the session before
+  every read and write. The check now tries `pass-cli info` and falls back to
+  `pass-cli test`, so a single build works across `pass-cli` releases that
+  disagree about which check exists. A `pass-cli` with neither is reported as
+  incompatible with the SecretSpec release, instead of passing the CLI's usage
+  text through as the error.
+  ([#279](https://github.com/cachix/secretspec/issues/279))
 - SOPS write-target previews consistently use canonical physical paths on macOS
   and Windows, matching the files used for writes.
 - Passbolt now updates UUID-addressed resources outside a configured folder,

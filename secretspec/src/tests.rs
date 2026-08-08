@@ -6212,6 +6212,19 @@ fn test_single_store_ref_rejects_unsupported_coordinate_up_front() {
                 msg.contains("dotenv"),
                 "message should name the store: {msg}"
             );
+            // Dropping the coordinate is only one of the two remedies, and it is
+            // the wrong one when the coordinate is meaningful to the store the
+            // ref was written for. The message must also point at a
+            // per-provider address, or a user whose ref legitimately needs
+            // `field` is left with no way forward.
+            assert!(
+                msg.contains("refs.<alias>"),
+                "message should offer a per-provider address: {msg}"
+            );
+            assert!(
+                msg.contains("concepts/references"),
+                "message should link the reference docs: {msg}"
+            );
         }
         other => panic!("expected ProviderOperationFailed, got {other:?}"),
     }

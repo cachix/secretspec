@@ -311,6 +311,7 @@ pub mod passbolt;
 pub mod protonpass;
 #[cfg(feature = "scaleway")]
 pub mod scaleway;
+pub mod sec;
 #[cfg(feature = "sops")]
 pub mod sops;
 pub mod systemd_credential;

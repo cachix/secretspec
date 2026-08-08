@@ -125,6 +125,23 @@ keyring://                   # System default keychain
 **Storage**: Service `secretspec/{project}/{profile}/{key}`, with the current
 operating-system username as the account
 
+## sec Provider (0.19+)
+
+**Availability**: Added in SecretSpec 0.19. Requires sec 1.0+.
+
+**URI**: `sec://[?template=PATTERN]` - Uses [sec](https://github.com/kaidstor/sec), a local single-file encrypted store built for agent-safe workflows (values never on argv or in shell history)
+
+```text
+sec://                                    # sec's native layout
+sec://?template=shared@{profile}/{key}    # Replace the convention template
+```
+
+**Features**: Read/write, profiles, `init --from`, local XChaCha20-Poly1305-encrypted storage with the master key in the OS keychain (`SEC_KEY` for headless use)
+
+**Prerequisites**: `sec` CLI 1.0+
+
+**Storage**: sec's own address space — `{project}@{profile}/{key}`, with the `default` profile collapsing to the project's base set (`{project}@/{key}`), so existing sec stores work without migration
+
 ## KeePass KDBX Provider (0.17+)
 
 :::caution[Version compatibility]

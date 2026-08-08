@@ -470,6 +470,12 @@ impl<'a> Address<'a> {
 /// it came from, and how to fix it, so a `ref` written for one store fails
 /// loudly when routing points it at a store that cannot honor those
 /// coordinates, instead of silently resolving something else.
+///
+/// Both remedies are offered because dropping the coordinate is only right when
+/// every endpoint should share one address. When the coordinate is meaningful to
+/// the store the ref was written for — a Bitwarden or 1Password item field, say —
+/// and this store simply organizes the secret differently, the fix is a
+/// per-provider address (0.19+), not a lossy edit to the ref.
 fn reject_unsupported_coords(
     provider: &str,
     addr: &NativeAddress,
@@ -483,7 +489,9 @@ fn reject_unsupported_coords(
         if !supported.contains(&name) {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "the {provider} provider does not support the `{name}` coordinate. \
-                 Drop `{name}` from the ref for `{item}`.",
+                 Drop `{name}` from the ref for `{item}`, or give this provider its \
+                 own address with `refs.<alias>` or an alias `ref` template (0.19+): \
+                 https://secretspec.dev/concepts/references/#different-coordinates-per-provider-019",
                 item = addr.item
             )));
         }

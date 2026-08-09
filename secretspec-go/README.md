@@ -124,5 +124,14 @@ Unlike staging, this also works for a `go get` dependency.
 
 ### Dynamic linking (0.19+)
 
-Drop `--library-type staticlib` from the install and the binary links the
-shared library instead.
+Install into a separate prefix without the static-only wrapper, then use the
+same `pkgconfig` build tag:
+
+```bash
+cargo cinstall -p secretspec-ffi --prefix "$PREFIX" --libdir lib --pkgconfigdir lib/pkgconfig
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" CGO_ENABLED=1 go build -tags static,pkgconfig ./...
+```
+
+The linker prefers the shared library from this install. Unless `PREFIX` is a
+system location, add `PREFIX/lib` to the platform's runtime library search path
+when running the binary.

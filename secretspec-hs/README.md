@@ -100,5 +100,15 @@ PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal test  -f use-pkg-config
 
 ### Dynamic linking (0.19+)
 
-Drop `--library-type staticlib` from the install and the build links the shared
-library instead.
+Install into a separate prefix without the static-only wrapper, then use the
+same `use-pkg-config` flag:
+
+```bash
+cargo cinstall -p secretspec-ffi --prefix "$PREFIX" --libdir lib --pkgconfigdir lib/pkgconfig
+cd secretspec-hs
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal build -f use-pkg-config
+```
+
+The linker prefers the shared library from this install. Unless `PREFIX` is a
+system location, add `PREFIX/lib` to the platform's runtime library search path
+when running the executable.

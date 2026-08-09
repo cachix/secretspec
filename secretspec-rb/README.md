@@ -72,5 +72,14 @@ The same flag works in a checkout: `bash scripts/build-ext.sh --enable-pkg-confi
 
 ### Dynamic linking (0.19+)
 
-Drop `--library-type staticlib` from the install and the extension links the
-shared library instead.
+Install into a separate prefix without the static-only wrapper, then use the
+same extension flag:
+
+```bash
+cargo cinstall -p secretspec-ffi --prefix "$PREFIX" --libdir lib --pkgconfigdir lib/pkgconfig
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" gem install secretspec -- --enable-pkg-config
+```
+
+The linker prefers the shared library from this install. Unless `PREFIX` is a
+system location, add `PREFIX/lib` to the platform's runtime library search path
+when loading the extension.

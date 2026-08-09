@@ -59,7 +59,7 @@ detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
 
 [features]
-default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "infisical", "bw", "age", "scaleway", "sops"]
+default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "azappconfig", "infisical", "bw", "age", "scaleway", "sops"]
 cli = ["dep:toml_edit", "dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
@@ -79,6 +79,9 @@ infisical = ["dep:reqwest", "tokio/sync"]
 bws = []
 bw = ["dep:base64"]
 akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secrets"]
+# App Configuration connection strings use Azure Core's existing HMAC-SHA256
+# implementation, avoiding a second cryptography dependency.
+azappconfig = ["akv", "dep:reqwest", "azure_core/hmac_rust"]
 age = ["dep:age"]
 sops = []
 

@@ -38,6 +38,7 @@
 //! - [`openbao::OpenBaoProvider`]: OpenBao integration (0.17+)
 //! - [`bws::BwsProvider`]: Bitwarden Secrets Manager integration
 //! - [`akv::AkvProvider`]: Azure Key Vault integration
+//! - [`azappconfig::AzAppConfigProvider`]: Azure App Configuration integration (0.19+)
 //! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
 //! - [`bw::BitwardenProvider`]: Bitwarden Password Manager (0.18+)
 //! - [`sops::SopsProvider`]: SOPS-encrypted file integration (0.17+)
@@ -142,6 +143,8 @@ pub mod akv;
 pub mod awsps;
 #[cfg(feature = "awssm")]
 pub mod awssm;
+#[cfg(feature = "azappconfig")]
+pub mod azappconfig;
 #[cfg(feature = "bw")]
 pub mod bw;
 #[cfg(feature = "bws")]

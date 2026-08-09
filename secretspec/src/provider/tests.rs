@@ -1280,6 +1280,25 @@ mod integration_tests {
                     .expect("Should create akv provider");
                 (provider, None)
             }
+            #[cfg(feature = "azappconfig")]
+            // Set AZAPPCONFIG_TEST_STORE to a real store name and authenticate
+            // with an App Configuration Data Owner identity. An optional
+            // AZAPPCONFIG_TEST_LABEL keeps live fixtures in one exact label.
+            "azappconfig" => {
+                let store = std::env::var("AZAPPCONFIG_TEST_STORE").expect(
+                    "Testing the azappconfig provider requires a real store: set AZAPPCONFIG_TEST_STORE to a store name (and authenticate via AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET or `az login`).",
+                );
+                let mut provider_spec = format!("azappconfig://{store}");
+                if let Ok(label) = std::env::var("AZAPPCONFIG_TEST_LABEL")
+                    && !label.is_empty()
+                {
+                    provider_spec.push_str("?label=");
+                    provider_spec.push_str(&crate::provider::ProviderUrl::encode_query(&label));
+                }
+                let provider = Box::<dyn Provider>::try_from(provider_spec.as_str())
+                    .expect("Should create azappconfig provider");
+                (provider, None)
+            }
             _ => {
                 let provider = Box::<dyn Provider>::try_from(provider_name)
                     .unwrap_or_else(|_| panic!("{} provider should exist", provider_name));

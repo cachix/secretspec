@@ -1272,10 +1272,14 @@ mod tests {
         assert!(message.contains("mirror"), "{message}");
     }
 
+    /// A password-bearing URI is refused outright now, so what a diagnostic can
+    /// still echo is the userinfo the URI legitimately carries (here a Vault
+    /// namespace). Strict redaction drops it anyway: the same-store message
+    /// names the store, not who authenticates to it.
     #[test]
-    fn same_store_error_redacts_inline_authoritative_credentials() {
+    fn same_store_error_redacts_inline_authoritative_userinfo() {
         let _env = scrub_resolution_env();
-        let source = "vault://team-user:super-sensitive-password@127.0.0.1:8200/secret?tls=false";
+        let source = "vault://team-user@127.0.0.1:8200/secret?tls=false";
         let inline = ProviderAlias::from(source)
             .with_cache(ProviderCache::new(source, "8h").expect("valid cache policy"));
         let spec = cached_spec_with(vec!["route"], &[("route", inline)]);
@@ -1287,6 +1291,28 @@ mod tests {
             "{message}"
         );
         assert!(!message.contains("team-user"), "{message}");
+        assert!(!message.contains("tls=false"), "{message}");
+    }
+
+    /// Planning a cached route reconstructs its canonical provider URI, so a
+    /// password-bearing alias is refused here, before any store is contacted.
+    /// The refusal has to quote the URI to be actionable, which is why strict
+    /// redaction outlives the credential-bearing URIs it was written for: the
+    /// message that tells you not to embed a credential must not repeat it.
+    #[test]
+    fn planning_refuses_an_inline_credential_without_echoing_it() {
+        let _env = scrub_resolution_env();
+        let source = "vault://team-user:super-sensitive-password@127.0.0.1:8200/secret?tls=false";
+        let inline = ProviderAlias::from(source)
+            .with_cache(ProviderCache::new(source, "8h").expect("valid cache policy"));
+        let spec = cached_spec_with(vec!["route"], &[("route", inline)]);
+
+        let message = spec.build_plan(None).unwrap_err().to_string();
+        assert!(message.contains("carries a password"), "{message}");
+        assert!(
+            message.contains("secretspec config provider login"),
+            "{message}"
+        );
         assert!(!message.contains("super-sensitive-password"), "{message}");
     }
 

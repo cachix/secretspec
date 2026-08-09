@@ -156,6 +156,29 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
             }
         }
 
+        // The `onepassword+token://token@vault` form carried a service account
+        // token in the URI, which then travelled into committed manifests,
+        // shell history, and CI logs. The token now comes from a provider
+        // credential or the environment; the scheme itself
+        // (`onepassword+token://vault`) still selects service account auth.
+        // Checked for both userinfo positions, since the token was accepted in
+        // either, and independently of the host so it cannot be reached only
+        // through a vault-bearing URI.
+        if scheme == "onepassword+token" && (!url.username().is_empty() || url.password().is_some())
+        {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "onepassword+token:// no longer accepts the service account token in the \
+                 URI, because a URI reaches committed manifests, shell history, and CI \
+                 logs. Keep the scheme without the token \
+                 (`onepassword+token://<vault>`) and supply the token as the \
+                 `service_account_token` provider credential (`secretspec config provider \
+                 login <alias>`, or `credentials = { service_account_token = \"keyring\" }` \
+                 on the alias), or set OP_SERVICE_ACCOUNT_TOKEN. See \
+                 https://secretspec.dev/providers/onepassword/#provider-credentials"
+                    .to_string(),
+            ));
+        }
+
         let mut config = Self::default();
 
         // Parse URL components for account@vault format, ignoring dummy localhost
@@ -166,16 +189,7 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
 
             // Check if we have username (account) information
             if !username.is_empty() {
-                // Handle user:token format for service account tokens
-                if scheme == "onepassword+token" {
-                    if let Some(password) = url.password() {
-                        config.service_account_token = Some(password);
-                    } else {
-                        config.service_account_token = Some(username);
-                    }
-                } else {
-                    config.account = Some(username);
-                }
+                config.account = Some(username);
                 config.default_vault = Some(host);
             } else {
                 // No username, so the host is the vault
@@ -888,7 +902,7 @@ impl Provider for OnePasswordProvider {
 
     fn uri(&self) -> String {
         // Reconstruct the URI from the config
-        // Format: onepassword://[account@]vault or onepassword+token://[token@]vault
+        // Format: onepassword://[account@]vault or onepassword+token://vault
 
         let scheme = if self.config.service_account_token.is_some() {
             "onepassword+token"
@@ -898,8 +912,8 @@ impl Provider for OnePasswordProvider {
 
         let mut uri = format!("{}://", scheme);
 
-        // For service account token, the token itself might be in the URI
-        // but we don't want to expose the actual token value, just indicate it's configured
+        // A configured service account token (from a provider credential or the
+        // environment) selects the scheme but is never written into the URI.
         if self.config.service_account_token.is_some() {
             // Just indicate token auth is being used without exposing the token
             if let Some(ref vault) = self.config.default_vault {
@@ -1227,18 +1241,45 @@ mod tests {
         );
     }
 
+    /// Both userinfo spellings the token scheme used to accept are now refused,
+    /// through the real construction path, in an error that says where the token
+    /// belongs instead and never repeats the token back.
+    ///
+    /// The two spellings are refused by different checks — the password position
+    /// by the shared URI gate, the username position by this provider — so both
+    /// are exercised end to end rather than against this module's `try_from`.
     #[test]
-    fn try_from_token_scheme_captures_token_from_username() {
-        let c = config("onepassword+token://ops_tok@Private");
-        assert_eq!(c.service_account_token.as_deref(), Some("ops_tok"));
-        assert_eq!(c.default_vault.as_deref(), Some("Private"));
-        assert_eq!(c.account, None);
+    fn try_from_token_scheme_rejects_a_token_in_the_uri() {
+        for source in [
+            "onepassword+token://ops_tok@Private",
+            "onepassword+token://acct:ops_tok@Private",
+        ] {
+            let Err(error) = Box::<dyn crate::provider::Provider>::try_from(source) else {
+                panic!("{source} was accepted");
+            };
+            let message = error.to_string();
+            assert!(
+                message.contains("service_account_token"),
+                "{source}: {message}"
+            );
+            assert!(!message.contains("ops_tok"), "{source}: {message}");
+        }
+
+        // The documented single-token form additionally names the environment
+        // fallback and how to keep the scheme.
+        let message = config_err("onepassword+token://ops_tok@Private").to_string();
+        assert!(message.contains("OP_SERVICE_ACCOUNT_TOKEN"), "{message}");
+        assert!(message.contains("onepassword+token://<vault>"), "{message}");
     }
 
+    /// The scheme itself still selects service account authentication; only the
+    /// embedded token is gone.
     #[test]
-    fn try_from_token_scheme_captures_token_from_password() {
-        let c = config("onepassword+token://acct:ops_tok@Private");
-        assert_eq!(c.service_account_token.as_deref(), Some("ops_tok"));
+    fn try_from_token_scheme_without_a_token_selects_the_vault() {
+        let c = config("onepassword+token://Private");
+        assert_eq!(c.default_vault.as_deref(), Some("Private"));
+        assert_eq!(c.service_account_token, None);
+        assert_eq!(c.account, None);
     }
 
     #[test]
@@ -1292,8 +1333,12 @@ mod tests {
 
     #[test]
     fn uri_for_token_does_not_leak_secret() {
-        let provider =
-            OnePasswordProvider::new(config("onepassword+token://ops_secret_tok@Private"));
+        // The token now reaches the config from a provider credential or the
+        // environment rather than the URI, and still must not resurface in the
+        // `uri()` the audit log persists.
+        let mut config = config("onepassword+token://Private");
+        config.service_account_token = Some("ops_secret_tok".to_string());
+        let provider = OnePasswordProvider::new(config);
         let uri = provider.uri();
         assert_eq!(uri, "onepassword+token://Private");
         assert!(!uri.contains("ops_secret_tok"));

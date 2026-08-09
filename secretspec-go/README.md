@@ -6,7 +6,7 @@ Rust core, so the SDK inherits every provider with no Go-side logic. By default
 the resolver is loaded at runtime via
 [purego](https://github.com/ebitengine/purego) (dlopen, no cgo), keeping `go get`
 toolchain-free. Use `-tags static` to stage and embed the archive, or
-`-tags pkgconfig` to link an installed library (see below).
+`-tags pkgconfig` (0.19+) to link an installed library (see below).
 
 ```go
 package main

@@ -26,5 +26,6 @@ esac
 cargo cinstall -p secretspec-ffi --manifest-path "$repo_root/Cargo.toml" \
   --library-type "$library_type" \
   --prefix "$prefix" \
+  --bindir lib \
   --libdir lib \
   --pkgconfigdir lib/pkgconfig

@@ -68,6 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Windows shared `secretspec-ffi` installs now place the runtime DLL in the
+  documented `PREFIX/lib` runtime library directory.
 - `import` warns when a literal source uses convention naming but a provider
   alias for the same storage container addresses active secrets differently
   through a `ref` template or scoped `refs`. Import output also retains the

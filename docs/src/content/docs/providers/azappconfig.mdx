@@ -146,9 +146,11 @@ $ secretspec run --provider app_config -- deploy
 ## Storage and selection
 
 Convention entries use
-`{prefix}secretspec:{project}:{profile}:{key}`. Project, profile, and key
-components accept ASCII letters, digits, underscores, and hyphens. App
-Configuration keys cannot contain `%` or be exactly `.` or `..`.
+`{prefix}secretspec:{project}:{profile}:{key}`. Project and profile components
+accept ASCII letters, digits, underscores, and hyphens. Secret keys start with
+an ASCII letter or underscore and continue with ASCII letters, digits, or
+underscores; `defaults` is reserved for profile configuration. App Configuration
+keys cannot contain `%` or be exactly `.` or `..`.
 
 Label, prefix, and tags select values; they do not grant access. Reads require
 the exact key, configured label, and all tag selectors. New entries receive the

@@ -418,6 +418,10 @@ fn validate_name_component(name: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn is_valid_secret_name(value: &str) -> bool {
+    value != "defaults" && value.is_ascii() && crate::config::is_valid_identifier(value)
+}
+
 fn validate_appconfig_key(key: &str, name: &str) -> Result<()> {
     if key.is_empty() {
         return Err(operation_error(format!("{name} cannot be empty")));
@@ -891,7 +895,11 @@ impl AzAppConfigProvider {
     fn convention_key(&self, project: &str, profile: &str, key: &str) -> Result<String> {
         validate_name_component("project", project)?;
         validate_name_component("profile", profile)?;
-        validate_name_component("key", key)?;
+        if !is_valid_secret_name(key) {
+            return Err(operation_error(format!(
+                "key '{key}' cannot become a SecretSpec declaration: use an ASCII letter or underscore first, followed by ASCII letters, digits, or underscores, and avoid the reserved name 'defaults'"
+            )));
+        }
         let native = format!(
             "{}secretspec:{project}:{profile}:{key}",
             self.config.prefix.as_deref().unwrap_or_default()
@@ -929,7 +937,7 @@ impl AzAppConfigProvider {
         Ok(url)
     }
 
-    fn list_url(&self, context: DiscoveryContext<'_>) -> Result<Url> {
+    fn discovery_prefix(&self, context: DiscoveryContext<'_>) -> Result<String> {
         let base = format!(
             "{}secretspec:{}:{}:",
             self.config.prefix.as_deref().unwrap_or_default(),
@@ -939,7 +947,11 @@ impl AzAppConfigProvider {
         validate_name_component("project", context.project)?;
         validate_name_component("profile", context.profile)?;
         validate_appconfig_key(&base, "discovery prefix")?;
+        Ok(base)
+    }
 
+    fn list_url(&self, context: DiscoveryContext<'_>) -> Result<Url> {
+        let base = self.discovery_prefix(context)?;
         let mut url = self.endpoint_url()?;
         url.path_segments_mut()
             .map_err(|_| operation_error("invalid App Configuration endpoint".to_string()))?
@@ -1583,19 +1595,17 @@ impl AzAppConfigProvider {
                 record.key
             )));
         }
-        let marker = format!(
-            "{}secretspec:",
-            self.config.prefix.as_deref().unwrap_or_default()
-        );
-        let Some(rest) = record.key.strip_prefix(&marker) else {
+        let prefix = self.discovery_prefix(context)?;
+        let Some(key) = record.key.strip_prefix(&prefix) else {
             return Ok(None);
         };
-        let parts = rest.split(':').collect::<Vec<_>>();
-        if parts.len() != 3 || parts[0] != context.project || parts[1] != context.profile {
-            return Ok(None);
+        if key.contains(':') {
+            return Err(operation_error(format!(
+                "Azure App Configuration key '{}' is nested inside the SecretSpec discovery namespace",
+                record.key
+            )));
         }
-        let key = parts[2];
-        if !crate::config::is_valid_identifier(key) {
+        if !is_valid_secret_name(key) {
             return Err(operation_error(format!(
                 "Azure App Configuration key '{}' maps to invalid SecretSpec name '{key}'",
                 record.key
@@ -2279,6 +2289,10 @@ mod tests {
             ("app", "prod", ""),
             ("my app", "prod", "KEY"),
             ("app", "prod", "KEY.PART"),
+            ("app", "prod", "api-key"),
+            ("app", "prod", "9KEY"),
+            ("app", "prod", "KÉY"),
+            ("app", "prod", "defaults"),
         ] {
             assert!(provider.convention_key(project, profile, key).is_err());
         }
@@ -3316,5 +3330,19 @@ mod tests {
                 )
                 .is_err()
         );
+        let error = provider
+            .declaration_from_record(
+                context,
+                record("payments:secretspec:checkout:prod:defaults", None),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("defaults"), "{error}");
+        let error = provider
+            .declaration_from_record(
+                context,
+                record("payments:secretspec:checkout:prod:API:KEY", None),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("nested"), "{error}");
     }
 }

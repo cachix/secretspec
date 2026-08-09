@@ -268,6 +268,9 @@ as in 0.19.0.
   coordinate, so a `field` written for one store no longer has to be dropped to
   reach another store that organizes the secret differently.
   ([#266](https://github.com/cachix/secretspec/issues/266))
+- Azure App Configuration declaration discovery now rejects ambiguous nested
+  convention keys and accepts only convention names that can be represented in
+  generated SecretSpec manifests.
 - The Proton Pass provider works with `pass-cli` 2.2.4 and later, which removed
   the `pass-cli test` subcommand the provider ran to check the session before
   every read and write. The check now tries `pass-cli info` and falls back to

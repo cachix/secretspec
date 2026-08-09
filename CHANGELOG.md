@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.19.0] - 2026-08-09
 
 ### Changed
 - The Rust SDK's `ProviderAlias` now provides `leaf`, `credentials`, and
@@ -22,7 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `go-passbolt-cli`, with convention-based names, references to existing
   resources, and credentials supplied by the CLI configuration or SecretSpec
   provider environment variables.
-
 - Windows ARM64 CLI release artifacts (`aarch64-pc-windows-msvc`).
 - Provider aliases can define native `ref` templates and secrets can override
   coordinates per leaf alias with `refs`, so fallback providers and import
@@ -73,6 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selected source alias, making alias-specific addressing visible without
   changing literal-provider semantics.
   ([#312](https://github.com/cachix/secretspec/issues/312))
+- The error for a coordinate a provider does not support now points at
+  `refs.<alias>` and alias `ref` templates as well as at removing the
+  coordinate, so a `field` written for one store no longer has to be dropped to
+  reach another store that organizes the secret differently.
+  ([#266](https://github.com/cachix/secretspec/issues/266))
 - The Proton Pass provider works with `pass-cli` 2.2.4 and later, which removed
   the `pass-cli test` subcommand the provider ran to check the session before
   every read and write. The check now tries `pass-cli info` and falls back to

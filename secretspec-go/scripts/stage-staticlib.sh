@@ -4,7 +4,7 @@
 # per-platform archive (lib/), the C header (include/), and a generated
 # cgo_ldflags_<os>_<arch>.go carrying the archive path + its transitive native
 # deps (captured from `rustc --print native-static-libs`, never hardcoded).
-# A `-tags static,pkgconfig` build skips the staged inputs and reads
+# A `-tags pkgconfig` build skips the staged inputs and reads an installed
 # secretspec_ffi.pc instead.
 #
 # Honors:

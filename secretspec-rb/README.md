@@ -58,28 +58,21 @@ checkout:
 bash scripts/build-ext.sh
 ```
 
-### pkg-config (0.19+)
+### Linking with pkg-config (0.19+)
 
-Install the library with [cargo-c](https://github.com/lu-zero/cargo-c) and pass
-`--enable-pkg-config` to the build:
+Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
-bash secretspec-ffi/scripts/cinstall.sh "$PREFIX"
+# Use "static" (the default) or "shared"; use separate prefixes for both.
+bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
+```
+
+Then use the same extension flag for either type:
+
+```bash
 PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" gem install secretspec -- --enable-pkg-config
 ```
 
 The same flag works in a checkout: `bash scripts/build-ext.sh --enable-pkg-config`.
-
-### Dynamic linking (0.19+)
-
-Install into a separate prefix without the static-only wrapper, then use the
-same extension flag:
-
-```bash
-cargo cinstall -p secretspec-ffi --prefix "$PREFIX" --libdir lib --pkgconfigdir lib/pkgconfig
-PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" gem install secretspec -- --enable-pkg-config
-```
-
-The linker prefers the shared library from this install. Unless `PREFIX` is a
-system location, add `PREFIX/lib` to the platform's runtime library search path
-when loading the extension.
+A shared install in a non-system prefix also requires `PREFIX/lib` in the
+platform's runtime library search path.

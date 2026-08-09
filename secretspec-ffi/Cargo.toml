@@ -18,8 +18,8 @@ crate-type = ["cdylib", "staticlib", "lib"]
 [features]
 capi = []
 
-# Read by cargo-c: `cargo cinstall -p secretspec-ffi --library-type staticlib`
-# installs the archive with the C header and a generated secretspec_ffi.pc.
+# Read by cargo-c when the static or shared library is installed with the C
+# header and a generated secretspec_ffi.pc.
 [package.metadata.capi.library]
 name = "secretspec_ffi"
 

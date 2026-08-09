@@ -18,26 +18,20 @@ installers = ["shell"]
 # so a whole-workspace release build fails; precise builds skip them.
 precise-builds = true
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "aarch64-pc-windows-msvc", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+#
+# aarch64-pc-windows-msvc is missing on purpose: dist refuses to build a target
+# whose standalone updater it cannot fetch, and axoupdater publishes no binary
+# for it (axodotdev/axoupdater#313). install-updater is a global setting, so
+# that target is built and attached by cli-windows-arm64.yml instead, leaving
+# the updater intact everywhere dist can provide one.
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Whether to install an updater program
-#
-# Off because axoupdater publishes no aarch64-pc-windows-msvc binary and dist
-# refuses to build a target whose updater is missing. install-updater is global,
-# so the Windows ARM64 artifacts and the updater cannot both ship until upstream
-# adds that target: https://github.com/axodotdev/axoupdater/issues/313
-# dist resolves the updater by HEADing the axoupdater release asset, so once the
-# asset exists this can go back to true (with always-use-latest-updater if the
-# dist pin still lags).
-install-updater = false
+install-updater = true
 
 # https://github.com/axodotdev/cargo-dist/issues/74
 [dist.github-custom-runners]
 aarch64-unknown-linux-gnu = "ubuntu-24.04-arm"
 aarch64-apple-darwin = "macos-latest"
 x86_64-apple-darwin = "macos-15"
-
-# Build Windows ARM64 on the same x64 Windows runners as MSVC x64 (cargo-dist 0.29+).
-[dist.github-custom-runners.aarch64-pc-windows-msvc]
-runner = "windows-2022"

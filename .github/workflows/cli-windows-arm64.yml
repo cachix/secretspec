@@ -1,0 +1,128 @@
+name: "CLI Windows ARM64"
+
+# Builds the Windows ARM64 CLI archive that cargo-dist cannot produce.
+#
+# dist refuses to build any target whose standalone updater it cannot fetch, and
+# axoupdater publishes no aarch64-pc-windows-msvc binary
+# (https://github.com/axodotdev/axoupdater/issues/313). Since install-updater is
+# a global setting, dropping this one target out of dist-workspace.toml keeps the
+# updater for every target dist can serve, and this workflow supplies the missing
+# archive. It matches dist's naming and layout (binary plus README, LICENSE, and
+# CHANGELOG at the archive root, built with the `dist` profile) so the release
+# assets stay uniform.
+#
+# No `-update` asset is produced here: the updater reads an install receipt that
+# only the shell and powershell installers write, and neither resolves this
+# platform, so the binary would have nothing to act on. Once axoupdater ships
+# the target, put it back in dist's `targets` and delete this workflow.
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Existing GitHub Release tag to upload the archive to
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub Release tag to upload the archive to
+        required: false
+        type: string
+        default: ""
+  push:
+    tags:
+      - v**
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: aarch64-pc-windows-msvc
+    # The same x64 runner dist used to cross-compile this target.
+    runs-on: windows-2022
+    steps:
+      - name: Enable Windows long paths
+        run: git config --global core.longpaths true
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - name: Add the Windows ARM64 target
+        run: rustup target add aarch64-pc-windows-msvc
+
+      - name: Build the CLI
+        run: >-
+          cargo build -p secretspec --profile dist
+          --target aarch64-pc-windows-msvc
+
+      - name: Stage the archive contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir staging
+          # Copy the README through its real path: the repository root entry is
+          # a symlink, which a Windows checkout may materialize as a text file
+          # holding the target path.
+          cp secretspec/README.md staging/README.md
+          cp CHANGELOG.md LICENSE staging/
+          cp target/aarch64-pc-windows-msvc/dist/secretspec.exe staging/
+
+      - name: Create the archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path staging/* `
+            -DestinationPath secretspec-aarch64-pc-windows-msvc.zip
+
+      - name: Verify the archive
+        shell: pwsh
+        run: |
+          $zip = [System.IO.Compression.ZipFile]::OpenRead(
+            "$PWD/secretspec-aarch64-pc-windows-msvc.zip")
+          $names = $zip.Entries.FullName
+          $zip.Dispose()
+          # Every file dist puts in a Windows archive, at the archive root.
+          foreach ($entry in 'secretspec.exe', 'README.md', 'LICENSE', 'CHANGELOG.md') {
+            if ($names -notcontains $entry) {
+              throw "the archive is missing $entry"
+            }
+          }
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cli-aarch64-pc-windows-msvc
+          path: secretspec-aarch64-pc-windows-msvc.zip
+
+  release:
+    name: Publish the Windows ARM64 CLI
+    needs: build
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cli-aarch64-pc-windows-msvc
+
+      - name: Attach the archive to the GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          bash scripts/upload-release-asset.sh \
+            "$RELEASE_TAG" "secretspec-aarch64-pc-windows-msvc.zip"

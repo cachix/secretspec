@@ -36,14 +36,14 @@ Add `cache` to the remote provider alias and select that same alias normally:
 ```toml title="secretspec.toml"
 [providers]
 local = "keyring://secretspec/cache/{project}/{profile}/{key}"
-app_config = {
-  uri = "azappconfig://team-config",
-  credentials = { tenant_id = "keyring", client_id = "keyring", client_secret = "keyring" },
+azure = {
+  uri = "akv://team-vault",
+  credentials = { client_secret = "keyring" },
   cache = { provider = "local", max_age = "8h" }
 }
 
 [profiles.development.defaults]
-providers = ["app_config"]
+providers = ["azure"]
 ```
 
 The alias remains the authoritative provider, so its [provider
@@ -58,12 +58,12 @@ local leaf provider:
 
 ```toml title="secretspec.toml"
 [providers]
-app_config = "azappconfig://team-config?auth=cli" # SecretSpec 0.19+
+azure = "akv://team-vault?auth=cli"
 env = "env://"
 local = "keyring://secretspec/cache/{project}/{profile}/{key}"
 
 remote = {
-  fallback = ["app_config", "env"],
+  fallback = ["azure", "env"],
   cache = { provider = "local", max_age = "8h" }
 }
 
@@ -101,11 +101,11 @@ For a cached fallback route, select a leaf provider to bypass the cache for one
 command:
 
 ```bash
-$ secretspec check --provider app_config
+$ secretspec check --provider azure
 ```
 
 In the fallback example, a direct write such as
-`secretspec set API_KEY --provider app_config` invalidates the corresponding cache
+`secretspec set API_KEY --provider azure` invalidates the corresponding cache
 entry.
 
 ## Freshness and invalidation

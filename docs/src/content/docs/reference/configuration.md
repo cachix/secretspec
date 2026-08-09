@@ -544,14 +544,14 @@ optional and configures that same provider:
 ```toml title="secretspec.toml"
 [providers]
 local = "keyring://secretspec/cache/{project}/{profile}/{key}"
-app_config = {
-  uri = "azappconfig://team-config",
-  credentials = { tenant_id = "keyring", client_id = "keyring", client_secret = "keyring" },
+azure = {
+  uri = "akv://team-vault",
+  credentials = { client_secret = "keyring" },
   cache = { provider = "local", max_age = "8h" }
 }
 
 [profiles.development.defaults]
-providers = ["app_config"]
+providers = ["azure"]
 ```
 
 The alias remains both the selected cached route and the build key for its
@@ -575,10 +575,10 @@ can answer:
 
 ```toml title="secretspec.toml"
 [providers]
-app_config = "azappconfig://team-config?auth=cli" # SecretSpec 0.19+
+azure = { uri = "akv://team-vault", credentials = { client_secret = "keyring" } }
 env = "env://"
 local = "keyring://secretspec/cache/{project}/{profile}/{key}"
-myprovider = { fallback = ["app_config", "env"], cache = { provider = "local", max_age = "8h" } }
+myprovider = { fallback = ["azure", "env"], cache = { provider = "local", max_age = "8h" } }
 
 [profiles.development.defaults]
 providers = ["myprovider"]

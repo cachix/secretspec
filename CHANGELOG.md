@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.19.0] - 2026-08-09
 
 ### Changed
+
+- The static installer no longer installs the `secretspec-update` helper;
+  re-run the installer to upgrade. Shipping it alongside the new Windows ARM64
+  binaries is not possible yet, because the upstream updater has no Windows
+  ARM64 build ([axoupdater#313](https://github.com/axodotdev/axoupdater/issues/313)).
+  Installs that already have `secretspec-update` keep it and it keeps working.
 - The Rust SDK's `ProviderAlias` now provides `leaf`, `credentials`, and
   `credentials_mut` helpers so callers can construct and inspect leaf or
   inline-cached aliases without depending on their storage representation.

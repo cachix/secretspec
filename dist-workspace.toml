@@ -22,7 +22,15 @@ targets = ["aarch64-apple-darwin", "aarch64-pc-windows-msvc", "aarch64-unknown-l
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Whether to install an updater program
-install-updater = true
+#
+# Off because axoupdater publishes no aarch64-pc-windows-msvc binary and dist
+# refuses to build a target whose updater is missing. install-updater is global,
+# so the Windows ARM64 artifacts and the updater cannot both ship until upstream
+# adds that target: https://github.com/axodotdev/axoupdater/issues/313
+# dist resolves the updater by HEADing the axoupdater release asset, so once the
+# asset exists this can go back to true (with always-use-latest-updater if the
+# dist pin still lags).
+install-updater = false
 
 # https://github.com/axodotdev/cargo-dist/issues/74
 [dist.github-custom-runners]

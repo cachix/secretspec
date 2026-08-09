@@ -91,7 +91,6 @@ const CLIENT_ID: &str = "client_id";
 const CLIENT_SECRET: &str = "client_secret";
 const CONNECTION_STRING: &str = "connection_string";
 const MAX_TAG_FILTERS: usize = 5;
-const MAX_ERROR_BODY: usize = 8 * 1024;
 const MAX_VAULT_CLIENTS: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -350,9 +349,9 @@ fn parse_tag(value: &str) -> Result<(String, String)> {
     let (name, value) = value
         .split_once('=')
         .ok_or_else(|| operation_error("azappconfig tags use tag=NAME=VALUE".to_string()))?;
-    if name.is_empty() || value.is_empty() {
+    if name.is_empty() || value.is_empty() || name.contains('\0') || value.contains('\0') {
         return Err(operation_error(
-            "azappconfig tag names and values cannot be empty".to_string(),
+            "azappconfig tag names and values cannot be empty or null".to_string(),
         ));
     }
     Ok((name.to_string(), value.to_string()))
@@ -859,13 +858,6 @@ struct KeyValueWrite<'a> {
 }
 
 #[derive(Debug, Deserialize)]
-struct AzureProblem {
-    title: Option<String>,
-    name: Option<String>,
-    detail: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 struct KeyValueList {
     #[serde(default)]
     items: Vec<KeyValue>,
@@ -964,39 +956,10 @@ impl AzAppConfigProvider {
         Ok(url)
     }
 
-    async fn response_error(
-        &self,
-        action: &str,
-        mut response: reqwest::Response,
-    ) -> SecretSpecError {
+    async fn response_error(&self, action: &str, response: reqwest::Response) -> SecretSpecError {
         let status = response.status();
-        let mut bytes = Vec::with_capacity(MAX_ERROR_BODY);
-        if response
-            .content_length()
-            .is_none_or(|length| length <= MAX_ERROR_BODY as u64)
-        {
-            while bytes.len() < MAX_ERROR_BODY {
-                let Ok(Some(chunk)) = response.chunk().await else {
-                    break;
-                };
-                let remaining = MAX_ERROR_BODY - bytes.len();
-                bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
-                if chunk.len() > remaining {
-                    break;
-                }
-            }
-        }
-        let detail = serde_json::from_slice::<AzureProblem>(&bytes)
-            .ok()
-            .and_then(|problem| {
-                [problem.title, problem.name, problem.detail]
-                    .into_iter()
-                    .flatten()
-                    .find(|value| !value.is_empty())
-            });
-        let detail = detail.map_or_else(String::new, |detail| format!(": {detail}"));
         operation_error(format!(
-            "Azure App Configuration {action} failed with HTTP {}{detail}",
+            "Azure App Configuration {action} failed with HTTP {}",
             status.as_u16()
         ))
     }
@@ -1512,6 +1475,11 @@ impl AzAppConfigProvider {
     }
 
     fn validate_continuation(&self, initial: &Url, next_link: &str) -> Result<Url> {
+        if Url::parse(next_link).is_ok() {
+            return Err(operation_error(
+                "Azure App Configuration returned an absolute continuation link".to_string(),
+            ));
+        }
         let next = initial.join(next_link).map_err(|_| {
             operation_error(
                 "Azure App Configuration returned an invalid continuation link".to_string(),
@@ -2095,6 +2063,7 @@ mod tests {
             "azappconfig://shared?tag==prod",
             "azappconfig://shared?tag=app=",
             "azappconfig://shared?tag=app=one&tag=app=two",
+            "azappconfig://shared?tag=app=%00",
             "azappconfig://shared?tag=a=1&tag=b=2&tag=c=3&tag=d=4&tag=e=5&tag=f=6",
         ] {
             assert!(
@@ -2248,11 +2217,10 @@ mod tests {
             let error =
                 super::super::block_on(provider.fetch_key_value("failed", true)).unwrap_err();
             assert!(
-                error
-                    .to_string()
-                    .contains(&format!("HTTP {status}: request failed")),
+                error.to_string().contains(&format!("HTTP {status}")),
                 "{error}"
             );
+            assert!(!error.to_string().contains("request failed"), "{error}");
             assert_eq!(failure.finish().len(), 1);
         }
 
@@ -2459,6 +2427,99 @@ mod tests {
     }
 
     #[test]
+    fn delete_distinguishes_absent_deleted_and_no_content() {
+        let absent = HttpFixture::start(|_| vec![StubResponse::empty(404)]);
+        let provider = fixture_provider(&absent.endpoint, "azappconfig://shared");
+        assert!(!super::super::block_on(provider.delete_async("key")).unwrap());
+        assert_eq!(absent.finish().len(), 1);
+
+        for (status, expected) in [(200, true), (204, false)] {
+            let fixture = HttpFixture::start(|_| {
+                vec![
+                    StubResponse::json(200, key_value("key", "old")),
+                    StubResponse::empty(status),
+                ]
+            });
+            let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+            assert_eq!(
+                super::super::block_on(provider.delete_async("key")).unwrap(),
+                expected
+            );
+            let requests = fixture.finish();
+            assert_eq!(requests[1].method, "DELETE");
+            assert_eq!(requests[1].header("if-match"), Some("etag-1"));
+        }
+    }
+
+    #[test]
+    fn delete_preflight_and_delete_refuse_special_entries_identically() {
+        let physical_key = "secretspec:app:prod:KEY";
+        let fixture = HttpFixture::start(|_| {
+            let mut record = key_value(physical_key, "reference");
+            record["content_type"] = json!(format!("{KEY_VAULT_REFERENCE_TYPE};charset=utf-8"));
+            vec![
+                StubResponse::json(200, record.clone()),
+                StubResponse::json(200, record),
+            ]
+        });
+        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let address = Address::Convention {
+            project: "app",
+            profile: "prod",
+            key: "KEY",
+        };
+        let preflight = provider.check_deletable(address).unwrap_err().to_string();
+        let deletion = provider.delete(address).unwrap_err().to_string();
+        assert_eq!(preflight, deletion);
+        let requests = fixture.finish();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|request| request.method == "GET"));
+    }
+
+    #[test]
+    fn hmac_reads_succeed_while_guarded_write_and_delete_denials_remain_errors() {
+        let fixture = HttpFixture::start(|_| {
+            vec![
+                StubResponse::json(200, key_value("key", "value")),
+                StubResponse::json(200, key_value("key", "old")),
+                StubResponse::json(403, json!({"detail": "must stay private"})),
+                StubResponse::json(200, key_value("key", "old")),
+                StubResponse::json(403, json!({"detail": "must stay private"})),
+            ]
+        });
+        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let read = super::super::block_on(provider.fetch_key_value("key", true))
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.value.as_deref(), Some("value"));
+
+        let write_error = super::super::block_on(
+            provider.set_async("key", &SecretString::new("new".to_string().into())),
+        )
+        .unwrap_err();
+        assert!(write_error.to_string().contains("HTTP 403"));
+        assert!(!write_error.to_string().contains("must stay private"));
+
+        let delete_error = super::super::block_on(provider.delete_async("key")).unwrap_err();
+        assert!(delete_error.to_string().contains("HTTP 403"));
+        assert!(!delete_error.to_string().contains("must stay private"));
+
+        let requests = fixture.finish();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.method.as_str())
+                .collect::<Vec<_>>(),
+            ["GET", "GET", "PUT", "GET", "DELETE"]
+        );
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.header("authorization").is_some())
+        );
+    }
+
+    #[test]
     fn content_type_detection_is_strict_but_parameter_order_independent() {
         for content_type in [
             "application/vnd.microsoft.appconfig.keyvaultref+json;charset=utf-8",
@@ -2549,10 +2610,15 @@ mod tests {
             .unwrap();
         let mut valid = initial.clone();
         valid.query_pairs_mut().append_pair("After", "cursor");
+        let valid = safe_request_target(&valid);
+        assert!(provider.validate_continuation(&initial, &valid).is_ok());
+
         assert!(
             provider
-                .validate_continuation(&initial, valid.as_str())
-                .is_ok()
+                .validate_continuation(&initial, initial.as_str())
+                .unwrap_err()
+                .to_string()
+                .contains("absolute continuation")
         );
 
         let broadened = "https://shared.azconfig.io/kv?api-version=2026-04-01&After=cursor";

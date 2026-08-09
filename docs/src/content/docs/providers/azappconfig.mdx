@@ -37,8 +37,10 @@ $ secretspec run --provider azappconfig://payments-production -- your-command
 ### Prerequisites
 
 - An Azure App Configuration store
-- **App Configuration Data Reader** for reads, or **App Configuration Data
-  Owner** for writes and deletes
+- For Entra authentication, **App Configuration Data Reader** for reads or
+  **App Configuration Data Owner** for writes and deletes
+- For connection-string authentication, a read-only access key for reads or a
+  read-write access key for writes and deletes
 - **Key Vault Secrets User** on each referenced vault when entries are Key
   Vault references
 - Build with `--features azappconfig` (0.19+)
@@ -59,7 +61,9 @@ Select authentication with `auth`:
   back to `AZURE_APPCONFIG_CONNECTION_STRING`. This environment variable is a
   SecretSpec fallback name. The connection string's `Endpoint` must exactly
   match the provider URI's endpoint, so the URI still selects the store and a
-  credential cannot redirect requests to another endpoint.
+  credential cannot redirect requests to another endpoint. Read-only and
+  read-write access keys can expose direct values and routing metadata across
+  their store permissions; selectors do not narrow those permissions.
 
 ## Provider credentials
 
@@ -274,14 +278,15 @@ they do not prove SecretSpec created every matching direct entry. External
 tools must not place mutable direct values in that scope unless SecretSpec may
 adopt, update, and delete them.
 
-A principal with **App Configuration Data Owner** can replace a direct value or
-redirect a Key Vault reference to another vault beneath the allowed
-`key_vault_suffix`. SecretSpec then follows that URI with its configured Key
-Vault identity. Treat App Configuration writers as trusted routing
-administrators, restrict their role assignments, and limit the Key Vault
-identity to explicitly required vaults and secrets. A versionless reference
-tracks the latest Key Vault version; pin the 32-character version in the stored
-URI when review or rollout requires a fixed revision.
+A principal with **App Configuration Data Owner** or a read-write connection
+string can replace a direct value or redirect a Key Vault reference to another
+vault beneath the allowed `key_vault_suffix`. SecretSpec then follows that URI
+with its configured Key Vault identity. Treat App Configuration writers and
+read-write access keys as trusted routing administrators, restrict their
+permissions and distribution, and limit the Key Vault identity to explicitly
+required vaults and secrets. A versionless reference tracks the latest Key
+Vault version; pin the 32-character version in the stored URI when review or
+rollout requires a fixed revision.
 
 ## Limitations
 

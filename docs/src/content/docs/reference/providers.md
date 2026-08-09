@@ -552,7 +552,7 @@ azappconfig://shared?tag=app=payments&tag=stage=production
 azappconfig://shared?auth=connection_string&key_vault_auth=managed_identity
 ```
 
-**Features (0.19+)**: Read/write/delete, project and profile isolation,
+**Features (0.19+)**: Read/write/delete, project and profile namespacing,
 declaration discovery, exact label and tag selection, sovereign-cloud endpoint
 configuration, Entra or connection-string authentication, and Key Vault
 reference resolution

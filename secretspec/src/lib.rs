@@ -83,7 +83,8 @@ pub use report::{
     RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus, SecretResolution,
 };
 pub use resolve::{
-    RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource, resolve_json,
+    NamedResolution, RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource,
+    resolve_json,
 };
 pub use secrets::ExportFormat;
 pub use secrets::Secrets;

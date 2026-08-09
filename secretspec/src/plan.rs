@@ -105,6 +105,11 @@ impl Route {
     /// the raw fallback — or `None` for the default provider. Each entry is
     /// resolved (and credential-backed) only when the read reaches it, so the chain
     /// is genuinely tried in order.
+    ///
+    /// Test-only: resolution walks the chain inside the plan executor, which
+    /// owns the ordering. This exposes the same order for tests that assert how
+    /// a route was resolved.
+    #[cfg(test)]
     pub(crate) fn specs(&self) -> Option<Vec<String>> {
         self.primary.as_ref().map(|primary| {
             let mut specs = Vec::with_capacity(1 + self.fallback.len());

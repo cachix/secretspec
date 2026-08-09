@@ -14,7 +14,9 @@ use crate::provider::{
     ProviderCredentials, same_storage_container,
 };
 use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
-use crate::resolve::{RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource};
+use crate::resolve::{
+    NamedResolution, RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource,
+};
 use crate::validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
 use colored::Colorize;
 use data_encoding::{
@@ -57,6 +59,51 @@ fn validation_failure(errors: ValidationErrors) -> SecretSpecError {
     }
 }
 
+/// Which declared secrets a single-secret resolution can see.
+///
+/// A scope narrows what a session resolves, but it is a `check`/`run`/`export`
+/// concept: `secretspec get NAME` names one secret and has no `--scope`, so it
+/// reads the whole profile. The SDK's [`Secrets::resolve_named`] resolves the
+/// session's surface instead, scope included.
+#[derive(Clone, Copy)]
+enum Surface {
+    /// The scope intersection, or the whole profile when no scope is active.
+    Scoped,
+    /// Every secret the profile declares, whatever the active scope.
+    WholeProfile,
+}
+
+impl Surface {
+    fn names(self, secrets: &Secrets, profile: &str) -> Result<Vec<String>> {
+        match self {
+            Self::Scoped => secrets.resolve_profile_secret_names(Some(profile)),
+            Self::WholeProfile => secrets.profile_secret_names_unscoped(Some(profile)),
+        }
+    }
+}
+
+/// Translates a resolution entry's provenance flags into the value-carrying
+/// response's [`ResolvedSource`]. Shared so a batch resolve and a named one
+/// cannot disagree about where a value came from.
+fn resolved_source(entry: &SecretResolution) -> ResolvedSource {
+    if entry.generated {
+        ResolvedSource::Generated
+    } else if entry.default_applied {
+        ResolvedSource::Default
+    } else if entry.composed {
+        ResolvedSource::Composed
+    } else {
+        ResolvedSource::Provider
+    }
+}
+
+/// Stands in for a secret's name in diagnostics when the active scope hides it.
+///
+/// Every accessed-but-not-visible secret is by construction a dependency of a
+/// visible composed secret, so this describes what it is without disclosing
+/// which secret it is.
+pub(crate) const HIDDEN_SECRET_LABEL: &str = "a hidden composition input";
+
 /// Emits a warning when a provider in a fallback chain fails so the user
 /// can see why a particular link was skipped, without aborting the chain.
 ///
@@ -67,13 +114,6 @@ fn validation_failure(errors: ValidationErrors) -> SecretSpecError {
 /// `awssm://…?prefix=…`) from a provider's own `uri()`.
 ///
 /// [`redact_uri_strict`]: crate::audit::redact_uri_strict
-/// Stands in for a secret's name in diagnostics when the active scope hides it.
-///
-/// Every accessed-but-not-visible secret is by construction a dependency of a
-/// visible composed secret, so this describes what it is without disclosing
-/// which secret it is.
-pub(crate) const HIDDEN_SECRET_LABEL: &str = "a hidden composition input";
-
 fn warn_provider_failure(display_uri: &str, secret_name: &str, err: &SecretSpecError) {
     eprintln!(
         "{} provider {} failed for {}: {}; trying next provider in chain",
@@ -934,6 +974,38 @@ impl Secrets {
     pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
         if let Some(reason) = normalize_reason(&reason.into()) {
             self.reason = Some(reason);
+        }
+        self
+    }
+
+    /// Sets a session reason only when none is already in effect.
+    ///
+    /// This is the "supply a fallback" form of [`Secrets::with_reason`]: an
+    /// embedding application can describe *itself* ("nightly export job") without
+    /// overwriting the more specific reason its own caller passed through
+    /// `SECRETSPEC_REASON`. Calling `with_reason` for that purpose would silently
+    /// discard the user's reason and put the wrapper's boilerplate in every audit
+    /// log entry instead.
+    ///
+    /// The reason is normalized like every other source, so a blank or
+    /// whitespace-only argument still leaves the session without a reason rather
+    /// than storing an empty one. Precedence is therefore: an explicit
+    /// [`Secrets::with_reason`], then `SECRETSPEC_REASON`, then this default.
+    ///
+    /// Available since SecretSpec 0.20.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use secretspec::Secrets;
+    ///
+    /// // Uses SECRETSPEC_REASON when the caller set one, "nightly export" otherwise.
+    /// let spec = Secrets::load().unwrap().with_default_reason("nightly export");
+    /// spec.check(false).unwrap();
+    /// ```
+    pub fn with_default_reason(mut self, reason: impl Into<String>) -> Self {
+        if self.reason.is_none() {
+            self.reason = normalize_reason(&reason.into());
         }
         self
     }
@@ -2173,43 +2245,6 @@ impl Secrets {
         provider.get_many(&requests)
     }
 
-    /// Read and validate one cached envelope. Every cache failure is fail-open:
-    /// the authoritative route remains usable and gets a chance to refresh the
-    /// cache after a successful read.
-    fn read_cached_secret(
-        &self,
-        planned: &PlannedSecret,
-        route: &Route,
-        profile: &str,
-    ) -> Option<(SecretString, String)> {
-        let cache = route.cache()?;
-        let provider = match self.build_provider(cache.spec.clone(), Some(profile)) {
-            Ok(provider) => provider,
-            Err(error) => {
-                cache_read_warning(&planned.name, error);
-                return None;
-            }
-        };
-        let stored = match provider.get(self.cache_address(profile, &planned.name)) {
-            Ok(Some(value)) => value,
-            Ok(None) => return None,
-            Err(error) => {
-                cache_read_warning(&planned.name, error);
-                return None;
-            }
-        };
-        match cached_entry(planned, cache, &stored, &self.config.project.name, profile) {
-            CachedEntry::Fresh(value) => Some((value, provider.uri())),
-            CachedEntry::Stale => {
-                self.evict_cache_entry(provider.as_ref(), &planned.name, profile);
-                None
-            }
-            // Someone else's value: fall through to the authoritative route and
-            // leave it alone.
-            CachedEntry::Foreign => None,
-        }
-    }
-
     /// Cache-first read for a whole plan: one provider per distinct cache store,
     /// one batched read each.
     ///
@@ -3271,232 +3306,44 @@ impl Secrets {
         Ok(deleted)
     }
 
-    /// Retrieves and prints a secret value
+    /// Resolves one secret and prints it to stdout: the CLI's `secretspec get`.
     ///
-    /// This method retrieves a secret from the storage backend and prints it
-    /// to stdout. If the secret is not found but has a default value, the
-    /// default is printed.
+    /// A secret declared `as_path` prints the path to its materialized file,
+    /// which outlives this process; every other secret prints its value. A
+    /// value from the manifest's `default`, a `generate` config, or a
+    /// composition prints like any other.
     ///
-    /// # Arguments
-    ///
-    /// * `name` - The name of the secret to retrieve
-    /// * `provider_arg` - Optional provider to use
-    /// * `profile` - Optional profile to use
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` if the secret was found and printed
+    /// Library callers want [`Self::resolve_named`], which returns the value
+    /// instead of printing it and distinguishes an undeclared name from a
+    /// declared secret with no value.
     ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// - The secret is not defined in the specification
-    /// - The secret is not found and has no default value
+    /// [`SecretSpecError::SecretNotFound`] when the name is not declared on the
+    /// active profile and scope, or is declared but produced no value. Provider
+    /// and configuration failures surface as their own errors.
     pub fn get(&self, name: &str) -> Result<()> {
-        self.ensure_reason_for(AuditAction::Get, Some(name))?;
-        let profile_name = self.resolve_profile_name(None);
-        // Plan the secret exactly as batch resolution would, so the read route,
-        // address, and effective config are the same decisions `check`/`run`
-        // make. `None` means it is not declared in this profile.
-        let planned = match self.plan_secret(name, &profile_name, None) {
-            Ok(Some(planned)) => planned,
-            // Planning failed (e.g. an undefined provider alias). Still an
-            // attempted read, so audit it like the batch path audits every
-            // planning failure; no provider can be attributed yet.
-            Err(err) => {
-                self.record_key_error(AuditAction::Get, &profile_name, name, None, None, &err);
-                return Err(err);
+        // A printer over the library API, so the CLI's single-secret read makes
+        // exactly the resolution decisions `resolve_named` makes (and audits
+        // them once, there) rather than maintaining a second single-secret path.
+        match self.resolve_named_within(name, Surface::WholeProfile)? {
+            NamedResolution::Resolved(secret) => {
+                // `as_path` secrets are materialized and their temp file
+                // persisted during resolution, so a printed path is still valid
+                // after this process exits.
+                let rendered = secret
+                    .value
+                    .or(secret.path)
+                    .expect("a resolved secret carries either a value or a path");
+                println!("{rendered}");
+                Ok(())
             }
-            Ok(None) => {
-                // The secret is not defined, so no provider can be attributed.
-                // Audit the failed read for parity with `set`'s undefined path.
-                let err = SecretSpecError::SecretNotFound(name.to_string());
-                self.record_key_error(AuditAction::Get, &profile_name, name, None, None, &err);
-                return Err(err);
-            }
-        };
-        // Composed values and generated-on-miss values need the batch executor:
-        // it renders dependency closures and owns the generation policy,
-        // including providers that return a value without storing it.
-        if planned.is_composed() || planned.secret.missing == MissingPolicy::Generate {
-            let names = if planned.is_composed() {
-                self.composed_dependency_names(name, &profile_name)
-            } else {
-                vec![name.to_string()]
-            };
-            let plan = self.build_plan_from_names(profile_name.clone(), names)?;
-            // No output filter: the closure resolves the target's dependencies
-            // and this caller reads only the target from the result.
-            return match self.execute_plan(&plan, Materialize::Values, None)? {
-                Ok(mut validated) => {
-                    if !validated.resolved.secrets.contains_key(name) {
-                        let err = SecretSpecError::SecretNotFound(name.to_string());
-                        self.record_key_error(
-                            AuditAction::Get,
-                            &profile_name,
-                            name,
-                            None,
-                            None,
-                            &err,
-                        );
-                        return Err(err);
-                    }
-                    validated.keep_temp_files()?;
-                    let value = &validated.resolved.secrets[name];
-                    let source_provider = validated
-                        .resolution
-                        .iter()
-                        .find(|entry| entry.name == name)
-                        .and_then(|entry| entry.source_provider.clone());
-                    self.record(
-                        AuditAction::Get,
-                        &profile_name,
-                        AuditOutcome::Found,
-                        AuditFields {
-                            key: Some(name),
-                            provider_uri: source_provider.clone(),
-                            reference: source_provider
-                                .is_some()
-                                .then(|| planned.reference())
-                                .flatten(),
-                            ..Default::default()
-                        },
-                    );
-                    println!("{}", value.expose_secret());
-                    Ok(())
-                }
-                Err(errors) => {
-                    let err = validation_failure(errors);
-                    self.record_key_error(AuditAction::Get, &profile_name, name, None, None, &err);
-                    Err(err)
-                }
-            };
-        }
-        let route = planned
-            .route
-            .as_ref()
-            .expect("non-composed secrets have a provider route");
-        let default = planned.config().default.clone();
-        // A fresh cache hit completes the read without constructing or
-        // contacting any authoritative provider. Misses and invalid entries
-        // fall through to the ordinary ordered provider route.
-        let (result, cache_hit) =
-            if let Some((value, uri)) = self.read_cached_secret(&planned, route, &profile_name) {
-                (Ok((Some(value), Some(uri), None)), true)
-            } else {
-                // Walk the route's chain in order; each entry is resolved lazily and a
-                // broken link is skipped with a warning, so an undefined alias never
-                // blocks a provider elsewhere in the chain from answering.
-                let read_specs = route.specs();
-                let provider_cache = ProviderCache::default();
-                let result = self.get_secret_from_providers(
-                    &provider_cache,
-                    &planned,
-                    name,
-                    read_specs.as_deref(),
-                    &self.config.project.name,
-                    &profile_name,
-                    route.primary(),
-                );
-                if let Ok((Some(value), _, _)) = &result {
-                    self.write_cached_secret(&planned, route, &profile_name, value);
-                }
-                (result, false)
-            };
-
-        // Audit the access at the provider boundary, before defaults are applied.
-        // The provider URI consulted is reported back so the chain miss/error
-        // attributes to the last provider tried rather than guessing. The native
-        // coordinates (if any) are recorded alongside, since the provider URI
-        // names only the store.
-        let attempted_address = if !cache_hit && result.is_err() {
-            let read_specs = route.specs();
-            let provider_spec = read_specs
-                .as_deref()
-                .and_then(|specs| specs.last().map(String::as_str));
-            self.address_for_spec(
-                &planned,
-                provider_spec,
-                &self.config.project.name,
-                &profile_name,
-            )
-            .ok()
-        } else {
-            None
-        };
-        let reference = if cache_hit {
-            None
-        } else {
-            result
-                .as_ref()
-                .ok()
-                .and_then(|(_, _, reference)| reference.as_ref())
-                .or_else(|| attempted_address.as_ref().and_then(OwnedAddress::native))
-                .or_else(|| planned.reference())
-        };
-        match &result {
-            Ok((Some(_), uri, _)) => self.record(
-                AuditAction::Get,
-                &profile_name,
-                AuditOutcome::Found,
-                AuditFields {
-                    key: Some(name),
-                    provider_uri: uri.clone(),
-                    reference,
-                    ..Default::default()
-                },
-            ),
-            Ok((None, uri, _)) if default.is_some() => self.record(
-                AuditAction::Get,
-                &profile_name,
-                AuditOutcome::Default,
-                AuditFields {
-                    key: Some(name),
-                    provider_uri: uri.clone(),
-                    reference,
-                    ..Default::default()
-                },
-            ),
-            Ok((None, uri, _)) => self.record(
-                AuditAction::Get,
-                &profile_name,
-                AuditOutcome::Missing,
-                AuditFields {
-                    key: Some(name),
-                    provider_uri: uri.clone(),
-                    reference,
-                    ..Default::default()
-                },
-            ),
-            Err(e) => {
-                self.record_key_error(AuditAction::Get, &profile_name, name, None, reference, e)
+            // Undeclared and missing are one error for the CLI: either way there
+            // is nothing to print. Both are already audited by `resolve_named`.
+            NamedResolution::Missing { .. } | NamedResolution::Undeclared => {
+                Err(SecretSpecError::SecretNotFound(name.to_string()))
             }
         }
-
-        let (value, representation) = match result?.0 {
-            Some(value) => (value, ResolvedRepresentation::Stored),
-            None => (
-                default
-                    .map(|value| SecretString::new(value.into()))
-                    .ok_or_else(|| SecretSpecError::SecretNotFound(name.to_string()))?,
-                ResolvedRepresentation::Logical,
-            ),
-        };
-        match self.prepare_resolved(&planned, name, value, representation)? {
-            PreparedSecret::Inline(value) => println!("{}", value.expose_secret()),
-            PreparedSecret::File { owner, .. } => {
-                // `get` prints a path for use after this process exits, so unlike
-                // SDK resolution it deliberately persists the backing file.
-                let temp_path = owner.into_temp_path();
-                let persisted_path = temp_path.keep().map_err(|error| {
-                    SecretSpecError::Io(io::Error::other(format!(
-                        "Failed to persist temporary file: {error}"
-                    )))
-                })?;
-                println!("{}", persisted_path.display());
-            }
-        }
-        Ok(())
     }
 
     /// Ensures all required secrets are present, optionally prompting for missing ones
@@ -4618,6 +4465,218 @@ impl Secrets {
         self.resolve_impl(false)
     }
 
+    /// Resolve one declared secret by name.
+    ///
+    /// [`Self::resolve`] answers "can this whole profile be satisfied", which is
+    /// the wrong question for a consumer that needs a single secret: an
+    /// unrelated missing required secret fails the call and yields nothing, even
+    /// though the requested secret is sitting there. This resolves only `name`
+    /// and the composition inputs it derives from, so no other declaration can
+    /// fail it, and it separates the outcomes a batch resolve conflates — see
+    /// [`NamedResolution`].
+    ///
+    /// The active profile and scope both apply. A secret the scope hides is
+    /// reported as [`NamedResolution::Undeclared`]: it is not on the surface
+    /// this session resolves, and reporting it as merely missing would leak that
+    /// the scope hides it. Genuine provider and configuration failures (an
+    /// undefined alias, an unreachable vault) stay errors instead of collapsing
+    /// into a missing value.
+    ///
+    /// Whole-profile presence constraints (`at_least_one`, `exactly_one`) are
+    /// not evaluated, matching the CLI's single-secret `get`: whether a group is
+    /// satisfied is a property of the profile, and this read deliberately never
+    /// looks at the rest of it.
+    ///
+    /// Like [`Self::resolve`], this carries the value, mints a generatable
+    /// secret, and persists an `as_path` temp file so the returned path outlives
+    /// the call. Treat the payload as sensitive.
+    ///
+    /// Available since SecretSpec 0.20.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use secretspec::{NamedResolution, Secrets};
+    ///
+    /// let spec = Secrets::load().unwrap();
+    /// match spec.resolve_named("DATABASE_URL").unwrap() {
+    ///     NamedResolution::Resolved(secret) => println!("got {:?}", secret.source),
+    ///     NamedResolution::Missing { required } => println!("missing (required: {required})"),
+    ///     NamedResolution::Undeclared => println!("not declared in this profile"),
+    /// }
+    /// ```
+    pub fn resolve_named(&self, name: &str) -> Result<NamedResolution> {
+        self.resolve_named_within(name, Surface::Scoped)
+    }
+
+    /// Shared core of [`Self::resolve_named`] and [`Self::get`].
+    ///
+    /// They differ only in which surface decides that a name exists: the SDK
+    /// resolves what the session exposes (a scope narrows it), while the CLI's
+    /// `get` names one secret and has no `--scope`, so an ambient or configured
+    /// scope must not hide a secret from it.
+    fn resolve_named_within(&self, name: &str, surface: Surface) -> Result<NamedResolution> {
+        self.ensure_reason_for(AuditAction::Get, Some(name))?;
+        let profile_name = self.resolve_profile_name(None);
+
+        // Decide whether this surface offers the name at all, before any
+        // provider is contacted.
+        let visible = match surface.names(self, &profile_name) {
+            Ok(visible) => visible,
+            Err(err) => {
+                self.record_key_error(AuditAction::Get, &profile_name, name, None, None, &err);
+                return Err(err);
+            }
+        };
+        if !visible.iter().any(|declared| declared == name) {
+            // An attempted read of a name this surface does not offer is still
+            // an attempted read, and is audited as one (matching how `set`
+            // records an undefined secret). No provider can be attributed.
+            let err = SecretSpecError::SecretNotFound(name.to_string());
+            self.record_key_error(AuditAction::Get, &profile_name, name, None, None, &err);
+            return Ok(NamedResolution::Undeclared);
+        }
+
+        // The target plus its transitive composition inputs: the same
+        // least-access plan `get` builds, so an unrelated required secret is
+        // never read and can never fail this call.
+        let names = self.composed_dependency_names(name, &profile_name);
+        let plan = match self.build_plan_from_names(profile_name.clone(), names) {
+            Ok(plan) => plan,
+            Err(err) => {
+                self.record_key_error(AuditAction::Get, &profile_name, name, None, None, &err);
+                return Err(err);
+            }
+        };
+        // No output filter: the dependency closure has to resolve, and a filter
+        // would additionally enable the whole-profile constraint checks that a
+        // single-secret read does not own.
+        let mut read_addresses = HashMap::new();
+        let outcome =
+            match self.execute_plan(&plan, Materialize::Values, None, Some(&mut read_addresses)) {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    let reference = read_addresses.get(name);
+                    self.record_key_error(
+                        AuditAction::Get,
+                        &profile_name,
+                        name,
+                        None,
+                        reference,
+                        &err,
+                    );
+                    return Err(err);
+                }
+            };
+        // Exactly the coordinates the read reached, never the declared ones: an
+        // alias `ref` template resolves to a different address per provider, and
+        // a read served from cache addressed no authoritative store at all.
+        let reference = read_addresses.get(name);
+
+        match outcome {
+            Ok(mut validated) => {
+                // Cloned so the entry outlives the `&mut` borrow that persisting
+                // the temp files needs.
+                let entry = validated
+                    .resolution
+                    .iter()
+                    .find(|entry| entry.name == name)
+                    .expect("the planned target always has a resolution entry")
+                    .clone();
+                if entry.status != ResolutionStatus::Resolved {
+                    self.record(
+                        AuditAction::Get,
+                        &profile_name,
+                        AuditOutcome::Missing,
+                        AuditFields {
+                            key: Some(name),
+                            reference,
+                            ..Default::default()
+                        },
+                    );
+                    return Ok(NamedResolution::Missing {
+                        required: entry.required,
+                    });
+                }
+
+                // Persist as_path temp files so the returned path stays valid
+                // for the caller, exactly as `resolve` does.
+                validated.keep_temp_files()?;
+                let raw = validated
+                    .resolved
+                    .secrets
+                    .get(name)
+                    .expect("a Resolved entry always has a value")
+                    .expose_secret()
+                    .to_string();
+                let (value, path) = if entry.as_path {
+                    (None, Some(raw))
+                } else {
+                    (Some(raw), None)
+                };
+
+                self.record(
+                    AuditAction::Get,
+                    &profile_name,
+                    if entry.default_applied {
+                        AuditOutcome::Default
+                    } else {
+                        AuditOutcome::Found
+                    },
+                    AuditFields {
+                        key: Some(name),
+                        provider_uri: entry.source_provider.clone(),
+                        reference,
+                        ..Default::default()
+                    },
+                );
+                Ok(NamedResolution::Resolved(ResolvedSecret {
+                    value,
+                    path,
+                    as_path: entry.as_path,
+                    source: resolved_source(&entry),
+                    source_provider: entry.source_provider,
+                }))
+            }
+            Err(errors) => {
+                // Constraints are skipped for this partial plan, so a violation
+                // here would mean the resolver changed its mind about that;
+                // surface it rather than reporting a missing value.
+                if !errors.constraint_violations.is_empty() {
+                    let err = SecretSpecError::ValidationFailed(Box::new(errors));
+                    self.record_key_error(
+                        AuditAction::Get,
+                        &profile_name,
+                        name,
+                        None,
+                        reference,
+                        &err,
+                    );
+                    return Err(err);
+                }
+                // The target is missing; a composed target whose input is
+                // missing reports against the target, which is what the caller
+                // asked about.
+                let required = errors
+                    .resolution
+                    .iter()
+                    .find(|entry| entry.name == name)
+                    .is_none_or(|entry| entry.required);
+                self.record(
+                    AuditAction::Get,
+                    &profile_name,
+                    AuditOutcome::Missing,
+                    AuditFields {
+                        key: Some(name),
+                        reference,
+                        ..Default::default()
+                    },
+                );
+                Ok(NamedResolution::Missing { required })
+            }
+        }
+    }
+
     /// Shared core of [`Self::resolve`]/[`Self::resolve_without_values`].
     /// `include_values` gates whether resolved secret values are copied into the
     /// response and, in turn, whether the underlying pass mints generated
@@ -4643,15 +4702,7 @@ impl Secrets {
                     if entry.status != ResolutionStatus::Resolved {
                         continue;
                     }
-                    let source = if entry.generated {
-                        ResolvedSource::Generated
-                    } else if entry.default_applied {
-                        ResolvedSource::Default
-                    } else if entry.composed {
-                        ResolvedSource::Composed
-                    } else {
-                        ResolvedSource::Provider
-                    };
+                    let source = resolved_source(entry);
                     // Only copy the secret value out when the caller wants it;
                     // otherwise the bytes never enter the response.
                     let (value, path) = if !include_values {
@@ -4819,7 +4870,9 @@ impl Secrets {
         let result: Result<std::result::Result<ValidatedSecrets, ValidationErrors>> =
             visible_result
                 .and_then(|_| self.build_plan_from_names(profile_name.clone(), worklist))
-                .and_then(|plan| self.execute_plan(&plan, materialize, output_filter.as_ref()));
+                .and_then(|plan| {
+                    self.execute_plan(&plan, materialize, output_filter.as_ref(), None)
+                });
 
         // Record exactly one `Check` event for the whole batch when this is a
         // top-level read, regardless of how the resolution exited — so a failed
@@ -5025,11 +5078,16 @@ impl Secrets {
     /// secret and writing `as_path` temp files); [`Materialize::None`] runs the
     /// identical resolution but skips both, reaching the same per-secret status
     /// without mutating a provider or touching disk.
+    /// `read_addresses` collects the native coordinates each secret was actually
+    /// read from, for the callers that audit a single secret. A cache hit
+    /// contributes nothing: the authoritative coordinates were not consulted, so
+    /// recording them would overstate what the read touched.
     fn execute_plan(
         &self,
         plan: &ResolutionPlan,
         materialize: Materialize,
         output_filter: Option<&HashSet<String>>,
+        mut read_addresses: Option<&mut HashMap<String, NativeAddress>>,
     ) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
         let project = self.config.project.name.as_str();
         let profile = plan.profile.as_str();
@@ -5251,6 +5309,16 @@ impl Secrets {
                     source_provider = cached_uris
                         .remove(name)
                         .or_else(|| group_uris.get(&primary_uri).cloned());
+                    if !was_cached && let Some(addresses) = read_addresses.as_deref_mut() {
+                        // The primary answered, so it was addressed with the
+                        // coordinates the group fetch computed for this spec.
+                        if let Ok(address) =
+                            self.address_for_spec(planned, primary_uri, project, profile)
+                            && let Some(native) = address.native()
+                        {
+                            addresses.insert(name.clone(), native.clone());
+                        }
+                    }
                     if !was_cached && materialize == Materialize::Values {
                         self.write_cached_secret(planned, route, profile, &value);
                     }
@@ -5272,38 +5340,59 @@ impl Secrets {
                 None => {
                     let primary_failed = failed_primary_uris.contains_key(&primary_uri);
 
+                    // The primary was addressed even though it did not answer.
+                    // An audited failed read has to name the coordinates it
+                    // attempted, so record them before the error paths below
+                    // return. A fallback that answers overwrites this with the
+                    // address that did.
+                    if let Some(addresses) = read_addresses.as_deref_mut()
+                        && let Ok(address) =
+                            self.address_for_spec(planned, primary_uri, project, profile)
+                        && let Some(native) = address.native()
+                    {
+                        addresses.insert(name.clone(), native.clone());
+                    }
+
                     // The primary missed, so consume the fallback result fetched
                     // concurrently above. Each chain was still tried in order
                     // and received the diagnostic label rather than a hidden
                     // composition input's raw name.
-                    let (fallback_value, fallback_uri, _) = match route.fallback_specs() {
-                        Some(_) => {
-                            let resolved = fallback_results
-                                .remove(name)
-                                .expect("primary miss with fallback was prefetched")?;
-                            // A primary that errored plus an exhausted fallback
-                            // chain is not "missing": the authoritative provider
-                            // is unreachable and might hold the value. Surface the
-                            // primary error, exactly as the no-fallback arm below.
-                            if resolved.0.is_none() && primary_failed {
+                    let (fallback_value, fallback_uri, fallback_reference) =
+                        match route.fallback_specs() {
+                            Some(_) => {
+                                let resolved = fallback_results
+                                    .remove(name)
+                                    .expect("primary miss with fallback was prefetched")?;
+                                // A primary that errored plus an exhausted fallback
+                                // chain is not "missing": the authoritative provider
+                                // is unreachable and might hold the value. Surface the
+                                // primary error, exactly as the no-fallback arm below.
+                                if resolved.0.is_none() && primary_failed {
+                                    let err = failed_primary_uris
+                                        .remove(&primary_uri)
+                                        .expect("primary_failed implies entry present");
+                                    return Err(err);
+                                }
+                                resolved
+                            }
+                            // No alternative chain and the primary failed: surface the
+                            // original error rather than reporting a spurious missing.
+                            None if primary_failed => {
                                 let err = failed_primary_uris
                                     .remove(&primary_uri)
                                     .expect("primary_failed implies entry present");
                                 return Err(err);
                             }
-                            resolved
-                        }
-                        // No alternative chain and the primary failed: surface the
-                        // original error rather than reporting a spurious missing.
-                        None if primary_failed => {
-                            let err = failed_primary_uris
-                                .remove(&primary_uri)
-                                .expect("primary_failed implies entry present");
-                            return Err(err);
-                        }
-                        None => (None, None, None),
-                    };
+                            None => (None, None, None),
+                        };
 
+                    if let Some(addresses) = read_addresses.as_deref_mut()
+                        && let Some(reference) = fallback_reference
+                    {
+                        // Recorded for a miss too: the attempted coordinates are
+                        // what an audited failed read has to name.
+                        addresses.insert(name.clone(), reference);
+                    }
                     if let Some(value) = fallback_value {
                         source_provider = fallback_uri;
                         if materialize == Materialize::Values {
@@ -6204,6 +6293,45 @@ mod policy_tests {
         assert_eq!(normalize_reason(""), None);
         assert_eq!(normalize_reason("   "), None);
         assert_eq!(normalize_reason("\t\n"), None);
+    }
+
+    /// A default reason fills the gap but never overwrites one the caller
+    /// already supplied: a wrapper describing itself must not replace the more
+    /// specific reason its own caller passed in.
+    #[test]
+    fn with_default_reason_only_fills_an_absent_reason() {
+        let spec = || {
+            Secrets::new(
+                crate::tests::resolve_test_config(HashMap::new()),
+                None,
+                None,
+                None,
+            )
+        };
+
+        // No reason yet: the default is adopted, normalized like any other.
+        assert_eq!(
+            spec().with_default_reason("  nightly export  ").reason,
+            Some("nightly export".to_string())
+        );
+
+        // A reason already in effect wins, whichever order the calls come in.
+        assert_eq!(
+            spec()
+                .with_reason("running migrations")
+                .with_default_reason("nightly export")
+                .reason,
+            Some("running migrations".to_string())
+        );
+
+        // A blank default is no reason at all, so the session stays unreasoned
+        // rather than storing an empty string that would satisfy nothing.
+        assert_eq!(spec().with_default_reason("   ").reason, None);
+        // ...and a blank default cannot clear a real reason either.
+        assert_eq!(
+            spec().with_reason("deploy").with_default_reason("").reason,
+            Some("deploy".to_string())
+        );
     }
 
     #[test]

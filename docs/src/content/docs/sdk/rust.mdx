@@ -8,6 +8,7 @@ import basicExample from '../../../../../secretspec-derive/examples/basic.rs?raw
 import profilesExample from '../../../../../secretspec-derive/examples/profiles.rs?raw';
 import scopesExample from '../../../../../secretspec-derive/examples/scopes.rs?raw';
 import asPathExample from '../../../../../secretspec-derive/examples/as_path.rs?raw';
+import namedExample from '../../../../../secretspec-derive/examples/named.rs?raw';
 import exampleManifest from '../../../../../secretspec-derive/secretspec.toml?raw';
 
 SecretSpec provides a Rust library with type-safe access to secrets through a
@@ -67,6 +68,25 @@ would leave that field unfillable. `SecretSpec::builder()` therefore has no
 `with_scope`, and typed `load()` and `load_profile()` always resolve the full
 profile. Use a separate manifest or the untyped API when a component needs a
 narrowed set.
+
+## Resolving one secret (0.20+)
+
+`resolve()` answers whether the whole profile can be satisfied, so a single
+missing required secret fails it and returns nothing. When a component needs one
+secret, `resolve_named()` reads only that secret and the inputs it composes
+from, and reports the outcomes separately:
+
+<Code code={namedExample} lang="rust" meta='title="named.rs"' />
+
+`NamedResolution::Undeclared` covers both a name the profile does not declare
+and one the active [scope](/concepts/scopes/) hides, since neither is on the
+surface this session resolves. Provider and configuration failures stay `Err`
+rather than turning into a missing value, and whole-profile presence constraints
+(`at_least_one`, `exactly_one`) are not evaluated for a single-secret read.
+
+`with_default_reason()` (also 0.20+) supplies a reason only when the caller has
+not already set one through `with_reason()` or `SECRETSPEC_REASON`, so a wrapper
+can describe itself without overwriting the more specific reason it was given.
 
 ## Secrets as file paths
 

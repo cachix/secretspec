@@ -530,9 +530,42 @@ akv://myvault.vault.azure.cn             # Sovereign cloud (full DNS name)
 akv://myvault?suffix=vault.azure.cn      # Sovereign cloud (explicit suffix, bare vault name)
 ```
 
-**Features**: Read/write, cloud sync, profiles, service principal/managed identity/workload identity auth
+**Features**: Read/write, cloud sync, profiles, service principal/managed identity/workload identity auth, version-pinned refs (0.19+)
 **Prerequisites**: An Azure Key Vault instance, authenticated via one of the methods above, build with `--features akv`
 **Storage**: Secret name `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}` (lowercase, unpadded Base32 preserves case and punctuation distinctions within Azure's case-insensitive secret-name namespace)
+
+## Azure App Configuration Provider (0.19+)
+
+:::caution[Version compatibility]
+The `azappconfig` provider is added in SecretSpec 0.19.
+:::
+
+**URI**:
+`azappconfig://STORE[?auth=METHOD][&label=LABEL][&prefix=PREFIX][&tag=NAME=VALUE]...`
+- Reads and manages Azure App Configuration key-values and resolves canonical
+  Azure Key Vault references
+
+```bash
+azappconfig://payments-production
+azappconfig://shared?label=production&prefix=payments:
+azappconfig://shared?tag=app=payments&tag=stage=production
+azappconfig://shared?auth=connection_string&key_vault_auth=managed_identity
+```
+
+**Features (0.19+)**: Read/write/delete, project and profile isolation,
+declaration discovery, exact label and tag selection, sovereign-cloud endpoint
+configuration, Entra or connection-string authentication, and Key Vault
+reference resolution
+**Prerequisites (0.19+)**: An Azure App Configuration store, matching
+data-plane permissions, and build with `--features azappconfig`; Key Vault
+references also require an Entra identity with secret-read access
+**Authentication (0.19+)**: `env`, `cli`, `managed_identity`,
+`workload_identity`, or `connection_string`. See the
+[provider guide](/providers/azappconfig/#authentication) for App Configuration
+and Key Vault identity separation.
+**Storage (0.19+)**:
+`{prefix}secretspec:{project}:{profile}:{key}` under one exact label; omission
+selects the null label
 
 ## Infisical Provider
 
@@ -665,6 +698,7 @@ $ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | BW (0.18+) | ✅ End-to-end | Cloud (Bitwarden) or self-hosted | ✅ Yes |
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
+| Azure App Configuration (0.19+) | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
 | Infisical | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |
 | age (0.17+) | ✅ age encryption | Local filesystem | ❌ No |
 | SOPS (0.17+) | ✅ Configured SOPS encryption | Local filesystem | Depends on configured key service |

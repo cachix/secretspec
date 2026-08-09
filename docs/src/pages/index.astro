@@ -56,6 +56,7 @@ const providerMetadata: ProviderMetadata[] = [
   { slug: 'scaleway', label: 'Scaleway Secret Manager (0.17+)' },
   { icon: 'googlecloud', slug: 'gcsm', label: 'Google Cloud Secret Manager' },
   { icon: 'microsoftazure', slug: 'akv', label: 'Azure Key Vault' },
+  { icon: 'microsoftazure', slug: 'azappconfig', label: 'Azure App Configuration (0.19+)' },
   { slug: 'infisical', label: 'Infisical' },
   { slug: 'age', label: 'age (0.17+)' },
   { slug: 'gopass', label: 'Gopass' },
@@ -147,6 +148,7 @@ const providerColors: Record<string, SyntaxColorName> = {
   scaleway: 'magenta',
   gcsm: 'red',
   akv: 'blue',
+  azappconfig: 'blue',
   infisical: 'cyan',
   age: 'yellow',
   gopass: 'green',
@@ -532,6 +534,7 @@ const reelScriptData = {
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/kdbx/"><span class="provider-name">kdbx</span>: KeePass KDBX databases (0.17+)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/keeper/"><span class="provider-name">keeper</span>: Keeper Secrets Manager (0.18+) via official Rust SDK</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/passbolt/"><span class="provider-name">passbolt</span>: Passbolt self-hosted password manager (0.19+) via go-passbolt-cli</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-blue)" href="/providers/azappconfig/"><span class="provider-name">azappconfig</span>: Azure App Configuration (0.19+)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/infisical/"><span class="provider-name">infisical</span>: Infisical secret management</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/openbao/"><span class="provider-name">openbao</span>: OpenBao secret management (0.17+)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/age/"><span class="provider-name">age</span>: age-encrypted file (0.17+)</a>

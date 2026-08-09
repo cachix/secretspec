@@ -36,14 +36,14 @@ Add `cache` to the remote provider alias and select that same alias normally:
 ```toml title="secretspec.toml"
 [providers]
 local = "keyring://secretspec/cache/{project}/{profile}/{key}"
-azure = {
-  uri = "akv://team-vault",
-  credentials = { client_secret = "keyring" },
+app_config = {
+  uri = "azappconfig://team-config",
+  credentials = { tenant_id = "keyring", client_id = "keyring", client_secret = "keyring" },
   cache = { provider = "local", max_age = "8h" }
 }
 
 [profiles.development.defaults]
-providers = ["azure"]
+providers = ["app_config"]
 ```
 
 The alias remains the authoritative provider, so its [provider
@@ -58,12 +58,12 @@ local leaf provider:
 
 ```toml title="secretspec.toml"
 [providers]
-azure = "akv://team-vault?auth=cli"
+app_config = "azappconfig://team-config?auth=cli" # SecretSpec 0.19+
 env = "env://"
 local = "keyring://secretspec/cache/{project}/{profile}/{key}"
 
 remote = {
-  fallback = ["azure", "env"],
+  fallback = ["app_config", "env"],
   cache = { provider = "local", max_age = "8h" }
 }
 
@@ -101,11 +101,11 @@ For a cached fallback route, select a leaf provider to bypass the cache for one
 command:
 
 ```bash
-$ secretspec check --provider azure
+$ secretspec check --provider app_config
 ```
 
 In the fallback example, a direct write such as
-`secretspec set API_KEY --provider azure` invalidates the corresponding cache
+`secretspec set API_KEY --provider app_config` invalidates the corresponding cache
 entry.
 
 ## Freshness and invalidation
@@ -125,8 +125,9 @@ rejects such routes during planning. The examples use a separate keyring
 namespace for `local`.
 
 The cache provider must also support deletion: keyring, pass, gopass, dotenv,
-age (0.20+), or a Vault/OpenBao KV v2 mount. Other providers are rejected
-during planning.
+age (0.20+), Azure App Configuration (0.19+), or a Vault/OpenBao KV v2 mount. Other
+providers are rejected during planning. An Azure App Configuration cache must
+select a different store from every authoritative entry.
 
 Clear one entry or every cached entry in the active profile:
 
@@ -256,6 +257,11 @@ supports Azure CLI sessions as well as service principals, managed identity,
 and workload identity. Prefer the identity mode that matches the environment;
 do not replace short-lived or workload-bound credentials with long-lived
 credentials solely to reduce latency.
+
+Azure App Configuration (0.19+) supports the same Entra identity modes plus
+connection strings. When entries resolve Key Vault references, benchmark both
+the App Configuration request and the separate Key Vault request; a warm cache
+avoids both remote reads.
 
 To distinguish connection setup from the secret API itself, probe the remote
 endpoint without requesting a real secret. This Azure Key Vault example is

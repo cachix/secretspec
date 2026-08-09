@@ -112,7 +112,10 @@ be confused with component data.
 A secret's
 [`ref`](/reference/configuration/#secret-references) field names an
 existing secret instead: `item` is the secret name (`field` and `version` are
-not yet supported). References are **read-only** in this provider, and `item`
+both rejected through SecretSpec 0.18). `field` remains unsupported. SecretSpec
+0.19+ accepts `version` as a 32-character ASCII alphanumeric Azure Key Vault
+version identifier; omission reads the latest version. References are
+**read-only** in this provider, and `item`
 must already be a valid Azure Key Vault secret name (letters, digits, and
 hyphens only) — unlike convention secrets, it is validated but never rewritten,
 since silently rewriting a `ref` could point at a different secret than the
@@ -120,7 +123,11 @@ one you named.
 
 ```toml
 [profiles.production]
-DATABASE_URL = { description = "DB", ref = { item = "database-url" }, providers = ["akv://myvault"] }
+DATABASE_URL = {
+  description = "DB",
+  ref = { item = "database-url", version = "0123456789abcdef0123456789abcdef" }, # version: 0.19+
+  providers = ["akv://myvault"]
+}
 ```
 
 ## CI/CD

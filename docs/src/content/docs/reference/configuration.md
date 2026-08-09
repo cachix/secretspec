@@ -590,10 +590,10 @@ accept aliases, provider names, and URIs, but must resolve to leaf providers;
 cached aliases cannot be nested, and the cache must resolve to a different
 store than the route's own authoritative providers, since it holds its entries
 at the same logical address. The cache provider must also be one SecretSpec can
-delete from — keyring, pass, gopass, dotenv, age (0.20+), or a Vault/OpenBao
-KV v2 mount — since every form of invalidation is a delete. Put credentials on
-leaf aliases
-rather than the cached fallback alias.
+delete from — keyring, pass, gopass, dotenv, age (0.20+), Azure App
+Configuration (0.19+), or a Vault/OpenBao KV v2 mount — since every form of
+invalidation is a delete. Put credentials on leaf aliases rather than the
+cached fallback alias.
 See [Provider caching](/concepts/providers/caching/)
 for freshness, failure, invalidation, and clearing behavior.
 

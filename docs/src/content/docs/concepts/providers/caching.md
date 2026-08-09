@@ -127,7 +127,8 @@ namespace for `local`.
 The cache provider must also support deletion: keyring, pass, gopass, dotenv,
 age (0.20+), Azure App Configuration (0.19+), or a Vault/OpenBao KV v2 mount. Other
 providers are rejected during planning. An Azure App Configuration cache must
-select a different store from every authoritative entry.
+select a different storage identity and address space from every authoritative
+entry; a separate App Configuration resource is not required.
 
 Clear one entry or every cached entry in the active profile:
 

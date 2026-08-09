@@ -81,6 +81,7 @@ use url::Url;
 
 const API_VERSION: &str = "2026-04-01";
 const DEFAULT_SUFFIX: &str = "azconfig.io";
+// https://learn.microsoft.com/azure/azure-app-configuration/concept-enable-rbac#app-configuration-audience
 const DEFAULT_AUDIENCE: &str = "https://appconfig.azure.com";
 const DEFAULT_KEY_VAULT_SUFFIX: &str = "vault.azure.net";
 const KEY_VAULT_REFERENCE_TYPE: &str = "application/vnd.microsoft.appconfig.keyvaultref+json";
@@ -92,6 +93,7 @@ const CLIENT_SECRET: &str = "client_secret";
 const CONNECTION_STRING: &str = "connection_string";
 const MAX_TAG_FILTERS: usize = 5;
 const MAX_VAULT_CLIENTS: usize = 16;
+const MAX_ERROR_RESPONSE_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 enum AppConfigAuth {
@@ -577,11 +579,12 @@ impl AzAppConfigProvider {
                             (None, None) => true,
                         });
                 if replace {
+                    let request_value = raw.split(';').next().unwrap_or(raw);
                     tokens.insert(
                         id.to_string(),
                         SyncToken {
                             sequence,
-                            value: raw.to_string(),
+                            value: request_value.to_string(),
                         },
                     );
                 }
@@ -865,6 +868,11 @@ struct KeyValueList {
     next_link: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct AppConfigError {
+    name: Option<String>,
+}
+
 enum ValueType {
     Direct,
     KeyVaultReference,
@@ -906,10 +914,9 @@ impl AzAppConfigProvider {
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("api-version", API_VERSION);
-            query.append_pair(
-                "label",
-                &escape_filter(self.config.label.as_deref().unwrap_or("\0")),
-            );
+            if let Some(label) = &self.config.label {
+                query.append_pair("label", label);
+            }
             if include_tags {
                 for (name, value) in &self.config.tags {
                     query.append_pair(
@@ -956,11 +963,43 @@ impl AzAppConfigProvider {
         Ok(url)
     }
 
-    async fn response_error(&self, action: &str, response: reqwest::Response) -> SecretSpecError {
+    async fn response_error(
+        &self,
+        action: &str,
+        mut response: reqwest::Response,
+    ) -> SecretSpecError {
         let status = response.status();
+        let mut body = Vec::new();
+        let mut complete = true;
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk))
+                    if chunk.len() <= MAX_ERROR_RESPONSE_BYTES.saturating_sub(body.len()) =>
+                {
+                    body.extend_from_slice(&chunk);
+                }
+                Ok(Some(_)) | Err(_) => {
+                    complete = false;
+                    break;
+                }
+                Ok(None) => break,
+            }
+        }
+        let parameter = complete
+            .then(|| serde_json::from_slice::<AppConfigError>(&body).ok())
+            .flatten()
+            .and_then(|error| error.name)
+            .filter(|name| {
+                matches!(
+                    name.as_str(),
+                    "api-version" | "key" | "label" | "tags" | "$select" | "after" | "snapshot"
+                )
+            })
+            .map(|name| format!(" for parameter '{name}'"))
+            .unwrap_or_default();
         operation_error(format!(
-            "Azure App Configuration {action} failed with HTTP {}",
-            status.as_u16()
+            "Azure App Configuration {action} failed with HTTP {}{parameter}",
+            status.as_u16(),
         ))
     }
 
@@ -985,6 +1024,9 @@ impl AzAppConfigProvider {
             StatusCode::OK => {
                 let record = self.parse_key_value("read", response).await?;
                 self.validate_selected_record(key, &record)?;
+                if include_tags && !self.matches_tags(&record) {
+                    return Ok(None);
+                }
                 Ok(Some(record))
             }
             StatusCode::NOT_FOUND => Ok(None),
@@ -1314,6 +1356,7 @@ fn parse_vault_reference(value: &str, allowed_suffix: &str) -> Result<VaultRefer
                 .chars()
                 .all(|character| character.is_ascii_alphanumeric()))
     {
+        // Azure emits 32-character object versions; reject other shapes before authentication.
         return Err(operation_error(
             "Azure Key Vault reference version must be a 32-character ASCII identifier".to_string(),
         ));
@@ -1361,14 +1404,16 @@ impl AzAppConfigProvider {
     }
 
     fn vault_provider(&self, reference: &VaultReference) -> Result<Arc<super::akv::AkvProvider>> {
-        let mut vaults = self.vaults.lock().unwrap();
-        if let Some(provider) = vaults.get(&reference.vault_host) {
-            return Ok(Arc::clone(provider));
-        }
-        if vaults.len() >= MAX_VAULT_CLIENTS {
-            return Err(operation_error(format!(
-                "one azappconfig provider can resolve at most {MAX_VAULT_CLIENTS} Key Vault hosts; split this workload across provider aliases"
-            )));
+        {
+            let vaults = self.vaults.lock().unwrap();
+            if let Some(provider) = vaults.get(&reference.vault_host) {
+                return Ok(Arc::clone(provider));
+            }
+            if vaults.len() >= MAX_VAULT_CLIENTS {
+                return Err(operation_error(format!(
+                    "one azappconfig provider can resolve at most {MAX_VAULT_CLIENTS} Key Vault hosts; split this workload across provider aliases"
+                )));
+            }
         }
         let credential = self.key_vault_credential()?;
         let config = super::akv::AkvConfig::from_validated_vault_host(
@@ -1378,6 +1423,15 @@ impl AzAppConfigProvider {
         let provider = Arc::new(super::akv::AkvProvider::with_token_credential(
             config, credential,
         ));
+        let mut vaults = self.vaults.lock().unwrap();
+        if let Some(existing) = vaults.get(&reference.vault_host) {
+            return Ok(Arc::clone(existing));
+        }
+        if vaults.len() >= MAX_VAULT_CLIENTS {
+            return Err(operation_error(format!(
+                "one azappconfig provider can resolve at most {MAX_VAULT_CLIENTS} Key Vault hosts; split this workload across provider aliases"
+            )));
+        }
         vaults.insert(reference.vault_host.clone(), Arc::clone(&provider));
         Ok(provider)
     }
@@ -1663,7 +1717,9 @@ impl Provider for AzAppConfigProvider {
     fn delete(&self, addr: Address<'_>) -> Result<bool> {
         if matches!(addr, Address::Native(_)) {
             self.check_deletable(addr)?;
-            unreachable!("native deletion check always fails");
+            return Err(operation_error(
+                "azappconfig native deletion is not implemented".to_string(),
+            ));
         }
         let key = self.resolve_key(addr)?;
         self.initial_request
@@ -1683,6 +1739,12 @@ impl Provider for AzAppConfigProvider {
     }
 
     fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
+        if matches!(addr, Address::Native(_)) {
+            self.resolve_coords(addr)?;
+            return Err(operation_error(
+                "azappconfig native references are read-only and cannot be written".to_string(),
+            ));
+        }
         let key = self.resolve_key(addr)?;
         let label = self.config.label.as_deref().unwrap_or("<no label>");
         Ok(format!(
@@ -1758,10 +1820,18 @@ impl Provider for AzAppConfigProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use azure_core::http::{
+        AsyncRawResponse, ClientOptions, HttpClient, Request, StatusCode as HttpStatusCode,
+        Transport, headers::Headers,
+    };
+    use azure_identity::DeveloperToolsCredential;
+    use azure_security_keyvault_secrets::{SecretClient, SecretClientOptions};
     use reqwest::header::HeaderValue;
     use serde_json::{Value, json};
+    use std::future::Future;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread::{self, JoinHandle};
     use std::time::Duration;
@@ -1786,6 +1856,7 @@ mod tests {
         status: u16,
         headers: Vec<(String, String)>,
         body: Vec<u8>,
+        request_key: bool,
     }
 
     impl StubResponse {
@@ -1794,6 +1865,7 @@ mod tests {
                 status,
                 headers: Vec::new(),
                 body: Vec::new(),
+                request_key: false,
             }
         }
 
@@ -1802,12 +1874,36 @@ mod tests {
                 status,
                 headers: vec![("content-type".to_string(), "application/json".to_string())],
                 body: serde_json::to_vec(&body).unwrap(),
+                request_key: false,
             }
         }
 
         fn header(mut self, name: &str, value: &str) -> Self {
             self.headers.push((name.to_string(), value.to_string()));
             self
+        }
+
+        fn with_request_key(mut self) -> Self {
+            self.request_key = true;
+            self
+        }
+
+        fn prepare_for(&mut self, request: &CapturedRequest) {
+            if !self.request_key {
+                return;
+            }
+            let url = Url::parse("http://fixture.invalid")
+                .unwrap()
+                .join(&request.target)
+                .unwrap();
+            let encoded = url.path_segments().unwrap().next_back().unwrap();
+            let key = percent_encoding::percent_decode_str(encoded)
+                .decode_utf8()
+                .unwrap()
+                .into_owned();
+            let mut body: Value = serde_json::from_slice(&self.body).unwrap();
+            body["key"] = Value::String(key);
+            self.body = serde_json::to_vec(&body).unwrap();
         }
     }
 
@@ -1829,7 +1925,7 @@ mod tests {
             let stop = Arc::new(AtomicBool::new(false));
             let stopped = Arc::clone(&stop);
             let handle = thread::spawn(move || {
-                for response in responses {
+                for mut response in responses {
                     let mut stream = loop {
                         match listener.accept() {
                             Ok((stream, _)) => break stream,
@@ -1843,6 +1939,7 @@ mod tests {
                         }
                     };
                     let request = read_request(&mut stream);
+                    response.prepare_for(&request);
                     captured.lock().unwrap().push(request);
                     write_response(&mut stream, response);
                 }
@@ -1964,6 +2061,74 @@ mod tests {
             "tags": {},
             "locked": false
         })
+    }
+
+    fn key_vault_value(uri: &str) -> Value {
+        let mut record = key_value("", &json!({"uri": uri}).to_string());
+        record["content_type"] = Value::String(format!("{KEY_VAULT_REFERENCE_TYPE};charset=utf-8"));
+        record
+    }
+
+    #[derive(Debug)]
+    struct RecordingKeyVaultClient {
+        paths: Mutex<Vec<String>>,
+        value: String,
+    }
+
+    impl RecordingKeyVaultClient {
+        fn new(value: &str) -> Arc<Self> {
+            Arc::new(Self {
+                paths: Mutex::new(Vec::new()),
+                value: value.to_string(),
+            })
+        }
+    }
+
+    impl HttpClient for RecordingKeyVaultClient {
+        fn execute_request<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            request: &'life1 Request,
+        ) -> Pin<Box<dyn Future<Output = azure_core::Result<AsyncRawResponse>> + Send + 'async_trait>>
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            self.paths.lock().unwrap().push(request.url().path().into());
+            let body = json!({"value": self.value}).to_string();
+            Box::pin(async move {
+                Ok(AsyncRawResponse::from_bytes(
+                    HttpStatusCode::Ok,
+                    Headers::new(),
+                    body,
+                ))
+            })
+        }
+    }
+
+    fn key_vault_provider(
+        host: &str,
+        transport: Arc<RecordingKeyVaultClient>,
+    ) -> Arc<super::super::akv::AkvProvider> {
+        let credential = DeveloperToolsCredential::new(None).unwrap();
+        let vault_url = format!("https://{host}/");
+        let client = SecretClient::new(
+            &vault_url,
+            credential,
+            Some(SecretClientOptions {
+                client_options: ClientOptions {
+                    transport: Some(Transport::new(transport)),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        let config = super::super::akv::AkvConfig::from_validated_vault_host(
+            host.to_string(),
+            super::super::akv::AuthMethod::Env,
+        );
+        Arc::new(super::super::akv::AkvProvider::with_client(config, client))
     }
 
     fn discovery_target(endpoint: &str, after: Option<&str>) -> String {
@@ -2150,18 +2315,31 @@ mod tests {
     fn item_urls_select_null_or_exact_label_and_tags() {
         let null = provider("azappconfig://shared");
         let null_url = null.item_url("secretspec:app:prod:KEY", true).unwrap();
-        assert!(null_url.as_str().contains("label=%00"), "{null_url}");
+        assert!(!null_url.query_pairs().any(|(name, _)| name == "label"));
+        let null_list = null.list_url(DiscoveryContext::new("app", "prod")).unwrap();
+        assert!(null_list.as_str().contains("label=%00"), "{null_list}");
 
-        let selected =
-            provider("azappconfig://shared?label=production&tag=app=payments&tag=stage=prod");
+        let selected = provider(
+            "azappconfig://shared?label=prod%2A%2C%5Cblue&tag=app=payments&tag=stage=prod",
+        );
         let pairs = selected
             .item_url("key", true)
             .unwrap()
             .query_pairs()
             .map(|(name, value)| (name.into_owned(), value.into_owned()))
             .collect::<Vec<_>>();
-        assert!(pairs.contains(&("label".to_string(), "production".to_string())));
+        assert!(pairs.contains(&("label".to_string(), r"prod*,\blue".to_string())));
         assert_eq!(pairs.iter().filter(|(name, _)| name == "tags").count(), 2);
+
+        let list = selected
+            .list_url(DiscoveryContext::new("app", "prod"))
+            .unwrap();
+        assert_eq!(
+            list.query_pairs()
+                .find(|(name, _)| name == "label")
+                .map(|(_, value)| value.into_owned()),
+            Some(r"prod\*\,\\blue".to_string())
+        );
     }
 
     #[test]
@@ -2174,6 +2352,30 @@ mod tests {
             hex(&sha256(b"abc")),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+        for (length, expected) in [
+            (
+                55,
+                "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318",
+            ),
+            (
+                56,
+                "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a",
+            ),
+            (
+                64,
+                "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb",
+            ),
+            (
+                119,
+                "31eba51c313a5c08226adf18d4a359cfdfd8d2e816b13f4af952f7ea6584dcfb",
+            ),
+            (
+                120,
+                "2f3d335432c70b580af0e8e1b3674a7c020d683aa5f73aaaedfdc55af904c21c",
+            ),
+        ] {
+            assert_eq!(hex(&sha256(&vec![b'a'; length])), expected);
+        }
     }
 
     #[test]
@@ -2210,7 +2412,11 @@ mod tests {
             let failure = HttpFixture::start(|_| {
                 vec![StubResponse::json(
                     status,
-                    json!({"title": "request failed"}),
+                    json!({
+                        "name": "tags",
+                        "title": "request failed",
+                        "detail": "sensitive response detail"
+                    }),
                 )]
             });
             let provider = fixture_provider(&failure.endpoint, "azappconfig://shared");
@@ -2220,15 +2426,52 @@ mod tests {
                 error.to_string().contains(&format!("HTTP {status}")),
                 "{error}"
             );
+            assert!(error.to_string().contains("parameter 'tags'"), "{error}");
             assert!(!error.to_string().contains("request failed"), "{error}");
+            assert!(!error.to_string().contains("sensitive"), "{error}");
             assert_eq!(failure.finish().len(), 1);
         }
+
+        let oversized = HttpFixture::start(|_| {
+            vec![StubResponse {
+                status: 400,
+                headers: vec![("content-type".to_string(), "application/json".to_string())],
+                body: serde_json::to_vec(&json!({
+                    "name": "tags",
+                    "detail": "s".repeat(MAX_ERROR_RESPONSE_BYTES)
+                }))
+                .unwrap(),
+                request_key: false,
+            }]
+        });
+        let provider = fixture_provider(&oversized.endpoint, "azappconfig://shared");
+        let error = super::super::block_on(provider.fetch_key_value("failed", true)).unwrap_err();
+        assert!(error.to_string().contains("HTTP 400"), "{error}");
+        assert!(!error.to_string().contains("parameter"), "{error}");
+        assert_eq!(oversized.finish().len(), 1);
+
+        let unrecognized = HttpFixture::start(|_| {
+            vec![StubResponse::json(
+                400,
+                json!({"name": "secret-bearing-name", "detail": "sensitive detail"}),
+            )]
+        });
+        let provider = fixture_provider(&unrecognized.endpoint, "azappconfig://shared");
+        let error = super::super::block_on(provider.fetch_key_value("failed", true)).unwrap_err();
+        assert!(error.to_string().contains("HTTP 400"), "{error}");
+        assert!(
+            !error.to_string().contains("secret-bearing-name"),
+            "{error}"
+        );
+        assert!(!error.to_string().contains("sensitive"), "{error}");
+        assert_eq!(unrecognized.finish().len(), 1);
 
         let malformed = HttpFixture::start(|_| {
             vec![StubResponse {
                 status: 200,
                 headers: Vec::new(),
                 body: b"not-json".to_vec(),
+                request_key: false,
             }]
         });
         let provider = fixture_provider(&malformed.endpoint, "azappconfig://shared");
@@ -2240,6 +2483,29 @@ mod tests {
             "{error}"
         );
         assert_eq!(malformed.finish().len(), 1);
+    }
+
+    #[test]
+    fn reads_reject_records_outside_configured_tag_scope() {
+        let fixture = HttpFixture::start(|_| {
+            let mut record = key_value("shared-key", "secret-value");
+            record["tags"] = json!({"stage": "test"});
+            vec![StubResponse::json(200, record)]
+        });
+        let provider = fixture_provider(
+            &fixture.endpoint,
+            "azappconfig://shared?tag=stage=production",
+        );
+        let address = NativeAddress {
+            item: "shared-key".to_string(),
+            ..Default::default()
+        };
+        assert!(
+            super::super::block_on(provider.selected_value_async(Address::Native(&address)))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fixture.finish().len(), 1);
     }
 
     #[test]
@@ -2265,7 +2531,7 @@ mod tests {
         assert_eq!(requests[0].method, "GET");
         assert_eq!(requests[1].method, "PUT");
         assert_eq!(requests[1].header("if-none-match"), Some("*"));
-        assert_eq!(requests[1].header("sync-token"), Some("sync=created;sn=7"));
+        assert_eq!(requests[1].header("sync-token"), Some("sync=created"));
         let target = provider
             .endpoint_url()
             .unwrap()
@@ -2276,7 +2542,7 @@ mod tests {
                 .query_pairs()
                 .find(|(name, _)| name == "label")
                 .map(|(_, value)| value.into_owned()),
-            Some(r"prod\*\,\\blue".to_string())
+            Some(r"prod*,\blue".to_string())
         );
         let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
         assert_eq!(body["value"], "new-value");
@@ -2598,8 +2864,210 @@ mod tests {
         provider.merge_sync_tokens(&second);
         assert_eq!(
             provider.current_sync_token().as_deref(),
-            Some("abc=one;sn=1,def=y;sn=4")
+            Some("abc=one,def=y")
         );
+    }
+
+    #[test]
+    fn get_many_deduplicates_addresses_and_maps_every_declaration() {
+        let fixture = HttpFixture::start(|_| {
+            vec![StubResponse::json(
+                200,
+                key_value("shared-key", "secret-value"),
+            )]
+        });
+        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let address = NativeAddress {
+            item: "shared-key".to_string(),
+            ..Default::default()
+        };
+        let values = provider
+            .get_many(&[
+                ("FIRST", Address::Native(&address)),
+                ("SECOND", Address::Native(&address)),
+            ])
+            .unwrap();
+        assert_eq!(values["FIRST"].expose_secret(), "secret-value");
+        assert_eq!(values["SECOND"].expose_secret(), "secret-value");
+        assert_eq!(fixture.finish().len(), 1);
+    }
+
+    #[test]
+    fn get_many_deduplicates_key_vault_references() {
+        let fixture = HttpFixture::start(|_| {
+            let record = key_vault_value("https://shared.vault.azure.net/secrets/api-key");
+            vec![
+                StubResponse::json(200, record.clone()).with_request_key(),
+                StubResponse::json(200, record).with_request_key(),
+            ]
+        });
+        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let transport = RecordingKeyVaultClient::new("resolved-value");
+        provider.vaults.lock().unwrap().insert(
+            "shared.vault.azure.net".to_string(),
+            key_vault_provider("shared.vault.azure.net", Arc::clone(&transport)),
+        );
+        let first = NativeAddress {
+            item: "first-key".to_string(),
+            ..Default::default()
+        };
+        let second = NativeAddress {
+            item: "second-key".to_string(),
+            ..Default::default()
+        };
+        let values = provider
+            .get_many(&[
+                ("FIRST", Address::Native(&first)),
+                ("SECOND", Address::Native(&second)),
+            ])
+            .unwrap();
+        assert_eq!(values["FIRST"].expose_secret(), "resolved-value");
+        assert_eq!(values["SECOND"].expose_secret(), "resolved-value");
+        assert_eq!(transport.paths.lock().unwrap().len(), 1);
+        assert_eq!(fixture.finish().len(), 2);
+    }
+
+    #[test]
+    fn get_many_reference_failure_names_every_affected_declaration() {
+        let fixture = HttpFixture::start(|_| {
+            let record = key_vault_value("https://shared.vault.azure.net/secrets/api-key");
+            vec![
+                StubResponse::json(200, record.clone()).with_request_key(),
+                StubResponse::json(200, record).with_request_key(),
+            ]
+        });
+        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let first = NativeAddress {
+            item: "first-key".to_string(),
+            ..Default::default()
+        };
+        let second = NativeAddress {
+            item: "second-key".to_string(),
+            ..Default::default()
+        };
+        let error = provider
+            .get_many(&[
+                ("FIRST", Address::Native(&first)),
+                ("SECOND", Address::Native(&second)),
+            ])
+            .unwrap_err();
+        let message = error.to_string();
+        for expected in ["FIRST", "SECOND", "first-key", "second-key"] {
+            assert!(message.contains(expected), "{message}");
+        }
+        assert!(message.contains("require key_vault_auth"), "{message}");
+        assert_eq!(fixture.finish().len(), 2);
+    }
+
+    #[test]
+    fn get_many_resolves_references_across_vaults() {
+        let fixture = HttpFixture::start(|_| {
+            vec![
+                StubResponse::json(
+                    200,
+                    key_vault_value("https://first.vault.azure.net/secrets/api-key"),
+                )
+                .with_request_key(),
+                StubResponse::json(
+                    200,
+                    key_vault_value("https://second.vault.azure.net/secrets/api-key"),
+                )
+                .with_request_key(),
+            ]
+        });
+        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let first_transport = RecordingKeyVaultClient::new("first-value");
+        let second_transport = RecordingKeyVaultClient::new("second-value");
+        let mut vaults = provider.vaults.lock().unwrap();
+        vaults.insert(
+            "first.vault.azure.net".to_string(),
+            key_vault_provider("first.vault.azure.net", Arc::clone(&first_transport)),
+        );
+        vaults.insert(
+            "second.vault.azure.net".to_string(),
+            key_vault_provider("second.vault.azure.net", Arc::clone(&second_transport)),
+        );
+        drop(vaults);
+        let first = NativeAddress {
+            item: "first-key".to_string(),
+            ..Default::default()
+        };
+        let second = NativeAddress {
+            item: "second-key".to_string(),
+            ..Default::default()
+        };
+        let values = provider
+            .get_many(&[
+                ("FIRST", Address::Native(&first)),
+                ("SECOND", Address::Native(&second)),
+            ])
+            .unwrap();
+        assert_eq!(
+            values
+                .values()
+                .map(|value| value.expose_secret())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["first-value", "second-value"])
+        );
+        assert_eq!(first_transport.paths.lock().unwrap().len(), 1);
+        assert_eq!(second_transport.paths.lock().unwrap().len(), 1);
+        assert_eq!(fixture.finish().len(), 2);
+    }
+
+    #[test]
+    fn key_vault_provider_cache_enforces_host_cap_before_authentication() {
+        let provider = provider("azappconfig://shared?auth=connection_string");
+        let mut vaults = provider.vaults.lock().unwrap();
+        for index in 0..MAX_VAULT_CLIENTS {
+            let host = format!("vault-{index}.vault.azure.net");
+            let config = super::super::akv::AkvConfig::from_validated_vault_host(
+                host.clone(),
+                super::super::akv::AuthMethod::Env,
+            );
+            vaults.insert(host, Arc::new(super::super::akv::AkvProvider::new(config)));
+        }
+        drop(vaults);
+
+        let reference = VaultReference {
+            canonical_uri: "https://overflow.vault.azure.net/secrets/api-key/".to_string(),
+            vault_host: "overflow.vault.azure.net".to_string(),
+            secret_name: "api-key".to_string(),
+            version: None,
+        };
+        let error = provider.vault_provider(&reference).err().unwrap();
+        assert!(
+            error.to_string().contains("at most 16 Key Vault hosts"),
+            "{error}"
+        );
+        assert!(provider.key_vault_credential.get().is_none());
+    }
+
+    #[test]
+    fn native_addresses_have_no_write_target() {
+        let provider = provider("azappconfig://shared");
+        let address = NativeAddress {
+            item: "shared-key".to_string(),
+            ..Default::default()
+        };
+        let writable = provider
+            .check_writable(Address::Native(&address))
+            .unwrap_err()
+            .to_string();
+        let described = provider
+            .describe_write_target(Address::Native(&address))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(described, writable);
+
+        let deletable = provider
+            .check_deletable(Address::Native(&address))
+            .unwrap_err()
+            .to_string();
+        let deleted = provider
+            .delete(Address::Native(&address))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(deleted, deletable);
     }
 
     #[test]

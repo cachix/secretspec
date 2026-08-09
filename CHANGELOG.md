@@ -198,7 +198,9 @@ as in 0.19.0.
 - **Azure App Configuration provider** (`azappconfig://`, 0.19+): select direct
   values and Azure Key Vault references by label, prefix, and tags, with Entra
   ID or connection-string authentication and guarded writes, deletion, and
-  declaration discovery.
+  declaration discovery. Azure Key Vault references can pin an exact secret
+  version, and cached-route validation compares canonical vault endpoints
+  independently of authentication choice.
 - Profiles can opt out of inheriting `[profiles.default]` by setting
   `inherit = false` in their profile defaults (0.19+), allowing standalone
   secret sets alongside profiles that still share the default declarations.

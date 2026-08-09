@@ -421,7 +421,7 @@ impl AkvProvider {
     }
 
     #[cfg(test)]
-    fn with_client(config: AkvConfig, client: SecretClient) -> Self {
+    pub(crate) fn with_client(config: AkvConfig, client: SecretClient) -> Self {
         Self {
             config,
             credentials: ProviderCredentials::new(),
@@ -514,6 +514,7 @@ impl AkvProvider {
                  underscores; if this `ref` names a real secret, use the vault's actual name."
             )));
         }
+        // Azure emits 32-character object versions; reject other shapes before authentication.
         if let Some(version) = coords.version.as_deref()
             && (version.len() != 32 || !version.bytes().all(|byte| byte.is_ascii_alphanumeric()))
         {

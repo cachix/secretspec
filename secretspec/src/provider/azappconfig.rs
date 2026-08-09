@@ -456,6 +456,8 @@ pub struct AzAppConfigProvider {
     sync_tokens: Mutex<BTreeMap<String, SyncToken>>,
     vaults: Mutex<HashMap<String, Arc<super::akv::AkvProvider>>>,
     initial_request: super::akv::InitialRequestGate,
+    #[cfg(test)]
+    allow_insecure_loopback: bool,
 }
 
 crate::register_provider! {
@@ -484,6 +486,8 @@ impl AzAppConfigProvider {
             sync_tokens: Mutex::new(BTreeMap::new()),
             vaults: Mutex::new(HashMap::new()),
             initial_request: super::akv::InitialRequestGate::default(),
+            #[cfg(test)]
+            allow_insecure_loopback: false,
         }
     }
 
@@ -593,7 +597,14 @@ impl AzAppConfigProvider {
         body: Option<Vec<u8>>,
         conditional: Option<(HeaderName, &str)>,
     ) -> Result<reqwest::Response> {
-        if url.scheme() != "https" || url.origin() != self.endpoint_url()?.origin() {
+        #[cfg(not(test))]
+        let allowed_scheme = url.scheme() == "https";
+        #[cfg(test)]
+        let allowed_scheme = url.scheme() == "https"
+            || (self.allow_insecure_loopback
+                && url.scheme() == "http"
+                && url.host_str() == Some("127.0.0.1"));
+        if !allowed_scheme || url.origin() != self.endpoint_url()?.origin() {
             return Err(operation_error(
                 "refusing Azure App Configuration request outside configured HTTPS endpoint"
                     .to_string(),
@@ -635,7 +646,7 @@ impl AzAppConfigProvider {
                     Some(query) => format!("{}?{query}", url.path()),
                     None => url.path().to_string(),
                 };
-                let host = url.host_str().expect("validated endpoint has a host");
+                let host = &url[url::Position::BeforeHost..url::Position::AfterPort];
                 let string_to_sign = format!(
                     "{}\n{}\n{};{};{}",
                     method.as_str(),
@@ -1506,7 +1517,14 @@ impl AzAppConfigProvider {
                 "Azure App Configuration returned an invalid continuation link".to_string(),
             )
         })?;
-        if next.scheme() != "https"
+        #[cfg(not(test))]
+        let allowed_scheme = next.scheme() == "https";
+        #[cfg(test)]
+        let allowed_scheme = next.scheme() == "https"
+            || (self.allow_insecure_loopback
+                && next.scheme() == "http"
+                && next.host_str() == Some("127.0.0.1"));
+        if !allowed_scheme
             || next.origin() != initial.origin()
             || next.path() != initial.path()
             || next.fragment().is_some()
@@ -1773,6 +1791,173 @@ impl Provider for AzAppConfigProvider {
 mod tests {
     use super::*;
     use reqwest::header::HeaderValue;
+    use serde_json::{Value, json};
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread::{self, JoinHandle};
+    use std::time::Duration;
+
+    #[derive(Debug)]
+    struct CapturedRequest {
+        method: String,
+        target: String,
+        headers: BTreeMap<String, String>,
+        body: Vec<u8>,
+    }
+
+    impl CapturedRequest {
+        fn header(&self, name: &str) -> Option<&str> {
+            self.headers
+                .get(&name.to_ascii_lowercase())
+                .map(String::as_str)
+        }
+    }
+
+    struct StubResponse {
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    }
+
+    impl StubResponse {
+        fn empty(status: u16) -> Self {
+            Self {
+                status,
+                headers: Vec::new(),
+                body: Vec::new(),
+            }
+        }
+
+        fn json(status: u16, body: Value) -> Self {
+            Self {
+                status,
+                headers: vec![("content-type".to_string(), "application/json".to_string())],
+                body: serde_json::to_vec(&body).unwrap(),
+            }
+        }
+
+        fn header(mut self, name: &str, value: &str) -> Self {
+            self.headers.push((name.to_string(), value.to_string()));
+            self
+        }
+    }
+
+    struct HttpFixture {
+        endpoint: String,
+        requests: Arc<Mutex<Vec<CapturedRequest>>>,
+        stop: Arc<AtomicBool>,
+        handle: Option<JoinHandle<()>>,
+    }
+
+    impl HttpFixture {
+        fn start(build: impl FnOnce(&str) -> Vec<StubResponse>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+            let responses = build(&endpoint);
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let captured = Arc::clone(&requests);
+            let stop = Arc::new(AtomicBool::new(false));
+            let stopped = Arc::clone(&stop);
+            let handle = thread::spawn(move || {
+                for response in responses {
+                    let mut stream = loop {
+                        match listener.accept() {
+                            Ok((stream, _)) => break stream,
+                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                if stopped.load(Ordering::Acquire) {
+                                    return;
+                                }
+                                thread::sleep(Duration::from_millis(1));
+                            }
+                            Err(error) => panic!("fixture accept failed: {error}"),
+                        }
+                    };
+                    let request = read_request(&mut stream);
+                    captured.lock().unwrap().push(request);
+                    write_response(&mut stream, response);
+                }
+            });
+            Self {
+                endpoint,
+                requests,
+                stop,
+                handle: Some(handle),
+            }
+        }
+
+        fn finish(mut self) -> Vec<CapturedRequest> {
+            self.stop.store(true, Ordering::Release);
+            self.handle.take().unwrap().join().unwrap();
+            std::mem::take(&mut *self.requests.lock().unwrap())
+        }
+    }
+
+    impl Drop for HttpFixture {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Release);
+            if let Some(handle) = self.handle.take() {
+                handle.join().unwrap();
+            }
+        }
+    }
+
+    fn read_request(stream: &mut TcpStream) -> CapturedRequest {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut raw = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0, "request ended before headers");
+            raw.extend_from_slice(&buffer[..read]);
+            if let Some(index) = raw.windows(4).position(|window| window == b"\r\n\r\n") {
+                break index + 4;
+            }
+        };
+        let head = std::str::from_utf8(&raw[..header_end]).unwrap();
+        let mut lines = head.split("\r\n");
+        let mut request_line = lines.next().unwrap().split_whitespace();
+        let method = request_line.next().unwrap().to_string();
+        let target = request_line.next().unwrap().to_string();
+        let headers = lines
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, value)| (name.to_ascii_lowercase(), value.trim().to_string()))
+            .collect::<BTreeMap<_, _>>();
+        let content_length = headers
+            .get("content-length")
+            .map(|value| value.parse::<usize>().unwrap())
+            .unwrap_or_default();
+        while raw.len() < header_end + content_length {
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0, "request ended before body");
+            raw.extend_from_slice(&buffer[..read]);
+        }
+        CapturedRequest {
+            method,
+            target,
+            headers,
+            body: raw[header_end..header_end + content_length].to_vec(),
+        }
+    }
+
+    fn write_response(stream: &mut TcpStream, response: StubResponse) {
+        write!(
+            stream,
+            "HTTP/1.1 {} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n",
+            response.status,
+            response.body.len()
+        )
+        .unwrap();
+        for (name, value) in response.headers {
+            write!(stream, "{name}: {value}\r\n").unwrap();
+        }
+        stream.write_all(b"\r\n").unwrap();
+        stream.write_all(&response.body).unwrap();
+        stream.flush().unwrap();
+    }
 
     fn config(uri: &str) -> AzAppConfigConfig {
         AzAppConfigConfig::try_from(&ProviderUrl::new(Url::parse(uri).unwrap())).unwrap()
@@ -1780,6 +1965,49 @@ mod tests {
 
     fn provider(uri: &str) -> AzAppConfigProvider {
         AzAppConfigProvider::new(config(uri))
+    }
+
+    fn fixture_provider(endpoint: &str, uri: &str) -> AzAppConfigProvider {
+        let mut provider = provider(uri);
+        provider.config.endpoint = endpoint.to_string();
+        provider.allow_insecure_loopback = true;
+        provider
+            .http
+            .set(reqwest::Client::builder().build().unwrap())
+            .unwrap();
+        provider
+            .auth
+            .set(ResolvedAuth::ConnectionString(ConnectionStringAuth {
+                id: "fixture-id".to_string(),
+                secret: AzureSecret::new("c2lnbmluZy1zZWNyZXQ=".to_string()),
+            }))
+            .map_err(|_| ())
+            .unwrap();
+        provider
+    }
+
+    fn key_value(key: &str, value: &str) -> Value {
+        json!({
+            "etag": "etag-1",
+            "key": key,
+            "label": null,
+            "content_type": null,
+            "value": value,
+            "tags": {},
+            "locked": false
+        })
+    }
+
+    fn discovery_target(endpoint: &str, after: Option<&str>) -> String {
+        let mut provider = provider("azappconfig://shared");
+        provider.config.endpoint = endpoint.to_string();
+        let mut url = provider
+            .list_url(DiscoveryContext::new("checkout", "prod"))
+            .unwrap();
+        if let Some(after) = after {
+            url.query_pairs_mut().append_pair("After", after);
+        }
+        safe_request_target(&url)
     }
 
     fn hex(bytes: &[u8]) -> String {
@@ -1999,6 +2227,238 @@ mod tests {
     }
 
     #[test]
+    fn reads_treat_only_404_as_missing_and_reject_invalid_responses() {
+        let missing = HttpFixture::start(|_| vec![StubResponse::empty(404)]);
+        let provider = fixture_provider(&missing.endpoint, "azappconfig://shared");
+        assert!(
+            super::super::block_on(provider.fetch_key_value("missing", true))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(missing.finish().len(), 1);
+
+        for status in [400, 401, 403, 409, 412, 429] {
+            let failure = HttpFixture::start(|_| {
+                vec![StubResponse::json(
+                    status,
+                    json!({"title": "request failed"}),
+                )]
+            });
+            let provider = fixture_provider(&failure.endpoint, "azappconfig://shared");
+            let error =
+                super::super::block_on(provider.fetch_key_value("failed", true)).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("HTTP {status}: request failed")),
+                "{error}"
+            );
+            assert_eq!(failure.finish().len(), 1);
+        }
+
+        let malformed = HttpFixture::start(|_| {
+            vec![StubResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: b"not-json".to_vec(),
+            }]
+        });
+        let provider = fixture_provider(&malformed.endpoint, "azappconfig://shared");
+        let error = super::super::block_on(provider.fetch_key_value("broken", true)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("returned invalid key-value JSON"),
+            "{error}"
+        );
+        assert_eq!(malformed.finish().len(), 1);
+    }
+
+    #[test]
+    fn create_is_conditional_signed_and_carries_response_sync_token() {
+        let fixture = HttpFixture::start(|_| {
+            vec![
+                StubResponse::empty(404).header("Sync-Token", "sync=created;sn=7"),
+                StubResponse::empty(200),
+            ]
+        });
+        let provider = fixture_provider(
+            &fixture.endpoint,
+            "azappconfig://shared?label=prod%2A%2C%5Cblue&tag=app=payments",
+        );
+        super::super::block_on(provider.set_async(
+            "secretspec:checkout:prod:API_KEY",
+            &SecretString::new("new-value".to_string().into()),
+        ))
+        .unwrap();
+
+        let requests = fixture.finish();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[1].method, "PUT");
+        assert_eq!(requests[1].header("if-none-match"), Some("*"));
+        assert_eq!(requests[1].header("sync-token"), Some("sync=created;sn=7"));
+        let target = provider
+            .endpoint_url()
+            .unwrap()
+            .join(&requests[1].target)
+            .unwrap();
+        assert_eq!(
+            target
+                .query_pairs()
+                .find(|(name, _)| name == "label")
+                .map(|(_, value)| value.into_owned()),
+            Some(r"prod\*\,\\blue".to_string())
+        );
+        let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+        assert_eq!(body["value"], "new-value");
+        assert_eq!(body["tags"], json!({"app": "payments"}));
+
+        let date = requests[1].header("x-ms-date").unwrap();
+        let content_hash = requests[1].header("x-ms-content-sha256").unwrap();
+        assert_eq!(
+            content_hash,
+            azure_core::base64::encode(sha256(&requests[1].body))
+        );
+        let canonical = format!(
+            "PUT\n{}\n{};{};{}",
+            requests[1].target,
+            date,
+            requests[1].header("host").unwrap(),
+            content_hash
+        );
+        let signature = azure_core::hmac::hmac_sha256(
+            &canonical,
+            &AzureSecret::new("c2lnbmluZy1zZWNyZXQ=".to_string()),
+        )
+        .unwrap();
+        let expected_authorization = format!(
+            "HMAC-SHA256 Credential=fixture-id&SignedHeaders=x-ms-date;host;x-ms-content-sha256&Signature={signature}"
+        );
+        assert_eq!(
+            requests[1].header("authorization"),
+            Some(expected_authorization.as_str())
+        );
+        assert!(
+            requests
+                .iter()
+                .flat_map(|request| request.headers.values())
+                .all(|value| !value.contains("c2lnbmluZy1zZWNyZXQ="))
+        );
+    }
+
+    #[test]
+    fn update_preserves_metadata_and_reports_precondition_failure() {
+        let fixture = HttpFixture::start(|_| {
+            vec![
+                StubResponse::json(
+                    200,
+                    json!({
+                        "etag": "etag-existing",
+                        "key": "key",
+                        "label": null,
+                        "content_type": "text/plain",
+                        "value": "old",
+                        "tags": {"app": "payments", "owner": null},
+                        "description": "kept",
+                        "locked": false
+                    }),
+                ),
+                StubResponse::empty(412),
+            ]
+        });
+        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared?tag=app=payments");
+        let error = super::super::block_on(
+            provider.set_async("key", &SecretString::new("new".to_string().into())),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("changed concurrently"),
+            "{error}"
+        );
+
+        let requests = fixture.finish();
+        assert_eq!(requests[1].header("if-match"), Some("etag-existing"));
+        let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+        assert_eq!(body["value"], "new");
+        assert_eq!(body["content_type"], "text/plain");
+        assert_eq!(body["tags"], json!({"app": "payments", "owner": null}));
+        assert_eq!(body["description"], "kept");
+    }
+
+    #[test]
+    fn mutations_refuse_mismatched_tags_before_writing() {
+        let fixture = HttpFixture::start(|_| {
+            let mut record = key_value("key", "old");
+            record["tags"] = json!({"app": "other"});
+            vec![StubResponse::json(200, record)]
+        });
+        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared?tag=app=payments");
+        let error = super::super::block_on(
+            provider.set_async("key", &SecretString::new("new".to_string().into())),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("does not match configured tag"),
+            "{error}"
+        );
+        let requests = fixture.finish();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+    }
+
+    #[test]
+    fn mutations_refuse_locked_special_and_etagless_records_before_writing() {
+        let cases = [
+            ("locked", json!({"locked": true})),
+            (
+                "special content type",
+                json!({"content_type": format!("{KEY_VAULT_REFERENCE_TYPE};charset=utf-8")}),
+            ),
+            ("did not include an ETag", json!({"etag": null})),
+        ];
+        for (expected, patch) in cases {
+            let fixture = HttpFixture::start(|_| {
+                let mut record = key_value("key", "old");
+                for (name, value) in patch.as_object().unwrap() {
+                    record[name] = value.clone();
+                }
+                vec![StubResponse::json(200, record)]
+            });
+            let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+            let error = super::super::block_on(
+                provider.set_async("key", &SecretString::new("new".to_string().into())),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+            let requests = fixture.finish();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].method, "GET");
+        }
+    }
+
+    #[test]
+    fn delete_uses_etag_and_reports_concurrent_change() {
+        let fixture = HttpFixture::start(|_| {
+            vec![
+                StubResponse::json(200, key_value("key", "old")),
+                StubResponse::empty(412),
+            ]
+        });
+        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let error = super::super::block_on(provider.delete_async("key")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("changed concurrently; retry the delete"),
+            "{error}"
+        );
+        let requests = fixture.finish();
+        assert_eq!(requests[1].method, "DELETE");
+        assert_eq!(requests[1].header("if-match"), Some("etag-1"));
+    }
+
+    #[test]
     fn content_type_detection_is_strict_but_parameter_order_independent() {
         for content_type in [
             "application/vnd.microsoft.appconfig.keyvaultref+json;charset=utf-8",
@@ -2066,10 +2526,8 @@ mod tests {
     fn sync_tokens_keep_newest_sequence_per_id() {
         let provider = provider("azappconfig://shared");
         let mut first = HeaderMap::new();
-        first.insert(
-            "sync-token",
-            HeaderValue::from_static("abc=one;sn=1,def=x;sn=3"),
-        );
+        first.append("sync-token", HeaderValue::from_static("abc=one;sn=1"));
+        first.append("sync-token", HeaderValue::from_static("def=x;sn=3"));
         provider.merge_sync_tokens(&first);
         let mut second = HeaderMap::new();
         second.insert(
@@ -2103,6 +2561,187 @@ mod tests {
             provider
                 .validate_continuation(&initial, "https://evil.example/kv?After=cursor")
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn test_http_escape_hatch_is_loopback_only_and_explicit() {
+        let mut provider = provider("azappconfig://shared");
+        provider.config.endpoint = "http://127.0.0.1:9/".to_string();
+        let loopback = Url::parse("http://127.0.0.1:9/kv?api-version=2026-04-01").unwrap();
+        let error =
+            super::super::block_on(provider.send(Method::GET, loopback, None, None)).unwrap_err();
+        assert!(error.to_string().contains("outside configured HTTPS"));
+
+        provider.allow_insecure_loopback = true;
+        provider.config.endpoint = "http://localhost:9/".to_string();
+        let localhost = Url::parse("http://localhost:9/kv?api-version=2026-04-01").unwrap();
+        let error =
+            super::super::block_on(provider.send(Method::GET, localhost, None, None)).unwrap_err();
+        assert!(error.to_string().contains("outside configured HTTPS"));
+    }
+
+    #[test]
+    fn reflection_follows_same_scope_pages_without_fetching_values() {
+        let fixture = HttpFixture::start(|endpoint| {
+            let next = discovery_target(endpoint, Some("cursor"));
+            vec![
+                StubResponse::json(
+                    200,
+                    json!({
+                        "items": [{
+                            "key": "secretspec:checkout:prod:DATABASE_URL",
+                            "label": null,
+                            "content_type": null
+                        }],
+                        "@nextLink": next
+                    }),
+                ),
+                StubResponse::json(
+                    200,
+                    json!({
+                        "items": [{
+                            "key": "secretspec:checkout:prod:API_KEY",
+                            "label": null,
+                            "content_type": null
+                        }]
+                    }),
+                ),
+            ]
+        });
+        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let declarations = super::super::block_on(
+            provider.reflect_async(DiscoveryContext::new("checkout", "prod")),
+        )
+        .unwrap();
+        assert_eq!(
+            declarations.keys().cloned().collect::<BTreeSet<_>>(),
+            BTreeSet::from(["API_KEY".to_string(), "DATABASE_URL".to_string()])
+        );
+
+        let requests = fixture.finish();
+        assert_eq!(requests.len(), 2);
+        let mut cursors = Vec::new();
+        for request in requests {
+            assert_eq!(request.method, "GET");
+            assert!(request.body.is_empty());
+            let url = provider
+                .endpoint_url()
+                .unwrap()
+                .join(&request.target)
+                .unwrap();
+            assert_eq!(url.path(), "/kv");
+            assert_eq!(
+                url.query_pairs()
+                    .find(|(name, _)| name == "$select")
+                    .map(|(_, value)| value.into_owned()),
+                Some("key,label,content_type".to_string())
+            );
+            cursors.push(
+                url.query_pairs()
+                    .find(|(name, _)| name.eq_ignore_ascii_case("after"))
+                    .map(|(_, value)| value.into_owned()),
+            );
+        }
+        assert_eq!(cursors, [None, Some("cursor".to_string())]);
+    }
+
+    #[test]
+    fn reflection_rejects_cyclic_continuation_before_another_request() {
+        let fixture = HttpFixture::start(|endpoint| {
+            vec![StubResponse::json(
+                200,
+                json!({
+                    "items": [],
+                    "@nextLink": discovery_target(endpoint, None)
+                }),
+            )]
+        });
+        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let error = super::super::block_on(
+            provider.reflect_async(DiscoveryContext::new("checkout", "prod")),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("cyclic continuation"), "{error}");
+        assert_eq!(fixture.finish().len(), 1);
+    }
+
+    #[test]
+    fn reflection_rejects_broadened_continuation_before_another_request() {
+        let fixture = HttpFixture::start(|_| {
+            vec![StubResponse::json(
+                200,
+                json!({
+                    "items": [],
+                    "@nextLink": "/kv?api-version=2026-04-01&After=cursor"
+                }),
+            )]
+        });
+        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let error = super::super::block_on(
+            provider.reflect_async(DiscoveryContext::new("checkout", "prod")),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("broadened discovery filters"),
+            "{error}"
+        );
+        assert_eq!(fixture.finish().len(), 1);
+    }
+
+    #[test]
+    fn key_vault_selection_and_resolution_errors_include_appconfig_context() {
+        let provider = provider("azappconfig://shared?auth=connection_string");
+        let record = |value: &str| KeyValue {
+            etag: Some("etag".to_string()),
+            key: "reference".to_string(),
+            label: None,
+            content_type: Some(format!("{KEY_VAULT_REFERENCE_TYPE};charset=utf-8")),
+            value: Some(value.to_string()),
+            tags: BTreeMap::new(),
+            description: None,
+            locked: false,
+        };
+        let error = match provider.select_record("payments-key", record("not-json")) {
+            Err(error) => error,
+            Ok(_) => panic!("malformed reference was accepted"),
+        };
+        assert!(
+            error.to_string().contains(
+                "invalid Key Vault reference in Azure App Configuration key 'payments-key'"
+            ),
+            "{error}"
+        );
+
+        provider
+            .auth
+            .set(ResolvedAuth::ConnectionString(ConnectionStringAuth {
+                id: "fixture-id".to_string(),
+                secret: AzureSecret::new("c2lnbmluZy1zZWNyZXQ=".to_string()),
+            }))
+            .map_err(|_| ())
+            .unwrap();
+        let selected = provider
+            .select_record(
+                "payments-key",
+                record(r#"{"uri":"https://payments.vault.azure.net/secrets/api-key"}"#),
+            )
+            .unwrap();
+        let SelectedValue::Reference { key, reference } = selected else {
+            panic!("expected Key Vault reference");
+        };
+        let error = provider
+            .resolve_selected_reference(&key, &reference)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "failed to resolve Key Vault reference from Azure App Configuration key 'payments-key' through vault 'payments.vault.azure.net'"
+            ),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("require key_vault_auth"),
+            "{error}"
         );
     }
 

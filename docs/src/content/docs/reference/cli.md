@@ -538,6 +538,14 @@ independently. A source alias can use its own [provider `ref` template or
 per-secret scoped ref](/concepts/references/#different-coordinates-per-provider-019),
 while the destination uses its selected alias's mapping.
 
+Also in SecretSpec 0.19+, a literal source remains convention-addressed, but
+`import` warns when it shares a storage container with a defined alias whose
+template or active scoped refs resolve any imported secret to a different
+entry. The warning is informational: keep the literal to migrate
+convention-named entries, or select the alias when its alias-specific
+coordinates describe the intended source. Import output retains the selected
+alias name alongside its resolved, credential-free provider URI.
+
 **Arguments:**
 - `<FROM_PROVIDER>` - Provider to import from (e.g., `env`, `dotenv:/path/to/.env`)
 - `--delete-source` - After copying, delete a source value only when the

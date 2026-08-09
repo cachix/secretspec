@@ -972,18 +972,7 @@ pub trait Provider: Send + Sync {
         other: &dyn Provider,
         other_addr: Address<'_>,
     ) -> Result<bool> {
-        let same_store = match (self.physical_store_path(), other.physical_store_path()) {
-            (Some(left), Some(right)) => {
-                same_file::is_same_file(left, right).unwrap_or_else(|_| {
-                    let left = comparable_missing_file_path(left);
-                    let right = comparable_missing_file_path(right);
-                    left == right
-                })
-            }
-            (None, None) => self.entry_container_identity() == other.entry_container_identity(),
-            _ => false,
-        };
-        if !same_store {
+        if !same_storage_container(self, other) {
             return Ok(false);
         }
 
@@ -1107,6 +1096,29 @@ fn comparable_missing_file_path(path: &std::path::Path) -> std::path::PathBuf {
     std::fs::canonicalize(parent)
         .map(|parent| parent.join(file_name))
         .unwrap_or(absolute)
+}
+
+/// Returns whether two providers address the same physical storage container,
+/// without comparing any one secret's resolved coordinates.
+///
+/// This is the store half of [`Provider::same_entries`]. Keeping it here lets
+/// non-destructive diagnostics use exactly the same filesystem and provider
+/// identity rules as destructive import preflight, including symlinks, hard
+/// links, missing file paths, and provider-specific container identities.
+pub(crate) fn same_storage_container<L, R>(left: &L, right: &R) -> bool
+where
+    L: Provider + ?Sized,
+    R: Provider + ?Sized,
+{
+    match (left.physical_store_path(), right.physical_store_path()) {
+        (Some(left), Some(right)) => same_file::is_same_file(left, right).unwrap_or_else(|_| {
+            let left = comparable_missing_file_path(left);
+            let right = comparable_missing_file_path(right);
+            left == right
+        }),
+        (None, None) => left.entry_container_identity() == right.entry_container_identity(),
+        _ => false,
+    }
 }
 
 /// Default max concurrent unique-address fetches in [`get_each`].

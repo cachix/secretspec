@@ -67,6 +67,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `import` warns when a literal source uses convention naming but a provider
+  alias for the same storage container addresses active secrets differently
+  through a `ref` template or scoped `refs`. Import output also retains the
+  selected source alias, making alias-specific addressing visible without
+  changing literal-provider semantics.
+  ([#312](https://github.com/cachix/secretspec/issues/312))
 - The Proton Pass provider works with `pass-cli` 2.2.4 and later, which removed
   the `pass-cli test` subcommand the provider ran to check the session before
   every read and write. The check now tries `pass-cli info` and falls back to

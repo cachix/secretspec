@@ -11,7 +11,7 @@ use crate::manifest::{CompiledManifest, MissingPolicy};
 use crate::plan::{PlannedSecret, ResolutionPlan, ResolvedCache, Route};
 use crate::provider::{
     Address, GeneratedValuePersistence, OwnedAddress, Provider as ProviderTrait,
-    ProviderCredentials,
+    ProviderCredentials, same_storage_container,
 };
 use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
 use crate::resolve::{RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource};
@@ -260,6 +260,13 @@ struct PreparedImport {
     target_value: Option<SecretString>,
     copied: bool,
     source_deleted: bool,
+}
+
+/// One selectable alias whose address mapping diverges from a literal import
+/// source even though both providers address the same storage container.
+struct ImportAliasDivergence {
+    alias: String,
+    affected_secrets: Vec<String>,
 }
 
 /// Memoized provider credentials with single-flight population per key.
@@ -3822,6 +3829,118 @@ impl Secrets {
         }
     }
 
+    /// Finds effective leaf aliases whose provider shares a storage container
+    /// with a literal import source but whose active address mapping reaches a
+    /// different entry for at least one imported secret.
+    ///
+    /// This is diagnostic only. A literal keeps convention semantics even when
+    /// exactly one alias matches, because aliases are identities and multiple
+    /// aliases may intentionally map one container in different ways. Candidate
+    /// providers are built without resolving their declared credentials so a
+    /// warning can never touch credential stores or break an otherwise valid
+    /// literal import.
+    fn literal_import_alias_divergences(
+        &self,
+        source_spec: &str,
+        source_provider: &dyn ProviderTrait,
+        planned: &[PlannedSecret],
+        profile: &str,
+    ) -> Vec<ImportAliasDivergence> {
+        if self.lookup_provider_alias_entry(source_spec).is_some() {
+            return Vec::new();
+        }
+
+        self.known_provider_aliases()
+            .into_iter()
+            .filter_map(|alias_name| {
+                let alias = self.lookup_provider_alias_entry(&alias_name)?;
+                if alias.is_cached() {
+                    return None;
+                }
+
+                let has_active_mapping = alias.reference_template().is_some()
+                    || planned.iter().any(|secret| {
+                        secret
+                            .config()
+                            .refs
+                            .as_ref()
+                            .is_some_and(|refs| refs.contains_key(&alias_name))
+                    });
+                if !has_active_mapping {
+                    return None;
+                }
+
+                // Identity comparison needs only provider configuration. Do not
+                // resolve this alias's credentials merely to produce a warning.
+                let alias_provider = self.build_source_provider(&alias_name).ok()?;
+                if !same_storage_container(source_provider, alias_provider.as_ref()) {
+                    return None;
+                }
+
+                let affected_secrets = planned
+                    .iter()
+                    .filter_map(|secret| {
+                        let literal_address = self
+                            .address_for_spec(
+                                secret,
+                                Some(source_spec),
+                                &self.config.project.name,
+                                profile,
+                            )
+                            .ok()?;
+                        let alias_address = self
+                            .address_for_spec(
+                                secret,
+                                Some(&alias_name),
+                                &self.config.project.name,
+                                profile,
+                            )
+                            .ok()?;
+
+                        let differs = match source_provider.same_entries(
+                            literal_address.as_address(),
+                            alias_provider.as_ref(),
+                            alias_address.as_address(),
+                        ) {
+                            Ok(same) => !same,
+                            // An alias address that the provider cannot compare
+                            // still represents behavior the literal bypasses.
+                            // Keep the warning non-fatal and suppress it only if
+                            // both address models are structurally identical.
+                            Err(_) => literal_address != alias_address,
+                        };
+                        differs.then(|| secret.name.clone())
+                    })
+                    .collect::<Vec<_>>();
+
+                (!affected_secrets.is_empty()).then_some(ImportAliasDivergence {
+                    alias: alias_name,
+                    affected_secrets,
+                })
+            })
+            .collect()
+    }
+
+    fn warn_literal_import_alias_divergences(
+        source_uri: &str,
+        divergences: &[ImportAliasDivergence],
+    ) {
+        for divergence in divergences {
+            let count = divergence.affected_secrets.len();
+            let noun = if count == 1 { "secret" } else { "secrets" };
+            let example = &divergence.affected_secrets[0];
+            eprintln!(
+                "{} import source {} uses convention naming, but provider alias {} addresses {} {} differently in the same storage container (for example, {}). Use that alias as the source if its alias-specific coordinates are intended; keep the literal source to use convention-named entries.",
+                "warning:".yellow(),
+                source_uri.bold(),
+                format!("'{}'", divergence.alias).bold(),
+                count,
+                noun,
+                example.bold(),
+            );
+        }
+    }
+
     /// Imports secrets from one provider to another
     ///
     /// This method copies all secrets defined in the specification from the
@@ -3874,11 +3993,20 @@ impl Secrets {
         let mut kept_in_source = 0;
         let mut read_names: Vec<String> = Vec::new();
         let mut source_uri: Option<String> = None;
+        let mut source_display: Option<String> = None;
 
         let copy_result = (|| -> Result<()> {
             let from_provider_instance =
                 self.build_provider(from_provider.to_string(), Some(&profile_display))?;
-            source_uri = Some(from_provider_instance.uri());
+            let provider_uri = from_provider_instance.uri();
+            source_uri = Some(provider_uri.clone());
+            source_display = Some(
+                if self.lookup_provider_alias_entry(from_provider).is_some() {
+                    format!("provider alias '{from_provider}' ({provider_uri})")
+                } else {
+                    provider_uri.clone()
+                },
+            );
 
             if delete_source
                 && !crate::provider::spec_provider_deletes(
@@ -3893,31 +4021,54 @@ impl Secrets {
 
             eprintln!(
                 "Importing secrets from {} (profile: {})...\n",
-                from_provider_instance.uri().blue(),
+                source_display
+                    .as_deref()
+                    .expect("source display is set with the provider URI")
+                    .blue(),
                 profile_display.cyan()
             );
 
             let import_names = self.profile_secret_names_unscoped(Some(&profile_display))?;
-            let mut prepared = Vec::new();
+            let mut planned_imports = Vec::new();
 
-            // Resolve and read every endpoint before mutating either store.
-            // This makes failures in a later secret harmless to earlier source
-            // entries and gives --delete-source one destructive preflight.
+            // Resolve every effective secret before looking in either store so
+            // the literal-vs-alias diagnostic reflects the complete import and
+            // can be emitted before the first provider read.
             for name in import_names {
                 let planned = self
                     .plan_secret(&name, &profile_display, None)?
                     .expect("Secret should exist since we're iterating over it");
-                let Some(route) = planned.route.as_ref() else {
+                if planned.route.is_none() {
                     continue;
-                };
+                }
 
                 if planned.extract().is_some() {
                     return Err(SecretSpecError::ExtractedSecretReadOnly(
                         planned.name.clone(),
                     ));
                 }
+                planned_imports.push(planned);
+            }
 
-                read_names.push(name.clone());
+            let divergences = self.literal_import_alias_divergences(
+                from_provider,
+                from_provider_instance.as_ref(),
+                &planned_imports,
+                &profile_display,
+            );
+            Self::warn_literal_import_alias_divergences(&provider_uri, &divergences);
+
+            // Resolve and read every endpoint before mutating either store.
+            // This makes failures in a later secret harmless to earlier source
+            // entries and gives --delete-source one destructive preflight.
+            let mut prepared = Vec::new();
+            for planned in planned_imports {
+                let route = planned
+                    .route
+                    .as_ref()
+                    .expect("planned imports are provider-backed");
+
+                read_names.push(planned.name.clone());
                 let source_address = self.address_for_spec(
                     &planned,
                     Some(from_provider),
@@ -4219,7 +4370,7 @@ impl Secrets {
                 "\n{} Successfully imported {} secrets from {}",
                 "✓".green(),
                 imported,
-                source_uri.as_deref().unwrap_or("configured provider"),
+                source_display.as_deref().unwrap_or("configured provider"),
             );
         }
 

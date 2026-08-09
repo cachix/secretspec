@@ -560,9 +560,11 @@ reference resolution
 data-plane permissions, and build with `--features azappconfig`; Key Vault
 references also require an Entra identity with secret-read access
 **Authentication (0.19+)**: `env`, `cli`, `managed_identity`,
-`workload_identity`, or `connection_string`. See the
-[provider guide](/providers/azappconfig/#authentication) for App Configuration
-and Key Vault identity separation.
+`workload_identity`, or `connection_string`. Prefer Entra authentication so
+workloads use Azure RBAC without distributing App Configuration access keys;
+reserve connection strings for environments where Entra is unavailable. See
+the [provider guide](/providers/azappconfig/#authentication) for App
+Configuration and Key Vault identity separation.
 **Storage (0.19+)**:
 `{prefix}secretspec:{project}:{profile}:{key}` under one exact label; omission
 selects the null label

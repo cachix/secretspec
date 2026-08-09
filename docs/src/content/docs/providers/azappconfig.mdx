@@ -47,6 +47,15 @@ $ secretspec run --provider azappconfig://payments-production -- your-command
 
 ### Authentication
 
+:::tip[Prefer Microsoft Entra ID]
+Use Entra authentication by default, especially managed identity or workload
+identity for deployed workloads. RBAC avoids distributing App Configuration
+access keys. Reserve `auth=connection_string` for environments where Entra
+authentication is unavailable, protect and rotate the connection string as a
+secret, and keep App Configuration local authentication disabled when it is
+not needed.
+:::
+
 Select authentication with `auth`:
 
 - `env` (default): a complete `tenant_id`, `client_id`, and `client_secret`
@@ -86,7 +95,11 @@ azappconfig://STORE[?auth=env|cli|managed_identity|workload_identity|connection_
   it with a dotted host.
 - `audience`: Entra token audience. Public Azure defaults to
   `https://appconfig.azure.com`; non-public hosts require an explicit HTTPS
-  origin.
+  origin. For `env` service-principal or `workload_identity` authentication in
+  a sovereign cloud, also set `AZURE_AUTHORITY_HOST` to that cloud's Entra
+  authority. For `cli`, select the matching Azure cloud before signing in.
+  `audience` controls the requested token scope; it does not select the Entra
+  authority.
 - `label`: selects one exact label. Omitting it selects the null label rather
   than every label.
 - `prefix`: prepended literally to convention keys. Include any separator the
@@ -290,6 +303,8 @@ rollout requires a fixed revision.
 
 ## Limitations
 
+- One provider instance resolves references from at most 16 distinct Key Vault
+  hosts. Split larger sets across provider aliases.
 - Feature flags, snapshot references, and unknown Azure App Configuration
   special content types are rejected. Only direct values and canonical Key
   Vault references are resolved.

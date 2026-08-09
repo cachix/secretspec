@@ -75,7 +75,7 @@ use reqwest::header::{
 use reqwest::{Method, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 use url::Url;
 
@@ -870,7 +870,10 @@ enum ValueType {
 
 enum SelectedValue {
     Direct(SecretString),
-    Reference(VaultReference),
+    Reference {
+        key: String,
+        reference: VaultReference,
+    },
 }
 
 impl AzAppConfigProvider {
@@ -900,7 +903,10 @@ impl AzAppConfigProvider {
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("api-version", API_VERSION);
-            query.append_pair("label", self.config.label.as_deref().unwrap_or("\0"));
+            query.append_pair(
+                "label",
+                &escape_filter(self.config.label.as_deref().unwrap_or("\0")),
+            );
             if include_tags {
                 for (name, value) in &self.config.tags {
                     query.append_pair(
@@ -932,7 +938,10 @@ impl AzAppConfigProvider {
             let mut query = url.query_pairs_mut();
             query.append_pair("api-version", API_VERSION);
             query.append_pair("key", &format!("{}*", escape_filter(&base)));
-            query.append_pair("label", self.config.label.as_deref().unwrap_or("\0"));
+            query.append_pair(
+                "label",
+                &escape_filter(self.config.label.as_deref().unwrap_or("\0")),
+            );
             for (name, value) in &self.config.tags {
                 query.append_pair(
                     "tags",
@@ -944,11 +953,29 @@ impl AzAppConfigProvider {
         Ok(url)
     }
 
-    async fn response_error(&self, action: &str, response: reqwest::Response) -> SecretSpecError {
+    async fn response_error(
+        &self,
+        action: &str,
+        mut response: reqwest::Response,
+    ) -> SecretSpecError {
         let status = response.status();
-        let bytes = response.bytes().await.unwrap_or_default();
-        let bytes = &bytes[..bytes.len().min(MAX_ERROR_BODY)];
-        let detail = serde_json::from_slice::<AzureProblem>(bytes)
+        let mut bytes = Vec::with_capacity(MAX_ERROR_BODY);
+        if response
+            .content_length()
+            .is_none_or(|length| length <= MAX_ERROR_BODY as u64)
+        {
+            while bytes.len() < MAX_ERROR_BODY {
+                let Ok(Some(chunk)) = response.chunk().await else {
+                    break;
+                };
+                let remaining = MAX_ERROR_BODY - bytes.len();
+                bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                if chunk.len() > remaining {
+                    break;
+                }
+            }
+        }
+        let detail = serde_json::from_slice::<AzureProblem>(&bytes)
             .ok()
             .and_then(|problem| {
                 [problem.title, problem.name, problem.detail]
@@ -1051,8 +1078,16 @@ impl AzAppConfigProvider {
                         "Azure App Configuration Key Vault reference '{key}' has no value"
                     ))
                 })?;
-                parse_vault_reference(&value, &self.config.key_vault_suffix)
-                    .map(SelectedValue::Reference)
+                let reference = parse_vault_reference(&value, &self.config.key_vault_suffix)
+                    .map_err(|error| {
+                        operation_error(format!(
+                            "invalid Key Vault reference in Azure App Configuration key '{key}': {error}"
+                        ))
+                    })?;
+                Ok(SelectedValue::Reference {
+                    key: key.to_string(),
+                    reference,
+                })
             }
             ValueType::AzureSpecial(content_type) => Err(operation_error(format!(
                 "Azure App Configuration key '{key}' uses unsupported special content type '{content_type}'"
@@ -1388,6 +1423,19 @@ impl AzAppConfigProvider {
         })
     }
 
+    fn resolve_selected_reference(
+        &self,
+        key: &str,
+        reference: &VaultReference,
+    ) -> Result<SecretString> {
+        self.resolve_vault_reference(reference).map_err(|error| {
+            operation_error(format!(
+                "failed to resolve Key Vault reference from Azure App Configuration key '{key}' through vault '{}': {error}",
+                reference.vault_host
+            ))
+        })
+    }
+
     fn get_selected(&self, addr: Address<'_>) -> Result<Option<SelectedValue>> {
         self.initial_request
             .run(|| super::block_on(self.selected_value_async(addr)))
@@ -1407,7 +1455,7 @@ impl AzAppConfigProvider {
         });
 
         let mut values = HashMap::new();
-        let mut references: HashMap<VaultReference, Vec<&str>> = HashMap::new();
+        let mut references: HashMap<VaultReference, (Vec<&str>, BTreeSet<String>)> = HashMap::new();
         for (names, result) in selected {
             match result? {
                 Some(SelectedValue::Direct(value)) => {
@@ -1415,24 +1463,34 @@ impl AzAppConfigProvider {
                         values.insert(name.to_string(), value.clone());
                     }
                 }
-                Some(SelectedValue::Reference(reference)) => {
-                    references.entry(reference).or_default().extend(names);
+                Some(SelectedValue::Reference { key, reference }) => {
+                    let entry = references.entry(reference).or_default();
+                    entry.0.extend(names);
+                    entry.1.insert(key);
                 }
                 None => {}
             }
         }
 
-        let references = references.into_iter().collect::<Vec<_>>();
-        let resolved =
-            map_concurrently(&references, get_each_concurrency(), |(reference, names)| {
+        let references = references
+            .into_iter()
+            .map(|(reference, (names, keys))| (reference, names, keys))
+            .collect::<Vec<_>>();
+        let resolved = map_concurrently(
+            &references,
+            get_each_concurrency(),
+            |(reference, names, keys)| {
                 let result = self.resolve_vault_reference(reference).map_err(|error| {
                     operation_error(format!(
-                        "failed to resolve Azure Key Vault reference for {}: {error}",
-                        names.join(", ")
+                        "failed to resolve Key Vault reference for {} from Azure App Configuration key(s) {} through vault '{}': {error}",
+                        names.join(", "),
+                        keys.iter().map(|key| format!("'{key}'")).collect::<Vec<_>>().join(", "),
+                        reference.vault_host
                     ))
                 });
                 (names.clone(), result)
-            });
+            },
+        );
         for (names, result) in resolved {
             let value = result?;
             for name in names {
@@ -1584,8 +1642,8 @@ impl Provider for AzAppConfigProvider {
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
         match self.get_selected(addr)? {
             Some(SelectedValue::Direct(value)) => Ok(Some(value)),
-            Some(SelectedValue::Reference(reference)) => {
-                self.resolve_vault_reference(&reference).map(Some)
+            Some(SelectedValue::Reference { key, reference }) => {
+                self.resolve_selected_reference(&key, &reference).map(Some)
             }
             None => Ok(None),
         }

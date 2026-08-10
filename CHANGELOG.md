@@ -72,6 +72,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Ruby gems for Apple silicon now use the generic `arm64-darwin` platform
+  instead of including the build runner's Darwin version.
 - Windows shared `secretspec-ffi` installs now place the runtime DLL in the
   documented `PREFIX/lib` runtime library directory.
 - `import` warns when a literal source uses convention naming but a provider

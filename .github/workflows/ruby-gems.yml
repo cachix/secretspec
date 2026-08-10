@@ -50,7 +50,7 @@ jobs:
         include:
           - { target: x86_64-linux, runner: ubuntu-latest }
           - { target: aarch64-linux, runner: ubuntu-24.04-arm }
-          - { target: arm64-darwin, runner: macos-latest }
+          - { target: arm64-darwin, runner: macos-latest, deployment_target: "12.0" }
           - { target: x64-mingw-ucrt, runner: windows-latest }
 
     steps:
@@ -89,9 +89,19 @@ jobs:
 
       - name: Stage the staticlib and build the platform gem
         shell: bash
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
+          EXPECTED_GEM_PLATFORM: ${{ matrix.target }}
         run: |
           bash secretspec-rb/scripts/stage-staticlib.sh
-          ( cd secretspec-rb && gem build secretspec.gemspec )
+          cd secretspec-rb
+          gem build secretspec.gemspec
+          ruby -rrubygems/package -e '
+            gem = Dir["secretspec-*.gem"].fetch(0)
+            platform = Gem::Package.new(gem).spec.platform.to_s
+            expected = ENV.fetch("EXPECTED_GEM_PLATFORM")
+            abort "expected gem platform #{expected}, got #{platform}" unless platform == expected
+          '
 
       - name: Smoke test the gem
         shell: bash

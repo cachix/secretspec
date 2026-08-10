@@ -20,5 +20,9 @@ Gem::Specification.new do |spec|
   # scripts/stage-staticlib.sh). The archive is platform-specific, so build a
   # platform gem when it is present; one such gem serves every Ruby ABI.
   staged = File.exist?("vendor/libsecretspec_ffi.a")
-  spec.platform = Gem::Platform::CURRENT if staged
+  if staged
+    platform = Gem::Platform.new(Gem::Platform.local)
+    platform.version = nil if platform.os == "darwin"
+    spec.platform = platform
+  end
 end

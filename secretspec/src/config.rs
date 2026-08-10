@@ -1970,6 +1970,8 @@ struct SecretSerde {
     secret_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     generate: Option<GenerateConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt: Option<bool>,
 }
 
 /// Text encoding used for a secret's stored representation.
@@ -2144,6 +2146,10 @@ pub struct Secret {
     pub secret_type: Option<String>,
     /// Auto-generation configuration. Either `true` for defaults or a table with options.
     pub generate: Option<GenerateConfig>,
+    /// Prompt securely when the value is missing during `secretspec run`.
+    /// The selected provider decides whether the answer is persisted. Available
+    /// since SecretSpec 0.19.
+    pub prompt: Option<bool>,
 }
 
 impl TryFrom<SecretSerde> for Secret {
@@ -2179,6 +2185,7 @@ impl TryFrom<SecretSerde> for Secret {
             extract: value.extract,
             secret_type: value.secret_type,
             generate: value.generate,
+            prompt: value.prompt,
         })
     }
 }
@@ -2207,6 +2214,7 @@ impl From<Secret> for SecretSerde {
             extract: value.extract,
             secret_type: value.secret_type,
             generate: value.generate,
+            prompt: value.prompt,
         }
     }
 }
@@ -2312,9 +2320,28 @@ impl Secret {
                 || self.extract.is_some()
                 || self.secret_type.is_some()
                 || self.would_generate()
+                || self.prompt == Some(true)
             {
                 return Err(
-                    "`composed` secrets cannot also set `default`, `providers`, `ref`, `refs`, `encoding`, `extract`, `type`, or enabled `generate`"
+                    "`composed` secrets cannot also set `default`, `providers`, `ref`, `refs`, `encoding`, `extract`, `type`, enabled `generate`, or `prompt = true`"
+                        .into(),
+                );
+            }
+        }
+
+        if self.prompt == Some(true) {
+            if self.required == Some(false)
+                || self.at_least_one.is_some()
+                || self.exactly_one.is_some()
+            {
+                return Err(
+                    "`prompt = true` secrets must be individually required; omit `required` or set `required = true`"
+                        .into(),
+                );
+            }
+            if self.default.is_some() || self.would_generate() || self.extract.is_some() {
+                return Err(
+                    "`prompt = true` cannot be combined with `default`, enabled `generate`, or `extract`"
                         .into(),
                 );
             }
@@ -2504,6 +2531,7 @@ impl Secret {
             extract: inherit(current, default, |s| s.extract.clone()),
             secret_type: inherit(current, default, |s| s.secret_type.clone()),
             generate: inherit(current, default, |s| s.generate.clone()),
+            prompt: inherit(current, default, |s| s.prompt),
         })
     }
 }
@@ -3731,6 +3759,67 @@ default = "placeholder"
             ..Default::default()
         };
         assert!(s.validate().unwrap_err().contains("requires 'type'"));
+    }
+
+    #[test]
+    fn secret_prompt_parses_round_trips_and_inherits() {
+        let parsed: Secret =
+            toml::from_str("description = \"One-time deployment password\"\nprompt = true")
+                .unwrap();
+        assert_eq!(parsed.prompt, Some(true));
+        assert!(parsed.validate().is_ok());
+
+        let rendered = toml::to_string(&parsed).unwrap();
+        assert!(rendered.contains("prompt = true"), "{rendered}");
+
+        let inherited = Secret::resolved(None, Some(&parsed), None).unwrap();
+        assert_eq!(inherited.prompt, Some(true));
+        let disabled = Secret::resolved(
+            Some(&Secret {
+                prompt: Some(false),
+                ..Default::default()
+            }),
+            Some(&parsed),
+            None,
+        )
+        .unwrap();
+        assert_eq!(disabled.prompt, Some(false));
+    }
+
+    #[test]
+    fn secret_prompt_rejects_ambiguous_missing_value_policies() {
+        for secret in [
+            Secret {
+                description: Some("d".to_string()),
+                prompt: Some(true),
+                default: Some("fallback".to_string()),
+                ..Default::default()
+            },
+            Secret {
+                description: Some("d".to_string()),
+                prompt: Some(true),
+                required: Some(false),
+                ..Default::default()
+            },
+            Secret {
+                description: Some("d".to_string()),
+                prompt: Some(true),
+                secret_type: Some("password".to_string()),
+                generate: Some(GenerateConfig::Bool(true)),
+                ..Default::default()
+            },
+            Secret {
+                description: Some("d".to_string()),
+                prompt: Some(true),
+                extract: Some(SecretExtract {
+                    format: ExtractFormat::Json,
+                    pointer: "/password".to_string(),
+                }),
+                ..Default::default()
+            },
+        ] {
+            assert!(secret.validate().is_err());
+        }
     }
 
     #[test]

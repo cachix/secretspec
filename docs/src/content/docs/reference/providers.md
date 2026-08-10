@@ -64,16 +64,19 @@ The `null` provider is added in SecretSpec 0.19.
 :::
 
 **URI**: `null://` - Always reports a missing value so the declaration's
-committed `default` or configured generator supplies the value
+committed `default`, configured generator, or `prompt = true` run input (0.19+)
+supplies the value
 
 ```text
 null://                      # No configuration or storage
 ```
 
 **Features**: No I/O, no authentication, no persistence, ordinary writes
-rejected; generated values are returned only for the current resolution
+rejected; generated and prompted values are returned only for the current
+resolution or child invocation
 **Use case**: Non-sensitive configuration from the version-controlled manifest,
-or ephemeral generated values that should be fresh for every resolution
+or ephemeral generated/operator-supplied values that should be fresh for every
+resolution or run
 
 ## systemd Credential Provider (0.17+)
 

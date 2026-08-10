@@ -1,4 +1,4 @@
-use super::{Address, GeneratedValuePersistence, Provider, ProviderUrl};
+use super::{Address, ProducedValuePersistence, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 /// Configuration for the null provider.
 ///
 /// The provider takes no options because it never reads or stores values. It
-/// exists to let SecretSpec continue to a declaration's `default` or ephemeral
-/// generated value.
+/// exists to let SecretSpec continue to a declaration's `default`, ephemeral
+/// generated value, or ephemeral `prompt = true` input during `run`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NullConfig {}
 
@@ -41,16 +41,17 @@ impl TryFrom<&ProviderUrl> for NullConfig {
 /// A provider that never contains or stores a value.
 ///
 /// A miss lets normal resolution continue to the secret's committed `default`,
-/// or lets a configured generator mint a value for only the current resolution.
-/// This makes the provider useful for non-sensitive environment configuration
-/// committed to `secretspec.toml` and for ephemeral generated secrets.
+/// lets a configured generator mint a value for only the current resolution,
+/// or lets `run` ask for a `prompt = true` value without storing it. This makes
+/// the provider useful for non-sensitive environment configuration committed to
+/// `secretspec.toml` and for ephemeral generated or operator-supplied secrets.
 pub struct NullProvider;
 
 crate::register_provider! {
     struct: NullProvider,
     config: NullConfig,
     name: "null",
-    description: "Use defaults or ephemeral generation without storage (0.19+)",
+    description: "Use defaults, generation, or run prompts without storage (0.19+)",
     schemes: ["null"],
     examples: ["null://"],
 }
@@ -99,8 +100,12 @@ impl Provider for NullProvider {
         ))
     }
 
-    fn generated_value_persistence(&self) -> GeneratedValuePersistence {
-        GeneratedValuePersistence::Ephemeral
+    fn generated_value_persistence(&self) -> ProducedValuePersistence {
+        ProducedValuePersistence::Ephemeral
+    }
+
+    fn prompted_value_persistence(&self) -> ProducedValuePersistence {
+        ProducedValuePersistence::Ephemeral
     }
 
     fn name(&self) -> &'static str {
@@ -130,7 +135,11 @@ mod tests {
         assert!(provider.get(addr).unwrap().is_none());
         assert_eq!(
             provider.generated_value_persistence(),
-            GeneratedValuePersistence::Ephemeral
+            ProducedValuePersistence::Ephemeral
+        );
+        assert_eq!(
+            provider.prompted_value_persistence(),
+            ProducedValuePersistence::Ephemeral
         );
         let error = provider
             .set(addr, &SecretString::new("8090".into()))
@@ -223,7 +232,11 @@ mod tests {
         let provider = Box::<dyn Provider>::try_from("null://").unwrap();
         assert_eq!(
             provider.generated_value_persistence(),
-            GeneratedValuePersistence::Ephemeral
+            ProducedValuePersistence::Ephemeral
+        );
+        assert_eq!(
+            provider.prompted_value_persistence(),
+            ProducedValuePersistence::Ephemeral
         );
     }
 

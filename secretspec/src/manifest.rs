@@ -20,6 +20,9 @@ pub(crate) enum MissingPolicy {
     UseDefault,
     /// The configured generator supplies the value.
     Generate,
+    /// `secretspec run` securely asks the operator; the selected provider
+    /// decides whether the answer is persisted.
+    Prompt,
 }
 
 impl MissingPolicy {
@@ -54,7 +57,9 @@ impl CompiledSecret {
         let declared_required = config
             .required
             .unwrap_or(config.default.is_none() && !conditionally_required);
-        let missing = if config.would_generate() {
+        let missing = if config.prompt == Some(true) {
+            MissingPolicy::Prompt
+        } else if config.would_generate() {
             MissingPolicy::Generate
         } else if config.default.is_some() {
             MissingPolicy::UseDefault
@@ -111,6 +116,17 @@ mod tests {
         let alternative = CompiledSecret::new(Secret::default(), true);
         assert_eq!(alternative.missing, MissingPolicy::Omit);
         assert!(!alternative.declared_required);
+
+        let prompted = CompiledSecret::new(
+            Secret {
+                prompt: Some(true),
+                ..Default::default()
+            },
+            false,
+        );
+        assert_eq!(prompted.missing, MissingPolicy::Prompt);
+        assert!(prompted.declared_required);
+        assert!(prompted.missing.guaranteed_on_success());
     }
 }
 

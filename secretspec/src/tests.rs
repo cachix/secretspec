@@ -5828,6 +5828,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
             extract: None,
             secret_type: Some("password".to_string()),
             generate: Some(crate::config::GenerateConfig::Bool(true)),
+            prompt: None,
         },
     );
     profiles.insert(

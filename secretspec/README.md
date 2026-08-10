@@ -55,6 +55,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
 - **[Type-Safe Rust SDK](https://secretspec.dev/sdk/rust/)**: Generate strongly-typed structs from your `secretspec.toml` for compile-time safety
 - **[Profile Support](https://secretspec.dev/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
 - **[Secret Generation](https://secretspec.dev/concepts/generation/)**: Auto-generate passwords, tokens, UUIDs, and more when secrets are missing — declarative "generate if absent"
+- **Run prompts (0.19+)**: Set `prompt = true` to request a hidden missing value; writable providers save it, while `null` keeps it invocation-only
 - **Composed Secrets (0.16+)**: Derive read-only values such as DSNs from declared secrets with strict, order-independent `${UPPERCASE_NAME}` references
 - **[Configuration Inheritance](https://secretspec.dev/concepts/inheritance/)**: Extend and override shared configurations using the `extends` feature
 - **[Audit Logging](https://secretspec.dev/concepts/audit/)**: Every secret access recorded locally (who, when, why, outcome) — on by default, secret values never logged
@@ -82,7 +83,7 @@ $ secretspec config global init  # 0.17+
   dotenv: Traditional .env files
   file: Plaintext files, one per secret (0.19+)
   env: Read-only environment variables
-  null: Use defaults or ephemeral generation without storage (0.19+)
+  null: Use defaults, generation, or run prompts without storage (0.19+)
   systemd-credential: Read-only systemd service credentials (0.17+)
   pass: Unix password manager with GPG encryption
   gopass: Gopass CLI password manager with GPG encryption (0.15+)
@@ -200,7 +201,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[.env files](https://secretspec.dev/providers/dotenv)** - Traditional dotenv files
 - **[Plaintext files](https://secretspec.dev/providers/file)** (0.19+) - One UTF-8 file per secret in a local directory tree
 - **[Environment variables](https://secretspec.dev/providers/env)** - Read-only for CI/CD
-- **[Null](https://secretspec.dev/providers/null)** (0.19+) - Use committed defaults or ephemeral generation without secret storage
+- **[Null](https://secretspec.dev/providers/null)** (0.19+) - Use committed defaults, ephemeral generation, or ephemeral run prompts without secret storage
 - **[systemd credentials](https://secretspec.dev/providers/systemd-credential)** (0.17+) - Read-only credentials passed to the current service
 - **[Pass](https://secretspec.dev/providers/pass)** - Unix password manager with GPG encryption
 - **[Gopass](https://secretspec.dev/providers/gopass)** (0.15+) - GPG-based password manager with git-synced password store

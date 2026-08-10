@@ -84,6 +84,74 @@ pub struct SecretReference {
     pub field: String,
 }
 
+/// Collision-resistant framing around each `op inject` expression.
+///
+/// Inject performs textual replacement, so formats such as JSON cannot safely
+/// carry arbitrary secret text without a format-aware escaping guarantee. These
+/// per-call markers preserve newlines and punctuation verbatim. Parsing also
+/// requires each marker exactly once and in order, preventing shifted values.
+#[derive(Debug)]
+struct InjectTemplate {
+    input: String,
+    frames: Vec<(String, String)>,
+}
+
+impl InjectTemplate {
+    fn new(reference_uris: &[String], nonce: &str) -> Self {
+        let mut input = String::new();
+        let mut frames = Vec::with_capacity(reference_uris.len());
+
+        for (index, reference_uri) in reference_uris.iter().enumerate() {
+            let start = format!("__SECRETSPEC_OP_{nonce}_{index}_START__");
+            let end = format!("__SECRETSPEC_OP_{nonce}_{index}_END__");
+            input.push_str(&start);
+            input.push_str("{{ ");
+            input.push_str(reference_uri);
+            input.push_str(" }}");
+            input.push_str(&end);
+            frames.push((start, end));
+        }
+
+        Self { input, frames }
+    }
+
+    fn parse(&self, output: &str) -> Result<Vec<String>> {
+        for (start, end) in &self.frames {
+            if output.matches(start).count() != 1 || output.matches(end).count() != 1 {
+                return Err(Self::malformed_output());
+            }
+        }
+
+        let mut remaining = output;
+        let mut values = Vec::with_capacity(self.frames.len());
+        for (start, end) in &self.frames {
+            let Some(after_start) = remaining.strip_prefix(start) else {
+                return Err(Self::malformed_output());
+            };
+            let Some((value, after_end)) = after_start.split_once(end) else {
+                return Err(Self::malformed_output());
+            };
+            values.push(value.to_string());
+            remaining = after_end;
+        }
+
+        // `op inject` terminates stdout with one newline even when its input
+        // does not. Accept only that exact transport suffix so whitespace in
+        // the framed secret values remains untouched.
+        if !matches!(remaining, "" | "\n" | "\r\n") {
+            return Err(Self::malformed_output());
+        }
+
+        Ok(values)
+    }
+
+    fn malformed_output() -> SecretSpecError {
+        SecretSpecError::ProviderOperationFailed(
+            "1Password CLI returned malformed output from 'op inject'".to_string(),
+        )
+    }
+}
+
 /// Configuration for the OnePassword provider.
 ///
 /// This struct contains all the necessary configuration options for
@@ -313,7 +381,13 @@ pub struct OnePasswordProvider {
     op_command: String,
     /// Credentials supplied by the provider alias.
     credentials: ProviderCredentials,
+    #[cfg(test)]
+    command_override: Option<std::sync::Arc<TestOpCommandOverride>>,
 }
+
+#[cfg(test)]
+type TestOpCommandOverride =
+    dyn Fn(&Command, Option<&str>) -> Result<String> + Send + Sync + 'static;
 
 const SERVICE_ACCOUNT_TOKEN: &str = "service_account_token";
 const OP_SERVICE_ACCOUNT_TOKEN_ENV: &str = "OP_SERVICE_ACCOUNT_TOKEN";
@@ -347,6 +421,8 @@ impl OnePasswordProvider {
             config,
             op_command,
             credentials: ProviderCredentials::new(),
+            #[cfg(test)]
+            command_override: None,
         }
     }
 
@@ -407,6 +483,11 @@ impl OnePasswordProvider {
         }
 
         cmd.args(args);
+
+        #[cfg(test)]
+        if let Some(command_override) = &self.command_override {
+            return command_override(&cmd, stdin_data);
+        }
 
         // Configure stdio based on whether we have stdin data
         if stdin_data.is_some() {
@@ -541,8 +622,11 @@ impl OnePasswordProvider {
         vault: &str,
         reference: &SecretReference,
     ) -> Result<Option<SecretString>> {
-        let reference_uri = Self::reference_uri(vault, reference);
-        match self.execute_op_command(&["read", "--no-newline", &reference_uri], None) {
+        self.read_reference_uri(&Self::reference_uri(vault, reference))
+    }
+
+    fn read_reference_uri(&self, reference_uri: &str) -> Result<Option<SecretString>> {
+        match self.execute_op_command(&["read", "--no-newline", reference_uri], None) {
             Ok(output) => Ok(Some(SecretString::new(output.into()))),
             Err(SecretSpecError::ProviderOperationFailed(msg))
                 if msg.contains("isn't an item") || msg.contains("doesn't have a field") =>
@@ -550,6 +634,35 @@ impl OnePasswordProvider {
                 Ok(None)
             }
             Err(e) => Err(e),
+        }
+    }
+
+    /// Resolves unique field references with one textual `op inject` batch.
+    ///
+    /// A failed inject is retried reference-by-reference because `op inject`
+    /// fails the entire template when any field is missing. Individual reads
+    /// retain the provider's missing-value and detailed error semantics.
+    fn read_reference_uris(&self, reference_uris: &[String]) -> Result<Vec<Option<SecretString>>> {
+        if reference_uris.is_empty() {
+            return Ok(Vec::new());
+        }
+        if reference_uris.len() == 1 {
+            return Ok(vec![self.read_reference_uri(&reference_uris[0])?]);
+        }
+
+        let nonce = uuid::Uuid::new_v4().simple().to_string();
+        let template = InjectTemplate::new(reference_uris, &nonce);
+        match self.execute_op_command(&["inject"], Some(&template.input)) {
+            Ok(output) => template.parse(&output).map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| Some(SecretString::new(value.into())))
+                    .collect()
+            }),
+            Err(_) => reference_uris
+                .iter()
+                .map(|reference_uri| self.read_reference_uri(reference_uri))
+                .collect(),
         }
     }
 
@@ -1033,8 +1146,8 @@ impl Provider for OnePasswordProvider {
     ///
     /// Whole-item addresses (every convention secret, and field-less refs)
     /// are served from one item listing per vault plus parallel `op item get`
-    /// calls for the titles that exist. Field-addressed refs go through
-    /// `op read` each, concurrently.
+    /// calls for the titles that exist. Multiple field-addressed refs use one
+    /// `op inject` call, with individual reads only as a correctness fallback.
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
         if requests.is_empty() {
             return Ok(HashMap::new());
@@ -1042,12 +1155,23 @@ impl Provider for OnePasswordProvider {
 
         // Whole-item requests as (request name, item title), grouped by vault.
         let mut whole_items: HashMap<String, Vec<(String, String)>> = HashMap::new();
-        let mut field_refs: Vec<(&str, Address<'_>)> = Vec::new();
+        // Field references retain first-seen order while the index deduplicates
+        // identical physical addresses and records every request name to fan out.
+        let mut field_ref_indices: HashMap<String, usize> = HashMap::new();
+        let mut field_refs: Vec<(String, Vec<String>)> = Vec::new();
         for (name, addr) in requests {
             let coords = self.operation_coordinates(*addr)?;
             let (vault, reference) = self.native_reference(&coords)?;
             match reference {
-                Some(_) => field_refs.push((name, *addr)),
+                Some(reference) => {
+                    let reference_uri = Self::reference_uri(&vault, &reference);
+                    if let Some(index) = field_ref_indices.get(&reference_uri) {
+                        field_refs[*index].1.push(name.to_string());
+                    } else {
+                        field_ref_indices.insert(reference_uri.clone(), field_refs.len());
+                        field_refs.push((reference_uri, vec![name.to_string()]));
+                    }
+                }
                 None => whole_items
                     .entry(vault)
                     .or_default()
@@ -1059,7 +1183,20 @@ impl Provider for OnePasswordProvider {
         for (vault, items) in whole_items {
             results.extend(self.get_items_batch(&vault, items)?);
         }
-        results.extend(super::get_each(self, &field_refs)?);
+
+        let reference_uris: Vec<String> = field_refs
+            .iter()
+            .map(|(reference_uri, _)| reference_uri.clone())
+            .collect();
+        let values = self.read_reference_uris(&reference_uris)?;
+        for ((_, names), value) in field_refs.into_iter().zip(values) {
+            if let Some(value) = value {
+                for name in names {
+                    results.insert(name, value.clone());
+                }
+            }
+        }
+
         Ok(results)
     }
 }
@@ -1444,5 +1581,371 @@ mod tests {
         };
         let err = provider.native_reference(&addr).unwrap_err();
         assert!(err.to_string().contains("need a `field`"), "{err}");
+    }
+
+    fn command_args(command: &Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn framed_output(template: &InjectTemplate, values: &[&str]) -> String {
+        let mut output = String::new();
+        for ((start, end), value) in template.frames.iter().zip(values) {
+            output.push_str(start);
+            output.push_str(value);
+            output.push_str(end);
+        }
+        output
+    }
+
+    fn secret_matches(results: &HashMap<String, SecretString>, name: &str, expected: &str) -> bool {
+        results
+            .get(name)
+            .is_some_and(|value| value.expose_secret() == expected)
+    }
+
+    #[test]
+    fn inject_template_round_trips_arbitrary_utf8_values() {
+        let references: Vec<String> = (0..7)
+            .map(|index| format!("op://vault/item/{index}"))
+            .collect();
+        let template = InjectTemplate::new(&references, "deterministic-nonce");
+        let values = [
+            "contains=equals",
+            "\"quoted\"",
+            r"back\slash",
+            "Zażółć gęślą jaźń 🔐",
+            "",
+            " spaces stay ",
+            "first line\nsecond line\nthird line",
+        ];
+
+        for reference in &references {
+            let expression = format!("{{{{ {reference} }}}}");
+            assert_eq!(template.input.matches(&expression).count(), 1);
+        }
+        assert!(
+            values
+                .iter()
+                .filter(|value| !value.is_empty())
+                .all(|value| !template.input.contains(value))
+        );
+
+        let parsed = template.parse(&framed_output(&template, &values)).unwrap();
+        assert!(
+            parsed
+                .iter()
+                .zip(values)
+                .all(|(actual, expected)| actual == expected)
+        );
+    }
+
+    #[test]
+    fn inject_parser_accepts_cli_trailing_newline_without_trimming_values() {
+        let references = vec!["op://vault/item/one".to_string()];
+        let template = InjectTemplate::new(&references, "deterministic-nonce");
+        let value = " secret whitespace stays \n";
+        let output = format!("{}\n", framed_output(&template, &[value]));
+
+        assert_eq!(template.parse(&output).unwrap(), [value]);
+    }
+
+    #[test]
+    fn inject_parser_rejects_malformed_output_without_echoing_it() {
+        let references = vec![
+            "op://vault/item/one".to_string(),
+            "op://vault/item/two".to_string(),
+        ];
+        let template = InjectTemplate::new(&references, "deterministic-nonce");
+        let valid = framed_output(&template, &["first", "second"]);
+        let (first_start, first_end) = &template.frames[0];
+        let (second_start, second_end) = &template.frames[1];
+        let sensitive = "DO_NOT_ECHO_PLAINTEXT";
+        let malformed = [
+            valid.trim_end_matches(second_end).to_string(),
+            format!("{valid}{first_start}{first_end}"),
+            format!("{second_start}second{second_end}{first_start}first{first_end}"),
+            format!("unexpected{valid}"),
+            format!("{valid}\n\n"),
+            format!("{valid} \n"),
+            format!(
+                "{first_start}{sensitive}{first_end}{first_end}{second_start}second{second_end}"
+            ),
+        ];
+
+        for output in malformed {
+            let error = template.parse(&output).unwrap_err().to_string();
+            assert_eq!(
+                error,
+                "Provider operation failed: 1Password CLI returned malformed output from 'op inject'"
+            );
+            assert!(!error.contains(sensitive));
+            assert!(!error.contains(&output));
+        }
+    }
+
+    #[test]
+    fn multiple_field_refs_use_one_inject_and_fan_out_duplicates() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Debug)]
+        struct ObservedCall {
+            args: Vec<String>,
+            template: String,
+            token_is_set: bool,
+        }
+
+        let calls = Arc::new(Mutex::new(Vec::<ObservedCall>::new()));
+        let observed = Arc::clone(&calls);
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig {
+            account: Some("work".to_string()),
+            default_vault: Some("Personal Vault".to_string()),
+            service_account_token: Some("ops_test_token".to_string()),
+            ..Default::default()
+        });
+        provider.command_override = Some(Arc::new(move |command, stdin| {
+            let args = command_args(command);
+            let token_is_set = command.get_envs().any(|(key, value)| {
+                key == OP_SERVICE_ACCOUNT_TOKEN_ENV
+                    && value.is_some_and(|value| value == "ops_test_token")
+            });
+            let template = stdin.expect("inject stdin").to_string();
+            observed.lock().unwrap().push(ObservedCall {
+                args,
+                template: template.clone(),
+                token_is_set,
+            });
+            Ok(template
+                .replace(
+                    "{{ op://Personal Vault/API Key/password }}",
+                    "first=\"value\"\\with\nlines 🔐",
+                )
+                .replace(
+                    "{{ op://Prod Vault/Database/API Section/client secret }}",
+                    "",
+                ))
+        }));
+
+        let first = crate::config::NativeAddress {
+            item: "API Key".to_string(),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+        let duplicate = first.clone();
+        let second = crate::config::NativeAddress {
+            item: "Database".to_string(),
+            section: Some("API Section".to_string()),
+            field: Some("client secret".to_string()),
+            vault: Some("Prod Vault".to_string()),
+            ..Default::default()
+        };
+        let results = provider
+            .get_many(&[
+                ("FIRST", Address::Native(&first)),
+                ("FIRST_COPY", Address::Native(&duplicate)),
+                ("SECOND", Address::Native(&second)),
+            ])
+            .unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].args, ["--account", "work", "inject"]);
+        assert!(calls[0].token_is_set);
+        assert_eq!(
+            calls[0]
+                .template
+                .matches("{{ op://Personal Vault/API Key/password }}")
+                .count(),
+            1
+        );
+        assert_eq!(
+            calls[0]
+                .template
+                .matches("{{ op://Prod Vault/Database/API Section/client secret }}")
+                .count(),
+            1
+        );
+        assert!(!calls[0].template.contains("first=\"value\""));
+        assert!(secret_matches(
+            &results,
+            "FIRST",
+            "first=\"value\"\\with\nlines 🔐"
+        ));
+        assert!(secret_matches(
+            &results,
+            "FIRST_COPY",
+            "first=\"value\"\\with\nlines 🔐"
+        ));
+        assert!(secret_matches(&results, "SECOND", ""));
+    }
+
+    #[test]
+    fn one_unique_field_ref_uses_one_read_and_fans_out() {
+        use std::sync::{Arc, Mutex};
+
+        let calls = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+        let observed = Arc::clone(&calls);
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new(move |command, stdin| {
+            assert!(stdin.is_none());
+            observed.lock().unwrap().push(command_args(command));
+            Ok("single value".to_string())
+        }));
+
+        let address = crate::config::NativeAddress {
+            item: "API Key".to_string(),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+        let results = provider
+            .get_many(&[
+                ("FIRST", Address::Native(&address)),
+                ("SECOND", Address::Native(&address)),
+            ])
+            .unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0],
+            ["read", "--no-newline", "op://Personal/API Key/password"]
+        );
+        assert!(secret_matches(&results, "FIRST", "single value"));
+        assert!(secret_matches(&results, "SECOND", "single value"));
+    }
+
+    #[test]
+    fn inject_failure_falls_back_and_omits_missing_references() {
+        use std::sync::{Arc, Mutex};
+
+        let calls = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+        let observed = Arc::clone(&calls);
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new(move |command, _stdin| {
+            let args = command_args(command);
+            observed.lock().unwrap().push(args.clone());
+            match args.first().map(String::as_str) {
+                Some("inject") => Err(SecretSpecError::ProviderOperationFailed(
+                    "one field is missing".to_string(),
+                )),
+                Some("read") if args.last().is_some_and(|arg| arg.ends_with("/present")) => {
+                    Ok("available".to_string())
+                }
+                Some("read") => Err(SecretSpecError::ProviderOperationFailed(
+                    "item doesn't have a field with this name".to_string(),
+                )),
+                _ => unreachable!("unexpected mocked command"),
+            }
+        }));
+
+        let present = crate::config::NativeAddress {
+            item: "Item".to_string(),
+            field: Some("present".to_string()),
+            ..Default::default()
+        };
+        let missing = crate::config::NativeAddress {
+            item: "Item".to_string(),
+            field: Some("missing".to_string()),
+            ..Default::default()
+        };
+        let results = provider
+            .get_many(&[
+                ("PRESENT", Address::Native(&present)),
+                ("MISSING", Address::Native(&missing)),
+                ("MISSING_COPY", Address::Native(&missing)),
+            ])
+            .unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0], ["inject"]);
+        assert_eq!(calls.iter().filter(|args| args[0] == "read").count(), 2);
+        assert!(secret_matches(&results, "PRESENT", "available"));
+        assert!(!results.contains_key("MISSING"));
+        assert!(!results.contains_key("MISSING_COPY"));
+    }
+
+    #[test]
+    fn mixed_whole_items_and_field_refs_keep_both_batch_paths() {
+        use std::sync::{Arc, Mutex};
+
+        let calls = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+        let observed = Arc::clone(&calls);
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new(move |command, stdin| {
+            let args = command_args(command);
+            observed.lock().unwrap().push(args.clone());
+            match args.as_slice() {
+                [command, list, ..] if command == "item" && list == "list" => Ok(
+                    r#"[{"id":"whole-id","title":"Whole Item"}]"#.to_string(),
+                ),
+                [command, get, id, ..]
+                    if command == "item" && get == "get" && id == "whole-id" =>
+                {
+                    Ok(r#"{"fields":[{"id":"value","type":"STRING","label":"value","value":"whole value"}]}"#.to_string())
+                }
+                [command] if command == "inject" => Ok(stdin
+                    .expect("inject stdin")
+                    .replace("{{ op://Personal/Field One/password }}", "field one")
+                    .replace("{{ op://Personal/Field Two/token }}", "field two")),
+                _ => unreachable!("unexpected mocked command"),
+            }
+        }));
+
+        let whole = crate::config::NativeAddress {
+            item: "Whole Item".to_string(),
+            ..Default::default()
+        };
+        let first = crate::config::NativeAddress {
+            item: "Field One".to_string(),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+        let second = crate::config::NativeAddress {
+            item: "Field Two".to_string(),
+            field: Some("token".to_string()),
+            ..Default::default()
+        };
+        let results = provider
+            .get_many(&[
+                ("WHOLE", Address::Native(&whole)),
+                ("FIRST", Address::Native(&first)),
+                ("SECOND", Address::Native(&second)),
+            ])
+            .unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.iter().filter(|args| args[0] == "inject").count(), 1);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|args| args.starts_with(&["item".to_string(), "list".to_string()]))
+                .count(),
+            1
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|args| args.starts_with(&["item".to_string(), "get".to_string()]))
+                .count(),
+            1
+        );
+        assert!(secret_matches(&results, "WHOLE", "whole value"));
+        assert!(secret_matches(&results, "FIRST", "field one"));
+        assert!(secret_matches(&results, "SECOND", "field two"));
+    }
+
+    #[test]
+    fn empty_batch_does_not_invoke_op() {
+        use std::sync::Arc;
+
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new(|_, _| {
+            panic!("empty batch must not invoke the command seam")
+        }));
+
+        assert!(provider.get_many(&[]).unwrap().is_empty());
     }
 }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
 
@@ -16,8 +16,12 @@ fn run_import(project: &Path, source: &str) -> Output {
         // Keep the subprocess hermetic: no user aliases, defaults, profile, or
         // audit path may influence the import under test.
         .env("HOME", project)
-        .env("XDG_CONFIG_HOME", project.join("config"))
+        .env("XDG_CONFIG_HOME", config_home(project))
         .env("XDG_STATE_HOME", project.join("state"))
+        // Windows ignores the XDG variables: there the config and audit
+        // directories come from APPDATA and the cache from LOCALAPPDATA.
+        .env("APPDATA", config_home(project))
+        .env("LOCALAPPDATA", project.join("state"))
         .env_remove("SECRETSPEC_PROVIDER")
         .env_remove("SECRETSPEC_PROFILE")
         .env_remove("SECRETSPEC_SCOPE")
@@ -46,10 +50,26 @@ fn env_values(path: &Path) -> HashMap<String, String> {
         .collect()
 }
 
+/// Per-user config home handed to the subprocess.
+fn config_home(project: &Path) -> PathBuf {
+    project.join("config")
+}
+
+/// Where the CLI reads `config.toml` beneath that config home. etcetera's
+/// Windows strategy nests one more `config` component than its XDG strategy.
+fn global_config_path(project: &Path) -> PathBuf {
+    let directory = config_home(project).join("secretspec");
+    if cfg!(windows) {
+        directory.join("config").join("config.toml")
+    } else {
+        directory.join("config.toml")
+    }
+}
+
 fn write_global_config(project: &Path, contents: &str) {
-    let directory = project.join("config/secretspec");
-    fs::create_dir_all(&directory).unwrap();
-    fs::write(directory.join("config.toml"), contents).unwrap();
+    let path = global_config_path(project);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, contents).unwrap();
 }
 
 #[test]

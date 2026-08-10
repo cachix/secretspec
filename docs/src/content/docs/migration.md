@@ -68,8 +68,9 @@ declared values from a 1Password vault:
 $ secretspec import onepassword://Development
 ```
 
-Imports copy values into your configured default provider and do not overwrite
-values that are already present there.
+Imports copy values into your configured default provider, or into the system
+keyring when you have not configured one. They do not overwrite values that
+are already present there.
 
 ## Next steps
 

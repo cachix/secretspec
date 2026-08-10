@@ -61,6 +61,8 @@
   };
 
   packages = [
+    # documentation link validation
+    pkgs.lychee
     # coverage testing
     pkgs.cargo-tarpaulin
     # installers

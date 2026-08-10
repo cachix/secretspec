@@ -464,6 +464,28 @@ DATABASE_URL=postgresql://localhost/mydb
 $ secretspec run --scope api -- ./api-server
 ```
 
+SecretSpec 0.19+ can securely request a declared missing value before the child
+starts. The selected provider normally saves the answer; choose `null` when it
+must be ephemeral:
+
+```toml title="secretspec.toml"
+[profiles.default]
+DEPLOY_PASSWORD = { description = "One-time deployment password", required = true, prompt = true, providers = ["null"] }
+```
+
+```bash
+$ secretspec run -- ./deploy
+? Enter value for DEPLOY_PASSWORD (profile: default):
+```
+
+The hidden prompt reads from the controlling terminal, leaving the child's
+stdin unchanged even when it is piped or redirected. The answer is injected
+only for that invocation when the provider is `null`; writable providers save
+it and make the prompt a first-use provisioning step. If no controlling
+terminal exists, `run` fails before starting the child. Only declarations with
+`prompt = true` opt into this behavior; ordinary missing secrets still fail
+without a prompt.
+
 The `--provider` override applies to every secret, including those with a
 [`ref`](/reference/configuration/#secret-references) field: refs are redirected
 to the overriding provider just like convention secrets. This makes it easy to

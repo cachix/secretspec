@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Secrets can set `prompt = true` to request a hidden value from the controlling
+  terminal when `secretspec run` finds no stored value. Writable providers save
+  the answer for later runs; the `null` provider keeps it invocation-only.
 - Profiles can opt out of inheriting `[profiles.default]` by setting
   `inherit = false` in their profile defaults (0.19+), allowing standalone
   secret sets alongside profiles that still share the default declarations.

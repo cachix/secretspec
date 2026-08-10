@@ -1,16 +1,17 @@
 ---
 title: Null Provider
-description: Use committed defaults or ephemeral generation without a storage backend
+description: Use committed defaults, ephemeral generation, or run-time prompts without storage
 ---
 
 :::caution[Version compatibility]
 The `null` provider is added in SecretSpec 0.19.
 :::
 
-The null provider always reports that a value is missing. SecretSpec then uses
-the declaration's committed `default` or generates a fresh value when
-`generate` is enabled. This is useful for non-sensitive environment
-configuration and secrets that should exist for only one resolution.
+The null provider always reports that a value is missing. SecretSpec can then
+use the declaration's committed `default`, generate a fresh value, or—in
+SecretSpec 0.19+—ask the operator during `run` when `prompt = true`. This is
+useful for non-sensitive environment configuration and values that should exist
+for only one invocation or resolution.
 
 ## At a glance
 
@@ -19,7 +20,7 @@ configuration and secrets that should exist for only one resolution.
 | Provider | `null` (0.19+) |
 | URI | `null://` |
 | Access | Always returns missing; ordinary writes are rejected |
-| Best for | Team-shared defaults and ephemeral generated values |
+| Best for | Team-shared defaults, ephemeral generated values, and operator-supplied run values (0.19+) |
 | Storage | None |
 
 ## Quick start
@@ -61,6 +62,26 @@ and gives that value to the child process. A later `run`, `get`, `check`, or SDK
 value-carrying resolution generates a new value. Value-free reports mark the
 secret as generated without minting it.
 
+## Ephemeral operator input (0.19+)
+
+:::note[SecretSpec 0.19+]
+Run-time prompting through `null://` is available starting in SecretSpec 0.19.
+:::
+
+Combine `prompt = true` with `null` when the value must always come from the
+operator and must never be stored:
+
+```toml title="secretspec.toml"
+[profiles.default]
+DEPLOY_PASSWORD = { description = "One-time deployment password", required = true, prompt = true, providers = ["null"] }
+```
+
+`secretspec run -- ./deploy` reads the value through a hidden controlling
+terminal prompt, without consuming the child's stdin. The answer is present in
+the child environment for that invocation and is then discarded. It is never
+passed to `null.set()` or written to a cache. A noninteractive run fails before
+the child starts; other commands and SDK resolution do not prompt.
+
 ## How it works
 
 SecretSpec normally asks the selected provider before using a default or
@@ -69,8 +90,11 @@ report a missing value, and every ordinary write is rejected. The missing read
 lets SecretSpec use the committed default or generator without provider I/O.
 
 The provider has no options, credentials, feature flag, or persistent state.
-Use it on declarations with defaults or enabled generation. Required
-declarations with neither remain missing, and explicit writes are rejected.
+Use it on declarations with defaults, enabled generation, or `prompt = true`
+(0.19+). Here `prompt` chooses operator input while `null` chooses ephemeral
+handling; with a writable provider the same prompted answer would be saved.
+Required declarations with none of those remain missing, and explicit writes
+are rejected.
 
 :::danger[Defaults are public configuration]
 Manifest defaults are committed to version control in plaintext. Use `default`
@@ -79,7 +103,7 @@ exist in the resolving process and its configured delivery boundary.
 :::
 
 :::caution[Ephemeral means unstable]
-Generated values are shared only within one resolution. Do not use `null` for
-credentials that another process, machine, or later invocation must retrieve.
-Use a writable provider for those values.
+Generated and prompted values are shared only within one resolution or child
+invocation. Do not use `null` for credentials that another process, machine, or
+later invocation must retrieve. Use a writable provider for those values.
 :::

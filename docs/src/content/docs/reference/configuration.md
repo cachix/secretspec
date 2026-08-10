@@ -167,6 +167,7 @@ Each secret variable is defined as a table with the following fields:
 | `extract` (0.19+) | table | No | Select one logical value from stored structured data, for example `extract = { format = "json", pointer = "/database/password" }` |
 | `type` | string | No | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
 | `generate` | boolean or table | No | Enable auto-generation when secret is missing |
+| `prompt` (0.19+) | boolean | No | Securely prompt for a missing value during `secretspec run`; the selected provider controls persistence |
 
 Field notes:
 
@@ -180,6 +181,8 @@ Field notes:
   though the provider does not have to supply it.
 - `type` is required when `generate` is enabled.
 - `generate` and `default` cannot both be set.
+- `prompt = true` (0.19+) is for individually required secrets and cannot be
+  combined with `default`, enabled `generate`, `extract`, or `composed`.
 - `extract` (0.19+) is read-only and cannot be combined with enabled
   `generate`.
 
@@ -248,7 +251,7 @@ configuration and resolution behavior.
 Scopes name membership-only subsets of a profile's secrets, so a single service
 or task resolves only what it declares instead of the entire profile. They are
 **orthogonal to profiles**: a profile decides how each secret resolves
-(`required`, `default`, providers, references, generation, `as_path`,
+(`required`, `default`, providers, references, generation, prompts (0.19+), `as_path`,
 `encoding` (0.19+), `extract` (0.19+), and the storage namespace); a scope only
 decides *which* secrets take part in a given resolution.
 
@@ -897,6 +900,49 @@ vault, and item paths on provider URIs are errors.
 - [Audit log](/concepts/audit/) events carry a `ref` field with the coordinates.
 - `check --explain` and `check --json` attribute ref secrets to the store URI
   they resolved from.
+
+### Prompt on missing during run (0.19+)
+
+:::caution[Version compatibility]
+`prompt = true` declarations require SecretSpec 0.19 or newer.
+:::
+
+Use `prompt = true` when `secretspec run` should ask the operator after every
+configured provider has returned missing. Prompting is the value source;
+persistence remains a property of the selected provider.
+
+With a writable provider, the answer is saved and reused by later runs. The
+write destination and writability are checked before the hidden prompt opens,
+just as they are for `secretspec set`. Use the `null` provider when the answer
+must exist only for one child invocation:
+
+```toml
+[profiles.default]
+DEPLOY_PASSWORD = { description = "One-time deployment password", required = true, prompt = true, providers = ["null"] }
+```
+
+Here `null` makes the operator the only possible value source and explicitly
+declines persistence, so the answer is injected into the child environment and
+discarded after it exits. It is not written to a provider or cache. The prompt
+uses the controlling terminal rather than the command's stdin, so a pipe or
+redirected file remains available to the child:
+
+```bash
+$ printf 'deployment input\n' | secretspec run -- ./deploy
+? Enter value for DEPLOY_PASSWORD (profile: default):
+```
+
+Only `run` interprets `prompt = true` as a missing-value policy. `get`, `export`,
+SDK resolution, and value-free reports do not prompt. Interactive `check`
+retains its existing setup behavior instead: it offers to store any missing
+required secret, independently of `prompt`, and therefore cannot satisfy a
+`null`-backed declaration. A `run` without a controlling terminal fails before
+starting the child. Explicit `set` and import operations remain governed by the
+provider, not by `prompt`.
+
+`prompt = true` is limited to individually required secrets and cannot be
+combined with `default`, enabled `generate`, `extract`, or `composed`. Profile
+overrides may set `prompt = false` to return to ordinary missing-value behavior.
 
 ### Secret Generation
 

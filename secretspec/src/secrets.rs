@@ -10,7 +10,7 @@ use crate::error::{Result, SecretSpecError};
 use crate::manifest::{CompiledManifest, MissingPolicy};
 use crate::plan::{PlannedSecret, ResolutionPlan, ResolvedCache, Route};
 use crate::provider::{
-    Address, GeneratedValuePersistence, OwnedAddress, Provider as ProviderTrait,
+    Address, OwnedAddress, ProducedValuePersistence, Provider as ProviderTrait,
     ProviderCredentials, same_storage_container,
 };
 use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
@@ -416,11 +416,24 @@ enum Materialize {
     /// Full pass: mint-and-store a missing generatable secret and write each
     /// `as_path` secret to a temp file. Backs `validate()`/`resolve()`/`check`.
     Values,
+    /// Full pass for `run`: the same materialization as `Values`, plus secure
+    /// controlling-terminal input for declarations with `prompt = true`.
+    Run,
     /// Value-free pass: never write a generated secret back to a provider and
     /// never persist a secret to disk. A generatable-but-absent secret is still
     /// reported as it *would* resolve, without minting it. Backs `report()` and
     /// `resolve_without_values()`.
     None,
+}
+
+impl Materialize {
+    fn values(self) -> bool {
+        self != Self::None
+    }
+
+    fn prompts(self) -> bool {
+        self == Self::Run
+    }
 }
 
 /// A logical value in the shape exposed to callers. Inline values remain
@@ -528,6 +541,9 @@ pub struct Secrets {
     /// consume a value. Library and SDK instances leave this unset, so planning
     /// a write never produces unsolicited output outside the CLI.
     write_target_reporter: Option<WriteTargetReporter>,
+    /// Test seam for deterministic run-prompt coverage. Production CLI
+    /// instances leave this unset and use the controlling terminal.
+    prompt_reader: Option<PromptReader>,
 }
 
 /// Credential-free description of one provider write, computed after routing
@@ -541,6 +557,7 @@ pub(crate) struct WriteTarget {
 }
 
 type WriteTargetReporter = Arc<dyn Fn(&WriteTarget) + Send + Sync>;
+type PromptReader = Arc<dyn Fn(&str, &str) -> Result<SecretString> + Send + Sync>;
 
 /// secretspec's own opt-in for marking the current process as an agent. Lets any
 /// harness that the `detect-coding-agent` crate does not recognize identify itself.
@@ -724,6 +741,7 @@ impl Secrets {
             audit: None,
             provider_credentials_cache: ProviderCredentialsCache::default(),
             write_target_reporter: None,
+            prompt_reader: None,
         }
     }
 
@@ -806,6 +824,7 @@ impl Secrets {
             audit,
             provider_credentials_cache: ProviderCredentialsCache::default(),
             write_target_reporter: None,
+            prompt_reader: None,
         })
     }
 
@@ -818,6 +837,14 @@ impl Secrets {
         reporter: impl Fn(&WriteTarget) + Send + Sync + 'static,
     ) {
         self.write_target_reporter = Some(Arc::new(reporter));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_prompt_reader(
+        &mut self,
+        reader: impl Fn(&str, &str) -> Result<SecretString> + Send + Sync + 'static,
+    ) {
+        self.prompt_reader = Some(Arc::new(reader));
     }
 
     /// Sets the provider to use for secret operations
@@ -4443,7 +4470,7 @@ impl Secrets {
         let addr = address.as_address();
         let backend = self.write_provider_for_route(route, Some(profile_name))?;
 
-        if backend.generated_value_persistence() == GeneratedValuePersistence::Ephemeral {
+        if backend.generated_value_persistence() == ProducedValuePersistence::Ephemeral {
             eprintln!(
                 "{} {} - generated for this resolution without provider storage (profile: {})",
                 "✓".green(),
@@ -4489,6 +4516,100 @@ impl Secrets {
         );
 
         Ok(Some(value))
+    }
+
+    /// Reads one missing value from the controlling terminal during `run`.
+    /// Inquire's crossterm backend opens `/dev/tty` on Unix (and the console
+    /// input handle on Windows) when stdin is redirected, so the child retains
+    /// its original stdin stream. Persistence is deliberately handled by
+    /// [`Self::try_prompt_secret`], after this input-only step succeeds.
+    fn prompt_run_secret(&self, name: &str, profile: &str) -> Result<SecretString> {
+        let value = if let Some(reader) = &self.prompt_reader {
+            reader(name, profile)?
+        } else {
+            let message = format!("Enter value for {name} (profile: {profile}):");
+            let entered = inquire::Password::new(&message)
+                .without_confirmation()
+                .prompt()
+                .map_err(|error| match error {
+                    inquire::InquireError::NotTTY | inquire::InquireError::IO(_) => {
+                        SecretSpecError::PromptUnavailable(name.to_string())
+                    }
+                    other => SecretSpecError::InquireError(other),
+                })?;
+            SecretString::new(entered.into())
+        };
+
+        if value.expose_secret().is_empty() {
+            return Err(SecretSpecError::PromptValueEmpty(name.to_string()));
+        }
+        Ok(value)
+    }
+
+    /// Acquires a missing value for `prompt = true` and applies the primary
+    /// provider's persistence policy. Storage providers persist by default,
+    /// making the prompt a first-use provisioning step; explicitly ephemeral
+    /// providers such as `null` return the answer only to this `run`.
+    fn try_prompt_secret(
+        &self,
+        planned: &PlannedSecret,
+        profile_name: &str,
+    ) -> Result<SecretString> {
+        let name = planned.name.as_str();
+        let route = planned
+            .route
+            .as_ref()
+            .expect("a prompted secret is provider-backed");
+        let address = self.address_for_spec(
+            planned,
+            route.group_key(),
+            &self.config.project.name,
+            profile_name,
+        )?;
+        let addr = address.as_address();
+        let backend = self.write_provider_for_route(route, Some(profile_name))?;
+        let persistence = backend.prompted_value_persistence();
+
+        // A durable answer is a write. Resolve and preview the exact target,
+        // and reject a read-only destination, before asking the operator for a
+        // value. Ephemeral providers explicitly bypass the write path.
+        if persistence == ProducedValuePersistence::Persist {
+            self.preflight_write(planned, profile_name, backend.as_ref())?;
+        }
+
+        let value = self.prompt_run_secret(name, profile_name)?;
+        if persistence == ProducedValuePersistence::Ephemeral {
+            eprintln!(
+                "{} {} - entered for this run without provider storage (profile: {})",
+                "✓".green(),
+                name,
+                profile_name
+            );
+            return Ok(value);
+        }
+
+        let encoded_value = Self::encoded_for_storage(planned, &value);
+        let stored_value = encoded_value.as_ref().unwrap_or(&value);
+        let set_result = backend.set(addr, stored_value);
+        self.audit_write_result(
+            &set_result,
+            name,
+            profile_name,
+            Some(backend.uri()),
+            address.native(),
+            None,
+        );
+        set_result?;
+        self.sync_cache_after_write(planned, route, profile_name, stored_value);
+
+        eprintln!(
+            "{} {} - entered and saved to {} (profile: {})",
+            "✓".green(),
+            name,
+            backend.name(),
+            profile_name
+        );
+        Ok(value)
     }
 
     /// Writes secret bytes to a temporary file and returns the file handle and path
@@ -4745,18 +4866,16 @@ impl Secrets {
     /// `Check` audit event.
     ///
     /// Top-level reads ([`Self::validate`], `check`) pass `true`. Internal
-    /// re-validations inside [`Self::ensure_secrets`] pass `false`, so a single
-    /// user action emits one `Check` (not several), and `secretspec run` — which
-    /// resolves via `ensure_secrets` and then records its own `Run` event — is
-    /// not also recorded as a `Check`. The trade-off: a direct
+    /// re-validations inside [`Self::ensure_secrets`] and the `run` resolver pass
+    /// `false`, so one user action does not also emit a `Check`. The trade-off:
+    /// a direct
     /// `ensure_secrets` call (rare; not the path `secretspec-derive` uses) does
     /// not emit a `Check` read event, though any writes it performs are audited.
     ///
-    /// `materialize` gates the pass's two side effects (minting+storing a
-    /// generated secret, and writing `as_path` temp files). [`Materialize::None`]
-    /// runs the identical resolution but skips both, so the value-free entry
-    /// points reach the same per-secret status without mutating a provider or
-    /// touching disk; see [`Materialize`].
+    /// `materialize` gates value production, generated-secret persistence,
+    /// `as_path` files, and run-only prompting for missing values.
+    /// [`Materialize::None`] runs the same provider resolution without those
+    /// effects; see [`Materialize`].
     fn validate_audited(
         &self,
         emit_check: bool,
@@ -5016,15 +5135,15 @@ impl Secrets {
     /// derives nothing itself. It builds a provider per primary-store group,
     /// fetches the groups concurrently, then walks each secret: a primary hit is
     /// recorded; a miss falls through the secret's resolved fallback chain, then
-    /// generation, then the committed default, before being reported missing. A
+    /// its compiled missing-value policy (prompt, generation, default, or
+    /// absence). A
     /// primary that *errored* (rather than merely lacked the secret) with no
     /// fallback to try surfaces that error instead of a spurious "missing", so a
     /// machine consumer can tell an outage from an unprovisioned secret.
     ///
-    /// `materialize` gates the two side effects (minting+storing a generated
-    /// secret and writing `as_path` temp files); [`Materialize::None`] runs the
-    /// identical resolution but skips both, reaching the same per-secret status
-    /// without mutating a provider or touching disk.
+    /// `materialize` gates values and their effects. [`Materialize::Run`] also
+    /// enables explicit missing-value prompts; [`Materialize::None`] skips all value
+    /// production, provider/cache writes, and temp files.
     fn execute_plan(
         &self,
         plan: &ResolutionPlan,
@@ -5251,13 +5370,13 @@ impl Secrets {
                     source_provider = cached_uris
                         .remove(name)
                         .or_else(|| group_uris.get(&primary_uri).cloned());
-                    if !was_cached && materialize == Materialize::Values {
+                    if !was_cached && materialize.values() {
                         self.write_cached_secret(planned, route, profile, &value);
                     }
                     // Copy the value into the response only on a full pass; a
                     // value-free pass has the status it needs and never
                     // materializes a value or writes a temp file.
-                    if materialize == Materialize::Values {
+                    if materialize.values() {
                         self.insert_resolved(
                             &mut secrets,
                             &mut temp_files,
@@ -5306,7 +5425,7 @@ impl Secrets {
 
                     if let Some(value) = fallback_value {
                         source_provider = fallback_uri;
-                        if materialize == Materialize::Values {
+                        if materialize.values() {
                             self.write_cached_secret(planned, route, profile, &value);
                             self.insert_resolved(
                                 &mut secrets,
@@ -5320,12 +5439,38 @@ impl Secrets {
                         status = ResolutionStatus::Resolved;
                     } else {
                         match planned.secret.missing {
+                            MissingPolicy::Prompt => {
+                                // Prompt only for names the active scope exposes.
+                                // A hidden composition dependency must never be
+                                // disclosed merely because a visible derived
+                                // secret depends on it.
+                                if materialize.prompts()
+                                    && output_filter.is_none_or(|filter| filter.contains(name))
+                                {
+                                    let prompted = self.try_prompt_secret(planned, profile)?;
+                                    self.insert_resolved(
+                                        &mut secrets,
+                                        &mut temp_files,
+                                        planned,
+                                        diagnostic_name,
+                                        prompted,
+                                        ResolvedRepresentation::Logical,
+                                    )?;
+                                    status = ResolutionStatus::Resolved;
+                                } else if required {
+                                    missing_required.push(name.clone());
+                                    status = ResolutionStatus::MissingRequired;
+                                } else {
+                                    missing_optional.push(name.clone());
+                                    status = ResolutionStatus::MissingOptional;
+                                }
+                            }
                             MissingPolicy::Generate => {
                                 // A full pass mints and stores; a value-free pass
                                 // reports that generation would resolve without
                                 // performing that side effect.
                                 generated = true;
-                                if materialize == Materialize::Values {
+                                if materialize.values() {
                                     let generated_value = self
                                         .try_generate_secret(planned, profile)?
                                         .expect("compiled Generate policy has a generator");
@@ -5347,7 +5492,7 @@ impl Secrets {
                                     .as_ref()
                                     .expect("compiled UseDefault policy has a default");
                                 default_applied = true;
-                                if materialize == Materialize::Values {
+                                if materialize.values() {
                                     self.insert_resolved(
                                         &mut secrets,
                                         &mut temp_files,
@@ -5437,7 +5582,7 @@ impl Secrets {
                     statuses.get(dependency) == Some(&ResolutionStatus::Resolved)
                 });
                 let status = if dependencies_resolved {
-                    if materialize == Materialize::Values {
+                    if materialize.values() {
                         let rendered = template
                             .render(|dependency| {
                                 secrets.get(dependency).map(|value| value.expose_secret())
@@ -5463,7 +5608,9 @@ impl Secrets {
                             missing_optional.push(planned.name.clone());
                             ResolutionStatus::MissingOptional
                         }
-                        MissingPolicy::Generate | MissingPolicy::UseDefault => {
+                        MissingPolicy::Generate
+                        | MissingPolicy::UseDefault
+                        | MissingPolicy::Prompt => {
                             unreachable!("composed source conflicts are rejected at load time")
                         }
                     }
@@ -5662,10 +5809,16 @@ impl Secrets {
             )));
         }
 
-        // Ensure all secrets are available (will error out if missing).
+        // Resolve all secrets for this invocation. `Materialize::Run` is the
+        // only mode allowed to ask for an explicitly `prompt = true` value;
+        // the prompt backend uses the controlling terminal and leaves the
+        // child's inherited stdin untouched.
         // `validation_result` owns the temp files for `as_path` secrets and
         // must stay alive until the child process has terminated.
-        let validation_result = match self.ensure_secrets(None, None, false) {
+        let resolution = self
+            .validate_audited(false, Materialize::Run)
+            .and_then(|result| result.map_err(validation_failure));
+        let validation_result = match resolution {
             Ok(v) => v,
             Err(e) => {
                 // Record the attempt even when validation fails and the command
@@ -6703,6 +6856,141 @@ mod report_provider_tests {
             .unwrap();
         assert_eq!(got, "vault://host");
         assert!(!got.contains("zzz"));
+    }
+}
+
+#[cfg(test)]
+mod run_prompt_tests {
+    use super::*;
+    use crate::config::Secret;
+    use secrecy::ExposeSecret;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn prompted_spec() -> Secrets {
+        let config = crate::tests::resolve_test_config(HashMap::from([(
+            "DEPLOY_PASSWORD".to_string(),
+            Secret {
+                description: Some("One-time deployment password".to_string()),
+                required: Some(true),
+                providers: Some(vec!["null".to_string()]),
+                prompt: Some(true),
+                ..Default::default()
+            },
+        )]));
+        Secrets::new(config, None, None, None)
+    }
+
+    fn prompted_dotenv_spec(path: &std::path::Path) -> Secrets {
+        let config = crate::tests::resolve_test_config(HashMap::from([(
+            "DEPLOY_PASSWORD".to_string(),
+            Secret {
+                description: Some("Deployment password".to_string()),
+                required: Some(true),
+                providers: Some(vec![format!("dotenv://{}", path.display())]),
+                prompt: Some(true),
+                ..Default::default()
+            },
+        )]));
+        Secrets::new(config, None, None, None)
+    }
+
+    #[test]
+    fn run_prompts_again_for_each_resolution_without_storing() {
+        let _env = crate::tests::scrub_resolution_env();
+        let prompts = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&prompts);
+        let mut spec = prompted_spec();
+        spec.set_prompt_reader(move |name, profile| {
+            assert_eq!(name, "DEPLOY_PASSWORD");
+            assert_eq!(profile, "default");
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(SecretString::new("entered-once".into()))
+        });
+
+        for expected_prompts in 1..=2 {
+            let validated = spec
+                .validate_audited(false, Materialize::Run)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                validated.resolved.secrets["DEPLOY_PASSWORD"].expose_secret(),
+                "entered-once"
+            );
+            assert_eq!(prompts.load(Ordering::SeqCst), expected_prompts);
+        }
+
+        // Ordinary library/SDK resolution never opens an interactive prompt.
+        assert!(
+            spec.validate_audited(false, Materialize::Values)
+                .unwrap()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn writable_provider_persists_the_prompted_value() {
+        let _env = crate::tests::scrub_resolution_env();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let dotenv_path = temp_dir.path().join("prompt.env");
+        let prompts = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&prompts);
+        let mut spec = prompted_dotenv_spec(&dotenv_path);
+        spec.set_prompt_reader(move |name, profile| {
+            assert_eq!(name, "DEPLOY_PASSWORD");
+            assert_eq!(profile, "default");
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(SecretString::new("persisted-answer".into()))
+        });
+
+        for _ in 0..2 {
+            let validated = spec
+                .validate_audited(false, Materialize::Run)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                validated.resolved.secrets["DEPLOY_PASSWORD"].expose_secret(),
+                "persisted-answer"
+            );
+        }
+
+        assert_eq!(prompts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            std::fs::read_to_string(dotenv_path).unwrap(),
+            "DEPLOY_PASSWORD=\"persisted-answer\"\n"
+        );
+    }
+
+    #[test]
+    fn run_surfaces_an_unavailable_controlling_terminal() {
+        let _env = crate::tests::scrub_resolution_env();
+        let mut spec = prompted_spec();
+        spec.set_prompt_reader(|name, _| Err(SecretSpecError::PromptUnavailable(name.to_string())));
+
+        let error = match spec.validate_audited(false, Materialize::Run) {
+            Err(error) => error,
+            Ok(_) => panic!("run resolution should fail without a controlling terminal"),
+        };
+        assert!(matches!(
+            error,
+            SecretSpecError::PromptUnavailable(name) if name == "DEPLOY_PASSWORD"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_injects_the_prompted_value_into_the_child() {
+        let _env = crate::tests::scrub_resolution_env();
+        let mut spec = prompted_spec();
+        spec.set_prompt_reader(|_, _| Ok(SecretString::new("entered-once".into())));
+
+        let exit = spec
+            .run_command(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "test \"$DEPLOY_PASSWORD\" = entered-once".to_string(),
+            ])
+            .unwrap();
+        assert_eq!(exit, 0);
     }
 }
 

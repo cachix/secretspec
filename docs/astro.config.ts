@@ -4,6 +4,7 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import starlightLlmsTxt from "starlight-llms-txt";
 import starlightBlog from "starlight-blog";
+import { terminalCopyPlugin } from "./src/lib/terminal-copy.mjs";
 
 const rustSdkBasicExample = readFileSync(
   new URL("../secretspec-derive/examples/basic.rs", import.meta.url),
@@ -57,6 +58,9 @@ export default defineConfig({
   },
   integrations: [
     starlight({
+      expressiveCode: {
+        plugins: [terminalCopyPlugin()],
+      },
       plugins: [
         starlightBlog({
           title: "Blog",

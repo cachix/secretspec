@@ -58,6 +58,24 @@
   color: var(--sl-color-accent-high);
 }
 
+/* Each prompted command gets a copy button aligned with its first line. */
+.sl-markdown-content
+  .expressive-code
+  figure.is-terminal
+  .terminal-command-start
+  > .code {
+  padding-inline-end: 3rem;
+}
+
+.sl-markdown-content
+  .expressive-code
+  figure.is-terminal
+  .terminal-line-copy {
+  inset-block-start: 50%;
+  inset-inline-end: 0.5rem;
+  transform: translateY(-50%);
+}
+
 /* Swap the release-post logo artwork with the active documentation theme. */
 :root[data-theme="dark"]
   img[alt="The new SecretSpec document-and-keyhole logo"] {

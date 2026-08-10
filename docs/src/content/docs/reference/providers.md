@@ -194,13 +194,19 @@ apply to it and those reads sync hourly.
 
 ## OnePassword Provider
 
-**URI**: `onepassword://[account@]vault` or `onepassword+token://user:token@vault`
+**URI**: `onepassword://[account@]vault` or `onepassword+token://vault`
 
 ```bash
-onepassword://MyVault                           # Default account
-onepassword://work@CompanyVault                 # Specific account
-onepassword+token://user:op_token@SecureVault   # Service account
+onepassword://MyVault              # Default account
+onepassword://work@CompanyVault    # Specific account
+onepassword+token://SecureVault    # Service account
 ```
+
+The `onepassword+token://` scheme selects service account authentication; the
+token comes from the `service_account_token` provider credential or
+`OP_SERVICE_ACCOUNT_TOKEN`. Putting the token in the URI
+(`onepassword+token://token@vault`) is rejected from 0.19 on, since a URI ends
+up in committed manifests, shell history, and CI logs.
 
 **Features**: Read/write, cloud sync, profiles via vaults, service accounts
 **Prerequisites**: `op` CLI, authenticated through desktop app integration, a

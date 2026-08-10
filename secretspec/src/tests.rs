@@ -722,6 +722,183 @@ fn test_resolve_carries_values_and_provenance() {
     );
 }
 
+/// A declared secret carrying the description the manifest requires.
+fn described(description: &str) -> Secret {
+    Secret {
+        description: Some(description.to_string()),
+        ..Default::default()
+    }
+}
+
+/// A profile holding one stored secret, one optional-missing secret, one
+/// required-missing secret, and a composition over the stored one, all served by
+/// a dotenv store. Enough surface to tell the named-resolution outcomes apart.
+fn named_resolution_spec(env_path: &Path) -> Secrets {
+    fs::write(env_path, "DB_USER=alice\n").unwrap();
+    let secrets = HashMap::from([
+        ("DB_USER".to_string(), described("user")),
+        (
+            "SENTRY_DSN".to_string(),
+            Secret {
+                required: Some(false),
+                ..described("dsn")
+            },
+        ),
+        ("MISSING_TOKEN".to_string(), described("token")),
+        (
+            "DSN".to_string(),
+            Secret {
+                composed: Some("postgres://${DB_USER}@db/app".to_string()),
+                ..described("database url")
+            },
+        ),
+    ]);
+    let config = resolve_test_config(secrets);
+    config.validate().unwrap();
+    let provider = format!("dotenv://{}", env_path.display());
+    Secrets::new(config, None, Some(provider), None)
+}
+
+/// The reason this API exists: `resolve()` fails wholesale when any required
+/// secret is missing, so a consumer that needs one secret cannot get it. A named
+/// resolution reads only its target, so an unrelated missing required secret is
+/// none of its business.
+#[test]
+fn resolve_named_ignores_an_unrelated_missing_required_secret() {
+    use crate::resolve::{NamedResolution, ResolvedSource};
+
+    let temp_dir = TempDir::new().unwrap();
+    let spec = named_resolution_spec(&temp_dir.path().join(".env"));
+
+    // The batch API cannot serve this profile at all: MISSING_TOKEN sinks it.
+    let batch = spec.resolve().unwrap();
+    assert!(!batch.is_ok());
+    assert!(batch.secrets.is_empty());
+
+    // The named API still returns the secret that is actually present.
+    let resolved = match spec.resolve_named("DB_USER").unwrap() {
+        NamedResolution::Resolved(secret) => secret,
+        other => panic!("DB_USER is stored and must resolve, got {other:?}"),
+    };
+    assert_eq!(resolved.value.as_deref(), Some("alice"));
+    assert_eq!(resolved.source, ResolvedSource::Provider);
+    assert!(resolved.source_provider.is_some());
+}
+
+/// A composed target pulls in exactly its own inputs, so it resolves even though
+/// an unrelated required secret elsewhere in the profile is missing.
+#[test]
+fn resolve_named_resolves_a_composition_from_its_own_inputs() {
+    use crate::resolve::{NamedResolution, ResolvedSource};
+
+    let temp_dir = TempDir::new().unwrap();
+    let spec = named_resolution_spec(&temp_dir.path().join(".env"));
+
+    let resolved = match spec.resolve_named("DSN").unwrap() {
+        NamedResolution::Resolved(secret) => secret,
+        other => panic!("DSN composes over a stored secret, got {other:?}"),
+    };
+    assert_eq!(resolved.value.as_deref(), Some("postgres://alice@db/app"));
+    assert_eq!(resolved.source, ResolvedSource::Composed);
+}
+
+/// Missing declared secrets report their declared requirement rather than
+/// failing, leaving the policy call to the caller.
+#[test]
+fn resolve_named_reports_missing_declared_secrets_with_their_requirement() {
+    use crate::resolve::NamedResolution;
+
+    let temp_dir = TempDir::new().unwrap();
+    let spec = named_resolution_spec(&temp_dir.path().join(".env"));
+
+    assert_eq!(
+        spec.resolve_named("MISSING_TOKEN").unwrap(),
+        NamedResolution::Missing { required: true }
+    );
+    assert_eq!(
+        spec.resolve_named("SENTRY_DSN").unwrap(),
+        NamedResolution::Missing { required: false }
+    );
+}
+
+/// An undeclared name is a distinct outcome from a declared secret with no
+/// value: the caller asked about something this configuration does not offer.
+#[test]
+fn resolve_named_reports_an_undeclared_name() {
+    use crate::resolve::NamedResolution;
+
+    let temp_dir = TempDir::new().unwrap();
+    let spec = named_resolution_spec(&temp_dir.path().join(".env"));
+
+    assert_eq!(
+        spec.resolve_named("NOT_IN_THE_MANIFEST").unwrap(),
+        NamedResolution::Undeclared
+    );
+}
+
+/// A scope narrows the surface a session resolves, so a secret it hides is not
+/// on offer here. Reporting it as merely missing would disclose that the scope
+/// hides it, and would invite the caller to treat it as settable.
+#[test]
+fn resolve_named_treats_a_scope_hidden_secret_as_undeclared() {
+    use crate::config::Scope;
+    use crate::resolve::NamedResolution;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "DB_USER=alice\nAPI_KEY=k\n").unwrap();
+
+    let mut config = resolve_test_config(HashMap::from([
+        ("DB_USER".to_string(), described("user")),
+        ("API_KEY".to_string(), described("api key")),
+    ]));
+    config.scopes = Some(HashMap::from([(
+        "db".to_string(),
+        Scope {
+            secrets: vec!["DB_USER".to_string()],
+        },
+    )]));
+    config.validate().unwrap();
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let mut spec = Secrets::new(config, None, Some(provider), None);
+    spec.set_scope("db");
+
+    assert!(matches!(
+        spec.resolve_named("DB_USER").unwrap(),
+        NamedResolution::Resolved(_)
+    ));
+    // Stored in the same file and declared in the profile, but out of scope.
+    assert_eq!(
+        spec.resolve_named("API_KEY").unwrap(),
+        NamedResolution::Undeclared
+    );
+}
+
+/// A broken configuration is an error, not an absent value: collapsing the two
+/// would let a typo in a provider alias read as "this secret is unset".
+#[test]
+fn resolve_named_surfaces_configuration_errors() {
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "DB_USER=alice\n").unwrap();
+
+    let secrets = HashMap::from([(
+        "DB_USER".to_string(),
+        Secret {
+            providers: Some(vec!["no_such_alias".to_string()]),
+            ..described("user")
+        },
+    )]);
+    let config = resolve_test_config(secrets);
+    let spec = Secrets::new(config, None, None, None);
+
+    assert!(
+        spec.resolve_named("DB_USER").is_err(),
+        "an undefined provider alias must not read as a missing value"
+    );
+}
+
 #[test]
 fn composed_secrets_resolve_in_dependency_order_without_reparsing_values() {
     use crate::resolve::ResolvedSource;

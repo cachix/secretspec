@@ -8,12 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.19.0] - 2026-08-09
 
 ### Changed
+
+- A provider URI may no longer carry a credential. A URI with a password
+  (`scheme://user:secret@host`) is rejected, and `onepassword+token://` no
+  longer accepts the service account token in its userinfo
+  (`onepassword+token://token@vault`). A URI is committed to `secretspec.toml`,
+  echoed into shell history, and printed by CI, so a credential written there is
+  already disclosed and redacting it at the terminal cannot retract it. Keep the
+  scheme and supply the credential through a provider credential
+  (`secretspec config provider login <alias>`, or `credentials = { ... }` on the
+  alias) or the provider's environment variable; the errors name both. An
+  unparseable provider specification is now also redacted before it is reported.
+- `secretspec get` resolves through the same path as the SDK's `resolve_named`,
+  so a single-secret read makes exactly the decisions batch resolution makes. It
+  continues to read the whole profile regardless of an active scope, and audits
+  the coordinates it actually reached.
 - The Rust SDK's `ProviderAlias` now provides `leaf`, `credentials`, and
   `credentials_mut` helpers so callers can construct and inspect leaf or
   inline-cached aliases without depending on their storage representation.
 
 ### Added
 
+- The Rust SDK can resolve a single secret with `Secrets::resolve_named`, which
+  reads only that secret and the inputs it composes from. An unrelated missing
+  required secret no longer fails the call, and the result distinguishes an
+  undeclared name (including one the active scope hides) from a declared secret
+  with no value, reporting whether that value was required.
+- `Secrets::with_default_reason` sets a session reason only when none is already
+  in effect, so an embedding application can describe itself without discarding
+  the reason its own caller supplied through `with_reason` or
+  `SECRETSPEC_REASON`.
 - Profiles can opt out of inheriting `[profiles.default]` by setting
   `inherit = false` in their profile defaults (0.19+), allowing standalone
   secret sets alongside profiles that still share the default declarations.

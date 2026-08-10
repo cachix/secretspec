@@ -128,7 +128,7 @@ through [quicktype](https://quicktype.io) to generate idiomatic typed classes in
 any language, then populate them from each SDK's `fields()` map:
 
 ```bash
-secretspec schema | quicktype -s schema --top-level SecretSpec --lang python -o secrets_gen.py
+$ secretspec schema | quicktype -s schema --top-level SecretSpec --lang python -o secrets_gen.py
 ```
 
 ```python
@@ -142,17 +142,20 @@ language.
 ## Install
 
 ```bash
-pip install secretspec                              # Python
-npm install secretspec                              # Node.js / TypeScript
-gem install secretspec                              # Ruby
-go get github.com/cachix/secretspec/secretspec-go   # Go
+$ pip install secretspec                              # Python
+
+$ npm install secretspec                              # Node.js / TypeScript
+
+$ gem install secretspec                              # Ruby
+
+$ go get github.com/cachix/secretspec/secretspec-go   # Go
 ```
 
 For Haskell, add `secretspec` from Hackage to your `build-depends`. The CLI and
 Rust SDK upgrade as usual:
 
 ```bash
-cargo install secretspec
+$ cargo install secretspec
 ```
 
 See the [SDK overview](/sdk/overview/) for the per-language guides. Questions or

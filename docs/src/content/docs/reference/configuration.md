@@ -266,10 +266,13 @@ secrets = ["DATABASE_URL", "QUEUE_TOKEN"]
 ```
 
 ```bash
-secretspec run --scope api    -- ./api      # sees DATABASE_URL, API_KEY
-secretspec run --scope worker -- ./worker   # sees DATABASE_URL, QUEUE_TOKEN
-secretspec check  --scope api
-secretspec export --scope worker --format dotenv
+$ secretspec run --scope api    -- ./api      # sees DATABASE_URL, API_KEY
+
+$ secretspec run --scope worker -- ./worker   # sees DATABASE_URL, QUEUE_TOKEN
+
+$ secretspec check  --scope api
+
+$ secretspec export --scope worker --format dotenv
 ```
 
 Behavior:
@@ -603,8 +606,9 @@ For example, authenticate the 0.14 BWS provider by setting its environment
 variable before running SecretSpec:
 
 ```bash
-export BWS_ACCESS_TOKEN="0.your-access-token..."
-secretspec check
+$ export BWS_ACCESS_TOKEN="0.your-access-token..."
+
+$ secretspec check
 ```
 
 ### Audit Logging

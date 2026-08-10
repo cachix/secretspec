@@ -29,6 +29,7 @@ REST API.
 
 ```bash
 $ export SCW_SECRET_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
 $ export SCW_DEFAULT_PROJECT_ID=11111111-2222-3333-4444-555555555555
 
 # Set a secret
@@ -139,7 +140,9 @@ DB_PASSWORD = { description = "DB pw", ref = { item = "/prod/db-credentials", fi
 
 ```bash
 $ export SCW_SECRET_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
 $ export SCW_DEFAULT_PROJECT_ID=11111111-2222-3333-4444-555555555555
+
 $ export SCW_DEFAULT_REGION=fr-par
 
 $ secretspec run --provider scaleway://fr-par -- deploy

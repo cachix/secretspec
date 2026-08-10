@@ -33,7 +33,7 @@ Generate typed structs with `secretspec schema` plus
 [quicktype](https://quicktype.io), then unmarshal `resolved.FieldsJSON()`:
 
 ```bash
-secretspec schema | quicktype -s schema --top-level SecretSpec --lang go -o secrets_gen.go
+$ secretspec schema | quicktype -s schema --top-level SecretSpec --lang go -o secrets_gen.go
 ```
 
 <Code code={typedAccessExample} lang="go" meta='title="typed_access/main.go"' />
@@ -61,8 +61,9 @@ For a self-contained binary with no runtime library to locate, build with
 into the Go binary. In a development checkout:
 
 ```bash
-bash scripts/stage-staticlib.sh
-CGO_ENABLED=1 go build -tags static ./...
+$ bash scripts/stage-staticlib.sh
+
+$ CGO_ENABLED=1 go build -tags static ./...
 ```
 
 ## Linking with pkg-config (0.19+)
@@ -71,13 +72,13 @@ Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
 # Use "static" (the default) or "shared"; use separate prefixes for both.
-bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
+$ bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
 ```
 
 Then use the same build command for either type:
 
 ```bash
-PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" CGO_ENABLED=1 go build -tags pkgconfig ./...
+$ PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" CGO_ENABLED=1 go build -tags pkgconfig ./...
 ```
 
 Unlike staging, this also works for a `go get` dependency. A shared install in

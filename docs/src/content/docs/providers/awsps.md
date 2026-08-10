@@ -244,5 +244,6 @@ Prefer an AWS workload identity or short-lived OIDC credentials:
 
 ```bash
 $ export AWS_REGION=us-east-1
+
 $ secretspec run --provider awsps -- deploy
 ```

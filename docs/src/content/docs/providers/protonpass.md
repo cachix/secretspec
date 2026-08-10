@@ -113,7 +113,9 @@ SecretSpec at it with `SECRETSPEC_PROTONPASS_CLI_PATH`:
 ```bash
 $ curl -Lo ~/.local/bin/pass-cli-2.2.3 \
     https://github.com/protonpass/pass-cli/releases/download/2.2.3/pass-cli-linux-x86_64
+
 $ chmod +x ~/.local/bin/pass-cli-2.2.3
+
 $ export SECRETSPEC_PROTONPASS_CLI_PATH="$HOME/.local/bin/pass-cli-2.2.3"
 ```
 
@@ -136,7 +138,7 @@ protonpass://[vault_name[/title-template]]
 
 ### URI examples
 
-```bash
+```text
 # Default vault ("secretspec")
 protonpass://
 
@@ -182,6 +184,7 @@ $ pass-cli personal-access-token create --name ci --expiration 1y
 
 # Authenticate in CI (store the token as a CI secret)
 $ pass-cli login --pat $PROTON_PASS_PAT
+
 $ secretspec run -- deploy
 ```
 

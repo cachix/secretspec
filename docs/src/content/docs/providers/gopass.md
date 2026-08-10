@@ -44,13 +44,13 @@ $ secretspec run --provider gopass -- npm start
 Install the `gopass` CLI and initialize a password store:
 ```bash
 # macOS
-brew install gopass
+$ brew install gopass
 
 # Debian/Ubuntu
-sudo apt install gopass
+$ sudo apt install gopass
 
 # NixOS
-nix-env -iA nixpkgs.gopass
+$ nix-env -iA nixpkgs.gopass
 ```
 
 ### Authentication

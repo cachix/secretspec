@@ -23,7 +23,7 @@ the CLI. Every provider, fallback chain, profile, generator, reference, and
 ## Install (0.16+)
 
 ```bash
-dotnet add package Cachix.SecretSpec
+$ dotnet add package Cachix.SecretSpec
 ```
 
 The package targets .NET 8 and includes native resolvers for glibc and musl
@@ -37,7 +37,7 @@ beside its executable; `dotnet publish` selects and copies that runtime asset
 automatically.
 
 ```bash
-dotnet publish -c Release -r linux-x64 --self-contained \
+$ dotnet publish -c Release -r linux-x64 --self-contained \
   -p:PublishAot=true
 ```
 
@@ -86,7 +86,7 @@ can still be inspected.
 Generate an idiomatic C# model from the manifest schema:
 
 ```bash
-secretspec schema |
+$ secretspec schema | \
   quicktype -s schema --top-level AppSecrets --lang csharp -o AppSecrets.cs
 ```
 

@@ -27,7 +27,7 @@ any provider that implements reflection, including age files, AWS Parameter
 Store, and Bitwarden Password Manager vaults.
 
 ```bash
-secretspec init [--from <PROVIDER>] [--project <PROJECT>] [--profile <PROFILE>]
+$ secretspec init [--from <PROVIDER>] [--project <PROJECT>] [--profile <PROFILE>]
 ```
 
 **Options:**
@@ -68,7 +68,7 @@ available in SecretSpec 0.17+; without options, the command prompts for the
 provider and profile.
 
 ```bash
-secretspec config global init [--provider <PROVIDER>] [--profile <PROFILE>] # 0.17+
+$ secretspec config global init [--provider <PROVIDER>] [--profile <PROFILE>] # 0.17+
 ```
 
 SecretSpec 0.17+ accepts `--provider` and `--profile` so installations can save
@@ -100,7 +100,7 @@ Display current user-global configuration. The explicit namespace is available
 in SecretSpec 0.17+; `secretspec config show` remains a hidden alias.
 
 ```bash
-secretspec config global show # 0.17+
+$ secretspec config global show # 0.17+
 ```
 
 **Example:**
@@ -123,7 +123,7 @@ the legacy `config provider add` spelling remains a hidden alias.
 :::
 
 ```bash
-secretspec config global provider add <ALIAS> <URI> [--credential NAME=PROVIDER]... # 0.17+
+$ secretspec config global provider add <ALIAS> <URI> [--credential NAME=PROVIDER]... # 0.17+
 ```
 
 **Arguments:**
@@ -148,7 +148,7 @@ $ secretspec config global provider add bws "bws://project-uuid" --credential ac
 List all configured user-level provider aliases. Project-level aliases declared in `secretspec.toml` are not shown by this command.
 
 ```bash
-secretspec config global provider list # 0.17+
+$ secretspec config global provider list # 0.17+
 ```
 
 **Example:**
@@ -163,7 +163,7 @@ env         → env://
 Remove a provider alias from your user-level configuration. To remove a project-level alias, edit the `[providers]` table in `secretspec.toml` directly.
 
 ```bash
-secretspec config global provider remove <ALIAS> # 0.17+
+$ secretspec config global provider remove <ALIAS> # 0.17+
 ```
 
 **Arguments:**
@@ -185,7 +185,7 @@ environment variables.
 :::
 
 ```bash
-secretspec config provider login <ALIAS>
+$ secretspec config provider login <ALIAS>
 ```
 
 **Arguments:**
@@ -206,7 +206,7 @@ A read-only source provider is rejected. An alias that declares no credentials r
 Check if all required secrets are available, with interactive prompting for missing secrets.
 
 ```bash
-secretspec check [OPTIONS]
+$ secretspec check [OPTIONS]
 ```
 
 **Options:**
@@ -272,7 +272,7 @@ $ secretspec check --profile production --json
 Get a secret value.
 
 ```bash
-secretspec get [OPTIONS] <NAME>
+$ secretspec get [OPTIONS] <NAME>
 ```
 
 **Options:**
@@ -294,7 +294,7 @@ union `SecretSpec` (safe for any profile); with `--profile`, that profile's exac
 fields. Value-free: reads only the manifest, never a provider.
 
 ```bash
-secretspec schema [OPTIONS]
+$ secretspec schema [OPTIONS]
 ```
 
 **Options:**
@@ -335,7 +335,7 @@ unrelated tables. The new declaration follows the profile's defaults; without
 a `required` profile default, it is required like any other declaration.
 
 ```bash
-secretspec add <NAME> [--description <DESCRIPTION>] [--profile <PROFILE>] # 0.18+
+$ secretspec add <NAME> [--description <DESCRIPTION>] [--profile <PROFILE>] # 0.18+
 ```
 
 **Arguments and options:**
@@ -363,7 +363,7 @@ from `default` or an extended manifest.
 Set a secret value.
 
 ```bash
-secretspec set [OPTIONS] <NAME> [VALUE]
+$ secretspec set [OPTIONS] <NAME> [VALUE]
 ```
 
 **Options:**
@@ -397,8 +397,9 @@ Delete stored provider values without changing their declarations in
 `secretspec.toml`.
 
 ```bash
-secretspec delete <NAME>... [--provider <PROVIDER>] [--profile <PROFILE>]
-secretspec delete --all [--yes] [--provider <PROVIDER>] [--profile <PROFILE>]
+$ secretspec delete <NAME>... [--provider <PROVIDER>] [--profile <PROFILE>]
+
+$ secretspec delete --all [--yes] [--provider <PROVIDER>] [--profile <PROFILE>]
 ```
 
 **Arguments and options:**
@@ -441,7 +442,7 @@ managed path or record rather than only the referenced field.
 Run a command with secrets injected as environment variables.
 
 ```bash
-secretspec run [OPTIONS] -- <COMMAND>
+$ secretspec run [OPTIONS] -- <COMMAND>
 ```
 
 **Options:**
@@ -496,7 +497,7 @@ $ secretspec run -- node app.js  # app.js reads process.env.DATABASE_URL
 Resolve every secret for the active profile and write it to stdout in a chosen format, without running a command. Unlike `run`, it never prompts and exits non-zero when a required secret is missing, so CI can gate on it.
 
 ```bash
-secretspec export [OPTIONS]
+$ secretspec export [OPTIONS]
 ```
 
 Options are `-p, --provider <PROVIDER>`, `-P, --profile <PROFILE>`, `-S, --scope <SCOPE>` (a `[scopes]` subset of the profile, SecretSpec 0.17+), and `--format <FORMAT>` (default `shell`).
@@ -528,7 +529,7 @@ The `gha` format targets a `secretspec export --format gha` step in a GitHub or 
 Import secrets from one provider to another.
 
 ```bash
-secretspec import <FROM_PROVIDER> [--delete-source]
+$ secretspec import <FROM_PROVIDER> [--delete-source]
 ```
 
 The destination provider and profile are determined from your configuration. Secrets that already exist in the destination provider will not be overwritten.
@@ -600,7 +601,7 @@ Delete cached provider values for one secret, or for every cached secret in the
 active profile. Authoritative fallback providers are not modified.
 
 ```bash
-secretspec cache clear [NAME] [--profile <PROFILE>]
+$ secretspec cache clear [NAME] [--profile <PROFILE>]
 ```
 
 **Arguments and options:**
@@ -633,7 +634,7 @@ for configuration and resolution behavior.
 Show the local [audit log](/concepts/audit/) of secret access.
 
 ```bash
-secretspec audit [--project <NAME>] [--action <ACTION>] [-n <N>] [--json]
+$ secretspec audit [--project <NAME>] [--action <ACTION>] [-n <N>] [--json]
 ```
 
 **Options:**

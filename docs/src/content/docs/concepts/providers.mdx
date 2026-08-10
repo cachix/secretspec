@@ -120,6 +120,7 @@ $ secretspec run --provider dotenv -- npm start
 
 # Route every secret in subsequent commands to existing environment variables.
 $ export SECRETSPEC_PROVIDER=env
+
 $ secretspec check
 ```
 
@@ -203,7 +204,9 @@ Use the CLI to manage user-level aliases:
 ```bash
 # SecretSpec 0.17+
 $ secretspec config global provider add prod_vault "onepassword://Production"
+
 $ secretspec config global provider list
+
 $ secretspec config global provider remove prod_vault
 ```
 
@@ -279,6 +282,7 @@ source from the CLI:
 
 ```bash
 $ secretspec config global provider add bws "bws://project-uuid" --credential access_token=keyring # 0.17+
+
 $ secretspec config provider login bws
 ```
 

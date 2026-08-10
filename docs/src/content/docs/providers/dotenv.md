@@ -34,7 +34,7 @@ $ secretspec run --provider dotenv -- npm start
 
 ### URI format
 
-```bash
+```text
 # Default (.env next to secretspec.toml)
 dotenv
 
@@ -53,7 +53,7 @@ current user's home directory.
 ### Environment variable
 
 ```bash
-export SECRETSPEC_PROVIDER=dotenv:.env.local
+$ export SECRETSPEC_PROVIDER=dotenv:.env.local
 ```
 
 ### Project configuration
@@ -70,7 +70,7 @@ DATABASE_URL = { description = "Database URL", providers = ["local"] }
 
 Dotenv uses standard `KEY=VALUE` pairs:
 
-```bash
+```dotenv
 # .env
 DATABASE_URL=postgresql://localhost/mydb
 API_KEY=sk-1234567890

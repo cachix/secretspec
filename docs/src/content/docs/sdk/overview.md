@@ -77,7 +77,7 @@ and deserializer for any language, which you build from the SDK's `fields()`
 map:
 
 ```bash
-secretspec schema | quicktype -s schema --top-level SecretSpec --lang <language>
+$ secretspec schema | quicktype -s schema --top-level SecretSpec --lang <language>
 ```
 
 This keeps the per-language surface tiny: the SDK only provides `fields()`, and

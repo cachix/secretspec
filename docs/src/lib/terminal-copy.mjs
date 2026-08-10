@@ -1,11 +1,15 @@
-function scanShellLine(line, initialQuote) {
-  let quote = initialQuote;
+const promptPattern = /^\s*\$\s(.*)$/;
+
+function scanShellLine(line, initialState = {}) {
+  let quote = initialState.quote;
+  let atTokenStart = initialState.atTokenStart ?? true;
   let escaped = false;
 
   for (let index = 0; index < line.length; index += 1) {
     const character = line[index];
     if (escaped) {
       escaped = false;
+      atTokenStart = false;
       continue;
     }
     if (character === "\\" && quote !== "'") {
@@ -14,30 +18,42 @@ function scanShellLine(line, initialQuote) {
     }
     if ((character === "'" || character === '"') && !quote) {
       quote = character;
+      atTokenStart = false;
       continue;
     }
     if (character === quote) {
       quote = undefined;
+      atTokenStart = false;
       continue;
     }
-    if (
-      character === "#" &&
-      !quote &&
-      (index === 0 || /\s/.test(line[index - 1]))
-    ) {
+    if (character === "#" && !quote && atTokenStart) {
       return {
         text: line.slice(0, index).trimEnd(),
         quote,
         escaped: false,
+        atTokenStart,
       };
     }
+    if (!quote && /\s/.test(character)) {
+      atTokenStart = true;
+      continue;
+    }
+    if (!quote && /[;|&()<>]/.test(character)) {
+      atTokenStart = true;
+      continue;
+    }
+    atTokenStart = false;
   }
 
-  return { text: line, quote, escaped };
+  return { text: line, quote, escaped, atTokenStart };
 }
 
 function withoutLineContinuation(line) {
-  return line.trimEnd().slice(0, -1).trimEnd();
+  const withoutBackslash = line.trimEnd().slice(0, -1);
+  return {
+    text: withoutBackslash.trimEnd(),
+    separator: /\s$/.test(withoutBackslash) ? " " : "",
+  };
 }
 
 export function extractTerminalCommandGroups(code, language = "bash") {
@@ -49,16 +65,19 @@ export function extractTerminalCommandGroups(code, language = "bash") {
   );
 
   for (const [lineIndex, line] of lines.entries()) {
-    const prompted = line.match(/^\s*\$\s(.*)$/);
+    const prompted = line.match(promptPattern);
     if (prompted) {
       const scanned = scanShellLine(prompted[1]);
       const continues = supportsContinuation && scanned.escaped;
+      const continuation = continues
+        ? withoutLineContinuation(scanned.text)
+        : undefined;
       current = {
         lineIndex,
-        lines: [
-          continues ? withoutLineContinuation(scanned.text) : scanned.text,
-        ],
+        lines: [continuation?.text ?? scanned.text],
+        separators: continuation ? [continuation.separator] : [],
         quote: scanned.quote,
+        atTokenStart: scanned.atTokenStart,
       };
       commands.push(current);
       if (!continues) current = undefined;
@@ -66,24 +85,37 @@ export function extractTerminalCommandGroups(code, language = "bash") {
     }
 
     if (current) {
-      const scanned = scanShellLine(line, current.quote);
+      const scanned = scanShellLine(line, current);
       const continues = scanned.escaped;
-      current.lines.push(
-        (continues
-          ? withoutLineContinuation(scanned.text)
-          : scanned.text
-        ).trim(),
-      );
+      const continuation = continues
+        ? withoutLineContinuation(scanned.text)
+        : undefined;
+      if (
+        current.separators.at(-1) === "" &&
+        /^\s/.test(continuation?.text ?? scanned.text)
+      ) {
+        current.separators[current.separators.length - 1] = " ";
+      }
+      current.lines.push((continuation?.text ?? scanned.text).trim());
+      if (continuation) current.separators.push(continuation.separator);
       current.quote = scanned.quote;
+      current.atTokenStart = scanned.atTokenStart;
       if (!continues) current = undefined;
     }
   }
 
   return commands
-    .map(({ lineIndex, lines: commandLines }) => ({
-      lineIndex,
-      command: commandLines.join(" ").trim(),
-    }))
+    .map(({ lineIndex, lines: commandLines, separators }) => {
+      const command = commandLines
+        .slice(1)
+        .reduce(
+          (joined, segment, index) =>
+            `${joined}${separators[index] ?? " "}${segment}`,
+          commandLines[0],
+        )
+        .trim();
+      return { lineIndex, command };
+    })
     .filter(({ command }) => command.length > 0);
 }
 
@@ -123,28 +155,38 @@ export function terminalCopyPlugin() {
     name: "SecretSpec terminal copy",
     hooks: {
       postprocessRenderedBlock: ({ codeBlock, renderData }) => {
-        if (!hasClass(renderData.blockAst, "is-terminal")) return;
+        const hasPrompt = codeBlock.code
+          .split("\n")
+          .some((line) => promptPattern.test(line));
+        if (!hasPrompt) return;
+
         const commands = extractTerminalCommandGroups(
           codeBlock.code,
           codeBlock.language,
         );
-        if (!commands.length) return;
 
         const copy = findElement(renderData.blockAst, (node) =>
           hasClass(node, "copy"),
         );
+        if (!copy?.parent) return;
+
+        const copyIndex = copy.parent.children.indexOf(copy.node);
+        if (copyIndex < 0) return;
+
+        if (!commands.length) {
+          copy.parent.children.splice(copyIndex, 1);
+          return;
+        }
+
         const code = findElement(
           renderData.blockAst,
           (node) => node.tagName === "code",
         );
-        if (!copy?.parent || !code) return;
+        if (!code) return;
 
-        const copyIndex = copy.parent.children.indexOf(copy.node);
-        copy.parent.children.splice(copyIndex, 1);
-
-        for (const { lineIndex, command } of commands) {
+        const replacements = commands.map(({ lineIndex, command }) => {
           const line = code.node.children[lineIndex];
-          if (!line) continue;
+          if (!line?.children) return undefined;
 
           const lineCopy = cloneNode(copy.node);
           lineCopy.properties.className = ["copy", "terminal-line-copy"];
@@ -152,7 +194,7 @@ export function terminalCopyPlugin() {
             lineCopy,
             (node) => node.tagName === "button",
           )?.node;
-          if (!button) continue;
+          if (!button) return undefined;
 
           if ("dataCode" in button.properties) {
             button.properties.dataCode = command;
@@ -160,6 +202,13 @@ export function terminalCopyPlugin() {
             button.properties["data-code"] = command;
           }
 
+          return { line, lineCopy };
+        });
+        if (replacements.some((replacement) => !replacement)) return;
+
+        copy.parent.children.splice(copyIndex, 1);
+
+        for (const { line, lineCopy } of replacements) {
           line.properties.className = [
             ...(line.properties.className ?? []),
             "terminal-command-start",

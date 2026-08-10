@@ -39,6 +39,21 @@ test("joins Bash continuation lines without copying backslashes", () => {
   );
 });
 
+test("preserves token boundaries across Bash continuations", () => {
+  assert.equal(
+    extractTerminalCommands("$ printf foo\\\nbar", "bash"),
+    "printf foobar",
+  );
+  assert.equal(
+    extractTerminalCommands("$ printf foo \\\nbar", "bash"),
+    "printf foo bar",
+  );
+  assert.equal(
+    extractTerminalCommands("$ printf foo\\\n    bar", "bash"),
+    "printf foo bar",
+  );
+});
+
 test("preserves quoted hashes across Bash continuation lines", () => {
   const session = `$ printf "%s\\n" "hello \\
     # world"`;
@@ -66,6 +81,14 @@ test("omits inline annotations from copied commands", () => {
   assert.equal(
     extractTerminalCommands('$ command "value # stays" https://example.test/#id'),
     'command "value # stays" https://example.test/#id',
+  );
+  assert.equal(
+    extractTerminalCommands("$ command;# annotation"),
+    "command;",
+  );
+  assert.equal(
+    extractTerminalCommands("$ printf foo\\ #bar"),
+    "printf foo\\ #bar",
   );
 });
 
@@ -205,7 +228,7 @@ test("leaves command-only shell blocks on the default copy button", () => {
   assert.equal(blockAst.children[1].properties.className[0], "copy");
 });
 
-test("uses the rendered terminal frame instead of a language allowlist", () => {
+test("supports prompted terminal languages outside the continuation allowlist", () => {
   const { blockAst } = terminalBlockAst(2);
 
   terminalCopyPlugin().hooks.postprocessRenderedBlock({
@@ -218,7 +241,7 @@ test("uses the rendered terminal frame instead of a language allowlist", () => {
   assert.equal(line.children[0].children[0].properties.dataCode, "secretspec check");
 });
 
-test("leaves explicitly nonterminal Bash frames unchanged", () => {
+test("cleans prompted blocks even when their frame is nonterminal", () => {
   const { blockAst } = terminalBlockAst(1, false);
 
   terminalCopyPlugin().hooks.postprocessRenderedBlock({
@@ -227,8 +250,9 @@ test("leaves explicitly nonterminal Bash frames unchanged", () => {
   });
 
   const line = blockAst.children[0].children[0].children[0];
-  assert.equal(line.children.length, 0);
-  assert.equal(blockAst.children[1].properties.className[0], "copy");
+  assert.equal(line.children[0].properties.className[1], "terminal-line-copy");
+  assert.equal(line.children[0].children[0].properties.dataCode, "secretspec check");
+  assert.equal(blockAst.children.length, 1);
 });
 
 test("does not add a copy button for an empty prompted annotation", () => {
@@ -241,5 +265,18 @@ test("does not add a copy button for an empty prompted annotation", () => {
 
   const line = blockAst.children[0].children[0].children[0];
   assert.equal(line.children.length, 0);
+  assert.equal(blockAst.children.length, 1);
+});
+
+test("keeps the default button when replacement AST validation fails", () => {
+  const { blockAst } = terminalBlockAst(1);
+  blockAst.children[1].children = [];
+
+  terminalCopyPlugin().hooks.postprocessRenderedBlock({
+    codeBlock: { language: "bash", code: "$ secretspec check" },
+    renderData: { blockAst },
+  });
+
+  assert.equal(blockAst.children.length, 2);
   assert.equal(blockAst.children[1].properties.className[0], "copy");
 });

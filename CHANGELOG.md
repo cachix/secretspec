@@ -48,8 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider environment variables.
 - Windows ARM64 CLI release artifacts (`aarch64-pc-windows-msvc`), attached to
   the GitHub Release as `secretspec-aarch64-pc-windows-msvc.zip` with a
-  checksum. The static installer does not resolve this platform yet, so
-  download the archive directly.
+  checksum. The static installer still installs the x86_64 build on Windows
+  ARM64, which runs under emulation, so download the archive directly for a
+  native binary.
 - Provider aliases can define native `ref` templates and secrets can override
   coordinates per leaf alias with `refs`, so fallback providers and import
   sources/destinations resolve independently. `import --delete-source` now

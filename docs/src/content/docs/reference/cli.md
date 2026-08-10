@@ -573,7 +573,7 @@ $ secretspec import dotenv:/home/user/old-project/.env --delete-source
 ```
 
 **Use Cases:**
-- Migrate from .env files to a secure provider like keyring or OnePassword
+- Migrate from .env files to a secure provider like keyring or 1Password
 - Copy secrets between different profiles or projects
 - Import existing environment variables into SecretSpec management
 

@@ -11,7 +11,7 @@ the link for the individual provider. For the semantic authentication names
 accepted by those providers and their environment fallbacks, see the
 [provider credentials reference](/reference/provider-credentials/).
 
-## DotEnv Provider
+## Dotenv Provider
 
 **URI**: `dotenv://[path]` - Stores secrets in `.env` files
 
@@ -96,7 +96,7 @@ values, provider-credential source support
 convention addresses use the SecretSpec key as the filename, and `ref.item`
 selects a different credential name
 
-## GoPass Provider
+## Gopass Provider
 
 Available starting with SecretSpec 0.15.
 
@@ -192,7 +192,7 @@ already-registered device and reads that identity's vault instead. That state
 is separate from your own, so `dcli configure disable-auto-sync true` does not
 apply to it and those reads sync hourly.
 
-## OnePassword Provider
+## 1Password Provider
 
 **URI**: `onepassword://[account@]vault` or `onepassword+token://user:token@vault`
 
@@ -597,7 +597,7 @@ $ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 
 | Provider | Encryption | Storage Location | Network Access |
 |----------|------------|------------------|----------------|
-| DotEnv | ❌ Plain text | Local filesystem | ❌ No |
+| Dotenv | ❌ Plain text | Local filesystem | ❌ No |
 | File (0.19+) | ❌ Plain text | Local filesystem | ❌ No |
 | Environment | ❌ Plain text | Process memory | ❌ No |
 | Null (0.19+) | N/A — no stored value | None | ❌ No |
@@ -605,12 +605,12 @@ $ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Keyring | ✅ System encryption | System keychain | ❌ No |
 | KeePass KDBX (0.17+) | ✅ KDBX encryption | Local filesystem | ❌ No |
 | Pass | ✅ GPG encryption | Local filesystem | ❌ No |
-| GoPass | ✅ GPG encryption | Local filesystem | ❌ No |
+| Gopass | ✅ GPG encryption | Local filesystem | ❌ No |
 | Proton Pass | ✅ End-to-end | Cloud (Proton) | ✅ Yes |
 | Passbolt (0.19+) | ✅ End-to-end | Self-hosted (Passbolt server) | ✅ Yes |
 | LastPass | ✅ End-to-end | Cloud (LastPass) | ✅ Yes |
 | Dashlane (0.18+) | ✅ End-to-end | Cloud (Dashlane), synced locally | Yes — `dcli` auto-syncs hourly |
-| OnePassword | ✅ End-to-end | Cloud (OnePassword) | ✅ Yes |
+| 1Password | ✅ End-to-end | Cloud (1Password) | ✅ Yes |
 | Keeper (0.18+) | ✅ End-to-end | Cloud (Keeper) | ✅ Yes |
 | GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |

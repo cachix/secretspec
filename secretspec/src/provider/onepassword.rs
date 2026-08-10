@@ -639,9 +639,9 @@ impl OnePasswordProvider {
 
     /// Resolves unique field references with one textual `op inject` batch.
     ///
-    /// A failed inject is retried reference-by-reference because `op inject`
-    /// fails the entire template when any field is missing. Individual reads
-    /// retain the provider's missing-value and detailed error semantics.
+    /// A failed inject is retried with bounded concurrent reads because `op
+    /// inject` fails the entire template when any field is missing. Individual
+    /// reads retain the provider's missing-value and detailed error semantics.
     fn read_reference_uris(&self, reference_uris: &[String]) -> Result<Vec<Option<SecretString>>> {
         if reference_uris.is_empty() {
             return Ok(Vec::new());
@@ -659,10 +659,13 @@ impl OnePasswordProvider {
                     .map(|value| Some(SecretString::new(value.into())))
                     .collect()
             }),
-            Err(_) => reference_uris
-                .iter()
-                .map(|reference_uri| self.read_reference_uri(reference_uri))
-                .collect(),
+            Err(_) => super::map_concurrently(
+                reference_uris,
+                super::get_each_concurrency(),
+                |reference_uri| self.read_reference_uri(reference_uri),
+            )
+            .into_iter()
+            .collect(),
         }
     }
 
@@ -1865,6 +1868,67 @@ mod tests {
         assert!(secret_matches(&results, "PRESENT", "available"));
         assert!(!results.contains_key("MISSING"));
         assert!(!results.contains_key("MISSING_COPY"));
+    }
+
+    #[test]
+    fn inject_failure_fallback_preserves_bounded_concurrency() {
+        use std::{
+            sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering},
+            },
+            time::Duration,
+        };
+
+        let _lock = crate::tests::scrub_resolution_env();
+        let _concurrency =
+            crate::tests::EnvVarGuard::set(super::super::GET_EACH_CONCURRENCY_ENV, "3");
+
+        let current = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new({
+            let current = Arc::clone(&current);
+            let peak = Arc::clone(&peak);
+            let reads = Arc::clone(&reads);
+            move |command, _stdin| {
+                let args = command_args(command);
+                if args.first().is_some_and(|arg| arg == "inject") {
+                    return Err(SecretSpecError::ProviderOperationFailed(
+                        "one field is missing".to_string(),
+                    ));
+                }
+
+                assert_eq!(args.first().map(String::as_str), Some("read"));
+                reads.fetch_add(1, Ordering::SeqCst);
+                let active = current.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(active, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(80));
+                current.fetch_sub(1, Ordering::SeqCst);
+                Ok(args.last().expect("reference URI").clone())
+            }
+        }));
+
+        let references: Vec<String> = (0..10)
+            .map(|index| format!("op://Personal/Item/field-{index}"))
+            .collect();
+        let values = provider.read_reference_uris(&references).unwrap();
+
+        assert_eq!(reads.load(Ordering::SeqCst), references.len());
+        assert!(
+            peak.load(Ordering::SeqCst) <= 3,
+            "fallback exceeded the configured concurrency cap"
+        );
+        assert!(
+            peak.load(Ordering::SeqCst) >= 2,
+            "fallback unexpectedly processed every reference serially"
+        );
+        assert!(values.iter().zip(&references).all(|(value, reference)| {
+            value
+                .as_ref()
+                .is_some_and(|value| value.expose_secret() == reference)
+        }));
     }
 
     #[test]

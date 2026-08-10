@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - 1Password field references now resolve in one batched CLI call, reducing
-  repeated unlocks and process startup when loading multiple secrets.
+  repeated unlocks and process startup when loading multiple secrets. If a
+  missing reference requires individual reads, those reads remain bounded and
+  concurrent.
 - The Rust SDK's `ProviderAlias` now provides `leaf`, `credentials`, and
   `credentials_mut` helpers so callers can construct and inspect leaf or
   inline-cached aliases without depending on their storage representation.

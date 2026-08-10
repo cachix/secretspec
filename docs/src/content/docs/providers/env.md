@@ -20,8 +20,9 @@ The Environment Variable provider reads secrets directly from process environmen
 
 ```bash
 # Set environment variables
-export DATABASE_URL="postgresql://localhost/mydb"
-export API_KEY="sk-1234567890"
+$ export DATABASE_URL="postgresql://localhost/mydb"
+
+$ export API_KEY="sk-1234567890"
 
 # Check secrets are available
 $ secretspec check --provider env
@@ -38,7 +39,9 @@ The env provider accepts no configuration options:
 ```bash
 # All these are equivalent
 $ secretspec check --provider env
+
 $ secretspec check --provider env:
+
 $ secretspec check --provider env://
 ```
 

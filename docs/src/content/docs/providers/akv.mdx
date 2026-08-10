@@ -145,6 +145,7 @@ Store all three declared credentials, then use the alias:
 
 ```bash
 $ secretspec config provider login azure
+
 $ secretspec run --provider azure -- deploy
 ```
 
@@ -154,7 +155,9 @@ to its matching conventional environment variable:
 ```bash
 # Set credentials
 $ export AZURE_TENANT_ID="..."
+
 $ export AZURE_CLIENT_ID="..."
+
 $ export AZURE_CLIENT_SECRET="..."
 
 # Run command

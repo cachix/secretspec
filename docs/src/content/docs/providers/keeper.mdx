@@ -65,8 +65,9 @@ are useful for application setup, but neither is needed when SecretSpec runs.
 Set `KSM_CONFIG` to the JSON or Base64 KSM client configuration:
 
 ```bash
-export KSM_CONFIG="$KEEPER_CLIENT_CONFIG"
-secretspec check --provider "keeper://SHARED_FOLDER_UID"
+$ export KSM_CONFIG="$KEEPER_CLIENT_CONFIG"
+
+$ secretspec check --provider "keeper://SHARED_FOLDER_UID"
 ```
 
 The configuration contains private client keys. Treat the whole value as a
@@ -111,10 +112,12 @@ Pair it with file storage so the SDK can persist the generated client keys for
 later SecretSpec processes:
 
 ```bash
-export KSM_TOKEN="US:ONE_TIME_TOKEN"
-secretspec check \
+$ export KSM_TOKEN="US:ONE_TIME_TOKEN"
+
+$ secretspec check \
   --provider "keeper://SHARED_FOLDER_UID?config_file=.keeper/client-config.json"
-unset KSM_TOKEN
+
+$ unset KSM_TOKEN
 ```
 
 A Keeper one-time token cannot be reused. Remove it after the first successful
@@ -197,8 +200,9 @@ record UID when duplicate titles exist.
 Store the bound KSM configuration as one protected CI secret:
 
 ```bash
-export KSM_CONFIG="$CI_KEEPER_CONFIG"
-secretspec run --provider "keeper://SHARED_FOLDER_UID" -- ./deploy
+$ export KSM_CONFIG="$CI_KEEPER_CONFIG"
+
+$ secretspec run --provider "keeper://SHARED_FOLDER_UID" -- ./deploy
 ```
 
 The KSM application should receive access only to the folders the job needs.

@@ -32,7 +32,7 @@ Generate typed classes with `secretspec schema` plus
 [quicktype](https://quicktype.io), then build them from `resolved.fields`:
 
 ```bash
-secretspec schema | quicktype -s schema --top-level SecretSpec --lang ruby -o secrets_gen.rb
+$ secretspec schema | quicktype -s schema --top-level SecretSpec --lang ruby -o secrets_gen.rb
 ```
 
 <Code code={typedAccessExample} lang="ruby" meta='title="typed_access.rb"' />
@@ -48,13 +48,13 @@ Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
 # Use "static" (the default) or "shared"; use separate prefixes for both.
-bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
+$ bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
 ```
 
 Then use the same extension flag for either type:
 
 ```bash
-PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" gem install secretspec -- --enable-pkg-config
+$ PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" gem install secretspec -- --enable-pkg-config
 ```
 
 A shared install in a non-system prefix also requires `PREFIX/lib` in the

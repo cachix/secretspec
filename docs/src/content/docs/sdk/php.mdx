@@ -32,7 +32,7 @@ to `ext-ffi`, so your application code is the same either way.
 ## Install
 
 ```bash
-composer require cachix/secretspec
+$ composer require cachix/secretspec
 ```
 
 That installs the pure-PHP client. Then provide the native resolver with **one**
@@ -81,7 +81,7 @@ Then fetch the native library for your platform (a one-time step; Composer does
 not run it automatically):
 
 ```bash
-vendor/bin/secretspec-install-lib
+$ vendor/bin/secretspec-install-lib
 ```
 
 That downloads the right `secretspec-ffi` library from the matching GitHub
@@ -147,7 +147,7 @@ Generate a typed class with `secretspec schema` plus
 [quicktype](https://quicktype.io), then build it from `$resolved->fields()`:
 
 ```bash
-secretspec schema | quicktype -s schema --top-level SecretSpec --lang php -o SecretSpecTyped.php
+$ secretspec schema | quicktype -s schema --top-level SecretSpec --lang php -o SecretSpecTyped.php
 ```
 
 <Code code={typedAccessExample} lang="php" meta='title="typed_access.php"' />

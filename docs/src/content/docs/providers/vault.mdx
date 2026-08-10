@@ -54,6 +54,7 @@ the usual configuration provides both environment variables:
 
 ```bash
 $ export VAULT_ROLE_ID=your-role-id
+
 $ export VAULT_SECRET_ID=your-secret-id
 ```
 
@@ -238,7 +239,9 @@ logging in from `VAULT_ROLE_ID` and `VAULT_SECRET_ID`:
 
 ```bash
 $ export VAULT_ROLE_ID="$CI_VAULT_ROLE_ID"
+
 $ export VAULT_SECRET_ID="$CI_VAULT_SECRET_ID"
+
 $ secretspec export --format gha --provider "vault://vault.example.com:8200/secret?auth=approle"
 ```
 
@@ -264,6 +267,7 @@ $ secretspec set DATABASE_URL --provider "vault://vault.example.com:8200/secret?
 $ secretspec check --provider vault://team-a@vault.example.com:8200/secret
 
 $ export VAULT_NAMESPACE=team-a
+
 $ secretspec check --provider vault://vault.example.com:8200/secret
 ```
 
@@ -271,6 +275,8 @@ $ secretspec check --provider vault://vault.example.com:8200/secret
 
 ```bash
 $ vault server -dev
+
 $ export VAULT_TOKEN=hvs.dev-root-token
+
 $ secretspec check --provider "vault://127.0.0.1:8200/secret?tls=false"
 ```

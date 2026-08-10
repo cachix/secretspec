@@ -58,13 +58,13 @@ readable summary:
 
 ```bash
 # Last 20 entries, formatted
-secretspec audit -n 20
+$ secretspec audit -n 20
 
 # Only `run` events for one project
-secretspec audit --project my-app --action run
+$ secretspec audit --project my-app --action run
 
 # Raw JSON Lines, piped to jq
-secretspec audit --json | jq 'select(.outcome == "missing")'
+$ secretspec audit --json | jq 'select(.outcome == "missing")'
 ```
 
 It is configured in your **user-global config**
@@ -87,7 +87,7 @@ See [Audit Logging](/concepts/audit/) for the full record schema and options.
 When a coding agent like Claude Code reaches for a secret without a reason, the
 access is refused and the agent is told exactly what to do next:
 
-```text
+```console
 $ secretspec run -- npm test
 Error: Accessing secrets requires a reason. Provide one with --reason
 "<why you are accessing these secrets>", the SECRETSPEC_REASON environment
@@ -99,7 +99,7 @@ disable.)
 Claude Code reads that message, states why it needs the secret, and retries:
 
 ```bash
-secretspec run --reason "run the test suite before opening a PR" -- npm test
+$ secretspec run --reason "run the test suite before opening a PR" -- npm test
 ```
 
 Both the refusal and the successful retry land in the audit log, so the reason
@@ -113,7 +113,7 @@ is tied to the access. There are three ways to supply a reason:
 
 ```bash
 # CLI: the most explicit option, overrides the others
-secretspec run --reason "deploying release 0.12" -- ./deploy.sh
+$ secretspec run --reason "deploying release 0.12" -- ./deploy.sh
 ```
 
 ```rust
@@ -123,7 +123,7 @@ let secrets = Secrets::load(/* ... */)?.with_reason("nightly backup job");
 
 ```bash
 # Env: lowest precedence, but honored everywhere
-export SECRETSPEC_REASON="nightly backup job"
+$ export SECRETSPEC_REASON="nightly backup job"
 ```
 
 `SECRETSPEC_REASON` is resolved by `Secrets::load` / `load_from`, which means
@@ -160,7 +160,7 @@ Coding agents are spotted by the
 ## Upgrading
 
 ```bash
-cargo install secretspec
+$ cargo install secretspec
 ```
 
 Remember the new default: agents must pass a reason: set `require_reason = false`

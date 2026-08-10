@@ -13,14 +13,14 @@ Choose your preferred installation method:
 <TabItem label="Static Binary">
 
 ```bash
-curl -sSL https://install.secretspec.dev | sh
+$ curl -sSL https://install.secretspec.dev | sh
 ```
 
 The static installer also installs `secretspec-update`. Run it to install the
 latest SecretSpec release:
 
 ```bash
-secretspec-update
+$ secretspec-update
 ```
 
 If you installed SecretSpec through Nix or another package manager, update it
@@ -44,7 +44,7 @@ Add to your `devenv.nix`:
 <TabItem label="Nix">
 
 ```bash
-nix-env -iA secretspec -f https://github.com/NixOS/nixpkgs/tarball/nixpkgs-unstable
+$ nix-env -iA secretspec -f https://github.com/NixOS/nixpkgs/tarball/nixpkgs-unstable
 ```
 
 </TabItem>
@@ -169,6 +169,7 @@ the manifest, then store its value:
 
 ```bash
 $ secretspec add API_KEY --description "API access token" # 0.18+
+
 $ secretspec set API_KEY
 ```
 

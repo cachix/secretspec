@@ -70,7 +70,7 @@ Provider migrations can now remove each source value after proving the move
 succeeded:
 
 ```bash
-secretspec import dotenv:~/.config/payments/.env --delete-source
+$ secretspec import dotenv:~/.config/payments/.env --delete-source
 ```
 
 [`import --delete-source`](/reference/cli/#import) reads the destination back
@@ -225,7 +225,7 @@ environment, or provider-credential inputs continue to take precedence.
 ## Upgrading
 
 ```bash
-cargo install secretspec
+$ cargo install secretspec
 ```
 
 0.18 also makes two local workflows less dependent on machine-specific setup:

@@ -53,8 +53,9 @@ $ secretspec check --profile development
 ✓ API_KEY - External API key (using default)
 
 # Set via environment
-export SECRETSPEC_PROFILE=production
-secretspec run -- npm start
+$ export SECRETSPEC_PROFILE=production
+
+$ secretspec run -- npm start
 ```
 
 ## Profile Inheritance in Detail

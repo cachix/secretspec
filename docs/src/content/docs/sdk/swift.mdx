@@ -88,7 +88,7 @@ deployment can still be inspected.
 Generate an idiomatic Swift model from the manifest schema:
 
 ```bash
-secretspec schema |
+$ secretspec schema | \
   quicktype -s schema --top-level AppSecrets --lang swift -o AppSecrets.swift
 ```
 

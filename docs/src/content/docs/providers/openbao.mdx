@@ -28,6 +28,7 @@ The `openbao` provider is added in SecretSpec 0.17.
 
 ```bash
 $ export BAO_TOKEN=hvs.your-token-here
+
 $ secretspec set DATABASE_URL --provider openbao://bao.example.com:8200
 Enter value for DATABASE_URL: postgresql://localhost/mydb
 ✓ Secret 'DATABASE_URL' saved to openbao (profile: default)
@@ -72,6 +73,7 @@ so the usual configuration provides both inputs:
 
 ```bash
 $ export BAO_ROLE_ID=your-role-id
+
 $ export BAO_SECRET_ID=your-secret-id
 ```
 
@@ -228,7 +230,9 @@ AppRole avoids placing a user token in the CI environment:
 
 ```bash
 $ export BAO_ROLE_ID="$CI_ROLE_ID"
+
 $ export BAO_SECRET_ID="$CI_SECRET_ID"
+
 $ secretspec export --format gha --provider "openbao://bao.example.com:8200/secret?auth=approle"
 ```
 
@@ -253,6 +257,7 @@ $ secretspec set DATABASE_URL --provider "openbao://bao.example.com:8200/secret?
 $ secretspec check --provider openbao://team-a@bao.example.com:8200/secret
 
 $ export BAO_NAMESPACE=team-a
+
 $ secretspec check --provider openbao://bao.example.com:8200/secret
 ```
 
@@ -260,6 +265,8 @@ $ secretspec check --provider openbao://bao.example.com:8200/secret
 
 ```bash
 $ bao server -dev -dev-root-token-id="dev-only-token"
+
 $ export BAO_TOKEN="dev-only-token"
+
 $ secretspec check --provider "openbao://127.0.0.1:8200/secret?tls=false"
 ```

@@ -44,7 +44,7 @@ Generate a typed record with `secretspec schema` plus
 [quicktype](https://quicktype.io), then decode `S.fieldsJson resolved`:
 
 ```bash
-secretspec schema | quicktype -s schema --top-level SecretSpec --lang haskell -o Secrets.hs
+$ secretspec schema | quicktype -s schema --top-level SecretSpec --lang haskell -o Secrets.hs
 ```
 
 ## Building
@@ -54,18 +54,22 @@ directory of its own (so the linker picks the archive, not the co-located
 `.so`) and pass its native dependencies to the linker:
 
 ```bash
-cargo build -p secretspec-ffi
-TARGET="$(cargo metadata --no-deps --format-version 1 \
+$ cargo build -p secretspec-ffi
+
+$ TARGET="$(cargo metadata --no-deps --format-version 1 \
   | grep -o '"target_directory":"[^"]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/')"
 
 # Stage the staticlib alone, and capture its native-static-libs for the linker.
-LIBDIR="$(mktemp -d)"
-cp "$TARGET/debug/libsecretspec_ffi.a" "$LIBDIR/"
-NATIVE_LIBS="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
+$ LIBDIR="$(mktemp -d)"
+
+$ cp "$TARGET/debug/libsecretspec_ffi.a" "$LIBDIR/"
+
+$ NATIVE_LIBS="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
   --print native-static-libs 2>&1 | sed -n 's/^note: native-static-libs: //p' | tail -1)"
 
-cabal build --extra-lib-dirs="$LIBDIR" --ghc-options="-optl${NATIVE_LIBS// / -optl}"
-cabal test  --extra-lib-dirs="$LIBDIR" --ghc-options="-optl${NATIVE_LIBS// / -optl}"
+$ cabal build --extra-lib-dirs="$LIBDIR" --ghc-options="-optl${NATIVE_LIBS// / -optl}"
+
+$ cabal test  --extra-lib-dirs="$LIBDIR" --ghc-options="-optl${NATIVE_LIBS// / -optl}"
 ```
 
 ### Linking with pkg-config (0.19+)
@@ -74,15 +78,17 @@ Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
 # Use "static" (the default) or "shared"; use separate prefixes for both.
-bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
+$ bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
 ```
 
 Then use the same Cabal flag for either type:
 
 ```bash
-cd secretspec-hs
-PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal build -f use-pkg-config
-PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal test  -f use-pkg-config
+$ cd secretspec-hs
+
+$ PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal build -f use-pkg-config
+
+$ PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal test  -f use-pkg-config
 ```
 
 A shared install in a non-system prefix also requires `PREFIX/lib` in the

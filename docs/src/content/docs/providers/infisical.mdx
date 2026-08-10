@@ -54,6 +54,7 @@ Create a machine identity in Infisical, grant it access to the project, and set:
 
 ```bash
 $ export INFISICAL_CLIENT_ID=...
+
 $ export INFISICAL_CLIENT_SECRET=...
 ```
 
@@ -142,7 +143,7 @@ A project whose environments do not correspond to profiles pins one with `?env=`
 
 ```bash
 # Every profile reads Infisical's "dev" environment
-secretspec run --provider "infisical://app.infisical.com/7e2f1a4c-...?env=dev" -- npm start
+$ secretspec run --provider "infisical://app.infisical.com/7e2f1a4c-...?env=dev" -- npm start
 ```
 
 Profiles stay separate either way: the profile names the folder as well as the environment, so
@@ -208,7 +209,9 @@ token minted by your deployment environment:
 
 ```bash
 $ export INFISICAL_CLIENT_ID="$CI_INFISICAL_CLIENT_ID"
+
 $ export INFISICAL_CLIENT_SECRET="$CI_INFISICAL_CLIENT_SECRET"
+
 $ secretspec run --provider "infisical://app.infisical.com/7e2f1a4c-...?env=prod" -- deploy
 ```
 
@@ -230,8 +233,9 @@ Values are read with Infisical's own `${...}` references expanded, matching its 
 Point the URI at the instance, or set `INFISICAL_DOMAIN`:
 
 ```bash
-export INFISICAL_DOMAIN=https://vault.example.com
-secretspec run --provider "infisical:///7e2f1a4c-..." -- npm start
+$ export INFISICAL_DOMAIN=https://vault.example.com
+
+$ secretspec run --provider "infisical:///7e2f1a4c-..." -- npm start
 ```
 
 Infisical's legacy `INFISICAL_API_URL` is honoured too, so an instance already configured for

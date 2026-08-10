@@ -15,7 +15,7 @@ accepted by those providers and their environment fallbacks, see the
 
 **URI**: `dotenv://[path]` - Stores secrets in `.env` files
 
-```bash
+```text
 dotenv://                    # Uses default .env
 dotenv:///config/.env        # Custom path
 dotenv://config/.env         # Relative path
@@ -35,7 +35,7 @@ explicitly configured local directory
 
 `ROOT` is required. The bare `file` provider name is rejected.
 
-```bash
+```text
 file:./.secrets              # Relative to secretspec.toml
 file:///run/secrets          # Absolute directory
 ```
@@ -51,7 +51,7 @@ symbolic links inside the configured store are rejected.
 
 **URI**: `env://` - Read-only access to system environment variables
 
-```bash
+```text
 env://                       # Current process environment
 ```
 
@@ -66,7 +66,7 @@ The `null` provider is added in SecretSpec 0.19.
 **URI**: `null://` - Always reports a missing value so the declaration's
 committed `default` or configured generator supplies the value
 
-```bash
+```text
 null://                      # No configuration or storage
 ```
 
@@ -84,7 +84,7 @@ The `systemd-credential` provider is added in SecretSpec 0.17.
 **URI**: `systemd-credential://` - Reads credentials passed to the current
 service by systemd
 
-```bash
+```text
 systemd-credential://          # $CREDENTIALS_DIRECTORY
 ```
 
@@ -102,7 +102,7 @@ Available starting with SecretSpec 0.15.
 
 **URI**: `gopass://[host][path]` - Uses `gopass`, a multi-user and multi-store abstraction layer over `pass`, with GPG encryption
 
-```bash
+```text
 gopass://                                    # Default folder prefix
 gopass://secretspec/shared/{profile}/{key}   # Custom folder prefix with placeholders
 ```
@@ -117,7 +117,7 @@ Gopass entries store a single line; multiline secrets are truncated to their fir
 
 **URI**: `keyring://` - Uses system keychain/keyring for secure storage
 
-```bash
+```text
 keyring://                   # System default keychain
 ```
 
@@ -134,7 +134,7 @@ The `kdbx` provider is added in SecretSpec 0.17.
 **URI**: `kdbx:PATH[?keyfile=PATH][&prefix=TEMPLATE]` - Stores secrets in a
 KeePass-compatible encrypted database
 
-```bash
+```text
 kdbx:./secrets.kdbx
 kdbx:/var/lib/myapp/secrets.kdbx
 kdbx:./secrets.kdbx?keyfile=./secrets.key
@@ -156,7 +156,7 @@ title, and optional `field` for a standard or custom field.
 
 **URI**: `lastpass://[item_template]` - Integrates with LastPass via `lpass` CLI
 
-```bash
+```text
 lastpass://                                      # Default layout
 lastpass://Work/SecretSpec/{project}/{profile}/{key} # Custom item template
 ```
@@ -171,7 +171,7 @@ item template replaces the default and supports `{project}`, `{profile}`, and
 
 **URI**: `dashlane://[item_type]` - Integrates with Dashlane via the `dcli` CLI
 
-```bash
+```text
 dashlane://          # Search secrets, then logins, then notes
 dashlane://note      # Secure notes only
 dashlane://secret    # Dashlane Secrets only (Business plans)
@@ -196,7 +196,7 @@ apply to it and those reads sync hourly.
 
 **URI**: `onepassword://[account@]vault` or `onepassword+token://user:token@vault`
 
-```bash
+```text
 onepassword://MyVault                           # Default account
 onepassword://work@CompanyVault                 # Specific account
 onepassword+token://user:op_token@SecureVault   # Service account
@@ -222,7 +222,7 @@ The `keeper` provider is added in SecretSpec 0.18.
 **URI**: `keeper://FOLDER_UID[?config_file=PATH]` - Stores records in
 Keeper Secrets Manager through Keeper's official Rust SDK
 
-```bash
+```text
 keeper://SHARED_FOLDER_UID
 keeper://SHARED_FOLDER_UID?config_file=.keeper/client-config.json
 ```
@@ -241,7 +241,7 @@ optional standard/custom `field`.
 
 **URI**: `pass://` - Uses Unix password manager with GPG encryption
 
-```bash
+```text
 pass://                       # Default password store
 ```
 
@@ -253,7 +253,7 @@ pass://                       # Default password store
 
 **URI**: `protonpass://[vault[/title-template]]` - Stores secrets in Proton Pass via the official `pass-cli`
 
-```bash
+```text
 protonpass://                                      # Default vault ("secretspec")
 protonpass://Work                                  # Specific vault
 protonpass://Work/{project}/{profile}/{key}        # Custom vault and title template
@@ -298,7 +298,7 @@ passbolt://?template=teams/{project}/{profile}/{key}   # Replace the convention 
 
 **URI**: `gcsm://PROJECT_ID` - Stores secrets in Google Cloud Secret Manager
 
-```bash
+```text
 gcsm://my-gcp-project         # GCP project ID
 ```
 
@@ -310,7 +310,7 @@ gcsm://my-gcp-project         # GCP project ID
 
 **URI**: `awssm://[profile@]REGION` - Stores secrets in AWS Secrets Manager
 
-```bash
+```text
 awssm://us-east-1             # Specific AWS region
 awssm://production@us-east-1  # Specific AWS profile and region
 awssm://                      # SDK default region and credentials
@@ -331,7 +331,7 @@ The `awsps` provider is added in SecretSpec 0.18.
 - Stores secrets as encrypted AWS Systems Manager Parameter Store values;
   `prefix` and `template` are mutually exclusive.
 
-```bash
+```text
 awsps://us-east-1                                  # Specific AWS region
 awsps://production@us-east-1                       # AWS profile and region
 awsps://us-east-1?prefix=/team                     # Additional hierarchy
@@ -356,7 +356,7 @@ key, while `tier` accepts `standard`, `advanced`, or `intelligent-tiering`
 
 **URI**: `scaleway://[REGION][?project_id=UUID&path=/folder]` - Stores secrets in Scaleway Secret Manager
 
-```bash
+```text
 scaleway://fr-par                                    # Region, project from SCW_DEFAULT_PROJECT_ID
 scaleway://nl-ams?project_id=PROJECT_UUID            # Region and project
 scaleway://fr-par?project_id=PROJECT_UUID&path=/team # Nest under a folder
@@ -371,7 +371,7 @@ scaleway://                                          # Region from SCW_DEFAULT_R
 
 **URI**: `vault://[namespace@]host[:port][/mount][?options]` - Stores secrets in HashiCorp Vault's KV engine
 
-```bash
+```text
 vault://vault.example.com:8200/secret       # KV v2 at "secret" mount
 vault://vault.example.com:8200              # Default "secret" mount
 vault://ns1@vault.example.com:8200/secret   # With namespace
@@ -398,7 +398,7 @@ The `openbao` provider is added in SecretSpec 0.17.
 
 **URI**: `openbao://[namespace@]host[:port][/mount][?options]` - Stores secrets in OpenBao's KV engine
 
-```bash
+```text
 openbao://bao.example.com:8200/secret
 openbao://team-a@bao.example.com:8200/secret
 openbao://bao.example.com:8200/secret?auth=approle
@@ -418,7 +418,7 @@ openbao://127.0.0.1:8200/secret?kv=1&tls=false
 
 **URI**: `bw://[COLLECTION]` - Stores secrets in a Bitwarden Password Manager vault via the `bw` CLI
 
-```bash
+```text
 bw://                                   # Personal vault
 bw://dev-secrets                        # Collection, by name or ID
 bw://myorg@dev-secrets                  # Organization and collection
@@ -455,7 +455,7 @@ each operation. See the [provider guide](/providers/bw/#self-hosted-servers).
 
 **URI**: `bws://[SERVER_BASE@]PROJECT_UUID` - Stores secrets in Bitwarden Secrets Manager
 
-```bash
+```text
 bws://a9230ec4-5507-4870-b8b5-b3f500587e4c                    # US cloud (default)
 bws://vault.bitwarden.eu@a9230ec4-5507-4870-b8b5-b3f500587e4c # EU cloud
 bws://bw.example.com@a9230ec4-5507-4870-b8b5-b3f500587e4c     # Self hosted
@@ -480,7 +480,7 @@ may briefly be visible to same-user process-inspection tools.
 
 **URI**: `akv://VAULT_NAME[?auth=env|cli|managed_identity|workload_identity][&suffix=DNS_SUFFIX]` - Stores secrets in Azure Key Vault
 
-```bash
+```text
 akv://myvault                            # Service principal env vars, falling back to `az login`
 akv://myvault?auth=managed_identity      # VM / App Service / AKS system-assigned managed identity
 akv://myvault?auth=workload_identity     # AKS workload identity federation
@@ -498,7 +498,7 @@ Available since SecretSpec 0.16.
 
 **URI**: `infisical://[HOST]/PROJECT_ID[?env=SLUG][&path=/PREFIX][&tls=false]` - Stores secrets in Infisical
 
-```bash
+```text
 infisical://app.infisical.com/7e2f1a4c-...            # Infisical Cloud (US)
 infisical://eu.infisical.com/7e2f1a4c-...             # Infisical Cloud (EU)
 infisical://vault.example.com/7e2f1a4c-...?env=prod   # Read every profile from one environment
@@ -527,7 +527,7 @@ Values are read with Infisical's secret references expanded, matching its own CL
 
 **URI**: `age://PATH[?identity=FILE][&recipients-file=FILE][&armor=false]` - Stores secrets in a single age-encrypted file committed alongside code
 
-```bash
+```text
 age://secrets.age                                        # Encrypt to your own identity
 age://secrets.age?identity=/home/alice/.config/age/plugin-identity.txt
 age://secrets.age?recipients-file=secrets.age.recipients # Share with a roster
@@ -547,7 +547,7 @@ The `sops` provider is added in SecretSpec 0.17.
 **URI**: `sops://PATH[?format=yaml|json|dotenv|ini]` - Stores secrets in a
 SOPS-encrypted file or a templated set of files
 
-```bash
+```text
 sops://secrets.enc.yaml
 sops://secrets/{project}/{profile}.enc.json
 sops://secrets/{project}/.env.{profile}.enc?format=dotenv
@@ -571,20 +571,25 @@ through templated paths are rejected.
 ### Command Line
 ```bash
 # Simple provider names
-secretspec get API_KEY --provider keyring
-secretspec get API_KEY --provider dotenv
-secretspec get API_KEY --provider env
+$ secretspec get API_KEY --provider keyring
+
+$ secretspec get API_KEY --provider dotenv
+
+$ secretspec get API_KEY --provider env
 
 # URIs with configuration
-secretspec get API_KEY --provider dotenv:/path/to/.env
-secretspec get API_KEY --provider onepassword://vault
-secretspec get API_KEY --provider "onepassword://account@vault"
+$ secretspec get API_KEY --provider dotenv:/path/to/.env
+
+$ secretspec get API_KEY --provider onepassword://vault
+
+$ secretspec get API_KEY --provider "onepassword://account@vault"
 ```
 
 ### Environment Variables
 ```bash
-export SECRETSPEC_PROVIDER=keyring
-export SECRETSPEC_PROVIDER="dotenv:///config/.env"
+$ export SECRETSPEC_PROVIDER=keyring
+
+$ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 ```
 
 

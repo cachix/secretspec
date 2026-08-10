@@ -31,8 +31,10 @@ library currently accesses this key type through the non-interactive
 
 ```bash
 $ mkdir -p "$HOME/.config/age"
+
 $ age-keygen -pq -o "$HOME/.config/age/keys.txt"
 Public key: age1pq1...
+
 $ age-plugin-pq -identity -o "$HOME/.config/age/plugin-identity.txt" "$HOME/.config/age/keys.txt"
 
 $ secretspec set DATABASE_URL --provider "age://secrets.age?identity=$HOME/.config/age/plugin-identity.txt"
@@ -158,6 +160,7 @@ Commit the blob and its roster, and give the job an identity to decrypt with. Th
 
 ```bash
 $ export AGE_IDENTITY="$CI_AGE_IDENTITY"
+
 $ secretspec run --provider "age://secrets.age" -- deploy
 ```
 

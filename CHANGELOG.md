@@ -5,19 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Added
-
-- The Rust SDK can resolve a single secret with `Secrets::resolve_named`, which
-  reads only that secret and the inputs it composes from. An unrelated missing
-  required secret no longer fails the call, and the result distinguishes an
-  undeclared name (including one the active scope hides) from a declared secret
-  with no value, reporting whether that value was required.
-- `Secrets::with_default_reason` sets a session reason only when none is already
-  in effect, so an embedding application can describe itself without discarding
-  the reason its own caller supplied through `with_reason` or
-  `SECRETSPEC_REASON`.
+## [0.19.0] - 2026-08-09
 
 ### Changed
 
@@ -35,16 +23,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a single-secret read makes exactly the decisions batch resolution makes. It
   continues to read the whole profile regardless of an active scope, and audits
   the coordinates it actually reached.
-
-## [0.19.0] - 2026-08-09
-
-### Changed
 - The Rust SDK's `ProviderAlias` now provides `leaf`, `credentials`, and
   `credentials_mut` helpers so callers can construct and inspect leaf or
   inline-cached aliases without depending on their storage representation.
 
 ### Added
 
+- The Rust SDK can resolve a single secret with `Secrets::resolve_named`, which
+  reads only that secret and the inputs it composes from. An unrelated missing
+  required secret no longer fails the call, and the result distinguishes an
+  undeclared name (including one the active scope hides) from a declared secret
+  with no value, reporting whether that value was required.
+- `Secrets::with_default_reason` sets a session reason only when none is already
+  in effect, so an embedding application can describe itself without discarding
+  the reason its own caller supplied through `with_reason` or
+  `SECRETSPEC_REASON`.
 - Profiles can opt out of inheriting `[profiles.default]` by setting
   `inherit = false` in their profile defaults (0.19+), allowing standalone
   secret sets alongside profiles that still share the default declarations.

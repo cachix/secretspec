@@ -299,7 +299,7 @@ Provider credentials follow these rules:
   profiles should share one provider credential.
 - **Names are provider-specific.** The catalog above is exhaustive. Unsupported
   names are rejected before any source is read.
-- **A URI may not carry a credential (0.20+).** A provider URI with a password
+- **A URI may not carry a credential (0.19+).** A provider URI with a password
   (`scheme://user:secret@host`) is rejected, as is a service account token in
   the `onepassword+token://` userinfo. A URI is committed to `secretspec.toml`,
   echoed into shell history, and printed by CI, so a credential written there is

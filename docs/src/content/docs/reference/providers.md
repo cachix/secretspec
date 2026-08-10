@@ -205,7 +205,7 @@ onepassword+token://SecureVault    # Service account
 The `onepassword+token://` scheme selects service account authentication; the
 token comes from the `service_account_token` provider credential or
 `OP_SERVICE_ACCOUNT_TOKEN`. Putting the token in the URI
-(`onepassword+token://token@vault`) is rejected from 0.20 on, since a URI ends
+(`onepassword+token://token@vault`) is rejected from 0.19 on, since a URI ends
 up in committed manifests, shell history, and CI logs.
 
 **Features**: Read/write, cloud sync, profiles via vaults, service accounts

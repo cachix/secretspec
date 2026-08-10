@@ -992,7 +992,7 @@ impl Secrets {
     /// than storing an empty one. Precedence is therefore: an explicit
     /// [`Secrets::with_reason`], then `SECRETSPEC_REASON`, then this default.
     ///
-    /// Available since SecretSpec 0.20.
+    /// Available since SecretSpec 0.19.
     ///
     /// # Example
     ///
@@ -4491,7 +4491,7 @@ impl Secrets {
     /// secret, and persists an `as_path` temp file so the returned path outlives
     /// the call. Treat the payload as sensitive.
     ///
-    /// Available since SecretSpec 0.20.
+    /// Available since SecretSpec 0.19.
     ///
     /// # Example
     ///

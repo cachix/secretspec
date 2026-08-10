@@ -69,7 +69,7 @@ would leave that field unfillable. `SecretSpec::builder()` therefore has no
 profile. Use a separate manifest or the untyped API when a component needs a
 narrowed set.
 
-## Resolving one secret (0.20+)
+## Resolving one secret (0.19+)
 
 `resolve()` answers whether the whole profile can be satisfied, so a single
 missing required secret fails it and returns nothing. When a component needs one
@@ -84,7 +84,7 @@ surface this session resolves. Provider and configuration failures stay `Err`
 rather than turning into a missing value, and whole-profile presence constraints
 (`at_least_one`, `exactly_one`) are not evaluated for a single-secret read.
 
-`with_default_reason()` (also 0.20+) supplies a reason only when the caller has
+`with_default_reason()` (also 0.19+) supplies a reason only when the caller has
 not already set one through `with_reason()` or `SECRETSPEC_REASON`, so a wrapper
 can describe itself without overwriting the more specific reason it was given.
 

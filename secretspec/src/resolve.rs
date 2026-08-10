@@ -115,7 +115,7 @@ impl ResolveResponse {
 /// and whether its absence is an error. A genuine provider or configuration
 /// failure is never one of these variants; it surfaces as `Err` from the call.
 ///
-/// Available since SecretSpec 0.20.
+/// Available since SecretSpec 0.19.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NamedResolution {
     /// The name is not declared on the active resolution surface: either absent

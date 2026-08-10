@@ -1701,7 +1701,7 @@ impl TryFrom<&Url> for Box<dyn Provider> {
 /// Bitwarden organization, a 1Password account), so a scheme whose username
 /// carries a credential rejects it itself.
 ///
-/// Since SecretSpec 0.20.
+/// Since SecretSpec 0.19.
 fn reject_uri_credential(url: &ProviderUrl) -> Result<()> {
     if url.password().is_none() {
         return Ok(());

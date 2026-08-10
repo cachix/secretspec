@@ -3,11 +3,17 @@ title: Migration
 description: Bring existing secret declarations and values into SecretSpec
 ---
 
-SecretSpec can discover declarations from an existing `.env` file or copy
-values from another provider. Secret values are never written to
+SecretSpec can discover declarations from supported providers or copy values
+from another provider. Secret values are never written to
 `secretspec.toml`.
 
-## Start a new project from `.env`
+Dotenv files support declaration discovery in every current release.
+SecretSpec 0.18+ can also discover declarations from age files, AWS Systems
+Manager Parameter Store, and Bitwarden Password Manager vaults.
+
+## Start a new project from existing secrets
+
+### From `.env`
 
 When an existing project already has a `.env` file, initialize its manifest
 from the names in that file:
@@ -23,6 +29,28 @@ your configured default provider:
 ```bash
 $ secretspec import dotenv://.env
 ```
+
+### From another provider (0.18+)
+
+:::caution[Version compatibility]
+Declaration discovery from providers other than dotenv is available starting
+with SecretSpec 0.18.
+:::
+
+Use `init --from` with any provider that supports declaration discovery. For
+example, you can discover declarations from an AWS Parameter Store hierarchy:
+
+```bash
+$ secretspec init \
+    --from 'awsps://us-east-1?template=/{profile}/{project}/{key}' \
+    --project payments \
+    --profile production
+```
+
+Discovery creates declarations only; it does not copy secret values into
+`secretspec.toml`. You can also discover declarations from age files and
+Bitwarden Password Manager vaults. See the [`init`
+reference](/reference/cli/#init) for examples and provider-specific options.
 
 ## Import into an existing project
 

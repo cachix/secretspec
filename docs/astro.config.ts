@@ -160,7 +160,7 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
           items: [
             { label: "Quick Start", slug: "quick-start" },
             { label: "Migration", slug: "migration" },
-            { label: "Common Commands", slug: "common-commands" },
+            { label: "Basic Usage", slug: "basic-usage" },
             { label: "Comparison", slug: "comparison" },
           ],
         },

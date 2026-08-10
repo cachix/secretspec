@@ -1,5 +1,5 @@
 ---
-title: Common Commands
+title: Basic Usage
 description: The SecretSpec commands you will use most often
 ---
 

@@ -3,14 +3,47 @@ title: Bitwarden Password Manager Provider
 description: Bitwarden Password Manager secrets management integration
 ---
 
-The `bw` provider integrates with Bitwarden Password Manager for secret management with vault-wide access to all item types.
+The `bw` provider reads and writes secrets in Bitwarden Password Manager by
+using the official `bw` CLI.
 
 :::note[Version compatibility]
-The Bitwarden Password Manager provider is an upcoming SecretSpec 0.18 feature and is not
-available in SecretSpec 0.17.
+The Bitwarden Password Manager provider was added in SecretSpec 0.18.
 :::
 
-## Prerequisites
+## At a glance
+
+| | |
+|---|---|
+| Provider | `bw` |
+| URI | `bw://[COLLECTION\|ORGANIZATION@COLLECTION][?options]` |
+| Access | Read and write |
+| Best for | Existing Bitwarden Password Manager vaults and items |
+| Authentication | An unlocked `bw` CLI session through `BW_SESSION` |
+| Build feature | `bw` |
+
+## Quick start
+
+Sign in, unlock the vault, and export the session returned by `bw unlock`:
+
+```bash
+$ bw login
+
+$ export BW_SESSION="$(bw unlock --raw)"
+```
+
+Then write a secret and use it in a command:
+
+```bash
+$ secretspec set DATABASE_URL --provider bw://
+Enter value for DATABASE_URL: postgresql://localhost/mydb
+✓ Secret 'DATABASE_URL' saved to bw (profile: default)
+
+$ secretspec run --provider bw:// -- npm start
+```
+
+## Setup
+
+### Prerequisites
 
 - Bitwarden CLI (`bw`)
 - Bitwarden account
@@ -18,63 +51,20 @@ available in SecretSpec 0.17.
 - Signed in via `bw login` and unlocked with `bw unlock`
 - `BW_SESSION` environment variable set
 
-## Configuration
+Build SecretSpec with `--features bw` when the provider is not included by
+your package.
 
-### URI Format
+### Authentication
 
-#### Password Manager URIs
-```
-bw://[collection]
-bw://[org@collection]
-bw://?server=https://vault.company.com
-bw://?type=login&field=password
-```
-
-- `collection`: Target collection, by name or by ID
-- `org@collection`: Organization and collection, each by name or by ID
-- `type`: Item type (login, card, identity, sshkey, securenote)
-- `field`: Specific field to extract
-- `server`: The self-hosted server this configuration expects. This does **not**
-  configure the CLI — it is a guard that fails with remediation steps when the
-  `bw` CLI is pointed somewhere else. See [Self-hosted servers](#self-hosted-servers).
-
-##### Addressing organizations and collections (0.18+)
-
-Names and IDs are interchangeable: SecretSpec resolves a name to the ID the
-`bw` CLI requires. Names match case-insensitively, and one containing a space
-must be percent-encoded (`bw://Acme%20Inc@dev-secrets`).
-
-The organization is a scope and an assertion rather than a filter. It selects
-which `dev-secrets` you mean when several organizations have one, and it must
-agree with the collection you named — addressing a collection that lives
-somewhere else is an error rather than a silent search of the wrong place. A
-collection identifies its own organization, so naming the organization is
-optional whenever the collection name is unambiguous:
+The provider uses the active `bw` CLI session. Export the session key after
+unlocking the vault:
 
 ```bash
-$ secretspec get DATABASE_URL --provider "bw://dev-secrets"
+$ export BW_SESSION="your-session-key"
 ```
 
-An address that cannot be resolved fails immediately and lists the
-organizations or collections that do exist. If a collection was created or
-shared with you recently, run `bw sync` so the CLI can see it.
-
-### Examples
-
-```bash
-# Password Manager - Personal vault
-$ secretspec set API_KEY --provider bw://
-
-# Password Manager - Organization collection
-$ secretspec set DATABASE_URL --provider "bw://myorg@dev-secrets"
-
-# Password Manager - Self-hosted instance (CLI must already be configured
-# for this server; see Self-hosted servers below)
-$ secretspec set TOKEN --provider "bw://?server=https://vault.company.com"
-
-# Password Manager - Specific item type and field
-$ secretspec get 'MyApp Database' --provider 'bw://?type=login&field=username'
-```
+SecretSpec distinguishes between a CLI that is signed out and a vault that is
+still locked, and reports the appropriate `bw login` or `bw unlock` command.
 
 ### Self-hosted servers
 
@@ -110,21 +100,83 @@ company_vault = "bw://?server=https://vault.company.com"
 
 Omit `?server=` to accept whatever server the CLI is configured for.
 
-## Usage
+## Configuration
 
-### Basic Commands
+### URI format
+
+```
+bw://[collection]
+bw://[org@collection]
+bw://?server=https://vault.company.com
+bw://?type=login&field=password
+```
+
+- `collection`: Target collection, by name or by ID
+- `org@collection`: Organization and collection, each by name or by ID
+- `type`: Item type (login, card, identity, sshkey, securenote)
+- `field`: Specific field to extract
+- `server`: The self-hosted server this configuration expects. This does **not**
+  configure the CLI — it is a guard that fails with remediation steps when the
+  `bw` CLI is pointed somewhere else. See [Self-hosted servers](#self-hosted-servers).
+
+### Organizations and collections (0.18+)
+
+Names and IDs are interchangeable: SecretSpec resolves a name to the ID the
+`bw` CLI requires. Names match case-insensitively, and one containing a space
+must be percent-encoded (`bw://Acme%20Inc@dev-secrets`).
+
+The organization is a scope and an assertion rather than a filter. It selects
+which `dev-secrets` you mean when several organizations have one, and it must
+agree with the collection you named — addressing a collection that lives
+somewhere else is an error rather than a silent search of the wrong place. A
+collection identifies its own organization, so naming the organization is
+optional whenever the collection name is unambiguous:
 
 ```bash
-# Set a secret (Password Manager)
-$ secretspec set DATABASE_URL
-Enter value for DATABASE_URL: postgresql://localhost/mydb
-✓ Secret DATABASE_URL saved to Bitwarden
+$ secretspec get DATABASE_URL --provider "bw://dev-secrets"
+```
 
-# Get a secret from existing vault item
-$ secretspec get 'MyApp Database' --provider 'bw://?type=login'
+An address that cannot be resolved fails immediately and lists the
+organizations or collections that do exist. If a collection was created or
+shared with you recently, run `bw sync` so the CLI can see it.
 
-# Run with secrets
-$ secretspec run -- npm start
+### URI examples
+
+```bash
+# Password Manager - Personal vault
+$ secretspec set API_KEY --provider bw://
+
+# Password Manager - Organization collection
+$ secretspec set DATABASE_URL --provider "bw://myorg@dev-secrets"
+
+# Password Manager - Self-hosted instance (CLI must already be configured
+# for this server; see Self-hosted servers below)
+$ secretspec set TOKEN --provider "bw://?server=https://vault.company.com"
+
+# Password Manager - Specific item type and field
+$ secretspec get 'MyApp Database' --provider 'bw://?type=login&field=username'
+```
+
+### Project configuration
+
+Define reusable aliases when a team uses a shared organization or collection:
+
+```toml title="secretspec.toml"
+[providers]
+team_vault = "bw://myorg@dev-secrets"
+
+[profiles.default.defaults]
+providers = ["team_vault"]
+```
+
+Profiles can select different aliases or the provider directly:
+
+```toml title="secretspec.toml"
+[profiles.development.defaults]
+providers = ["bw"]
+
+[profiles.production.defaults]
+providers = ["bw"]
 ```
 
 ### Discover declarations (0.18+)
@@ -152,11 +204,34 @@ context does not change Bitwarden item names. To migrate the discovered values
 after reviewing the declarations, run the `secretspec import` command printed
 by `init`.
 
-### Item Type Configuration
+### Environment defaults
+
+Environment variables can supply defaults when they are not present in the
+provider URI:
+
+```bash
+$ export BITWARDEN_DEFAULT_TYPE=login
+
+$ export BITWARDEN_DEFAULT_FIELD=password
+
+$ export BITWARDEN_ORGANIZATION=myorg
+
+$ export BITWARDEN_COLLECTION=dev-secrets
+
+$ secretspec get DATABASE_PASSWORD --provider bw://
+```
+
+Organization and collection values can be names or IDs and resolve in the same
+way as values in the URI.
+
+## Storage model
 
 The Bitwarden provider supports all Bitwarden item types with smart field detection:
 
-#### Login Items (Default)
+### Item types
+
+#### Login items
+
 ```bash
 # Get password field (default)
 $ secretspec get 'Database Login' --provider 'bw://?type=login'
@@ -168,7 +243,8 @@ $ secretspec get 'Database Login' --provider 'bw://?type=login&field=username'
 $ secretspec get 'API Service' --provider 'bw://?type=login&field=api_key'
 ```
 
-#### Credit Card Items
+#### Credit card items
+
 ```bash
 # Get API key from custom field (field required)
 $ secretspec get 'Stripe Payment' --provider 'bw://?type=card&field=api_key'
@@ -177,7 +253,8 @@ $ secretspec get 'Stripe Payment' --provider 'bw://?type=card&field=api_key'
 $ secretspec get 'Company Card' --provider 'bw://?type=card&field=number'
 ```
 
-#### SSH Key Items
+#### SSH key items
+
 ```bash
 # Get private key (default)
 $ secretspec get 'Deploy Key' --provider 'bw://?type=sshkey'
@@ -193,7 +270,8 @@ therefore filled with `(not set by SecretSpec)`. Replace them in Bitwarden if
 you need the real values, or write them yourself with `?field=public_key` and
 `?field=key_fingerprint`.
 
-#### Identity Items
+#### Identity items
+
 ```bash
 # Get custom field (field required)
 $ secretspec get 'Employee Record' --provider 'bw://?type=identity&field=employee_id'
@@ -202,65 +280,14 @@ $ secretspec get 'Employee Record' --provider 'bw://?type=identity&field=employe
 $ secretspec get 'Personal Identity' --provider 'bw://?type=identity&field=email'
 ```
 
-#### Secure Note Items
+#### Secure note items
+
 ```bash
 # Get value from secure note
 $ secretspec get 'Legacy Config' --provider 'bw://?type=securenote&field=config_value'
 ```
 
-### Profile Configuration
-
-```toml
-# secretspec.toml
-[profiles.development.defaults]
-providers = ["bw"]
-
-[profiles.production.defaults]
-providers = ["bw"]
-
-```
-
-### Environment Variables
-
-#### Authentication
-```bash
-# Password Manager session
-$ export BW_SESSION="your-session-key"
-```
-
-#### Configuration Defaults
-```bash
-# Set item type and field defaults
-$ export BITWARDEN_DEFAULT_TYPE=login
-
-$ export BITWARDEN_DEFAULT_FIELD=password
-
-# Organization settings (names or IDs, resolved the same way as in the URI)
-$ export BITWARDEN_ORGANIZATION=myorg
-
-$ export BITWARDEN_COLLECTION=dev-secrets
-
-# Use defaults
-$ secretspec get DATABASE_PASSWORD --provider bw://
-```
-
-### CI/CD Integration
-
-#### Password Manager with Session Key
-```bash
-# Login and unlock (interactive)
-$ bw login
-
-$ bw unlock
-
-# Export session for automation
-$ export BW_SESSION="session-key-from-unlock"
-
-# Use in CI/CD
-$ secretspec run --provider bw://Production -- deploy
-```
-
-### Default Field by Item Type
+### Default fields
 
 When no field is named, each item type uses the default below. The same default
 applies to reads and writes, so `secretspec set` followed by `secretspec get`
@@ -317,11 +344,53 @@ That is how a Card and a Login of the same name stay separately addressable:
 $ secretspec get API_KEY --provider "bw://?type=card"
 ```
 
-## Error Handling
+## Use existing secrets
+
+The secret name selects an existing Bitwarden item by default:
+
+```bash
+$ secretspec get 'MyApp Database' --provider 'bw://?type=login'
+```
+
+Use a `ref` when the SecretSpec key and Bitwarden item name differ, or when a
+specific field is required:
+
+```toml title="secretspec.toml"
+[profiles.default]
+DATABASE_URL = { description = "Application database", ref = { item = "MyApp Database", field = "password" }, providers = ["bw"] }
+```
+
+## CI/CD
+
+Provide an unlocked session to the job as `BW_SESSION`, then select the
+provider as usual:
+
+```bash
+$ export BW_SESSION="session-key-from-unlock"
+
+$ secretspec run --provider bw://Production -- deploy
+```
+
+Treat the session key as a CI secret and avoid printing it in job logs.
+
+## Security considerations
+
+- `BW_SESSION` unlocks the vault for the lifetime of the session, and the
+  provider has vault-wide access. Keep the session key out of checked-in
+  configuration and shell history.
+- Scope provider URIs to the intended organization and collection when
+  possible.
+- For self-hosted installations, use `?server=` as a guard against operating
+  on a differently configured vault.
+- Ambiguous item names fail instead of selecting one silently; use an item ID
+  to disambiguate intentional duplicates.
+
+## Troubleshooting
 
 The provider includes comprehensive error handling with helpful guidance:
 
-### CLI Installation
+### CLI installation
+
 ```
 Bitwarden CLI (bw) is not installed.
 
@@ -331,18 +400,21 @@ To install it:
   - Download: https://bitwarden.com/help/cli/
 ```
 
-### Authentication Issues
+### Authentication issues
+
 - Clear distinction between "not logged in" vs "vault locked"
 - Step-by-step guidance for `bw login` and `bw unlock`
 - Session key setup instructions
 
-### Server Mismatch
+### Server mismatch
+
 When `?server=` names a different server than the one the `bw` CLI is configured
 for, the operation stops before touching the vault and reports both addresses
 alongside the `bw logout` / `bw config server` / `bw login` / `bw unlock`
 sequence needed to correct it.
 
-### Item Access
+### Item access
+
 - Graceful handling of missing items
 - Field validation and suggestions
 - Organization/collection permission guidance

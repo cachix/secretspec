@@ -1,19 +1,50 @@
 ---
-title: "SOPS: Secrets OPerationS"
-description: SOPS integration
+title: SOPS Provider
+description: Store secrets in SOPS-encrypted files
 tableOfContents:
   maxHeadingLevel: 4
 ---
 
 import ProviderCredentials from '../../../components/ProviderCredentials.astro';
 
-The SOPS provider integrates with <a href="https://getsops.io" target="_blank" rel="noopener noreferrer">SOPS</a> to enable reading and writing of secrets encrypted at rest in local files.
+The `sops` provider reads and writes secrets in files encrypted with
+<a href="https://getsops.io" target="_blank" rel="noopener noreferrer">SOPS</a>.
 
 :::caution[Version compatibility]
-The `sops` provider is added in SecretSpec 0.17.
+The `sops` provider was added in SecretSpec 0.17.
 :::
 
-## Prerequisites
+## At a glance
+
+| | |
+|---|---|
+| Provider | `sops` |
+| URI | `sops://[PATH][?options]` |
+| Access | Read and write |
+| Best for | Encrypted files stored alongside a project |
+| Authentication | SOPS key configuration or SecretSpec provider credentials |
+| Build feature | `sops` |
+
+## Quick start
+
+After installing SOPS and configuring a creation rule or another encryption
+method, write a secret to an encrypted YAML file:
+
+```bash
+$ secretspec set DATABASE_URL --provider sops://secrets.enc.yaml
+```
+
+Use the same provider to inject the secret into a command:
+
+```bash
+$ secretspec run --provider sops://secrets.enc.yaml -- npm start
+```
+
+See [Setup](#setup) if SOPS does not already know which keys to use.
+
+## Setup
+
+### Prerequisites
 
 - The SOPS CLI available within the environment:
   - <a href="https://github.com/getsops/sops/releases" target="_blank" rel="noopener noreferrer">Manually download a release binary</a>
@@ -21,25 +52,65 @@ The `sops` provider is added in SecretSpec 0.17.
   - Install with a package manager:
 
     ```bash
-      # Homebrew
-      $ brew install sops
+    # Homebrew
+    $ brew install sops
 
-      # Arch
-      $ sudo pacman -S sops
+    # Arch
+    $ sudo pacman -S sops
     ```
+
+- The keys or credentials required by the selected SOPS encryption method
+- Build SecretSpec with `--features sops` when the provider is not included by
+  your package
+
+For a new file, SOPS needs either encryption options in the provider URI or a
+matching creation rule in `.sops.yaml`. For example:
+
+```yaml title=".sops.yaml"
+creation_rules:
+  - path_regex: secrets\.enc\.yaml$
+    age: "age1jpa8rf5qmrg6pw444fcgpkaxg8x4neueszrexzagdjpunjlgeyzq304w34"
+```
+
+## Provider credentials
+
+Secret values used to authenticate SOPS belong in a provider alias's
+`credentials` map, not in the SOPS URI.
+
+<ProviderCredentials provider="sops" />
+
+For example, this alias loads an age identity from the system keyring and
+passes it only to the SOPS child process:
+
+```toml title="secretspec.toml"
+[providers.sops_age]
+uri = "sops://secrets.enc.yaml?age_recipients=age1example"
+
+[providers.sops_age.credentials]
+age_key = "keyring"
+
+[profiles.production.defaults]
+providers = ["sops_age"]
+```
+
+When a credential is not declared on the alias, SOPS can still use its normal
+environment variable.
 
 ## Configuration
 
-### URI Format
+### URI format
 
-```
-sops://path/to/secret[?key=value[&key=value]...]
+```text
+sops://[path/to/secret][?key=value[&key=value]...]
 ```
 
-- `path/to/secret` — required path to the encrypted file (absolute or relative)
+- `path/to/secret` — optional absolute or relative path to the encrypted file;
+  defaults to `secrets.enc.yaml`
 
   - :::tip[Secrets in multiple files?]
-    In order to represent more than one file the path must be templated. i.e. separate SOPS-encrypted files per profile, or a hierarchical directory structure.
+    To represent more than one file, use a templated path. This supports
+    separate SOPS-encrypted files per profile or a hierarchical directory
+    structure.
 
     A templated path must include both `{project}` and `{profile}` placeholders. Examples:
 
@@ -47,12 +118,31 @@ sops://path/to/secret[?key=value[&key=value]...]
     - `sops://secrets-dir/{project}/{profile}.enc.yaml`
       :::
 
-- `?key=value` -- optional query parameter, refer to the [Query Parameters section](#query-parameters) for available parameters.
+- `?key=value` — optional query parameter; see [Query parameters](#query-parameters)
 - `&key=value` — additional parameters
 
-### Query Parameters
+### Project configuration
 
-Excepting the SecretSpec-specific `format` parameter, refer to <a href="https://getsops.io/docs/#usage" target="_blank" rel="noopener noreferrer">the SOPS documentation</a> for the purpose and usage of each parameter.
+Use an alias to keep the storage path and encryption settings in
+`secretspec.toml`:
+
+```toml title="secretspec.toml"
+[providers]
+encrypted_file = "sops://secrets/{project}/{profile}.enc.yaml"
+
+[profiles.default.defaults]
+providers = ["encrypted_file"]
+```
+
+Templated paths must contain both `{project}` and `{profile}`. Use a
+single-file URI when every project and profile should share one encrypted
+document.
+
+### Query parameters
+
+Except for the SecretSpec-specific `format` parameter, see the
+<a href="https://getsops.io/docs/#usage" target="_blank" rel="noopener noreferrer">SOPS documentation</a>
+for the purpose and usage of each parameter.
 
 #### SecretSpec
 
@@ -118,7 +208,7 @@ Excepting the SecretSpec-specific `format` parameter, refer to <a href="https://
 | --------------------------------- | ---------------------------------- |
 | gpg_exec                          | SOPS_GPG_EXEC                      |
 
-#### Hashicorp Vault/OpenBao
+#### HashiCorp Vault/OpenBao
 
 | Provider URL Query Parameter Name | Corresponding Environment Variable |
 | --------------------------------- | ---------------------------------- |
@@ -132,31 +222,7 @@ Excepting the SecretSpec-specific `format` parameter, refer to <a href="https://
 | huawei_kms_ids                    | SOPS_HUAWEICLOUD_KMS_IDS           |
 | huawei_sdk_project_id             | HUAWEICLOUD_SDK_PROJECT_ID         |
 
-## Provider credentials
-
-Secret values used to authenticate SOPS belong in a provider alias's
-`credentials` map, not in the SOPS URI.
-
-<ProviderCredentials provider="sops" />
-
-For example, this alias loads an age identity from the system keyring and
-passes it only to the SOPS child process:
-
-```toml title="secretspec.toml"
-[providers.sops_age]
-uri = "sops://secrets.enc.yaml?age_recipients=age1example"
-
-[providers.sops_age.credentials]
-age_key = "keyring"
-
-[profiles.production.defaults]
-providers = ["sops_age"]
-```
-
-When a credential is not declared on the alias, SOPS can still use its normal
-environment variable.
-
-## Storage layout
+## Storage model
 
 The URI shape determines the on-disk layout. This matters when editing a file
 with `sops` directly and when diagnosing a value set under the wrong profile.
@@ -204,7 +270,7 @@ the resolved provider URI, profile, file, and selector before prompting for or
 writing the value. This makes an accidentally omitted `--profile` visible
 before the encrypted file changes.
 
-## Format handling
+### Format handling
 
 SecretSpec asks SOPS to emit JSON when decrypting, then uses one lookup path
 for YAML, JSON, dotenv, and INI files. When `?format=` is present, SecretSpec
@@ -221,7 +287,7 @@ different profiles. Use a templated path such as
 `secrets/{project}/.env.{profile}.enc?format=dotenv` when profiles need
 separate dotenv values.
 
-## Secret references
+## Use existing secrets
 
 SOPS supports `ref = { item = "..." }` against a **single-file** provider URI.
 For YAML, JSON, and dotenv, the item names a root key and does not add the
@@ -244,7 +310,7 @@ templated SOPS URI also rejects refs: without convention
 external item belongs to. See [Secret References](/concepts/references/) for
 the general model.
 
-## Usage
+## Advanced configuration
 
 ### Set a secret with age
 
@@ -266,3 +332,28 @@ then:
 ```bash
 $ secretspec set DATABASE_URL --provider sops://secrets.enc.json
 ```
+
+## CI/CD
+
+Make the selected SOPS key service available to the job through provider
+credentials or its standard environment variables, then run SecretSpec with
+the configured alias:
+
+```bash
+$ secretspec run --profile production --provider sops_age -- deploy
+```
+
+Provider credentials are exposed only to the SOPS child process. Store their
+backing values in the CI platform's secret store rather than in the provider
+URI.
+
+## Security considerations
+
+- Commit only the SOPS-encrypted files, never decrypted copies or private key
+  material.
+- Keep authentication values in provider credentials or SOPS environment
+  variables instead of URI query parameters.
+- Review the resolved file and selector shown by `secretspec set` and
+  interactive `secretspec check` in SecretSpec 0.19+ before confirming a
+  write.
+- Use templated paths when profiles must not share the same dotenv key.

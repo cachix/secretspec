@@ -159,8 +159,8 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
           label: "Getting Started",
           items: [
             { label: "Quick Start", slug: "quick-start" },
-            { label: "Migration", slug: "migration" },
             { label: "Basic Usage", slug: "basic-usage" },
+            { label: "Migration", slug: "migration" },
             { label: "Comparison", slug: "comparison" },
           ],
         },

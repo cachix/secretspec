@@ -77,6 +77,11 @@ Next steps:
 
 </div>
 
+This example assumes the project does not have a `.env` file. If one exists,
+`init` discovers its secret names automatically and reports the number of
+declarations it created. Review those declarations instead of replacing them
+in the next step. See [Migration](/migration/) for details.
+
 ### 2. Declare your secrets
 
 Edit `secretspec.toml` so it describes what your application expects:

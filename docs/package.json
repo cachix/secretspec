@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
-    "build": "npm run check:provider-credentials && npm run check:terminal-copy && astro check && astro build",
+    "build": "npm run check:provider-credentials && npm run check:terminal-copy && astro check && astro build && npm run check:links",
+    "check:links": "node --test scripts/check-internal-links.test.mjs && node scripts/check-internal-links.mjs",
     "check:provider-credentials": "node --test scripts/provider-credentials.test.mjs && node scripts/check-provider-credentials.mjs",
     "check:terminal-copy": "node --test scripts/terminal-copy.test.mjs",
     "preview": "astro preview",

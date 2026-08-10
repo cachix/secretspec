@@ -846,7 +846,7 @@ entry declares neither, it inherits whichever form `[profiles.default]` uses.
 
 | Provider | `item` | `field` | Without `field` | Writes via ref |
 |----------|--------|---------|-----------------|----------------|
-| [OnePassword](/providers/onepassword/#use-existing-secrets) | Item title or UUID | Field label; `vault` and `section` also apply | Reads the item like a convention secret (its value or password field); writes edit the `value` field | ✅ via `op item edit` (adds a missing field, never creates items) |
+| [1Password](/providers/onepassword/#use-existing-secrets) | Item title or UUID | Field label; `vault` and `section` also apply | Reads the item like a convention secret (its value or password field); writes edit the `value` field | ✅ via `op item edit` (adds a missing field, never creates items) |
 | [Keeper (0.18+)](/providers/keeper/#use-existing-records) | Record UID or exact title | Standard field type/label or custom field label | Reads `password` | ✅ for existing records and fields |
 | [keyring](/providers/keyring/#use-existing-secrets) | Service | Account (defaults to the current system username) | Current user's entry | ✅ |
 | [dotenv](/providers/dotenv/#use-existing-secrets) | `.env` key | Rejected | Reads the key | ✅ |

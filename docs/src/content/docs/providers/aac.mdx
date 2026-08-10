@@ -9,27 +9,27 @@ The Azure App Configuration provider reads and manages ordinary key-values and
 resolves canonical Azure Key Vault references.
 
 :::caution[Version compatibility]
-The `azappconfig` provider is added in SecretSpec 0.19.
+The `aac` provider is added in SecretSpec 0.19.
 :::
 
 ## At a glance
 
 | | |
 | --- | --- |
-| Provider | `azappconfig` (0.19+) |
-| URI | `azappconfig://STORE[?OPTIONS]` |
+| Provider | `aac` (0.19+) |
+| URI | `aac://STORE[?OPTIONS]` |
 | Access | Read, write, delete, and discovery; native references are read-only |
 | Best for | Azure applications that centralize configuration and Key Vault references |
 | Authentication | Service principal, Azure CLI, managed identity, workload identity, or App Configuration connection string |
-| Availability | SecretSpec 0.19+; requires the `azappconfig` build feature |
+| Availability | SecretSpec 0.19+; requires the `aac` build feature |
 | Default storage | `secretspec:{project}:{profile}:{key}` with no label |
 
 ## Quick start
 
 ```bash
-$ secretspec set DATABASE_URL --provider azappconfig://payments-production
-$ secretspec get DATABASE_URL --provider azappconfig://payments-production
-$ secretspec run --provider azappconfig://payments-production -- your-command
+$ secretspec set DATABASE_URL --provider aac://payments-production
+$ secretspec get DATABASE_URL --provider aac://payments-production
+$ secretspec run --provider aac://payments-production -- your-command
 ```
 
 ## Setup
@@ -43,7 +43,7 @@ $ secretspec run --provider azappconfig://payments-production -- your-command
   read-write access key for writes and deletes
 - **Key Vault Secrets User** on each referenced vault when entries are Key
   Vault references
-- Build with `--features azappconfig` (0.19+)
+- Build with `--features aac` (0.19+)
 
 ### Authentication
 
@@ -76,14 +76,14 @@ Select authentication with `auth`:
 
 ## Provider credentials
 
-<ProviderCredentials provider="azappconfig" />
+<ProviderCredentials provider="aac" />
 
 ## Configuration
 
 ### URI format
 
 ```text
-azappconfig://STORE[?auth=env|cli|managed_identity|workload_identity|connection_string]
+aac://STORE[?auth=env|cli|managed_identity|workload_identity|connection_string]
   [&suffix=DNS_SUFFIX][&audience=TOKEN_AUDIENCE]
   [&key_vault_auth=inherit|env|cli|managed_identity|workload_identity]
   [&key_vault_suffix=DNS_SUFFIX]
@@ -114,18 +114,18 @@ azappconfig://STORE[?auth=env|cli|managed_identity|workload_identity|connection_
   `vault.azure.net`. Referenced vaults must be direct subdomains of this suffix.
 
 ```text
-azappconfig://payments-production
-azappconfig://shared?label=production&prefix=payments:
-azappconfig://shared?tag=app=payments&tag=stage=production
-azappconfig://shared?auth=connection_string&key_vault_auth=managed_identity
-azappconfig://store.example.com?audience=https%3A%2F%2Fappconfig.example.com&key_vault_suffix=vault.example.com
+aac://payments-production
+aac://shared?label=production&prefix=payments:
+aac://shared?tag=app=payments&tag=stage=production
+aac://shared?auth=connection_string&key_vault_auth=managed_identity
+aac://store.example.com?audience=https%3A%2F%2Fappconfig.example.com&key_vault_suffix=vault.example.com
 ```
 
 ### Project configuration
 
 ```toml title="secretspec.toml"
 [providers.app_config]
-uri = "azappconfig://shared?label=production&prefix=payments:"
+uri = "aac://shared?label=production&prefix=payments:"
 
 [providers.app_config.credentials]
 tenant_id = "keyring"
@@ -175,7 +175,7 @@ value.
 DATABASE_URL = {
   description = "Database URL",
   ref = { item = "payments:database-url" },
-  providers = ["azappconfig://shared?label=production"]
+  providers = ["aac://shared?label=production"]
 }
 ```
 
@@ -203,7 +203,7 @@ references, **Key Vault Secrets User** on the required vaults:
 
 ```bash
 $ secretspec run \
-    --provider 'azappconfig://payments-production?auth=workload_identity' \
+    --provider 'aac://payments-production?auth=workload_identity' \
     -- deploy
 ```
 
@@ -218,7 +218,7 @@ connection string in the URI:
 
 ```toml title="secretspec.toml"
 [providers.app_config_ci]
-uri = "azappconfig://payments-production?auth=connection_string"
+uri = "aac://payments-production?auth=connection_string"
 
 [providers.app_config_ci.credentials]
 connection_string = "keyring"
@@ -256,7 +256,7 @@ resolve references across those authorized vaults without changing its shape.
 
 ## Discovery and caching
 
-`secretspec init --from azappconfig://STORE` discovers convention entries for
+`secretspec init --from aac://STORE` discovers convention entries for
 the active project, profile, prefix, label, and tags. Direct values and Key
 Vault references are discoverable; unsupported special content types stop
 discovery.

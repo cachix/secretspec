@@ -86,7 +86,7 @@ impl ProviderUrl {
     }
 
     #[cfg(any(
-        feature = "azappconfig",
+        feature = "aac",
         feature = "infisical",
         feature = "openbao",
         feature = "vault",

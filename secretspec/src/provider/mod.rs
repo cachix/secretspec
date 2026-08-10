@@ -38,7 +38,7 @@
 //! - [`openbao::OpenBaoProvider`]: OpenBao integration (0.17+)
 //! - [`bws::BwsProvider`]: Bitwarden Secrets Manager integration
 //! - [`akv::AkvProvider`]: Azure Key Vault integration
-//! - [`azappconfig::AzAppConfigProvider`]: Azure App Configuration integration (0.19+)
+//! - [`aac::AacProvider`]: Azure App Configuration integration (0.19+)
 //! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
 //! - [`bw::BitwardenProvider`]: Bitwarden Password Manager (0.18+)
 //! - [`sops::SopsProvider`]: SOPS-encrypted file integration (0.17+)
@@ -135,6 +135,8 @@ pub(crate) use traits::{get_each_concurrency, map_concurrently, same_storage_con
 pub(crate) use url::{ProviderUrl, URI_ENCODE_SET};
 
 // Provider implementations.
+#[cfg(feature = "aac")]
+pub mod aac;
 #[cfg(feature = "age")]
 pub mod age;
 #[cfg(feature = "akv")]
@@ -143,8 +145,6 @@ pub mod akv;
 pub mod awsps;
 #[cfg(feature = "awssm")]
 pub mod awssm;
-#[cfg(feature = "azappconfig")]
-pub mod azappconfig;
 #[cfg(feature = "bw")]
 pub mod bw;
 #[cfg(feature = "bws")]

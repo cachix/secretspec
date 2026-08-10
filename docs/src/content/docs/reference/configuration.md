@@ -871,7 +871,7 @@ entry declares neither, it inherits whichever form `[profiles.default]` uses.
 | [GCSM](/providers/gcsm/#use-existing-secrets) | Secret id; `version` also applies | Rejected | Reads latest or the pinned version | — (read-only) |
 | [Bitwarden (bws)](/providers/bws/#use-existing-secrets) | BWS key name | Rejected | Reads the key | ✅ |
 | [Azure Key Vault (0.15+)](/providers/akv/#use-existing-secrets) | Secret name; `version` pins a version (0.19+) | Rejected | Reads latest or the pinned version (0.19+) | — (read-only) |
-| [Azure App Configuration (0.19+)](/providers/azappconfig/#use-existing-key-values) | App Configuration key | Rejected | Reads the direct value or resolves its canonical Key Vault reference | — (read-only) |
+| [Azure App Configuration (0.19+)](/providers/aac/#use-existing-key-values) | App Configuration key | Rejected | Reads the direct value or resolves its canonical Key Vault reference | — (read-only) |
 | [Infisical (0.16+)](/providers/infisical/#use-existing-secrets) | Folder and key; `version` also applies | Rejected | Reads the latest version | ✅ unless a version is pinned |
 
 A provider rejects coordinates it has no equivalent for, with an error naming

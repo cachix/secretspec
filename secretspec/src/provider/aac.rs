@@ -22,7 +22,7 @@
 //! # URI format
 //!
 //! ```text
-//! azappconfig://STORE[?auth=env|cli|managed_identity|workload_identity|connection_string]
+//! aac://STORE[?auth=env|cli|managed_identity|workload_identity|connection_string]
 //!   [&suffix=DNS_SUFFIX][&audience=TOKEN_AUDIENCE]
 //!   [&key_vault_auth=inherit|env|cli|managed_identity|workload_identity]
 //!   [&key_vault_suffix=DNS_SUFFIX]
@@ -57,9 +57,9 @@
 //! # Examples
 //!
 //! ```bash
-//! secretspec check --provider azappconfig://payments-prod
-//! secretspec check --provider 'azappconfig://shared?label=production&prefix=payments:'
-//! secretspec check --provider 'azappconfig://shared?tag=app=payments&tag=stage=production'
+//! secretspec check --provider aac://payments-prod
+//! secretspec check --provider 'aac://shared?label=production&prefix=payments:'
+//! secretspec check --provider 'aac://shared?tag=app=payments&tag=stage=production'
 //! ```
 
 use super::{
@@ -114,7 +114,7 @@ impl AppConfigAuth {
             "workload_identity" => Ok(Self::WorkloadIdentity),
             "connection_string" => Ok(Self::ConnectionString),
             other => Err(operation_error(format!(
-                "unknown azappconfig auth method '{other}': expected env, cli, \
+                "unknown aac auth method '{other}': expected env, cli, \
                  managed_identity, workload_identity, or connection_string"
             ))),
         }
@@ -166,7 +166,7 @@ impl KeyVaultAuth {
 
 /// Credential-free Azure App Configuration provider configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AzAppConfigConfig {
+pub struct AacConfig {
     store_host: String,
     endpoint: String,
     auth: AppConfigAuth,
@@ -181,30 +181,30 @@ pub struct AzAppConfigConfig {
     tags: Vec<(String, String)>,
 }
 
-impl TryFrom<&ProviderUrl> for AzAppConfigConfig {
+impl TryFrom<&ProviderUrl> for AacConfig {
     type Error = SecretSpecError;
 
     fn try_from(url: &ProviderUrl) -> Result<Self> {
-        if url.scheme() != "azappconfig" {
+        if url.scheme() != "aac" {
             return Err(operation_error(format!(
-                "invalid scheme '{}' for azappconfig provider: expected azappconfig",
+                "invalid scheme '{}' for aac provider: expected aac",
                 url.scheme()
             )));
         }
         if !url.username().is_empty() || url.password().is_some() {
             return Err(operation_error(
-                "azappconfig URIs cannot contain user information".to_string(),
+                "aac URIs cannot contain user information".to_string(),
             ));
         }
         if url.port().is_some() {
             return Err(operation_error(
-                "azappconfig endpoints cannot contain an explicit port".to_string(),
+                "aac endpoints cannot contain an explicit port".to_string(),
             ));
         }
 
         let store_host = url.host().filter(|host| !host.is_empty()).ok_or_else(|| {
             operation_error(
-                "Azure App Configuration store is required: use azappconfig://STORE".to_string(),
+                "Azure App Configuration store is required: use aac://STORE".to_string(),
             )
         })?;
         let path = url.path();
@@ -212,7 +212,7 @@ impl TryFrom<&ProviderUrl> for AzAppConfigConfig {
         if !item.is_empty() {
             let hint = crate::config::ref_table_hint(None, item, None, None);
             return Err(operation_error(format!(
-                "azappconfig URIs take no path: address the key with {hint} on the secret instead"
+                "aac URIs take no path: address the key with {hint} on the secret instead"
             )));
         }
 
@@ -235,32 +235,30 @@ impl TryFrom<&ProviderUrl> for AzAppConfigConfig {
                     | "label"
                     | "prefix"
             ) {
-                return Err(operation_error(format!(
-                    "unknown azappconfig parameter '{name}'"
-                )));
+                return Err(operation_error(format!("unknown aac parameter '{name}'")));
             }
             if value.is_empty() {
                 return Err(operation_error(format!(
-                    "azappconfig parameter '{name}' cannot be empty"
+                    "aac parameter '{name}' cannot be empty"
                 )));
             }
             if singleton.insert(name.clone(), value).is_some() {
                 return Err(operation_error(format!(
-                    "azappconfig parameter '{name}' may appear only once"
+                    "aac parameter '{name}' may appear only once"
                 )));
             }
         }
 
         if tags.len() > MAX_TAG_FILTERS {
             return Err(operation_error(format!(
-                "azappconfig accepts at most {MAX_TAG_FILTERS} tag filters"
+                "aac accepts at most {MAX_TAG_FILTERS} tag filters"
             )));
         }
         tags.sort_by(|left, right| left.0.cmp(&right.0));
         for pair in tags.windows(2) {
             if pair[0].0 == pair[1].0 {
                 return Err(operation_error(format!(
-                    "azappconfig tag name '{}' may appear only once",
+                    "aac tag name '{}' may appear only once",
                     pair[0].0
                 )));
             }
@@ -277,7 +275,7 @@ impl TryFrom<&ProviderUrl> for AzAppConfigConfig {
             .transpose()?;
         if store_host.contains('.') && suffix.is_some() {
             return Err(operation_error(
-                "azappconfig suffix is valid only with a bare store name".to_string(),
+                "aac suffix is valid only with a bare store name".to_string(),
             ));
         }
         let effective_host = if store_host.contains('.') {
@@ -299,7 +297,7 @@ impl TryFrom<&ProviderUrl> for AzAppConfigConfig {
             .unwrap_or_else(|| DEFAULT_AUDIENCE.to_string());
         if !is_public && !audience_explicit {
             return Err(operation_error(format!(
-                "azappconfig host '{effective_host}' is outside Azure public cloud; set audience explicitly"
+                "aac host '{effective_host}' is outside Azure public cloud; set audience explicitly"
             )));
         }
 
@@ -350,10 +348,10 @@ fn operation_error(message: String) -> SecretSpecError {
 fn parse_tag(value: &str) -> Result<(String, String)> {
     let (name, value) = value
         .split_once('=')
-        .ok_or_else(|| operation_error("azappconfig tags use tag=NAME=VALUE".to_string()))?;
+        .ok_or_else(|| operation_error("aac tags use tag=NAME=VALUE".to_string()))?;
     if name.is_empty() || value.is_empty() || name.contains('\0') || value.contains('\0') {
         return Err(operation_error(
-            "azappconfig tag names and values cannot be empty or null".to_string(),
+            "aac tag names and values cannot be empty or null".to_string(),
         ));
     }
     Ok((name.to_string(), value.to_string()))
@@ -386,7 +384,7 @@ fn canonical_https_endpoint(host: &str) -> Result<String> {
 
 fn normalize_audience(value: &str) -> Result<String> {
     let url = Url::parse(value)
-        .map_err(|error| operation_error(format!("invalid azappconfig audience: {error}")))?;
+        .map_err(|error| operation_error(format!("invalid aac audience: {error}")))?;
     if url.scheme() != "https"
         || url.host_str().is_none()
         || !url.username().is_empty()
@@ -397,7 +395,7 @@ fn normalize_audience(value: &str) -> Result<String> {
         || url.fragment().is_some()
     {
         return Err(operation_error(
-            "azappconfig audience must be an HTTPS origin without credentials, port, path, query, or fragment"
+            "aac audience must be an HTTPS origin without credentials, port, path, query, or fragment"
                 .to_string(),
         ));
     }
@@ -452,8 +450,8 @@ struct SyncToken {
 }
 
 /// Azure App Configuration provider, available in SecretSpec 0.19+.
-pub struct AzAppConfigProvider {
-    config: AzAppConfigConfig,
+pub struct AacProvider {
+    config: AacConfig,
     credentials: ProviderCredentials,
     http: OnceLock<reqwest::Client>,
     auth: OnceLock<ResolvedAuth>,
@@ -466,22 +464,22 @@ pub struct AzAppConfigProvider {
 }
 
 crate::register_provider! {
-    struct: AzAppConfigProvider,
-    config: AzAppConfigConfig,
-    name: "azappconfig",
+    struct: AacProvider,
+    config: AacConfig,
+    name: "aac",
     description: "Azure App Configuration (0.19+)",
-    schemes: ["azappconfig"],
+    schemes: ["aac"],
     examples: [
-        "azappconfig://payments-production",
-        "azappconfig://shared?label=production&prefix=payments:",
-        "azappconfig://shared?tag=app=payments&tag=stage=production",
+        "aac://payments-production",
+        "aac://shared?label=production&prefix=payments:",
+        "aac://shared?tag=app=payments&tag=stage=production",
     ],
     credential_names: [TENANT_ID, CLIENT_ID, CLIENT_SECRET, CONNECTION_STRING],
     deletes: true,
 }
 
-impl AzAppConfigProvider {
-    pub fn new(config: AzAppConfigConfig) -> Self {
+impl AacProvider {
+    pub fn new(config: AacConfig) -> Self {
         Self {
             config,
             credentials: ProviderCredentials::new(),
@@ -891,7 +889,7 @@ enum SelectedValue {
     },
 }
 
-impl AzAppConfigProvider {
+impl AacProvider {
     fn convention_key(&self, project: &str, profile: &str, key: &str) -> Result<String> {
         validate_name_component("project", project)?;
         validate_name_component("profile", profile)?;
@@ -1391,7 +1389,7 @@ fn parse_vault_reference(value: &str, allowed_suffix: &str) -> Result<VaultRefer
     })
 }
 
-impl AzAppConfigProvider {
+impl AacProvider {
     fn key_vault_credential(&self) -> Result<Arc<dyn TokenCredential>> {
         if let Some(credential) = self.key_vault_credential.get() {
             return Ok(Arc::clone(credential));
@@ -1423,7 +1421,7 @@ impl AzAppConfigProvider {
             }
             if vaults.len() >= MAX_VAULT_CLIENTS {
                 return Err(operation_error(format!(
-                    "one azappconfig provider can resolve at most {MAX_VAULT_CLIENTS} Key Vault hosts; split this workload across provider aliases"
+                    "one aac provider can resolve at most {MAX_VAULT_CLIENTS} Key Vault hosts; split this workload across provider aliases"
                 )));
             }
         }
@@ -1441,7 +1439,7 @@ impl AzAppConfigProvider {
         }
         if vaults.len() >= MAX_VAULT_CLIENTS {
             return Err(operation_error(format!(
-                "one azappconfig provider can resolve at most {MAX_VAULT_CLIENTS} Key Vault hosts; split this workload across provider aliases"
+                "one aac provider can resolve at most {MAX_VAULT_CLIENTS} Key Vault hosts; split this workload across provider aliases"
             )));
         }
         vaults.insert(reference.vault_host.clone(), Arc::clone(&provider));
@@ -1677,7 +1675,7 @@ impl AzAppConfigProvider {
     }
 }
 
-impl Provider for AzAppConfigProvider {
+impl Provider for AacProvider {
     fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
         Ok(NativeAddress {
             item: self.convention_key(project, profile, key)?,
@@ -1716,7 +1714,7 @@ impl Provider for AzAppConfigProvider {
         self.resolve_coords(addr)?;
         if matches!(addr, Address::Native(_)) {
             return Err(operation_error(
-                "azappconfig native references are read-only and cannot be written".to_string(),
+                "aac native references are read-only and cannot be written".to_string(),
             ));
         }
         let key = self.resolve_key(addr)?;
@@ -1728,7 +1726,7 @@ impl Provider for AzAppConfigProvider {
         if matches!(addr, Address::Native(_)) {
             self.check_deletable(addr)?;
             return Err(operation_error(
-                "azappconfig native deletion is not implemented".to_string(),
+                "aac native deletion is not implemented".to_string(),
             ));
         }
         let key = self.resolve_key(addr)?;
@@ -1740,7 +1738,7 @@ impl Provider for AzAppConfigProvider {
         self.resolve_coords(addr)?;
         if matches!(addr, Address::Native(_)) {
             return Err(operation_error(
-                "azappconfig native references are read-only and cannot be deleted".to_string(),
+                "aac native references are read-only and cannot be deleted".to_string(),
             ));
         }
         let key = self.resolve_key(addr)?;
@@ -1752,7 +1750,7 @@ impl Provider for AzAppConfigProvider {
         if matches!(addr, Address::Native(_)) {
             self.resolve_coords(addr)?;
             return Err(operation_error(
-                "azappconfig native references are read-only and cannot be written".to_string(),
+                "aac native references are read-only and cannot be written".to_string(),
             ));
         }
         let key = self.resolve_key(addr)?;
@@ -1802,7 +1800,7 @@ impl Provider for AzAppConfigProvider {
                 ProviderUrl::encode_query(&format!("{name}={value}"))
             ));
         }
-        let base = format!("azappconfig://{}", self.config.store_host);
+        let base = format!("aac://{}", self.config.store_host);
         if parameters.is_empty() {
             base
         } else {
@@ -2034,15 +2032,15 @@ mod tests {
         stream.flush().unwrap();
     }
 
-    fn config(uri: &str) -> AzAppConfigConfig {
-        AzAppConfigConfig::try_from(&ProviderUrl::new(Url::parse(uri).unwrap())).unwrap()
+    fn config(uri: &str) -> AacConfig {
+        AacConfig::try_from(&ProviderUrl::new(Url::parse(uri).unwrap())).unwrap()
     }
 
-    fn provider(uri: &str) -> AzAppConfigProvider {
-        AzAppConfigProvider::new(config(uri))
+    fn provider(uri: &str) -> AacProvider {
+        AacProvider::new(config(uri))
     }
 
-    fn fixture_provider(endpoint: &str, uri: &str) -> AzAppConfigProvider {
+    fn fixture_provider(endpoint: &str, uri: &str) -> AacProvider {
         let mut provider = provider(uri);
         provider.config.endpoint = endpoint.to_string();
         provider.allow_insecure_loopback = true;
@@ -2142,7 +2140,7 @@ mod tests {
     }
 
     fn discovery_target(endpoint: &str, after: Option<&str>) -> String {
-        let mut provider = provider("azappconfig://shared");
+        let mut provider = provider("aac://shared");
         provider.config.endpoint = endpoint.to_string();
         let mut url = provider
             .list_url(DiscoveryContext::new("checkout", "prod"))
@@ -2159,7 +2157,7 @@ mod tests {
 
     #[test]
     fn default_store_uses_public_endpoint_and_current_audience() {
-        let config = config("azappconfig://payments");
+        let config = config("aac://payments");
         assert_eq!(config.endpoint, "https://payments.azconfig.io/");
         assert_eq!(config.audience, "https://appconfig.azure.com");
         assert_eq!(config.label, None);
@@ -2168,8 +2166,8 @@ mod tests {
 
     #[test]
     fn sovereign_host_requires_and_round_trips_audience() {
-        let error = AzAppConfigConfig::try_from(&ProviderUrl::new(
-            Url::parse("azappconfig://payments.azconfig.azure.cn").unwrap(),
+        let error = AacConfig::try_from(&ProviderUrl::new(
+            Url::parse("aac://payments.azconfig.azure.cn").unwrap(),
         ))
         .unwrap_err();
         assert!(
@@ -2177,12 +2175,11 @@ mod tests {
             "{error}"
         );
 
-        let provider = provider(
-            "azappconfig://payments.azconfig.azure.cn?audience=https%3A%2F%2Fappconfig.azure.cn",
-        );
+        let provider =
+            provider("aac://payments.azconfig.azure.cn?audience=https%3A%2F%2Fappconfig.azure.cn");
         assert_eq!(
             provider.uri(),
-            "azappconfig://payments.azconfig.azure.cn?audience=https://appconfig.azure.cn"
+            "aac://payments.azconfig.azure.cn?audience=https://appconfig.azure.cn"
         );
         assert_eq!(config(&provider.uri()).endpoint, provider.config.endpoint);
     }
@@ -2190,7 +2187,7 @@ mod tests {
     #[test]
     fn bare_store_supports_explicit_suffix() {
         let provider = provider(
-            "azappconfig://payments?suffix=azconfig.azure.us&audience=https%3A%2F%2Fappconfig.azure.us",
+            "aac://payments?suffix=azconfig.azure.us&audience=https%3A%2F%2Fappconfig.azure.us",
         );
         assert_eq!(
             provider.config.endpoint,
@@ -2198,29 +2195,28 @@ mod tests {
         );
         assert_eq!(
             provider.uri(),
-            "azappconfig://payments?suffix=azconfig.azure.us&audience=https://appconfig.azure.us"
+            "aac://payments?suffix=azconfig.azure.us&audience=https://appconfig.azure.us"
         );
     }
 
     #[test]
     fn uri_rejects_paths_unknowns_duplicates_and_conflicts() {
         for uri in [
-            "azappconfig://store/existing",
-            "azappconfig://store?unknown=value",
-            "azappconfig://store?label=prod&label=stage",
-            "azappconfig://store?label=",
-            "azappconfig://store.example?suffix=azconfig.io&audience=https%3A%2F%2Fappconfig.example",
-            "azappconfig://store?auth=connection_string&key_vault_auth=inherit",
+            "aac://store/existing",
+            "aac://store?unknown=value",
+            "aac://store?label=prod&label=stage",
+            "aac://store?label=",
+            "aac://store.example?suffix=azconfig.io&audience=https%3A%2F%2Fappconfig.example",
+            "aac://store?auth=connection_string&key_vault_auth=inherit",
         ] {
-            let error = AzAppConfigConfig::try_from(&ProviderUrl::new(Url::parse(uri).unwrap()));
+            let error = AacConfig::try_from(&ProviderUrl::new(Url::parse(uri).unwrap()));
             assert!(error.is_err(), "expected invalid URI: {uri}");
         }
     }
 
     #[test]
     fn tags_are_exact_unique_bounded_and_stably_ordered() {
-        let provider =
-            provider("azappconfig://shared?tag=stage=prod&tag=app=payments&label=production");
+        let provider = provider("aac://shared?tag=stage=prod&tag=app=payments&label=production");
         assert_eq!(
             provider.config.tags,
             vec![
@@ -2230,19 +2226,19 @@ mod tests {
         );
         assert_eq!(
             provider.uri(),
-            "azappconfig://shared?label=production&tag=app=payments&tag=stage=prod"
+            "aac://shared?label=production&tag=app=payments&tag=stage=prod"
         );
 
         for uri in [
-            "azappconfig://shared?tag=app",
-            "azappconfig://shared?tag==prod",
-            "azappconfig://shared?tag=app=",
-            "azappconfig://shared?tag=app=one&tag=app=two",
-            "azappconfig://shared?tag=app=%00",
-            "azappconfig://shared?tag=a=1&tag=b=2&tag=c=3&tag=d=4&tag=e=5&tag=f=6",
+            "aac://shared?tag=app",
+            "aac://shared?tag==prod",
+            "aac://shared?tag=app=",
+            "aac://shared?tag=app=one&tag=app=two",
+            "aac://shared?tag=app=%00",
+            "aac://shared?tag=a=1&tag=b=2&tag=c=3&tag=d=4&tag=e=5&tag=f=6",
         ] {
             assert!(
-                AzAppConfigConfig::try_from(&ProviderUrl::new(Url::parse(uri).unwrap())).is_err(),
+                AacConfig::try_from(&ProviderUrl::new(Url::parse(uri).unwrap())).is_err(),
                 "expected invalid tags: {uri}"
             );
         }
@@ -2251,7 +2247,7 @@ mod tests {
     #[test]
     fn filter_values_escape_azure_metacharacters_before_url_encoding() {
         assert_eq!(escape_filter(r"a*b,c\d"), r"a\*b\,c\\d");
-        let provider = provider("azappconfig://shared?tag=group=a*b%2Cc%5Cd");
+        let provider = provider("aac://shared?tag=group=a*b%2Cc%5Cd");
         let url = provider.item_url("key", true).unwrap();
         assert_eq!(
             url.query_pairs()
@@ -2263,7 +2259,7 @@ mod tests {
 
     #[test]
     fn convention_key_is_readable_reversible_and_exactly_prefixed() {
-        let provider = provider("azappconfig://shared?prefix=payments%3Aorders%3A");
+        let provider = provider("aac://shared?prefix=payments%3Aorders%3A");
         let address = provider
             .convention_address("checkout", "production", "DATABASE_URL")
             .unwrap();
@@ -2282,7 +2278,7 @@ mod tests {
 
     #[test]
     fn convention_rejects_invalid_components_and_azure_keys() {
-        let provider = provider("azappconfig://shared");
+        let provider = provider("aac://shared");
         for (project, profile, key) in [
             ("", "prod", "KEY"),
             ("app", "", "KEY"),
@@ -2297,8 +2293,8 @@ mod tests {
             assert!(provider.convention_key(project, profile, key).is_err());
         }
         assert!(
-            AzAppConfigConfig::try_from(&ProviderUrl::new(
-                Url::parse("azappconfig://shared?prefix=%25").unwrap()
+            AacConfig::try_from(&ProviderUrl::new(
+                Url::parse("aac://shared?prefix=%25").unwrap()
             ))
             .is_err()
         );
@@ -2306,11 +2302,11 @@ mod tests {
 
     #[test]
     fn identity_includes_label_and_prefix_but_not_tags_or_auth() {
-        let base = provider("azappconfig://shared");
-        let cli = provider("azappconfig://shared?auth=cli");
-        let tagged = provider("azappconfig://shared?tag=app=payments");
-        let labeled = provider("azappconfig://shared?label=production");
-        let prefixed = provider("azappconfig://shared?prefix=payments%3A");
+        let base = provider("aac://shared");
+        let cli = provider("aac://shared?auth=cli");
+        let tagged = provider("aac://shared?tag=app=payments");
+        let labeled = provider("aac://shared?label=production");
+        let prefixed = provider("aac://shared?prefix=payments%3A");
         assert_eq!(base.storage_identity(), cli.storage_identity());
         assert_eq!(base.storage_identity(), tagged.storage_identity());
         assert_ne!(base.storage_identity(), labeled.storage_identity());
@@ -2327,15 +2323,14 @@ mod tests {
 
     #[test]
     fn item_urls_select_null_or_exact_label_and_tags() {
-        let null = provider("azappconfig://shared");
+        let null = provider("aac://shared");
         let null_url = null.item_url("secretspec:app:prod:KEY", true).unwrap();
         assert!(!null_url.query_pairs().any(|(name, _)| name == "label"));
         let null_list = null.list_url(DiscoveryContext::new("app", "prod")).unwrap();
         assert!(null_list.as_str().contains("label=%00"), "{null_list}");
 
-        let selected = provider(
-            "azappconfig://shared?label=prod%2A%2C%5Cblue&tag=app=payments&tag=stage=prod",
-        );
+        let selected =
+            provider("aac://shared?label=prod%2A%2C%5Cblue&tag=app=payments&tag=stage=prod");
         let pairs = selected
             .item_url("key", true)
             .unwrap()
@@ -2414,7 +2409,7 @@ mod tests {
     #[test]
     fn reads_treat_only_404_as_missing_and_reject_invalid_responses() {
         let missing = HttpFixture::start(|_| vec![StubResponse::empty(404)]);
-        let provider = fixture_provider(&missing.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&missing.endpoint, "aac://shared");
         assert!(
             super::super::block_on(provider.fetch_key_value("missing", true))
                 .unwrap()
@@ -2433,7 +2428,7 @@ mod tests {
                     }),
                 )]
             });
-            let provider = fixture_provider(&failure.endpoint, "azappconfig://shared");
+            let provider = fixture_provider(&failure.endpoint, "aac://shared");
             let error =
                 super::super::block_on(provider.fetch_key_value("failed", true)).unwrap_err();
             assert!(
@@ -2458,7 +2453,7 @@ mod tests {
                 request_key: false,
             }]
         });
-        let provider = fixture_provider(&oversized.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&oversized.endpoint, "aac://shared");
         let error = super::super::block_on(provider.fetch_key_value("failed", true)).unwrap_err();
         assert!(error.to_string().contains("HTTP 400"), "{error}");
         assert!(!error.to_string().contains("parameter"), "{error}");
@@ -2470,7 +2465,7 @@ mod tests {
                 json!({"name": "secret-bearing-name", "detail": "sensitive detail"}),
             )]
         });
-        let provider = fixture_provider(&unrecognized.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&unrecognized.endpoint, "aac://shared");
         let error = super::super::block_on(provider.fetch_key_value("failed", true)).unwrap_err();
         assert!(error.to_string().contains("HTTP 400"), "{error}");
         assert!(
@@ -2488,7 +2483,7 @@ mod tests {
                 request_key: false,
             }]
         });
-        let provider = fixture_provider(&malformed.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&malformed.endpoint, "aac://shared");
         let error = super::super::block_on(provider.fetch_key_value("broken", true)).unwrap_err();
         assert!(
             error
@@ -2506,10 +2501,7 @@ mod tests {
             record["tags"] = json!({"stage": "test"});
             vec![StubResponse::json(200, record)]
         });
-        let provider = fixture_provider(
-            &fixture.endpoint,
-            "azappconfig://shared?tag=stage=production",
-        );
+        let provider = fixture_provider(&fixture.endpoint, "aac://shared?tag=stage=production");
         let address = NativeAddress {
             item: "shared-key".to_string(),
             ..Default::default()
@@ -2532,7 +2524,7 @@ mod tests {
         });
         let provider = fixture_provider(
             &fixture.endpoint,
-            "azappconfig://shared?label=prod%2A%2C%5Cblue&tag=app=payments",
+            "aac://shared?label=prod%2A%2C%5Cblue&tag=app=payments",
         );
         super::super::block_on(provider.set_async(
             "secretspec:checkout:prod:API_KEY",
@@ -2615,7 +2607,7 @@ mod tests {
                 StubResponse::empty(412),
             ]
         });
-        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared?tag=app=payments");
+        let provider = fixture_provider(&fixture.endpoint, "aac://shared?tag=app=payments");
         let error = super::super::block_on(
             provider.set_async("key", &SecretString::new("new".to_string().into())),
         )
@@ -2641,7 +2633,7 @@ mod tests {
             record["tags"] = json!({"app": "other"});
             vec![StubResponse::json(200, record)]
         });
-        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared?tag=app=payments");
+        let provider = fixture_provider(&fixture.endpoint, "aac://shared?tag=app=payments");
         let error = super::super::block_on(
             provider.set_async("key", &SecretString::new("new".to_string().into())),
         )
@@ -2673,7 +2665,7 @@ mod tests {
                 }
                 vec![StubResponse::json(200, record)]
             });
-            let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+            let provider = fixture_provider(&fixture.endpoint, "aac://shared");
             let error = super::super::block_on(
                 provider.set_async("key", &SecretString::new("new".to_string().into())),
             )
@@ -2693,7 +2685,7 @@ mod tests {
                 StubResponse::empty(412),
             ]
         });
-        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&fixture.endpoint, "aac://shared");
         let error = super::super::block_on(provider.delete_async("key")).unwrap_err();
         assert!(
             error
@@ -2709,7 +2701,7 @@ mod tests {
     #[test]
     fn delete_distinguishes_absent_deleted_and_no_content() {
         let absent = HttpFixture::start(|_| vec![StubResponse::empty(404)]);
-        let provider = fixture_provider(&absent.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&absent.endpoint, "aac://shared");
         assert!(!super::super::block_on(provider.delete_async("key")).unwrap());
         assert_eq!(absent.finish().len(), 1);
 
@@ -2720,7 +2712,7 @@ mod tests {
                     StubResponse::empty(status),
                 ]
             });
-            let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+            let provider = fixture_provider(&fixture.endpoint, "aac://shared");
             assert_eq!(
                 super::super::block_on(provider.delete_async("key")).unwrap(),
                 expected
@@ -2742,7 +2734,7 @@ mod tests {
                 StubResponse::json(200, record),
             ]
         });
-        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&fixture.endpoint, "aac://shared");
         let address = Address::Convention {
             project: "app",
             profile: "prod",
@@ -2767,7 +2759,7 @@ mod tests {
                 StubResponse::json(403, json!({"detail": "must stay private"})),
             ]
         });
-        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&fixture.endpoint, "aac://shared");
         let read = super::super::block_on(provider.fetch_key_value("key", true))
             .unwrap()
             .unwrap();
@@ -2806,18 +2798,16 @@ mod tests {
             "APPLICATION/VND.MICROSOFT.APPCONFIG.KEYVAULTREF+JSON; foo=bar; CHARSET = UTF-8",
         ] {
             assert!(matches!(
-                AzAppConfigProvider::value_type(Some(content_type)),
+                AacProvider::value_type(Some(content_type)),
                 ValueType::KeyVaultReference
             ));
         }
         assert!(matches!(
-            AzAppConfigProvider::value_type(Some(
-                "application/vnd.microsoft.appconfig.keyvaultref+json"
-            )),
+            AacProvider::value_type(Some("application/vnd.microsoft.appconfig.keyvaultref+json")),
             ValueType::AzureSpecial(_)
         ));
         assert!(matches!(
-            AzAppConfigProvider::value_type(Some("application/json")),
+            AacProvider::value_type(Some("application/json")),
             ValueType::Direct
         ));
     }
@@ -2865,7 +2855,7 @@ mod tests {
 
     #[test]
     fn sync_tokens_keep_newest_sequence_per_id() {
-        let provider = provider("azappconfig://shared");
+        let provider = provider("aac://shared");
         let mut first = HeaderMap::new();
         first.append("sync-token", HeaderValue::from_static("abc=one;sn=1"));
         first.append("sync-token", HeaderValue::from_static("def=x;sn=3"));
@@ -2890,7 +2880,7 @@ mod tests {
                 key_value("shared-key", "secret-value"),
             )]
         });
-        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&fixture.endpoint, "aac://shared");
         let address = NativeAddress {
             item: "shared-key".to_string(),
             ..Default::default()
@@ -2915,7 +2905,7 @@ mod tests {
                 StubResponse::json(200, record).with_request_key(),
             ]
         });
-        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&fixture.endpoint, "aac://shared");
         let transport = RecordingKeyVaultClient::new("resolved-value");
         provider.vaults.lock().unwrap().insert(
             "shared.vault.azure.net".to_string(),
@@ -2950,7 +2940,7 @@ mod tests {
                 StubResponse::json(200, record).with_request_key(),
             ]
         });
-        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&fixture.endpoint, "aac://shared");
         let first = NativeAddress {
             item: "first-key".to_string(),
             ..Default::default()
@@ -2989,7 +2979,7 @@ mod tests {
                 .with_request_key(),
             ]
         });
-        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&fixture.endpoint, "aac://shared");
         let first_transport = RecordingKeyVaultClient::new("first-value");
         let second_transport = RecordingKeyVaultClient::new("second-value");
         let mut vaults = provider.vaults.lock().unwrap();
@@ -3030,7 +3020,7 @@ mod tests {
 
     #[test]
     fn key_vault_provider_cache_enforces_host_cap_before_authentication() {
-        let provider = provider("azappconfig://shared?auth=connection_string");
+        let provider = provider("aac://shared?auth=connection_string");
         let mut vaults = provider.vaults.lock().unwrap();
         for index in 0..MAX_VAULT_CLIENTS {
             let host = format!("vault-{index}.vault.azure.net");
@@ -3058,7 +3048,7 @@ mod tests {
 
     #[test]
     fn native_addresses_have_no_write_target() {
-        let provider = provider("azappconfig://shared");
+        let provider = provider("aac://shared");
         let address = NativeAddress {
             item: "shared-key".to_string(),
             ..Default::default()
@@ -3086,7 +3076,7 @@ mod tests {
 
     #[test]
     fn continuation_must_preserve_endpoint_and_scope() {
-        let provider = provider("azappconfig://shared?label=prod&tag=app=payments");
+        let provider = provider("aac://shared?label=prod&tag=app=payments");
         let initial = provider
             .list_url(DiscoveryContext::new("checkout", "prod"))
             .unwrap();
@@ -3114,7 +3104,7 @@ mod tests {
 
     #[test]
     fn test_http_escape_hatch_is_loopback_only_and_explicit() {
-        let mut provider = provider("azappconfig://shared");
+        let mut provider = provider("aac://shared");
         provider.config.endpoint = "http://127.0.0.1:9/".to_string();
         let loopback = Url::parse("http://127.0.0.1:9/kv?api-version=2026-04-01").unwrap();
         let error =
@@ -3157,7 +3147,7 @@ mod tests {
                 ),
             ]
         });
-        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&fixture.endpoint, "aac://shared");
         let declarations = super::super::block_on(
             provider.reflect_async(DiscoveryContext::new("checkout", "prod")),
         )
@@ -3205,7 +3195,7 @@ mod tests {
                 }),
             )]
         });
-        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&fixture.endpoint, "aac://shared");
         let error = super::super::block_on(
             provider.reflect_async(DiscoveryContext::new("checkout", "prod")),
         )
@@ -3225,7 +3215,7 @@ mod tests {
                 }),
             )]
         });
-        let provider = fixture_provider(&fixture.endpoint, "azappconfig://shared");
+        let provider = fixture_provider(&fixture.endpoint, "aac://shared");
         let error = super::super::block_on(
             provider.reflect_async(DiscoveryContext::new("checkout", "prod")),
         )
@@ -3239,7 +3229,7 @@ mod tests {
 
     #[test]
     fn key_vault_selection_and_resolution_errors_include_appconfig_context() {
-        let provider = provider("azappconfig://shared?auth=connection_string");
+        let provider = provider("aac://shared?auth=connection_string");
         let record = |value: &str| KeyValue {
             etag: Some("etag".to_string()),
             key: "reference".to_string(),
@@ -3295,7 +3285,7 @@ mod tests {
 
     #[test]
     fn reflection_skips_foreign_keys_and_rejects_invalid_in_scope_names() {
-        let provider = provider("azappconfig://shared?prefix=payments%3A");
+        let provider = provider("aac://shared?prefix=payments%3A");
         let context = DiscoveryContext::new("checkout", "prod");
         let record = |key: &str, content_type: Option<&str>| KeyValue {
             etag: None,

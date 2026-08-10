@@ -195,7 +195,7 @@ as in 0.19.0.
 - Secrets can set `prompt = true` to request a hidden value from the controlling
   terminal when `secretspec run` finds no stored value. Writable providers save
   the answer for later runs; the `null` provider keeps it invocation-only.
-- **Azure App Configuration provider** (`azappconfig://`, 0.19+): select direct
+- **Azure App Configuration provider** (`aac://`, 0.19+): select direct
   values and Azure Key Vault references by label, prefix, and tags, with Entra
   ID or connection-string authentication and guarded writes, deletion, and
   declaration discovery. Azure Key Vault references can pin an exact secret

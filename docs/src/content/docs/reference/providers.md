@@ -537,19 +537,19 @@ akv://myvault?suffix=vault.azure.cn      # Sovereign cloud (explicit suffix, bar
 ## Azure App Configuration Provider (0.19+)
 
 :::caution[Version compatibility]
-The `azappconfig` provider is added in SecretSpec 0.19.
+The `aac` provider is added in SecretSpec 0.19.
 :::
 
 **URI**:
-`azappconfig://STORE[?auth=METHOD][&label=LABEL][&prefix=PREFIX][&tag=NAME=VALUE]...`
+`aac://STORE[?auth=METHOD][&label=LABEL][&prefix=PREFIX][&tag=NAME=VALUE]...`
 - Reads and manages Azure App Configuration key-values and resolves canonical
   Azure Key Vault references
 
 ```bash
-azappconfig://payments-production
-azappconfig://shared?label=production&prefix=payments:
-azappconfig://shared?tag=app=payments&tag=stage=production
-azappconfig://shared?auth=connection_string&key_vault_auth=managed_identity
+aac://payments-production
+aac://shared?label=production&prefix=payments:
+aac://shared?tag=app=payments&tag=stage=production
+aac://shared?auth=connection_string&key_vault_auth=managed_identity
 ```
 
 **Features (0.19+)**: Read/write/delete, project and profile namespacing,
@@ -557,13 +557,13 @@ declaration discovery, exact label and tag selection, sovereign-cloud endpoint
 configuration, Entra or connection-string authentication, and Key Vault
 reference resolution
 **Prerequisites (0.19+)**: An Azure App Configuration store, matching
-data-plane permissions, and build with `--features azappconfig`; Key Vault
+data-plane permissions, and build with `--features aac`; Key Vault
 references also require an Entra identity with secret-read access
 **Authentication (0.19+)**: `env`, `cli`, `managed_identity`,
 `workload_identity`, or `connection_string`. Prefer Entra authentication so
 workloads use Azure RBAC without distributing App Configuration access keys;
 reserve connection strings for environments where Entra is unavailable. See
-the [provider guide](/providers/azappconfig/#authentication) for App
+the [provider guide](/providers/aac/#authentication) for App
 Configuration and Key Vault identity separation.
 **Storage (0.19+)**:
 `{prefix}secretspec:{project}:{profile}:{key}` under one exact label; omission

@@ -359,7 +359,7 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
             },
             {
               label: "Azure App Configuration",
-              slug: "providers/azappconfig",
+              slug: "providers/aac",
               badge: { text: "0.19+", variant: "note" },
             },
             {

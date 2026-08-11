@@ -74,6 +74,14 @@ echo "==> Ruby (pkg-config discovery)"
 bash secretspec-rb/scripts/build-ext.sh --enable-pkg-config
 ( cd secretspec-rb && ruby -e 'Dir["test/test_*.rb"].sort.each { |f| require File.expand_path(f) }' )
 
+echo "==> Ruby (Bundler 4 Linux platforms)"
+# Ruby in the pinned Nix environment may predate Ruby 4, so exercise the
+# published gem with pinned Ruby 4 glibc and musl containers. The integration
+# test includes a working glibc control and asserts both known packaging
+# failures: the generic Linux gem loading on musl, and the missing `ruby`
+# platform fallback.
+bash secretspec-rb/repro/bundler-4-platforms/run.sh
+
 echo "==> Node"
 # The Node SDK uses a napi-rs addon (not the cdylib), built via the @napi-rs/cli
 # devDependency. Install it and build the addon once up front: the test files

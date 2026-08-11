@@ -803,38 +803,47 @@ fn test_create_from_string_with_full_uris() {
     let provider = Box::<dyn Provider>::try_from("onepassword://work@Production").unwrap();
     assert_eq!(provider.name(), "onepassword");
 
-    // Test onepassword with token
-    let provider =
-        Box::<dyn Provider>::try_from("onepassword+token://:ops_abc123@Private").unwrap();
+    // Test onepassword with the service account scheme; the token comes from a
+    // credential or the environment, never from the URI.
+    let provider = Box::<dyn Provider>::try_from("onepassword+token://Private").unwrap();
     assert_eq!(provider.name(), "onepassword");
 }
 
-/// The audit log and the fallback-chain warnings persist a provider's `uri()`
-/// and rely on it never echoing a credential the user embedded in the source
-/// URI (see `Provider::uri`). Enforce that contract for every registered scheme:
-/// build the provider from a URI carrying a recognizable secret in the
-/// *password* position and assert the reconstructed `uri()` does not contain it.
+/// A URL password is always a credential, and a URI is the one place a
+/// credential must never live: it reaches committed manifests, shell history,
+/// and CI logs, where no amount of terminal redaction can retract it. Enforce
+/// for *every* registered scheme that such a URI builds nothing and that the
+/// refusal does not repeat the secret back.
 ///
-/// The username/host/path positions hold non-secret attribution (1Password
-/// accounts, AWS profiles, Vault namespaces) and are intentionally preserved; a
-/// URL *password* is always a credential and must never resurface. A scheme that
-/// rejects this URI shape simply builds nothing, which leaks nothing.
+/// The username, host, and path positions are intentionally untouched: they
+/// hold non-secret attribution (1Password accounts, AWS profiles, Vault
+/// namespaces). A scheme whose username *was* a credential rejects it itself,
+/// which `try_from_token_scheme_rejects_a_token_in_the_uri` covers.
 #[test]
-fn uri_never_echoes_a_userinfo_password() {
+fn every_scheme_rejects_a_userinfo_password() {
     const SECRET: &str = "leaked_pw_DO_NOT_ECHO";
 
     for reg in super::PROVIDER_REGISTRY {
         for &scheme in reg.schemes {
             let source = format!("{scheme}://attribution:{SECRET}@host/path");
-            // Only assert on schemes that build; a parse failure echoes nothing.
-            let Ok(provider) = Box::<dyn Provider>::try_from(source.as_str()) else {
-                continue;
+            let Err(error) = Box::<dyn Provider>::try_from(source.as_str()) else {
+                panic!("provider scheme {scheme:?} accepted a URL password");
             };
-            let uri = provider.uri();
+            let message = error.to_string();
             assert!(
-                !uri.contains(SECRET),
-                "provider scheme {scheme:?} echoed a URL password into uri(): {uri:?}"
+                !message.contains(SECRET),
+                "provider scheme {scheme:?} echoed a URL password into its error: {message:?}"
             );
+            // The refusal has to be actionable, so it names the credentials this
+            // provider accepts instead. Driven by the registration, so a new
+            // provider gets the same quality without touching this test.
+            for credential in reg.credential_names {
+                assert!(
+                    message.contains(credential),
+                    "provider scheme {scheme:?} refused a URL password without naming its \
+                     {credential:?} credential: {message:?}"
+                );
+            }
         }
     }
 }

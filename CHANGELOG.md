@@ -5,9 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.19.0] - 2026-08-10
 
 ### Changed
+
+
+- A provider URI may no longer carry a credential. A URI with a password
+  (`scheme://user:secret@host`) is rejected, and `onepassword+token://` no
+  longer accepts the service account token in its userinfo
+  (`onepassword+token://token@vault`). A URI is committed to `secretspec.toml`,
+  echoed into shell history, and printed by CI, so a credential written there is
+  already disclosed and redacting it at the terminal cannot retract it. Keep the
+  scheme and supply the credential through a provider credential
+  (`secretspec config provider login <alias>`, or `credentials = { ... }` on the
+  alias) or the provider's environment variable; the errors name both. An
+  unparseable provider specification is now also redacted before it is reported.
+- `secretspec get` resolves through the same path as the SDK's `resolve_named`,
+  so a single-secret read makes exactly the decisions batch resolution makes. It
+  continues to read the whole profile regardless of an active scope, and audits
+  the coordinates it actually reached.
 - 1Password field references now resolve in one batched CLI call, reducing
   repeated unlocks and process startup when loading multiple secrets. If a
   missing reference requires individual reads, those reads remain bounded and
@@ -18,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The Rust SDK can resolve a single secret with `Secrets::resolve_named`, which
+  reads only that secret and the inputs it composes from. An unrelated missing
+  required secret no longer fails the call, and the result distinguishes an
+  undeclared name (including one the active scope hides) from a declared secret
+  with no value, reporting whether that value was required.
+- `Secrets::with_default_reason` sets a session reason only when none is already
+  in effect, so an embedding application can describe itself without discarding
+  the reason its own caller supplied through `with_reason` or
+  `SECRETSPEC_REASON`.
 - Secrets can set `prompt = true` to request a hidden value from the controlling
   terminal when `secretspec run` finds no stored value. Writable providers save
   the answer for later runs; the `null` provider keeps it invocation-only.
@@ -29,8 +54,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `go-passbolt-cli`, with convention-based names, references to existing
   resources, and credentials supplied by the CLI configuration or SecretSpec
   provider environment variables.
-
-- Windows ARM64 CLI release artifacts (`aarch64-pc-windows-msvc`).
 - Provider aliases can define native `ref` templates and secrets can override
   coordinates per leaf alias with `refs`, so fallback providers and import
   sources/destinations resolve independently. `import --delete-source` now
@@ -85,6 +108,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selected source alias, making alias-specific addressing visible without
   changing literal-provider semantics.
   ([#312](https://github.com/cachix/secretspec/issues/312))
+- The error for a coordinate a provider does not support now points at
+  `refs.<alias>` and alias `ref` templates as well as at removing the
+  coordinate, so a `field` written for one store no longer has to be dropped to
+  reach another store that organizes the secret differently.
+  ([#266](https://github.com/cachix/secretspec/issues/266))
 - The Proton Pass provider works with `pass-cli` 2.2.4 and later, which removed
   the `pass-cli test` subcommand the provider ran to check the session before
   every read and write. The check now tries `pass-cli info` and falls back to

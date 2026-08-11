@@ -482,6 +482,10 @@ fn redact_uri(uri: &str) -> String {
 /// `vault://host?token=...` — is not echoed to the terminal. Unlike [`redact_uri`]
 /// it sacrifices attribution detail (account/profile/prefix) for safety, which is
 /// acceptable for a transient warning that also names the affected secret.
+///
+/// Credential-bearing URIs are rejected outright (see
+/// [`crate::provider::reject_uri_credential`]); this stays the safety net for
+/// diagnostics that echo a URI before or while it is being validated.
 pub(crate) fn redact_uri_strict(uri: &str) -> String {
     let without_userinfo = match userinfo_span(uri) {
         // Drop `userinfo@`, keeping the scheme prefix and everything from the host.

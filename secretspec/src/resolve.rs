@@ -107,6 +107,34 @@ impl ResolveResponse {
     }
 }
 
+/// The outcome of resolving one secret by name with
+/// [`crate::Secrets::resolve_named`].
+///
+/// The three variants separate the questions a batch resolve conflates: whether
+/// the name exists on the active surface at all, whether it produced a value,
+/// and whether its absence is an error. A genuine provider or configuration
+/// failure is never one of these variants; it surfaces as `Err` from the call.
+///
+/// Available since SecretSpec 0.19.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NamedResolution {
+    /// The name is not declared on the active resolution surface: either absent
+    /// from the merged profile, or declared but hidden by the active scope. The
+    /// caller asked about a secret this configuration does not offer, which is
+    /// usually a bug in the caller rather than a missing value.
+    Undeclared,
+    /// The secret is declared but produced no value.
+    Missing {
+        /// Whether the profile declares this secret required, which is what
+        /// makes the absence an error for a whole-profile resolve. Reported here
+        /// rather than decided: a named resolve returns this variant either way
+        /// and leaves the policy to the caller.
+        required: bool,
+    },
+    /// The secret produced a value.
+    Resolved(ResolvedSecret),
+}
+
 /// Which resolution shape a request asks for.
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

@@ -59,9 +59,15 @@ jobs:
     - name: Run pre-commit hooks
       if: runner.os == 'Linux'
       run: devenv tasks run devenv:git-hooks:run --show-output
-    - name: Check provider credential documentation
+    - name: Install documentation dependencies
       if: runner.os == 'Linux'
-      run: devenv shell -- npm --prefix docs run check:provider-credentials
+      run: devenv shell -- npm --prefix docs ci
+    - name: Build documentation
+      if: runner.os == 'Linux'
+      run: devenv shell -- npm --prefix docs run build
+    - name: Check documentation links
+      if: runner.os == 'Linux'
+      run: devenv shell -- npm --prefix docs run check:links
     - name: Run tests
       run: devenv shell -- cargo test --all
 

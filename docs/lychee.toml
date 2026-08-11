@@ -1,0 +1,5 @@
+offline = true
+include_fragments = true
+index_files = ["index.html"]
+fallback_extensions = ["html"]
+no_progress = true

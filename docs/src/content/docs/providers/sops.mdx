@@ -64,12 +64,27 @@ See [Setup](#setup) if SOPS does not already know which keys to use.
   your package
 
 For a new file, SOPS needs either encryption options in the provider URI or a
-matching creation rule in `.sops.yaml`. For example:
+matching creation rule in `.sops.yaml`. Generate an age identity for your own
+project and print its recipient:
+
+```bash
+$ age-keygen -o key.txt
+
+$ age-keygen -y key.txt
+age1...
+
+$ export SOPS_AGE_KEY_FILE="$PWD/key.txt"
+```
+
+Keep `key.txt` secret and out of version control. `SOPS_AGE_KEY_FILE` makes the
+identity available for decryption. Copy the `age1...` recipient printed by the
+second command into the creation rule (the value below is a placeholder, not a
+usable recipient):
 
 ```yaml title=".sops.yaml"
 creation_rules:
   - path_regex: secrets\.enc\.yaml$
-    age: "age1jpa8rf5qmrg6pw444fcgpkaxg8x4neueszrexzagdjpunjlgeyzq304w34"
+    age: "YOUR_AGE_RECIPIENT"
 ```
 
 ## Provider credentials
@@ -315,7 +330,7 @@ the general model.
 ### Set a secret with age
 
 ```bash
-$ secretspec set DATABASE_URL --provider 'sops://secrets.enc.json?age_key_file=key.txt&age_recipients=age1jpa8rf5qmrg6pw444fcgpkaxg8x4neueszrexzagdjpunjlgeyzq304w34'
+$ secretspec set DATABASE_URL --provider 'sops://secrets.enc.json?age_key_file=key.txt&age_recipients=YOUR_AGE_RECIPIENT'
 ```
 
 Or, if `keys.txt` exists in a place discoverable by SOPS and `.sops.yaml`
@@ -324,7 +339,7 @@ exists next to the project's `secretspec.toml`, configure a creation rule:
 ```yaml title=".sops.yaml"
 creation_rules:
   - path_regex: secrets\.enc\.json$
-    age: "age1jpa8rf5qmrg6pw444fcgpkaxg8x4neueszrexzagdjpunjlgeyzq304w34"
+    age: "YOUR_AGE_RECIPIENT"
 ```
 
 then:

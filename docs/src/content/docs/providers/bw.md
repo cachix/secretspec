@@ -63,8 +63,9 @@ unlocking the vault:
 $ export BW_SESSION="your-session-key"
 ```
 
-SecretSpec distinguishes between a CLI that is signed out and a vault that is
-still locked, and reports the appropriate `bw login` or `bw unlock` command.
+Before reads and writes, SecretSpec requires the CLI status to be unlocked. If
+the CLI is signed out or the vault is locked, it reports combined guidance to
+run `bw login` and `bw unlock`, then set `BW_SESSION`.
 
 ### Self-hosted servers
 
@@ -204,10 +205,12 @@ context does not change Bitwarden item names. To migrate the discovered values
 after reviewing the declarations, run the `secretspec import` command printed
 by `init`.
 
-### Environment defaults
+### Environment overrides
 
-Environment variables can supply defaults when they are not present in the
-provider URI:
+Environment variables take precedence over organization, collection, item type,
+and default field values in the provider URI. A value left in the shell can
+therefore change an operation even when `--provider` supplies those settings;
+unset unwanted overrides before running SecretSpec:
 
 ```bash
 $ export BITWARDEN_DEFAULT_TYPE=login
@@ -222,7 +225,14 @@ $ secretspec get DATABASE_PASSWORD --provider bw://
 ```
 
 Organization and collection values can be names or IDs and resolve in the same
-way as values in the URI.
+way as values in the URI. The complete precedence is:
+
+| Setting | Highest to lowest precedence |
+|---------|------------------------------|
+| Organization | `BITWARDEN_ORGANIZATION`, provider URI |
+| Collection | `BITWARDEN_COLLECTION`, provider URI |
+| Item type | `BITWARDEN_DEFAULT_TYPE`, provider URI |
+| Field | Secret `ref.field`, `BITWARDEN_DEFAULT_FIELD`, provider URI, item-type default |
 
 ## Storage model
 
@@ -402,8 +412,8 @@ To install it:
 
 ### Authentication issues
 
-- Clear distinction between "not logged in" vs "vault locked"
-- Step-by-step guidance for `bw login` and `bw unlock`
+- Combined guidance for signed-out and locked states using `bw login` and
+  `bw unlock`
 - Session key setup instructions
 
 ### Server mismatch

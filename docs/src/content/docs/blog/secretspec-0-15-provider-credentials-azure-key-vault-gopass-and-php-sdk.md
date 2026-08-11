@@ -103,7 +103,7 @@ Enter access_token for provider 'bws' (source: keyring): ****
 ```
 
 A user-level alias and its credential source can also be declared entirely with
-[`config provider add`](/reference/cli/#config-provider-add):
+[`config provider add`](/reference/cli/#config-global-provider-add):
 
 ```bash
 $ secretspec config provider add bws "bws://project-uuid" \

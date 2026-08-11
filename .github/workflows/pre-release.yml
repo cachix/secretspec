@@ -132,10 +132,3 @@ jobs:
     name: CLI release artifacts
     needs: authorize
     uses: ./.github/workflows/cli-artifacts.yml
-
-  cli-windows-arm64:
-    name: CLI Windows ARM64
-    needs: authorize
-    permissions:
-      contents: write
-    uses: ./.github/workflows/cli-windows-arm64.yml

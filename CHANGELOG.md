@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 - A provider URI may no longer carry a credential. A URI with a password
-  (`scheme://user:secret@host`) is rejected, and `onepassword+token://` no
+  (`scheme://user:PASSWORD@host`) is rejected, and `onepassword+token://` no
   longer accepts the service account token in its userinfo
   (`onepassword+token://token@vault`). A URI is committed to `secretspec.toml`,
   echoed into shell history, and printed by CI, so a credential written there is

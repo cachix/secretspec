@@ -131,6 +131,7 @@ Clear one entry or every cached entry in the active profile:
 
 ```bash
 $ secretspec cache clear API_KEY          # SecretSpec 0.17+
+
 $ secretspec cache clear --profile production
 ```
 
@@ -212,8 +213,9 @@ Benchmark the same command, profile, and set of secrets each time. `check`
 resolves values without printing them:
 
 ```bash
-time secretspec get SECRET_NAME >/dev/null
-time secretspec check --no-prompt
+$ time secretspec get SECRET_NAME >/dev/null
+
+$ time secretspec check --no-prompt
 ```
 
 The redirected `get` prevents the value from appearing in the terminal. Compare
@@ -225,7 +227,7 @@ If you have [hyperfine](https://github.com/sharkdp/hyperfine), compare repeated
 runs:
 
 ```bash
-hyperfine --warmup 1 'secretspec check --no-prompt'
+$ hyperfine --warmup 1 'secretspec check --no-prompt'
 ```
 
 Record the first run separately. A warmup can hide cold authentication or an
@@ -238,7 +240,7 @@ When a provider uses an external CLI, time a harmless authentication command
 without printing its token. For Azure CLI, for example:
 
 ```bash
-time az account get-access-token \
+$ time az account get-access-token \
   --scope https://vault.azure.net/.default \
   --output none
 ```
@@ -260,7 +262,7 @@ expected to return an authorization error, but still reports DNS, TCP, TLS, and
 time to first byte:
 
 ```bash
-curl --silent --show-error --output /dev/null \
+$ curl --silent --show-error --output /dev/null \
   --write-out 'dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total}\n' \
   'https://VAULT.vault.azure.net/secrets/__probe__?api-version=7.5'
 ```
@@ -286,9 +288,11 @@ unique addresses concurrently. Test a few caps when latency grows with the
 number of secrets:
 
 ```bash
-SECRETSPEC_PROVIDER_CONCURRENCY=1 secretspec check --no-prompt
-SECRETSPEC_PROVIDER_CONCURRENCY=4 secretspec check --no-prompt
-SECRETSPEC_PROVIDER_CONCURRENCY=16 secretspec check --no-prompt
+$ SECRETSPEC_PROVIDER_CONCURRENCY=1 secretspec check --no-prompt
+
+$ SECRETSPEC_PROVIDER_CONCURRENCY=4 secretspec check --no-prompt
+
+$ SECRETSPEC_PROVIDER_CONCURRENCY=16 secretspec check --no-prompt
 ```
 
 More concurrency is not always faster. It can increase rate limiting, overload

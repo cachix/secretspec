@@ -12,7 +12,7 @@ set -euo pipefail
 pkg_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo_root="$(cd "$pkg_dir/.." && pwd)"
 
-# With pkg-config the .pc names an already-installed archive; nothing to build.
+# With pkg-config the .pc names an already-installed library; nothing to build.
 if [ -z "${SECRETSPEC_FFI_STATICLIB:-}" ] && [[ " $* " != *" --enable-pkg-config "* ]]; then
   cargo build -p secretspec-ffi --manifest-path "$repo_root/Cargo.toml"
 fi

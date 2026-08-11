@@ -106,9 +106,10 @@ A user-level alias and its credential source can also be declared entirely with
 [`config provider add`](/reference/cli/#config-provider-add):
 
 ```bash
-secretspec config provider add bws "bws://project-uuid" \
+$ secretspec config provider add bws "bws://project-uuid" \
   --credential access_token=keyring
-secretspec config provider login bws
+
+$ secretspec config provider login bws
 ```
 
 Credentials are fetched once per invocation and profile, then reused for every
@@ -126,13 +127,13 @@ Azure Key Vault joins the provider list with the `akv://` scheme:
 
 ```bash
 # Use service-principal credentials, or the current Azure CLI session
-secretspec run --provider akv://myvault -- npm start
+$ secretspec run --provider akv://myvault -- npm start
 
 # Use the platform's managed identity
-secretspec check --provider akv://myvault?auth=managed_identity
+$ secretspec check --provider akv://myvault?auth=managed_identity
 
 # Use AKS workload identity federation
-secretspec run --provider akv://myvault?auth=workload_identity -- ./deploy
+$ secretspec run --provider akv://myvault?auth=workload_identity -- ./deploy
 ```
 
 The default authentication mode first looks for the `tenant_id`, `client_id`,
@@ -155,8 +156,9 @@ client_secret = "keyring"
 ```
 
 ```bash
-secretspec config provider login azure
-secretspec run --provider azure -- ./deploy
+$ secretspec config provider login azure
+
+$ secretspec run --provider azure -- ./deploy
 ```
 
 Sovereign clouds can use either a complete vault hostname or an explicit DNS
@@ -182,8 +184,9 @@ Once Gopass is installed and its password store is initialized, select it like
 any other provider:
 
 ```bash
-secretspec set DATABASE_URL --provider gopass
-secretspec run --provider gopass -- npm start
+$ secretspec set DATABASE_URL --provider gopass
+
+$ secretspec run --provider gopass -- npm start
 ```
 
 By default, entries live under
@@ -205,7 +208,7 @@ installation, shared-store configuration, references, and current limitations.
 The new `cachix/secretspec` Composer package brings the shared resolver to PHP:
 
 ```bash
-composer require cachix/secretspec
+$ composer require cachix/secretspec
 ```
 
 ```php
@@ -258,7 +261,7 @@ The new `export` command resolves every secret for the active profile without
 starting another process. Its default output can be evaluated by a POSIX shell:
 
 ```bash
-eval "$(secretspec export --profile production)"
+$ eval "$(secretspec export --profile production)"
 ```
 
 Use `--format dotenv` to write dotenv syntax or `--format json` to pass the
@@ -316,7 +319,7 @@ Export attempts are also recorded in the
 ## Upgrading
 
 ```bash
-cargo install secretspec
+$ cargo install secretspec
 ```
 
 Existing providers retain their conventional environment authentication when

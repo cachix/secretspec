@@ -1,4 +1,4 @@
-//go:build windows && !static
+//go:build windows && !static && !pkgconfig
 
 package secretspec
 

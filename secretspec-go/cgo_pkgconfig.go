@@ -1,9 +1,9 @@
-//go:build static && pkgconfig
+//go:build pkgconfig
 
 package secretspec
 
-// Every link input comes from secretspec_ffi.pc (installed by
-// `cargo cinstall -p secretspec-ffi --library-type staticlib`).
+// Every link input comes from an installed secretspec_ffi.pc. The install may
+// contain either the static or shared library.
 
 /*
 #cgo pkg-config: secretspec_ffi

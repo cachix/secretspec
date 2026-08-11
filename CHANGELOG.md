@@ -5,9 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.19.0] - 2026-08-09
+## [0.19.0] - 2026-08-10
 
 ### Changed
+
 
 - A provider URI may no longer carry a credential. A URI with a password
   (`scheme://user:secret@host`) is rejected, and `onepassword+token://` no
@@ -23,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a single-secret read makes exactly the decisions batch resolution makes. It
   continues to read the whole profile regardless of an active scope, and audits
   the coordinates it actually reached.
+- 1Password field references now resolve in one batched CLI call, reducing
+  repeated unlocks and process startup when loading multiple secrets. If a
+  missing reference requires individual reads, those reads remain bounded and
+  concurrent.
 - The Rust SDK's `ProviderAlias` now provides `leaf`, `credentials`, and
   `credentials_mut` helpers so callers can construct and inspect leaf or
   inline-cached aliases without depending on their storage representation.
@@ -38,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in effect, so an embedding application can describe itself without discarding
   the reason its own caller supplied through `with_reason` or
   `SECRETSPEC_REASON`.
+- Secrets can set `prompt = true` to request a hidden value from the controlling
+  terminal when `secretspec run` finds no stored value. Writable providers save
+  the answer for later runs; the `null` provider keeps it invocation-only.
 - Profiles can opt out of inheriting `[profiles.default]` by setting
   `inherit = false` in their profile defaults (0.19+), allowing standalone
   secret sets alongside profiles that still share the default declarations.
@@ -76,13 +84,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a `secretspec_ffi.pc`, so consumers can link it — statically or
   dynamically — without hand-written linker flags.
 - The Haskell SDK's new `use-pkg-config` cabal flag
-  (`cabal build -f use-pkg-config`) resolves the archive through pkg-config.
+  (`cabal build -f use-pkg-config`) resolves an installed static or shared
+  library through pkg-config.
 - The Ruby SDK's native extension accepts a new `--enable-pkg-config` build
-  flag (`gem install secretspec -- --enable-pkg-config`) that resolves the
-  archive through pkg-config.
-- The Go SDK's `-tags static` build accepts a new `pkgconfig` build tag
-  (`go build -tags static,pkgconfig`) that resolves the archive through
-  pkg-config, so it also works for a `go get` dependency.
+  flag (`gem install secretspec -- --enable-pkg-config`) that resolves an
+  installed static or shared library through pkg-config.
+- The Go SDK has a new `pkgconfig` build tag (`go build -tags pkgconfig`) that
+  links an installed static or shared library, so it also works for a `go get`
+  dependency.
 - The Haskell SDK declares the archive's macOS system frameworks
   (`SystemConfiguration`, `Security`, `CoreFoundation`) in its cabal file, so
   GHC passes them to every link on macOS.
@@ -93,6 +102,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Ruby gems for Apple silicon now use the generic `arm64-darwin` platform
+  instead of including the build runner's Darwin version.
+- Windows shared `secretspec-ffi` installs now place the runtime DLL in the
+  documented `PREFIX/lib` runtime library directory.
 - `import` warns when a literal source uses convention naming but a provider
   alias for the same storage container addresses active secrets differently
   through a `ref` template or scoped `refs`. Import output also retains the

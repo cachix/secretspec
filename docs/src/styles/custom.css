@@ -58,6 +58,41 @@
   color: var(--sl-color-accent-high);
 }
 
+/* Each prompted command gets a copy button aligned with its first line. */
+.sl-markdown-content
+  .expressive-code
+  figure
+  .terminal-command-start {
+  align-items: center;
+  min-block-size: 2.5rem;
+}
+
+.sl-markdown-content
+  .expressive-code
+  figure
+  .terminal-command-start
+  > .code {
+  padding-inline-end: 3rem;
+}
+
+.sl-markdown-content
+  .expressive-code
+  figure
+  .terminal-line-copy {
+  inset-block-start: 50%;
+  inset-inline-end: 0.5rem;
+  transform: translateY(-50%);
+}
+
+@media (hover: hover) {
+  .sl-markdown-content
+    .expressive-code
+    figure
+    .terminal-command-start {
+    min-block-size: 2rem;
+  }
+}
+
 /* Swap the release-post logo artwork with the active documentation theme. */
 :root[data-theme="dark"]
   img[alt="The new SecretSpec document-and-keyhole logo"] {

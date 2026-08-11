@@ -1,24 +1,21 @@
 # frozen_string_literal: true
 
-# Builds the secretspec native extension, statically linking the secretspec-ffi
-# archive (libsecretspec_ffi.a) into the extension object. A Rust staticlib does
-# not carry its own native dependency closure, so the archive's transitive system
-# libs (captured from `rustc --print native-static-libs`, never hardcoded) are
-# appended to the link line after it.
+# Builds the secretspec native extension. By default it statically links the
+# secretspec-ffi archive (libsecretspec_ffi.a) and appends the archive's native
+# dependency closure captured from `rustc --print native-static-libs`.
 #
-# With --enable-pkg-config every link input comes from secretspec_ffi.pc
-# instead (installed by `cargo cinstall -p secretspec-ffi --library-type
-# staticlib`), and the discovery tiers below are skipped entirely.
+# With --enable-pkg-config every link input instead comes from an installed
+# secretspec_ffi.pc, which may select a static or shared library, and the
+# discovery tiers below are skipped entirely.
 
 require "mkmf"
 
 if enable_config("pkg-config", false)
-  # The .pc's Libs line orders the archive before its native deps; mkmf routes
-  # its -l flags to $libs and the rest (-L, macOS -framework) to $LDFLAGS.
+  # mkmf routes the .pc's -l flags to $libs and the rest (-L, macOS -framework)
+  # to $LDFLAGS.
   unless pkg_config("secretspec_ffi")
     abort("secretspec: pkg-config could not find secretspec_ffi; point " \
-          "PKG_CONFIG_PATH at the prefix installed by " \
-          "`cargo cinstall -p secretspec-ffi --library-type staticlib`")
+          "PKG_CONFIG_PATH at a prefix containing secretspec_ffi.pc")
   end
 
   create_makefile("secretspec/secretspec_ext")

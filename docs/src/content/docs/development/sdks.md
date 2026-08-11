@@ -136,13 +136,12 @@ GHC's linker at them.
 
 ## Linking through pkg-config (0.19+)
 
-`cargo cinstall -p secretspec-ffi`
-([cargo-c](https://github.com/lu-zero/cargo-c)) installs the libraries, the
-header, and a `secretspec_ffi.pc` carrying the full link line, so pkg-config
-consumers skip the `native-static-libs` capture above. Install with
-`--library-type staticlib` for static linking. The default install also
-carries the shared library, which the linker then prefers — one prefix cannot
-serve both modes.
+`secretspec-ffi/scripts/cinstall.sh PREFIX static|shared` uses
+[cargo-c](https://github.com/lu-zero/cargo-c) to install one library type, the
+header, and a `secretspec_ffi.pc` carrying its full link line. This lets
+pkg-config consumers skip the `native-static-libs` capture above. Use separate
+prefixes for the two modes: both metadata files use `-lsecretspec_ffi`, and the
+linker prefers a shared library when both forms are present.
 
 ## Adding a platform to an SDK
 

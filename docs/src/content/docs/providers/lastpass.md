@@ -37,13 +37,13 @@ $ secretspec run --provider lastpass -- npm start
 Install LastPass CLI:
 ```bash
 # macOS
-brew install lastpass-cli
+$ brew install lastpass-cli
 
 # Linux (apt)
-sudo apt install lastpass-cli
+$ sudo apt install lastpass-cli
 
 # NixOS
-nix-env -iA nixpkgs.lastpass-cli
+$ nix-env -iA nixpkgs.lastpass-cli
 ```
 
 ### Authentication
@@ -71,7 +71,7 @@ key should resolve to the same LastPass item.
 
 ### URI examples
 
-```bash
+```text
 # Default SecretSpec layout
 lastpass
 
@@ -111,6 +111,7 @@ DATABASE_URL = { description = "DB", ref = { item = "Shared-Infra/Production DB"
 ```bash
 # Disable interactive pinentry and authenticate with a CI-managed password
 $ export LPASS_DISABLE_PINENTRY=1
+
 $ echo "$LASTPASS_PASSWORD" | lpass login --trust your-email@example.com
 
 $ secretspec run --provider lastpass -- deploy

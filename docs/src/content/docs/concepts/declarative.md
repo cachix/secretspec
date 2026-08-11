@@ -38,11 +38,15 @@ SECRET_NAME = {
 - `composed` (0.16+): Derive a read-only value from other declared secrets (see [Composed Secrets](/concepts/composed-secrets/) for the strict template and dependency semantics)
 - `type`: Secret type for auto-generation (`password`, `hex`, `base64`, `uuid`, `command`)
 - `generate`: Enable auto-generation when the secret is missing (`true` or a table with options)
+- `prompt` (0.19+): Securely ask for a missing value during `secretspec run` and
+  let the selected provider decide whether to save the answer
 
 ## Related Concepts
 
 - [Configuration Inheritance](/concepts/inheritance/) lets projects share common secret definitions via the `extends` field
 - [Secret Generation](/concepts/generation/) auto-creates passwords, tokens, and keys when secrets are missing
+- [Run prompts (0.19+)](/reference/configuration/#prompt-on-missing-during-run-019)
+  provision stored secrets on first use, or remain invocation-only with `null`
 - [Composed Secrets (0.16+)](/concepts/composed-secrets/) derive values from
   other declared secrets without dotenv or shell expansion
 

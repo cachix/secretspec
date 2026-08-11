@@ -46,16 +46,19 @@ declare every member.
 `check`, `run`, and `export` accept `--scope`:
 
 ```bash
-secretspec check --profile production --scope api
-secretspec run --profile production --scope api -- ./api-server
-secretspec export --profile production --scope worker --format dotenv
+$ secretspec check --profile production --scope api
+
+$ secretspec run --profile production --scope api -- ./api-server
+
+$ secretspec export --profile production --scope worker --format dotenv
 ```
 
 Set `SECRETSPEC_SCOPE` to select one without repeating the flag:
 
 ```bash
-export SECRETSPEC_SCOPE=worker
-secretspec run --profile production -- ./worker
+$ export SECRETSPEC_SCOPE=worker
+
+$ secretspec run --profile production -- ./worker
 ```
 
 The command-line flag takes precedence over the environment variable. With no

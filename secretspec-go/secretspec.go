@@ -5,14 +5,16 @@
 // package marshals a JSON request to secretspec_resolve, parses the response
 // envelope, and exposes it with the same vocabulary as the Rust derive crate.
 //
-// Two bindings select the native resolver at build time:
+// Three build modes select the native resolver:
 //   - default (no build tag): purego (dlopen, no cgo). The library is located via
 //     the SECRETSPEC_FFI_LIB environment variable, an embedded copy, or a Cargo
 //     target directory. This keeps `go get` toolchain-free.
 //   - `-tags static`: cgo statically links libsecretspec_ffi.a, so the resolver
-//     is embedded in the Go binary (fully static on Linux/musl). See README.
+//     is embedded in the Go binary (fully static on Linux/musl).
+//   - `-tags pkgconfig` (0.19+): cgo links the installed static or shared library
+//     described by secretspec_ffi.pc. See README.
 //
-// Both bindings implement the same hooks (ensureLoaded, nativeResolve,
+// All bindings implement the same hooks (ensureLoaded, nativeResolve,
 // nativeABIVersion); the code below is binding-agnostic.
 package secretspec
 

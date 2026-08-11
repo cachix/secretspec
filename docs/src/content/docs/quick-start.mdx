@@ -13,14 +13,14 @@ Choose your preferred installation method:
 <TabItem label="Static Binary">
 
 ```bash
-curl -sSL https://install.secretspec.dev | sh
+$ curl -sSL https://install.secretspec.dev | sh
 ```
 
 The static installer also installs `secretspec-update`. Run it to install the
 latest SecretSpec release:
 
 ```bash
-secretspec-update
+$ secretspec-update
 ```
 
 If you installed SecretSpec through Nix or another package manager, update it
@@ -44,7 +44,7 @@ Add to your `devenv.nix`:
 <TabItem label="Nix">
 
 ```bash
-nix-env -iA secretspec -f https://github.com/NixOS/nixpkgs/tarball/nixpkgs-unstable
+$ nix-env -iA secretspec -f https://github.com/NixOS/nixpkgs/tarball/nixpkgs-unstable
 ```
 
 </TabItem>
@@ -101,12 +101,12 @@ $ secretspec config global init  # 0.17+
 ? Select your preferred provider backend:
 > keyring: Uses system keychain (Recommended)
   kdbx: KeePass KDBX databases (0.17+)
-  onepassword: OnePassword password manager
+  onepassword: 1Password password manager
   keeper: Keeper Secrets Manager (0.18+) via official Rust SDK
   dotenv: Traditional .env files
   file: Plaintext files, one per secret (0.19+)
   env: Read-only environment variables
-  null: Use defaults or ephemeral generation without storage (0.19+)
+  null: Use defaults, generation, or run prompts without storage (0.19+)
   systemd-credential: Read-only systemd service credentials (0.17+)
   pass: Unix password manager with GPG encryption
   gopass: Gopass CLI password manager with GPG encryption (0.15+)
@@ -169,6 +169,7 @@ the manifest, then store its value:
 
 ```bash
 $ secretspec add API_KEY --description "API access token" # 0.18+
+
 $ secretspec set API_KEY
 ```
 

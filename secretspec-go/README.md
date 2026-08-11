@@ -5,7 +5,8 @@ manager. A thin client over the `secretspec-ffi` C ABI. Resolution happens in th
 Rust core, so the SDK inherits every provider with no Go-side logic. By default
 the resolver is loaded at runtime via
 [purego](https://github.com/ebitengine/purego) (dlopen, no cgo), keeping `go get`
-toolchain-free; `-tags static` instead links it in statically (see below).
+toolchain-free. Use `-tags static` to stage and embed the archive, or
+`-tags pkgconfig` (0.19+) to link an installed library (see below).
 
 ```go
 package main
@@ -110,19 +111,21 @@ macOS links the archive in but stays self-contained-except-system-frameworks (no
 static libSystem). Windows stays on the default purego path. The prebuilt
 archives are attached to GitHub releases (`go-static.yml`).
 
-### pkg-config (0.19+)
+## Linking with pkg-config (0.19+)
 
-Install the library with [cargo-c](https://github.com/lu-zero/cargo-c) and add
-the `pkgconfig` tag instead of staging:
+Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
-bash secretspec-ffi/scripts/cinstall.sh "$PREFIX"
-PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" CGO_ENABLED=1 go build -tags static,pkgconfig ./...
+# Use "static" (the default) or "shared"; use separate prefixes for both.
+bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
 ```
 
-Unlike staging, this also works for a `go get` dependency.
+Then use the same build command for either type:
 
-### Dynamic linking (0.19+)
+```bash
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" CGO_ENABLED=1 go build -tags pkgconfig ./...
+```
 
-Drop `--library-type staticlib` from the install and the binary links the
-shared library instead.
+Unlike staging, this also works for a `go get` dependency. A shared install in
+a non-system prefix also requires `PREFIX/lib` in the platform's runtime
+library search path.

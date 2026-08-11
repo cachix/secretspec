@@ -159,7 +159,9 @@ DB_PASSWORD = { description = "DB pw", ref = { item = "prod/db-credentials", fie
 ```bash
 # Using environment variables
 $ export AWS_ACCESS_KEY_ID=AKIA...
+
 $ export AWS_SECRET_ACCESS_KEY=...
+
 $ export AWS_DEFAULT_REGION=us-east-1
 
 # Run command

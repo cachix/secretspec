@@ -32,7 +32,7 @@ Generate typed classes with `secretspec schema` plus
 [quicktype](https://quicktype.io), then build them from `resolved.fields`:
 
 ```bash
-secretspec schema | quicktype -s schema --top-level SecretSpec --lang ruby -o secrets_gen.rb
+$ secretspec schema | quicktype -s schema --top-level SecretSpec --lang ruby -o secrets_gen.rb
 ```
 
 <Code code={typedAccessExample} lang="ruby" meta='title="typed_access.rb"' />
@@ -42,17 +42,20 @@ secretspec schema | quicktype -s schema --top-level SecretSpec --lang ruby -o se
 The published platform gems bundle the `secretspec-ffi` archive and statically
 link it into the mkmf extension at install time.
 
-### pkg-config (0.19+)
+### Linking with pkg-config (0.19+)
 
-To build against your own `secretspec-ffi` install instead, install it with
-[cargo-c](https://github.com/lu-zero/cargo-c) and pass `--enable-pkg-config`:
+Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
-bash secretspec-ffi/scripts/cinstall.sh "$PREFIX"
-PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" gem install secretspec -- --enable-pkg-config
+# Use "static" (the default) or "shared"; use separate prefixes for both.
+$ bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
 ```
 
-### Dynamic linking (0.19+)
+Then use the same extension flag for either type:
 
-Drop `--library-type staticlib` from the install and the extension links the
-shared library instead.
+```bash
+$ PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" gem install secretspec -- --enable-pkg-config
+```
+
+A shared install in a non-system prefix also requires `PREFIX/lib` in the
+platform's runtime library search path.

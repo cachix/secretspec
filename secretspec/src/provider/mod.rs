@@ -20,7 +20,7 @@
 //! - [`keeper::KeeperProvider`]: Keeper Secrets Manager integration (0.18+)
 //! - [`dotenv::DotEnvProvider`]: `.env` file support
 //! - [`env::EnvProvider`]: Environment variables (read-only)
-//! - [`null::NullProvider`]: Defaults or ephemeral generation without storage (0.19+)
+//! - [`null::NullProvider`]: Defaults, generation, or run prompts without storage (0.19+)
 //! - [`file::FileProvider`]: Plaintext file-per-secret storage (0.19+)
 //! - [`pass::PassProvider`]: Pass integration
 //! - [`gopass::GoPassProvider`]: Gopass integration
@@ -48,7 +48,7 @@
 //! ```text
 //! keyring://
 //! dotenv://.env.production
-//! null://  # Use defaults or ephemeral generation without storage, 0.19+
+//! null://  # Use defaults, generation, or run prompts without storage, 0.19+
 //! file:./.secrets  # One plaintext file per secret, 0.19+
 //! onepassword://vault
 //! lastpass://folder
@@ -642,19 +642,19 @@ impl<'a> DiscoveryContext<'a> {
     }
 }
 
-/// Whether a value minted by a secret's `generate` configuration is written
-/// back to its primary provider.
+/// Whether a value SecretSpec produces after a provider miss is written back
+/// to the primary provider.
 ///
 /// This capability is available since SecretSpec 0.19. It is deliberately
 /// separate from read and write support: a provider may reject ordinary writes
-/// while explicitly allowing SecretSpec to return a freshly generated value
-/// for the current resolution.
+/// while explicitly allowing SecretSpec to return a generated or prompted
+/// value for the current resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GeneratedValuePersistence {
-    /// Store the generated value through [`Provider::set`] and reuse it on
+pub enum ProducedValuePersistence {
+    /// Store the produced value through [`Provider::set`] and reuse it on
     /// subsequent resolutions. This is the default for storage providers.
     Persist,
-    /// Return the generated value only from the current materializing
+    /// Return the produced value only from the current materializing
     /// resolution. No provider write or cache refresh is performed.
     Ephemeral,
 }
@@ -861,13 +861,25 @@ pub trait Provider: Send + Sync {
     /// `generate` configuration after this provider's read route misses.
     /// Available since SecretSpec 0.19.
     ///
-    /// [`GeneratedValuePersistence::Ephemeral`] affects only automatic
+    /// [`ProducedValuePersistence::Ephemeral`] affects only automatic
     /// generation. Ordinary [`set`](Provider::set), deletion, imports, and
     /// provider reads keep their usual behavior. The capability must be pure:
     /// callers may inspect it without running authentication preflight or other
     /// provider I/O.
-    fn generated_value_persistence(&self) -> GeneratedValuePersistence {
-        GeneratedValuePersistence::Persist
+    fn generated_value_persistence(&self) -> ProducedValuePersistence {
+        ProducedValuePersistence::Persist
+    }
+
+    /// Controls whether a value entered for a `prompt = true` declaration is
+    /// stored after the provider's read route misses. Available since
+    /// SecretSpec 0.19.
+    ///
+    /// The default persists the answer through [`Provider::set`], making the
+    /// prompt a first-use provisioning step. A provider that cannot or must not
+    /// retain values can return [`ProducedValuePersistence::Ephemeral`] so the
+    /// answer is used only by the current `run` resolution.
+    fn prompted_value_persistence(&self) -> ProducedValuePersistence {
+        ProducedValuePersistence::Persist
     }
 
     /// Describes the provider-native destination that a write to `addr` will
@@ -1260,8 +1272,11 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         (**self).check_writable(addr)
     }
-    fn generated_value_persistence(&self) -> GeneratedValuePersistence {
+    fn generated_value_persistence(&self) -> ProducedValuePersistence {
         (**self).generated_value_persistence()
+    }
+    fn prompted_value_persistence(&self) -> ProducedValuePersistence {
+        (**self).prompted_value_persistence()
     }
     fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
         (**self).describe_write_target(addr)
@@ -1474,9 +1489,14 @@ impl Provider for PreflightGuard {
         self.inner.check_writable(addr)
     }
 
-    fn generated_value_persistence(&self) -> GeneratedValuePersistence {
+    fn generated_value_persistence(&self) -> ProducedValuePersistence {
         // Capability inspection is pure and must not trigger authentication.
         self.inner.generated_value_persistence()
+    }
+
+    fn prompted_value_persistence(&self) -> ProducedValuePersistence {
+        // Capability inspection is pure and must not trigger authentication.
+        self.inner.prompted_value_persistence()
     }
 
     fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {

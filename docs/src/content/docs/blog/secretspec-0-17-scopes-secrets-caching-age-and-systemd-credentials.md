@@ -48,8 +48,9 @@ secrets = ["DATABASE_URL", "QUEUE_TOKEN"]
 ```
 
 ```bash
-secretspec run --scope api -- ./api
-secretspec run --scope worker -- ./worker
+$ secretspec run --scope api -- ./api
+
+$ secretspec run --scope worker -- ./worker
 ```
 
 Composed secrets may still read hidden dependencies to build a visible value,
@@ -220,7 +221,7 @@ also brings:
   behavior for Vault and OpenBao.
 
 ```bash
-cargo install secretspec
+$ cargo install secretspec
 ```
 
 See the [full changelog](https://github.com/cachix/secretspec/blob/main/CHANGELOG.md)

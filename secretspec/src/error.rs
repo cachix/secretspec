@@ -62,6 +62,12 @@ pub enum SecretSpecError {
     #[error("Secret '{0}' is required but not set")]
     RequiredSecretMissing(String),
     #[error(
+        "Secret '{0}' requires an interactive prompt, but no controlling terminal is available"
+    )]
+    PromptUnavailable(String),
+    #[error("Prompted value for secret '{0}' cannot be empty")]
+    PromptValueEmpty(String),
+    #[error(
         "Composed secret '{0}' is derived from other secrets and has no stored value to change"
     )]
     ComposedSecretReadOnly(String),
@@ -125,6 +131,8 @@ impl SecretSpecError {
             SecretSpecError::ProviderNotFound(_) => "provider_not_found",
             SecretSpecError::SecretNotFound(_) => "secret_not_found",
             SecretSpecError::RequiredSecretMissing(_) => "required_secret_missing",
+            SecretSpecError::PromptUnavailable(_) => "prompt_unavailable",
+            SecretSpecError::PromptValueEmpty(_) => "prompt_value_empty",
             SecretSpecError::ComposedSecretReadOnly(_) => "composed_secret_read_only",
             SecretSpecError::ExtractedSecretReadOnly(_) => "extracted_secret_read_only",
             SecretSpecError::CompositionFailed(_) => "composition_failed",
@@ -225,6 +233,14 @@ mod tests {
             (
                 SecretSpecError::RequiredSecretMissing("X".into()),
                 "required_secret_missing",
+            ),
+            (
+                SecretSpecError::PromptUnavailable("X".into()),
+                "prompt_unavailable",
+            ),
+            (
+                SecretSpecError::PromptValueEmpty("X".into()),
+                "prompt_value_empty",
             ),
             (
                 SecretSpecError::ComposedSecretReadOnly("X".into()),

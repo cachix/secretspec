@@ -36,8 +36,14 @@ pub trait Provider: Send + Sync {
     /// SecretSpec 0.19+: optional, defaults to Persist. Return Ephemeral only
     /// when generated values should be returned for one resolution without
     /// calling `set`; ordinary writes remain governed by `check_writable`.
-    fn generated_value_persistence(&self) -> GeneratedValuePersistence {
-        GeneratedValuePersistence::Persist
+    fn generated_value_persistence(&self) -> ProducedValuePersistence {
+        ProducedValuePersistence::Persist
+    }
+
+    /// SecretSpec 0.19+: optional, defaults to Persist. This is independent of
+    /// `prompt = true`, which selects operator input rather than storage policy.
+    fn prompted_value_persistence(&self) -> ProducedValuePersistence {
+        ProducedValuePersistence::Persist
     }
 
     /// SecretSpec 0.19+: optional pre-write description. The default renders
@@ -70,12 +76,15 @@ you declare the set, you never write the check. Have `set` call
 `self.check_writable(addr)?` first, so the pre-check and the write agree on
 one refusal message.
 
-SecretSpec 0.19+ also exposes `generated_value_persistence`. Leave its default
-of `Persist` for storage providers. `Ephemeral` is an explicit generation-only
-capability: after a healthy read miss, SecretSpec returns the generated logical
-value for the current materializing resolution without calling `set` or
-refreshing a cache. It does not make ordinary writes succeed and must be a pure,
-I/O-free capability check.
+SecretSpec 0.19+ also exposes `generated_value_persistence` and
+`prompted_value_persistence`. Leave their default of `Persist` for storage
+providers. `Ephemeral` is an explicit automatic-value capability: after a
+healthy read miss, SecretSpec returns the generated or prompted logical value
+for the current materializing resolution without calling `set` or refreshing a
+cache. It does not make ordinary writes succeed, and each method must be a pure,
+I/O-free capability check. In particular, `prompt = true` selects how a missing
+value is acquired; `prompted_value_persistence` decides what the provider does
+with the answer.
 
 In SecretSpec 0.19+, override `describe_write_target` when the provider URI and
 native coordinates do not identify the physical destination clearly. The

@@ -87,9 +87,13 @@ Configure the CLI once, before logging in:
 
 ```bash
 $ bw logout                                    # if already logged in
+
 $ bw config server https://vault.company.com
+
 $ bw login
+
 $ bw unlock
+
 $ export BW_SESSION="session-key-from-unlock"
 ```
 
@@ -228,10 +232,12 @@ $ export BW_SESSION="your-session-key"
 ```bash
 # Set item type and field defaults
 $ export BITWARDEN_DEFAULT_TYPE=login
+
 $ export BITWARDEN_DEFAULT_FIELD=password
 
 # Organization settings (names or IDs, resolved the same way as in the URI)
 $ export BITWARDEN_ORGANIZATION=myorg
+
 $ export BITWARDEN_COLLECTION=dev-secrets
 
 # Use defaults
@@ -244,6 +250,7 @@ $ secretspec get DATABASE_PASSWORD --provider bw://
 ```bash
 # Login and unlock (interactive)
 $ bw login
+
 $ bw unlock
 
 # Export session for automation

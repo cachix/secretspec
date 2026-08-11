@@ -1,13 +1,11 @@
-//go:build static
+//go:build static || pkgconfig
 
 package secretspec
 
-// Static binding: cgo links libsecretspec_ffi.a directly into the Go binary, so
-// the Rust resolver is embedded (fully static on Linux/musl with
-// `-ldflags '-linkmode external -extldflags "-static"'`). The link inputs come
-// from files staged by scripts/stage-staticlib.sh (cgo_vendored.go and the
-// generated cgo_ldflags_<os>_<arch>.go), or from secretspec_ffi.pc when the
-// pkgconfig tag is also set (cgo_pkgconfig.go).
+// Linked binding: cgo links the Rust resolver at build time. The link inputs
+// come from files staged by scripts/stage-staticlib.sh (`-tags static`) or from
+// secretspec_ffi.pc (`-tags pkgconfig`). The installed library selected by the
+// latter may be static or shared.
 
 /*
 #include <stdlib.h>
@@ -17,7 +15,7 @@ import "C"
 
 import "unsafe"
 
-// ensureLoaded is a no-op: the resolver is linked in, nothing to load.
+// ensureLoaded is a no-op: the platform linker loads the resolver.
 func ensureLoaded() error { return nil }
 
 // nativeResolve calls secretspec_resolve and returns the owned response, freeing

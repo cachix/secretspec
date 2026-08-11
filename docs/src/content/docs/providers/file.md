@@ -40,7 +40,9 @@ API_TOKEN = { description = "Local API token", providers = ["local_files"] }
 
 ```bash
 $ secretspec set API_TOKEN --profile development
+
 $ secretspec get API_TOKEN --profile development
+
 $ secretspec run --profile development -- npm start
 ```
 

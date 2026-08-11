@@ -83,13 +83,13 @@ and a readable summary:
 
 ```bash
 # Last 20 entries, formatted
-secretspec audit -n 20
+$ secretspec audit -n 20
 
 # Only `run` events for one project
-secretspec audit --project my-app --action run
+$ secretspec audit --project my-app --action run
 
 # Raw JSON Lines, piped to jq
-secretspec audit --json | jq 'select(.outcome == "missing")'
+$ secretspec audit --json | jq 'select(.outcome == "missing")'
 ```
 
 ## Size cap

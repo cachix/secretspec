@@ -86,19 +86,22 @@ cabal build --extra-lib-dirs="$LIBDIR" --ghc-options="-optl${NATIVE_LIBS// / -op
 cabal test  --extra-lib-dirs="$LIBDIR" --ghc-options="-optl${NATIVE_LIBS// / -optl}"
 ```
 
-### pkg-config (0.19+)
+### Linking with pkg-config (0.19+)
 
-Install the library with [cargo-c](https://github.com/lu-zero/cargo-c) and
-build with the `use-pkg-config` flag instead of the flags above:
+Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
-bash secretspec-ffi/scripts/cinstall.sh "$PREFIX"
+# Use "static" (the default) or "shared"; use separate prefixes for both.
+bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
+```
+
+Then use the same Cabal flag for either type:
+
+```bash
 cd secretspec-hs
 PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal build -f use-pkg-config
 PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal test  -f use-pkg-config
 ```
 
-### Dynamic linking (0.19+)
-
-Drop `--library-type staticlib` from the install and the build links the shared
-library instead.
+A shared install in a non-system prefix also requires `PREFIX/lib` in the
+platform's runtime library search path.

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Windows ARM64 CLI release artifacts (`aarch64-pc-windows-msvc`), attached to
+  the GitHub Release as `secretspec-aarch64-pc-windows-msvc.zip` with a
+  checksum. The static installer keeps selecting the x86_64 build on Windows
+  ARM64, which runs under emulation, so download the archive directly for a
+  native binary.
+
 ## [0.19.0] - 2026-08-10
 
 ### Changed

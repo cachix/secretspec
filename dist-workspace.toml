@@ -19,13 +19,11 @@ installers = ["shell"]
 precise-builds = true
 # Target platforms to build apps for (Rust target-triple syntax)
 #
-# aarch64-pc-windows-msvc is omitted on purpose: dist refuses to build a target
+# aarch64-pc-windows-msvc is missing on purpose: dist refuses to build a target
 # whose standalone updater it cannot fetch, and axoupdater publishes no binary
-# for it (axodotdev/axoupdater#313). Because install-updater is a global
-# setting, adding the target would mean dropping the updater for every
-# platform. Windows ARM64 hosts run the x86_64 build under emulation, which is
-# what the installer already selects for them. Add the target back once
-# axoupdater ships that asset.
+# for it (axodotdev/axoupdater#313). install-updater is a global setting, so
+# that target is built and attached by cli-windows-arm64.yml instead, leaving
+# the updater intact everywhere dist can provide one.
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"

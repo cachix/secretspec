@@ -5,7 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.19.1] - 2026-08-11
+
+Republishes 0.19.0's command-line artifacts. The library and CLI behave exactly
+as in 0.19.0.
 
 ### Added
 
@@ -14,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checksum. The static installer keeps selecting the x86_64 build on Windows
   ARM64, which runs under emulation, so download the archive directly for a
   native binary.
+
+### Fixed
+
+- The 0.19.0 GitHub Release shipped without its CLI archives, its installer,
+  and the Swift XCFramework, so `curl https://install.secretspec.dev | sh` and
+  `swift package` resolution of 0.19.0 both failed. Every language registry
+  (crates.io, PyPI, npm, RubyGems, Hackage, NuGet) published 0.19.0 normally and
+  is unaffected. Install 0.19.1 instead; SwiftPM version ranges resolve to it
+  automatically.
 
 ## [0.19.0] - 2026-08-10
 

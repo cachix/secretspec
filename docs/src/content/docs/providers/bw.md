@@ -114,8 +114,9 @@ bw://?type=login&field=password
 
 - `collection`: Target collection, by name or by ID
 - `org@collection`: Organization and collection, each by name or by ID
-- `type`: Item type (login, card, identity, sshkey, securenote)
-- `field`: Specific field to extract
+- `type`: Item type to require when matching an existing item and to use when
+  creating a new one (`login`, `card`, `identity`, `sshkey`, or `securenote`)
+- `field`: Built-in or custom field to read or write
 - `server`: The self-hosted server this configuration expects. This does **not**
   configure the CLI — it is a guard that fails with remediation steps when the
   `bw` CLI is pointed somewhere else. See [Self-hosted servers](#self-hosted-servers).
@@ -236,7 +237,11 @@ way as values in the URI. The complete precedence is:
 
 ## Storage model
 
-The Bitwarden provider supports all Bitwarden item types with smart field detection:
+The Bitwarden provider supports every Password Manager item type. When an item
+type is selected through `BITWARDEN_DEFAULT_TYPE` or `?type=`, it filters reads
+and updates to that type and selects the type of a newly created item. If
+neither is set, reads and updates accept any matching type, while new items are
+Logins.
 
 ### Item types
 
@@ -324,10 +329,11 @@ STRIPE_KEY = { description = "Card custom field", ref = { item = "Stripe Test Ca
 DEPLOY_PUBKEY = { description = "SSH public key", ref = { item = "Deploy SSH Key", field = "public_key" } }
 ```
 
-A named field resolves to that field or to nothing. If it is absent the secret
-is reported missing rather than answered from some other field, so a typo in
-`field` surfaces as a missing secret instead of the wrong value. `field =
-"notes"` addresses a Secure Note's body.
+Built-in field names and aliases resolve only to that built-in field. Custom
+field names first match in full, case-insensitively. If there is no exact match,
+SecretSpec uses the first custom field whose name contains the requested text,
+also case-insensitively. Use the complete custom-field name to avoid an
+unintended partial match. `field = "notes"` addresses a Secure Note's body.
 
 ### How items are matched (0.18+)
 
@@ -339,13 +345,9 @@ nobody watching, so a partial match would quietly read — or overwrite — a
 neighbouring item.
 
 Bitwarden does not require names to be unique. When more than one item matches,
-SecretSpec refuses the address and lists the colliding ids rather than picking
-one; point the secret at a single item by using its id as the `item`:
-
-```toml
-[profiles.default]
-API_KEY = { description = "Disambiguated by id", ref = { item = "5a1b2c3d-...." } }
-```
+SecretSpec refuses the address and lists the colliding IDs rather than picking
+one. Rename the items so the selected name is unique, or use `?type=` when the
+collisions have different item types.
 
 Adding `?type=` narrows the match to that item type, on both reads and writes.
 That is how a Card and a Login of the same name stay separately addressable:
@@ -370,6 +372,8 @@ specific field is required:
 DATABASE_URL = { description = "Application database", ref = { item = "MyApp Database", field = "password" }, providers = ["bw"] }
 ```
 
+`ref.item` is matched against the Bitwarden item name, not its item ID.
+
 ## CI/CD
 
 Provide an unlocked session to the job as `BW_SESSION`, then select the
@@ -378,7 +382,7 @@ provider as usual:
 ```bash
 $ export BW_SESSION="session-key-from-unlock"
 
-$ secretspec run --provider bw://Production -- deploy
+$ secretspec run --provider bw:// -- deploy
 ```
 
 Treat the session key as a CI secret and avoid printing it in job logs.
@@ -386,18 +390,16 @@ Treat the session key as a CI secret and avoid printing it in job logs.
 ## Security considerations
 
 - `BW_SESSION` unlocks the vault for the lifetime of the session, and the
-  provider has vault-wide access. Keep the session key out of checked-in
-  configuration and shell history.
+  session can access everything granted to the signed-in account. Keep the
+  session key out of checked-in configuration and shell history.
 - Scope provider URIs to the intended organization and collection when
   possible.
 - For self-hosted installations, use `?server=` as a guard against operating
   on a differently configured vault.
-- Ambiguous item names fail instead of selecting one silently; use an item ID
-  to disambiguate intentional duplicates.
+- Ambiguous item names fail instead of selecting one silently; rename them or
+  use `?type=` when the duplicates have different item types.
 
 ## Troubleshooting
-
-The provider includes comprehensive error handling with helpful guidance:
 
 ### CLI installation
 
@@ -410,21 +412,9 @@ To install it:
   - Download: https://bitwarden.com/help/cli/
 ```
 
-### Authentication issues
-
-- Combined guidance for signed-out and locked states using `bw login` and
-  `bw unlock`
-- Session key setup instructions
-
 ### Server mismatch
 
 When `?server=` names a different server than the one the `bw` CLI is configured
 for, the operation stops before touching the vault and reports both addresses
 alongside the `bw logout` / `bw config server` / `bw login` / `bw unlock`
 sequence needed to correct it.
-
-### Item access
-
-- Graceful handling of missing items
-- Field validation and suggestions
-- Organization/collection permission guidance

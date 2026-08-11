@@ -95,11 +95,12 @@ Secret values used to authenticate SOPS belong in a provider alias's
 <ProviderCredentials provider="sops" />
 
 For example, this alias loads an age identity from the system keyring and
-passes it only to the SOPS child process:
+passes it only to the SOPS child process. Replace `YOUR_AGE_RECIPIENT` with the
+recipient printed by `age-keygen -y` during setup:
 
 ```toml title="secretspec.toml"
 [providers.sops_age]
-uri = "sops://secrets.enc.yaml?age_recipients=age1example"
+uri = "sops://secrets.enc.yaml?age_recipients=YOUR_AGE_RECIPIENT"
 
 [providers.sops_age.credentials]
 age_key = "keyring"
@@ -120,7 +121,8 @@ sops://[path/to/secret][?key=value[&key=value]...]
 ```
 
 - `path/to/secret` — optional absolute or relative path to the encrypted file;
-  defaults to `secrets.enc.yaml`
+  defaults to `secrets.enc.yaml`. Relative paths are resolved from the directory
+  containing `secretspec.toml`, not from the shell's current directory.
 
   - :::tip[Secrets in multiple files?]
     To represent more than one file, use a templated path. This supports
@@ -135,6 +137,9 @@ sops://[path/to/secret][?key=value[&key=value]...]
 
 - `?key=value` — optional query parameter; see [Query parameters](#query-parameters)
 - `&key=value` — additional parameters
+
+Relative `age_key_file`, `age_ssh_private_key_file`, and `sops_config` query
+values are resolved from the same manifest directory.
 
 ### Project configuration
 
@@ -163,7 +168,7 @@ for the purpose and usage of each parameter.
 
 | Provider URL Query Parameter Name | Purpose                                                                                               |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| format                            | Overrides the extension-based file format detection. Valid values: `dotenv` `env` `ini` `json` `yaml` |
+| format                            | Overrides the extension-based file format detection. Valid values: `dotenv` `env` `ini` `json` `yaml` `yml` |
 
 #### SOPS
 
@@ -237,6 +242,13 @@ for the purpose and usage of each parameter.
 | huawei_kms_ids                    | SOPS_HUAWEICLOUD_KMS_IDS           |
 | huawei_sdk_project_id             | HUAWEICLOUD_SDK_PROJECT_ID         |
 
+Each query option in the environment-mapping tables is exported to the SOPS
+child process and overrides the same inherited environment variable. SOPS
+configuration resolves in this order: `sops_config` in the URI, a `.sops.yaml`
+discovered from the manifest directory or one of its parents, then an inherited
+`SOPS_CONFIG`. Provider credentials similarly override their matching secret
+environment fallbacks, but only for the SOPS child process.
+
 ## Storage model
 
 The URI shape determines the on-disk layout. This matters when editing a file
@@ -287,15 +299,18 @@ before the encrypted file changes.
 
 ### Format handling
 
-SecretSpec asks SOPS to emit JSON when decrypting, then uses one lookup path
-for YAML, JSON, dotenv, and INI files. When `?format=` is present, SecretSpec
-also passes the corresponding SOPS input type so filenames such as
+SecretSpec asks SOPS to emit JSON when decrypting and selects the secret from
+that JSON representation. When `?format=` is present, SecretSpec passes the
+corresponding SOPS input type where SOPS supports one, so filenames such as
 `.env.production.enc?format=dotenv` work correctly.
 
 SOPS does not support `--input-type ini`, so `?format=ini` is accepted only
 when the filename itself ends in `.ini`. Without `?format=`, the filename must
 end in `.yaml`, `.yml`, `.json`, `.env`, `.dotenv`, or `.ini`; an unrecognized
 extension is reported as a configuration error.
+
+When a selected YAML or JSON node is not a string, reads return its compact JSON
+representation. Writes always store the supplied secret as a string value.
 
 In a single dotenv file, the same key cannot hold different values for
 different profiles. Use a templated path such as
@@ -318,34 +333,24 @@ EXTERNAL_TOKEN = { description = "Token already managed in shared.enc.yaml", ref
 ```
 
 This YAML example reads or writes root selector `["existing_token"]`; the INI
-equivalent is `["DEFAULT"]["existing_token"]`. SOPS documents hold single
-values at each key, so `field` and other extra ref coordinates are rejected. A
-templated SOPS URI also rejects refs: without convention
-`project`/`profile` inputs, SecretSpec cannot choose which templated file the
-external item belongs to. See [Secret References](/concepts/references/) for
-the general model.
+equivalent is `["DEFAULT"]["existing_token"]`. This provider treats the value
+at the selected key as the complete secret, so it supports only `item` and
+rejects `field` and other extra ref coordinates. A templated SOPS URI also
+rejects refs: without convention `project`/`profile` inputs, SecretSpec cannot
+choose which templated file the external item belongs to. See
+[Secret References](/concepts/references/) for the general model.
 
 ## Advanced configuration
 
-### Set a secret with age
+### Pass age settings in the provider URI
+
+The setup above uses `.sops.yaml` and `SOPS_AGE_KEY_FILE`. To keep both settings
+in the provider URI instead, derive the recipient from the same identity:
 
 ```bash
-$ secretspec set DATABASE_URL --provider 'sops://secrets.enc.json?age_key_file=key.txt&age_recipients=YOUR_AGE_RECIPIENT'
-```
+$ AGE_RECIPIENT="$(age-keygen -y key.txt)"
 
-Or, if `keys.txt` exists in a place discoverable by SOPS and `.sops.yaml`
-exists next to the project's `secretspec.toml`, configure a creation rule:
-
-```yaml title=".sops.yaml"
-creation_rules:
-  - path_regex: secrets\.enc\.json$
-    age: "YOUR_AGE_RECIPIENT"
-```
-
-then:
-
-```bash
-$ secretspec set DATABASE_URL --provider sops://secrets.enc.json
+$ secretspec set DATABASE_URL --provider "sops://secrets.enc.json?age_key_file=key.txt&age_recipients=${AGE_RECIPIENT}"
 ```
 
 ## CI/CD
@@ -366,8 +371,8 @@ URI.
 
 - Commit only the SOPS-encrypted files, never decrypted copies or private key
   material.
-- Keep authentication values in provider credentials or SOPS environment
-  variables instead of URI query parameters.
+- Keep secret authentication values in provider credentials or SOPS
+  environment variables instead of URI query parameters.
 - Review the resolved file and selector shown by `secretspec set` and
   interactive `secretspec check` in SecretSpec 0.19+ before confirming a
   write.

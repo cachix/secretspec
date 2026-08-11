@@ -20,7 +20,7 @@ This release includes:
 - **[Provider-specific storage
   layouts](#provider-specific-storage-layouts)**: give each provider its own
   address, transform stored values, import existing files, and preview exact
-  write destinations.
+  write references.
 - **[Config belongs in secrets](#config-belongs-in-secrets)**: resolve
   profile-specific config alongside stored secrets, generate ephemeral values,
   and securely prompt during `secretspec run`.
@@ -31,8 +31,7 @@ This release includes:
   workflows](#faster-remote-provider-workflows)**: attach a cache directly to
   an authoritative provider and batch 1Password field reads.
 - **[Smaller improvements](#smaller-improvements)**: create standalone profiles
-  and install complete pkg-config metadata for native SDK consumers. Starting
-  with 0.19.1, releases also include a native Windows ARM64 CLI archive.
+  and install complete pkg-config metadata for native SDK consumers.
 
 ## Provider-specific storage layouts
 
@@ -186,10 +185,10 @@ every copied value, and only then removes the plaintext source files.
 Preflight, write, or verification failures leave every source untouched. A
 destination with a different existing value keeps its corresponding source.
 
-### See the destination before writing
+### See the reference before writing
 
 `secretspec set` and interactive `secretspec check` now print the resolved
-write destination before reading a value:
+write reference before reading a value:
 
 ```console
 $ secretspec set API_KEY --profile production --provider sops://secrets.enc.yaml
@@ -332,6 +331,12 @@ the batch contains a missing reference, SecretSpec falls back to bounded
 concurrent reads so it can preserve per-secret missing-value behavior without
 serializing the whole profile.
 
+In the cold-cache benchmark from
+[the implementation PR](https://github.com/cachix/secretspec/pull/317), a
+representative profile with 25 field references resolved in 11.890 seconds,
+down from 96.294 seconds. The batch used 3 `op` processes instead of 27, making
+that run 8.10 times faster.
+
 ## Smaller improvements
 
 ### Standalone profiles
@@ -367,17 +372,6 @@ supports installed static or shared libraries.
 Haskell now declares its required macOS system frameworks. The Rust SDK's
 `ProviderAlias` type also exposes `leaf`, `credentials`, and `credentials_mut`
 helpers for configuration tooling.
-
-### Native Windows ARM64 CLI archive (0.19.1+)
-
-Starting with 0.19.1, the GitHub Release includes
-`secretspec-aarch64-pc-windows-msvc.zip` and its checksum. Download that archive
-directly to run the CLI natively on Windows ARM64.
-
-The static installer still selects the x64 build on Windows ARM devices, where
-it runs under emulation. The standalone updater is also unavailable for the
-native archive until
-[axoupdater supports Windows ARM64](https://github.com/axodotdev/axoupdater/pull/357).
 
 ## Upgrading
 
@@ -416,6 +410,12 @@ for every change and fix in this release.
 
 These items are not part of 0.19. They are open work for future releases:
 
+- **Native Windows ARM64 CLI archive (target: 0.19.1)**: add
+  `secretspec-aarch64-pc-windows-msvc.zip` and its checksum to GitHub Releases
+  so the CLI can run natively on Windows ARM64. The static installer will
+  continue to select the x64 build on Windows ARM devices until it supports the
+  native archive, and standalone updates depend on
+  [axoupdater supporting Windows ARM64](https://github.com/axodotdev/axoupdater/pull/357).
 - **WinGet packaging**: publish the initial package tracked in
   [microsoft/winget-pkgs#413776](https://github.com/microsoft/winget-pkgs/pull/413776),
   then automate stable updates through

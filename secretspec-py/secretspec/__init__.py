@@ -38,6 +38,7 @@ __all__ = [
     "SecretReport",
     "SecretSpecError",
     "MissingRequiredError",
+    "CallerContext",
     "resolve",
     "report",
     "abi_version",
@@ -61,6 +62,28 @@ class MissingRequiredError(SecretSpecError):
             "missing required secret(s): " + ", ".join(missing),
         )
         self.missing = missing
+
+
+@dataclass(frozen=True)
+class CallerContext:
+    """Caller-asserted software-integration context (SecretSpec 0.20+)."""
+
+    name: str
+    version: Optional[str] = None
+    operation: Optional[str] = None
+    resource: Optional[str] = None
+
+    def _request(self) -> dict[str, str]:
+        return {
+            key: value
+            for key, value in {
+                "name": self.name,
+                "version": self.version,
+                "operation": self.operation,
+                "resource": self.resource,
+            }.items()
+            if value is not None
+        }
 
 
 @dataclass(frozen=True)
@@ -197,6 +220,7 @@ def resolve(
     profile: Optional[str] = None,
     scope: Optional[str] = None,
     reason: Optional[str] = None,
+    caller: Optional[CallerContext] = None,
 ) -> Resolved:
     """Resolve secrets and return a :class:`Resolved`.
 
@@ -210,6 +234,7 @@ def resolve(
         .with_profile(profile)
         .with_scope(scope)
         .with_reason(reason)
+        .with_caller(caller)
         .load()
     )
 
@@ -221,6 +246,7 @@ def report(
     profile: Optional[str] = None,
     scope: Optional[str] = None,
     reason: Optional[str] = None,
+    caller: Optional[CallerContext] = None,
 ) -> Report:
     """Resolve a value-free :class:`Report` (the inventory/preflight view).
 
@@ -235,6 +261,7 @@ def report(
         .with_profile(profile)
         .with_scope(scope)
         .with_reason(reason)
+        .with_caller(caller)
         .report()
     )
 
@@ -275,6 +302,12 @@ class _Builder:
     def with_reason(self, reason: Optional[str]) -> "_Builder":
         if reason is not None:
             self._request["reason"] = reason
+        return self
+
+    def with_caller(self, caller: Optional[CallerContext]) -> "_Builder":
+        """Identify the invoking software integration (SecretSpec 0.20+)."""
+        if caller is not None:
+            self._request["caller"] = caller._request()
         return self
 
     def with_no_values(self, no_values: bool = True) -> "_Builder":

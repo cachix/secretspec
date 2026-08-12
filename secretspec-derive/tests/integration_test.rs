@@ -352,5 +352,15 @@ mod profile_inheritance {
         let _ = SecretSpec::builder()
             .with_reason("running database migrations")
             .with_provider("dotenv://.env");
+
+        // Caller context identifies an integration without standing in for a
+        // user-supplied reason (0.20+).
+        let _ = SecretSpec::builder()
+            .with_caller(
+                secretspec::CallerContext::new("git")
+                    .with_operation("credential_get")
+                    .with_resource("github.com"),
+            )
+            .with_provider("dotenv://.env");
     }
 }

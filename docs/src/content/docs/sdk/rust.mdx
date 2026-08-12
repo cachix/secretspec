@@ -87,6 +87,29 @@ rather than turning into a missing value, and whole-profile presence constraints
 `with_default_reason()` (also 0.19+) supplies a reason only when the caller has
 not already set one through `with_reason()` or `SECRETSPEC_REASON`, so a wrapper
 can describe itself without overwriting the more specific reason it was given.
+When a wrapper only needs to identify the software integration, use the separate
+caller context below; unlike a default reason, it cannot satisfy
+`require_reason`.
+
+## Caller context (0.20+)
+
+Software integrations can record what invoked SecretSpec without replacing the
+user-supplied access reason:
+
+```rust
+use secretspec::{CallerContext, Secrets};
+
+let spec = Secrets::load()?.with_caller(
+    CallerContext::new("git")
+        .with_version("2.51.0")
+        .with_operation("credential_get")
+        .with_resource("github.com"),
+);
+```
+
+Generated builders expose the same `with_caller()` method. Caller context is
+caller-asserted audit metadata, not an authenticated identity, and never
+satisfies `require_reason`. Do not put credentials or secret values in it.
 
 ## Secrets as file paths
 

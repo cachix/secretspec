@@ -22,6 +22,20 @@ in `index.d.ts`.
 A missing required secret throws `MissingRequiredError`; any other failure
 throws `SecretSpecError` (with a stable `.kind`).
 
+## Caller context (0.20+)
+
+```js
+const builder = SecretSpec.builder().withCaller({
+  name: 'git',
+  version: '2.51.0',
+  operation: 'credential_get',
+  resource: 'github.com',
+});
+```
+
+Caller context identifies the invoking integration in audit records but never
+satisfies `require_reason`. Do not put credentials or secret values in it.
+
 ## Scopes (0.17+)
 
 Use `.withScope('api')` to resolve only a named `[scopes.api]` subset. The

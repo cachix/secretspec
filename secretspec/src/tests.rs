@@ -4285,7 +4285,7 @@ fn operation_scoped_provider_cache_refreshes_snapshots_between_resolutions() {
 }
 
 #[test]
-fn operation_scoped_provider_cache_applies_changed_reason_on_later_resolution() {
+fn operation_scoped_provider_cache_applies_changed_session_context_on_later_resolution() {
     let _lock = scrub_resolution_env();
     let temp_dir = TempDir::new().unwrap();
     let primary_file = temp_dir.path().join("empty.env");
@@ -4295,6 +4295,7 @@ fn operation_scoped_provider_cache_applies_changed_reason_on_later_resolution() 
     const SECRET: &str = "AUDITED_SECRET";
     let item = format!("{PROJECT}/default/{SECRET}");
     crate::provider::tests::take_stateful_reason_reads(&item);
+    crate::provider::tests::take_stateful_caller_reads(&item);
     let store = crate::provider::provider_from_spec(
         "statefultest://",
         crate::provider::ProviderCredentials::new(),
@@ -4307,9 +4308,19 @@ fn operation_scoped_provider_cache_applies_changed_reason_on_later_resolution() 
         )
         .unwrap();
 
-    let spec = stateful_fallback_spec(PROJECT, SECRET, &primary_file).with_reason("first reason");
+    let spec = stateful_fallback_spec(PROJECT, SECRET, &primary_file)
+        .with_reason("first reason")
+        .with_caller(
+            crate::CallerContext::new("git")
+                .with_operation("credential_get")
+                .with_resource("github.com"),
+        );
     spec.validate().unwrap().expect("first resolution succeeds");
-    let spec = spec.with_reason("second reason");
+    let spec = spec.with_reason("second reason").with_caller(
+        crate::CallerContext::new("git")
+            .with_operation("credential_store")
+            .with_resource("github.com"),
+    );
     spec.validate()
         .unwrap()
         .expect("second resolution succeeds");
@@ -4319,6 +4330,21 @@ fn operation_scoped_provider_cache_applies_changed_reason_on_later_resolution() 
         vec![
             Some("first reason".to_string()),
             Some("second reason".to_string())
+        ]
+    );
+    assert_eq!(
+        crate::provider::tests::take_stateful_caller_reads(&item),
+        vec![
+            Some(
+                crate::CallerContext::new("git")
+                    .with_operation("credential_get")
+                    .with_resource("github.com")
+            ),
+            Some(
+                crate::CallerContext::new("git")
+                    .with_operation("credential_store")
+                    .with_resource("github.com")
+            ),
         ]
     );
 }

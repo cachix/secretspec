@@ -5,6 +5,7 @@ import pathlib
 import pytest
 
 from secretspec import (
+    CallerContext,
     MissingRequiredError,
     SecretSpec,
     SecretSpecError,
@@ -36,6 +37,25 @@ def _project(tmp_path: pathlib.Path, dotenv: str) -> tuple[str, str]:
 
 def test_abi_version_nonempty():
     assert abi_version()
+
+
+def test_caller_context_is_structured_and_separate_from_reason():
+    builder = SecretSpec.builder().with_caller(
+        CallerContext(
+            name="git",
+            version="2.51.0",
+            operation="credential_get",
+            resource="github.com",
+        )
+    )
+    assert builder._request == {
+        "caller": {
+            "name": "git",
+            "version": "2.51.0",
+            "operation": "credential_get",
+            "resource": "github.com",
+        }
+    }
 
 
 def test_load_returns_values_and_provenance(tmp_path):

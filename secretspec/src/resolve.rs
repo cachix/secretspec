@@ -161,6 +161,10 @@ struct JsonRequest {
     scope: Option<String>,
     #[serde(default)]
     reason: Option<String>,
+    /// Structured software-integration identity (SecretSpec 0.20+). This is
+    /// informational context and does not satisfy `require_reason`.
+    #[serde(default)]
+    caller: Option<crate::CallerContext>,
     #[serde(default)]
     no_values: bool,
     #[serde(default)]
@@ -205,6 +209,9 @@ fn dispatch(request_json: &str) -> serde_json::Value {
     if let Some(reason) = request.reason {
         app = app.with_reason(reason);
     }
+    if let Some(caller) = request.caller {
+        app = app.with_caller(caller);
+    }
 
     match request.mode {
         // Value-free report: never fails on a missing required secret, so an
@@ -236,7 +243,8 @@ fn dispatch(request_json: &str) -> serde_json::Value {
 /// This is the shared JSON boundary used by every native binding (the C ABI in
 /// `secretspec-ffi` and the napi-rs Node addon), so the envelope contract is
 /// defined in exactly one place. The request accepts optional `path`,
-/// `provider`, `profile`, `scope`, `reason`, `no_values`, and `mode`
+/// `provider`, `profile`, `scope`, `reason`, `caller` (SecretSpec 0.20+),
+/// `no_values`, and `mode`
 /// (`"resolve"` by default, or `"report"` for the value-free
 /// [`crate::report::ResolutionReport`]).
 /// A `resolve` response carries secret values; treat its bytes as sensitive. A
@@ -255,4 +263,42 @@ pub fn resolve_json(request_json: &str) -> String {
     serde_json::to_string(&envelope).unwrap_or_else(|_| {
         "{\"ok\":false,\"error\":{\"kind\":\"serialize\",\"message\":\"failed to serialize response\"}}".to_string()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_caller_context_is_structured_and_separate_from_reason() {
+        let request: JsonRequest = serde_json::from_value(serde_json::json!({
+            "caller": {
+                "name": "git",
+                "version": "2.51.0",
+                "operation": "credential_get",
+                "resource": "github.com"
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            request.caller,
+            Some(
+                crate::CallerContext::new("git")
+                    .with_version("2.51.0")
+                    .with_operation("credential_get")
+                    .with_resource("github.com")
+            )
+        );
+        assert_eq!(request.reason, None);
+    }
+
+    #[test]
+    fn json_caller_requires_a_name() {
+        let response: serde_json::Value = serde_json::from_str(&resolve_json(
+            r#"{"caller":{"operation":"credential_get"}}"#,
+        ))
+        .unwrap();
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["kind"], "invalid_request");
+    }
 }

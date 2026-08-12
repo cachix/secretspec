@@ -22,6 +22,17 @@ throws `SecretSpecError` (with a stable `errorKind`).
 `as_path` secrets are materialized to temp files that outlive the call; call
 `S.close resolved` when done so they do not accumulate in the temp dir.
 
+## Caller context (0.20+)
+
+```haskell
+let caller = S.CallerContext
+      "git" (Just "2.51.0") (Just "credential_get") (Just "github.com")
+    configured = S.builder & S.withCaller caller
+```
+
+Caller context identifies the invoking integration in audit records but never
+satisfies `require_reason`. Do not put credentials or secret values in it.
+
 ## Scopes (0.17+)
 
 Use `withScope "api"` to resolve only a named `[scopes.api]` subset. The

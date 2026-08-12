@@ -93,6 +93,30 @@ func TestABIVersion(t *testing.T) {
 	}
 }
 
+func TestCallerContextIsStructuredAndSeparateFromReason(t *testing.T) {
+	builder := New().WithCaller(CallerContext{
+		Name:      "git",
+		Version:   "2.51.0",
+		Operation: "credential_get",
+		Resource:  "github.com",
+	})
+	encoded, err := json.Marshal(builder.req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(encoded, &request); err != nil {
+		t.Fatal(err)
+	}
+	caller := request["caller"].(map[string]any)
+	if caller["name"] != "git" || caller["operation"] != "credential_get" {
+		t.Fatalf("caller = %#v", caller)
+	}
+	if _, hasReason := request["reason"]; hasReason {
+		t.Fatal("caller context unexpectedly supplied a reason")
+	}
+}
+
 func TestLoadValuesAndProvenance(t *testing.T) {
 	manifestPath, provider := writeProject(t, "DATABASE_URL=postgres://db\n")
 

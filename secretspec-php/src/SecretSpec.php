@@ -47,8 +47,9 @@ final class SecretSpec
         ?string $profile = null,
         ?string $reason = null,
         ?string $scope = null,
+        ?CallerContext $caller = null,
     ): Resolved {
-        return self::configured($path, $provider, $profile, $scope, $reason)->load();
+        return self::configured($path, $provider, $profile, $scope, $reason, $caller)->load();
     }
 
     /**
@@ -63,8 +64,9 @@ final class SecretSpec
         ?string $profile = null,
         ?string $reason = null,
         ?string $scope = null,
+        ?CallerContext $caller = null,
     ): Report {
-        return self::configured($path, $provider, $profile, $scope, $reason)->report();
+        return self::configured($path, $provider, $profile, $scope, $reason, $caller)->report();
     }
 
     /** Build a {@see Builder} from the shared one-shot options. */
@@ -74,13 +76,15 @@ final class SecretSpec
         ?string $profile,
         ?string $scope,
         ?string $reason,
+        ?CallerContext $caller,
     ): Builder {
         return self::builder()
             ->withPath($path)
             ->withProvider($provider)
             ->withProfile($profile)
             ->withScope($scope)
-            ->withReason($reason);
+            ->withReason($reason)
+            ->withCaller($caller);
     }
 
     /** The ABI version reported by the loaded native library. */

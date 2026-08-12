@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Structured caller context lets CLI and SDK integrations identify the invoking
+  software, version, operation, and non-secret resource independently of the
+  user-supplied access reason. Audit records and providers receive the context,
+  but it never satisfies the `require_reason` policy.
 - Windows ARM64 CLI release artifacts (`aarch64-pc-windows-msvc`), attached to
   the GitHub Release as `secretspec-aarch64-pc-windows-msvc.zip` with a
   checksum. The static installer keeps selecting the x86_64 build on Windows

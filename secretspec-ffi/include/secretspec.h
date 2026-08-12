@@ -8,9 +8,13 @@
  * Request JSON (all fields optional):
  *   { "path": ".../secretspec.toml", "provider": "keyring://",
  *     "profile": "production", "scope": "api", "reason": "boot",
+ *     "caller": { "name": "git", "operation": "credential_get",
+ *                 "resource": "github.com" },
  *     "no_values": false, "mode": "resolve" }
  *
  * "scope" selects a named [scopes] subset of the active profile (0.17+).
+ * "caller" supplies structured, caller-asserted integration context (0.20+).
+ * Unlike "reason", it never satisfies the require_reason policy.
  *
  * "mode" selects the response shape and defaults to "resolve":
  *

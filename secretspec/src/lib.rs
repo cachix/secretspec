@@ -43,6 +43,7 @@
 // Internal modules
 mod audit;
 mod cache;
+mod caller;
 pub mod codegen;
 mod composition;
 mod config;
@@ -62,6 +63,7 @@ pub(crate) mod provider;
 pub mod cli;
 
 // Re-export only the types needed by users and generated code
+pub use caller::CallerContext;
 pub use config::Resolved;
 
 // Re-export config types for CLI usage only - these are marked #[doc(hidden)]

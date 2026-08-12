@@ -20,6 +20,20 @@ Go-side logic.
 A missing required secret returns `*MissingRequiredError`; any other failure
 returns `*Error` (with a stable `.Kind`).
 
+## Caller context (0.20+)
+
+```go
+builder := secretspec.New().WithCaller(secretspec.CallerContext{
+    Name: "git",
+    Version: "2.51.0",
+    Operation: "credential_get",
+    Resource: "github.com",
+})
+```
+
+Caller context identifies the invoking integration in audit records but never
+satisfies `require_reason`. Do not put credentials or secret values in it.
+
 ## Scopes (0.17+)
 
 Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. The

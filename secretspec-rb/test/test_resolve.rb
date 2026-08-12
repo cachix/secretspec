@@ -43,6 +43,21 @@ class ResolveTest < Minitest::Test
     refute_empty Secretspec.abi_version
   end
 
+  def test_caller_context_is_structured_and_separate_from_reason
+    builder = Secretspec::SecretSpec.builder.with_caller(
+      Secretspec::CallerContext.new(
+        name: "git",
+        version: "2.51.0",
+        operation: "credential_get",
+        resource: "github.com"
+      )
+    )
+    request = builder.instance_variable_get(:@request)
+    assert_equal "git", request.dig("caller", "name")
+    assert_equal "credential_get", request.dig("caller", "operation")
+    refute request.key?("reason")
+  end
+
   def test_load_values_and_provenance
     Dir.mktmpdir do |dir|
       manifest, provider = project(dir, "DATABASE_URL=postgres://db\n")

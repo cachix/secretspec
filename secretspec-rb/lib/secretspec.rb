@@ -45,6 +45,14 @@ module Secretspec
     end
   end
 
+  # Caller-asserted software-integration context (SecretSpec 0.20+).
+  CallerContext = Struct.new(:name, :version, :operation, :resource, keyword_init: true) do
+    def to_h
+      { "name" => name, "version" => version, "operation" => operation,
+        "resource" => resource }.compact
+    end
+  end
+
   # One resolved secret. Exactly one of +value+ / +path+ is set.
   ResolvedSecret = Struct.new(:value, :path, :as_path, :source, :source_provider) do
     # The usable string: the file path for as_path secrets, else the value.
@@ -153,6 +161,12 @@ module Secretspec
 
     def with_reason(reason)
       @request["reason"] = reason if reason
+      self
+    end
+
+    # Identify the invoking software integration (SecretSpec 0.20+).
+    def with_caller(caller)
+      @request["caller"] = caller.to_h if caller
       self
     end
 

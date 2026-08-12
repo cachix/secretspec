@@ -54,6 +54,21 @@ A one-shot form is also available:
 
 <Code code={oneShotExample} lang="csharp" meta='title="OneShot.cs"' />
 
+## Caller context (0.20+)
+
+```csharp
+var builder = SecretSpec.Builder().WithCaller(new CallerContext
+{
+    Name = "git",
+    Version = "2.51.0",
+    Operation = "credential_get",
+    Resource = "github.com",
+});
+```
+
+Caller context identifies the invoking integration in audit records but never
+satisfies `require_reason`. Do not put credentials or secret values in it.
+
 ## Scopes (0.17+)
 
 Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. The

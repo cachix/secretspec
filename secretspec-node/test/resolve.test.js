@@ -51,6 +51,22 @@ test('abiVersion is non-empty', () => {
   assert.ok(abiVersion().length > 0);
 });
 
+test('withCaller writes structured Git context without a reason', () => {
+  const builder = SecretSpec.builder().withCaller({
+    name: 'git',
+    version: '2.51.0',
+    operation: 'credential_get',
+    resource: 'github.com',
+  });
+  assert.deepEqual(builder._request.caller, {
+    name: 'git',
+    version: '2.51.0',
+    operation: 'credential_get',
+    resource: 'github.com',
+  });
+  assert.equal(builder._request.reason, undefined);
+});
+
 test('load returns values and provenance', () => {
   const { manifestPath, provider } = project('DATABASE_URL=postgres://db\n');
 

@@ -300,11 +300,15 @@ impl Provider for SlowTestProvider {
 pub(crate) struct StatefulTestProvider {
     snapshot: std::sync::OnceLock<HashMap<String, String>>,
     reason: Mutex<Option<String>>,
+    caller: Mutex<Option<crate::CallerContext>>,
 }
 pub(crate) struct StatefulTestConfig;
 
 static STATEFUL_REASON_READS: std::sync::LazyLock<Mutex<HashMap<String, Vec<Option<String>>>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static STATEFUL_CALLER_READS: std::sync::LazyLock<
+    Mutex<HashMap<String, Vec<Option<crate::CallerContext>>>>,
+> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 impl TryFrom<&super::ProviderUrl> for StatefulTestConfig {
     type Error = crate::SecretSpecError;
@@ -319,6 +323,7 @@ impl StatefulTestProvider {
         Self {
             snapshot: std::sync::OnceLock::new(),
             reason: Mutex::new(None),
+            caller: Mutex::new(None),
         }
     }
 }
@@ -351,6 +356,12 @@ impl Provider for StatefulTestProvider {
             .entry(item.clone())
             .or_default()
             .push(self.reason.lock().unwrap().clone());
+        STATEFUL_CALLER_READS
+            .lock()
+            .unwrap()
+            .entry(item.clone())
+            .or_default()
+            .push(self.caller.lock().unwrap().clone());
         let snapshot = self
             .snapshot
             .get_or_init(|| MEM_STORE.lock().unwrap().clone());
@@ -378,10 +389,22 @@ impl Provider for StatefulTestProvider {
     fn set_reason(&self, reason: Option<String>) {
         *self.reason.lock().unwrap() = reason;
     }
+
+    fn set_caller(&self, caller: Option<crate::CallerContext>) {
+        *self.caller.lock().unwrap() = caller;
+    }
 }
 
 pub(crate) fn take_stateful_reason_reads(item: &str) -> Vec<Option<String>> {
     STATEFUL_REASON_READS
+        .lock()
+        .unwrap()
+        .remove(item)
+        .unwrap_or_default()
+}
+
+pub(crate) fn take_stateful_caller_reads(item: &str) -> Vec<Option<crate::CallerContext>> {
+    STATEFUL_CALLER_READS
         .lock()
         .unwrap()
         .remove(item)

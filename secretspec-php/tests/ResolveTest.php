@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Secretspec\Tests;
 
 use PHPUnit\Framework\TestCase;
+use Secretspec\CallerContext;
 use Secretspec\MissingRequiredException;
 use Secretspec\SecretReport;
 use Secretspec\SecretSpec;
@@ -59,6 +60,24 @@ final class ResolveTest extends TestCase
     public function testAbiVersionNonEmpty(): void
     {
         self::assertNotEmpty(SecretSpec::abiVersion());
+    }
+
+    public function testCallerContextCanAccompanyASeparateReason(): void
+    {
+        [$manifest, $provider] = $this->project("DATABASE_URL=postgres://db\n");
+        $resolved = SecretSpec::builder()
+            ->withPath($manifest)
+            ->withProvider($provider)
+            ->withCaller(new CallerContext(
+                name: 'git',
+                version: '2.51.0',
+                operation: 'credential_get',
+                resource: 'github.com',
+            ))
+            ->withReason('push the release tag')
+            ->load();
+
+        self::assertSame('postgres://db', $resolved->secrets['DATABASE_URL']->get());
     }
 
     public function testLoadValuesAndProvenance(): void

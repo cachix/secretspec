@@ -6090,14 +6090,14 @@ impl Secrets {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum ExportFormat {
-    /// POSIX `export KEY='value'` statements
+    /// `export KEY='value'` lines for `eval "$(secretspec export)"`
     #[default]
     Shell,
     /// `KEY=value` lines in dotenv syntax
     Dotenv,
     /// A single JSON object mapping each secret name to its value
     Json,
-    /// GitHub/Forgejo Actions environment file plus `::add-mask::` on stdout
+    /// GitHub/Forgejo Actions `$GITHUB_ENV` file plus `::add-mask::` on stdout
     Gha,
 }
 

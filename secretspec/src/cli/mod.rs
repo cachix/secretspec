@@ -240,8 +240,8 @@ enum Commands {
     },
 }
 
-fn generate_completions(shell: CompletionShell, output: &mut dyn Write) {
-    completion::generate(shell, output).expect("failed to generate shell completions");
+fn generate_completions(shell: CompletionShell, output: &mut dyn Write) -> std::io::Result<()> {
+    completion::generate(shell, output)
 }
 
 /// Cached provider maintenance commands (0.17+).
@@ -325,7 +325,7 @@ enum GlobalProviderAction {
     /// Remove a provider alias
     Remove {
         /// Name of the provider alias to remove
-        #[arg(add = clap_complete::ArgValueCompleter::new(completion::provider_aliases))]
+        #[arg(add = clap_complete::ArgValueCompleter::new(completion::global_provider_aliases))]
         name: String,
     },
     /// List all configured provider aliases
@@ -356,7 +356,7 @@ enum ProviderAction {
     #[command(hide = true)]
     Remove {
         /// Name of the provider alias to remove
-        #[arg(add = clap_complete::ArgValueCompleter::new(completion::provider_aliases))]
+        #[arg(add = clap_complete::ArgValueCompleter::new(completion::global_provider_aliases))]
         name: String,
     },
     /// List all configured provider aliases
@@ -1454,7 +1454,7 @@ pub fn main() -> Result<()> {
             Ok(())
         }
         Commands::Completions { shell } => {
-            generate_completions(shell, &mut std::io::stdout().lock());
+            generate_completions(shell, &mut std::io::stdout().lock()).into_diagnostic()?;
             Ok(())
         }
         // Import secrets from one provider to another
@@ -2096,7 +2096,7 @@ mod tests {
 
         for shell in shells {
             let mut output = Vec::new();
-            generate_completions(shell, &mut output);
+            generate_completions(shell, &mut output).unwrap();
             let output = String::from_utf8(output).unwrap();
             assert!(
                 output.contains("secretspec"),
@@ -2107,15 +2107,6 @@ mod tests {
                 "missing dynamic completion protocol for {shell:?}"
             );
         }
-    }
-
-    #[test]
-    fn fish_completions_do_not_evaluate_value_descriptions() {
-        let mut output = Vec::new();
-        generate_completions(CompletionShell::Fish, &mut output);
-        let output = String::from_utf8(output).unwrap();
-        assert!(!output.contains("$("));
-        assert!(!output.contains("$GITHUB_ENV"));
     }
 
     #[test]

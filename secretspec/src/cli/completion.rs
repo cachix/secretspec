@@ -1,8 +1,9 @@
 use super::{Cli, CompletionShell};
+use crate::manifest::CompiledManifest;
 use crate::provider::providers as registered_providers;
 use crate::{Config, GlobalConfig};
-use clap::CommandFactory;
 use clap::builder::StyledStr;
+use clap::{ArgMatches, CommandFactory};
 use clap_complete::engine::{CompletionCandidate, PathCompleter, ValueCompleter};
 use clap_complete::env::{Bash, Elvish, EnvCompleter, Fish, Powershell, Shells, Zsh};
 use is_executable::IsExecutable;
@@ -17,6 +18,7 @@ static CONTEXT: OnceLock<CompletionContext> = OnceLock::new();
 
 struct CompletionContext {
     config: Option<Config>,
+    manifest: Option<CompiledManifest>,
     global: Option<GlobalConfig>,
     profile: String,
 }
@@ -24,12 +26,20 @@ struct CompletionContext {
 impl CompletionContext {
     fn load(args: &[OsString], current_dir: &Path) -> Self {
         let words = completion_words(args);
-        let explicit_file = argument_value(words, "--file", "-f").map(PathBuf::from);
-        let env_file = std::env::var_os("SECRETSPEC_FILE")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from);
-        let path = explicit_file
-            .or(env_file)
+        let matches = Cli::command()
+            .ignore_errors(true)
+            .try_get_matches_from(words)
+            .ok();
+        let path = matches
+            .as_ref()
+            .and_then(|matches| {
+                matches
+                    .try_get_one::<PathBuf>("file")
+                    .ok()
+                    .flatten()
+                    .cloned()
+            })
+            .filter(|path| !path.as_os_str().is_empty())
             .map(|path| {
                 if path.is_relative() {
                     current_dir.join(path)
@@ -38,19 +48,21 @@ impl CompletionContext {
                 }
             })
             .or_else(|| find_manifest(current_dir));
-        let config = path
+        let loaded = path
             .as_deref()
             .and_then(|path| Config::try_from(path).ok())
-            .filter(|config| config.validate().is_ok());
-        let global = GlobalConfig::load().ok().flatten();
-        let profile = argument_value(words, "--profile", "-P")
-            .and_then(|value| value.into_string().ok())
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| {
-                std::env::var("SECRETSPEC_PROFILE")
+            .and_then(|config| {
+                config
+                    .validate_and_compile()
                     .ok()
-                    .filter(|value| !value.trim().is_empty())
-            })
+                    .map(|manifest| (config, manifest))
+            });
+        let (config, manifest) = loaded.unzip();
+        let global = load_global_config();
+        let profile = matches
+            .as_ref()
+            .and_then(profile_value)
+            .filter(|value| !value.trim().is_empty())
             .or_else(|| {
                 global
                     .as_ref()
@@ -60,6 +72,7 @@ impl CompletionContext {
 
         Self {
             config,
+            manifest,
             global,
             profile,
         }
@@ -72,28 +85,23 @@ fn completion_words(args: &[OsString]) -> &[OsString] {
         .map_or(args, |index| &args[index + 1..])
 }
 
-fn argument_value(args: &[OsString], long: &str, short: &str) -> Option<OsString> {
-    let mut value = None;
-    let mut words = args.iter().skip(1);
-    while let Some(word) = words.next() {
-        if word == "--" {
-            break;
-        }
-        if word == long || word == short {
-            value = words.next().cloned();
-            continue;
-        }
-        if let Some(word) = word.to_str() {
-            if let Some(attached) = word.strip_prefix(&format!("{long}=")) {
-                value = Some(attached.into());
-            } else if let Some(attached) = word.strip_prefix(short)
-                && !attached.is_empty()
-            {
-                value = Some(attached.into());
-            }
-        }
-    }
-    value
+fn profile_value(matches: &ArgMatches) -> Option<String> {
+    matches
+        .try_get_one::<String>("profile")
+        .ok()
+        .flatten()
+        .cloned()
+        .or_else(|| {
+            matches
+                .subcommand()
+                .and_then(|(_, matches)| profile_value(matches))
+        })
+}
+
+fn load_global_config() -> Option<GlobalConfig> {
+    let path = GlobalConfig::path().ok()?;
+    let content = std::fs::read_to_string(path).ok()?;
+    toml::from_str(&content).ok()
 }
 
 fn find_manifest(start: &Path) -> Option<PathBuf> {
@@ -170,9 +178,10 @@ fn command_candidates(current: &OsStr, path: Option<&OsStr>) -> Vec<CompletionCa
     }
     matching(
         current,
-        commands
-            .into_iter()
-            .map(|(name, path)| candidate(name, path)),
+        commands.into_iter().map(|(name, path)| {
+            let hidden = name.as_os_str().as_encoded_bytes().starts_with(b".");
+            candidate(name, path).hide(hidden)
+        }),
     )
 }
 
@@ -204,8 +213,11 @@ fn profile_candidates(
 }
 
 pub(super) fn scopes(current: &OsStr) -> Vec<CompletionCandidate> {
-    let mut candidates: Vec<_> = CONTEXT
-        .get()
+    matching(current, scope_candidates(CONTEXT.get()))
+}
+
+fn scope_candidates(context: Option<&CompletionContext>) -> Vec<CompletionCandidate> {
+    let mut candidates: Vec<_> = context
         .and_then(|context| context.config.as_ref())
         .and_then(|config| config.scopes.as_ref())
         .into_iter()
@@ -213,7 +225,7 @@ pub(super) fn scopes(current: &OsStr) -> Vec<CompletionCandidate> {
         .map(|name| candidate(name, "Manifest scope"))
         .collect();
     candidates.sort();
-    matching(current, candidates)
+    candidates
 }
 
 pub(super) fn secrets(current: &OsStr) -> Vec<CompletionCandidate> {
@@ -224,45 +236,64 @@ fn secret_candidates(context: Option<&CompletionContext>) -> Vec<CompletionCandi
     let Some(context) = context else {
         return Vec::new();
     };
-    let Some(config) = &context.config else {
+    let Some(manifest) = &context.manifest else {
         return Vec::new();
     };
-    let Some(profile) = config.profiles.get(&context.profile) else {
+    let Some(profile) = manifest.profiles.get(&context.profile) else {
         return Vec::new();
     };
 
-    let mut secrets = BTreeMap::new();
-    if context.profile != "default"
-        && profile.inherits_default()
-        && let Some(default) = config.profiles.get("default")
-    {
-        secrets.extend(&default.secrets);
-    }
-    secrets.extend(&profile.secrets);
-    secrets
-        .into_iter()
-        .map(|(name, config)| candidate(name, config.description.as_deref().unwrap_or("Secret")))
+    profile
+        .secrets
+        .iter()
+        .map(|(name, secret)| {
+            candidate(
+                name,
+                secret.config.description.as_deref().unwrap_or("Secret"),
+            )
+        })
         .collect()
 }
 
 pub(super) fn providers(current: &OsStr) -> Vec<CompletionCandidate> {
-    matching(current, provider_candidates(CONTEXT.get(), true))
+    matching(current, provider_candidates(CONTEXT.get()))
 }
 
 pub(super) fn provider_aliases(current: &OsStr) -> Vec<CompletionCandidate> {
-    matching(current, provider_candidates(CONTEXT.get(), false))
+    matching(current, provider_alias_candidates(CONTEXT.get(), true))
 }
 
-fn provider_candidates(
-    context: Option<&CompletionContext>,
-    include_registered: bool,
-) -> Vec<CompletionCandidate> {
+pub(super) fn global_provider_aliases(current: &OsStr) -> Vec<CompletionCandidate> {
+    matching(current, provider_alias_candidates(CONTEXT.get(), false))
+}
+
+fn provider_candidates(context: Option<&CompletionContext>) -> Vec<CompletionCandidate> {
     let mut candidates = BTreeMap::new();
-    if include_registered {
-        for provider in registered_providers() {
-            candidates.insert(provider.name.to_string(), provider.description.to_string());
-        }
+    for provider in registered_providers() {
+        candidates.insert(provider.name.to_string(), provider.description.to_string());
     }
+    candidates.extend(provider_alias_map(context, true));
+    candidates
+        .into_iter()
+        .map(|(name, help)| candidate(name, help))
+        .collect()
+}
+
+fn provider_alias_candidates(
+    context: Option<&CompletionContext>,
+    include_project: bool,
+) -> Vec<CompletionCandidate> {
+    provider_alias_map(context, include_project)
+        .into_iter()
+        .map(|(name, help)| candidate(name, help))
+        .collect()
+}
+
+fn provider_alias_map(
+    context: Option<&CompletionContext>,
+    include_project: bool,
+) -> BTreeMap<String, String> {
+    let mut candidates = BTreeMap::new();
     if let Some(context) = context {
         if let Some(aliases) = context
             .global
@@ -273,10 +304,11 @@ fn provider_candidates(
                 candidates.insert(name.clone(), "User provider alias".to_string());
             }
         }
-        if let Some(aliases) = context
-            .config
-            .as_ref()
-            .and_then(|config| config.providers.as_ref())
+        if include_project
+            && let Some(aliases) = context
+                .config
+                .as_ref()
+                .and_then(|config| config.providers.as_ref())
         {
             for name in aliases.keys() {
                 candidates.insert(name.clone(), "Project provider alias".to_string());
@@ -284,9 +316,6 @@ fn provider_candidates(
         }
     }
     candidates
-        .into_iter()
-        .map(|(name, help)| candidate(name, help))
-        .collect()
 }
 
 pub(super) fn complete() {
@@ -424,10 +453,14 @@ team = "keyring://"
 [scopes.api]
 secrets = ["API_KEY"]
 
+[scopes.worker]
+secrets = ["API_KEY"]
+
 [profiles.default]
 API_KEY = { description = "API token" }
 
 [profiles.production]
+API_KEY = { required = false }
 DATABASE_URL = { description = "Production database" }
 "#,
         )
@@ -449,18 +482,70 @@ DATABASE_URL = { description = "Production database" }
             .collect()
     }
 
+    fn help(candidates: &[CompletionCandidate], value: &str) -> Option<String> {
+        candidates
+            .iter()
+            .find(|candidate| candidate.get_value() == value)
+            .and_then(CompletionCandidate::get_help)
+            .map(ToString::to_string)
+    }
+
     #[test]
     fn context_reads_the_nearest_manifest_and_explicit_profile() {
         let (_directory, context) = fixture();
         assert_eq!(context.profile, "production");
         assert!(context.config.is_some());
+        assert!(context.manifest.is_some());
+    }
+
+    #[test]
+    fn context_resolves_an_explicit_manifest_from_the_current_directory() {
+        let (directory, _) = fixture();
+        let nested = directory.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        let selected = fs::read_to_string(directory.path().join("secretspec.toml"))
+            .unwrap()
+            .replace("completion-test", "selected-manifest");
+        fs::write(directory.path().join("selected.toml"), selected).unwrap();
+        let args = [
+            OsString::from("secretspec"),
+            OsString::from("--file"),
+            OsString::from("../selected.toml"),
+            OsString::from("get"),
+            OsString::from("API_KEY"),
+        ];
+        let context = CompletionContext::load(&args, &nested);
+        assert_eq!(
+            context
+                .config
+                .as_ref()
+                .map(|config| config.project.name.as_str()),
+            Some("selected-manifest")
+        );
     }
 
     #[test]
     fn secret_candidates_include_inherited_declarations_and_descriptions() {
         let (_directory, context) = fixture();
         let candidates = secret_candidates(Some(&context));
+        assert_eq!(help(&candidates, "API_KEY").as_deref(), Some("API token"));
         assert_eq!(values(candidates), ["API_KEY", "DATABASE_URL"]);
+    }
+
+    #[test]
+    fn context_does_not_parse_child_command_options() {
+        let (directory, _) = fixture();
+        let args = [
+            OsString::from("secretspec"),
+            OsString::from("run"),
+            OsString::from("--profile"),
+            OsString::from("production"),
+            OsString::from("deploy"),
+            OsString::from("--profile"),
+            OsString::from("child-profile"),
+        ];
+        let context = CompletionContext::load(&args, directory.path());
+        assert_eq!(context.profile, "production");
     }
 
     #[test]
@@ -473,19 +558,54 @@ DATABASE_URL = { description = "Production database" }
     }
 
     #[test]
-    fn provider_candidates_combine_registered_and_project_aliases() {
-        let (_directory, context) = fixture();
-        let candidates = values(provider_candidates(Some(&context), true));
+    fn provider_candidates_combine_registered_and_both_alias_scopes() {
+        let (_directory, mut context) = fixture();
+        context.global = Some(
+            toml::from_str(
+                r#"
+[defaults.providers]
+personal = "keyring://"
+"#,
+            )
+            .unwrap(),
+        );
+        let candidates = values(provider_candidates(Some(&context)));
         assert!(candidates.contains(&"keyring".to_string()));
+        assert!(candidates.contains(&"personal".to_string()));
         assert!(candidates.contains(&"team".to_string()));
+
+        assert_eq!(
+            values(provider_alias_candidates(Some(&context), false)),
+            ["personal"]
+        );
+        assert_eq!(
+            values(provider_alias_candidates(Some(&context), true)),
+            ["personal", "team"]
+        );
     }
 
     #[test]
     fn malformed_or_missing_manifests_produce_no_project_candidates() {
         let directory = tempfile::tempdir().unwrap();
-        let context = CompletionContext::load(&[OsString::from("secretspec")], directory.path());
-        assert!(context.config.is_none());
-        assert!(secret_candidates(Some(&context)).is_empty());
+        let args = [OsString::from("secretspec")];
+        let missing = CompletionContext::load(&args, directory.path());
+        assert!(missing.config.is_none());
+        assert!(secret_candidates(Some(&missing)).is_empty());
+
+        fs::write(directory.path().join("secretspec.toml"), "not = [valid").unwrap();
+        let malformed = CompletionContext::load(&args, directory.path());
+        assert!(malformed.config.is_none());
+        assert!(secret_candidates(Some(&malformed)).is_empty());
+    }
+
+    #[test]
+    fn scope_candidates_are_sorted_and_prefix_filtered() {
+        let (_directory, context) = fixture();
+        assert_eq!(values(scope_candidates(Some(&context))), ["api", "worker"]);
+        assert_eq!(
+            values(matching(OsStr::new("w"), scope_candidates(Some(&context)))),
+            ["worker"]
+        );
     }
 
     #[test]
@@ -496,6 +616,28 @@ DATABASE_URL = { description = "Production database" }
         assert!(output.contains("SECRETSPEC_COMPLETE: nushell"));
         assert!(output.contains("@complete 'nu-complete secretspec'"));
         assert!(output.contains("export extern secretspec"));
+    }
+
+    #[test]
+    fn nushell_dynamic_output_preserves_values_and_descriptions() {
+        let mut command = Cli::command();
+        let mut output = Vec::new();
+        Nushell
+            .write_complete(
+                &mut command,
+                vec![OsString::from("secretspec"), OsString::from("c")],
+                None,
+                &mut output,
+            )
+            .unwrap();
+        let candidates: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        let config = candidates
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|candidate| candidate["value"] == "config")
+            .unwrap();
+        assert_eq!(config["description"], "Manage SecretSpec configuration");
     }
 
     #[test]
@@ -525,10 +667,13 @@ DATABASE_URL = { description = "Production database" }
 
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("deploy-tool");
+        let hidden = directory.path().join(".deploy-wrapper");
         let regular_file = directory.path().join("deploy-notes");
         fs::write(&executable, "").unwrap();
+        fs::write(&hidden, "").unwrap();
         fs::write(&regular_file, "").unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&hidden, fs::Permissions::from_mode(0o755)).unwrap();
 
         assert_eq!(
             values(command_candidates(
@@ -537,5 +682,8 @@ DATABASE_URL = { description = "Production database" }
             )),
             ["deploy-tool"]
         );
+        let hidden = command_candidates(OsStr::new(".deploy-"), Some(directory.path().as_os_str()));
+        assert_eq!(hidden.len(), 1);
+        assert!(hidden[0].is_hide_set());
     }
 }

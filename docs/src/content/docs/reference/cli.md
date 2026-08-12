@@ -433,10 +433,11 @@ Any cache entry declared for the secret is invalidated so it cannot continue to
 serve the deleted value.
 
 The providers that support deletion in 0.18 are keyring, dotenv, pass, gopass,
-Vault, OpenBao, and Keeper Secrets Manager. Other providers return an explicit
-unsupported-operation error. Vault, OpenBao, and Keeper refuse to delete native
-`ref` entries because their backends would have to destroy a whole externally
-managed path or record rather than only the referenced field.
+Vault, OpenBao, and Keeper Secrets Manager; age supports it starting with
+0.20. Other providers return an explicit unsupported-operation error. Vault,
+OpenBao, and Keeper refuse to delete native `ref` entries because their
+backends would have to destroy a whole externally managed path or record
+rather than only the referenced field.
 
 ### run
 Run a command with secrets injected as environment variables.

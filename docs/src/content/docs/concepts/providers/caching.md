@@ -125,7 +125,8 @@ rejects such routes during planning. The examples use a separate keyring
 namespace for `local`.
 
 The cache provider must also support deletion: keyring, pass, gopass, dotenv,
-or a Vault/OpenBao KV v2 mount. Other providers are rejected during planning.
+age (0.20+), or a Vault/OpenBao KV v2 mount. Other providers are rejected
+during planning.
 
 Clear one entry or every cached entry in the active profile:
 
@@ -189,9 +190,9 @@ alias.
 ## Security
 
 The cache contains the secret value, not just metadata. Use an encrypted
-provider such as keyring, pass, or gopass when values must be encrypted at rest.
-Dotenv stores entries as plaintext. Native expiry limits how long a copy exists
-without another SecretSpec run.
+provider such as keyring, pass, gopass, or age (0.20+) when values must be
+encrypted at rest. Dotenv stores entries as plaintext. Native expiry limits how
+long a copy exists without another SecretSpec run.
 
 ## Reference
 

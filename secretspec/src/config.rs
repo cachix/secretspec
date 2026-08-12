@@ -2142,7 +2142,10 @@ pub struct Secret {
     ///
     /// Available since SecretSpec 0.19.
     pub extract: Option<SecretExtract>,
-    /// The type of secret, used for generation (e.g., "password", "hex", "base64", "uuid", "command", "rsa_private_key")
+    /// The semantic secret type. Most types select generation behavior;
+    /// `ssh_private_key` identifies provider-backed OpenSSH keys for the
+    /// read-only SSH agent. The `ssh_private_key` type is available since
+    /// SecretSpec 0.19.
     pub secret_type: Option<String>,
     /// Auto-generation configuration. Either `true` for defaults or a table with options.
     pub generate: Option<GenerateConfig>,
@@ -2329,6 +2332,28 @@ impl Secret {
             }
         }
 
+        if self.secret_type.as_deref() == Some("ssh_private_key") {
+            if self.required == Some(false)
+                || self.at_least_one.is_some()
+                || self.exactly_one.is_some()
+            {
+                return Err(
+                    "`type = \"ssh_private_key\"` secrets must be individually required; omit `required` or set `required = true`"
+                        .into(),
+                );
+            }
+            if self.default.is_some()
+                || self.would_generate()
+                || self.prompt == Some(true)
+                || self.as_path == Some(true)
+            {
+                return Err(
+                    "`type = \"ssh_private_key\"` cannot be combined with `default`, enabled `generate`, `prompt = true`, or `as_path = true`"
+                        .into(),
+                );
+            }
+        }
+
         if self.prompt == Some(true) {
             if self.required == Some(false)
                 || self.at_least_one.is_some()
@@ -2432,6 +2457,12 @@ impl Secret {
             if let Some(ref t) = self.secret_type {
                 match t.as_str() {
                     "password" | "hex" | "base64" | "uuid" | "command" | "rsa_private_key" => {}
+                    "ssh_private_key" => {
+                        return Err(
+                            "type = \"ssh_private_key\" identifies a provider-backed key and cannot be generated"
+                                .into(),
+                        );
+                    }
                     unknown => {
                         return Err(format!("unknown secret type '{}'", unknown));
                     }
@@ -2445,7 +2476,8 @@ impl Secret {
         {
             // Type is informational when not generating, but still validate known values
             match t.as_str() {
-                "password" | "hex" | "base64" | "uuid" | "command" | "rsa_private_key" => {}
+                "password" | "hex" | "base64" | "uuid" | "command" | "rsa_private_key"
+                | "ssh_private_key" => {}
                 unknown => {
                     return Err(format!("unknown secret type '{}'", unknown));
                 }
@@ -3784,6 +3816,50 @@ default = "placeholder"
         )
         .unwrap();
         assert_eq!(disabled.prompt, Some(false));
+    }
+
+    #[test]
+    fn secret_ssh_private_key_type_parses_round_trips_and_inherits() {
+        let parsed: Secret =
+            toml::from_str("description = \"Deployment SSH key\"\ntype = \"ssh_private_key\"")
+                .unwrap();
+        assert_eq!(parsed.secret_type.as_deref(), Some("ssh_private_key"));
+        assert!(parsed.validate().is_ok());
+
+        let rendered = toml::to_string(&parsed).unwrap();
+        assert!(
+            rendered.contains("type = \"ssh_private_key\""),
+            "{rendered}"
+        );
+
+        let inherited = Secret::resolved(None, Some(&parsed), None).unwrap();
+        assert_eq!(inherited.secret_type.as_deref(), Some("ssh_private_key"));
+    }
+
+    #[test]
+    fn secret_ssh_private_key_rejects_nonstored_or_path_values() {
+        for secret in [
+            Secret {
+                description: Some("d".to_string()),
+                secret_type: Some("ssh_private_key".to_string()),
+                default: Some("not-secret".to_string()),
+                ..Default::default()
+            },
+            Secret {
+                description: Some("d".to_string()),
+                secret_type: Some("ssh_private_key".to_string()),
+                as_path: Some(true),
+                ..Default::default()
+            },
+            Secret {
+                description: Some("d".to_string()),
+                secret_type: Some("ssh_private_key".to_string()),
+                required: Some(false),
+                ..Default::default()
+            },
+        ] {
+            assert!(secret.validate().is_err());
+        }
     }
 
     #[test]

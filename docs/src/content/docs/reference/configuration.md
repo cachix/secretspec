@@ -165,7 +165,7 @@ Each secret variable is defined as a table with the following fields:
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
 | `encoding` (0.19+) | `"base64"`, `"base64url"`, or `"hex"` | No | Encode logical values before storage writes and decode stored values after reads |
 | `extract` (0.19+) | table | No | Select one logical value from stored structured data, for example `extract = { format = "json", pointer = "/database/password" }` |
-| `type` | string | No | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
+| `type` | string | No | Secret type: generatable `password`, `hex`, `base64`, `uuid`, `command`, or `rsa_private_key`; provider-backed `ssh_private_key` (0.19+) |
 | `generate` | boolean or table | No | Enable auto-generation when secret is missing |
 | `prompt` (0.19+) | boolean | No | Securely prompt for a missing value during `secretspec run`; the selected provider controls persistence |
 
@@ -185,6 +185,9 @@ Field notes:
   combined with `default`, enabled `generate`, `extract`, or `composed`.
 - `extract` (0.19+) is read-only and cannot be combined with enabled
   `generate`.
+- `type = "ssh_private_key"` (0.19+) is for individually required, provider-backed
+  OpenSSH private keys. It cannot be combined with `default`, enabled
+  `generate`, `prompt = true`, `as_path = true`, or `composed`.
 
 #### Composed Secrets
 
@@ -209,7 +212,8 @@ and composed secrets may reference other composed secrets. SecretSpec rejects
 unknown references, cycles, malformed references, and source conflicts while
 loading the manifest. A composed secret is read-only and cannot also set
 `default`, `providers`, `ref`, `refs` (0.19+), `type`, enabled `generate`,
-`encoding` (0.19+), or `extract` (0.19+).
+`encoding` (0.19+) or `extract` (0.19+). In 0.19+, `type = "ssh_private_key"`
+is likewise impossible because composed values cannot declare any `type`.
 
 Composition intentionally does **not** implement dotenv or shell expansion:
 
@@ -252,7 +256,7 @@ Scopes name membership-only subsets of a profile's secrets, so a single service
 or task resolves only what it declares instead of the entire profile. They are
 **orthogonal to profiles**: a profile decides how each secret resolves
 (`required`, `default`, providers, references, generation, prompts (0.19+), `as_path`,
-`encoding` (0.19+), `extract` (0.19+), and the storage namespace); a scope only
+`encoding` (0.19+), `extract` (0.19+), SSH-agent exposure (0.19+), and the storage namespace); a scope only
 decides *which* secrets take part in a given resolution.
 
 ```toml
@@ -943,6 +947,51 @@ provider, not by `prompt`.
 `prompt = true` is limited to individually required secrets and cannot be
 combined with `default`, enabled `generate`, `extract`, or `composed`. Profile
 overrides may set `prompt = false` to return to ordinary missing-value behavior.
+
+### SSH agent keys (0.19+)
+
+:::caution[Version compatibility]
+`type = "ssh_private_key"` and `secretspec ssh-agent` require SecretSpec 0.19 or newer.
+:::
+
+Declare a stored OpenSSH private key with `type = "ssh_private_key"` (0.19+) to
+make it available through SecretSpec's read-only SSH agent:
+
+See the [SSH agent integration guide (0.19+)](/integrations/ssh-agent/) for an
+end-to-end setup and operational guidance.
+
+```toml
+[providers]
+team = "onepassword://Production"
+
+[profiles.production]
+# `type = "ssh_private_key"` requires SecretSpec 0.19+.
+DEPLOY_SSH_KEY = { description = "Deployment SSH key", providers = ["team"], type = "ssh_private_key" }
+```
+
+```bash
+$ secretspec ssh-agent --profile production -- ssh deploy@example.com # 0.19+
+```
+
+The agent creates a private temporary Unix socket (or a named pipe on Windows),
+sets `SSH_AUTH_SOCK` only for the child, and removes the Unix socket when that
+command exits. It reads typed keys once to publish their public identities, then
+retrieves the selected key again for each signature request. Parsed private-key
+material is dropped after each operation and is never written to a temporary key
+file.
+
+Values must use the OpenSSH private-key format beginning with
+`-----BEGIN OPENSSH PRIVATE KEY-----`. The 0.19 agent does not prompt for a key
+passphrase, so the value stored inside the secure provider must not itself be
+passphrase-encrypted. Ed25519, ECDSA, and RSA-with-SHA-2 keys are supported.
+
+Only secrets declared with `type = "ssh_private_key"` (0.19+) are advertised.
+They must be individually required and provider-backed; `default`, enabled
+`generate`, `prompt = true`, `as_path = true`, and `composed` are rejected.
+Provider chains, native references, storage encoding, and structured extraction
+continue to use their ordinary resolution behavior. `secretspec ssh-agent
+--scope <name>` (0.19+) narrows the advertised identities to typed keys in that
+scope.
 
 ### Secret Generation
 

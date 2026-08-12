@@ -56,6 +56,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
 - **[Profile Support](https://secretspec.dev/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
 - **[Secret Generation](https://secretspec.dev/concepts/generation/)**: Auto-generate passwords, tokens, UUIDs, and more when secrets are missing — declarative "generate if absent"
 - **Run prompts (0.19+)**: Set `prompt = true` to request a hidden missing value; writable providers save it, while `null` keeps it invocation-only
+- **[SSH agent (0.19+)](https://secretspec.dev/integrations/ssh-agent/)**: Expose provider-backed `ssh_private_key` secrets to one command through a private agent socket without materializing temporary key files
 - **Composed Secrets (0.16+)**: Derive read-only values such as DSNs from declared secrets with strict, order-independent `${UPPERCASE_NAME}` references
 - **[Configuration Inheritance](https://secretspec.dev/concepts/inheritance/)**: Extend and override shared configurations using the `extends` feature
 - **[Audit Logging](https://secretspec.dev/concepts/audit/)**: Every secret access recorded locally (who, when, why, outcome) — on by default, secret values never logged
@@ -173,7 +174,24 @@ local = "keyring://"
 API_KEY = { description = "API key", providers = ["local"], refs = { remote = { item = "legacy-api", field = "token" } } }
 ```
 
-See the [configuration reference](https://secretspec.dev/reference/configuration/) for all available options.
+SecretSpec 0.19+ can also expose a stored OpenSSH private key through a
+read-only SSH agent. The private key is retrieved through its normal provider
+route and is never materialized as a temporary key file:
+
+```toml
+[profiles.production]
+# `type = "ssh_private_key"` requires SecretSpec 0.19+.
+DEPLOY_SSH_KEY = { description = "Deployment SSH key", type = "ssh_private_key", providers = ["remote"] }
+```
+
+```bash
+$ secretspec ssh-agent --profile production -- ssh deploy@example.com # 0.19+
+```
+
+See the [SSH agent integration guide](https://secretspec.dev/integrations/ssh-agent/)
+for setup and operational guidance, and the
+[configuration reference](https://secretspec.dev/reference/configuration/) for
+all available options.
 
 ## Profiles
 
@@ -306,6 +324,7 @@ secretspec cache clear [KEY]     # Clear cached provider values (0.17+)
 
 # Run with secrets
 secretspec run -- command        # Run command with secrets as env vars
+secretspec ssh-agent -- ssh host # Use typed SSH keys via an agent (0.19+)
 
 # Inspect access
 secretspec audit                 # Show the local audit log of secret access

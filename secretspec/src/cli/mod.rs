@@ -122,6 +122,24 @@ enum Commands {
         #[arg(trailing_var_arg = true)]
         command: Vec<String>,
     },
+    /// Expose ssh_private_key secrets through a read-only SSH agent (0.19+)
+    SshAgent {
+        /// Provider backend to use for every SSH private key
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        provider: Option<String>,
+        /// Profile containing the SSH private keys
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        profile: Option<String>,
+        /// Scope whose ssh_private_key secrets the agent may expose
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE")]
+        scope: Option<String>,
+        /// Agent socket path (defaults to a private temporary socket)
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        /// Optional command to run with SSH_AUTH_SOCK set
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
+    },
     /// Resolve secrets and print them for another tool to consume
     Export {
         /// Provider backend to use
@@ -1324,6 +1342,29 @@ pub fn main() -> Result<()> {
                 .wrap_err("Failed to run command")?;
             Ok(())
         }
+        Commands::SshAgent {
+            provider,
+            profile,
+            scope,
+            socket,
+            command,
+        } => {
+            let mut app = load_secrets(&cli.file, &cli.reason)?;
+            if let Some(provider) = provider {
+                app.set_provider(provider);
+            }
+            if let Some(profile) = profile {
+                app.set_profile(profile);
+            }
+            apply_scope(&mut app, scope);
+            if let Some(exit_code) = crate::ssh_agent::run(app, socket, command)
+                .into_diagnostic()
+                .wrap_err("Failed to run SecretSpec SSH agent")?
+            {
+                std::process::exit(exit_code);
+            }
+            Ok(())
+        }
         // Resolve secrets and print them without running a command
         Commands::Export {
             provider,
@@ -2259,6 +2300,45 @@ API_KEY = { description = "Existing" }
                 assert_eq!(command, vec!["npm", "start", "--flag"]);
             }
             _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn ssh_agent_captures_options_and_trailing_command() {
+        let cli = Cli::try_parse_from([
+            "secretspec",
+            "ssh-agent",
+            "--provider",
+            "onepassword",
+            "--profile",
+            "production",
+            "--scope",
+            "deploy",
+            "--socket",
+            "/tmp/private/agent.sock",
+            "--",
+            "ssh",
+            "deploy@example.com",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::SshAgent {
+                provider,
+                profile,
+                scope,
+                socket,
+                command,
+            } => {
+                assert_eq!(provider.as_deref(), Some("onepassword"));
+                assert_eq!(profile.as_deref(), Some("production"));
+                assert_eq!(scope.as_deref(), Some("deploy"));
+                assert_eq!(
+                    socket.as_deref(),
+                    Some(Path::new("/tmp/private/agent.sock"))
+                );
+                assert_eq!(command, vec!["ssh", "deploy@example.com"]);
+            }
+            _ => panic!("expected SshAgent command"),
         }
     }
 

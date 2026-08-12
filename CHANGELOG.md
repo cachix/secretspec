@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A read-only SSH agent can expose provider-backed OpenSSH private keys declared
+  with `type = "ssh_private_key"` (0.19+) without materializing temporary key
+  files. Run a single command with `secretspec ssh-agent -- <command>`, or serve
+  a foreground agent on a private socket. The wrapped command keeps the
+  terminal, so interactive `ssh` sessions behave normally, and it never inherits
+  the private-key variables the agent advertises. Agents shut down cleanly on
+  Ctrl-C, SIGTERM, or SIGHUP, forwarding the signal to the command's process
+  group and removing explicit socket paths. Undefined profiles are rejected
+  before the agent starts, RSA keys below 2048 bits are refused, and key-read
+  audits record the provider endpoint, the native reference that answered, and
+  any active scope.
 - Secrets can set `prompt = true` to request a hidden value from the controlling
   terminal when `secretspec run` finds no stored value. Writable providers save
   the answer for later runs; the `null` provider keeps it invocation-only.

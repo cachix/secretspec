@@ -40,6 +40,8 @@ SECRET_NAME = {
 - `generate`: Enable auto-generation when the secret is missing (`true` or a table with options)
 - `prompt` (0.19+): Securely ask for a missing value during `secretspec run` and
   let the selected provider decide whether to save the answer
+- `type = "ssh_private_key"` (0.19+): Identify a stored OpenSSH private key for
+  the read-only `secretspec ssh-agent` command
 
 ## Related Concepts
 
@@ -47,6 +49,8 @@ SECRET_NAME = {
 - [Secret Generation](/concepts/generation/) auto-creates passwords, tokens, and keys when secrets are missing
 - [Run prompts (0.19+)](/reference/configuration/#prompt-on-missing-during-run-019)
   provision stored secrets on first use, or remain invocation-only with `null`
+- [SSH agent integration (0.19+)](/integrations/ssh-agent/) keeps
+  private keys in their provider while OpenSSH requests signatures
 - [Composed Secrets (0.16+)](/concepts/composed-secrets/) derive values from
   other declared secrets without dotenv or shell expansion
 

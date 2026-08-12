@@ -1,5 +1,6 @@
 //! Validation results for secret checking
 
+use crate::config::NativeAddress;
 use crate::config::Resolved;
 use crate::report::{ResolutionReport, SecretResolution};
 use secrecy::SecretString;
@@ -22,6 +23,13 @@ pub struct ValidatedSecrets {
     /// Value-free per-secret resolution provenance (which provider answered,
     /// generated, defaulted, as_path). Drives `check --json`/`--explain`.
     pub resolution: Vec<SecretResolution>,
+    /// Native coordinates used by the provider endpoint that actually answered.
+    /// Kept separate from the public resolution report because it is internal
+    /// audit provenance, not part of the report's versioned wire format. Filled
+    /// in by the fetch that resolved each secret; only the CLI's audit log reads
+    /// it back.
+    #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+    pub(crate) source_references: HashMap<String, NativeAddress>,
     /// Temporary files for secrets with as_path=true.
     /// These are kept alive for the lifetime of ValidatedSecrets and automatically
     /// cleaned up when dropped.

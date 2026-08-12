@@ -515,6 +515,60 @@ $ secretspec run -- node app.js  # app.js reads process.env.DATABASE_URL
 ```
 :::
 
+### ssh-agent (0.19+)
+
+:::caution[Version compatibility]
+`secretspec ssh-agent` is available starting with SecretSpec 0.19.
+:::
+
+Expose OpenSSH private-key secrets declared with `type = "ssh_private_key"` (0.19+)
+through a read-only SSH-agent socket. The recommended form confines the socket
+to one child command:
+
+For an end-to-end provider setup, Git usage, security model, and troubleshooting,
+see the [SSH agent integration guide (0.19+)](/integrations/ssh-agent/).
+
+```bash
+$ secretspec ssh-agent [OPTIONS] -- <COMMAND> # 0.19+
+```
+
+**Options:**
+
+- `-p, --provider <PROVIDER>` - Override the provider for every SSH private key.
+- `-P, --profile <PROFILE>` - Select the profile containing the SSH private keys.
+- `-S, --scope <SCOPE>` - Expose only typed SSH keys in this scope.
+- `--socket <PATH>` - Use an explicit Unix socket or Windows named pipe instead
+  of the private default. On Unix, its parent must be a real directory
+  inaccessible to group and other users (mode `0700`).
+
+```toml title="secretspec.toml"
+[profiles.production]
+# `type = "ssh_private_key"` requires SecretSpec 0.19+.
+DEPLOY_SSH_KEY = { description = "Deployment SSH key", type = "ssh_private_key" }
+```
+
+```bash
+# The private key remains in its SecretSpec provider; only signing crosses the socket.
+$ secretspec ssh-agent --profile production -- ssh deploy@example.com # 0.19+
+
+# Git also uses OpenSSH and therefore uses the same agent.
+$ secretspec ssh-agent --profile production -- git clone git@example.com:team/repo.git # 0.19+
+```
+
+With no child command, the 0.19+ command stays in the foreground and prints a
+shell command that exports its socket. On Unix:
+
+```bash
+$ secretspec ssh-agent --profile production # 0.19+
+SSH_AUTH_SOCK='/tmp/secretspec-agent-.../agent.sock'; export SSH_AUTH_SOCK
+```
+
+The private socket authorizes signature requests, so do not expose it to other
+users or mount it into untrusted processes. The agent rejects key addition,
+removal, locking, smart-card, and extension requests; its identity allow-list
+comes entirely from the active profile's `type = "ssh_private_key"` (0.19+)
+declarations.
+
 ### export
 Resolve every secret for the active profile and write it to stdout in a chosen format, without running a command. Unlike `run`, it never prompts and exits non-zero when a required secret is missing, so CI can gate on it.
 

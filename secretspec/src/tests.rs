@@ -332,6 +332,7 @@ fn test_validation_result_structure() {
         missing_optional: vec!["optional_secret".to_string()],
         with_defaults: Vec::new(),
         resolution: Vec::new(),
+        source_references: HashMap::new(),
         temp_files: Vec::new(),
     };
     assert_eq!(valid_result.missing_optional.len(), 1);
@@ -7658,6 +7659,115 @@ REQUIRED = {{ description = "required", providers = ["target"] }}
     let events = audit_events(&lines);
     assert_eq!(events[0]["ref"], "item=prod_REQUIRED");
     assert!(!lines.lock().unwrap()[0].contains("hunter2"));
+}
+
+#[cfg(feature = "cli")]
+#[test]
+fn ssh_agent_key_audit_records_provider_scoped_and_alias_template_refs() {
+    let _env = scrub_resolution_env();
+    let temp_dir = TempDir::new().unwrap();
+    let store = temp_dir.path().join("store.env");
+    fs::write(
+        &store,
+        "templated_SSH_KEY=template-value\nSCOPED_SSH_KEY=scoped-value\n",
+    )
+    .unwrap();
+    let uri = format!("dotenv://{}", store.display());
+    let cases = [
+        (
+            ProviderAlias::from(uri.clone())
+                .with_reference_template(NativeAddressTemplate {
+                    item: "templated_{key}".to_string(),
+                    ..Default::default()
+                })
+                .unwrap(),
+            None,
+            "item=templated_SSH_KEY",
+            "template-value",
+        ),
+        (
+            ProviderAlias::from(uri),
+            Some(NativeAddress {
+                item: "SCOPED_SSH_KEY".to_string(),
+                ..Default::default()
+            }),
+            "item=SCOPED_SSH_KEY",
+            "scoped-value",
+        ),
+    ];
+
+    for (provider, scoped_ref, expected_ref, expected_value) in cases {
+        let mut secret = Secret {
+            secret_type: Some("ssh_private_key".to_string()),
+            providers: Some(vec!["target".to_string()]),
+            ..Default::default()
+        };
+        if let Some(reference) = scoped_ref {
+            secret.refs = Some(HashMap::from([("target".to_string(), reference)]));
+        }
+        let mut config = resolve_test_config(HashMap::from([("SSH_KEY".to_string(), secret)]));
+        config.providers = Some(HashMap::from([("target".to_string(), provider)]));
+        let mut spec = Secrets::new(config, None, None, None);
+        let (logger, lines) = crate::audit::test_support::collecting_logger();
+        spec.set_audit_for_test(logger);
+
+        let value = spec.ssh_agent_key("SSH_KEY").unwrap();
+
+        assert_eq!(value.expose_secret(), expected_value);
+        let events = audit_events(&lines);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["action"], "get");
+        assert_eq!(events[0]["ref"], expected_ref);
+    }
+}
+
+#[cfg(feature = "cli")]
+#[test]
+fn ssh_agent_key_audit_attributes_cache_hits_without_authoritative_ref() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "REMOTE_SSH_KEY=private-key\n").unwrap();
+    let mut config = resolve_test_config(HashMap::from([(
+        "SSH_KEY".to_string(),
+        Secret {
+            secret_type: Some("ssh_private_key".to_string()),
+            providers: Some(vec!["myprovider".to_string()]),
+            reference: Some(NativeAddress {
+                item: "REMOTE_SSH_KEY".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )]));
+    config.providers = Some(cached_dotenv_providers(&[&source], &cache, "8h"));
+    let mut secrets = Secrets::new(config, None, None, None);
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    secrets.set_audit_for_test(logger);
+
+    secrets.ssh_agent_key("SSH_KEY").unwrap();
+    secrets.ssh_agent_key("SSH_KEY").unwrap();
+
+    let events: Vec<_> = audit_events(&lines)
+        .into_iter()
+        .filter(|event| event["action"] == "get")
+        .collect();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0]["ref"], "item=REMOTE_SSH_KEY");
+    assert!(
+        events[0]["provider"]
+            .as_str()
+            .unwrap()
+            .contains("source.env")
+    );
+    assert!(
+        events[1]["provider"]
+            .as_str()
+            .unwrap()
+            .contains("cache.env")
+    );
+    assert!(events[1].get("ref").is_none());
 }
 
 #[test]

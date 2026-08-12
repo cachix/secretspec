@@ -113,10 +113,12 @@ const consumerMetadata: ConsumerMetadata[] = [
     secrets: ['DATABASE_URL', 'API_KEY', 'SIGNING_KEY'] },
   { icon: 'swift', label: 'Swift (0.18+)', href: '/sdk/swift/',
     secrets: ['DATABASE_URL', 'API_KEY', 'SENTRY_DSN'] },
-  { icon: 'githubactions', label: 'GitHub Actions', href: '/ci/github-actions/',
+  { icon: 'githubactions', label: 'GitHub Actions', href: '/integrations/github-actions/',
     secrets: ['NPM_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'CODECOV_TOKEN'] },
-  { label: 'Forgejo Actions', href: '/ci/github-actions/',
+  { label: 'Forgejo Actions', href: '/integrations/github-actions/',
     secrets: ['NPM_TOKEN', 'FORGEJO_TOKEN', 'DEPLOY_KEY'] },
+  { label: 'SSH / OpenSSH (0.19+)', href: '/integrations/ssh-agent/',
+    secrets: ['DEPLOY_SSH_KEY', 'GIT_SIGNING_KEY', 'BASTION_KEY'] },
   { icon: 'nixos', label: 'devenv & Nix', href: 'https://devenv.sh/integrations/secretspec/',
     secrets: ['DATABASE_URL', 'CACHIX_AUTH_TOKEN', 'REDIS_URL'] },
   { icon: 'systemd', label: 'systemd', href: '/providers/systemd-credential/',
@@ -177,6 +179,7 @@ const consumerColors: Record<string, SyntaxColorName> = {
   'Swift (0.18+)': 'red',
   'GitHub Actions': 'comment',
   'Forgejo Actions': 'orange',
+  'SSH / OpenSSH (0.19+)': 'green',
   'devenv & Nix': 'cyan',
   systemd: 'blue',
   Docker: 'cyan',
@@ -1636,7 +1639,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
     </div>
 
     <p class="landing-chain-result" style="margin-top: 1.5rem;">
-      The 0.17+ action masks every value, fails when a required secret is missing, and exposes the selected scope to later steps. Vault and OpenBao can use the runner's OIDC identity instead of a stored provider credential. <a href="/ci/github-actions/" class="landing-link">Configure Actions →</a>
+      The 0.17+ action masks every value, fails when a required secret is missing, and exposes the selected scope to later steps. Vault and OpenBao can use the runner's OIDC identity instead of a stored provider credential. <a href="/integrations/github-actions/" class="landing-link">Configure Actions →</a>
     </p>
   </div>
 </section>

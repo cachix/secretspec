@@ -250,6 +250,12 @@ type GroupFetch<'a> = (
     Box<dyn ProviderTrait>,
 );
 type FallbackReadResult = Result<(Option<SecretString>, Option<String>, Option<NativeAddress>)>;
+/// One batch read: the values a provider group answered with, plus the native
+/// coordinates each one came from.
+type GroupValues = (
+    HashMap<String, SecretString>,
+    HashMap<String, NativeAddress>,
+);
 
 struct PreparedImport {
     planned: PlannedSecret,
@@ -704,6 +710,10 @@ struct AuditFields<'a> {
     reference: Option<&'a NativeAddress>,
     /// Stable error-variant token when the outcome is an error.
     error_kind: Option<&'a str>,
+    /// Scope that constrained this specific action, for surfaces where the
+    /// action alone does not settle it. [`Secrets::record`] derives the scope
+    /// from the action when this is `None`.
+    scope: Option<String>,
 }
 
 impl Secrets {
@@ -1367,7 +1377,9 @@ impl Secrets {
             // Scopes affect only these bulk resolution surfaces. `get`, `set`,
             // and `import` deliberately ignore an ambient scope, so attaching it
             // to those events would falsely imply that it constrained the action.
-            let scope = match action {
+            // A caller that knows better states its own scope, which wins: the
+            // SSH agent reads keys as `get` but *is* restricted by the scope.
+            let scope = fields.scope.or_else(|| match action {
                 AuditAction::Check | AuditAction::Run | AuditAction::Export => {
                     self.resolve_scope_name(None)
                 }
@@ -1377,7 +1389,7 @@ impl Secrets {
                 | AuditAction::Import
                 | AuditAction::CacheClear
                 | AuditAction::CacheRefresh => None,
-            };
+            });
             logger.record(
                 action,
                 AuditContext {
@@ -1484,6 +1496,36 @@ impl Secrets {
                 provider_uri,
                 reference,
                 error_kind: Some(err.kind()),
+                ..Default::default()
+            },
+        );
+    }
+
+    /// Audits one SSH-agent key access. These are `get` events, but unlike an
+    /// ordinary `get` an active scope genuinely restricts which keys the agent
+    /// can expose (`ssh_agent_key_names` resolves through the scope), so the
+    /// scope is recorded: an auditor reconstructing which identities were
+    /// reachable needs to see the constraint that applied.
+    #[cfg(feature = "cli")]
+    fn record_ssh_agent_key(
+        &self,
+        profile: &str,
+        key: &str,
+        outcome: AuditOutcome,
+        provider_uri: Option<String>,
+        reference: Option<&NativeAddress>,
+        error_kind: Option<&str>,
+    ) {
+        self.record(
+            AuditAction::Get,
+            profile,
+            outcome,
+            AuditFields {
+                key: Some(key),
+                provider_uri,
+                reference,
+                error_kind,
+                scope: self.resolve_scope_name(None),
                 ..Default::default()
             },
         );
@@ -2038,19 +2080,105 @@ impl Secrets {
     /// it would silently display the *whole* profile under a scope, which is the
     /// one thing this filter exists to prevent. The displayed set stays identical
     /// to the resolved set.
-    fn effective_secrets(
+    pub(crate) fn effective_secrets(
         &self,
         profile_name: &str,
     ) -> Result<Vec<(String, crate::config::Secret)>> {
-        let members = self.active_scope_members()?;
-        Ok(self
+        self.require_profile(profile_name)?;
+        let profile = self
             .manifest
             .profile(profile_name)
-            .into_iter()
-            .flat_map(|profile| &profile.secrets)
+            .expect("raw and compiled profile sets stay identical");
+        let members = self.active_scope_members()?;
+        Ok(profile
+            .secrets
+            .iter()
             .filter(|(name, _)| members.as_ref().is_none_or(|m| m.contains(name.as_str())))
             .map(|(name, secret)| (name.clone(), secret.config.clone()))
             .collect())
+    }
+
+    /// Names of the active profile's stored OpenSSH private keys, selected by
+    /// their semantic secret type for the read-only SecretSpec SSH agent.
+    #[cfg(feature = "cli")]
+    pub(crate) fn ssh_agent_key_names(&self) -> Result<Vec<String>> {
+        let profile = self.resolve_profile_name(None);
+        Ok(self
+            .effective_secrets(&profile)?
+            .into_iter()
+            .filter_map(|(name, secret)| {
+                (secret.secret_type.as_deref() == Some("ssh_private_key")).then_some(name)
+            })
+            .collect())
+    }
+
+    /// Resolve one SSH-agent key without resolving unrelated profile secrets.
+    /// The caller parses and drops the returned OpenSSH key immediately after
+    /// deriving an identity or signature.
+    #[cfg(feature = "cli")]
+    pub(crate) fn ssh_agent_key(&self, name: &str) -> Result<SecretString> {
+        self.ensure_reason_for(AuditAction::Get, Some(name))?;
+        let profile = self.resolve_profile_name(None);
+        let config = self
+            .resolve_secret_config(name, Some(&profile))
+            .ok_or_else(|| SecretSpecError::SecretNotFound(name.to_string()))?;
+        if config.secret_type.as_deref() != Some("ssh_private_key") {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "secret '{name}' is not an SSH private key; set `type = \"ssh_private_key\"` in secretspec.toml"
+            )));
+        }
+
+        let result = self
+            .build_plan_from_names(profile.clone(), vec![name.to_string()])
+            .and_then(|plan| self.execute_plan(&plan, Materialize::Values, None));
+        match result {
+            Ok(Ok(validated)) => {
+                let value = validated
+                    .resolved
+                    .secrets
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| SecretSpecError::SecretNotFound(name.to_string()))?;
+                let source_provider = validated
+                    .resolution
+                    .iter()
+                    .find(|entry| entry.name == name)
+                    .and_then(|entry| entry.source_provider.clone());
+                let source_reference = validated.source_references.get(name);
+                self.record_ssh_agent_key(
+                    &profile,
+                    name,
+                    AuditOutcome::Found,
+                    source_provider,
+                    source_reference,
+                    None,
+                );
+                Ok(value)
+            }
+            Ok(Err(errors)) => {
+                let error = validation_failure(errors);
+                self.record_ssh_agent_key(
+                    &profile,
+                    name,
+                    AuditOutcome::Error,
+                    None,
+                    config.reference.as_ref(),
+                    Some(error.kind()),
+                );
+                Err(error)
+            }
+            Err(error) => {
+                self.record_ssh_agent_key(
+                    &profile,
+                    name,
+                    AuditOutcome::Error,
+                    None,
+                    config.reference.as_ref(),
+                    Some(error.kind()),
+                );
+                Err(error)
+            }
+        }
     }
 
     /// Provider-alias maps in lookup order: project `secretspec.toml` first,
@@ -2180,6 +2308,10 @@ impl Secrets {
     /// convention naming) is handed to `get_many`, which dedupes identical
     /// coordinates and batches or parallelizes as the store allows. The address
     /// is the one the plan already derived, so naming lives in exactly one place.
+    ///
+    /// The native coordinates of the secrets this batch answered are returned
+    /// alongside the values: access auditing needs them, and resolving them a
+    /// second time from the same inputs would be pure duplication.
     fn fetch_group(
         &self,
         provider: &dyn ProviderTrait,
@@ -2187,7 +2319,7 @@ impl Secrets {
         group: &[&PlannedSecret],
         project: &str,
         profile: &str,
-    ) -> Result<HashMap<String, SecretString>> {
+    ) -> Result<GroupValues> {
         let addresses = group
             .iter()
             .map(|planned| self.address_for_spec(planned, provider_spec, project, profile))
@@ -2197,7 +2329,16 @@ impl Secrets {
             .zip(&addresses)
             .map(|(planned, address)| (planned.name.as_str(), address.as_address()))
             .collect();
-        provider.get_many(&requests)
+        let values = provider.get_many(&requests)?;
+        let references = group
+            .iter()
+            .zip(&addresses)
+            .filter(|(planned, _)| values.contains_key(&planned.name))
+            .filter_map(|(planned, address)| {
+                Some((planned.name.clone(), address.native()?.clone()))
+            })
+            .collect();
+        Ok((values, references))
     }
 
     /// Read and validate one cached envelope. Every cache failure is fail-open:
@@ -5164,6 +5305,7 @@ impl Secrets {
                 missing_optional: Vec::new(),
                 with_defaults: Vec::new(),
                 resolution: Vec::new(),
+                source_references: HashMap::new(),
                 temp_files: Vec::new(),
             }));
         }
@@ -5182,6 +5324,11 @@ impl Secrets {
         let mut temp_files: Vec<tempfile::NamedTempFile> = Vec::new();
         // Per-secret provenance for the value-free resolution report.
         let mut resolution: Vec<SecretResolution> = Vec::new();
+        // Endpoint-specific native coordinates for access auditing, filled in by
+        // the fetches themselves. Cache hits deliberately have no entry: cache
+        // envelopes use convention naming, even when the authoritative route has
+        // a native ref.
+        let mut source_references: HashMap<String, NativeAddress> = HashMap::new();
         // Credential-free `uri()` of each successfully built primary provider
         // group, keyed by the group's primary URI, so a primary hit can be
         // attributed to the provider that answered.
@@ -5260,7 +5407,7 @@ impl Secrets {
             (provider_uri, group, provider): GroupFetch<'a>,
             project: &str,
             profile: &str,
-        ) -> (Option<&'a str>, Result<HashMap<String, SecretString>>) {
+        ) -> (Option<&'a str>, Result<GroupValues>) {
             let result = secrets.fetch_group(&*provider, provider_uri, &group, project, profile);
             (provider_uri, result)
         }
@@ -5285,7 +5432,10 @@ impl Secrets {
 
         for (provider_uri, result) in fetch_results {
             match result {
-                Ok(batch_results) => fetched_values.extend(batch_results),
+                Ok((batch_values, batch_references)) => {
+                    fetched_values.extend(batch_values);
+                    source_references.extend(batch_references);
+                }
                 Err(e) => {
                     // A provider was built; attribute to its credential-free
                     // `uri()`, already recorded in `group_uris` above.
@@ -5395,36 +5545,40 @@ impl Secrets {
                     // concurrently above. Each chain was still tried in order
                     // and received the diagnostic label rather than a hidden
                     // composition input's raw name.
-                    let (fallback_value, fallback_uri, _) = match route.fallback_specs() {
-                        Some(_) => {
-                            let resolved = fallback_results
-                                .remove(name)
-                                .expect("primary miss with fallback was prefetched")?;
-                            // A primary that errored plus an exhausted fallback
-                            // chain is not "missing": the authoritative provider
-                            // is unreachable and might hold the value. Surface the
-                            // primary error, exactly as the no-fallback arm below.
-                            if resolved.0.is_none() && primary_failed {
+                    let (fallback_value, fallback_uri, fallback_reference) =
+                        match route.fallback_specs() {
+                            Some(_) => {
+                                let resolved = fallback_results
+                                    .remove(name)
+                                    .expect("primary miss with fallback was prefetched")?;
+                                // A primary that errored plus an exhausted fallback
+                                // chain is not "missing": the authoritative provider
+                                // is unreachable and might hold the value. Surface the
+                                // primary error, exactly as the no-fallback arm below.
+                                if resolved.0.is_none() && primary_failed {
+                                    let err = failed_primary_uris
+                                        .remove(&primary_uri)
+                                        .expect("primary_failed implies entry present");
+                                    return Err(err);
+                                }
+                                resolved
+                            }
+                            // No alternative chain and the primary failed: surface the
+                            // original error rather than reporting a spurious missing.
+                            None if primary_failed => {
                                 let err = failed_primary_uris
                                     .remove(&primary_uri)
                                     .expect("primary_failed implies entry present");
                                 return Err(err);
                             }
-                            resolved
-                        }
-                        // No alternative chain and the primary failed: surface the
-                        // original error rather than reporting a spurious missing.
-                        None if primary_failed => {
-                            let err = failed_primary_uris
-                                .remove(&primary_uri)
-                                .expect("primary_failed implies entry present");
-                            return Err(err);
-                        }
-                        None => (None, None, None),
-                    };
+                            None => (None, None, None),
+                        };
 
                     if let Some(value) = fallback_value {
                         source_provider = fallback_uri;
+                        if let Some(reference) = fallback_reference {
+                            source_references.insert(name.clone(), reference);
+                        }
                         if materialize.values() {
                             self.write_cached_secret(planned, route, profile, &value);
                             self.insert_resolved(
@@ -5651,6 +5805,7 @@ impl Secrets {
         if let Some(filter) = output_filter {
             secrets.retain(|name, _| filter.contains(name));
             resolution.retain(|entry| filter.contains(&entry.name));
+            source_references.retain(|name, _| filter.contains(name));
             missing_required.retain(|name| filter.contains(name));
             missing_optional.retain(|name| filter.contains(name));
             with_defaults.retain(|(name, _)| filter.contains(name));
@@ -5754,6 +5909,7 @@ impl Secrets {
                 missing_optional,
                 with_defaults,
                 resolution,
+                source_references,
                 temp_files,
             }))
         }
@@ -6856,6 +7012,56 @@ mod report_provider_tests {
             .unwrap();
         assert_eq!(got, "vault://host");
         assert!(!got.contains("zzz"));
+    }
+}
+
+#[cfg(all(test, feature = "cli"))]
+mod ssh_agent_key_tests {
+    use super::*;
+    use crate::config::Secret;
+
+    #[test]
+    fn agent_allow_list_contains_only_ssh_private_key_secrets() {
+        let config = crate::tests::resolve_test_config(HashMap::from([
+            (
+                "DEPLOY_KEY".to_string(),
+                Secret {
+                    description: Some("Deployment key".to_string()),
+                    secret_type: Some("ssh_private_key".to_string()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "API_TOKEN".to_string(),
+                Secret {
+                    description: Some("API token".to_string()),
+                    ..Default::default()
+                },
+            ),
+        ]));
+        let spec = Secrets::new(config, None, None, None);
+
+        assert_eq!(spec.ssh_agent_key_names().unwrap(), vec!["DEPLOY_KEY"]);
+    }
+
+    #[test]
+    fn agent_allow_list_rejects_an_unknown_profile() {
+        let config = crate::tests::resolve_test_config(HashMap::from([(
+            "DEPLOY_KEY".to_string(),
+            Secret {
+                secret_type: Some("ssh_private_key".to_string()),
+                ..Default::default()
+            },
+        )]));
+        let spec = Secrets::new(config, None, None, Some("nonexistent".to_string()));
+
+        match spec.ssh_agent_key_names() {
+            Err(SecretSpecError::InvalidProfile(message)) => {
+                assert!(message.contains("nonexistent"));
+                assert!(message.contains("Available profiles: default"));
+            }
+            other => panic!("expected InvalidProfile, got {other:?}"),
+        }
     }
 }
 

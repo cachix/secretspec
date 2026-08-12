@@ -61,6 +61,9 @@ uuid = { version = "1", features = ["serde", "v4"] }
 data-encoding = "2"
 detect-coding-agent = "0.1"
 age = { version = "0.12", features = ["armor", "plugin", "ssh"] }
+ssh-agent-lib = "0.6"
+sha2 = { version = "0.10", features = ["oid"] }
+libc = "0.2"
 
 # The profile that 'dist' will build with
 [profile.dist]

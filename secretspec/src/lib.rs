@@ -53,6 +53,8 @@ mod plan;
 mod report;
 mod resolve;
 mod secrets;
+#[cfg(feature = "cli")]
+mod ssh_agent;
 mod validation;
 
 pub(crate) mod provider;

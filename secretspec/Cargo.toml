@@ -54,10 +54,21 @@ uuid.workspace = true
 data-encoding.workspace = true
 detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
+ssh-agent-lib = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 [features]
 default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "infisical", "bw", "age", "scaleway", "sops"]
-cli = ["dep:toml_edit"]
+cli = [
+    "dep:libc",
+    "dep:toml_edit",
+    "dep:ssh-agent-lib",
+    "dep:sha2",
+    "tokio/macros",
+    "tokio/process",
+    "tokio/signal",
+    "tokio/time",
+]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
 keeper = ["dep:keeper-secrets-manager-core"]
@@ -78,6 +89,9 @@ bw = ["dep:base64"]
 akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secrets"]
 age = ["dep:age"]
 sops = []
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Validates serialized resolution reports against the committed JSON Schema.

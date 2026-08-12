@@ -203,7 +203,7 @@ jobs:
 
 A missing required secret fails the action, so the same step also checks that
 the deployment environment is complete. See the [GitHub Actions
-guide](/ci/github-actions/) for provider selection and tokenless
+guide](/integrations/github-actions/) for provider selection and tokenless
 [Vault](/providers/vault/) or [OpenBao](/providers/openbao/) authentication
 through the runner's OIDC identity.
 

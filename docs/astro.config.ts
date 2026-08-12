@@ -51,7 +51,9 @@ export default defineConfig({
   site: "https://secretspec.dev/",
   redirects: {
     "/reference/adding-providers": "/development/adding-providers",
-    "/ci": "/ci/github-actions",
+    "/ci": "/integrations/github-actions",
+    "/ci/github-actions": "/integrations/github-actions",
+    "/integrations": "/integrations/overview",
   },
   vite: {
     plugins: [devGitHubApi],
@@ -376,9 +378,18 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
           ],
         },
         {
-          label: "CI",
+          label: "Integrations",
           items: [
-            { label: "GitHub Actions", slug: "ci/github-actions" },
+            { label: "Overview", slug: "integrations/overview" },
+            {
+              label: "SSH agent",
+              slug: "integrations/ssh-agent",
+              badge: { text: "0.19+", variant: "note" },
+            },
+            {
+              label: "GitHub Actions",
+              slug: "integrations/github-actions",
+            },
           ],
         },
         {

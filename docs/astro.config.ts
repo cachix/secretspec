@@ -131,6 +131,48 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
         }),
       ],
       title: "SecretSpec",
+      head: [
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image",
+            content: "https://secretspec.dev/social-card.png",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image:alt",
+            content: "SecretSpec — A declarative interface for every secret provider.",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:image:width", content: "1200" },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:image:height", content: "630" },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:image:type", content: "image/png" },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:image",
+            content: "https://secretspec.dev/social-card.png",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:image:alt",
+            content: "SecretSpec — A declarative interface for every secret provider.",
+          },
+        },
+      ],
       components: {
         Hero: "./src/overrides/Hero.astro",
         SocialIcons: "./src/overrides/SocialIcons.astro",

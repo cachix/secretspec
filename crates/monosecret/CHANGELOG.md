@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.2.0) (2026-08-12)
+
+### Documentation
+
+#### Repair stale documentation links and installation guidance
+
+Point historical issue references to the original `cachix/secretspec` repository, restore the original SecretSpec announcement and devenv integration URLs, and replace the unavailable custom installer with the published `@monosecret/cli` npm package.
+
+_Owner:_ Ifiok Jr. · _Introduced in:_ [`5a34243`](https://github.com/ifiokjr/monosecret/commit/5a34243085ca6c304b33c1d1c5f013f2a63c000f)
+
 ## [0.1.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.1.0) (2026-07-05)
 
 ### Features

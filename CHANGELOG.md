@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.2.0) (2026-08-12)
+
+Grouped release for `monosecret`.
+
+### Breaking
+
+#### Integrate native references and language SDKs
+
+_Packages:_ _monosecret_
+
+Add provider-independent table-form `ref` coordinates, address-based provider
+resolution, batch reads, writable checks, and value-free resolution reports.
+Provider implementations must migrate to the new address-oriented APIs.
+
+Integrate the shared native resolver source, local build paths, and tests for
+`monosecret_ffi`, Dart, `@monosecret/client`, Python, Go, Ruby, and Haskell
+bindings. The Dart package now resolves through `dart:ffi` without a separately
+installed CLI, and release builds publish verified C ABI assets for Linux,
+macOS, and Windows servers. Registry distribution for the other new native SDK
+artifacts remains deferred.
+
+_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #24](https://github.com/ifiokjr/monosecret/pull/24)
+
+#### Move the Dart builder package entrypoint
+
+_Packages:_ _dart:monosecret_builder_
+
+Expose the builder factory from `package:monosecret_builder/monosecret_builder.dart`, update `build.yaml` to use that package-named library, and remove the previous `package:monosecret_builder/builder.dart` entrypoint. Consumers importing the builder directly should update to the new package-named library.
+
+_Owner:_ Ifiok Jr. · _Introduced in:_ [`5191c5a`](https://github.com/ifiokjr/monosecret/commit/5191c5a65f9beaa9b746637cc99e9bd5e0248f2e)
+
+### Documentation
+
+#### Repair stale documentation links and installation guidance
+
+_Packages:_ _rust:monosecret_
+
+Point historical issue references to the original `cachix/secretspec` repository, restore the original SecretSpec announcement and devenv integration URLs, and replace the unavailable custom installer with the published `@monosecret/cli` npm package.
+
+_Owner:_ Ifiok Jr. · _Introduced in:_ [`5a34243`](https://github.com/ifiokjr/monosecret/commit/5a34243085ca6c304b33c1d1c5f013f2a63c000f)
+
 ## [0.1.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.1.0) (2026-07-05)
 
 Grouped release for `monosecret`.

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The age provider supports deleting secrets: `secretspec delete`,
+  `secretspec import --delete-source`, and cache invalidation now work with
+  it, so an age-encrypted file can serve as the local store of a cached
+  provider alias — an encrypted-at-rest cache with no keyring daemon or OS
+  keychain involved.
+
 - Windows ARM64 CLI release artifacts (`aarch64-pc-windows-msvc`), attached to
   the GitHub Release as `secretspec-aarch64-pc-windows-msvc.zip` with a
   checksum. The static installer keeps selecting the x86_64 build on Windows

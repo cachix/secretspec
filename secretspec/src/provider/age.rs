@@ -4,7 +4,8 @@
 //! The file is an encrypted dotenv blob whose plaintext is `KEY=value` lines
 //! encrypted to one or more age recipients. A read decrypts the whole blob with
 //! the configured identity. A write decrypts it, updates one key, and
-//! re-encrypts the whole blob to the current recipients.
+//! re-encrypts the whole blob to the current recipients; a delete removes one
+//! key the same way.
 //!
 //! # URI format
 //!
@@ -172,6 +173,7 @@ crate::register_provider! {
     schemes: ["age"],
     examples: ["age://secrets.age", "age://secrets.age?recipients-file=secrets.age.recipients"],
     credential_names: ["identity"],
+    deletes: true,
 }
 
 impl AgeProvider {
@@ -437,6 +439,21 @@ impl Provider for AgeProvider {
         self.store(&vars)
     }
 
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        let key = flat_item(self, addr)?;
+        if !self.config.path.exists() {
+            return Ok(false);
+        }
+        let mut vars = self.load()?;
+        if vars.remove(&*key).is_none() {
+            // Nothing to remove: leave the blob byte-identical instead of
+            // re-encrypting the same plaintext under fresh randomness.
+            return Ok(false);
+        }
+        self.store(&vars)?;
+        Ok(true)
+    }
+
     /// Decrypts the blob once and serves every requested key from it
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
         let vars = self.load()?;
@@ -648,6 +665,74 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
             "two"
         );
         assert!(provider.get(addr("MISSING")).unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_removes_one_key_and_preserves_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = write_identity(dir.path());
+        let provider = AgeProvider::new(AgeConfig {
+            path: dir.path().join("secrets.age"),
+            identity_path: Some(key),
+            recipients_file: None,
+            armor: true,
+        });
+
+        let addr = |k| Address::convention("proj", "default", k);
+        provider
+            .set(
+                addr("API_KEY"),
+                &SecretString::new("sekret".to_string().into()),
+            )
+            .unwrap();
+        provider
+            .set(addr("OTHER"), &SecretString::new("two".to_string().into()))
+            .unwrap();
+
+        assert!(provider.delete(addr("API_KEY")).unwrap());
+        assert!(provider.get(addr("API_KEY")).unwrap().is_none());
+        assert_eq!(
+            provider
+                .get(addr("OTHER"))
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "two"
+        );
+
+        // Idempotent: the second delete reports nothing removed.
+        assert!(!provider.delete(addr("API_KEY")).unwrap());
+    }
+
+    #[test]
+    fn delete_of_nothing_neither_creates_nor_rewrites_the_blob() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = write_identity(dir.path());
+        let provider = AgeProvider::new(AgeConfig {
+            path: dir.path().join("secrets.age"),
+            identity_path: Some(key),
+            recipients_file: None,
+            armor: true,
+        });
+
+        let addr = |k| Address::convention("proj", "default", k);
+
+        // No blob yet: nothing removed, and none brought into existence.
+        assert!(!provider.delete(addr("API_KEY")).unwrap());
+        assert!(!provider.config.path.exists());
+
+        provider
+            .set(
+                addr("API_KEY"),
+                &SecretString::new("sekret".to_string().into()),
+            )
+            .unwrap();
+        let before = std::fs::read(&provider.config.path).unwrap();
+
+        // Absent key: age encryption is randomized, so byte-identical output
+        // proves the blob was not re-encrypted.
+        assert!(!provider.delete(addr("MISSING")).unwrap());
+        assert_eq!(std::fs::read(&provider.config.path).unwrap(), before);
     }
 
     #[test]

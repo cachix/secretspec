@@ -683,9 +683,18 @@ $ secretspec audit --json | jq 'select(.outcome == "missing")'
 `completions` is available starting with SecretSpec 0.20.
 :::
 
-Generate a completion script from the same command definition used by
-`secretspec --help`. The output includes every command, option, possible value,
-and description supported by the target shell.
+Generate a completion script that asks the same command definition used by
+`secretspec --help` for suggestions. Completion results include every command,
+option, possible value, and description supported by the target shell. They
+also provide contextual suggestions for profile, scope, secret, provider, and
+provider-alias names. File arguments complete paths, while `secretspec run`
+completes executables and command-argument paths.
+
+When you press Tab, the completion script invokes `secretspec` to calculate the
+current suggestions. SecretSpec reads the nearest `secretspec.toml` (or the
+manifest selected by `--file` or `SECRETSPEC_FILE`) and user configuration to
+discover names and descriptions. It does not contact providers or read secret
+values.
 
 ```bash
 $ secretspec completions <SHELL>

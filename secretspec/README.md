@@ -310,7 +310,7 @@ secretspec run -- command        # Run command with secrets as env vars
 # Inspect access
 secretspec audit                 # Show the local audit log of secret access
 
-# Enable Fish completions for this session (0.20+)
+# Enable contextual Fish completions for this session (0.20+)
 secretspec completions fish | source
 ```
 

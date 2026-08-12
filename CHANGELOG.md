@@ -11,7 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `secretspec completions <shell>` generates completion scripts for Bash,
   Elvish, Fish, Nushell, PowerShell, and Zsh directly from the CLI definition,
-  including command, option, and possible-value descriptions.
+  including descriptions and contextual suggestions for profiles, scopes,
+  secret names, providers, aliases, paths, and commands. Completion reads
+  configuration metadata only; it never queries providers or reads secret
+  values.
 
 ## [0.19.1] - 2026-08-11
 

@@ -17,6 +17,8 @@ required-features = ["cli"]
 
 [dependencies]
 clap.workspace = true
+clap_complete = { workspace = true, optional = true }
+clap_complete_nushell = { workspace = true, optional = true }
 keyring = { workspace = true, optional = true }
 keepass = { workspace = true, optional = true }
 keeper-secrets-manager-core = { workspace = true, optional = true }
@@ -57,7 +59,7 @@ age = { workspace = true, optional = true }
 
 [features]
 default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "infisical", "bw", "age", "scaleway", "sops"]
-cli = ["dep:toml_edit"]
+cli = ["dep:toml_edit", "dep:clap_complete", "dep:clap_complete_nushell"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
 keeper = ["dep:keeper-secrets-manager-core"]

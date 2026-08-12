@@ -1,6 +1,6 @@
 use crate::provider::{Provider, providers, spec_names_known_provider};
 use crate::{Config, ExportFormat, GlobalConfig, GlobalDefaults, Profile, Project, Secrets};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -31,6 +31,23 @@ struct Cli {
     /// The subcommand to execute
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum CompletionShell {
+    /// Bourne Again Shell
+    Bash,
+    /// Elvish shell
+    Elvish,
+    /// Friendly Interactive Shell
+    Fish,
+    /// Nushell
+    Nushell,
+    /// PowerShell
+    #[value(name = "powershell")]
+    PowerShell,
+    /// Z shell
+    Zsh,
 }
 
 /// Available commands for the secretspec CLI.
@@ -177,6 +194,12 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Generate shell completion scripts (0.20+)
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: CompletionShell,
+    },
     /// Manage SecretSpec configuration
     Config {
         #[command(subcommand)]
@@ -210,6 +233,48 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+}
+
+fn generate_completions(shell: CompletionShell, output: &mut dyn Write) {
+    let mut command = Cli::command();
+    match shell {
+        CompletionShell::Bash => clap_complete::generate(
+            clap_complete::Shell::Bash,
+            &mut command,
+            "secretspec",
+            output,
+        ),
+        CompletionShell::Elvish => clap_complete::generate(
+            clap_complete::Shell::Elvish,
+            &mut command,
+            "secretspec",
+            output,
+        ),
+        CompletionShell::Fish => clap_complete::generate(
+            clap_complete::Shell::Fish,
+            &mut command,
+            "secretspec",
+            output,
+        ),
+        CompletionShell::Nushell => clap_complete::generate(
+            clap_complete_nushell::Nushell,
+            &mut command,
+            "secretspec",
+            output,
+        ),
+        CompletionShell::PowerShell => clap_complete::generate(
+            clap_complete::Shell::PowerShell,
+            &mut command,
+            "secretspec",
+            output,
+        ),
+        CompletionShell::Zsh => clap_complete::generate(
+            clap_complete::Shell::Zsh,
+            &mut command,
+            "secretspec",
+            output,
+        ),
+    }
 }
 
 /// Cached provider maintenance commands (0.17+).
@@ -1416,6 +1481,10 @@ pub fn main() -> Result<()> {
             }
             Ok(())
         }
+        Commands::Completions { shell } => {
+            generate_completions(shell, &mut std::io::stdout().lock());
+            Ok(())
+        }
         // Import secrets from one provider to another
         Commands::Import {
             from_provider,
@@ -2013,8 +2082,92 @@ mod tests {
 
     #[test]
     fn cli_command_definition_is_valid() {
-        use clap::CommandFactory;
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn completions_accept_every_supported_shell() {
+        let cases = [
+            ("bash", CompletionShell::Bash),
+            ("elvish", CompletionShell::Elvish),
+            ("fish", CompletionShell::Fish),
+            ("nushell", CompletionShell::Nushell),
+            ("powershell", CompletionShell::PowerShell),
+            ("zsh", CompletionShell::Zsh),
+        ];
+
+        for (name, expected) in cases {
+            let cli = Cli::try_parse_from(["secretspec", "completions", name]).unwrap();
+            match cli.command {
+                Commands::Completions { shell } => assert_eq!(shell, expected),
+                _ => panic!("expected completions command"),
+            }
+        }
+    }
+
+    #[test]
+    fn completions_reject_an_unknown_shell() {
+        assert!(Cli::try_parse_from(["secretspec", "completions", "tcsh"]).is_err());
+    }
+
+    #[test]
+    fn completion_scripts_cover_the_full_cli() {
+        let shells = [
+            CompletionShell::Bash,
+            CompletionShell::Elvish,
+            CompletionShell::Fish,
+            CompletionShell::Nushell,
+            CompletionShell::PowerShell,
+            CompletionShell::Zsh,
+        ];
+
+        for shell in shells {
+            let mut output = Vec::new();
+            generate_completions(shell, &mut output);
+            let output = String::from_utf8(output).unwrap();
+            assert!(
+                output.contains("secretspec"),
+                "missing binary for {shell:?}"
+            );
+            assert!(
+                output.contains("config"),
+                "missing subcommands for {shell:?}"
+            );
+            assert!(
+                output.contains("provider"),
+                "missing nested commands for {shell:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fish_completions_do_not_evaluate_value_descriptions() {
+        let mut output = Vec::new();
+        generate_completions(CompletionShell::Fish, &mut output);
+        let output = String::from_utf8(output).unwrap();
+        assert!(!output.contains("$("));
+        assert!(!output.contains("$GITHUB_ENV"));
+    }
+
+    #[test]
+    fn completion_scripts_include_descriptions_where_supported() {
+        let shells = [
+            CompletionShell::Elvish,
+            CompletionShell::Fish,
+            CompletionShell::Nushell,
+            CompletionShell::PowerShell,
+            CompletionShell::Zsh,
+        ];
+
+        for shell in shells {
+            let mut output = Vec::new();
+            generate_completions(shell, &mut output);
+            let output = String::from_utf8(output).unwrap();
+            assert!(
+                output.contains("Initialize a new secretspec.toml"),
+                "missing descriptions for {shell:?}"
+            );
+        }
     }
 
     #[test]

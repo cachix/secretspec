@@ -89,7 +89,20 @@ jobs:
         run: |
           set -euo pipefail
           export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
-          monochange run release
+          # A changeset that only bumps `docs`/`none` produces no releaseable
+          # packages; monochange exits non-zero with that message. Treat that
+          # specific case as "nothing to release" rather than failing the
+          # workflow, so a docs-only changeset can sit until a releaseable one
+          # arrives. Any other failure is re-raised.
+          if ! output="$(monochange run release 2>&1)"; then
+            if printf '%s\n' "$output" | grep -q 'no releaseable packages were found in discovered changesets'; then
+              echo "No releaseable packages in current changesets; skipping release PR refresh."
+              exit 0
+            fi
+            printf '%s\n' "$output" >&2
+            exit 1
+          fi
+          printf '%s\n' "$output"
         shell: devenv shell -- bash -e {0}
 
       - name: skip refresh without changesets

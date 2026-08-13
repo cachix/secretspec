@@ -30,10 +30,10 @@ repo = "monosecret"
 [cli.release]
 help_text = "Prepare, format, commit, and open the release pull request."
 steps = [
-  { name = "prepare release", type = "PrepareRelease", inputs = { format = "json" } },
-  { name = "format release commit", type = "Command", shell = "bash", command = "fix:format" },
-  { name = "commit release", type = "CommitRelease", inputs = { stage_all = true, no_verify = true } },
-  { name = "open release request", type = "OpenReleaseRequest", inputs = { stage_all = true, no_verify = true } },
+  { name = "prepare release", type = "PrepareRelease", allow_empty_changesets = true, inputs = { format = "json" } },
+  { name = "format release commit", type = "Command", shell = "bash", command = "fix:format", when = "{{ number_of_changesets > 0 }}" },
+  { name = "commit release", type = "CommitRelease", inputs = { stage_all = true, no_verify = true }, when = "{{ number_of_changesets > 0 }}" },
+  { name = "open release request", type = "OpenReleaseRequest", inputs = { stage_all = true, no_verify = true }, when = "{{ number_of_changesets > 0 }}" },
 ]
 
 [package."rust:monosecret"]

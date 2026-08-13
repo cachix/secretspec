@@ -113,7 +113,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo +stable build --locked --release -p monosecret_ffi --target "$RUST_TARGET"
+          cargo build --locked --release -p monosecret_ffi --target "$RUST_TARGET"
 
           asset_dir="$RUNNER_TEMP/monosecret-ffi-assets"
           stem="monosecret-ffi-${RUST_TARGET}-${RELEASE_TAG}"

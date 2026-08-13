@@ -6,8 +6,8 @@
 //! than placed in process arguments.
 
 use super::{Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl};
-use crate::config::{NativeAddress, Secret};
-use crate::{Result, SecretSpecError};
+use crate::config::NativeAddress;
+use crate::{Result, Secret, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -381,11 +381,7 @@ impl Provider for FlyProvider {
             .into_iter()
             .map(|listed| {
                 let name = listed.name;
-                let secret = Secret {
-                    description: Some(format!("{name} Fly.io app secret")),
-                    required: Some(true),
-                    ..Default::default()
-                };
+                let secret = Secret::required(format!("{name} Fly.io app secret"));
                 (name, secret)
             })
             .collect())

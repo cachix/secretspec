@@ -697,14 +697,7 @@ impl Provider for PassboltProvider {
                 continue;
             };
             if declarations
-                .insert(
-                    key.to_string(),
-                    Secret {
-                        description: Some(format!("{key} secret")),
-                        required: Some(true),
-                        ..Default::default()
-                    },
-                )
+                .insert(key.to_string(), Secret::required(format!("{key} secret")))
                 .is_some()
             {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(

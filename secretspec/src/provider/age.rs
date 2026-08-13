@@ -27,8 +27,8 @@ use super::{
     Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl, credential_or_env,
     flat_item,
 };
-use crate::config::{NativeAddress, Secret};
-use crate::{Result, SecretSpecError};
+use crate::config::NativeAddress;
+use crate::{Result, Secret, SecretSpecError};
 use age::armor::{ArmoredReader, ArmoredWriter, Format};
 use age::{Decryptor, Encryptor, Identity, IdentityFile, NoCallbacks, Recipient};
 use secrecy::{ExposeSecret, SecretString};
@@ -474,11 +474,7 @@ impl Provider for AgeProvider {
             .load()?
             .into_keys()
             .map(|key| {
-                let secret = Secret {
-                    description: Some(format!("{} secret", key)),
-                    required: Some(true),
-                    ..Default::default()
-                };
+                let secret = Secret::required(format!("{} secret", key));
                 (key, secret)
             })
             .collect())

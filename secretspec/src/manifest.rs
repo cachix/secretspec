@@ -153,12 +153,12 @@ pub(crate) struct CompiledConstraints {
 
 /// A parsed manifest reduced to the semantics shared by runtime and codegen.
 #[derive(Debug, Clone)]
-pub(crate) struct CompiledManifest {
+pub(crate) struct CompiledSpec {
     pub(crate) project: String,
     pub(crate) profiles: BTreeMap<String, CompiledProfile>,
 }
 
-impl CompiledManifest {
+impl CompiledSpec {
     pub(crate) fn compile(config: &Config) -> Self {
         let default_profile = config.profiles.get("default");
         let mut profiles = BTreeMap::new();

@@ -21,7 +21,6 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use secretspec::Config;
 use secretspec::codegen::{CodegenIr, IrField, build_ir, capitalize};
 use std::collections::{BTreeMap, HashSet};
 use syn::{LitStr, parse_macro_input};
@@ -280,16 +279,18 @@ pub fn declare_secrets(input: TokenStream) -> TokenStream {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
     let full_path = std::path::Path::new(&manifest_dir).join(&path);
 
-    let config: Config = match Config::try_from(full_path.as_path()) {
-        Ok(config) => config,
+    let spec = match secretspec::__private::load_for_codegen(full_path.as_path()) {
+        Ok(spec) => spec,
         Err(e) => {
             let error = format!("Failed to parse TOML: {}", e);
             return quote! { compile_error!(#error); }.into();
         }
     };
 
+    let ir = build_ir(&spec);
+
     // Validate the configuration at compile time
-    if let Err(validation_errors) = validate_config_for_codegen(&config) {
+    if let Err(validation_errors) = validate_config_for_codegen(&ir) {
         let error_message = format!(
             "Invalid secretspec configuration:\n{}",
             validation_errors.join("\n")
@@ -298,7 +299,7 @@ pub fn declare_secrets(input: TokenStream) -> TokenStream {
     }
 
     // Generate all the code
-    let output = generate_secret_spec_code(config);
+    let output = generate_secret_spec_code(ir);
     output.into()
 }
 
@@ -325,14 +326,14 @@ pub fn declare_secrets(input: TokenStream) -> TokenStream {
 ///
 /// - `Ok(())` if validation passes
 /// - `Err(Vec<String>)` containing all validation errors if any are found
-fn validate_config_for_codegen(config: &Config) -> Result<(), Vec<String>> {
+fn validate_config_for_codegen(ir: &CodegenIr) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
 
     // Validate secret names produce valid Rust identifiers
-    validate_rust_identifiers(config, &mut errors);
+    validate_rust_identifiers(ir, &mut errors);
 
     // Validate profile names produce valid Rust enum variants
-    validate_profile_identifiers(config, &mut errors);
+    validate_profile_identifiers(ir, &mut errors);
 
     if errors.is_empty() {
         Ok(())
@@ -358,7 +359,7 @@ fn validate_config_for_codegen(config: &Config) -> Result<(), Vec<String>> {
 /// - Secret names with invalid characters (e.g., "my-secret" with hyphen)
 /// - Secret names that are Rust keywords (e.g., "TYPE", "IMPL")
 /// - Multiple secrets producing the same field name (e.g., "API_KEY" and "api_key")
-fn validate_rust_identifiers(config: &Config, errors: &mut Vec<String>) {
+fn validate_rust_identifiers(ir: &CodegenIr, errors: &mut Vec<String>) {
     let rust_keywords = [
         "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
         "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
@@ -367,10 +368,12 @@ fn validate_rust_identifiers(config: &Config, errors: &mut Vec<String>) {
         "final", "macro", "override", "priv", "typeof", "unsized", "virtual", "yield", "try",
     ];
 
-    for (profile_name, profile_config) in &config.profiles {
+    for profile in &ir.profile_fields {
+        let profile_name = &profile.name;
         let mut profile_field_names = HashSet::new();
 
-        for secret_name in profile_config.secrets.keys() {
+        for field in &profile.fields {
+            let secret_name = &field.name;
             let field_name = secret_name.to_lowercase();
 
             // Check if it produces a valid Rust identifier
@@ -454,8 +457,8 @@ fn is_valid_rust_identifier(s: &str) -> bool {
 ///
 /// - Profile names that start with numbers (e.g., "1production")
 /// - Profile names with invalid characters (e.g., "prod-env")
-fn validate_profile_identifiers(config: &Config, errors: &mut Vec<String>) {
-    for profile_name in config.profiles.keys() {
+fn validate_profile_identifiers(ir: &CodegenIr, errors: &mut Vec<String>) {
+    for profile_name in &ir.profiles {
         let variant_name = capitalize(profile_name);
         if !is_valid_rust_identifier(&variant_name) {
             errors.push(format!(
@@ -1389,12 +1392,7 @@ mod builder_generation {
 /// 4. Generate SecretSpecProfile enum (profile-specific types)
 /// 5. Generate builder pattern implementation
 /// 6. Combine all components with necessary imports
-fn generate_secret_spec_code(config: Config) -> proc_macro2::TokenStream {
-    // Reduce the manifest to the shared codegen IR once. Every typing decision
-    // (union vs per-profile fields, optionality, as_path, profile list) comes
-    // from here, so this macro and the other-language emitters cannot drift.
-    let ir = build_ir(&config);
-
+fn generate_secret_spec_code(ir: CodegenIr) -> proc_macro2::TokenStream {
     let profile_variants = profile_variants_from_ir(&ir);
 
     // Union struct fields.

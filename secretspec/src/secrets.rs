@@ -8,7 +8,7 @@ use crate::config::{
     RequireReason, Resolved, SecretEncoding, SecretExtract,
 };
 use crate::error::{Result, SecretSpecError};
-use crate::manifest::{CompiledManifest, MissingPolicy};
+use crate::manifest::{CompiledSpec, MissingPolicy};
 use crate::plan::{PlannedSecret, ResolutionPlan, ResolvedCache, Route};
 use crate::provider::{
     Address, OwnedAddress, ProducedValuePersistence, Provider as ProviderTrait,
@@ -18,6 +18,7 @@ use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
 use crate::resolve::{
     NamedResolution, RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource,
 };
+use crate::spec::Spec;
 use crate::validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
 use colored::Colorize;
 use data_encoding::{
@@ -25,7 +26,6 @@ use data_encoding::{
 };
 use secrecy::{ExposeSecret, SecretSlice, SecretString};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::convert::TryFrom;
 use std::env;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
@@ -537,7 +537,7 @@ pub struct Secrets {
     config: Config,
     /// Effective profile semantics compiled once from `config` and shared by
     /// planning, runtime resolution, and inventory surfaces.
-    pub(crate) manifest: CompiledManifest,
+    pub(crate) manifest: CompiledSpec,
     /// Directory containing the loaded `secretspec.toml`. Relative filesystem
     /// paths held by file-backed providers (e.g. `dotenv`) are resolved against
     /// this rather than the process's current working directory, so running
@@ -770,7 +770,7 @@ impl Secrets {
         provider: Option<String>,
         profile: Option<String>,
     ) -> Self {
-        let manifest = CompiledManifest::compile(&config);
+        let manifest = CompiledSpec::compile(&config);
         Self {
             config,
             manifest,
@@ -828,13 +828,35 @@ impl Secrets {
     ///
     /// * `path` - Path to the `secretspec.toml` file
     pub fn load_from(path: &Path) -> Result<Self> {
-        let project_config = Config::try_from(path)?;
-        // Semantic validation (required vs default, ref coordinate rules,
-        // generate consistency) runs here so every CLI and SDK entry point
-        // enforces the same rules the config documents. The compiled manifest it
-        // produces is the one stored below, so the effective view is compiled
-        // exactly once per load.
-        let manifest = project_config.validate_and_compile()?;
+        let spec = Spec::try_from(path)?;
+        Self::from_spec(spec)
+    }
+
+    /// Creates a resolver from a Rust-built or parsed [`Spec`].
+    ///
+    /// A spec loaded from a path with [`Spec::try_from`] retains the manifest's
+    /// directory for relative provider paths. Rust-built specs and TOML strings
+    /// use the process's current working directory. [`Self::from_spec_at`]
+    /// explicitly overrides either behavior.
+    ///
+    /// Available starting with SecretSpec 0.20.
+    pub fn from_spec(spec: Spec) -> Result<Self> {
+        let base_dir = spec.base_dir.clone().unwrap_or_else(|| PathBuf::from("."));
+        Self::from_spec_at(spec, base_dir)
+    }
+
+    /// Creates a resolver from a [`Spec`] with an explicit logical base directory.
+    ///
+    /// `base_dir` resolves relative paths held by providers, just as
+    /// [`Self::load_from`] uses the directory containing `secretspec.toml`. The
+    /// path is not canonicalized and does not need to exist at construction
+    /// time.
+    ///
+    /// Available starting with SecretSpec 0.20.
+    pub fn from_spec_at(spec: Spec, base_dir: impl Into<PathBuf>) -> Result<Self> {
+        // A Spec already owns the exact compiled view produced by validation,
+        // so file and Rust frontends both arrive here without recompiling.
+        let (config, manifest) = spec.into_parts();
         let global_config = GlobalConfig::load()?;
         // Auditing is a per-machine concern configured in the user-global config
         // (`[audit]` in ~/.config/secretspec/config.toml), not the project. It is
@@ -845,21 +867,11 @@ impl Secrets {
                 .and_then(|g| g.audit.clone())
                 .unwrap_or_default(),
         );
-        // Directory the config lives in, used to resolve relative provider
-        // paths (e.g. `dotenv:.config/.env`) against the project root instead
-        // of the current working directory. Kept logical (not canonicalized) so
-        // a relative `--file` stays relative to the CWD and Windows extended
-        // (`\\?\`) prefixes are never introduced.
-        let config_dir = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-
         Ok(Self {
-            require_reason: project_config.project.require_reason.unwrap_or_default(),
-            config: project_config,
+            require_reason: config.project.require_reason.unwrap_or_default(),
+            config,
             manifest,
-            config_dir,
+            config_dir: base_dir.into(),
             global_config,
             provider: None,
             profile: None,
@@ -6319,6 +6331,32 @@ fn gha_heredoc_delimiter(value: &str) -> String {
         if !value.lines().any(|line| line == delimiter) {
             return delimiter;
         }
+    }
+}
+
+#[cfg(test)]
+mod construction_tests {
+    use super::*;
+
+    #[test]
+    fn from_spec_uses_explicit_logical_base_directory() {
+        let spec = Spec::from_toml(
+            r#"
+            [project]
+            name = "embedded"
+            revision = "1.0"
+            require_reason = false
+
+            [profiles.default]
+            TOKEN = { description = "Embedded token", required = false }
+        "#,
+        )
+        .unwrap();
+        let base_dir = PathBuf::from("a-base-directory-that-does-not-exist");
+
+        let secrets = Secrets::from_spec_at(spec, &base_dir).unwrap();
+
+        assert_eq!(secrets.config_dir, base_dir);
     }
 }
 

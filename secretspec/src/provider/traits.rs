@@ -512,10 +512,7 @@ pub trait Provider: Send + Sync {
     ///     println!("Found secret: {} = {:?}", name, secret);
     /// }
     /// ```
-    fn reflect(
-        &self,
-        _context: DiscoveryContext<'_>,
-    ) -> Result<HashMap<String, crate::config::Secret>> {
+    fn reflect(&self, _context: DiscoveryContext<'_>) -> Result<HashMap<String, crate::Secret>> {
         Err(SecretSpecError::ProviderOperationFailed(format!(
             "Provider '{}' does not support reflection",
             self.name()
@@ -773,10 +770,7 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn set_profile(&self, profile: &str) {
         (**self).set_profile(profile);
     }
-    fn reflect(
-        &self,
-        context: DiscoveryContext<'_>,
-    ) -> Result<HashMap<String, crate::config::Secret>> {
+    fn reflect(&self, context: DiscoveryContext<'_>) -> Result<HashMap<String, crate::Secret>> {
         (**self).reflect(context)
     }
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {

@@ -1,6 +1,6 @@
 [package]
 name = "monosecret_ffi"
-version.workspace = true
+version = "0.2.0"
 edition.workspace = true
 repository = "https://github.com/ifiokjr/monosecret/tree/main/crates/monosecret_ffi"
 description = "C ABI for Monosecret: resolve secrets from any language"

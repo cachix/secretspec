@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.2.0) (2026-08-13)
+
+### Documentation
+
+#### Fix the `depends_on` docs example and validate docs snippets
+
+The `depends_on` example in the configuration reference used a
+`service_token = { secret = "..." }` shape that did not deserialize into
+`ProviderDependency`, so anyone copying it hit a parse error. Use the correct
+`secret = "..."` form, make the example a complete copy-pasteable config, and
+document the optional `as` field for injecting a dependency under a different
+env-var name.
+
+Add an integration test (`docs_snippets`) that scans the docs for TOML snippets
+marked with an invisible `<!-- monosecret-test: ... -->` marker and parses /
+validates them against the `Config`, `GlobalConfig`, and `Project` schemas, so
+reference examples can't silently drift from the schema again. The harness is
+opt-in (no false positives on partial snippets) and a no-op when the docs tree
+isn't present.
+
+_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #27](https://github.com/ifiokjr/monosecret/pull/27)
+
+#### Repair stale documentation links and installation guidance
+
+Point historical issue references to the original `cachix/secretspec` repository, restore the original SecretSpec announcement and devenv integration URLs, and replace the unavailable custom installer with the published `@monosecret/cli` npm package.
+
+_Owner:_ Ifiok Jr. · _Review:_ [PR #29](https://github.com/ifiokjr/monosecret/pull/29) · _Related issues:_ [#23](https://github.com/ifiokjr/monosecret/issues/23), [#27](https://github.com/ifiokjr/monosecret/issues/27), [#28](https://github.com/ifiokjr/monosecret/issues/28)
+
 ## [0.1.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.1.0) (2026-07-05)
 
 ### Features

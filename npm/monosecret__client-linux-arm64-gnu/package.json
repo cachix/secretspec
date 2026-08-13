@@ -1,6 +1,6 @@
 {
   "name": "@monosecret/client-linux-arm64-gnu",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "cpu": [
     "arm64"

@@ -309,6 +309,9 @@ secretspec run -- command        # Run command with secrets as env vars
 
 # Inspect access
 secretspec audit                 # Show the local audit log of secret access
+
+# Enable contextual Fish completions for this session (0.20+)
+secretspec completions fish | source
 ```
 
 See the [full CLI reference](https://secretspec.dev/reference/cli) for all commands and options.

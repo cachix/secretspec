@@ -15,6 +15,9 @@ edition = "2024"
 
 [workspace.dependencies]
 clap = { version = "4.0", features = ["derive", "env"] }
+clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
+clap_complete_nushell = "4.6"
+is_executable = "1.0"
 keyring = "4.1.6"
 keepass = { version = "0.13.17", features = ["save_kdbx4"] }
 keeper-secrets-manager-core = { version = "17.3.0", default-features = false, features = ["blocking"] }

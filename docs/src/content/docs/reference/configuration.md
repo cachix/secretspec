@@ -9,6 +9,8 @@ The `monosecret.toml` file defines project-specific secret requirements. This fi
 
 ### [project] Section
 
+<!-- monosecret-test: project -->
+
 ```toml
 [project]
 name = "my-app"           # Project name (required)
@@ -154,6 +156,8 @@ Provider aliases may be declared in two places:
 
 On conflict the project-level alias wins, so a stale local config cannot silently shadow the team's mapping.
 
+<!-- monosecret-test: providers -->
+
 ```toml title="monosecret.toml"
 [providers]
 prod_vault = "onepassword://vault/Production"
@@ -167,6 +171,8 @@ DATABASE_URL = { description = "Production DB", providers = [
   "keyring",
 ] }
 ```
+
+<!-- monosecret-test: global -->
 
 ```toml title="~/.config/monosecret/config.toml"
 [defaults]
@@ -369,14 +375,30 @@ Project-level `[providers]` entries can also be tables with an optional
 `depends_on` section to declare that a provider depends on another secret
 for authentication:
 
+<!-- monosecret-test: validate -->
+
 ```toml
+[project]
+name = "myapp"
+revision = "1.0"
+
 [providers]
 keyring = "keyring://" # Simple alias — backward compatible
 
 [providers.op-dev]
 uri = "onepassword://Development"
 [[providers.op-dev.depends_on]]
-service_token = { secret = "OP_SERVICE_ACCOUNT_TOKEN" }
+secret = "OP_SERVICE_ACCOUNT_TOKEN"
+
+[profiles.default]
+# The dependency secret must itself be declared and resolved from a
+# bootstrap provider (one without its own `depends_on`), such as keyring.
+OP_SERVICE_ACCOUNT_TOKEN = { providers = [
+  "keyring",
+], description = "1Password service account token" }
+DATABASE_URL = { providers = [
+  "op-dev",
+], description = "Database connection string" }
 ```
 
 | Field        | Type   | Required | Description                                    |
@@ -386,9 +408,10 @@ service_token = { secret = "OP_SERVICE_ACCOUNT_TOKEN" }
 
 Each entry under `depends_on` has:
 
-| Field    | Type   | Required | Description                                        |
-| -------- | ------ | -------- | -------------------------------------------------- |
-| `secret` | string | Yes      | The Monosecret secret name that provides the value |
+| Field    | Type   | Required | Description                                                                                                                                      |
+| -------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `secret` | string | Yes      | The Monosecret secret name that provides the value                                                                                               |
+| `as`     | string | No       | Environment variable name to inject the value as. Defaults to `secret` (e.g. inject a per-account keyring secret as `OP_SERVICE_ACCOUNT_TOKEN`). |
 
 ### Audit Logging
 

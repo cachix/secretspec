@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The Fly.io `flyctl` provider publishes and deletes application secrets with
+  `secretspec set` and `secretspec delete`, and discovers their names with
+  `init --from`. Fly.io never exposes plaintext secret values, so the provider
+  clearly rejects read operations and CLI guidance recommends only supported
+  workflows. Writes keep values off process arguments by streaming them to
+  `flyctl secrets set` over stdin, refuse boundary whitespace that `flyctl`
+  would silently trim, and scrub ambient Fly token variables before injecting
+  the token selected through the provider credential mechanism.
 - `secretspec completions <shell>` generates completion scripts for Bash,
   Elvish, Fish, Nushell, PowerShell, and Zsh directly from the CLI definition,
   including descriptions and contextual suggestions for profiles, scopes,

@@ -22,6 +22,7 @@
 //! - [`env::EnvProvider`]: Environment variables (read-only)
 //! - [`null::NullProvider`]: Defaults, generation, or run prompts without storage (0.19+)
 //! - [`file::FileProvider`]: Plaintext file-per-secret storage (0.19+)
+//! - [`flyctl::FlyctlProvider`]: Fly.io application secrets, write-only (0.20+)
 //! - [`pass::PassProvider`]: Pass integration
 //! - [`gopass::GoPassProvider`]: Gopass integration
 //! - [`systemd_credential::SystemdCredentialProvider`]: systemd service credentials (0.17+)
@@ -290,6 +291,7 @@ pub mod dashlane;
 pub mod dotenv;
 pub mod env;
 pub mod file;
+pub mod flyctl;
 #[cfg(feature = "gcsm")]
 pub mod gcsm;
 pub mod gopass;
@@ -514,7 +516,9 @@ pub(crate) fn flat_item<'a, P: Provider + ?Sized>(
 }
 
 /// Macro support types
-pub use macros::{PROVIDER_REGISTRY, ProviderRegistration, declared_flag};
+pub use macros::{
+    PROVIDER_REGISTRY, ProviderRegistration, declared_flag, declared_read_capability,
+};
 
 /// Returns a list of all available providers with their metadata.
 ///
@@ -588,6 +592,17 @@ pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
 pub(crate) fn credential_names_for_spec(spec: &str) -> &'static [&'static str] {
     let (scheme, _) = split_spec(spec);
     registration_for_scheme(scheme).map_or(&[], |reg| reg.credential_names)
+}
+
+/// Whether the provider named by `spec` can return plaintext secret values.
+///
+/// Read from registration metadata so CLI guidance can inspect an alias target
+/// without constructing it, fetching its credentials, or running preflight.
+/// Unknown schemes return `false`; callers validate provider specs separately.
+#[cfg_attr(not(any(feature = "cli", test)), allow(dead_code))]
+pub(crate) fn spec_provider_reads(spec: &str) -> bool {
+    let (scheme, _) = split_spec(spec);
+    registration_for_scheme(scheme).is_some_and(|reg| reg.reads)
 }
 
 /// Whether the provider `spec` names implements [`Provider::delete`].

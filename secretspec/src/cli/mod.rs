@@ -894,6 +894,7 @@ pub fn main() -> Result<()> {
 
             // Create provider from the specification string.
             let provider: Box<dyn Provider> = from.as_str().try_into().into_diagnostic()?;
+            let source_reads = crate::provider::spec_provider_reads(&from);
 
             // Discover declarations in the namespace the new manifest will use.
             let secrets = provider
@@ -945,18 +946,34 @@ pub fn main() -> Result<()> {
             // If we discovered a populated provider, explain how to copy its
             // values after reviewing the declarations.
             if secret_count > 0 {
-                println!("\nTo migrate your secrets from {}:", from);
-                println!("  1. Review secretspec.toml and adjust as needed");
-                println!(
-                    "  2. {}    # Import secret values",
-                    migration_command(&from, &profile)
-                );
+                if source_reads {
+                    println!("\nTo migrate your secrets from {}:", from);
+                    println!("  1. Review secretspec.toml and adjust as needed");
+                    println!(
+                        "  2. {}    # Import secret values",
+                        migration_command(&from, &profile)
+                    );
+                } else {
+                    println!(
+                        "\nDiscovered secret names from {from}, but this write-only provider cannot return plaintext values to import."
+                    );
+                }
             }
 
             println!("\nNext steps:");
-            println!("  1. secretspec config global init    # Set up user defaults (0.17+)");
-            println!("  2. secretspec check          # Verify all secrets and set them");
-            println!("  3. secretspec run -- your-command  # Run with secrets");
+            if source_reads {
+                println!("  1. secretspec config global init    # Set up user defaults (0.17+)");
+                println!("  2. secretspec check          # Verify all secrets and set them");
+                println!("  3. secretspec run -- your-command  # Run with secrets");
+            } else {
+                println!("  1. Review secretspec.toml and adjust the discovered names");
+                println!(
+                    "  2. secretspec config global init    # Set up defaults for readable providers"
+                );
+                println!(
+                    "  3. Use secretspec set with an explicit provider to publish secret values"
+                );
+            }
 
             Ok(())
         }
@@ -1176,6 +1193,9 @@ pub fn main() -> Result<()> {
                         let app = load_secrets(&cli.file, &cli.reason)?;
                         let credentials =
                             app.declared_provider_credentials(&name).into_diagnostic()?;
+                        let provider_reads = crate::provider::spec_provider_reads(
+                            &app.resolve_provider_spec(name.clone()),
+                        );
                         if credentials.is_empty() {
                             println!("Provider alias '{name}' declares no credentials.");
                             return Ok(());
@@ -1201,9 +1221,15 @@ pub fn main() -> Result<()> {
                                 .into_diagnostic()?;
                             println!("✓ stored {credential_name} in {location}");
                         }
-                        println!(
-                            "\nRun 'secretspec check --provider {name}' to verify authentication."
-                        );
+                        if provider_reads {
+                            println!(
+                                "\nRun 'secretspec check --provider {name}' to verify authentication."
+                            );
+                        } else {
+                            println!(
+                                "\nProvider alias '{name}' is write-only; authentication will be verified on its next write."
+                            );
+                        }
                         Ok(())
                     }
                 }

@@ -303,6 +303,39 @@ passbolt://?template=teams/{project}/{profile}/{key}   # Replace the convention 
 
 **Write limitation**: `go-passbolt-cli` accepts created/updated values only as flags, so a value being written is visible in the child process argv until it exits. See the [Passbolt provider security notes](/providers/passbolt/#security-considerations-and-limitations).
 
+## Fly.io secrets provider (0.20+)
+
+**Availability**: Added in SecretSpec 0.20.
+
+**URI**: `flyctl://APP[?stage=true][&detach=true]` - Publishes application
+secrets through `flyctl secrets`
+
+```text
+flyctl://my-app                    # Update Machines and monitor the rollout
+flyctl://my-app?stage=true         # Register changes without deploying them
+flyctl://my-app?detach=true        # Start the rollout without monitoring it
+```
+
+**Features (0.20+)**: Write, delete, provider credentials, and name-only
+discovery through `init --from`; secret values are sent to `flyctl` over stdin
+instead of process arguments
+
+**Prerequisites (0.20+)**: `flyctl`, an authenticated login or an
+`access_token` provider credential (`FLY_API_TOKEN` and `FLY_ACCESS_TOKEN` are
+fallbacks), and permission to manage the app named in the URI
+
+**Storage (0.20+)**: Fly app secret `{key}`. The app URI, rather than the
+SecretSpec project or profile name, supplies isolation.
+
+**Read limitation**: Fly.io exposes secret names and digests but never
+plaintext values. `get`, `check`, `run`, fallback reads, generation-on-miss,
+and prompting-on-miss cannot use this write-only provider. See the
+[Fly.io provider guide](/providers/flyctl/).
+
+**Write limitation (0.20+)**: `flyctl` trims values read from stdin. SecretSpec
+rejects leading or trailing whitespace rather than silently publishing a
+different value.
+
 ## Google Cloud Secret Manager Provider
 
 **URI**: `gcsm://PROJECT_ID` - Stores secrets in Google Cloud Secret Manager
@@ -617,6 +650,7 @@ $ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Gopass | ✅ GPG encryption | Local filesystem | ❌ No |
 | Proton Pass | ✅ End-to-end | Cloud (Proton) | ✅ Yes |
 | Passbolt (0.19+) | ✅ End-to-end | Self-hosted (Passbolt server) | ✅ Yes |
+| Fly.io secrets (0.20+) | ✅ Fly.io-managed | Cloud (Fly.io app vault) | ✅ Yes |
 | LastPass | ✅ End-to-end | Cloud (LastPass) | ✅ Yes |
 | Dashlane (0.18+) | ✅ End-to-end | Cloud (Dashlane), synced locally | Yes — `dcli` auto-syncs hourly |
 | 1Password | ✅ End-to-end | Cloud (1Password) | ✅ Yes |

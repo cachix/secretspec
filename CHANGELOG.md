@@ -29,7 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without them (measured: 153-secret resolve with 3 missing items dropped
   from ~32s to ~6s). Authentication and unavailable-CLI errors during batch
   resolution now fail immediately instead of retrying every secret
-  individually.
+  individually. Vault inventories run with bounded concurrency, and recovery
+  preserves references whose rendered paths have multiple valid item/section
+  interpretations.
 - OnePassword optional references whose item names resemble authentication
   diagnostics are omitted as missing instead of aborting batch resolution.
 

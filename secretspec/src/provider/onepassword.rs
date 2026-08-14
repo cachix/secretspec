@@ -84,15 +84,24 @@ pub struct SecretReference {
     pub field: String,
 }
 
-/// A field reference queued for `op inject`, carrying the vault and item
-/// strings the render site already resolved. The URI is built from these
-/// same strings and is never re-parsed to recover them: item titles may
-/// contain `/`, which would make splitting the URI ambiguous.
+/// One possible vault/item interpretation of a rendered `op://` URI.
+///
+/// Distinct structured addresses can render the same URI when item or section
+/// names contain `/`, so recovery must retain every interpretation instead of
+/// trusting whichever address happened to be seen first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BatchRefCandidate {
+    vault: String,
+    item: String,
+}
+
+/// A unique rendered field reference queued for `op inject` together with all
+/// structured addresses that produced it. The URI is never re-parsed to recover
+/// these coordinates because `/` makes that operation ambiguous.
 #[derive(Debug, Clone)]
 struct BatchRef {
     uri: String,
-    vault: String,
-    item: String,
+    candidates: Vec<BatchRefCandidate>,
 }
 
 /// Collision-resistant framing around each `op inject` expression.
@@ -782,43 +791,66 @@ impl OnePasswordProvider {
             title: String,
         }
 
-        let vaults: HashSet<&str> = refs.iter().map(|r| r.vault.as_str()).collect();
+        let vaults: Vec<&str> = refs
+            .iter()
+            .flat_map(|r| {
+                r.candidates
+                    .iter()
+                    .map(|candidate| candidate.vault.as_str())
+            })
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let inventories = super::map_concurrently(
+            &vaults,
+            super::get_each_concurrency(),
+            |vault| -> Result<Option<(HashSet<String>, HashSet<String>)>> {
+                let output = match self.execute_op_command(
+                    &[
+                        "item",
+                        "list",
+                        "--vault",
+                        vault,
+                        "--include-archive",
+                        "--format",
+                        "json",
+                    ],
+                    None,
+                ) {
+                    Ok(output) => output,
+                    Err(error) if inject_error_is_recoverable(&error) => return Ok(None),
+                    Err(error) => return Err(error),
+                };
+                let items: Vec<ListItem> = match serde_json::from_str(&output) {
+                    Ok(items) => items,
+                    Err(_) => return Ok(None),
+                };
+                let mut ids = HashSet::new();
+                let mut titles = HashSet::new();
+                for entry in items {
+                    ids.insert(entry.id);
+                    titles.insert(entry.title.trim().to_lowercase());
+                }
+                Ok(Some((ids, titles)))
+            },
+        );
+
         let mut known: HashMap<&str, (HashSet<String>, HashSet<String>)> = HashMap::new();
-        for vault in vaults {
-            let output = match self.execute_op_command(
-                &[
-                    "item",
-                    "list",
-                    "--vault",
-                    vault,
-                    "--include-archive",
-                    "--format",
-                    "json",
-                ],
-                None,
-            ) {
-                Ok(output) => output,
-                Err(error) if inject_error_is_recoverable(&error) => return Ok(None),
-                Err(error) => return Err(error),
+        for (vault, inventory) in vaults.into_iter().zip(inventories) {
+            let Some(inventory) = inventory? else {
+                return Ok(None);
             };
-            let items: Vec<ListItem> = match serde_json::from_str(&output) {
-                Ok(items) => items,
-                Err(_) => return Ok(None),
-            };
-            let mut ids = HashSet::new();
-            let mut titles = HashSet::new();
-            for entry in items {
-                ids.insert(entry.id);
-                titles.insert(entry.title.trim().to_lowercase());
-            }
-            known.insert(vault, (ids, titles));
+            known.insert(vault, inventory);
         }
 
         Ok(Some(
             refs.iter()
                 .map(|r| {
-                    let (ids, titles) = &known[r.vault.as_str()];
-                    ids.contains(&r.item) || titles.contains(&r.item.trim().to_lowercase())
+                    r.candidates.iter().any(|candidate| {
+                        let (ids, titles) = &known[candidate.vault.as_str()];
+                        ids.contains(&candidate.item)
+                            || titles.contains(&candidate.item.trim().to_lowercase())
+                    })
                 })
                 .collect(),
         ))
@@ -1390,14 +1422,20 @@ impl Provider for OnePasswordProvider {
             match reference {
                 Some(reference) => {
                     let reference_uri = Self::reference_uri(&vault, &reference);
+                    let candidate = BatchRefCandidate {
+                        vault,
+                        item: reference.item,
+                    };
                     if let Some(index) = field_ref_indices.get(&reference_uri) {
                         field_refs[*index].1.push(name.to_string());
+                        if !field_refs[*index].0.candidates.contains(&candidate) {
+                            field_refs[*index].0.candidates.push(candidate);
+                        }
                     } else {
                         field_ref_indices.insert(reference_uri.clone(), field_refs.len());
                         let batch_ref = BatchRef {
                             uri: reference_uri,
-                            vault: vault.clone(),
-                            item: reference.item.clone(),
+                            candidates: vec![candidate],
                         };
                         field_refs.push((batch_ref, vec![name.to_string()]));
                     }
@@ -2179,8 +2217,10 @@ mod tests {
         let refs: Vec<BatchRef> = (0..10)
             .map(|index| BatchRef {
                 uri: format!("op://Personal/Item/field-{index}"),
-                vault: "Personal".to_string(),
-                item: "Item".to_string(),
+                candidates: vec![BatchRefCandidate {
+                    vault: "Personal".to_string(),
+                    item: "Item".to_string(),
+                }],
             })
             .collect();
         let values = provider.read_reference_uris(&refs).unwrap();
@@ -2365,6 +2405,76 @@ mod tests {
     }
 
     #[test]
+    fn recovery_retains_all_item_candidates_for_an_ambiguous_uri() {
+        use std::sync::{Arc, Mutex};
+
+        let calls = Arc::new(Mutex::new(Vec::<(Vec<String>, Option<String>)>::new()));
+        let observed = Arc::clone(&calls);
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new(move |command, stdin| {
+            let args = command_args(command);
+            observed
+                .lock()
+                .unwrap()
+                .push((args.clone(), stdin.map(str::to_string)));
+            match args.first().map(String::as_str) {
+                Some("inject") => Err(SecretSpecError::ProviderOperationFailed(
+                    "one referenced item is missing".to_string(),
+                )),
+                Some("item") => Ok(r#"[{"id":"foo-id","title":"Foo"}]"#.to_string()),
+                Some("read") => {
+                    assert_eq!(
+                        args,
+                        ["read", "--no-newline", "op://Personal/Foo/Bar/password"]
+                    );
+                    Ok("section value".to_string())
+                }
+                _ => unreachable!("unexpected mocked command"),
+            }
+        }));
+
+        let slash_item = crate::config::NativeAddress {
+            item: "Foo/Bar".to_string(),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+        let sectioned = crate::config::NativeAddress {
+            item: "Foo".to_string(),
+            section: Some("Bar".to_string()),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+        let ghost = crate::config::NativeAddress {
+            item: "Ghost".to_string(),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+        let results = provider
+            .get_many(&[
+                ("SLASH_ITEM", Address::Native(&slash_item)),
+                ("SECTIONED", Address::Native(&sectioned)),
+                ("GHOST", Address::Native(&ghost)),
+            ])
+            .unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 3, "inject, vault inventory, retained read");
+        assert_eq!(
+            calls[0]
+                .1
+                .as_deref()
+                .unwrap()
+                .matches("{{ op://Personal/Foo/Bar/password }}")
+                .count(),
+            1,
+            "the shared rendered URI remains deduplicated"
+        );
+        assert!(secret_matches(&results, "SLASH_ITEM", "section value"));
+        assert!(secret_matches(&results, "SECTIONED", "section value"));
+        assert!(!results.contains_key("GHOST"));
+    }
+
+    #[test]
     fn missing_item_check_is_case_insensitive_and_retains_match() {
         use std::sync::{Arc, Mutex};
 
@@ -2540,6 +2650,70 @@ mod tests {
             "SECOND",
             "value-for-op://Work/Secret/value"
         ));
+    }
+
+    #[test]
+    fn multi_vault_recovery_bounds_inventory_concurrency() {
+        use std::{
+            sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering},
+            },
+            time::Duration,
+        };
+
+        let _lock = crate::tests::scrub_resolution_env();
+        let _concurrency =
+            crate::tests::EnvVarGuard::set(super::super::GET_EACH_CONCURRENCY_ENV, "2");
+
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let inventories = Arc::new(AtomicUsize::new(0));
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new({
+            let active = Arc::clone(&active);
+            let peak = Arc::clone(&peak);
+            let inventories = Arc::clone(&inventories);
+            move |command, _stdin| {
+                let args = command_args(command);
+                match args.first().map(String::as_str) {
+                    Some("inject") => Err(SecretSpecError::ProviderOperationFailed(
+                        "one field is missing".to_string(),
+                    )),
+                    Some("item") => {
+                        inventories.fetch_add(1, Ordering::SeqCst);
+                        let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(current, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(80));
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        Ok(r#"[{"id":"item-id","title":"Item"}]"#.to_string())
+                    }
+                    Some("read") => Ok(args.last().unwrap().clone()),
+                    _ => unreachable!("unexpected mocked command"),
+                }
+            }
+        }));
+
+        let refs: Vec<BatchRef> = (0..6)
+            .map(|index| BatchRef {
+                uri: format!("op://Vault-{index}/Item/password"),
+                candidates: vec![BatchRefCandidate {
+                    vault: format!("Vault-{index}"),
+                    item: "Item".to_string(),
+                }],
+            })
+            .collect();
+        provider.read_reference_uris(&refs).unwrap();
+
+        assert_eq!(inventories.load(Ordering::SeqCst), refs.len());
+        assert!(
+            peak.load(Ordering::SeqCst) <= 2,
+            "inventory exceeded the configured concurrency cap"
+        );
+        assert!(
+            peak.load(Ordering::SeqCst) >= 2,
+            "vault inventories unexpectedly ran serially"
+        );
     }
 
     #[test]
@@ -2838,8 +3012,10 @@ mod tests {
 
         let refs = vec![BatchRef {
             uri: "op://Personal/aaa111/password".to_string(),
-            vault: "Personal".to_string(),
-            item: "aaa111".to_string(),
+            candidates: vec![BatchRefCandidate {
+                vault: "Personal".to_string(),
+                item: "aaa111".to_string(),
+            }],
         }];
 
         let flags = provider

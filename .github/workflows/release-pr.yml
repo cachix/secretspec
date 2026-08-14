@@ -140,7 +140,7 @@ jobs:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
         run: |
           cargo run -p monosecret -- \
-            --reason "Load RELEASE_PR_MERGE_TOKEN to create release tags and dispatch publishing." \
+            --reason "Load RELEASE_PR_MERGE_TOKEN to create release tags and comment on released issues." \
             env --shell github --profile ci --include RELEASE_PR_MERGE_TOKEN
         shell: devenv shell -- bash -e {0}
 
@@ -185,18 +185,3 @@ jobs:
           export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
           monochange --log-level=debug step comment-released-issues --from-ref="HEAD" --auto-close-issues
         shell: devenv shell -- bash -e {0}
-
-      - name: trigger release workflow
-        if: steps.tag_release.outputs.is_release_commit == 'true'
-        run: |
-          set -euo pipefail
-          export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
-          tag="$(jq -r '.tags.monosecret // empty' /tmp/tag-report.json)"
-          if [ -z "$tag" ]; then
-            echo "No monosecret group tag found in tag-report.json, skipping release trigger"
-            exit 0
-          fi
-          echo "Triggering release workflow for tag $tag"
-          gh workflow run release.yml \
-            --repo "${{ github.repository }}" \
-            -f "tag=$tag"

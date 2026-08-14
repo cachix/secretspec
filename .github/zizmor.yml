@@ -11,7 +11,6 @@ rules:
       - ci.yml
       - docs.yml
       - publish.yml
-      - release.yml
 
   github-env:
     ignore:
@@ -22,14 +21,12 @@ rules:
   template-injection:
     ignore:
       - publish.yml
-      - release.yml
       - release-pr.yml
       - changeset-policy.yml
 
   artipacked:
     ignore:
       - publish.yml
-      - release.yml
 
   cache-poisoning:
     ignore:

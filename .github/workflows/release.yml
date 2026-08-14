@@ -221,32 +221,3 @@ jobs:
         run: gh release edit "$RELEASE_TAG" --draft=false --latest --repo "${{ github.repository }}"
         env:
           GH_TOKEN: ${{ github.token }}
-
-  trigger_publish:
-    needs: publish_draft
-    environment: publisher
-    env:
-      RELEASE_TAG: ${{ inputs.tag }}
-    permissions:
-      actions: write
-    if: >-
-      (github.repository_owner == 'ifiokjr' || github.repository_owner == 'monosecret') &&
-      startsWith(inputs.tag, 'v')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: trigger publish workflow
-        run: |
-          set -euo pipefail
-          for attempt in {1..12}; do
-            if git ls-remote --exit-code --tags "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
-              break
-            fi
-            echo "Release tag ${RELEASE_TAG} is not visible yet (attempt $attempt/12)."
-            sleep 5
-          done
-          gh workflow run publish.yml \
-            --repo "${{ github.repository }}" \
-            -f "tag=$RELEASE_TAG"
-        env:
-          GH_TOKEN: ${{ github.token }}

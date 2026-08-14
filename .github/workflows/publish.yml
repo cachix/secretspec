@@ -4,16 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to publish (for example v0.1.0)."
+        description: "Release tag to publish (for example v0.1.0). Only used for manual retries; pub.dev trusted publishing requires the tag-push event below."
         required: true
         type: string
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.tag || github.run_id }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
+  # Never cancel a publish mid-flight: a partial registry publish is worse than
+  # a queued run waiting its turn.
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -26,8 +31,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      RELEASE_TAG: ${{ inputs.tag }}
-      RELEASE_ASSET_TAG: ${{ inputs.tag }}
+      # On a tag push github.ref_name is the tag (e.g. v0.2.0); on a manual
+      # workflow_dispatch retry inputs.tag is the tag.
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      RELEASE_ASSET_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - name: validate release tag input
         run: |
@@ -40,7 +47,7 @@ jobs:
       - name: checkout release tag
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: setup
@@ -71,6 +78,25 @@ jobs:
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
+
+      - name: wait for release to be published
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for the release workflow to finish and publish the draft release for $RELEASE_TAG..."
+          for attempt in $(seq 1 45); do
+            if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null | grep -qx false; then
+              echo "Release $RELEASE_TAG is published (no longer draft) after $attempt attempt(s)."
+              exit 0
+            fi
+            echo "  attempt $attempt/45: release still draft or not yet created; sleeping 60s"
+            sleep 60
+          done
+          echo "::error::Release $RELEASE_TAG was not published within the wait window. Check the release workflow run." >&2
+          exit 1
+        shell: bash
 
       - name: download release assets
         env:
@@ -117,6 +143,9 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-oidc.outputs.token }}
           NPM_CONFIG_PROVENANCE: "true"
+          # Stream child publish output so any auth prompt or hang is visible in
+          # the job log instead of being buffered until process exit.
+          PUBLISH_STREAM_OUTPUT: "true"
         run: |
 
           monochange step publish-packages \

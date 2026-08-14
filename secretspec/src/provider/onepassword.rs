@@ -673,13 +673,18 @@ impl OnePasswordProvider {
                     .map(|value| Some(SecretString::new(value.into())))
                     .collect()
             }),
-            Err(_) => super::map_concurrently(
-                reference_uris,
-                super::get_each_concurrency(),
-                |reference_uri| self.read_reference_uri(reference_uri),
-            )
-            .into_iter()
-            .collect(),
+            Err(error) => {
+                if !inject_error_is_recoverable(&error) {
+                    return Err(error);
+                }
+                super::map_concurrently(
+                    reference_uris,
+                    super::get_each_concurrency(),
+                    |reference_uri| self.read_reference_uri(reference_uri),
+                )
+                .into_iter()
+                .collect()
+            }
         }
     }
 
@@ -931,6 +936,29 @@ impl OnePasswordProvider {
 
         Ok(None)
     }
+}
+
+/// Error fragments from `op` that indicate the CLI cannot serve ANY request
+/// (authentication/session/account problems). Matched case-insensitively
+/// against the provider error text. A batch failure matching one of these
+/// must surface immediately: retrying or fanning out per-secret reads would
+/// repeat the same failure N times, slowly.
+const AUTH_ERROR_PATTERNS: &[&str] = &[
+    // Verbatim fragments pinned in the Findings Log (Task 1, live `op` 2.35.0 probes).
+    // "authentication required" catches execute_op_command's own canned
+    // AUTH_REQUIRED_HELP substitution for "not currently signed in" / "no
+    // active session" / "could not find session token" / "account is not
+    // signed in" — those raw phrases never reach this classifier verbatim.
+    "authentication required",
+    "authorization prompt",
+    "error initializing client",
+];
+
+fn inject_error_is_recoverable(error: &SecretSpecError) -> bool {
+    let message = error.to_string().to_lowercase();
+    !AUTH_ERROR_PATTERNS
+        .iter()
+        .any(|pattern| message.contains(pattern))
 }
 
 impl OnePasswordProvider {
@@ -1974,6 +2002,67 @@ mod tests {
                 .as_ref()
                 .is_some_and(|value| value.expose_secret() == reference)
         }));
+    }
+
+    #[test]
+    fn auth_failure_on_inject_fails_fast_without_fanout() {
+        use std::sync::{Arc, Mutex};
+
+        let calls = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+        let observed = Arc::clone(&calls);
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new(move |command, _stdin| {
+            observed.lock().unwrap().push(command_args(command));
+            Err(SecretSpecError::ProviderOperationFailed(
+                "[ERROR] 2026/08/14 00:00:00 error initializing client: found no accounts for filter \"x\"".to_string(),
+            ))
+        }));
+
+        let first = crate::config::NativeAddress {
+            item: "API Key".to_string(),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+        let second = crate::config::NativeAddress {
+            item: "Database".to_string(),
+            field: Some("secret".to_string()),
+            ..Default::default()
+        };
+        let error = provider
+            .get_many(&[
+                ("FIRST", Address::Native(&first)),
+                ("SECOND", Address::Native(&second)),
+            ])
+            .unwrap_err();
+
+        assert!(error.to_string().contains("error initializing client"));
+        assert_eq!(
+            calls.lock().unwrap().len(),
+            1,
+            "auth failure must not retry or fan out"
+        );
+    }
+
+    #[test]
+    fn inject_error_classification_separates_auth_from_data() {
+        let auth_authentication_required =
+            SecretSpecError::ProviderOperationFailed(AUTH_REQUIRED_HELP.to_string());
+        let auth_authorization_prompt = SecretSpecError::ProviderOperationFailed(
+            "[ERROR] 2026/08/14 00:00:00 authorization prompt dismissed, please try again"
+                .to_string(),
+        );
+        let auth_error_initializing_client = SecretSpecError::ProviderOperationFailed(
+            "[ERROR] 2026/08/14 00:00:00 error initializing client: found no accounts for filter \"x\"".to_string(),
+        );
+        let data = SecretSpecError::ProviderOperationFailed(
+            "[ERROR] 2026/08/14 00:00:00 could not resolve item UUID for item X: could not find item X in vault abc".to_string(),
+        );
+        assert!(!inject_error_is_recoverable(&auth_authentication_required));
+        assert!(!inject_error_is_recoverable(&auth_authorization_prompt));
+        assert!(!inject_error_is_recoverable(
+            &auth_error_initializing_client
+        ));
+        assert!(inject_error_is_recoverable(&data));
     }
 
     #[test]

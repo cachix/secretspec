@@ -53,9 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `secretspec set` against an Infisical secret names the environment in its
   pre-write preview, which the previous description left out.
 
-- Infisical import collision checks now recognize that a profile-derived
-  environment and an equivalent explicit `?env=` target the same secret,
-  preventing aliased destinations from overwriting one another.
+- Infisical import collision checks now recognize when aliases target the same
+  secret through a profile-derived versus explicit environment, or through an
+  absolute ref that overrides different configured path defaults, preventing
+  aliased destinations from overwriting one another.
 
 ## [0.19.1] - 2026-08-11
 

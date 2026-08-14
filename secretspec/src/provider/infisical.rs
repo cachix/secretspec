@@ -335,14 +335,14 @@ impl InfisicalProvider {
             .map(str::to_string)
     }
 
-    /// Renders the provider URI with the supplied environment identity.
+    /// Renders the provider URI with the supplied entry-addressing defaults.
     ///
-    /// The public URI passes the configured environment through. Entry
-    /// comparison omits it from the container and resolves it alongside the
-    /// address instead, so a profile-derived environment and an equivalent
-    /// explicit `?env=` can name the same entry without changing the provider's
-    /// cache identity.
-    fn render_uri(&self, environment: Option<&str>) -> String {
+    /// The public URI passes the configured environment and path through. Entry
+    /// comparison omits both from the underlying project container and resolves
+    /// them alongside the address instead, so aliases with different defaults
+    /// can still compare the physical entries they actually reach without
+    /// changing either alias's cache identity.
+    fn render_uri(&self, environment: Option<&str>, path: Option<&str>) -> String {
         let plain_http = self.config.endpoint.starts_with("http://");
         let host = self
             .config
@@ -354,11 +354,8 @@ impl InfisicalProvider {
         if let Some(env) = environment {
             query.push(format!("env={}", ProviderUrl::encode_query(env)));
         }
-        if self.config.path != DEFAULT_PATH {
-            query.push(format!(
-                "path={}",
-                ProviderUrl::encode_query(&self.config.path)
-            ));
+        if let Some(path) = path.filter(|path| *path != DEFAULT_PATH) {
+            query.push(format!("path={}", ProviderUrl::encode_query(path)));
         }
         if plain_http {
             query.push("tls=false".to_string());
@@ -1071,16 +1068,20 @@ impl Provider for InfisicalProvider {
     /// back as the same store. `tls` is the one that bites -- a plain-HTTP
     /// endpoint rendered without it comes back as HTTPS.
     fn uri(&self) -> String {
-        self.render_uri(self.config.environment.as_deref())
+        self.render_uri(
+            self.config.environment.as_deref(),
+            Some(self.config.path.as_str()),
+        )
     }
 
-    /// The environment is part of the resolved entry coordinates, not the
-    /// Infisical instance and project container. Omitting it here lets an
-    /// unpinned provider under profile `prod` compare equal to `?env=prod`;
+    /// The environment and path are part of the resolved entry coordinates,
+    /// not the Infisical instance and project container. Omitting both here
+    /// lets an unpinned provider under profile `prod` compare equal to
+    /// `?env=prod`, and lets an absolute ref override different path defaults;
     /// [`storage_identity`](Provider::storage_identity) remains the public URI
-    /// and therefore never absorbs session profile context.
+    /// with its configured defaults and never absorbs session profile context.
     fn entry_container_identity(&self) -> String {
-        self.render_uri(None)
+        self.render_uri(None, None)
     }
 
     /// Infisical versions its secrets, so a `ref` may pin one. Its values are
@@ -1637,6 +1638,51 @@ mod tests {
                 .same_entries(Address::Native(&addr), &pinned_dev, Address::Native(&addr),)
                 .unwrap(),
             "different Infisical environments must remain distinct"
+        );
+    }
+
+    /// An absolute ref supplies the complete Infisical folder, so configured
+    /// path defaults do not distinguish two aliases that reach that same folder.
+    #[test]
+    fn entry_identity_uses_the_resolved_absolute_path() {
+        let left = provider(&format!(
+            "infisical://app.infisical.com/{PROJECT}?env=prod&path=/left"
+        ));
+        let right = provider(&format!(
+            "infisical://app.infisical.com/{PROJECT}?env=prod&path=/right"
+        ));
+        let addr = NativeAddress {
+            item: "/shared/DB_PASSWORD".into(),
+            ..Default::default()
+        };
+
+        assert!(
+            left.same_entries(Address::Native(&addr), &right, Address::Native(&addr),)
+                .unwrap(),
+            "absolute refs that resolve to the same API path are one entry"
+        );
+    }
+
+    /// A relative ref is resolved under the configured path, so different path
+    /// defaults still keep the resulting Infisical entries distinct.
+    #[test]
+    fn entry_identity_resolves_relative_refs_under_the_configured_path() {
+        let left = provider(&format!(
+            "infisical://app.infisical.com/{PROJECT}?env=prod&path=/left"
+        ));
+        let right = provider(&format!(
+            "infisical://app.infisical.com/{PROJECT}?env=prod&path=/right"
+        ));
+        let addr = NativeAddress {
+            item: "shared/DB_PASSWORD".into(),
+            ..Default::default()
+        };
+
+        assert!(
+            !left
+                .same_entries(Address::Native(&addr), &right, Address::Native(&addr),)
+                .unwrap(),
+            "relative refs under different configured paths are distinct entries"
         );
     }
 

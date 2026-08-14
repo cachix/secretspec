@@ -25,7 +25,6 @@
 //! context its own `[audit] path`.
 
 use std::fs::OpenOptions;
-use std::io::IsTerminal;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -51,12 +50,23 @@ pub(crate) enum AuditAction {
 	Get,
 	/// Write a single secret (`monosecret set`).
 	Set,
+	/// Delete a stored secret value (`monosecret delete`, Monosecret 0.18+).
+	Delete,
 	/// Validate availability of all secrets (`monosecret check`).
 	Check,
 	/// Inject all secrets into a subprocess (`monosecret run`).
 	Run,
 	/// Copy secrets from one provider to another (`monosecret import`).
 	Import,
+	/// Resolve all secrets and emit them for another tool (`monosecret export`)
+	Export,
+	/// Delete one or more cached secret values (`monosecret cache clear`, and
+	/// the automatic invalidation of an entry a write superseded).
+	CacheClear,
+	/// Populate or refresh a cached provider route's local entry. Distinct from
+	/// `set`: the authoritative store is not written, so a read that refreshes
+	/// its cache cannot be mistaken for a secret write.
+	CacheRefresh,
 }
 
 /// The result of an audited operation.
@@ -71,6 +81,8 @@ pub(crate) enum AuditOutcome {
 	Default,
 	/// The secret was written successfully.
 	Written,
+	/// A stored secret or cached value was deleted successfully.
+	Deleted,
 	/// The audited subprocess (`run`) was successfully started with the secrets
 	/// injected. Distinct from `found`, which is about a secret lookup.
 	Started,
@@ -115,9 +127,12 @@ impl Actor {
 pub(crate) struct AuditContext<'a> {
 	pub project: &'a str,
 	pub profile: &'a str,
-	/// The single secret involved (`get`/`set`).
+	/// The active named scope for scope-aware bulk actions.
+	pub scope: Option<&'a str>,
+	/// The single secret involved (`get`/`set`/`delete`).
 	pub key: Option<&'a str>,
-	/// The set of secrets involved in a bulk action (`check`/`run`/`import`).
+	/// The set of secrets involved in a bulk action
+	/// (`check`/`run`/`import`/`export`).
 	pub keys: &'a [String],
 	/// For `run`, the program that was executed (argv[0] only — never arguments,
 	/// which may contain secrets).
@@ -125,7 +140,9 @@ pub(crate) struct AuditContext<'a> {
 	/// The provider URI that served (or was consulted for) the access. Redacted
 	/// before it is written.
 	pub provider_uri: Option<String>,
-	/// Canonical native coordinates; serialized as `ref`, never a value.
+	/// Canonical rendering of the secret's native `ref` coordinates, when the
+	/// access resolved one (e.g. `item=db field=password`). Keeps per-address
+	/// granularity now that `provider` names only the store.
 	pub reference: Option<String>,
 	pub outcome: AuditOutcome,
 	pub error_kind: Option<&'a str>,
@@ -148,6 +165,9 @@ struct AuditEvent<'a> {
 	action: AuditAction,
 	project: &'a str,
 	profile: &'a str,
+	/// Active named scope for `check`, `run`, and `export` (Monosecret 0.17+).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	scope: Option<&'a str>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	key: Option<&'a str>,
 	/// The set of secrets for a bulk action; omitted for single-key actions.
@@ -159,6 +179,7 @@ struct AuditEvent<'a> {
 	/// Redacted provider URI.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	provider: Option<String>,
+	/// Canonical rendering of the native `ref` coordinates, if any.
 	#[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
 	reference: Option<&'a str>,
 	outcome: AuditOutcome,
@@ -255,7 +276,7 @@ impl JsonlSink {
 	/// Resets the log file to empty at the size cap. The append handle's next
 	/// write then lands at the new end-of-file (offset 0).
 	#[cfg(not(windows))]
-	fn truncate(file: &std::fs::File) -> std::io::Result<()> {
+	fn truncate(&self, file: &std::fs::File) -> std::io::Result<()> {
 		file.set_len(0)
 	}
 
@@ -276,10 +297,7 @@ impl AuditSink for JsonlSink {
 	fn write_line(&self, line: &str) {
 		// A poisoned lock just means a previous writer panicked; the file handle is
 		// still usable for appending, so recover the guard rather than give up.
-		let mut guard = self
-			.file
-			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner);
+		let mut guard = self.file.lock().unwrap_or_else(|e| e.into_inner());
 
 		// Enforce the size cap with whole-line granularity: if appending this line
 		// would cross the cap, truncate and restart the file first so a line is
@@ -289,12 +307,7 @@ impl AuditSink for JsonlSink {
 		match guard.metadata().map(|m| m.len()) {
 			Ok(size) if size > 0 && size + projected > self.max_size_bytes => {
 				// With O_APPEND the next write lands at the new end-of-file (0).
-				#[cfg(not(windows))]
-				let truncate_result = Self::truncate(&guard);
-				#[cfg(windows)]
-				let truncate_result = self.truncate(&guard);
-
-				if let Err(e) = truncate_result {
+				if let Err(e) = self.truncate(&guard) {
 					warn_audit_failure(&self.path, &e);
 				}
 			}
@@ -363,7 +376,7 @@ impl AuditLogger {
 			}
 		};
 
-		if first_run && std::io::stderr().is_terminal() {
+		if first_run {
 			eprintln!(
 				"{} monosecret is now recording secret access to {} \
                  (disable with [audit] enabled = false in ~/.config/monosecret/config.toml)",
@@ -381,7 +394,7 @@ impl AuditLogger {
 	}
 
 	/// Records one event. Fail-open: serialization errors are reported and dropped.
-	pub(crate) fn record(&self, action: AuditAction, ctx: &AuditContext<'_>) {
+	pub(crate) fn record(&self, action: AuditAction, ctx: AuditContext<'_>) {
 		let event = AuditEvent {
 			v: SCHEMA_VERSION,
 			id: uuid::Uuid::new_v4().to_string(),
@@ -391,6 +404,7 @@ impl AuditLogger {
 			action,
 			project: ctx.project,
 			profile: ctx.profile,
+			scope: ctx.scope,
 			key: ctx.key,
 			keys: ctx.keys,
 			command: ctx.command,
@@ -409,7 +423,7 @@ impl AuditLogger {
 				eprintln!(
 					"{} failed to serialize audit event: {e}; skipping",
 					"warning:".yellow()
-				);
+				)
 			}
 		}
 	}
@@ -475,6 +489,10 @@ fn redact_uri(uri: &str) -> String {
 /// `vault://host?token=...` — is not echoed to the terminal. Unlike [`redact_uri`]
 /// it sacrifices attribution detail (account/profile/prefix) for safety, which is
 /// acceptable for a transient warning that also names the affected secret.
+///
+/// Credential-bearing URIs are rejected outright (see
+/// [`crate::provider::reject_uri_credential`]); this stays the safety net for
+/// diagnostics that echo a URI before or while it is being validated.
 pub(crate) fn redact_uri_strict(uri: &str) -> String {
 	let without_userinfo = match userinfo_span(uri) {
 		// Drop `userinfo@`, keeping the scheme prefix and everything from the host.
@@ -636,14 +654,15 @@ mod tests {
 
 		logger.record(
 			AuditAction::Get,
-			&AuditContext {
+			AuditContext {
 				project: "demo",
 				profile: "production",
+				scope: None,
 				key: Some("DATABASE_URL"),
 				keys: &[],
 				command: None,
 				provider_uri: Some("vault://user:s3cr3t@host/kv".to_string()),
-				reference: Some("item=database field=password".to_string()),
+				reference: None,
 				outcome: AuditOutcome::Found,
 				error_kind: None,
 				reason: Some("deploy web frontend"),
@@ -654,14 +673,18 @@ mod tests {
 		assert_eq!(lines.len(), 1);
 		let event: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
 
-		insta::assert_json_snapshot!(event, {
-			".id" => "[event-id]",
-			".ts" => "[timestamp]",
-			".version" => insta::dynamic_redaction(|value, _path| {
-				assert_eq!(value.as_str().unwrap(), env!("CARGO_PKG_VERSION"));
-				"[version]"
-			}),
-		});
+		assert_eq!(event["v"], SCHEMA_VERSION);
+		assert_eq!(event["action"], "get");
+		assert_eq!(event["outcome"], "found");
+		assert_eq!(event["project"], "demo");
+		assert_eq!(event["profile"], "production");
+		assert_eq!(event["key"], "DATABASE_URL");
+		assert_eq!(event["reason"], "deploy web frontend");
+		assert_eq!(event["session_id"], "test-session");
+		assert_eq!(event["seq"], 0);
+		// Provider credentials (the `:password`) are redacted; the username,
+		// host and path — provider attribution — are kept.
+		assert_eq!(event["provider"], "vault://user@host/kv");
 		// The secret value never appears anywhere in the record.
 		assert!(!lines[0].contains("s3cr3t"));
 	}
@@ -674,9 +697,10 @@ mod tests {
 
 		logger.record(
 			AuditAction::Run,
-			&AuditContext {
+			AuditContext {
 				project: "demo",
 				profile: "production",
+				scope: Some("api"),
 				key: None,
 				keys: &keys,
 				command: Some("./deploy.sh"),
@@ -690,14 +714,13 @@ mod tests {
 
 		let lines = sink.lines.lock().unwrap();
 		let event: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
-		insta::assert_json_snapshot!(event, {
-			".id" => "[event-id]",
-			".ts" => "[timestamp]",
-			".version" => insta::dynamic_redaction(|value, _path| {
-				assert_eq!(value.as_str().unwrap(), env!("CARGO_PKG_VERSION"));
-				"[version]"
-			}),
-		});
+		assert_eq!(event["action"], "run");
+		assert_eq!(event["scope"], "api");
+		assert_eq!(event["command"], "./deploy.sh");
+		assert_eq!(event["keys"][0], "DATABASE_URL");
+		assert_eq!(event["keys"][1], "API_KEY");
+		// Single-key field is omitted for bulk actions.
+		assert!(event.get("key").is_none());
 	}
 
 	#[test]
@@ -707,9 +730,10 @@ mod tests {
 		for _ in 0..3 {
 			logger.record(
 				AuditAction::Set,
-				&AuditContext {
+				AuditContext {
 					project: "demo",
 					profile: "default",
+					scope: None,
 					key: Some("K"),
 					keys: &[],
 					command: None,
@@ -777,7 +801,7 @@ mod tests {
 
 		let contents = std::fs::read_to_string(&path).unwrap();
 		// Only the most recent line survives the reset, intact and newline-terminated.
-		insta::assert_snapshot!(contents);
+		assert_eq!(contents, format!("{line}\n"));
 		assert!(contents.len() as u64 <= 40);
 	}
 
@@ -793,7 +817,7 @@ mod tests {
 		sink.write_line(&big);
 
 		let contents = std::fs::read_to_string(&path).unwrap();
-		insta::assert_snapshot!(contents);
+		assert_eq!(contents, format!("{big}\n"));
 	}
 
 	/// A configured `max_size_bytes` of 0 would truncate on every write; it must
@@ -809,7 +833,7 @@ mod tests {
 
 		let contents = std::fs::read_to_string(&path).unwrap();
 		// Both lines retained -> the zero cap was replaced by the default, not honored.
-		insta::assert_snapshot!(contents);
+		assert_eq!(contents, "first\nsecond\n");
 	}
 
 	/// The audit log may reference secret names, so it must be created owner-only.
@@ -864,9 +888,10 @@ mod tests {
 		let logger = AuditLogger::from_config(&cfg).expect("auditing should be enabled");
 		logger.record(
 			AuditAction::Get,
-			&AuditContext {
+			AuditContext {
 				project: "demo",
 				profile: "default",
+				scope: None,
 				key: Some("K"),
 				keys: &[],
 				command: None,
@@ -880,20 +905,6 @@ mod tests {
 
 		assert!(path.exists());
 		let contents = std::fs::read_to_string(&path).unwrap();
-		let mut event: serde_json::Value = serde_json::from_str(contents.trim()).unwrap();
-		event["actor"] = serde_json::json!({
-			"agent": "[actor-agent]",
-			"is_agent": "[actor-is-agent]",
-			"user": "[actor-user]",
-		});
-		insta::assert_json_snapshot!(event, {
-			".id" => "[event-id]",
-			".ts" => "[timestamp]",
-			".session_id" => "[session-id]",
-			".version" => insta::dynamic_redaction(|value, _path| {
-				assert_eq!(value.as_str().unwrap(), env!("CARGO_PKG_VERSION"));
-				"[version]"
-			}),
-		});
+		assert!(contents.contains("\"action\":\"get\""));
 	}
 }

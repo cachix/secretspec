@@ -1,6 +1,7 @@
 .devenv*
 .pre-commit*
 .direnv
+.idea/
 node_modules
 dist
 target
@@ -15,3 +16,7 @@ coverage/
 .packages
 .pub/
 pubspec.lock
+
+# dotnet build artifacts
+dotnet/**/obj/
+dotnet/**/bin/

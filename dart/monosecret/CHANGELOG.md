@@ -16,7 +16,7 @@
 
 ### Breaking
 
-#### Rebrand secretspec as monosecret
+#### Rebrand monosecret as monosecret
 
 Rename crates, CLI, npm packages, and Dart SDK to monosecret while preserving compatibility fallbacks.
 

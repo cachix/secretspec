@@ -35,10 +35,10 @@ pub struct PassConfig {
 impl TryFrom<&ProviderUrl> for PassConfig {
 	type Error = MonosecretError;
 
-	/// Creates a `PassConfig` from a URL.
+	/// Creates a PassConfig from a URL.
 	///
 	/// The URL must have the scheme "pass" (e.g., "pass://" or
-	/// "<pass://monosecret/shared/{profile}/{key>}").
+	/// "pass://monosecret/shared/{profile}/{key}").
 	fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
 		if url.scheme() != "pass" {
 			return Err(MonosecretError::ProviderOperationFailed(format!(
@@ -47,14 +47,15 @@ impl TryFrom<&ProviderUrl> for PassConfig {
 			)));
 		}
 
-		let mut config = Self::default();
+		let mut config = Self {
+			store_dir: url.query_value("store_dir"),
+			..Self::default()
+		};
 
 		if let Some(host) = url.host() {
 			let path = url.path();
-			config.folder_prefix = Some(format!("{host}{path}"));
+			config.folder_prefix = Some(format!("{}{}", host, path));
 		}
-
-		config.store_dir = url.query_value("store_dir");
 
 		Ok(config)
 	}
@@ -62,7 +63,7 @@ impl TryFrom<&ProviderUrl> for PassConfig {
 
 /// Provider for managing secrets with pass (password-store).
 ///
-/// The `PassProvider` uses the Unix password manager `pass`, which stores
+/// The PassProvider uses the Unix password manager `pass`, which stores
 /// secrets as GPG-encrypted files in a hierarchical structure.
 ///
 /// # Storage Format
@@ -89,17 +90,18 @@ crate::register_provider! {
 	description: "Unix password manager with GPG encryption",
 	schemes: ["pass"],
 	examples: ["pass://", "pass://monosecret/shared/{profile}/{key}", "pass://?store_dir=/path/to/store"],
+	deletes: true,
 }
 
 impl PassProvider {
-	/// Creates a new `PassProvider` with the given configuration.
+	/// Creates a new PassProvider with the given configuration.
 	pub fn new(config: PassConfig) -> Self {
 		Self { config }
 	}
 
 	/// Formats the entry name for a secret.
 	///
-	/// Uses `folder_prefix` as a format string with {project}, {profile}, and {key} placeholders.
+	/// Uses folder_prefix as a format string with {project}, {profile}, and {key} placeholders.
 	/// Defaults to "monosecret/{project}/{profile}/{key}" if not configured.
 	fn format_entry_name(&self, project: &str, profile: &str, key: &str) -> String {
 		let format_string = self
@@ -126,44 +128,18 @@ impl PassProvider {
 }
 
 impl Provider for PassProvider {
-	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
-		match address {
-			Address::Convention {
-				project,
-				profile,
-				key,
-			} => self.get(project, key, profile),
-			Address::Native(native) => {
-				crate::provider::reject_unsupported_coords(
-					self.name(),
-					native,
-					self.supported_coords(),
-				)?;
-				let mut config = self.config.clone();
-				config.folder_prefix = Some("{key}".to_string());
-				Self::new(config).get("", &native.item, "")
-			}
-		}
-	}
-
-	fn set_address(&self, address: Address<'_>, value: &SecretString) -> Result<()> {
-		match address {
-			Address::Convention {
-				project,
-				profile,
-				key,
-			} => self.set(project, key, value, profile),
-			Address::Native(native) => {
-				crate::provider::reject_unsupported_coords(
-					self.name(),
-					native,
-					self.supported_coords(),
-				)?;
-				let mut config = self.config.clone();
-				config.folder_prefix = Some("{key}".to_string());
-				Self::new(config).set("", &native.item, value, "")
-			}
-		}
+	/// Convention entries live under the folder-prefix format string,
+	/// `monosecret/{project}/{profile}/{key}` by default.
+	fn convention_address(
+		&self,
+		project: &str,
+		profile: &str,
+		key: &str,
+	) -> Result<crate::config::NativeAddress> {
+		Ok(crate::config::NativeAddress {
+			item: self.format_entry_name(project, profile, key),
+			..Default::default()
+		})
 	}
 
 	fn name(&self) -> &'static str {
@@ -186,8 +162,23 @@ impl Provider for PassProvider {
 				)
 			}
 			None if prefix.is_empty() => "pass".to_string(),
-			None => format!("pass://{prefix}"),
+			None => format!("pass://{}", prefix),
 		}
+	}
+
+	/// The folder prefix chooses an entry, not a password store. Keep it out
+	/// of the store identity so a default prefix and the same explicitly
+	/// spelled prefix can still be recognized as one physical entry after
+	/// their convention addresses are resolved.
+	fn entry_container_identity(&self) -> String {
+		match &self.config.store_dir {
+			Some(store_dir) => format!("pass:{}", store_dir),
+			None => "pass".to_string(),
+		}
+	}
+
+	fn physical_store_path(&self) -> Option<&std::path::Path> {
+		self.config.store_dir.as_deref().map(std::path::Path::new)
 	}
 
 	/// Retrieves a secret from the password store.
@@ -203,17 +194,18 @@ impl Provider for PassProvider {
 	/// * `Ok(Some(SecretString))` - The secret value if found
 	/// * `Ok(None)` - If the secret doesn't exist in the password store
 	/// * `Err` - If there was an error executing `pass` or reading the output
-	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-		let entry_name = self.format_entry_name(project, profile, key);
+	fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+		let entry_name = super::flat_item(self, addr)?;
 
 		let output = self
 			.command()
 			.arg("show")
-			.arg(&entry_name)
+			.arg(&*entry_name)
 			.output()
 			.map_err(|e| {
 				MonosecretError::ProviderOperationFailed(format!(
-					"Failed to execute 'pass' command: {e}. Is pass installed?"
+					"Failed to execute 'pass' command: {}. Is pass installed?",
+					e
 				))
 			})?;
 
@@ -225,14 +217,16 @@ impl Provider for PassProvider {
 			}
 
 			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"pass command failed: {stderr}"
+				"pass command failed: {}",
+				stderr
 			)));
 		}
 
 		let content = String::from_utf8(output.stdout)
 			.map_err(|e| {
 				MonosecretError::ProviderOperationFailed(format!(
-					"Failed to parse pass output as UTF-8: {e}"
+					"Failed to parse pass output as UTF-8: {}",
+					e
 				))
 			})?
 			.trim()
@@ -254,8 +248,8 @@ impl Provider for PassProvider {
 	///
 	/// * `Ok(())` - If the value was successfully written
 	/// * `Err(MonosecretError)` - If writing the pass entry fails
-	fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-		let entry_name = self.format_entry_name(project, profile, key);
+	fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+		let entry_name = super::flat_item(self, addr)?;
 
 		let mut child = self
 			.command()
@@ -266,7 +260,8 @@ impl Provider for PassProvider {
 			.spawn()
 			.map_err(|e| {
 				MonosecretError::ProviderOperationFailed(format!(
-					"Failed to execute pass command: {e}"
+					"Failed to execute pass command: {}",
+					e
 				))
 			})?;
 
@@ -281,7 +276,8 @@ impl Provider for PassProvider {
 			.write_all(value.expose_secret().as_bytes())
 			.map_err(|e| {
 				MonosecretError::ProviderOperationFailed(format!(
-					"Failed to write to pass stdin: {e}"
+					"Failed to write to pass stdin: {}",
+					e
 				))
 			})?;
 
@@ -290,18 +286,43 @@ impl Provider for PassProvider {
 
 		let output = child.wait_with_output().map_err(|e| {
 			MonosecretError::ProviderOperationFailed(format!(
-				"Failed to wait for pass command: {e}"
+				"Failed to wait for pass command: {}",
+				e
 			))
 		})?;
 
 		if !output.status.success() {
 			let stderr = String::from_utf8_lossy(&output.stderr);
 			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"pass command failed: {stderr}"
+				"pass command failed: {}",
+				stderr
 			)));
 		}
 
 		Ok(())
+	}
+
+	fn delete(&self, addr: Address<'_>) -> Result<bool> {
+		let entry_name = super::flat_item(self, addr)?;
+		let output = self
+			.command()
+			.args(["rm", "-f", &entry_name])
+			.output()
+			.map_err(|error| {
+				MonosecretError::ProviderOperationFailed(format!(
+					"Failed to execute 'pass' command: {error}. Is pass installed?"
+				))
+			})?;
+		if output.status.success() {
+			return Ok(true);
+		}
+		let stderr = String::from_utf8_lossy(&output.stderr);
+		if output.status.code() == Some(1) && stderr.contains("is not in the password store") {
+			return Ok(false);
+		}
+		Err(MonosecretError::ProviderOperationFailed(format!(
+			"pass command failed: {stderr}"
+		)))
 	}
 }
 
@@ -436,5 +457,36 @@ mod tests {
 				"folder_prefix corrupted by store_dir {store_dir:?} via uri {uri:?}"
 			);
 		}
+	}
+
+	/// A native address names the store entry directly via `item`, bypassing
+	/// the folder-prefix format string.
+	#[test]
+	fn native_address_names_the_entry() {
+		let p = PassProvider::new(PassConfig {
+			folder_prefix: Some("vault/{profile}/{key}".to_string()),
+			store_dir: None,
+		});
+		let addr = crate::config::NativeAddress {
+			item: "email/work".into(),
+			..Default::default()
+		};
+		assert_eq!(
+			crate::provider::flat_item(&p, Address::Native(&addr)).unwrap(),
+			"email/work"
+		);
+	}
+
+	/// Store entries have no sub-components; a `field` coordinate is rejected.
+	#[test]
+	fn native_address_rejects_field() {
+		let p = PassProvider::new(PassConfig::default());
+		let addr = crate::config::NativeAddress {
+			item: "email/work".into(),
+			field: Some("password".into()),
+			..Default::default()
+		};
+		let err = crate::provider::flat_item(&p, Address::Native(&addr)).unwrap_err();
+		assert!(err.to_string().contains("`field`"), "{err}");
 	}
 }

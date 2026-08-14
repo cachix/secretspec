@@ -1,5 +1,3 @@
-#![allow(clippy::indexing_slicing, unsafe_code)]
-
 //! Monosecret - A declarative secrets manager for development workflows
 //!
 //! This library provides a type-safe, declarative way to manage secrets and environment
@@ -8,7 +6,7 @@
 //! # Features
 //!
 //! - **Declarative Configuration**: Define secrets in `monosecret.toml`
-//! - **Multiple Providers**: Keyring, dotenv, environment variables, `OnePassword`, `LastPass`
+//! - **Multiple Providers**: Keyring, dotenv, environment variables, Keeper Secrets Manager (0.18+)
 //! - **Profile Support**: Different configurations for development, staging, production
 //! - **Type Safety**: Optional compile-time code generation for strongly-typed access
 //! - **Validation**: Ensure all required secrets are present before running applications
@@ -43,12 +41,15 @@
 //! ```
 
 // Internal modules
-#[allow(dead_code)]
 mod audit;
+mod cache;
 pub mod codegen;
+mod composition;
 mod config;
 mod error;
 pub(crate) mod generator;
+mod manifest;
+mod plan;
 mod report;
 mod resolve;
 mod secrets;
@@ -76,32 +77,45 @@ pub use config::{
 	Config,
 	GlobalConfig,
 	GlobalDefaults,
-	Manifest,
-	ManifestProfile,
-	ManifestProject,
-	ManifestSecret,
 	Profile,
 	ProfileDefaults,
 	Project,
 };
-// Re-export Secret and generation types for monosecret_derive
+// Re-export Secret and generation types for monosecret-derive
 #[doc(hidden)]
-pub use config::{GenerateConfig, GenerateOptions, Secret};
+pub use config::{
+	ExtractFormat,
+	GenerateConfig,
+	GenerateOptions,
+	Secret,
+	SecretEncoding,
+	SecretExtract,
+};
 // Public API exports
 pub use error::{MonosecretError, Result};
-pub use provider::Address;
+pub use manifest::Manifest;
+pub use manifest::ManifestProfile;
+pub use manifest::ManifestProject;
+pub use manifest::ManifestSecret;
+pub use provider::DiscoveryContext;
+pub use provider::ProducedValuePersistence;
 pub use provider::Provider;
 pub use report::RESOLUTION_REPORT_SCHEMA_VERSION;
 pub use report::ResolutionReport;
 pub use report::ResolutionStatus;
 pub use report::SecretResolution;
+pub use resolve::NamedResolution;
 pub use resolve::RESOLVE_SCHEMA_VERSION;
 pub use resolve::ResolveResponse;
 pub use resolve::ResolvedSecret;
 pub use resolve::ResolvedSource;
 pub use resolve::resolve_json;
+pub use secrets::ExportFormat;
 pub use secrets::Secrets;
+pub use validation::ConstraintKind;
+pub use validation::ConstraintViolation;
 pub use validation::ValidatedSecrets;
+pub use validation::ValidationErrors;
 
 #[cfg(test)]
 mod tests;

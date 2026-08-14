@@ -14,6 +14,30 @@ name = "monosecret_ffi"
 # All expose the same narrow C ABI.
 crate-type = ["cdylib", "staticlib", "lib"]
 
+# cargo-c enables this feature when building the C ABI; the ABI here is
+# unconditional, so it gates nothing.
+[features]
+capi = []
+
+# Read by cargo-c when the static or shared library is installed with the C
+# header and a generated monosecret_ffi.pc.
+[package.metadata.capi.library]
+name = "monosecret_ffi"
+
+# The header in include/ is hand-maintained; consumers expect it at the
+# include root as #include "monosecret.h".
+[package.metadata.capi.header]
+generation = false
+subdirectory = ""
+
+[package.metadata.capi.install.include]
+asset = [{ from = "include/monosecret.h", to = "" }]
+
+[package.metadata.capi.pkg_config]
+name = "monosecret_ffi"
+filename = "monosecret_ffi"
+description = "C ABI for Monosecret: resolve secrets from any language"
+
 [dependencies]
 # The envelope/resolve logic lives in the monosecret crate (resolve_json); this
 # crate is only the C ABI wrapper.

@@ -10,5 +10,5 @@ fn test_macro_generates_valid_code() {
 	// and generate code at compile time. The integration tests in the main crate
 	// will provide better coverage.
 
-	// If this test runs, the crate compiled correctly.
+	// Reaching this test means the crate and its proc macro compiled correctly.
 }

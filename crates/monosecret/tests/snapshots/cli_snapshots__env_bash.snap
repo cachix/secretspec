@@ -10,6 +10,8 @@ info:
     - bash
     - "--provider"
     - local
+  env:
+    HOME: /tmp/monosecret-cli-snapshots-env-bash
 ---
 success: true
 exit_code: 0

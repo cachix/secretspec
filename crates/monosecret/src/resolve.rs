@@ -27,7 +27,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Version of the [`ResolveResponse`] wire format.
-pub const RESOLVE_SCHEMA_VERSION: u32 = 1;
+pub const RESOLVE_SCHEMA_VERSION: u32 = 2;
 
 /// Where a resolved value came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +39,10 @@ pub enum ResolvedSource {
 	Generated,
 	/// The manifest's committed `default` value.
 	Default,
+	/// Derived from other declared secrets using a strict template.
+	///
+	/// Available since Monosecret 0.16.
+	Composed,
 }
 
 /// One resolved secret. Exactly one of `value` or `path` is set: `path` when
@@ -67,9 +71,17 @@ pub struct ResolveResponse {
 	/// Wire-format version; see [`RESOLVE_SCHEMA_VERSION`].
 	pub schema_version: u32,
 	/// Credential-free URI of the provider the resolution reported against.
+	/// Empty when no provider was contacted, which happens when a scope's
+	/// intersection with the selected profile is empty and there is nothing to
+	/// resolve.
 	pub provider: String,
 	/// The profile that was resolved.
 	pub profile: String,
+	/// The active secret scope, when resolution was scoped (`--scope`,
+	/// `MONOSECRET_SCOPE`, or the SDK builder). `None` — the whole profile
+	/// resolved — is omitted from JSON, so unscoped output is unchanged.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub scope: Option<String>,
 	/// Resolved secrets by name. Empty when a required secret is missing.
 	/// `BTreeMap` keeps the JSON object key order deterministic.
 	pub secrets: BTreeMap<String, ResolvedSecret>,
@@ -88,7 +100,6 @@ impl ResolveResponse {
 
 	/// Drop every inline value, keeping structure and provenance. Useful for an
 	/// inventory/policy consumer that wants the resolve shape without secrets.
-	#[must_use]
 	pub fn without_values(mut self) -> Self {
 		for secret in self.secrets.values_mut() {
 			secret.value = None;
@@ -96,6 +107,34 @@ impl ResolveResponse {
 		}
 		self
 	}
+}
+
+/// The outcome of resolving one secret by name with
+/// [`crate::Secrets::resolve_named`].
+///
+/// The three variants separate the questions a batch resolve conflates: whether
+/// the name exists on the active surface at all, whether it produced a value,
+/// and whether its absence is an error. A genuine provider or configuration
+/// failure is never one of these variants; it surfaces as `Err` from the call.
+///
+/// Available since Monosecret 0.19.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NamedResolution {
+	/// The name is not declared on the active resolution surface: either absent
+	/// from the merged profile, or declared but hidden by the active scope. The
+	/// caller asked about a secret this configuration does not offer, which is
+	/// usually a bug in the caller rather than a missing value.
+	Undeclared,
+	/// The secret is declared but produced no value.
+	Missing {
+		/// Whether the profile declares this secret required, which is what
+		/// makes the absence an error for a whole-profile resolve. Reported here
+		/// rather than decided: a named resolve returns this variant either way
+		/// and leaves the policy to the caller.
+		required: bool,
+	},
+	/// The secret produced a value.
+	Resolved(ResolvedSecret),
 }
 
 /// Which resolution shape a request asks for.
@@ -121,15 +160,20 @@ struct JsonRequest {
 	#[serde(default)]
 	profile: Option<String>,
 	#[serde(default)]
+	scope: Option<String>,
+	#[serde(default)]
 	reason: Option<String>,
 	#[serde(default)]
 	no_values: bool,
 	#[serde(default)]
+	mode: RequestMode,
+	/// Ephemeral `--include` selection (CLI/SDK). A secret outside the union of
+	/// `include` and `groups` is neither resolved nor reported missing.
+	#[serde(default)]
 	include: Vec<String>,
+	/// Ephemeral `--group` selection (CLI/SDK). See [`JsonRequest::include`].
 	#[serde(default)]
 	groups: Vec<String>,
-	#[serde(default)]
-	mode: RequestMode,
 }
 
 fn error_envelope(kind: &str, message: impl Into<String>) -> serde_json::Value {
@@ -155,7 +199,7 @@ fn dispatch(request_json: &str) -> serde_json::Value {
 	};
 	let mut app = match loaded {
 		Ok(app) => app,
-		Err(e) => return error_envelope(e.kind(), e.to_string()),
+		Err(e) => return error_envelope(e.kind(), crate::error::display_error_chain(&e)),
 	};
 
 	if let Some(provider) = request.provider {
@@ -163,6 +207,9 @@ fn dispatch(request_json: &str) -> serde_json::Value {
 	}
 	if let Some(profile) = request.profile {
 		app.set_profile(profile);
+	}
+	if let Some(scope) = request.scope {
+		app.set_scope(scope);
 	}
 	if let Some(reason) = request.reason {
 		app = app.with_reason(reason);
@@ -172,23 +219,33 @@ fn dispatch(request_json: &str) -> serde_json::Value {
 		// Value-free report: never fails on a missing required secret, so an
 		// inventory/preflight consumer always gets the shape back.
 		RequestMode::Report => {
-			let report = app.report_filtered(&request.include, &request.groups);
+			let report = if request.include.is_empty() && request.groups.is_empty() {
+				app.report()
+			} else {
+				app.report_filtered(&request.include, &request.groups)
+			};
 			match report {
 				Ok(report) => ok_envelope(report),
-				Err(e) => error_envelope(e.kind(), e.to_string()),
+				Err(e) => error_envelope(e.kind(), crate::error::display_error_chain(&e)),
 			}
 		}
 		// Value-carrying resolve. `no_values` takes the path that never copies a
 		// secret value into the response (and persists no temp file).
 		RequestMode::Resolve => {
 			let resolved = if request.no_values {
-				app.resolve_without_values_filtered(&request.include, &request.groups)
+				if request.include.is_empty() && request.groups.is_empty() {
+					app.resolve_without_values()
+				} else {
+					app.resolve_without_values_filtered(&request.include, &request.groups)
+				}
+			} else if request.include.is_empty() && request.groups.is_empty() {
+				app.resolve()
 			} else {
 				app.resolve_filtered(&request.include, &request.groups)
 			};
 			match resolved {
 				Ok(response) => ok_envelope(response),
-				Err(e) => error_envelope(e.kind(), e.to_string()),
+				Err(e) => error_envelope(e.kind(), crate::error::display_error_chain(&e)),
 			}
 		}
 	}
@@ -199,15 +256,16 @@ fn dispatch(request_json: &str) -> serde_json::Value {
 /// `{"ok": false, "error": {"kind", "message"}}`.
 ///
 /// This is the shared JSON boundary used by every native binding (the C ABI in
-/// `monosecret_ffi` and the napi-rs Node addon), so the envelope contract is
-/// defined in exactly one place. The request accepts optional `path`, `provider`,
-/// `profile`, `reason`, `no_values`, `include`, `groups`, and `mode` (`"resolve"`
-/// by default, or `"report"` for the value-free [`crate::report::ResolutionReport`]).
+/// `monosecret-ffi` and the napi-rs Node addon), so the envelope contract is
+/// defined in exactly one place. The request accepts optional `path`,
+/// `provider`, `profile`, `scope`, `reason`, `no_values`, and `mode`
+/// (`"resolve"` by default, or `"report"` for the value-free
+/// [`crate::report::ResolutionReport`]).
 /// A `resolve` response carries secret values; treat its bytes as sensitive. A
 /// `report` response never does.
 pub fn resolve_json(request_json: &str) -> String {
 	// Catch panics here, at the one place both native boundaries funnel through
-	// (the C ABI in `monosecret_ffi` and the napi-rs Node addon). Unwinding across
+	// (the C ABI in `monosecret-ffi` and the napi-rs Node addon). Unwinding across
 	// either is undefined behavior, and turning a panic into the same
 	// `{"ok":false,"error":...}` envelope every binding already parses means all
 	// bindings behave identically — the C ABI no longer needs to be the only one

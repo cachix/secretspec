@@ -1,8 +1,7 @@
 # Cross-language conformance suite
 
-Every native-backed Monosecret SDK uses the same Rust resolver contract. Dart,
-Go, Ruby, and Haskell call the `monosecret_ffi` C ABI; Python's pyo3 extension
-and the Node.js napi-rs addon call the Rust resolver directly. This suite proves
+Every canonical Monosecret SDK (Dart, Python, Go, Ruby, Node.js, Haskell, PHP,
+C#, and Swift) is a thin client over the same resolver contract. This suite proves
 they agree: each SDK resolves the same fixtures and must produce the identical
 **canonical** result.
 
@@ -17,7 +16,10 @@ Each directory under `fixtures/` is one case:
 - `expected_report.json` — the canonical resolution report
 
 Fixtures only cover successful resolutions; per-SDK test suites cover error
-behavior (missing-required, invalid input).
+behavior (missing-required, invalid input). The separate
+`constraint-violations/` case deliberately violates both v0.17 group constraint
+kinds and verifies that every SDK exposes typed `at_least_one` and `exactly_one`
+report entries without making the successful fixture loop fail.
 
 ## Canonical form
 
@@ -48,7 +50,8 @@ the comparison is deterministic and meaningful across languages.
 Run everything with the aggregate runner (inside the project devenv shell). It
 builds `monosecret_ffi`, points Go at the cdylib via `MONOSECRET_FFI_LIB`,
 stages the staticlib for Ruby and Haskell, builds the Python and Node.js native
-extensions, runs each language's conformance suite, and prints a combined
+extensions, exercises PHP and C#, and runs Swift on macOS. It runs each
+language's conformance suite and prints a combined
 PASS/FAIL/SKIP summary (exiting non-zero if any language fails):
 
 ```sh
@@ -65,3 +68,6 @@ relative to the repo root:
 - Node: `pnpm --filter @monosecret/client run build:native && pnpm --filter @monosecret/client test`
 - Haskell: `cd haskell/monosecret_hs && cabal test` (needs the `monosecret_ffi`
   staticlib staged on `--extra-lib-dirs`; see the Haskell SDK build steps)
+- PHP: `composer install && cd php/monosecret_php && ./vendor/bin/phpunit -c phpunit.xml.dist`
+- C#: `dotnet run --project dotnet/monosecret_dotnet/tests/Monosecret.Tests/Monosecret.Tests.csproj`
+- Swift (macOS): `bash swift/monosecret_swift/scripts/stage-local-xcframework.sh && swift test --manifest-cache none`

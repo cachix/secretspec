@@ -1,5 +1,14 @@
+# Single source of truth for the Rust toolchain used by local development and
+# native CI runners. This pinned nightly is rustc 1.98, above the core's Rust
+# 1.92 minimum, while retaining the fork's nightly rustfmt configuration.
 [toolchain]
 channel = "nightly-2026-06-29"
 components = ["clippy", "rustfmt"]
 profile = "default"
-targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]
+# The musl targets build fully static Go SDK binaries. The MinGW target builds
+# archives consumable by Windows GNU-based Ruby and Haskell toolchains.
+targets = [
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "x86_64-pc-windows-gnu",
+]

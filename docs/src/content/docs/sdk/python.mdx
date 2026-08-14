@@ -1,0 +1,46 @@
+---
+title: Python SDK
+description: Resolve Monosecret secrets from Python
+---
+
+import { Code } from 'astro:components';
+import quickStartExample from '../../../../../python/monosecret_py/examples/quick_start.py?raw';
+import scopesExample from '../../../../../python/monosecret_py/examples/scopes.py?raw';
+import typedAccessExample from '../../../../../python/monosecret_py/examples/typed_access.py?raw';
+
+The Python SDK (`monosecret`) is a thin client over a pyo3 extension that calls
+`monosecret::resolve_json` directly. Resolution (providers, chains, profiles,
+generation, `as_path`) happens in the Rust core, so the SDK inherits every
+provider with no Python-side logic.
+
+## Quick start
+
+<Code code={quickStartExample} lang="python" meta='title="quick_start.py"' />
+
+A missing required secret raises `MissingRequiredError`; any other failure
+raises `MonosecretError` (with a stable `.kind`).
+
+## Scopes (0.2+)
+
+Use `.with_scope("api")` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `resolved.scope` and `report.scope`:
+
+<Code code={scopesExample} lang="python" meta='title="scopes.py"' />
+
+## Typed access (codegen)
+
+Generate typed classes with `monosecret schema` plus
+[quicktype](https://quicktype.io), then build them from `resolved.fields()`:
+
+```bash
+$ monosecret schema | quicktype -s schema --top-level Monosecret --lang python -o secrets_gen.py
+```
+
+<Code code={typedAccessExample} lang="python" meta='title="typed_access.py"' />
+
+## Native library
+
+The resolver is statically linked into a pyo3 extension (`monosecret._native`,
+built from the `monosecret_py-native` crate) using pyo3's `abi3-py39` feature,
+so the published `cp39-abi3` wheel is self-contained — there is no separate
+`cdylib` to locate and no runtime dlopen.

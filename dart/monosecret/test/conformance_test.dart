@@ -43,6 +43,32 @@ void main() {
       expect(_canonicalReport(report), expected);
     });
   }
+
+  test('reports typed constraint violations', () async {
+    final directory = Directory(
+      '${fixtures.parent.path}/constraint-violations',
+    );
+    final report = await _builder(directory).report();
+    final violations = {
+      for (final violation in report.constraintViolations)
+        violation.kind: violation,
+    };
+
+    expect(
+      violations.keys,
+      unorderedEquals([
+        ConstraintViolationKind.atLeastOne,
+        ConstraintViolationKind.exactlyOne,
+      ]),
+    );
+    expect(violations[ConstraintViolationKind.atLeastOne]!.group, 'cloud');
+    expect(violations[ConstraintViolationKind.atLeastOne]!.present, isEmpty);
+    expect(violations[ConstraintViolationKind.exactlyOne]!.group, 'token');
+    expect(violations[ConstraintViolationKind.exactlyOne]!.present, [
+      'FALLBACK',
+      'PRIMARY',
+    ]);
+  });
 }
 
 Directory _fixturesDirectory() {

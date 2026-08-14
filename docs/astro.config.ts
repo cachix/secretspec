@@ -1,50 +1,48 @@
+import type { PluginOption, ViteDevServer } from "vite";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { readFileSync } from "node:fs";
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import starlightLlmsTxt from "starlight-llms-txt";
 import starlightBlog from "starlight-blog";
+import { terminalCopyPlugin } from "./src/lib/terminal-copy.mjs";
+
+const rustSdkBasicExample = readFileSync(
+  new URL("../crates/monosecret_derive/examples/basic.rs", import.meta.url),
+  "utf8",
+).trim();
 
 // Dev-only: `astro dev` (what `devenv up` runs) does not execute worker.js, so
-// /api/stars would 404 and the star pill would stay hidden locally. Mirror the
-// worker's GitHub proxy here so the pill populates during local development.
+// /api/github would 404 and the release/star pills would stay hidden locally.
+// Mirror the worker's GitHub proxy here so both populate during development.
 // Production is unaffected — it is served by worker.js.
-type DevStarsResponse = {
-  setHeader(name: string, value: string): void;
-  end(body: string): void;
-};
-
-type DevStarsServer = {
-  middlewares: {
-    use: (path: string, handler: (req: unknown, res: DevStarsResponse) => Promise<void>) => void;
-  };
-};
-
-type DevStarsPlugin = {
-  name: string;
-  apply: "serve";
-  enforce: "pre";
-  configureServer(server: DevStarsServer): void;
-};
-
-const devStarsApi: DevStarsPlugin = {
-  name: "dev-stars-api",
+const devGitHubApi: PluginOption = {
+  name: "dev-github-api",
   apply: "serve",
   enforce: "pre",
-  configureServer(server: DevStarsServer) {
-    server.middlewares.use("/api/stars", async (_req, res) => {
+  configureServer(server: ViteDevServer) {
+    server.middlewares.use("/api/github", async (_req: IncomingMessage, res: ServerResponse) => {
       let stars = null;
+      let release = null;
       try {
-        const r = await fetch("https://api.github.com/repos/ifiokjr/monosecret", {
-          headers: { "User-Agent": "monosecret-docs" },
-        });
-        if (r.ok) {
-          const data = await r.json();
+        const headers = { "User-Agent": "monosecret-docs" };
+        const [repoResponse, releaseResponse] = await Promise.all([
+          fetch("https://api.github.com/repos/ifiokjr/monosecret", { headers }),
+          fetch("https://api.github.com/repos/ifiokjr/monosecret/releases/latest", { headers }),
+        ]);
+        if (repoResponse.ok) {
+          const data = await repoResponse.json();
           if (typeof data.stargazers_count === "number") stars = data.stargazers_count;
         }
+        if (releaseResponse.ok) {
+          const data = await releaseResponse.json();
+          if (typeof data.tag_name === "string") release = data.tag_name;
+        }
       } catch {
-        // Degrade to { stars: null } — the pill simply stays hidden.
+        // Degrade to null values — the corresponding pills stay hidden.
       }
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ stars }));
+      res.end(JSON.stringify({ stars, release }));
     });
   },
 };
@@ -55,11 +53,26 @@ const githubPagesBase = process.env.GITHUB_PAGES_BASE?.trim();
 export default defineConfig({
   site: process.env.GITHUB_PAGES_SITE ?? "https://ifiokjr.github.io/monosecret/",
   ...(githubPagesBase ? { base: githubPagesBase } : {}),
+  redirects: {
+    "/reference/adding-providers": "/development/adding-providers",
+    "/ci": "/ci/github-actions",
+  },
   vite: {
-    plugins: [devStarsApi],
+    plugins: [devGitHubApi],
+  },
+  markdown: {
+    shikiConfig: {
+      themes: {
+        light: "github-light",
+        dark: "github-dark",
+      },
+    },
   },
   integrations: [
     starlight({
+      expressiveCode: {
+        plugins: [terminalCopyPlugin()],
+      },
       plugins: [
         starlightBlog({
           title: "Blog",
@@ -103,20 +116,17 @@ DB_PASSWORD  = { description = "DB password", type = "password", generate = true
 DATABASE_URL = { default = "postgresql://localhost/dev" }
 \`\`\`
 
+## Composed Secrets (0.2+)
+
+\`composed\` derives a read-only value from other declared secrets with strict,
+order-independent \`\${UPPERCASE_NAME}\` references. Names must match
+\`[A-Z][A-Z0-9_]*\`; it does not perform dotenv, shell, ambient-environment, or
+recursive expansion.
+
 ## Type-safe Rust SDK
 
 \`\`\`rust
-monosecret_derive::declare_secrets!("monosecret.toml");
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let secrets = Monosecret::builder()
-        .with_provider("keyring")
-        .with_profile(Profile::Production)
-        .load()?;
-    println!("{}", secrets.secrets.database_url);
-    secrets.secrets.set_as_env_vars();
-    Ok(())
-}
+${rustSdkBasicExample}
 \`\`\`
 
 ## Migration
@@ -129,7 +139,7 @@ $ monosecret import dotenv://.env.production
 
 ## Providers
 
-Secrets can be stored in: keyring (default), dotenv files, environment variables, 1Password, LastPass, Pass, Proton Pass, Google Cloud Secret Manager, AWS Secrets Manager, HashiCorp Vault / OpenBao, or Bitwarden Secrets Manager.`,
+Values can be resolved from: keyring (default), KeePass KDBX (0.2+), dotenv files, plaintext file directories (0.2+), environment variables, systemd service credentials (0.2+), 1Password, Gopass (0.2+), LastPass, Dashlane (0.2+, read-only), Pass, Proton Pass, Passbolt (0.2+), Keeper Secrets Manager (0.2+), Google Cloud Secret Manager, AWS Secrets Manager, AWS Systems Manager Parameter Store (0.2+), Scaleway Secret Manager (0.2+), HashiCorp Vault, OpenBao (0.2+), Bitwarden Password Manager (0.2+), Bitwarden Secrets Manager, Azure Key Vault, Infisical (0.2+), age (0.2+), or SOPS (0.2+). The null provider (0.2+) uses manifest defaults, ephemeral generation, or ephemeral run prompts without storage.`,
         }),
       ],
       title: "Monosecret",
@@ -143,7 +153,7 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
         dark: "./src/assets/logo-dark.png",
         replacesTitle: true,
       },
-      tagline: "Declarative secrets for development workflows",
+      tagline: "A declarative interface for every secret provider.",
       social: [
         {
           icon: "github",
@@ -160,41 +170,118 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
       sidebar: [
         {
           label: "Getting Started",
-          items: [{ label: "Quick Start", slug: "quick-start" }],
-        },
-        {
-          label: "Guides",
-          items: [{ label: "CI/CD Setup", slug: "guides/ci" }],
+          items: [
+            { label: "Quick Start", slug: "quick-start" },
+            { label: "Basic Usage", slug: "basic-usage" },
+            { label: "Migration", slug: "migration" },
+          ],
         },
         {
           label: "Concepts",
           items: [
             { label: "Overview", slug: "concepts/overview" },
+            { label: "Comparison", slug: "comparison" },
             {
-              label: "Declarative Configuration",
+              label: "monosecret.toml",
               slug: "concepts/declarative",
             },
-            { label: "Profiles", slug: "concepts/profiles" },
-            { label: "Providers", slug: "concepts/providers" },
             {
-              label: "Configuration Inheritance",
+              label: "monosecret.toml Inheritance",
               slug: "concepts/inheritance",
             },
-            { label: "Secret Generation", slug: "concepts/generation" },
-            { label: "Secret References", slug: "concepts/references" },
-            { label: "Audit Logging", slug: "concepts/audit" },
+            { label: "Profiles", slug: "concepts/profiles" },
+            {
+              label: "Scopes",
+              slug: "concepts/scopes",
+              badge: { text: "0.2+", variant: "note" },
+            },
+            {
+              label: "Secret Generation",
+              slug: "concepts/generation",
+              badge: { text: "0.1+", variant: "note" },
+            },
+            {
+              label: "Composed Secrets",
+              slug: "concepts/composed-secrets",
+              badge: { text: "0.2+", variant: "note" },
+            },
+            {
+              label: "Secret References",
+              slug: "concepts/references",
+              badge: { text: "0.1+", variant: "note" },
+            },
+            {
+              label: "Audit Logging",
+              slug: "concepts/audit",
+              badge: { text: "0.1+", variant: "note" },
+            },
+            {
+              label: "Providers",
+              items: [
+                { label: "Providers", slug: "concepts/providers" },
+                {
+                  label: "Provider fallback",
+                  slug: "concepts/providers/fallback",
+                },
+                {
+                  label: "Provider caching",
+                  slug: "concepts/providers/caching",
+                  badge: { text: "0.2+", variant: "note" },
+                },
+              ],
+            },
           ],
         },
         {
           label: "Providers",
           items: [
             { label: "Keyring", slug: "providers/keyring" },
+            {
+              label: "KeePass KDBX",
+              slug: "providers/kdbx",
+              badge: { text: "0.2+", variant: "note" },
+            },
             { label: "Dotenv", slug: "providers/dotenv" },
+            {
+              label: "Files",
+              slug: "providers/file",
+              badge: { text: "0.2+", variant: "note" },
+            },
             { label: "Environment Variables", slug: "providers/env" },
+            {
+              label: "Null",
+              slug: "providers/null",
+              badge: { text: "0.2+", variant: "note" },
+            },
+            {
+              label: "systemd Credentials",
+              slug: "providers/systemd-credential",
+              badge: { text: "0.2+", variant: "note" },
+            },
             { label: "Pass", slug: "providers/pass" },
             { label: "Proton Pass", slug: "providers/protonpass" },
+            {
+              label: "Passbolt",
+              slug: "providers/passbolt",
+              badge: { text: "0.2+", variant: "note" },
+            },
             { label: "LastPass", slug: "providers/lastpass" },
+            {
+              label: "Dashlane",
+              slug: "providers/dashlane",
+              badge: { text: "0.2+", variant: "note" },
+            },
             { label: "1Password", slug: "providers/onepassword" },
+            {
+              label: "Keeper Secrets Manager",
+              slug: "providers/keeper",
+              badge: { text: "0.2+", variant: "note" },
+            },
+            {
+              label: "Gopass",
+              slug: "providers/gopass",
+              badge: { text: "0.2+", variant: "note" },
+            },
             {
               label: "Google Cloud Secret Manager",
               slug: "providers/gcsm",
@@ -204,27 +291,113 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
               slug: "providers/awssm",
             },
             {
-              label: "Vault / OpenBao",
+              label: "AWS Parameter Store",
+              slug: "providers/awsps",
+              badge: { text: "0.2+", variant: "note" },
+            },
+            {
+              label: "Scaleway Secret Manager",
+              slug: "providers/scaleway",
+              badge: { text: "0.2+", variant: "note" },
+            },
+            {
+              label: "Vault",
               slug: "providers/vault",
+            },
+            {
+              label: "Bitwarden Password Manager",
+              slug: "providers/bw",
+              badge: { text: "0.2+", variant: "note" },
+            },
+            {
+              label: "OpenBao",
+              slug: "providers/openbao",
+              badge: { text: "0.2+", variant: "note" },
             },
             {
               label: "Bitwarden Secrets Manager",
               slug: "providers/bws",
+            },
+            {
+              label: "Azure Key Vault",
+              slug: "providers/akv",
+              badge: { text: "0.2+", variant: "note" },
+            },
+            {
+              label: "Infisical",
+              slug: "providers/infisical",
+              badge: { text: "0.2+", variant: "note" },
+            },
+            {
+              label: "age",
+              slug: "providers/age",
+              badge: { text: "0.2+", variant: "note" },
+            },
+            {
+              label: "SOPS",
+              slug: "providers/sops",
+              badge: { text: "0.2+", variant: "note" },
             },
           ],
         },
         {
           label: "SDK",
           items: [
-            { label: "Overview", slug: "sdk/overview" },
-            { label: "Rust SDK", slug: "sdk/rust" },
-            { label: "Dart SDK", slug: "sdk/dart" },
-            { label: "Python SDK", slug: "sdk/python" },
-            { label: "Go SDK", slug: "sdk/go" },
-            { label: "Ruby SDK", slug: "sdk/ruby" },
-            { label: "Node.js SDK", slug: "sdk/nodejs" },
-            { label: "Haskell SDK", slug: "sdk/haskell" },
+            {
+              label: "Overview",
+              slug: "sdk/overview",
+            },
+            { label: "Rust", slug: "sdk/rust" },
+            {
+              label: "Dart",
+              slug: "sdk/dart",
+              badge: { text: "0.1+", variant: "note" },
+            },
+            {
+              label: "Python",
+              slug: "sdk/python",
+              badge: { text: "0.1+", variant: "note" },
+            },
+            {
+              label: "Go",
+              slug: "sdk/go",
+              badge: { text: "0.1+", variant: "note" },
+            },
+            {
+              label: "Ruby",
+              slug: "sdk/ruby",
+              badge: { text: "0.1+", variant: "note" },
+            },
+            {
+              label: "Node.js",
+              slug: "sdk/nodejs",
+              badge: { text: "0.1+", variant: "note" },
+            },
+            {
+              label: "Haskell",
+              slug: "sdk/haskell",
+              badge: { text: "0.1+", variant: "note" },
+            },
+            {
+              label: "PHP",
+              slug: "sdk/php",
+              badge: { text: "0.2+", variant: "note" },
+            },
+            {
+              label: "C#",
+              slug: "sdk/csharp",
+              badge: { text: "0.2+", variant: "note" },
+            },
+            {
+              label: "Swift",
+              slug: "sdk/swift",
+              badge: { text: "0.2+", variant: "note" },
+            },
           ],
+        },
+        {
+          label: "CI",
+          items: [{ label: "GitHub Actions", slug: "ci/github-actions" }],
         },
         {
           label: "Reference",
@@ -232,7 +405,24 @@ Secrets can be stored in: keyring (default), dotenv files, environment variables
             { label: "Configuration", slug: "reference/configuration" },
             { label: "CLI Commands", slug: "reference/cli" },
             { label: "Providers", slug: "reference/providers" },
-            { label: "Adding Providers", slug: "reference/adding-providers" },
+            {
+              label: "Provider credentials",
+              slug: "reference/provider-credentials",
+              badge: { text: "0.2+", variant: "note" },
+            },
+          ],
+        },
+        {
+          label: "Development",
+          items: [
+            {
+              label: "Adding a Provider",
+              slug: "development/adding-providers",
+            },
+            {
+              label: "Adding an SDK",
+              slug: "development/sdks",
+            },
           ],
         },
       ],

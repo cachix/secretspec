@@ -1,0 +1,29 @@
+[package]
+name = "monosecret-php-native"
+version.workspace = true
+edition.workspace = true
+repository = "https://github.com/ifiokjr/monosecret"
+description = "ext-php-rs extension for the PHP SDK"
+license = "Apache-2.0"
+publish = false
+# The PHP client (PSR-4) lives in src/; keep the Rust source out of the way in
+# native/ so the two toolchains do not fight over the same directory.
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+# build.rs adds the macOS `-undefined dynamic_lookup` linker flag (Zend symbols
+# resolve at dlopen time); no-op on Linux.
+build = "build.rs"
+
+[lib]
+name = "monosecret_php_native"
+path = "native/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+# 0.15+: the 0.13 series leaves Zend data symbols (zend_ce_*,
+# zend_string_init_interned) without dllimport linkage on Windows, which
+# fails the MSVC link of the extension DLL.
+ext-php-rs = "0.15"
+monosecret = { workspace = true }

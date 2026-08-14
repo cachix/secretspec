@@ -24,7 +24,7 @@ revision = "1.0"
 
 [profiles.default]
 DATABASE_URL = { description = "DB", required = true }
-LOG_LEVEL = { description = "log", required = false, default = "info" }
+DEV_SESSION_SECRET = { description = "Development-only session secret", required = false, default = "development-only-secret" }
 SENTRY_DSN = { description = "sentry", required = false }
 """
 
@@ -88,5 +88,5 @@ def test_quicktype_types_consume_runtime_fields(tmp_path):
     # flat fields() map. Idiomatic snake_case attributes, typed.
     typed = module.Monosecret.from_dict(resolved.fields())
     assert typed.database_url == "postgres://db"
-    assert typed.log_level == "info"  # from default
+    assert typed.dev_session_secret == "development-only-secret"  # from default
     assert typed.sentry_dsn is None  # optional, missing

@@ -137,12 +137,46 @@ func TestConformanceReport(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if report.ConstraintViolations == nil {
+			t.Fatal("missing constraint_violations decoded as nil, want empty slice")
+		}
 		actualBytes, err := json.Marshal(canonicalReport(report))
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertJSONEqualsFile(t, actualBytes, filepath.Join(dir, "expected_report.json"))
 	})
+}
+
+func TestConstraintViolations(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(filepath.Dir(filepath.Dir(wd)), "conformance", "constraint-violations")
+	report, err := New().
+		WithPath(filepath.Join(dir, "monosecret.toml")).
+		WithProvider("dotenv://" + filepath.Join(dir, ".env")).
+		WithReason("constraint violation test").
+		Report()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.ConstraintViolations) != 2 {
+		t.Fatalf("got %d violations, want 2", len(report.ConstraintViolations))
+	}
+
+	byKind := map[ConstraintViolationKind]ConstraintViolation{}
+	for _, violation := range report.ConstraintViolations {
+		byKind[violation.Kind] = violation
+	}
+	if got := byKind[ConstraintViolationAtLeastOne]; got.Group != "cloud" || len(got.Present) != 0 {
+		t.Fatalf("unexpected at_least_one violation: %#v", got)
+	}
+	if got := byKind[ConstraintViolationExactlyOne]; got.Group != "token" ||
+		!reflect.DeepEqual(got.Present, []string{"FALLBACK", "PRIMARY"}) {
+		t.Fatalf("unexpected exactly_one violation: %#v", got)
+	}
 }
 
 func canonicalReport(report *Report) map[string]any {

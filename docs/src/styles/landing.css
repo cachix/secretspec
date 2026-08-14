@@ -137,8 +137,8 @@
 
 [data-theme='dark'] .landing-hero::before {
   background:
-    radial-gradient(60rem 30rem at 20% 0%, rgba(142, 163, 192, 0.12), transparent 60%),
-    radial-gradient(50rem 25rem at 90% 20%, rgba(45, 69, 102, 0.18), transparent 60%);
+    radial-gradient(60rem 30rem at 20% 0%, rgba(142, 163, 192, 0.1), transparent 60%),
+    radial-gradient(50rem 25rem at 90% 20%, rgba(45, 69, 102, 0.2), transparent 60%);
 }
 
 .landing-hero::after {
@@ -263,7 +263,7 @@
   font-size: 0.9375rem;
   font-weight: 600;
   border-radius: 0.5rem;
-  transition: all 0.15s;
+  transition: all 0.2s;
   text-decoration: none;
   cursor: pointer;
   border: none;
@@ -314,7 +314,7 @@
   color: var(--color-accent-600);
   font-weight: 600;
   text-decoration: none;
-  transition: color 0.15s;
+  transition: color 0.2s;
 }
 
 .landing-link:hover {
@@ -463,7 +463,7 @@
   font-weight: 500;
   color: var(--color-gray-700);
   text-decoration: none;
-  transition: border-color 0.15s, color 0.15s;
+  transition: border-color 0.2s, color 0.2s;
 }
 
 [data-theme='dark'] .landing-marquee-item {
@@ -619,7 +619,7 @@
   color: rgba(255, 255, 255, 0.85);
   background: var(--color-gray-900);
   border-radius: 0.5rem;
-  padding: 0.7rem 0.9rem;
+  padding: 0.1rem 0.9rem;
   overflow-x: auto;
 }
 
@@ -754,7 +754,7 @@
   border-color: var(--color-gray-700);
   box-shadow:
     0 1px 3px rgba(0, 0, 0, 0.3),
-    0 8px 24px rgba(0, 0, 0, 0.15);
+    0 8px 24px rgba(0, 0, 0, 0.2);
 }
 
 .landing-terminal-header {
@@ -776,7 +776,7 @@
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .landing-terminal-title {
@@ -841,7 +841,7 @@
   background: var(--sl-color-bg-nav);
   color: var(--color-gray-500);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.2s;
 }
 
 .landing-provider-tab:hover {
@@ -1137,7 +1137,7 @@
 }
 
 .landing-pipe-label {
-  font-size: 0.7rem;
+  font-size: 0.1rem;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1156,11 +1156,11 @@
 
 .landing-pipe-code {
   font-family: var(--sl-font-mono, monospace);
-  font-size: 0.7rem;
+  font-size: 0.1rem;
   color: rgba(255, 255, 255, 0.85);
   background: var(--color-gray-900);
   border-radius: 0.4rem;
-  padding: 0.55rem 0.7rem;
+  padding: 0.55rem 0.1rem;
   overflow-x: auto;
 }
 
@@ -1387,7 +1387,7 @@
   padding: 4rem 2rem;
   border-radius: 1.5rem;
   background:
-    radial-gradient(40rem 20rem at 50% 0%, rgba(45, 69, 102, 0.12), transparent 70%),
+    radial-gradient(40rem 20rem at 50% 0%, rgba(45, 69, 102, 0.1), transparent 70%),
     var(--sl-color-bg-nav);
   border: 1px solid var(--sl-color-hairline);
   text-align: center;
@@ -1396,7 +1396,7 @@
 
 [data-theme='dark'] .landing-cta-card {
   background:
-    radial-gradient(40rem 20rem at 50% 0%, rgba(142, 163, 192, 0.18), transparent 70%),
+    radial-gradient(40rem 20rem at 50% 0%, rgba(142, 163, 192, 0.2), transparent 70%),
     var(--sl-color-bg-nav);
 }
 

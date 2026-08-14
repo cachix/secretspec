@@ -19,7 +19,7 @@ require "monosecret/monosecret_ext"
 module Monosecret
   # Response wire-format version this SDK understands. Tracks monosecret_ffi's
   # RESOLVE_SCHEMA_VERSION; a mismatch means the loaded library is incompatible.
-  RESOLVE_SCHEMA_VERSION = 1
+  RESOLVE_SCHEMA_VERSION = 2
 
   # Wire-format version of the value-free report. Tracks monosecret's
   # RESOLUTION_REPORT_SCHEMA_VERSION.
@@ -54,7 +54,7 @@ module Monosecret
   end
 
   # A successful resolution, mirroring the Rust Resolved wrapper.
-  Resolved = Struct.new(:provider, :profile, :secrets, :missing_optional) do
+  Resolved = Struct.new(:provider, :profile, :secrets, :missing_optional, :scope) do
     # Export each resolved secret into ENV by its declared name. Secrets with no
     # usable value (e.g. under no_values) are skipped rather than deleted from
     # ENV (assigning nil would remove the variable).
@@ -94,10 +94,13 @@ module Monosecret
   SecretReport = Struct.new(:name, :status, :required, :source_provider,
                             :default_applied, :generated, :as_path)
 
+  # A failed cross-secret presence constraint in a resolution report.
+  ConstraintViolation = Struct.new(:kind, :group, :secrets, :present)
+
   # A value-free resolution snapshot. Unlike Resolved, a missing required secret
   # is a "missing_required" status here, not an error, so a report describes a
   # profile even when its secrets are not all available.
-  Report = Struct.new(:provider, :profile, :secrets)
+  Report = Struct.new(:provider, :profile, :secrets, :scope, :constraint_violations)
 
   # The narrow C ABI, statically linked into the monosecret_ext extension. The
   # Native.c_resolve / c_abi_version C functions are defined in
@@ -138,6 +141,12 @@ module Monosecret
       self
     end
 
+    # Limit resolution to a named manifest scope (Monosecret 0.17+).
+    def with_scope(scope)
+      @request["scope"] = scope if scope
+      self
+    end
+
     def with_reason(reason)
       @request["reason"] = reason if reason
       self
@@ -171,7 +180,7 @@ module Monosecret
 
       resolved = Resolved.new(
         response["provider"], response["profile"], secrets,
-        response["missing_optional"] || []
+        response["missing_optional"] || [], response["scope"]
       )
       return resolved unless block_given?
 
@@ -195,7 +204,12 @@ module Monosecret
                          s["source_provider"], s["default_applied"],
                          s["generated"], s["as_path"])
       end
-      Report.new(response["provider"], response["profile"], secrets)
+      violations = (response["constraint_violations"] || []).map do |violation|
+        ConstraintViolation.new(violation["kind"], violation["group"],
+                                violation["secrets"], violation["present"])
+      end
+      Report.new(response["provider"], response["profile"], secrets,
+                 response["scope"], violations)
     end
 
     private

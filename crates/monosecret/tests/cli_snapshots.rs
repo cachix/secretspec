@@ -18,6 +18,15 @@ fn bin() -> &'static str {
 	env!("CARGO_BIN_EXE_monosecret")
 }
 
+/// A deterministic per-test HOME so `assert_cmd_snapshot!`'s `env:` section
+/// (which insta filters do not touch) is stable across machines and runs.
+/// The directory is wiped first so the audit-log first-run note always prints.
+fn test_home(name: &str) -> std::path::PathBuf {
+	let home = std::path::PathBuf::from(format!("/tmp/monosecret-cli-snapshots-{name}"));
+	let _ = std::fs::remove_dir_all(&home);
+	home
+}
+
 /// Returns a set of insta filters that redact dynamic temp directory paths so
 /// snapshots are portable across machines.
 fn snapshot_settings() -> insta::Settings {
@@ -27,9 +36,24 @@ fn snapshot_settings() -> insta::Settings {
 	settings.add_filter(r"/var/folders/\S+", "[TMPDIR]");
 	// Linux temp dirs: /tmp/xxx...
 	settings.add_filter(r"/tmp/\S+", "[TMPDIR]");
+	settings.add_filter(r"/home/runner/work/_temp/\S+", "[TMPDIR]");
+	// Windows temp dirs (paths are forward-slash normalised in test configs).
+	settings.add_filter(r"[A-Z]:/Users/\S+/AppData/Local/Temp/\S+", "[TMPDIR]");
+	settings.add_filter(r"[A-Z]:/a/_temp/\S+", "[TMPDIR]");
+	// The audit first-run note is platform-dependent (prints on Unix where
+	// HOME is honoured, absent on Windows where etcetera uses USERPROFILE).
+	settings.add_filter(r"note: \S+ is now recording \S+ access to \S+[^\n]*\n", "");
+	// Strip .exe suffix on Windows so binary names match Unix snapshots.
+	settings.add_filter(r"monosecret\.exe", "monosecret");
 	// dotenv:// URIs containing redacted temp paths.
 	settings.add_filter(r"dotenv://\[TMPDIR\].*", "dotenv://[TMPDIR]...");
 	settings
+}
+
+/// Convert backslashes to forward slashes so Windows paths interpolated into
+/// TOML double-quoted strings are not interpreted as escape sequences.
+fn forward_slashes(p: &std::path::Path) -> String {
+	p.display().to_string().replace('\\', "/")
 }
 
 fn write_config(dir: &std::path::Path, toml: &str) {
@@ -142,7 +166,8 @@ OPTIONAL = { description = "Optional config", required = false, default = "not-a
 	);
 
 	let mut cmd = Command::new(bin());
-	cmd.current_dir(dir.path())
+	cmd.env("HOME", test_home("manifest-json"))
+		.current_dir(dir.path())
 		.args(["manifest", "--format", "json"]);
 	snapshot_settings().bind(|| {
 		assert_cmd_snapshot!(cmd);
@@ -175,11 +200,12 @@ local = "dotenv://{}"
 DATABASE_URL = {{ description = "Database URL", required = true, providers = ["local"] }}
 API_TOKEN = {{ description = "API token", required = true, providers = ["local"] }}
 "#,
-			dotenv.display()
+			forward_slashes(&dotenv)
 		),
 	);
 
 	let mut cmd = Command::new(bin());
+	cmd.env("HOME", test_home("env-dotenv"));
 	cmd.current_dir(dir.path()).args([
 		"--reason",
 		"test",
@@ -220,11 +246,12 @@ local = "dotenv://{}"
 DATABASE_URL = {{ description = "Database URL", required = true, providers = ["local"] }}
 API_TOKEN = {{ description = "API token", required = true, providers = ["local"] }}
 "#,
-			dotenv.display()
+			forward_slashes(&dotenv)
 		),
 	);
 
 	let mut cmd = Command::new(bin());
+	cmd.env("HOME", test_home("env-bash"));
 	cmd.current_dir(dir.path()).args([
 		"--reason",
 		"test",
@@ -266,11 +293,12 @@ local = "dotenv://{}"
 DATABASE_URL = {{ description = "Database URL", required = true, providers = ["local"] }}
 API_TOKEN = {{ description = "API token", required = true, providers = ["local"] }}
 "#,
-			dotenv.display()
+			forward_slashes(&dotenv)
 		),
 	);
 
 	let mut cmd = Command::new(bin());
+	cmd.env("HOME", test_home("check-all-present"));
 	cmd.current_dir(dir.path()).args([
 		"--reason",
 		"test",
@@ -306,11 +334,12 @@ local = "dotenv://{}"
 [profiles.default]
 API_TOKEN = {{ description = "API token", required = true, providers = ["local"] }}
 "#,
-			dotenv.display()
+			forward_slashes(&dotenv)
 		),
 	);
 
 	let mut cmd = Command::new(bin());
+	cmd.env("HOME", test_home("check-missing-required"));
 	cmd.current_dir(dir.path()).args([
 		"--reason",
 		"test",
@@ -345,11 +374,12 @@ local = "dotenv://{}"
 [profiles.default]
 API_TOKEN = {{ description = "API token", required = true, providers = ["local"] }}
 "#,
-			dotenv.display()
+			forward_slashes(&dotenv)
 		),
 	);
 
 	let mut cmd = Command::new(bin());
+	cmd.env("HOME", test_home("get-secret-value"));
 	cmd.current_dir(dir.path()).args([
 		"--reason",
 		"test",
@@ -384,11 +414,12 @@ local = "dotenv://{}"
 [profiles.default]
 DATABASE_URL = {{ description = "Database URL", required = false, default = "postgres://localhost/dev", providers = ["local"] }}
 "#,
-			dotenv.display()
+			forward_slashes(&dotenv)
 		),
 	);
 
 	let mut cmd = Command::new(bin());
+	cmd.env("HOME", test_home("get-secret-with-default"));
 	cmd.current_dir(dir.path()).args([
 		"--reason",
 		"test",

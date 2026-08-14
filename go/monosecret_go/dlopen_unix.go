@@ -1,4 +1,4 @@
-//go:build unix && !monosecret_static
+//go:build unix && !monosecret_static && !pkgconfig
 
 package monosecret
 

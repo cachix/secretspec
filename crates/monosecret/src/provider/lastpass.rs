@@ -13,9 +13,9 @@ use crate::provider::Address;
 use crate::provider::Provider;
 use crate::provider::ProviderUrl;
 
-/// Configuration for the `LastPass` provider.
+/// Configuration for the LastPass provider.
 ///
-/// This struct contains the configuration options for interacting with `LastPass`
+/// This struct contains the configuration options for interacting with LastPass
 /// through the `lpass` CLI tool.
 ///
 /// # Examples
@@ -33,7 +33,7 @@ use crate::provider::ProviderUrl;
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LastPassConfig {
-	/// Optional folder prefix format string for organizing secrets in `LastPass`.
+	/// Optional folder prefix format string for organizing secrets in LastPass.
 	///
 	/// Supports placeholders: {project}, {profile}, and {key}.
 	/// Defaults to "monosecret/{project}/{profile}/{key}" if not specified.
@@ -41,7 +41,7 @@ pub struct LastPassConfig {
 }
 
 impl Default for LastPassConfig {
-	/// Creates a default `LastPassConfig` with no folder prefix.
+	/// Creates a default LastPassConfig with no folder prefix.
 	fn default() -> Self {
 		Self {
 			folder_prefix: None,
@@ -52,7 +52,7 @@ impl Default for LastPassConfig {
 impl TryFrom<&ProviderUrl> for LastPassConfig {
 	type Error = MonosecretError;
 
-	/// Creates a `LastPassConfig` from a URL.
+	/// Creates a LastPassConfig from a URL.
 	///
 	/// Parses a URL in the format `lastpass://[folder]` where the folder
 	/// component is optional. The folder can be specified either as the
@@ -75,15 +75,15 @@ impl TryFrom<&ProviderUrl> for LastPassConfig {
 	}
 }
 
-/// `LastPass` provider implementation for Monosecret.
+/// LastPass provider implementation for Monosecret.
 ///
-/// This provider integrates with `LastPass` password manager through the `lpass` CLI tool.
-/// It stores secrets in a hierarchical structure within `LastPass` using a configurable
+/// This provider integrates with LastPass password manager through the `lpass` CLI tool.
+/// It stores secrets in a hierarchical structure within LastPass using a configurable
 /// format string that defaults to: `monosecret/{project}/{profile}/{key}`.
 ///
 /// # Requirements
 ///
-/// The `LastPass` CLI (`lpass`) must be installed and the user must be logged in:
+/// The LastPass CLI (`lpass`) must be installed and the user must be logged in:
 /// - macOS: `brew install lastpass-cli`
 /// - Linux: Use your package manager (e.g., `apt install lastpass-cli`)
 /// - NixOS: `nix-env -iA nixpkgs.lastpass-cli`
@@ -120,18 +120,18 @@ crate::register_provider! {
 }
 
 impl LastPassProvider {
-	/// Creates a new `LastPassProvider` with the given configuration.
+	/// Creates a new LastPassProvider with the given configuration.
 	///
 	/// # Arguments
 	///
-	/// * `config` - The `LastPass` configuration to use
+	/// * `config` - The LastPass configuration to use
 	pub fn new(config: LastPassConfig) -> Self {
 		Self { config }
 	}
 
-	/// Executes a `LastPass` CLI command and returns its output.
+	/// Executes a LastPass CLI command and returns its output.
 	///
-	/// This is the core method for interacting with the `LastPass` CLI. It handles
+	/// This is the core method for interacting with the LastPass CLI. It handles
 	/// command execution, error detection, and provides helpful error messages
 	/// for common issues like missing CLI installation or authentication.
 	///
@@ -147,9 +147,9 @@ impl LastPassProvider {
 	/// # Errors
 	///
 	/// - Returns an error if the `lpass` CLI is not installed
-	/// - Returns an error if the user is not logged in to `LastPass`
+	/// - Returns an error if the user is not logged in to LastPass
 	/// - Returns an error if the command fails for any other reason
-	fn execute_lpass_command(args: &[&str]) -> Result<String> {
+	fn execute_lpass_command(&self, args: &[&str]) -> Result<String> {
 		let mut cmd = Command::new("lpass");
 		cmd.args(args);
 
@@ -177,14 +177,18 @@ impl LastPassProvider {
 			));
 		}
 
-		String::from_utf8(output.stdout)
-			.map_err(|e| MonosecretError::ProviderOperationFailed(e.to_string()))
+		String::from_utf8(output.stdout).map_err(|e| {
+			MonosecretError::ProviderOperationFailed(format!(
+				"LastPass CLI returned non-UTF-8 output: {}",
+				crate::error::display_error_chain(&e)
+			))
+		})
 	}
 
-	/// Formats the item name for storage in `LastPass`.
+	/// Formats the item name for storage in LastPass.
 	///
-	/// Creates a hierarchical path for organizing secrets within `LastPass`.
-	/// Uses `folder_prefix` as a format string with {project}, {profile}, and {key} placeholders.
+	/// Creates a hierarchical path for organizing secrets within LastPass.
+	/// Uses folder_prefix as a format string with {project}, {profile}, and {key} placeholders.
 	/// Defaults to "monosecret/{project}/{profile}/{key}" if not configured.
 	///
 	/// # Arguments
@@ -195,7 +199,7 @@ impl LastPassProvider {
 	///
 	/// # Returns
 	///
-	/// A formatted string representing the full path to the secret in `LastPass`.
+	/// A formatted string representing the full path to the secret in LastPass.
 	fn format_item_name(&self, project: &str, key: &str, profile: &str) -> String {
 		let format_string = self
 			.config
@@ -209,7 +213,7 @@ impl LastPassProvider {
 			.replace("{key}", key)
 	}
 
-	/// Checks the current `LastPass` login status.
+	/// Checks the current LastPass login status.
 	///
 	/// Executes `lpass status` to determine if the user is currently logged in.
 	///
@@ -217,8 +221,8 @@ impl LastPassProvider {
 	///
 	/// Returns `Ok(true)` if logged in, `Ok(false)` if not logged in, or an error
 	/// if the status check itself fails.
-	fn check_login_status() -> Result<bool> {
-		match Self::execute_lpass_command(&["status"]) {
+	fn check_login_status(&self) -> Result<bool> {
+		match self.execute_lpass_command(&["status"]) {
 			Ok(output) => Ok(!output.contains("Not logged in")),
 			Err(MonosecretError::ProviderOperationFailed(msg))
 				if msg.contains("Not logged in")
@@ -230,11 +234,10 @@ impl LastPassProvider {
 		}
 	}
 
-	/// Checks that the user is logged in to `LastPass`.
+	/// Checks that the user is logged in to LastPass.
 	/// Called by the preflight guard before any provider operations.
-	#[allow(clippy::unused_self)]
 	pub(crate) fn check_auth(&self) -> Result<()> {
-		if !Self::check_login_status()? {
+		if !self.check_login_status()? {
 			return Err(MonosecretError::ProviderOperationFailed(
 				"LastPass authentication required. Please run 'lpass login <your-email>' first."
 					.to_string(),
@@ -245,73 +248,53 @@ impl LastPassProvider {
 }
 
 impl Provider for LastPassProvider {
-	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
-		match address {
-			Address::Convention {
-				project,
-				profile,
-				key,
-			} => self.get(project, key, profile),
-			Address::Native(native) => {
-				crate::provider::reject_unsupported_coords(
-					self.name(),
-					native,
-					self.supported_coords(),
-				)?;
-				let mut config = self.config.clone();
-				config.folder_prefix = Some("{key}".to_string());
-				Self::new(config).get("", &native.item, "")
-			}
-		}
-	}
-
-	fn set_address(&self, address: Address<'_>, value: &SecretString) -> Result<()> {
-		match address {
-			Address::Convention {
-				project,
-				profile,
-				key,
-			} => self.set(project, key, value, profile),
-			Address::Native(native) => {
-				crate::provider::reject_unsupported_coords(
-					self.name(),
-					native,
-					self.supported_coords(),
-				)?;
-				let mut config = self.config.clone();
-				config.folder_prefix = Some("{key}".to_string());
-				Self::new(config).set("", &native.item, value, "")
-			}
-		}
+	/// Convention items live under the folder-prefix format string,
+	/// `monosecret/{project}/{profile}/{key}` by default.
+	fn convention_address(
+		&self,
+		project: &str,
+		profile: &str,
+		key: &str,
+	) -> Result<crate::config::NativeAddress> {
+		Ok(crate::config::NativeAddress {
+			item: self.format_item_name(project, key, profile),
+			..Default::default()
+		})
 	}
 
 	fn name(&self) -> &'static str {
 		Self::PROVIDER_NAME
 	}
 
+	/// `lpass status` probes the user's singleton LastPass session, so every
+	/// instance shares one preflight probe.
+	fn auth_scope_key(&self) -> Option<String> {
+		Some(String::new())
+	}
+
+	/// `TryFrom` reads the whole `host` + `path` as the item template, so the
+	/// whole template is emitted here for it to read back. Emitting less names
+	/// a different template: dropping `/{key}` addresses one item for every
+	/// secret.
 	fn uri(&self) -> String {
-		// LastPass can be "lastpass" (default) or "lastpass://folder" or "lastpass://Folder/Subfolder"
-		if let Some(ref prefix) = self.config.folder_prefix {
-			// The folder_prefix might be something like "Monosecret/{project}/{profile}/{key}"
-			// We want to extract just the folder part for the URI
-			if let Some(folder) = prefix.split('/').next() {
-				if folder.is_empty() || folder == "Shared" {
-					"lastpass".to_string()
-				} else {
-					format!("lastpass://{}", ProviderUrl::encode(folder))
-				}
-			} else {
-				"lastpass".to_string()
+		match self.config.folder_prefix.as_deref() {
+			Some(prefix) if !prefix.is_empty() => {
+				format!("lastpass://{}", ProviderUrl::encode(prefix))
 			}
-		} else {
-			"lastpass".to_string()
+			_ => "lastpass".to_string(),
 		}
 	}
 
-	/// Retrieves a secret from `LastPass`.
+	/// The template selects an item inside the account's own vault; it does not
+	/// select another LastPass store.
+	fn entry_container_identity(&self) -> String {
+		"lastpass".to_string()
+	}
+
+	/// Retrieves a secret from LastPass.
 	///
-	/// Fetches the value of a secret stored in `LastPass` at the path
-	/// determined by the `folder_prefix` format string. Uses `lpass show` with
+	/// Fetches the value of a secret stored in LastPass at the path
+	/// determined by the folder_prefix format string. Uses `lpass show` with
 	/// the `--sync=now` flag to ensure fresh data from the server.
 	///
 	/// # Arguments
@@ -324,16 +307,16 @@ impl Provider for LastPassProvider {
 	///
 	/// - `Ok(Some(value))` if the secret exists and has a value
 	/// - `Ok(None)` if the secret doesn't exist or has an empty value
-	/// - `Err` if there's an error accessing `LastPass`
+	/// - `Err` if there's an error accessing LastPass
 	///
 	/// # Errors
 	///
-	/// - Returns an error if not logged in to `LastPass`
-	/// - Returns an error if the `LastPass` CLI fails
-	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-		let item_name = self.format_item_name(project, key, profile);
+	/// - Returns an error if not logged in to LastPass
+	/// - Returns an error if the LastPass CLI fails
+	fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+		let item_name = crate::provider::flat_item(self, addr)?;
 
-		match Self::execute_lpass_command(&["show", "--sync=now", "--password", &item_name]) {
+		match self.execute_lpass_command(&["show", "--sync=now", "--password", &item_name]) {
 			Ok(output) => {
 				let password = output.trim();
 				if password.is_empty() {
@@ -351,10 +334,10 @@ impl Provider for LastPassProvider {
 		}
 	}
 
-	/// Stores a secret in `LastPass`.
+	/// Stores a secret in LastPass.
 	///
-	/// Creates or updates a secret in `LastPass` at the path
-	/// determined by the `folder_prefix` format string. The method first checks if
+	/// Creates or updates a secret in LastPass at the path
+	/// determined by the folder_prefix format string. The method first checks if
 	/// the item exists to determine whether to use `lpass edit` (for updates)
 	/// or `lpass add` (for new items).
 	///
@@ -371,19 +354,19 @@ impl Provider for LastPassProvider {
 	///
 	/// # Errors
 	///
-	/// - Returns an error if not logged in to `LastPass`
-	/// - Returns an error if the `LastPass` CLI command fails
+	/// - Returns an error if not logged in to LastPass
+	/// - Returns an error if the LastPass CLI command fails
 	///
 	/// # Implementation Details
 	///
 	/// The method uses non-interactive mode and disables pinentry to avoid
 	/// GUI prompts. The secret value is passed via stdin to avoid exposing
 	/// it in the process list.
-	fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-		let item_name = self.format_item_name(project, key, profile);
+	fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+		let item_name = crate::provider::flat_item(self, addr)?;
 
 		// Check if item exists
-		if self.get(project, key, profile)?.is_some() {
+		if self.get(addr)?.is_some() {
 			// Update existing item
 			let args = vec![
 				"edit",
@@ -452,7 +435,7 @@ impl Provider for LastPassProvider {
 }
 
 impl Default for LastPassProvider {
-	/// Creates a `LastPassProvider` with default configuration.
+	/// Creates a LastPassProvider with default configuration.
 	///
 	/// This is equivalent to calling `LastPassProvider::new(LastPassConfig::default())`.
 	fn default() -> Self {
@@ -460,126 +443,120 @@ impl Default for LastPassProvider {
 	}
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
-	use std::os::unix::fs::PermissionsExt;
-	use std::sync::Mutex;
-
 	use super::*;
 
-	/// Serializes all lastpass tests so their `PathGuard` modifications don't
-	/// interfere with each other (one test finding another's fake `lpass`).
-	static LASTPASS_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-	/// RAII guard that restores `PATH` when dropped, even on panic.
-	struct PathGuard {
-		original: Option<std::ffi::OsString>,
-		_lock: std::sync::MutexGuard<'static, ()>,
+	fn provider_of(spec: &str) -> Box<dyn Provider> {
+		Box::<dyn Provider>::try_from(spec).expect("the spec must be valid")
 	}
 
-	impl PathGuard {
-		/// Prepend `dir` to `PATH` so the fake `lpass` is found first, while
-		/// keeping the rest of `PATH` intact so parallel tests that spawn `sh`
-		/// (e.g. the `OnePassword` fake-op) are not broken. Acquires the test lock
-		/// so only one lastpass test modifies `PATH` at a time.
-		#[allow(clippy::used_underscore_binding)]
-		fn prepend(dir: &std::path::Path) -> Self {
-			let _lock = LASTPASS_TEST_LOCK.lock().unwrap();
-			let original = std::env::var_os("PATH");
-			let new_path = match &original {
-				Some(p) => {
-					let mut paths: Vec<std::path::PathBuf> = std::env::split_paths(p).collect();
-					paths.insert(0, dir.to_path_buf());
-					std::env::join_paths(paths)
-						.unwrap_or_else(|_| dir.to_string_lossy().into_owned().into())
-				}
-				None => std::ffi::OsString::from(dir),
-			};
-			unsafe {
-				std::env::set_var("PATH", new_path);
-			}
-			Self { original, _lock }
-		}
+	fn uri_of(spec: &str) -> String {
+		provider_of(spec).uri()
 	}
 
-	impl Drop for PathGuard {
-		fn drop(&mut self) {
-			match self.original.take() {
-				Some(p) => unsafe {
-					std::env::set_var("PATH", p);
-				},
-				None => unsafe {
-					std::env::remove_var("PATH");
-				},
-			}
-		}
-	}
-
-	fn write_fake_lpass(dir: &std::path::Path, script_body: &str) {
-		let script = dir.join("lpass");
-		std::fs::write(&script, script_body).unwrap();
-		let mut perms = std::fs::metadata(&script).unwrap().permissions();
-		perms.set_mode(0o755);
-		std::fs::set_permissions(&script, perms).unwrap();
+	/// The item a spec addresses, for comparing two spellings of one store.
+	/// `LastPassConfig` has no `PartialEq`, and the rendered item is what the
+	/// template exists to produce.
+	fn addressed_item(spec: &str) -> String {
+		provider_of(spec)
+			.convention_address("my-app", "production", "API_KEY")
+			.expect("a convention address")
+			.item
 	}
 
 	#[test]
-	fn execute_lpass_command_errors_when_cli_not_installed() {
-		let _lock = LASTPASS_TEST_LOCK.lock().unwrap();
-		// If real `lpass` is installed this test is meaningless — skip it.
-		if Command::new("lpass").arg("--version").output().is_ok() {
-			eprintln!("skipping: lpass is installed");
-			return;
-		}
-		let err = LastPassProvider::execute_lpass_command(&["status"]).unwrap_err();
-		insta::assert_snapshot!(err.to_string());
-	}
-
-	#[test]
-	fn check_login_status_returns_false_when_not_logged_in() {
-		let dir = tempfile::tempdir().unwrap();
-		write_fake_lpass(dir.path(), "#!/bin/sh\nprintf 'Not logged in\\n'\nexit 0\n");
-		let _guard = PathGuard::prepend(dir.path());
-		let logged_in = LastPassProvider::check_login_status().unwrap();
-		assert!(!logged_in);
-	}
-
-	#[test]
-	fn check_auth_errors_when_not_logged_in() {
-		let dir = tempfile::tempdir().unwrap();
-		write_fake_lpass(dir.path(), "#!/bin/sh\nprintf 'Not logged in\\n'\nexit 0\n");
-		let _guard = PathGuard::prepend(dir.path());
-		let provider = LastPassProvider::default();
-		let err = provider.check_auth().unwrap_err();
-		insta::assert_snapshot!(err.to_string());
-	}
-
-	#[test]
-	fn get_returns_value_when_secret_exists() {
-		let dir = tempfile::tempdir().unwrap();
-		write_fake_lpass(
-			dir.path(),
-			"#!/bin/sh\ncase \"$1\" in\n  status) printf 'Logged in\\n' ;;\n  show) printf 'secret-value\\n' ;;\nesac\n",
+	fn format_item_name_default_pattern() {
+		let provider = LastPassProvider::new(LastPassConfig::default());
+		assert_eq!(
+			provider.format_item_name("myproj", "API_KEY", "prod"),
+			"monosecret/myproj/prod/API_KEY"
 		);
-		let _guard = PathGuard::prepend(dir.path());
-		let provider = LastPassProvider::default();
-		let value = provider
-			.get("project", "KEY", "default")
-			.unwrap()
-			.expect("should find secret");
-		insta::assert_snapshot!(value.expose_secret());
 	}
 
 	#[test]
-	fn get_returns_none_when_secret_not_found() {
-		let dir = tempfile::tempdir().unwrap();
-		write_fake_lpass(
-			dir.path(),
-			"#!/bin/sh\ncase \"$1\" in\n  status) printf 'Logged in\\n' ;;\n  show) printf 'Could not find specified account\\n' >&2; exit 1 ;;\nesac\n",
+	fn format_item_name_custom_prefix() {
+		let provider = LastPassProvider::new(LastPassConfig {
+			folder_prefix: Some("Work/{profile}/{key}".to_string()),
+		});
+		assert_eq!(
+			provider.format_item_name("myproj", "API_KEY", "prod"),
+			"Work/prod/API_KEY"
 		);
-		let _guard = PathGuard::prepend(dir.path());
-		let provider = LastPassProvider::default();
-		let result = provider.get("project", "MISSING", "default").unwrap();
-		assert!(result.is_none());
+	}
+
+	#[test]
+	fn uri_round_trips_the_item_template() {
+		// `uri()` is the provider's identity: Monosecret fingerprints cached
+		// routes with it, names the answering store with it in audit records,
+		// and the derive macro hands it back as a provider spec. Emitting only
+		// the first segment made different templates indistinguishable --
+		// `Shared/{project}/{profile}/{key}` read back as the default
+		// `monosecret/{project}/{profile}/{key}`, a different folder, and
+		// `Work/TeamA/{key}` read back as the literal item `Work`, one item for
+		// every secret in the profile.
+		for spec in [
+			"lastpass",
+			"lastpass://",
+			"lastpass://Work",
+			"lastpass://Shared",
+			"lastpass://Shared/{project}/{profile}/{key}",
+			"lastpass://Shared-Monosecret/{project}/{profile}/{key}",
+			"lastpass://Work/TeamA/{project}/{profile}/{key}",
+			"lastpass://Shared Items/dev/{key}",
+		] {
+			let rendered = uri_of(spec);
+			assert_eq!(
+				addressed_item(&rendered),
+				addressed_item(spec),
+				"{spec} rendered as {rendered}, which does not read back as the same item",
+			);
+		}
+	}
+
+	/// Two templates under one folder must stay distinguishable, or the cache
+	/// fingerprints both routes alike and keeps serving the first one's values
+	/// after the source is repointed at the second.
+	#[test]
+	fn uri_distinguishes_two_templates_under_one_folder() {
+		assert_ne!(
+			uri_of("lastpass://Work/TeamA/{project}/{profile}/{key}"),
+			uri_of("lastpass://Work/TeamB/{project}/{profile}/{key}"),
+		);
+	}
+}
+
+#[cfg(test)]
+mod reference_tests {
+	use super::*;
+
+	/// A native address names the item directly via `item`, bypassing the
+	/// folder-prefix format string.
+	#[test]
+	fn native_address_names_the_item() {
+		let p = LastPassProvider::new(LastPassConfig {
+			folder_prefix: Some("Work/{key}".to_string()),
+		});
+		let addr = crate::config::NativeAddress {
+			item: "Shared/api-token".into(),
+			..Default::default()
+		};
+		assert_eq!(
+			crate::provider::flat_item(&p, Address::Native(&addr)).unwrap(),
+			"Shared/api-token"
+		);
+	}
+
+	/// LastPass items are read whole here; a `field` coordinate is rejected.
+	#[test]
+	fn native_address_rejects_field() {
+		let p = LastPassProvider::new(LastPassConfig::default());
+		let addr = crate::config::NativeAddress {
+			item: "api-token".into(),
+			field: Some("password".into()),
+			..Default::default()
+		};
+		let err = crate::provider::flat_item(&p, Address::Native(&addr)).unwrap_err();
+		assert!(err.to_string().contains("`field`"), "{err}");
 	}
 }

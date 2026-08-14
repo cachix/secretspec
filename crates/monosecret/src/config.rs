@@ -42,164 +42,881 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde::Serialize;
+use tempfile::NamedTempFile;
 
-// ── Provider config & references ────────────────────────────────────────────
+use crate::composition::Template;
+use crate::manifest::CompiledManifest;
+use crate::manifest::Manifest;
 
-/// A single entry in `[providers]`.
+/// A single entry in a project's `[providers]` table.
 ///
-/// TOML deserialization is [`serde::untagged`], so:
-///
-/// | TOML                                      | Rust variant                            |
-/// |-------------------------------------------|-----------------------------------------|
-/// | `keyring = "keyring://"`               | `ProviderConfig::Alias("keyring://")`  |
-/// | `[providers.op]\nuri = "…"`            | `ProviderConfig::Structured { … }`      |
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// String entries retain the historical alias form, while table entries can
+/// declare provider dependencies and all Monosecret 0.19 alias options.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ProviderConfig {
-	/// Legacy / simple alias — just a URI string.
+	/// A provider URI written as a bare string.
 	Alias(String),
-	/// Structured provider with optional dependency declarations.
+	/// A provider table with dependency or 0.19 alias configuration.
 	Structured(ProviderConfigStructured),
 }
 
 impl ProviderConfig {
-	/// Returns the provider URI regardless of variant.
+	/// Returns the configured provider URI, when this entry names a leaf.
 	pub fn uri(&self) -> &str {
 		match self {
-			ProviderConfig::Alias(uri) => uri.as_str(),
-			ProviderConfig::Structured(s) => s.uri.as_str(),
+			Self::Alias(uri) => uri,
+			Self::Structured(config) => &config.uri,
 		}
 	}
 
-	/// Returns a reference to the dependency list, if structured.
+	/// Returns declared secret dependencies, if any.
 	pub fn depends_on(&self) -> Option<&[ProviderDependency]> {
 		match self {
-			ProviderConfig::Alias(_) => None,
-			ProviderConfig::Structured(s) if s.depends_on.is_empty() => None,
-			ProviderConfig::Structured(s) => Some(&s.depends_on),
+			Self::Structured(config) if !config.depends_on.is_empty() => Some(&config.depends_on),
+			_ => None,
+		}
+	}
+
+	pub(crate) fn to_alias(&self) -> std::result::Result<ProviderAlias, String> {
+		match self {
+			Self::Alias(uri) => Ok(ProviderAlias::from_uri(uri)),
+			Self::Structured(config) => config.to_alias(),
 		}
 	}
 }
 
-/// Structured provider configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ProviderConfigStructured {
-	/// The provider URI (required).
-	pub uri: String,
-	/// Required secrets that must be resolved before this provider is usable.
-	#[serde(default, skip_serializing_if = "Vec::is_empty")]
-	pub depends_on: Vec<ProviderDependency>,
+impl From<String> for ProviderConfig {
+	fn from(uri: String) -> Self {
+		Self::Alias(uri)
+	}
 }
 
-/// A single dependency declaration under `[[providers.<name>.depends_on]]`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+impl From<&str> for ProviderConfig {
+	fn from(uri: &str) -> Self {
+		Self::Alias(uri.to_string())
+	}
+}
+
+impl From<ProviderAlias> for ProviderConfig {
+	fn from(alias: ProviderAlias) -> Self {
+		if alias.credentials.is_empty()
+			&& alias.reference_template.is_none()
+			&& alias.fallback.is_empty()
+			&& alias.cache.is_none()
+		{
+			return Self::Alias(alias.uri);
+		}
+		Self::Structured(ProviderConfigStructured {
+			uri: alias.uri,
+			depends_on: Vec::new(),
+			credentials: alias.credentials,
+			reference_template: alias.reference_template,
+			fallback: alias.fallback,
+			cache: alias.cache,
+		})
+	}
+}
+
+/// Structured project provider configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderConfigStructured {
+	/// Provider URI. Empty only for a cached fallback route.
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub uri: String,
+	/// Secrets resolved before constructing this provider.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub depends_on: Vec<ProviderDependency>,
+	/// Monosecret 0.19 semantic credential sources.
+	#[serde(default, skip_serializing_if = "HashMap::is_empty")]
+	pub credentials: HashMap<String, CredentialSource>,
+	/// Provider-scoped native address template.
+	#[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
+	pub reference_template: Option<NativeAddressTemplate>,
+	/// Ordered authoritative providers for a cached route.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) fallback: Vec<String>,
+	/// Optional provider cache policy.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) cache: Option<ProviderCache>,
+}
+
+impl ProviderConfigStructured {
+	fn to_alias(&self) -> std::result::Result<ProviderAlias, String> {
+		if !self.fallback.is_empty() {
+			if !self.uri.is_empty() {
+				return Err("a provider alias cannot set both `uri` and `fallback`".to_string());
+			}
+			if !self.credentials.is_empty() || self.reference_template.is_some() {
+				return Err(
+					"a cached fallback alias cannot declare credentials or a ref template"
+						.to_string(),
+				);
+			}
+			let cache = self
+				.cache
+				.clone()
+				.ok_or_else(|| "a cached fallback alias also requires `cache`".to_string())?;
+			return ProviderAlias::cached(self.fallback.clone(), cache);
+		}
+		if self.uri.trim().is_empty() {
+			return Err("a structured provider requires a non-empty `uri`".to_string());
+		}
+		if self.cache.is_some() && self.reference_template.is_some() {
+			return Err(
+				"an inline cached provider alias cannot declare a ref template".to_string(),
+			);
+		}
+		if let Some(template) = &self.reference_template {
+			template.validate()?;
+		}
+		Ok(ProviderAlias {
+			uri: self.uri.clone(),
+			credentials: self.credentials.clone(),
+			reference_template: self.reference_template.clone(),
+			fallback: Vec::new(),
+			cache: self.cache.clone(),
+		})
+	}
+}
+
+/// A secret needed to construct a provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderDependency {
-	/// The Monosecret secret name that provides the value
-	/// (e.g. `OP_SERVICE_ACCOUNT_TOKEN`).
+	/// Name of the Monosecret secret supplying the value.
 	pub secret: String,
-	/// Environment variable name to inject the resolved value as.
-	/// Defaults to the secret name when omitted.
-	#[serde(default, skip_serializing_if = "Option::is_none", rename = "as")]
+	/// Environment variable name exposed to the provider.
+	#[serde(default, rename = "as", skip_serializing_if = "Option::is_none")]
 	pub as_name: Option<String>,
 }
 
 impl ProviderDependency {
-	/// Returns the effective env-var name for this dependency.
-	///
-	/// When `as` is set, returns that value. Otherwise defaults to the
-	/// [`secret`](Self::secret) name.
+	/// The environment variable name used for this dependency.
 	pub fn effective_as(&self) -> &str {
 		self.as_name.as_deref().unwrap_or(&self.secret)
 	}
 }
 
-/// A single entry in a secret's `providers` list.
-///
-/// TOML deserialization is [`serde::untagged`]:
-///
-/// | TOML                                                       | Rust variant                       |
-/// |------------------------------------------------------------|------------------------------------|
-/// | `"env"`                                                 | `ProviderRef::Alias("env")`       |
-/// | `{ provider = "op", path = ["GH"], key = "t" }`    | `ProviderRef::Detail { … }`         |
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A provider entry on a secret or profile default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ProviderRef {
-	/// Simple alias reference (backward compat).
+	/// A provider alias, built-in name, or URI.
 	Alias(String),
-	/// Detailed provider reference with relative location.
+	/// A provider plus provider-relative path/key hints.
 	Detail(ProviderRefDetail),
 }
 
 impl ProviderRef {
-	/// Returns the provider alias name regardless of variant.
+	/// Provider alias, name, or URI regardless of representation.
 	pub fn provider_alias(&self) -> &str {
 		match self {
-			ProviderRef::Alias(name) => name.as_str(),
-			ProviderRef::Detail(d) => d.provider.as_str(),
+			Self::Alias(provider) => provider,
+			Self::Detail(detail) => &detail.provider,
 		}
 	}
 }
 
 impl From<String> for ProviderRef {
-	fn from(s: String) -> Self {
-		ProviderRef::Alias(s)
+	fn from(provider: String) -> Self {
+		Self::Alias(provider)
 	}
 }
 
-impl<'a> From<&'a str> for ProviderRef {
-	fn from(s: &'a str) -> Self {
-		ProviderRef::Alias(s.to_string())
+impl From<&str> for ProviderRef {
+	fn from(provider: &str) -> Self {
+		Self::Alias(provider.to_string())
 	}
 }
 
-/// Detailed provider reference with relative location within the provider.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+impl std::fmt::Display for ProviderRef {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str(self.provider_alias())
+	}
+}
+
+impl std::ops::Deref for ProviderRef {
+	type Target = str;
+
+	fn deref(&self) -> &Self::Target {
+		self.provider_alias()
+	}
+}
+
+/// Detailed provider reference with relative location hints.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderRefDetail {
-	/// The provider alias name (resolved against `[providers]`).
+	/// Provider alias, name, or URI.
 	pub provider: String,
-	/// Optional path segments within the provider's store
-	/// (e.g. section name, folder).
+	/// Provider-relative path segments.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub path: Option<Vec<String>>,
-	/// Optional key within that path.
-	/// Defaults to the Monosecret secret name when absent.
+	/// Provider-relative key; defaults to the logical secret name.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub key: Option<String>,
 }
 
-/// Carries provider-relative location hints for secret lookups.
-///
-/// Created from a [`ProviderRef::Detail`] during resolution.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+/// Provider-relative lookup hints derived from a [`ProviderRef`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecretRequest {
-	/// Path segments within the provider (e.g. `["GitHub"]`).
+	/// Provider-relative path segments.
 	pub path: Option<Vec<String>>,
-	/// Key at that path. Defaults to the secret name.
+	/// Provider-relative key.
 	pub key: Option<String>,
 }
 
 impl SecretRequest {
-	/// Create a [`SecretRequest`] from a [`ProviderRef`].
-	///
-	/// For [`ProviderRef::Alias`] this returns a default (empty) request.
-	/// For [`ProviderRef::Detail`] it copies `path` and `key`.
-	pub fn from_provider_ref(r: &ProviderRef) -> Self {
-		match r {
+	/// Create lookup hints from a provider reference.
+	pub fn from_provider_ref(reference: &ProviderRef) -> Self {
+		match reference {
 			ProviderRef::Alias(_) => Self::default(),
-			ProviderRef::Detail(d) => {
+			ProviderRef::Detail(detail) => {
 				Self {
-					path: d.path.clone(),
-					key: d.key.clone(),
+					path: detail.path.clone(),
+					key: detail.key.clone(),
 				}
+			}
+		}
+	}
+
+	pub(crate) fn to_native_address(&self, logical_name: &str) -> Option<NativeAddress> {
+		if self.path.is_none() && self.key.is_none() {
+			return None;
+		}
+		let mut path = self.path.clone().unwrap_or_default();
+		let item = if path.is_empty() {
+			logical_name.to_string()
+		} else {
+			path.remove(0)
+		};
+		let section = (!path.is_empty()).then(|| path.join("/"));
+		Some(NativeAddress {
+			item,
+			field: self.key.clone().or_else(|| Some(logical_name.to_string())),
+			vault: None,
+			section,
+			version: None,
+		})
+	}
+}
+
+/// Where one credential required by a provider comes from.
+///
+/// Written in an alias's `credentials` map either as a bare provider spec,
+/// which reads the credential from that provider at the convention path for
+/// the active project and profile:
+///
+/// ```toml
+/// credentials = { access_token = "keyring" }
+/// ```
+///
+/// or as a table that pins the exact location with the same `ref` coordinates a
+/// secret uses:
+///
+/// ```toml
+/// credentials = { role_id = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "role_id" } } }
+/// ```
+///
+/// Reusing `ref` means provider credentials are addressed exactly like every
+/// other secret — no separate storage convention. A bare spec round-trips back
+/// to a bare string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CredentialSource {
+	/// Provider spec (alias, bare provider name, or URI) supplying the credential.
+	pub provider: String,
+	/// Native coordinates within that provider. When absent, the credential is
+	/// read at the convention path (the credential name as key) for the active
+	/// project and profile.
+	pub reference: Option<NativeAddress>,
+}
+
+impl CredentialSource {
+	/// A source that reads from `provider` using convention naming.
+	pub fn from_provider(provider: impl Into<String>) -> Self {
+		Self {
+			provider: provider.into(),
+			reference: None,
+		}
+	}
+}
+
+impl From<String> for CredentialSource {
+	fn from(provider: String) -> Self {
+		Self::from_provider(provider)
+	}
+}
+
+impl From<&str> for CredentialSource {
+	fn from(provider: &str) -> Self {
+		Self::from_provider(provider)
+	}
+}
+
+impl Serialize for CredentialSource {
+	fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		match &self.reference {
+			// A ref-less source round-trips back to the bare-string form.
+			None => serializer.serialize_str(&self.provider),
+			Some(reference) => {
+				use serde::ser::SerializeStruct;
+				let mut table = serializer.serialize_struct("CredentialSource", 2)?;
+				table.serialize_field("provider", &self.provider)?;
+				table.serialize_field("ref", reference)?;
+				table.end()
 			}
 		}
 	}
 }
 
-// ── Main config types ──────────────────────────────────────────────────────
+impl<'de> Deserialize<'de> for CredentialSource {
+	fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		struct SourceVisitor;
+
+		impl<'de> serde::de::Visitor<'de> for SourceVisitor {
+			type Value = CredentialSource;
+
+			fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+				f.write_str("a provider spec string or a { provider, ref } table")
+			}
+
+			fn visit_str<E: serde::de::Error>(self, provider: &str) -> Result<CredentialSource, E> {
+				Ok(CredentialSource::from_provider(provider))
+			}
+
+			fn visit_map<M: serde::de::MapAccess<'de>>(
+				self,
+				map: M,
+			) -> Result<CredentialSource, M::Error> {
+				#[derive(Deserialize)]
+				#[serde(deny_unknown_fields)]
+				struct Table {
+					provider: String,
+					#[serde(default, rename = "ref")]
+					reference: Option<NativeAddress>,
+				}
+				let table = Table::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+				Ok(CredentialSource {
+					provider: table.provider,
+					reference: table.reference,
+				})
+			}
+		}
+
+		deserializer.deserialize_any(SourceVisitor)
+	}
+}
+
+/// Cache policy for a cached provider alias. Available since Monosecret 0.17.
+///
+/// Cached aliases read from `provider` before consulting their `fallback`
+/// sources. A cached value remains fresh for `max_age`.
+///
+/// [`ProviderCache::new`] is the only constructor, and the fields carrying the
+/// validated values are private, so a policy that exists always has a
+/// non-empty provider spec and a `max_age` that parsed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProviderCache {
+	/// Leaf provider spec used to persist the cache envelope.
+	provider: String,
+	/// Human-readable freshness duration (`30m`, `8h`, `1d`, or combinations).
+	max_age: String,
+	/// [`Self::max_age`] in seconds, parsed once at construction. Derived, so
+	/// it is not part of the serialized form.
+	#[serde(skip)]
+	max_age_secs: u64,
+}
+
+impl ProviderCache {
+	/// A cache policy for `provider` holding values for `max_age`.
+	///
+	/// Returns the user-facing reason when the provider spec is blank or the
+	/// duration is not a value like `30m`, `8h`, or `1h30m`.
+	pub fn new(
+		provider: impl Into<String>,
+		max_age: impl Into<String>,
+	) -> std::result::Result<Self, String> {
+		let provider = provider.into();
+		let max_age = max_age.into();
+		if provider.trim().is_empty() {
+			return Err("cache.provider must be a non-empty provider spec".to_string());
+		}
+		let max_age_secs = parse_cache_max_age(&max_age)?;
+		Ok(Self {
+			provider,
+			max_age,
+			max_age_secs,
+		})
+	}
+
+	/// The freshness window in seconds, parsed from [`Self::max_age`].
+	pub fn max_age_secs(&self) -> u64 {
+		self.max_age_secs
+	}
+
+	/// The leaf provider spec used to persist the cache envelope.
+	pub fn provider(&self) -> &str {
+		&self.provider
+	}
+
+	/// The human-readable freshness duration supplied at construction.
+	pub fn max_age(&self) -> &str {
+		&self.max_age
+	}
+}
+
+impl<'de> Deserialize<'de> for ProviderCache {
+	fn deserialize<D: serde::Deserializer<'de>>(
+		deserializer: D,
+	) -> std::result::Result<Self, D::Error> {
+		// Deserializing through the constructor is what keeps an unparseable
+		// duration from reaching planning: the config load reports it once,
+		// pointing at the alias that declared it.
+		#[derive(Deserialize)]
+		#[serde(deny_unknown_fields)]
+		struct Table {
+			provider: String,
+			max_age: String,
+		}
+		let table = Table::deserialize(deserializer)?;
+		ProviderCache::new(table.provider, table.max_age).map_err(serde::de::Error::custom)
+	}
+}
+
+/// Parse a cache duration without accepting ambiguous bare numbers.
+pub(crate) fn parse_cache_max_age(value: &str) -> std::result::Result<u64, String> {
+	let value = value.trim();
+	if value.is_empty() {
+		return Err("cache max_age must not be empty".to_string());
+	}
+
+	let bytes = value.as_bytes();
+	let mut index = 0;
+	let mut total = 0_u64;
+	while index < bytes.len() {
+		let digits_start = index;
+		while index < bytes.len() && bytes[index].is_ascii_digit() {
+			index += 1;
+		}
+		if digits_start == index {
+			return Err(format!(
+				"invalid cache max_age '{value}'; expected a duration such as '30m', '8h', or '1d'"
+			));
+		}
+		let amount: u64 = value[digits_start..index]
+			.parse()
+			.map_err(|_| format!("cache max_age '{value}' is too large"))?;
+		if index == bytes.len() {
+			return Err(format!(
+				"invalid cache max_age '{value}'; every number needs a unit (s, m, h, d, or w)"
+			));
+		}
+		let multiplier = match bytes[index] {
+			b's' => 1,
+			b'm' => 60,
+			b'h' => 60 * 60,
+			b'd' => 24 * 60 * 60,
+			b'w' => 7 * 24 * 60 * 60,
+			_ => {
+				return Err(format!(
+					"invalid cache max_age '{value}'; supported units are s, m, h, d, and w"
+				));
+			}
+		};
+		index += 1;
+		total = total
+			.checked_add(
+				amount
+					.checked_mul(multiplier)
+					.ok_or_else(|| format!("cache max_age '{value}' is too large"))?,
+			)
+			.ok_or_else(|| format!("cache max_age '{value}' is too large"))?;
+	}
+	if total == 0 {
+		return Err("cache max_age must be greater than zero".to_string());
+	}
+	Ok(total)
+}
+
+/// A provider alias: either a leaf provider or, in Monosecret 0.17+, a cached
+/// fallback route.
+///
+/// In TOML an alias is written either as a bare string, which is just the URI:
+///
+/// ```toml
+/// [providers]
+/// keyring = "keyring://"
+/// ```
+///
+/// or as a table carrying a `credentials` map, whose entries name semantic
+/// credentials the provider needs and the provider spec to source them from:
+///
+/// ```toml
+/// [providers]
+/// bws = { uri = "bws://project-uuid", credentials = { access_token = "keyring" } }
+/// ```
+///
+/// Monosecret 0.19+ can cache one provider directly on its alias:
+///
+/// ```toml
+/// [providers]
+/// azure = { uri = "akv://team-vault", cache = { provider = "local", max_age = "8h" } }
+/// local = "keyring://monosecret/cache/{project}/{profile}/{key}"
+/// ```
+///
+/// A cached fallback route names multiple authoritative sources in order and a
+/// leaf provider used for the local cache:
+///
+/// ```toml
+/// [providers]
+/// azure = "akv://team-vault"
+/// local = "keyring://monosecret/cache/{project}/{profile}/{key}"
+/// myprovider = { fallback = ["azure", "env"], cache = { provider = "local", max_age = "8h" } }
+/// ```
+///
+/// Leaf aliases round-trip as before: an alias with no credentials or ref
+/// template serializes back to a bare string, so existing configs are untouched.
+///
+/// Construct one through [`ProviderAlias::from_uri`] or
+/// [`ProviderAlias::cached`]; the struct is `#[non_exhaustive]` so a future
+/// alias form can be added without breaking callers.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct ProviderAlias {
+	/// The provider URI (e.g. `keyring://`, `bws://project-uuid`). Also the
+	/// authoritative source when `cache` is set without `fallback` (0.19+).
+	pub uri: String,
+	/// Semantic credential name to the [`CredentialSource`] that supplies it.
+	/// Empty for a bare string alias, so "declares no credentials" has exactly
+	/// one representation.
+	pub credentials: HashMap<String, CredentialSource>,
+	/// Provider-scoped native-address template (0.19+). Placeholders compile a
+	/// logical `{project}/{profile}/{key}` address into this alias's own
+	/// coordinates before the provider is contacted.
+	pub reference_template: Option<NativeAddressTemplate>,
+	/// Ordered authoritative sources for a cached fallback alias (0.17+).
+	/// Empty for a leaf alias and for an inline URI cache (0.19+).
+	pub(crate) fallback: Vec<String>,
+	/// Cache policy for a cached alias (0.17+). `None` for an uncached leaf
+	/// alias.
+	pub(crate) cache: Option<ProviderCache>,
+}
+
+impl ProviderAlias {
+	/// A bare alias carrying only a URI and no credentials.
+	pub fn from_uri(uri: impl Into<String>) -> Self {
+		Self {
+			uri: uri.into(),
+			credentials: HashMap::new(),
+			reference_template: None,
+			fallback: Vec::new(),
+			cache: None,
+		}
+	}
+
+	/// A leaf alias carrying a URI and its semantic credential sources.
+	pub fn leaf(uri: impl Into<String>, credentials: HashMap<String, CredentialSource>) -> Self {
+		Self {
+			uri: uri.into(),
+			credentials,
+			reference_template: None,
+			fallback: Vec::new(),
+			cache: None,
+		}
+	}
+
+	/// Semantic credential sources for a leaf or inline cached provider.
+	pub fn credentials(&self) -> Option<&HashMap<String, CredentialSource>> {
+		self.fallback.is_empty().then_some(&self.credentials)
+	}
+
+	/// Mutable semantic credential sources for a leaf or inline cached provider.
+	pub fn credentials_mut(&mut self) -> Option<&mut HashMap<String, CredentialSource>> {
+		self.fallback.is_empty().then_some(&mut self.credentials)
+	}
+
+	/// A cached route alias: ordered authoritative sources plus the cache they
+	/// are cached in (0.17+).
+	///
+	/// Returns the user-facing reason when no source is named, so a cached
+	/// alias that exists always has a source to read from and write to.
+	pub fn cached(
+		fallback: Vec<String>,
+		cache: ProviderCache,
+	) -> std::result::Result<Self, String> {
+		if fallback.is_empty() || fallback.iter().any(|spec| spec.trim().is_empty()) {
+			return Err(
+				"a cached provider alias requires at least one non-empty fallback".to_string(),
+			);
+		}
+		Ok(Self {
+			uri: String::new(),
+			credentials: HashMap::new(),
+			reference_template: None,
+			fallback,
+			cache: Some(cache),
+		})
+	}
+
+	/// Adds a cache policy to this alias (inline URI form available in 0.19+).
+	///
+	/// A URI alias retains its URI and credentials as the authoritative
+	/// provider. An existing fallback alias retains its ordered route.
+	pub fn with_cache(mut self, cache: ProviderCache) -> Self {
+		self.cache = Some(cache);
+		self
+	}
+
+	/// Whether this alias describes a cached route rather than a leaf provider
+	/// (0.17+).
+	pub fn is_cached(&self) -> bool {
+		self.cache.is_some()
+	}
+
+	/// The single authoritative URI this alias names, if it names one.
+	///
+	/// `Some` for a leaf alias and for the inline cache form (0.19+), where
+	/// the alias itself remains the authoritative provider. `None` for a
+	/// cached fallback alias, whose ordered sources are in [`Self::fallback`].
+	pub fn authoritative_uri(&self) -> Option<&str> {
+		(!self.uri.is_empty()).then_some(self.uri.as_str())
+	}
+
+	/// The ordered authoritative sources of a cached alias.
+	///
+	/// Empty for an uncached leaf alias and for an inline URI cache (0.19+).
+	pub fn fallback(&self) -> &[String] {
+		&self.fallback
+	}
+
+	/// The cache policy of a cached alias.
+	///
+	/// `None` for a leaf alias.
+	pub fn cache(&self) -> Option<&ProviderCache> {
+		self.cache.as_ref()
+	}
+
+	/// The native-address template attached to this leaf alias, if any.
+	pub fn reference_template(&self) -> Option<&NativeAddressTemplate> {
+		self.reference_template.as_ref()
+	}
+
+	/// Attach a validated native-address template to a leaf alias.
+	pub fn with_reference_template(
+		mut self,
+		template: NativeAddressTemplate,
+	) -> std::result::Result<Self, String> {
+		if self.is_cached() {
+			return Err(
+                "a cached provider alias cannot declare a ref template; put templates on its leaf aliases"
+                    .to_string(),
+            );
+		}
+		template.validate()?;
+		self.reference_template = Some(template);
+		Ok(self)
+	}
+}
+
+impl From<String> for ProviderAlias {
+	fn from(uri: String) -> Self {
+		Self::from_uri(uri)
+	}
+}
+
+impl From<&str> for ProviderAlias {
+	fn from(uri: &str) -> Self {
+		Self::from_uri(uri)
+	}
+}
+
+impl std::fmt::Display for ProviderAlias {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		if let Some(cache) = &self.cache {
+			match self.authoritative_uri() {
+				None => {
+					// A fallback alias never carries credentials, so the shared
+					// suffix below does not apply to it.
+					return write!(
+						f,
+						"fallback [{}], cached in {} for {}",
+						self.fallback.join(", "),
+						cache.provider,
+						cache.max_age
+					);
+				}
+				Some(uri) => {
+					write!(
+						f,
+						"{}, cached in {} for {}",
+						uri, cache.provider, cache.max_age
+					)?
+				}
+			}
+		} else {
+			write!(f, "{}", self.uri)?;
+		}
+		if !self.credentials.is_empty() {
+			let mut names: Vec<&str> = self.credentials.keys().map(String::as_str).collect();
+			names.sort();
+			write!(f, " (credentials: {})", names.join(", "))?;
+		}
+		if let Some(template) = &self.reference_template {
+			write!(f, " (ref template: {})", template.render_description())?;
+		}
+		Ok(())
+	}
+}
+
+impl Serialize for ProviderAlias {
+	fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		if let Some(cache) = &self.cache {
+			use serde::ser::SerializeStruct;
+			return match self.authoritative_uri() {
+				Some(uri) => {
+					let fields = if self.credentials.is_empty() { 2 } else { 3 };
+					let mut table = serializer.serialize_struct("ProviderAlias", fields)?;
+					table.serialize_field("uri", uri)?;
+					if !self.credentials.is_empty() {
+						table.serialize_field("credentials", &self.credentials)?;
+					}
+					table.serialize_field("cache", cache)?;
+					table.end()
+				}
+				None => {
+					let mut table = serializer.serialize_struct("ProviderAlias", 2)?;
+					table.serialize_field("fallback", &self.fallback)?;
+					table.serialize_field("cache", cache)?;
+					table.end()
+				}
+			};
+		}
+		if self.credentials.is_empty() && self.reference_template.is_none() {
+			// A bare alias serializes back to the plain-string form, so an alias
+			// that was written as a string round-trips unchanged.
+			serializer.serialize_str(&self.uri)
+		} else {
+			use serde::ser::SerializeStruct;
+			let mut table = serializer.serialize_struct("ProviderAlias", 3)?;
+			table.serialize_field("uri", &self.uri)?;
+			if !self.credentials.is_empty() {
+				table.serialize_field("credentials", &self.credentials)?;
+			}
+			if let Some(template) = &self.reference_template {
+				table.serialize_field("ref", template)?;
+			}
+			table.end()
+		}
+	}
+}
+
+impl<'de> Deserialize<'de> for ProviderAlias {
+	fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		struct AliasVisitor;
+
+		impl<'de> serde::de::Visitor<'de> for AliasVisitor {
+			type Value = ProviderAlias;
+
+			fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+				f.write_str(
+					"a provider URI string, a { uri, credentials, cache } table, or a \
+                     { fallback, cache } table",
+				)
+			}
+
+			fn visit_str<E: serde::de::Error>(self, uri: &str) -> Result<ProviderAlias, E> {
+				Ok(ProviderAlias::from_uri(uri))
+			}
+
+			fn visit_map<M: serde::de::MapAccess<'de>>(
+				self,
+				map: M,
+			) -> Result<ProviderAlias, M::Error> {
+				// A dedicated struct gives precise field-level errors (unknown
+				// key, missing `uri`) rather than the opaque message an
+				// `#[serde(untagged)]` enum would produce on any typo.
+				#[derive(Deserialize)]
+				#[serde(deny_unknown_fields)]
+				struct Table {
+					#[serde(default)]
+					uri: Option<String>,
+					#[serde(default)]
+					credentials: Option<HashMap<String, CredentialSource>>,
+					#[serde(default, rename = "ref")]
+					reference_template: Option<NativeAddressTemplate>,
+					#[serde(default)]
+					fallback: Option<Vec<String>>,
+					#[serde(default)]
+					cache: Option<ProviderCache>,
+				}
+				let table = Table::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+				match (table.uri, table.fallback, table.cache) {
+					(Some(uri), None, cache) => {
+						if let Some(template) = &table.reference_template {
+							template.validate().map_err(serde::de::Error::custom)?;
+						}
+						if cache.is_some() && table.reference_template.is_some() {
+							return Err(serde::de::Error::custom(
+								"an inline cached provider alias cannot declare a ref template",
+							));
+						}
+						Ok(ProviderAlias {
+							uri,
+							credentials: table.credentials.unwrap_or_default(),
+							reference_template: table.reference_template,
+							fallback: Vec::new(),
+							cache,
+						})
+					}
+					(None, Some(fallback), Some(cache)) => {
+						if table.credentials.is_some() {
+							return Err(serde::de::Error::custom(
+								"a cached provider alias cannot declare credentials; \
+                                 put credentials on its leaf fallback aliases",
+							));
+						}
+						if table.reference_template.is_some() {
+							return Err(serde::de::Error::custom(
+								"a cached provider alias cannot declare a ref template; put templates on its leaf aliases",
+							));
+						}
+						// The remaining shape checks live in the constructor,
+						// so a `ProviderAlias` built in Rust and one loaded from
+						// TOML enforce exactly the same invariants.
+						ProviderAlias::cached(fallback, cache).map_err(serde::de::Error::custom)
+					}
+					(Some(_), Some(_), _) => {
+						Err(serde::de::Error::custom(
+							"a provider alias must use either { uri, credentials, ref, cache } or \
+                             { fallback, cache }, not both",
+						))
+					}
+					(None, Some(_), None) => {
+						Err(serde::de::Error::custom(
+							"a cached provider alias with fallback also requires cache",
+						))
+					}
+					(None, None, Some(_)) => {
+						Err(serde::de::Error::custom(
+							"a cached provider alias with cache also requires uri or fallback",
+						))
+					}
+					(None, None, None) => {
+						Err(serde::de::Error::custom(
+							"a provider alias table requires uri or fallback plus cache",
+						))
+					}
+				}
+			}
+		}
+
+		deserializer.deserialize_any(AliasVisitor)
+	}
+}
 
 /// The root configuration structure for a Monosecret project.
 ///
@@ -216,57 +933,19 @@ pub struct Config {
 	/// Take precedence over aliases in the user-global config
 	/// (`~/.config/monosecret/config.toml`), so teams can check vault mappings
 	/// into version control instead of replicating them on every machine.
-	/// Can be a simple alias (`"keyring://"`) or a structured table with
-	/// dependency declarations (`{ uri = "…", depends_on = [ … ] }`).
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub providers: Option<HashMap<String, ProviderConfig>>,
-	/// Declared secret groups. Secrets may only reference groups declared here.
+	/// Declared filtering groups. Secrets may only reference groups declared here.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub groups: Option<HashMap<String, String>>,
-}
-
-/// Secret-value-free manifest for SDK code generation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Manifest {
-	/// Project metadata from `[project]`.
-	pub project: ManifestProject,
-	/// Effective profiles, with default profile fallback and profile defaults applied.
-	pub profiles: BTreeMap<String, ManifestProfile>,
-	/// Declared groups from `[groups]`; values are group descriptions.
-	pub groups: BTreeMap<String, String>,
-}
-
-/// Project metadata included in a [`Manifest`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ManifestProject {
-	/// Project name.
-	pub name: String,
-	/// Configuration revision.
-	pub revision: String,
-}
-
-/// Effective profile metadata included in a [`Manifest`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ManifestProfile {
-	/// Effective secret declarations for this profile.
-	pub secrets: BTreeMap<String, ManifestSecret>,
-}
-
-/// Effective secret metadata included in a [`Manifest`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ManifestSecret {
-	/// Whether the secret is required in this effective profile.
-	pub required: bool,
-	/// Whether the secret has a default value. The value itself is intentionally omitted.
-	pub has_default: bool,
-	/// Whether Monosecret resolves this secret to a temporary file path.
-	pub as_path: bool,
-	/// Groups this secret belongs to.
-	pub groups: Vec<String>,
+	/// Named secret scopes: membership-only subsets of a profile's secrets, used
+	/// to resolve only what one service/task needs (`--scope api`) rather than the
+	/// whole profile. A scope never changes a secret's `required`/`default`/
+	/// providers or its storage address — it only narrows which secrets
+	/// participate in a resolution. Orthogonal to profiles: the resolved set is
+	/// the intersection of the merged profile and the scope's secret list.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub scopes: Option<HashMap<String, Scope>>,
 }
 
 impl Config {
@@ -275,85 +954,12 @@ impl Config {
 	}
 
 	/// Returns a secret-value-free manifest suitable for SDK code generation.
+	///
+	/// Profile inheritance and profile defaults are applied before metadata is
+	/// emitted. Secret values, provider configuration, and credentials are never
+	/// included.
 	pub fn to_manifest(&self) -> Manifest {
-		let mut profiles = BTreeMap::new();
-		for profile_name in self.profiles.keys() {
-			profiles.insert(profile_name.clone(), self.manifest_profile(profile_name));
-		}
-
-		Manifest {
-			project: ManifestProject {
-				name: self.project.name.clone(),
-				revision: self.project.revision.clone(),
-			},
-			profiles,
-			groups: self
-				.groups
-				.clone()
-				.unwrap_or_default()
-				.into_iter()
-				.collect(),
-		}
-	}
-
-	fn manifest_profile(&self, profile_name: &str) -> ManifestProfile {
-		let mut secrets = BTreeMap::new();
-		let current_profile = self.profiles.get(profile_name);
-		let default_profile = (profile_name != "default")
-			.then(|| self.profiles.get("default"))
-			.flatten();
-
-		let mut secret_names = HashSet::new();
-		if let Some(profile) = current_profile {
-			secret_names.extend(profile.secrets.keys().cloned());
-		}
-		if let Some(profile) = default_profile {
-			secret_names.extend(profile.secrets.keys().cloned());
-		}
-
-		for secret_name in secret_names {
-			if let Some(secret) = self.manifest_secret(&secret_name, profile_name) {
-				secrets.insert(secret_name, secret);
-			}
-		}
-
-		ManifestProfile { secrets }
-	}
-
-	fn manifest_secret(&self, name: &str, profile_name: &str) -> Option<ManifestSecret> {
-		let current_profile = self.profiles.get(profile_name);
-		let current_secret = current_profile.and_then(|profile| profile.secrets.get(name));
-		let current_defaults = current_profile.and_then(|profile| profile.defaults.as_ref());
-		let default_secret = if profile_name == "default" {
-			None
-		} else {
-			self.profiles
-				.get("default")
-				.and_then(|profile| profile.secrets.get(name))
-		};
-
-		if current_secret.is_none() && default_secret.is_none() {
-			return None;
-		}
-
-		Some(ManifestSecret {
-			required: current_secret
-				.and_then(|secret| secret.required)
-				.or_else(|| default_secret.and_then(|secret| secret.required))
-				.or_else(|| current_defaults.and_then(|defaults| defaults.required))
-				.unwrap_or(true),
-			has_default: current_secret.is_some_and(|secret| secret.default.is_some())
-				|| default_secret.is_some_and(|secret| secret.default.is_some())
-				|| current_defaults.is_some_and(|defaults| defaults.default.is_some()),
-			as_path: current_secret
-				.and_then(|secret| secret.as_path)
-				.or_else(|| default_secret.and_then(|secret| secret.as_path))
-				.unwrap_or(false),
-			groups: current_secret
-				.and_then(|secret| secret.groups.clone())
-				.or_else(|| default_secret.and_then(|secret| secret.groups.clone()))
-				.unwrap_or_default(),
-		})
+		CompiledManifest::compile(self).public_manifest(self)
 	}
 
 	/// Validate the configuration.
@@ -368,6 +974,13 @@ impl Config {
 	///
 	/// Returns a `ParseError` if validation fails.
 	pub fn validate(&self) -> Result<(), ParseError> {
+		self.validate_and_compile().map(|_| ())
+	}
+
+	/// Validate and return the compiled manifest, so callers that also need the
+	/// effective view (e.g. [`crate::Secrets::load_from`]) reuse the single
+	/// compile validation already performed instead of recompiling.
+	pub(crate) fn validate_and_compile(&self) -> Result<CompiledManifest, ParseError> {
 		if self.project.name.is_empty() {
 			return Err(ParseError::Validation(
 				"Project name cannot be empty".into(),
@@ -380,66 +993,128 @@ impl Config {
 			));
 		}
 
-		// Validate each profile. Non-default profiles are partial overlays, so
-		// validate their effective secret after inheriting omitted fields from the
-		// default profile rather than rejecting a valid override in isolation.
-		for (profile_name, profile) in &self.profiles {
-			if profile.secrets.is_empty() {
-				return Err(ParseError::Validation(format!(
-					"Profile '{profile_name}': Profile must define at least one secret"
-				)));
-			}
+		// Raw syntax checks stay on the document model; effective semantic
+		// checks consume the same compiled manifest as runtime and codegen.
+		// Validate `default` first, then remaining profiles in name order so
+		// error attribution is deterministic.
+		let compiled = CompiledManifest::compile(self);
+		let default_profile = self.profiles.get("default");
+		if let Some(default_profile) = default_profile {
+			default_profile
+				.validate_raw(false)
+				.map_err(|e| ParseError::Validation(format!("Profile 'default': {}", e)))?;
+			validate_compiled_profile(&compiled, "default")?;
+		}
 
+		let mut profile_names: Vec<&String> = self
+			.profiles
+			.keys()
+			.filter(|name| name.as_str() != "default")
+			.collect();
+		profile_names.sort();
+
+		for profile_name in profile_names {
+			let profile = &self.profiles[profile_name];
+			let can_inherit_secrets = default_profile.is_some() && profile.inherits_default();
+			profile.validate_raw(can_inherit_secrets).map_err(|e| {
+				ParseError::Validation(format!("Profile '{}': {}", profile_name, e))
+			})?;
+			validate_compiled_profile(&compiled, profile_name)?;
+		}
+
+		self.validate_filter_groups(&compiled)?;
+		self.validate_scopes(&compiled)?;
+
+		Ok(compiled)
+	}
+
+	fn validate_filter_groups(&self, compiled: &CompiledManifest) -> Result<(), ParseError> {
+		for (profile_name, profile) in &compiled.profiles {
 			for (secret_name, secret) in &profile.secrets {
-				if !is_valid_identifier(secret_name) {
-					return Err(ParseError::Validation(format!(
-						"Profile '{profile_name}': Invalid secret name '{secret_name}': must be a valid identifier (alphanumeric and underscores, not starting with a number)"
-					)));
-				}
-
-				let mut effective = secret.clone();
-				if profile_name != "default"
-					&& let Some(default) = self
-						.profiles
-						.get("default")
-						.and_then(|profile| profile.secrets.get(secret_name))
-				{
-					effective.description = effective
-						.description
-						.or_else(|| default.description.clone());
-					effective.required = effective.required.or(default.required);
-					effective.default = effective.default.or_else(|| default.default.clone());
-					effective.groups = effective.groups.or_else(|| default.groups.clone());
-					effective.providers = effective.providers.or_else(|| default.providers.clone());
-					effective.reference = effective.reference.or_else(|| default.reference.clone());
-					effective.as_path = effective.as_path.or(default.as_path);
-					effective.secret_type = effective
-						.secret_type
-						.or_else(|| default.secret_type.clone());
-					effective.generate = effective.generate.or_else(|| default.generate.clone());
-				}
-				effective.validate().map_err(|error| {
+				let Some(groups) = &secret.config.groups else {
+					continue;
+				};
+				let declared = self.declared_groups().ok_or_else(|| {
 					ParseError::Validation(format!(
-						"Profile '{profile_name}': Secret '{secret_name}': {error}"
+						"Secret '{profile_name}.{secret_name}' references groups but no top-level [groups] table is declared"
 					))
 				})?;
-
-				if let Some(groups) = &secret.groups {
-					let declared = self.declared_groups().ok_or_else(|| {
-						ParseError::Validation(format!(
-							"Secret '{profile_name}.{secret_name}' references groups but no top-level [groups] table is declared"
-						))
-					})?;
-
-					for group in groups {
-						if declared.contains_key(group) {
-							continue;
-						}
-
+				for group in groups {
+					if !declared.contains_key(group) {
 						return Err(ParseError::Validation(format!(
 							"Secret '{profile_name}.{secret_name}' references undeclared group '{group}'"
 						)));
 					}
+				}
+			}
+		}
+		Ok(())
+	}
+
+	/// Every secret named by a scope must be declared by at least one profile.
+	/// A scope is membership-only, so listing a name no profile declares can
+	/// never resolve to anything and is a configuration error (mirroring the
+	/// per-profile intersection: a scope's own list is validated against the
+	/// union of all profiles, while the *effective* set at runtime is the
+	/// intersection with the selected profile). Scope names are validated in
+	/// sorted order, and secrets within a scope in declaration order, so error
+	/// attribution is deterministic.
+	///
+	/// The list's own shape is checked first. An empty scope is rejected rather
+	/// than accepted as "resolves to nothing": it contacts no provider, so
+	/// `check --scope` reports a clean `0 found, 0 missing` and `run --scope`
+	/// launches the command with every manifest secret scrubbed and none
+	/// injected — a green result that guarantees nothing. A blank or repeated
+	/// entry is likewise a typo with no meaning, not a subset worth resolving.
+	fn validate_scopes(&self, compiled: &CompiledManifest) -> Result<(), ParseError> {
+		let Some(scopes) = &self.scopes else {
+			return Ok(());
+		};
+
+		let declared: std::collections::BTreeSet<&str> = compiled
+			.profiles
+			.values()
+			.flat_map(|profile| profile.secrets.keys())
+			.map(String::as_str)
+			.collect();
+
+		let mut scope_names: Vec<&String> = scopes.keys().collect();
+		scope_names.sort();
+
+		for scope_name in scope_names {
+			if scope_name.trim().is_empty() {
+				return Err(ParseError::Validation(
+					"Scope names cannot be empty".to_string(),
+				));
+			}
+
+			let secrets = &scopes[scope_name].secrets;
+			if secrets.is_empty() {
+				return Err(ParseError::Validation(format!(
+					"Scope '{}' lists no secrets; a scope must name at least one",
+					scope_name
+				)));
+			}
+
+			let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+			for secret in secrets {
+				if secret.trim().is_empty() {
+					return Err(ParseError::Validation(format!(
+						"Scope '{}' lists an empty secret name",
+						scope_name
+					)));
+				}
+				if !seen.insert(secret.as_str()) {
+					return Err(ParseError::Validation(format!(
+						"Scope '{}' lists secret '{}' more than once",
+						scope_name, secret
+					)));
+				}
+				if !declared.contains(secret.as_str()) {
+					return Err(ParseError::Validation(format!(
+						"Scope '{}' references secret '{}', which is not declared in any profile",
+						scope_name, secret
+					)));
 				}
 			}
 		}
@@ -457,56 +1132,223 @@ impl Config {
 		self.profiles.get_mut(name)
 	}
 
-	/// Merge another configuration into this one.
+	/// Overlay a later manifest document onto an earlier one.
 	///
-	/// The current configuration takes precedence - values from `other`
-	/// are only used if not already present.
-	pub fn merge_with(&mut self, other: Config) {
-		// Inherit the reason policy from the parent when this config leaves it
-		// unspecified. `name`/`revision`/`extends` stay per-project and are not
-		// merged, but `require_reason` is a security policy meant to apply
-		// uniformly, so a shared base config can set it for everything that
-		// extends it.
+	/// A source graph is linearized from least to most specific, so folding it
+	/// means every later source wins while fields the later source leaves absent
+	/// continue to inherit from the earlier one.
+	fn overlay_with(&mut self, later: Config) {
+		let inherited_require_reason = self.project.require_reason;
+		self.project = later.project;
 		if self.project.require_reason.is_none() {
-			self.project.require_reason = other.project.require_reason;
+			self.project.require_reason = inherited_require_reason;
 		}
 
-		// Merge profiles
-		for (profile_name, profile_config) in other.profiles {
+		for (profile_name, later_profile) in later.profiles {
 			match self.profiles.get_mut(&profile_name) {
-				Some(existing_profile) => {
-					existing_profile.merge_with(profile_config);
-				}
+				Some(profile) => profile.overlay_with(later_profile),
 				None => {
-					self.profiles.insert(profile_name, profile_config);
+					self.profiles.insert(profile_name, later_profile);
 				}
 			}
 		}
 
-		// Merge provider aliases — current entries win.
-		if let Some(other_providers) = other.providers {
-			let merged = self.providers.get_or_insert_with(HashMap::new);
-			for (alias, config) in other_providers {
-				merged.entry(alias).or_insert(config);
-			}
+		if let Some(later_providers) = later.providers {
+			self.providers
+				.get_or_insert_with(HashMap::new)
+				.extend(later_providers);
 		}
 
-		// Merge group declarations — current entries win.
-		if let Some(other_groups) = other.groups {
-			let merged = self.groups.get_or_insert_with(HashMap::new);
-			for (name, description) in other_groups {
-				merged.entry(name).or_insert(description);
-			}
+		if let Some(later_groups) = later.groups {
+			self.groups
+				.get_or_insert_with(HashMap::new)
+				.extend(later_groups);
+		}
+
+		if let Some(later_scopes) = later.scopes {
+			self.scopes
+				.get_or_insert_with(HashMap::new)
+				.extend(later_scopes);
 		}
 	}
 
 	// Internal methods
 
-	fn from_path_with_visited(
-		path: &Path,
-		visited: &mut HashSet<PathBuf>,
-	) -> Result<Self, ParseError> {
-		// Get canonical path to handle symlinks and relative paths consistently
+	fn parse_document(content: &str) -> Result<Self, ParseError> {
+		let config: Config = toml::from_str(content)?;
+		if config.project.revision != "1.0" {
+			return Err(ParseError::UnsupportedRevision(config.project.revision));
+		}
+		Ok(config)
+	}
+}
+
+fn validate_compiled_profile(
+	manifest: &CompiledManifest,
+	profile_name: &str,
+) -> Result<(), ParseError> {
+	let profile = manifest
+		.profile(profile_name)
+		.expect("compiled profiles mirror parsed profiles");
+	for (name, secret) in &profile.secrets {
+		secret.config.validate_effective().map_err(|e| {
+			ParseError::Validation(format!(
+				"Profile '{}': Secret '{}': {}",
+				profile_name, name, e
+			))
+		})?;
+	}
+	validate_profile_constraints(profile_name, profile)?;
+	validate_composition_graph(profile_name, profile)?;
+	Ok(())
+}
+
+fn validate_profile_constraints(
+	profile_name: &str,
+	profile: &crate::manifest::CompiledProfile,
+) -> Result<(), ParseError> {
+	fn validate_groups(
+		profile_name: &str,
+		kind: &str,
+		groups: &[crate::manifest::CompiledConstraintGroup],
+	) -> Result<(), ParseError> {
+		for group in groups {
+			if group.members.len() < 2 {
+				return Err(ParseError::Validation(format!(
+					"Profile '{}': {} group '{}' must contain at least two secrets",
+					profile_name, kind, group.name
+				)));
+			}
+		}
+		Ok(())
+	}
+
+	let at_least_names: HashSet<&str> = profile
+		.constraints
+		.at_least_one
+		.iter()
+		.map(|group| group.name.as_str())
+		.collect();
+	if let Some(group) = profile
+		.constraints
+		.exactly_one
+		.iter()
+		.find(|group| at_least_names.contains(group.name.as_str()))
+	{
+		return Err(ParseError::Validation(format!(
+			"Profile '{}': group '{}' cannot mix at_least_one and exactly_one membership",
+			profile_name, group.name
+		)));
+	}
+
+	validate_groups(
+		profile_name,
+		"at_least_one",
+		&profile.constraints.at_least_one,
+	)?;
+	validate_groups(
+		profile_name,
+		"exactly_one",
+		&profile.constraints.exactly_one,
+	)?;
+
+	Ok(())
+}
+
+fn validate_composition_graph(
+	profile_name: &str,
+	profile: &crate::manifest::CompiledProfile,
+) -> Result<(), ParseError> {
+	// Templates were parsed during manifest compilation; a malformed one was
+	// already rejected by `validate_semantics` before this runs.
+	let mut graph: BTreeMap<&str, &[String]> = BTreeMap::new();
+	for (name, secret) in &profile.secrets {
+		let Some(template) = &secret.composition else {
+			continue;
+		};
+		for dependency in template.dependencies() {
+			if !profile.secrets.contains_key(dependency) {
+				return Err(ParseError::Validation(format!(
+					"Profile '{}': Secret '{}': composed reference `${{{}}}` does not name a declared secret",
+					profile_name, name, dependency
+				)));
+			}
+		}
+		graph.insert(name.as_str(), template.dependencies());
+	}
+
+	fn visit<'a>(
+		name: &'a str,
+		graph: &BTreeMap<&'a str, &'a [String]>,
+		state: &mut HashMap<&'a str, u8>,
+		stack: &mut Vec<&'a str>,
+	) -> Result<(), Vec<String>> {
+		match state.get(name).copied() {
+			Some(2) => return Ok(()),
+			Some(1) => {
+				let start = stack.iter().position(|item| *item == name).unwrap_or(0);
+				let mut cycle: Vec<String> = stack[start..].iter().map(|s| s.to_string()).collect();
+				cycle.push(name.to_string());
+				return Err(cycle);
+			}
+			_ => {}
+		}
+		state.insert(name, 1);
+		stack.push(name);
+		if let Some(dependencies) = graph.get(name) {
+			for dependency in *dependencies {
+				if graph.contains_key(dependency.as_str()) {
+					visit(dependency, graph, state, stack)?;
+				}
+			}
+		}
+		stack.pop();
+		state.insert(name, 2);
+		Ok(())
+	}
+
+	let mut state = HashMap::new();
+	for name in graph.keys() {
+		if let Err(cycle) = visit(name, &graph, &mut state, &mut Vec::new()) {
+			return Err(ParseError::Validation(format!(
+				"Profile '{}': composed secret cycle: {}",
+				profile_name,
+				cycle.join(" -> ")
+			)));
+		}
+	}
+	Ok(())
+}
+
+/// Loads an inheritance graph and emits each source exactly once in deterministic
+/// post-order. `active` detects genuine back-edges; `emitted` separately handles
+/// shared ancestors, which are valid DAG nodes rather than cycles.
+struct ConfigGraphLoader {
+	active: HashSet<PathBuf>,
+	emitted: HashSet<PathBuf>,
+	documents: Vec<Config>,
+}
+
+impl ConfigGraphLoader {
+	fn load(path: &Path) -> Result<Config, ParseError> {
+		let mut loader = Self {
+			active: HashSet::new(),
+			emitted: HashSet::new(),
+			documents: Vec::new(),
+		};
+		loader.visit(path)?;
+
+		let mut documents = loader.documents.into_iter();
+		let mut merged = documents
+			.next()
+			.expect("visiting a root always emits at least one document");
+		for document in documents {
+			merged.overlay_with(document);
+		}
+		Ok(merged)
+	}
+
+	fn visit(&mut self, path: &Path) -> Result<(), ParseError> {
 		let canonical_path = path.canonicalize().map_err(|e| {
 			ParseError::Io(io::Error::new(
 				e.kind(),
@@ -514,76 +1356,42 @@ impl Config {
 			))
 		})?;
 
-		// Check for circular dependency
-		if !visited.insert(canonical_path.clone()) {
+		if self.emitted.contains(&canonical_path) {
+			return Ok(());
+		}
+		if !self.active.insert(canonical_path.clone()) {
 			return Err(ParseError::CircularDependency(format!(
 				"Configuration file {} is part of a circular dependency chain",
 				canonical_path.display()
 			)));
 		}
 
-		let content = fs::read_to_string(path)?;
-		Self::from_str_with_visited(&content, Some(path), visited)
-	}
-
-	fn from_str_with_visited(
-		content: &str,
-		base_path: Option<&Path>,
-		visited: &mut HashSet<PathBuf>,
-	) -> Result<Self, ParseError> {
-		let mut config: Config = toml::from_str(content)?;
-
-		// Validate revision
-		if config.project.revision != "1.0" {
-			return Err(ParseError::UnsupportedRevision(config.project.revision));
-		}
-
-		// Process extends if present
-		if let Some(extends_paths) = config.project.extends.clone()
-			&& let Some(base) = base_path
-		{
-			let base_dir = base.parent().unwrap_or(Path::new("."));
-			config = Self::merge_extended_configs(config, &extends_paths, base_dir, visited)?;
-		}
-
-		Ok(config)
-	}
-
-	fn merge_extended_configs(
-		mut base_config: Config,
-		extends_paths: &[String],
-		base_dir: &Path,
-		visited: &mut HashSet<PathBuf>,
-	) -> Result<Config, ParseError> {
-		for extend_path in extends_paths {
-			// If path ends with .toml, use it as-is; otherwise append monosecret.toml
+		let content = fs::read_to_string(&canonical_path)?;
+		let config = Config::parse_document(&content)?;
+		// Resolve `extends` relative to the manifest's referenced location, not
+		// its canonicalized target: a symlinked manifest inherits from paths
+		// relative to the symlink, not to the file it points at. Cycle detection
+		// and dedup still key on `canonical_path`.
+		let base_dir = path.parent().unwrap_or(Path::new("."));
+		for extend_path in config.project.extends.iter().flatten() {
 			let joined_path = base_dir.join(extend_path);
-			let has_toml_extension = Path::new(extend_path)
-				.extension()
-				.and_then(|extension| extension.to_str())
-				.is_some_and(|extension| extension.eq_ignore_ascii_case("toml"));
-			let full_path = if has_toml_extension {
+			let full_path = if extend_path.ends_with(".toml") {
 				joined_path
 			} else {
-				let monosecret_path = joined_path.join("monosecret.toml");
-				if monosecret_path.exists() {
-					monosecret_path
-				} else {
-					joined_path.join("secretspec.toml")
-				}
+				joined_path.join("monosecret.toml")
 			};
-
 			if !full_path.exists() {
 				return Err(ParseError::ExtendedConfigNotFound(
 					full_path.display().to_string(),
 				));
 			}
-
-			let extended_config = Self::from_path_with_visited(&full_path, visited)?;
-			base_config.merge_with(extended_config);
+			self.visit(&full_path)?;
 		}
 
-		Ok(base_config)
+		self.active.remove(&canonical_path);
+		self.emitted.insert(canonical_path);
+		self.documents.push(config);
+		Ok(())
 	}
 }
 
@@ -595,8 +1403,7 @@ impl FromStr for Config {
 	/// Note: Configuration inheritance (`extends`) is not supported when parsing
 	/// from a string since there's no base path to resolve relative paths.
 	fn from_str(s: &str) -> Result<Self, Self::Err> {
-		let mut visited = HashSet::new();
-		Self::from_str_with_visited(s, None, &mut visited)
+		Self::parse_document(s)
 	}
 }
 
@@ -607,8 +1414,7 @@ impl TryFrom<&Path> for Config {
 	///
 	/// This supports configuration inheritance via `extends` and circular dependency detection.
 	fn try_from(path: &Path) -> Result<Self, Self::Error> {
-		let mut visited = HashSet::new();
-		Self::from_path_with_visited(path, &mut visited)
+		ConfigGraphLoader::load(path)
 	}
 }
 
@@ -639,6 +1445,10 @@ impl Serialize for RequireReason {
 
 impl<'de> Deserialize<'de> for RequireReason {
 	fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		// A reason policy is a boolean or the string "agents". A hand-written visitor
+		// (rather than an untagged enum) lets serde report a precise, located error for
+		// a wrong *type*, not just for unknown strings. For example `require_reason = 1`
+		// yields "invalid type: integer `1`, expected a boolean or the string \"agents\"".
 		struct RequireReasonVisitor;
 
 		impl serde::de::Visitor<'_> for RequireReasonVisitor {
@@ -689,12 +1499,15 @@ pub struct Project {
 	/// Policy controlling when secret access must supply a reason. Accepts a boolean
 	/// or `"agents"`; enforced by [`crate::Secrets`]. `None` means "unspecified": it
 	/// resolves to [`RequireReason::default`] unless a parent config supplies a value
-	/// via `extends` (see [`Config::merge_with`]).
+	/// via `extends`, in which case the overlay from that parent fills it in.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub require_reason: Option<RequireReason>,
 }
 
 impl Default for Project {
+	/// A minimal project: empty name, current revision, no inheritance, unspecified
+	/// reason policy. Lets call sites build a `Project` with `..Default::default()`
+	/// so adding a field here does not require touching every literal.
 	fn default() -> Self {
 		Self {
 			name: String::new(),
@@ -703,6 +1516,129 @@ impl Default for Project {
 			require_reason: None,
 		}
 	}
+}
+
+/// Audit logging configuration, parsed from the top-level `[audit]` table in the
+/// user-global config (`~/.config/monosecret/config.toml`).
+///
+/// Auditing is an operator/per-machine concern (where the log lives, whether it is
+/// on), so it lives in the user config rather than the project's `monosecret.toml`:
+/// a cloned repository must not be able to redirect or silence your local audit
+/// log. monosecret records every secret read/write to a local JSON Lines file so
+/// that access is reviewable after the fact. Auditing is **on by default**; set
+/// `enabled = false` to turn it off. Secret values are never written to the log.
+///
+/// ```toml
+/// [audit]
+/// enabled = false
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AuditConfig {
+	/// Whether to record secret access. Defaults to `true`.
+	pub enabled: bool,
+	/// Where to write the JSON Lines log. Must be an absolute path (a leading `~`
+	/// is expanded to the home directory); a relative path is rejected and
+	/// auditing is disabled, because it would resolve against the current working
+	/// directory and scatter the log per-CWD. When unset, defaults to the per-user
+	/// XDG state directory (`~/.local/state/monosecret/audit.log` on Linux).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub path: Option<PathBuf>,
+	/// Hard cap on the log file size in bytes (default 1 MiB). At the cap the file
+	/// is truncated and restarted; no rotated backups are kept, so the log is a
+	/// rolling-by-reset record bounded to this size, not a complete history.
+	pub max_size_bytes: u64,
+}
+
+impl Default for AuditConfig {
+	fn default() -> Self {
+		Self {
+			enabled: true,
+			path: None,
+			max_size_bytes: 1_048_576,
+		}
+	}
+}
+
+impl AuditConfig {
+	/// The resolved on-disk path: the configured `path` (with a leading `~`
+	/// expanded to the home directory), or the default per-user audit log
+	/// location when no `path` is set.
+	///
+	/// Returns `None` when the location cannot be honored: either no `path` is set
+	/// and no default can be determined (no home/state directory), or the
+	/// configured `path` is **relative**. A relative path is rejected rather than
+	/// resolved against the current working directory — that would write a separate
+	/// log in every directory monosecret runs from. Use [`Self::has_relative_path`]
+	/// to distinguish the relative-path case for a precise diagnostic.
+	pub fn resolved_path(&self) -> Option<PathBuf> {
+		match self.path.clone() {
+			// Reject a relative configured path; only an absolute one is honored.
+			Some(path) => Some(expand_tilde(path)).filter(|p| p.is_absolute()),
+			None => default_audit_path(),
+		}
+	}
+
+	/// Whether a `path` is configured but is not absolute (after `~` expansion).
+	/// Such a path is rejected by [`Self::resolved_path`]; this lets callers emit a
+	/// "path is not absolute" message instead of a generic "no location" one.
+	pub fn has_relative_path(&self) -> bool {
+		self.path
+			.as_ref()
+			.is_some_and(|p| !expand_tilde(p.clone()).is_absolute())
+	}
+}
+
+/// Shared etcetera arguments identifying monosecret, so the app identity (used
+/// to derive config/state/data dirs) lives in a single place.
+fn app_strategy_args() -> etcetera::app_strategy::AppStrategyArgs {
+	etcetera::app_strategy::AppStrategyArgs {
+		top_level_domain: String::new(),
+		author: String::new(),
+		app_name: "monosecret".into(),
+	}
+}
+
+/// Default audit log location: the per-user state directory chosen by
+/// `choose_app_strategy`. That is the XDG strategy on both Linux and macOS (the
+/// CLI convention etcetera uses), so the log lives at
+/// `~/.local/state/monosecret/audit.log` on each. The `data_dir` fallback only
+/// applies on platforms whose strategy reports no distinct state dir.
+fn default_audit_path() -> Option<PathBuf> {
+	use etcetera::app_strategy::AppStrategy;
+	use etcetera::app_strategy::choose_app_strategy;
+	let strategy = choose_app_strategy(app_strategy_args()).ok()?;
+	let dir = strategy.state_dir().unwrap_or_else(|| strategy.data_dir());
+	Some(dir.join("audit.log"))
+}
+
+/// Per-user cache directory chosen by `choose_app_strategy`: state a provider
+/// can rebuild from its source of truth, unlike the config and state dirs.
+pub(crate) fn cache_dir() -> Option<PathBuf> {
+	use etcetera::app_strategy::AppStrategy;
+	use etcetera::app_strategy::choose_app_strategy;
+	Some(choose_app_strategy(app_strategy_args()).ok()?.cache_dir())
+}
+
+/// Expands a leading `~` (or `~/`) in a configured path to the user's home
+/// directory. A configured `~/.local/...` path would otherwise become a
+/// literal `./~` directory. Paths without a leading `~`, or paths that cannot
+/// be resolved to a home directory, are returned unchanged.
+pub(crate) fn expand_tilde(path: PathBuf) -> PathBuf {
+	let Ok(rest) = path.strip_prefix("~") else {
+		return path;
+	};
+	let Some(home) = home_dir() else {
+		return path;
+	};
+	home.join(rest)
+}
+
+/// Best-effort home directory, via etcetera with an `HOME` env fallback.
+fn home_dir() -> Option<PathBuf> {
+	etcetera::home_dir()
+		.ok()
+		.or_else(|| std::env::var_os("HOME").map(PathBuf::from))
 }
 
 /// Configuration for a specific profile (environment).
@@ -719,12 +1655,33 @@ pub struct Profile {
 	pub secrets: HashMap<String, Secret>,
 }
 
+/// A named, membership-only subset of a profile's secrets.
+///
+/// Scopes are orthogonal to profiles. A profile decides how a secret resolves
+/// (`required`, `default`, providers, references, generation, `as_path`, and the
+/// storage namespace); a scope only decides *which* secrets take part in a given
+/// resolution. Selecting `--scope api` resolves exactly the intersection of the
+/// merged profile and this scope's `secrets` list, so a single service loads only
+/// what it declares instead of the entire profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Scope {
+	/// The secret names that belong to this scope. Every name must be declared by
+	/// at least one profile; an unknown name is a configuration error.
+	pub secrets: Vec<String>,
+}
+
 /// Default configuration for a profile.
 ///
 /// Provides defaults that apply to all secrets within the profile.
 /// Individual secrets can override any of these defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileDefaults {
+	/// Whether this non-default profile inherits declarations and omitted
+	/// fields from `[profiles.default]`. Omitted means `true`. Available since
+	/// Monosecret 0.19.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub inherit: Option<bool>,
+
 	/// Default value for the required field of secrets in this profile.
 	/// If not specified, secrets default to required=true.
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -739,7 +1696,23 @@ pub struct ProfileDefaults {
 	/// Providers are tried in order until one has the secret.
 	/// Individual secrets can override this with their own providers field.
 	#[serde(skip_serializing_if = "Option::is_none")]
-	pub providers: Option<Vec<String>>,
+	pub providers: Option<Vec<ProviderRef>>,
+}
+
+impl ProfileDefaults {
+	/// Fill fields this table leaves unset from an earlier, less specific
+	/// defaults table. Lets `extends` inherit `[profiles.*.defaults]` field by
+	/// field, with the later (more specific) document winning.
+	fn inherit_missing_from(&mut self, earlier: &ProfileDefaults) {
+		self.inherit = self.inherit.or(earlier.inherit);
+		self.required = self.required.or(earlier.required);
+		if self.default.is_none() {
+			self.default = earlier.default.clone();
+		}
+		if self.providers.is_none() {
+			self.providers = earlier.providers.clone();
+		}
+	}
 }
 
 impl Profile {
@@ -751,38 +1724,50 @@ impl Profile {
 		}
 	}
 
-	/// Validate the profile configuration.
-	///
-	/// Ensures all secrets have valid names and configurations.
-	pub fn validate(&self) -> Result<(), String> {
-		if self.secrets.is_empty() {
+	/// Whether this profile inherits declarations and omitted secret fields
+	/// from `[profiles.default]`.
+	pub(crate) fn inherits_default(&self) -> bool {
+		self.defaults
+			.as_ref()
+			.and_then(|defaults| defaults.inherit)
+			.unwrap_or(true)
+	}
+
+	/// Validate declarations before profile/default inheritance is compiled.
+	fn validate_raw(&self, can_inherit_secrets: bool) -> Result<(), String> {
+		// A non-default profile may be an empty marker that inherits every
+		// secret from `default`. Profiles with nothing to inherit still need
+		// to declare at least one secret.
+		if self.secrets.is_empty() && !can_inherit_secrets {
 			return Err("Profile must define at least one secret".into());
 		}
 
-		for (name, secret) in &self.secrets {
-			// Validate secret name is a valid identifier
-			if !is_valid_identifier(name) {
+		for name in self.sorted_secret_names() {
+			let secret = &self.secrets[&name];
+			if !is_valid_identifier(&name) {
 				return Err(format!(
-					"Invalid secret name '{name}': must be a valid identifier (alphanumeric and underscores, not starting with a number)"
+					"Invalid secret name '{}': must be a valid identifier (alphanumeric and underscores, not starting with a number)",
+					name
 				));
 			}
-
 			secret
-				.validate()
-				.map_err(|e| format!("Secret '{name}': {e}"))?;
+				.validate_required_default()
+				.map_err(|e| format!("Secret '{}': {}", name, e))?;
 		}
 
 		Ok(())
 	}
 
-	/// Merge another profile configuration into this one.
-	///
-	/// The current profile takes precedence - secrets from `other`
-	/// are only added if they don't already exist.
-	pub fn merge_with(&mut self, other: Profile) {
-		for (secret_name, secret_config) in other.secrets {
-			self.secrets.entry(secret_name).or_insert(secret_config);
+	/// Overlay a later profile document while inheriting individual default
+	/// fields that the later document leaves absent.
+	fn overlay_with(&mut self, later: Profile) {
+		if let Some(mut later_defaults) = later.defaults {
+			if let Some(earlier_defaults) = &self.defaults {
+				later_defaults.inherit_missing_from(earlier_defaults);
+			}
+			self.defaults = Some(later_defaults);
 		}
+		self.secrets.extend(later.secrets);
 	}
 
 	/// Returns an iterator over the secrets in this profile.
@@ -791,6 +1776,14 @@ impl Profile {
 	/// and the Secret contains the configuration for that secret.
 	pub fn iter(&self) -> hash_map::Iter<'_, String, Secret> {
 		self.secrets.iter()
+	}
+
+	/// Secret names declared in this profile, sorted for deterministic
+	/// ordering (grouping, missing lists) instead of the map's hash order.
+	pub(crate) fn sorted_secret_names(&self) -> Vec<String> {
+		let mut names: Vec<String> = self.secrets.keys().cloned().collect();
+		names.sort();
+		names
 	}
 }
 
@@ -864,27 +1857,63 @@ pub struct GenerateOptions {
 }
 
 /// Native coordinates of one externally managed secret: the value of a
-/// secret's canonical `ref` field. Coordinates name a secret, while provider
-/// selection and fallback remain controlled by `providers` and CLI overrides.
+/// secret's `ref` field.
+///
+/// The coordinates carry naming only; *routing* (which store to consult) stays
+/// with the ordinary provider resolution (`providers` chains, `--provider`
+/// override, defaults). Each provider translates the coordinates into its own
+/// namespace — the 1Password item title, the Vault KV path plus field, the AWS
+/// secret name plus JSON key, the `.env` key — and rejects coordinates it has
+/// no equivalent for, so the same `ref` re-resolves against whichever store
+/// routing selects.
+///
+/// The coordinates are *not* uniformly provider-independent, and this type does
+/// not pretend they are:
+///
+/// - `item` (required) and `field` are shared vocabulary every relevant store
+///   maps: a name, and an optional component within it.
+/// - `vault`, `section` (1Password), and `version` (GCSM) are coordinates only
+///   some stores have an equivalent for. Each is named for the concept, not the
+///   vendor, so another store can adopt one by adding it to its
+///   [`supported_coords`](crate::provider::Provider::supported_coords); a store
+///   that has not rejects it rather than guessing. They are deliberately *not*
+///   collapsed into one generalized coordinate: a 1Password vault (a per-secret
+///   naming axis) and a Vault mount (set-once connection topology, whose
+///   per-secret hierarchy already lives in `item`) are different concepts and
+///   should not be forced to look alike. A store whose container is genuinely
+///   connection-level (a Vault mount, a GCSM project, an AWS region) takes it
+///   from the provider URI instead.
+///
+/// Unknown TOML keys are rejected at parse time.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize)]
 pub struct NativeAddress {
-	/// Store-native item, path, service, secret id, or variable name.
+	/// The store's own name for the secret: item title (1Password, Proton
+	/// Pass, LastPass), entry path (pass), KV path (Vault), secret name/ARN
+	/// (AWS), secret id (GCSM), key name (BWS, dotenv), variable name (env),
+	/// service (keyring).
 	pub item: String,
-	/// Optional field within the item (for example a JSON key or account).
+	/// A component within the item: field label (1Password), KV field
+	/// (Vault), JSON key (AWS), account (keyring). Providers whose secrets
+	/// have no sub-components reject it.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub field: Option<String>,
-	/// Optional 1Password vault override.
+	/// 1Password only: the vault holding the item, overriding the store's
+	/// default vault for this secret.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub vault: Option<String>,
-	/// Optional 1Password section.
+	/// 1Password only: the section containing the field.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub section: Option<String>,
-	/// Optional provider-native version (currently GCP Secret Manager).
+	/// GCSM only: the secret version to read; defaults to the latest.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub version: Option<String>,
 }
 
 impl NativeAddress {
+	/// Every coordinate name paired with its value, outer scope first. The
+	/// single enumeration that the renderer, the validator, and the
+	/// provider-side coordinate rejection all consume, so a new coordinate
+	/// cannot be added to one and silently missed by the others.
 	pub(crate) fn coordinates(&self) -> [(&'static str, Option<&str>); 5] {
 		[
 			("vault", self.vault.as_deref()),
@@ -895,19 +1924,163 @@ impl NativeAddress {
 		]
 	}
 
-	/// Canonical, value-free rendering used by diagnostics and audit metadata.
+	/// Canonical single-line rendering for logs and audit events, outer scope
+	/// first: `vault=Production item=db field=password`. Only present
+	/// coordinates appear.
 	pub fn render(&self) -> String {
-		self.coordinates()
-			.into_iter()
-			.filter_map(|(name, value)| value.map(|value| format!("{name}={value}")))
-			.collect::<Vec<_>>()
-			.join(" ")
+		let mut out = String::new();
+		for (name, value) in self.coordinates() {
+			if let Some(value) = value {
+				if !out.is_empty() {
+					out.push(' ');
+				}
+				out.push_str(name);
+				out.push('=');
+				out.push_str(value);
+			}
+		}
+		out
 	}
 }
 
-/// Derived deserialization target for [`NativeAddress`]. Table input delegates
-/// here so serde retains precise unknown-field diagnostics, while string input
-/// can provide a useful translation hint.
+/// A provider-alias template for native secret coordinates (0.19+).
+///
+/// Each coordinate accepts the logical placeholders `{project}`, `{profile}`,
+/// and `{key}`. The template belongs to one provider alias, so fallback links
+/// and import endpoints can map the same logical secret into different native
+/// address shapes without sharing provider-specific coordinates.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeAddressTemplate {
+	/// Template for the provider's required `item` coordinate.
+	pub item: String,
+	/// Optional template for a component within the item.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub field: Option<String>,
+	/// Optional container template.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub vault: Option<String>,
+	/// Optional section template.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub section: Option<String>,
+	/// Optional version template.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub version: Option<String>,
+}
+
+impl NativeAddressTemplate {
+	pub(crate) fn coordinates(&self) -> [(&'static str, Option<&str>); 5] {
+		[
+			("vault", self.vault.as_deref()),
+			("item", Some(self.item.as_str())),
+			("section", self.section.as_deref()),
+			("field", self.field.as_deref()),
+			("version", self.version.as_deref()),
+		]
+	}
+
+	/// Validate every coordinate and placeholder without provider I/O.
+	pub fn validate(&self) -> std::result::Result<(), String> {
+		for (name, value) in self.coordinates() {
+			let Some(value) = value else {
+				continue;
+			};
+			if value.trim().is_empty() {
+				return Err(format!(
+					"provider ref template coordinate `{name}` cannot be empty or whitespace"
+				));
+			}
+			expand_address_template(value, "project", "profile", "KEY").map_err(|error| {
+				format!("invalid provider ref template coordinate `{name}`: {error}")
+			})?;
+		}
+		Ok(())
+	}
+
+	/// Expand this alias template for one logical secret.
+	pub fn expand(
+		&self,
+		project: &str,
+		profile: &str,
+		key: &str,
+	) -> std::result::Result<NativeAddress, String> {
+		self.validate()?;
+		let expand = |value: &str| expand_address_template(value, project, profile, key);
+		Ok(NativeAddress {
+			item: expand(&self.item)?,
+			field: self.field.as_deref().map(expand).transpose()?,
+			vault: self.vault.as_deref().map(expand).transpose()?,
+			section: self.section.as_deref().map(expand).transpose()?,
+			version: self.version.as_deref().map(expand).transpose()?,
+		})
+	}
+
+	pub(crate) fn render_description(&self) -> String {
+		let mut out = String::new();
+		for (name, value) in self.coordinates() {
+			if let Some(value) = value {
+				if !out.is_empty() {
+					out.push(' ');
+				}
+				out.push_str(name);
+				out.push('=');
+				out.push_str(value);
+			}
+		}
+		out
+	}
+}
+
+/// Expand one address-template coordinate in a single pass. A compiled parser
+/// is intentionally used instead of chained `replace` calls: logical names may
+/// themselves contain brace-like text and must never be interpreted as another
+/// placeholder after insertion.
+fn expand_address_template(
+	template: &str,
+	project: &str,
+	profile: &str,
+	key: &str,
+) -> std::result::Result<String, String> {
+	let mut out = String::with_capacity(template.len());
+	let mut rest = template;
+	loop {
+		let Some(open) = rest.find('{') else {
+			if rest.contains('}') {
+				return Err(format!("template '{template}' contains an unmatched `}}`"));
+			}
+			out.push_str(rest);
+			break;
+		};
+		let prefix = &rest[..open];
+		if prefix.contains('}') {
+			return Err(format!("template '{template}' contains an unmatched `}}`"));
+		}
+		out.push_str(prefix);
+		let after_open = &rest[open + 1..];
+		let Some(close) = after_open.find('}') else {
+			return Err(format!("template '{template}' contains an unmatched `{{`"));
+		};
+		let placeholder = &after_open[..close];
+		out.push_str(match placeholder {
+            "project" => project,
+            "profile" => profile,
+            "key" => key,
+            _ => {
+                return Err(format!(
+                    "unknown placeholder `{{{placeholder}}}` in template '{template}'; expected {{project}}, {{profile}}, or {{key}}"
+                ));
+            }
+        });
+		rest = &after_open[close + 1..];
+	}
+	Ok(out)
+}
+
+/// Derived deserialization target for [`NativeAddress`]. The manual
+/// [`Deserialize`] below delegates table input here so serde's precise
+/// `deny_unknown_fields` messages ("unknown field \`filed\`, expected one of
+/// ...") survive, while string input gets a translation hint instead of the
+/// useless "invalid type" default.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NativeAddressFields {
@@ -919,43 +2092,50 @@ struct NativeAddressFields {
 }
 
 impl From<NativeAddressFields> for NativeAddress {
-	fn from(fields: NativeAddressFields) -> Self {
-		Self {
-			item: fields.item,
-			field: fields.field,
-			vault: fields.vault,
-			section: fields.section,
-			version: fields.version,
+	fn from(f: NativeAddressFields) -> Self {
+		NativeAddress {
+			item: f.item,
+			field: f.field,
+			vault: f.vault,
+			section: f.section,
+			version: f.version,
 		}
 	}
 }
 
-/// Render the canonical inline TOML table used in reference diagnostics.
+/// Renders the `ref = { ... }` TOML inline table used by the error hints that
+/// translate a rejected provider-URI address into the exact table to write.
+/// Shared by the string-`ref` deserialization hint below and by every provider
+/// that rejects a URI-embedded address, so the renderings cannot drift.
 pub(crate) fn ref_table_hint(
 	vault: Option<&str>,
 	item: &str,
 	section: Option<&str>,
 	field: Option<&str>,
 ) -> String {
-	let coordinates = NativeAddress {
+	let coords = NativeAddress {
 		item: item.to_string(),
 		field: field.map(str::to_string),
 		vault: vault.map(str::to_string),
 		section: section.map(str::to_string),
 		version: None,
 	};
-	let rendered = coordinates
+	let rendered: Vec<String> = coords
 		.coordinates()
 		.into_iter()
-		.filter_map(|(name, value)| value.map(|value| format!(r#"{name} = "{value}""#)))
-		.collect::<Vec<_>>();
+		.filter_map(|(name, value)| value.map(|v| format!("{name} = \"{v}\"")))
+		.collect();
 	format!("ref = {{ {} }}", rendered.join(", "))
 }
 
-fn ref_string_hint(value: &str) -> String {
-	if let Some(reference) = value.strip_prefix("op://") {
-		let segments = reference.split('/').collect::<Vec<_>>();
-		match segments.as_slice() {
+/// The error shown when `ref` is written as a string. Earlier iterations of
+/// the feature accepted provider URIs here, so pasted `op://vault/item/field`
+/// strings are the expected mistake: translate the common shapes into the
+/// exact table to write.
+fn ref_string_hint(s: &str) -> String {
+	if let Some(rest) = s.strip_prefix("op://") {
+		let segments: Vec<&str> = rest.split('/').collect();
+		match segments[..] {
 			[vault, item, field] if !vault.is_empty() && !item.is_empty() && !field.is_empty() => {
 				return format!(
 					"`ref` takes a table of coordinates, not a URI. Use: {}",
@@ -977,15 +2157,50 @@ fn ref_string_hint(value: &str) -> String {
 		}
 	}
 	format!(
-		"`ref` takes a table of native secret coordinates, not a string: got '{value}'. \
-		 Write e.g. {}; which store resolves the coordinates comes from `providers` \
-		 (or the default provider).",
+		"`ref` takes a table of native secret coordinates, not a string: got '{s}'. \
+         Write e.g. {}; which store resolves \
+         the coordinates comes from `providers` (or the default provider).",
 		ref_table_hint(None, "db", None, Some("password"))
 	)
 }
 
+/// Deserialize a group membership as either `"name"` or `["name", ...]`.
+fn deserialize_group_names<'de, D>(
+	deserializer: D,
+) -> std::result::Result<Option<Vec<String>>, D::Error>
+where
+	D: serde::Deserializer<'de>,
+{
+	#[derive(Deserialize)]
+	#[serde(untagged)]
+	enum OneOrMany {
+		One(String),
+		Many(Vec<String>),
+	}
+
+	Ok(Some(match OneOrMany::deserialize(deserializer)? {
+		OneOrMany::One(name) => vec![name],
+		OneOrMany::Many(names) => names,
+	}))
+}
+
+/// Preserve the compact string form when a secret belongs to one group.
+fn serialize_group_names<S>(
+	groups: &Option<Vec<String>>,
+	serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+	S: serde::Serializer,
+{
+	match groups.as_deref() {
+		Some([group]) => serializer.serialize_str(group),
+		Some(groups) => groups.serialize(serializer),
+		None => serializer.serialize_none(),
+	}
+}
+
 impl<'de> Deserialize<'de> for NativeAddress {
-	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
 	where
 		D: serde::Deserializer<'de>,
 	{
@@ -994,13 +2209,14 @@ impl<'de> Deserialize<'de> for NativeAddress {
 		impl<'de> serde::de::Visitor<'de> for AddressVisitor {
 			type Value = NativeAddress;
 
-			fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-				formatter.write_str(
-					r#"a table of native secret coordinates like { item = "db", field = "password" }"#,
+			fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+				write!(
+					f,
+					"a table of native secret coordinates like {{ item = \"db\", field = \"password\" }}"
 				)
 			}
 
-			fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+			fn visit_map<A>(self, map: A) -> std::result::Result<Self::Value, A::Error>
 			where
 				A: serde::de::MapAccess<'de>,
 			{
@@ -1008,16 +2224,173 @@ impl<'de> Deserialize<'de> for NativeAddress {
 					.map(NativeAddress::from)
 			}
 
-			fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+			fn visit_str<E>(self, s: &str) -> std::result::Result<Self::Value, E>
 			where
 				E: serde::de::Error,
 			{
-				Err(E::custom(ref_string_hint(value)))
+				Err(E::custom(ref_string_hint(s)))
 			}
 		}
 
 		deserializer.deserialize_any(AddressVisitor)
 	}
+}
+
+/// The serialized form of `required`: either the existing boolean or a table
+/// of cross-secret presence groups.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum RequiredSetting {
+	Bool(bool),
+	Groups(RequiredGroups),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequiredGroups {
+	#[serde(
+		default,
+		deserialize_with = "deserialize_group_names",
+		serialize_with = "serialize_group_names",
+		skip_serializing_if = "Option::is_none"
+	)]
+	at_least_one: Option<Vec<String>>,
+	#[serde(
+		default,
+		deserialize_with = "deserialize_group_names",
+		serialize_with = "serialize_group_names",
+		skip_serializing_if = "Option::is_none"
+	)]
+	exactly_one: Option<Vec<String>>,
+}
+
+/// Serde proxy that keeps the established Rust `Secret` API while presenting
+/// requiredness as one boolean-or-table field in TOML.
+#[derive(Serialize, Deserialize)]
+struct SecretSerde {
+	description: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	required: Option<RequiredSetting>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	default: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	groups: Option<Vec<String>>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	composed: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	providers: Option<Vec<ProviderRef>>,
+	#[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+	reference: Option<NativeAddress>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	refs: Option<HashMap<String, NativeAddress>>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	as_path: Option<bool>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	encoding: Option<SecretEncoding>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	extract: Option<SecretExtract>,
+	#[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+	secret_type: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	generate: Option<GenerateConfig>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	prompt: Option<bool>,
+}
+
+/// Text encoding used for a secret's stored representation.
+///
+/// Available since Monosecret 0.19.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SecretEncoding {
+	/// RFC 4648 Base64. Writes use padding; reads accept padded or unpadded input.
+	Base64,
+	/// RFC 4648 URL- and filename-safe Base64. Writes omit padding; reads
+	/// accept padded or unpadded input.
+	Base64Url,
+	/// RFC 4648 Base16. Writes use lowercase; reads are case-insensitive.
+	Hex,
+}
+
+impl SecretEncoding {
+	/// Stable manifest spelling used in diagnostics.
+	pub(crate) const fn as_str(self) -> &'static str {
+		match self {
+			Self::Base64 => "base64",
+			Self::Base64Url => "base64url",
+			Self::Hex => "hex",
+		}
+	}
+}
+
+/// A structured-data format from which one logical secret can be extracted.
+///
+/// Available since Monosecret 0.19.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExtractFormat {
+	/// A JSON document selected with an RFC 6901 JSON Pointer.
+	Json,
+}
+
+impl ExtractFormat {
+	/// Stable manifest spelling used in diagnostics.
+	pub(crate) const fn as_str(self) -> &'static str {
+		match self {
+			Self::Json => "json",
+		}
+	}
+}
+
+/// Selects one logical secret from a structured stored value.
+///
+/// Extraction is applied after [`SecretEncoding`] is decoded and only to
+/// values read from providers or caches. Defaults and composed values are
+/// already logical and are not extracted.
+///
+/// Available since Monosecret 0.19.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretExtract {
+	/// The structured-data format of the stored value.
+	pub format: ExtractFormat,
+	/// RFC 6901 JSON Pointer selecting the logical value.
+	pub pointer: String,
+}
+
+impl SecretExtract {
+	fn validate(&self) -> Result<(), String> {
+		match self.format {
+			ExtractFormat::Json => validate_json_pointer(&self.pointer),
+		}
+	}
+}
+
+/// Validate the JSON Pointer grammar independently of any particular document.
+/// An empty pointer selects the whole document; every non-empty pointer starts
+/// with `/`, and `~` escapes only `~0` and `~1`.
+fn validate_json_pointer(pointer: &str) -> Result<(), String> {
+	if pointer.is_empty() {
+		return Ok(());
+	}
+	if !pointer.starts_with('/') {
+		return Err("`extract.pointer` must be empty or start with `/` (RFC 6901)".into());
+	}
+
+	let mut chars = pointer.char_indices();
+	while let Some((index, ch)) = chars.next() {
+		if ch == '~' {
+			match chars.next() {
+				Some((_, '0' | '1')) => {}
+				_ => {
+					return Err(format!(
+						"`extract.pointer` has an invalid `~` escape at byte {index}; use `~0` for `~` or `~1` for `/`"
+					));
+				}
+			}
+		}
+	}
+	Ok(())
 }
 
 /// Configuration for an individual secret.
@@ -1026,45 +2399,152 @@ impl<'de> Deserialize<'de> for NativeAddress {
 /// whether it's required, an optional default value, and optionally
 /// which providers to use for retrieving this secret (in fallback order).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(try_from = "SecretSerde", into = "SecretSerde")]
 pub struct Secret {
 	/// Human-readable description of what this secret is used for
 	pub description: Option<String>,
 	/// Whether this secret must be provided (no default value)
 	/// If not specified, defaults to true unless overridden by profile defaults
-	#[serde(skip_serializing_if = "Option::is_none")]
 	pub required: Option<bool>,
+	/// Named groups in which at least one member must resolve. Serialized
+	/// inside the `required` table as either one string or an array of strings.
+	///
+	/// Available since Monosecret 0.17.
+	pub at_least_one: Option<Vec<String>>,
+	/// Named groups in which exactly one member must resolve. Serialized
+	/// inside the `required` table as either one string or an array of strings.
+	///
+	/// Available since Monosecret 0.17.
+	pub exactly_one: Option<Vec<String>>,
 	/// Optional default value if the secret is not provided
-	#[serde(skip_serializing_if = "Option::is_none")]
 	pub default: Option<String>,
-	/// Optional list of group names this secret belongs to.
-	/// Groups must be declared in the top-level `[groups]` table.
-	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Filtering groups this secret belongs to. Every name must be declared in
+	/// the top-level `[groups]` table.
 	pub groups: Option<Vec<String>>,
-	/// Optional list of provider references for retrieving this secret.
+	/// A strict template derived from other declared secrets. References use
+	/// `${UPPERCASE_NAME}`; `$$` produces a literal dollar sign.
+	///
+	/// Available since Monosecret 0.16.
+	pub composed: Option<String>,
+	/// Optional list of provider aliases for retrieving this secret.
 	/// Providers are tried in order until one has the secret.
 	/// If not specified, uses the profile defaults.providers or global provider.
-	/// Each entry is resolved against the providers map in the project/global config.
-	///
-	/// Accepts both simple alias strings (`"keyring"`) and detailed references
-	/// (`{ provider = "op", path = ["GitHub"], key = "token" }`).
-	#[serde(skip_serializing_if = "Option::is_none")]
+	/// Each alias is resolved against the providers map in GlobalConfig.
+	/// Example: providers = ["keyring", "env"] will try keyring first, then env.
 	pub providers: Option<Vec<ProviderRef>>,
-	/// Provider-independent native coordinates. Routing still follows
-	/// [`Self::providers`] and provider overrides.
-	#[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+	/// Native coordinates naming one externally managed secret (see
+	/// [`NativeAddress`]): `ref = { item = "db", field = "password" }`.
+	///
+	/// The coordinates supply *naming only*, replacing Monosecret's own
+	/// `{project}/{profile}/{key}` scheme for this secret. Which store
+	/// resolves them follows ordinary provider resolution — the secret's
+	/// `providers` chain, the `--provider` override, or the default provider —
+	/// so the same `ref` can be re-routed (e.g. at a fixtures store during
+	/// tests) without editing it, and composes with `providers`. Also composes
+	/// with `generate`: a missing referenced secret is minted and written to
+	/// its coordinates. Serialized as `ref` in TOML.
 	pub reference: Option<NativeAddress>,
+	/// Provider-alias-scoped native coordinates (0.19+). The selected alias's
+	/// entry overrides its alias-level ref template; aliases absent from this
+	/// map use their template or ordinary convention address. Mutually
+	/// exclusive with the legacy route-wide `ref` field.
+	pub refs: Option<HashMap<String, NativeAddress>>,
 	/// Whether to write the secret value to a temporary file and return the path.
 	/// If true, the secret will be written to a temporary file and the field
 	/// will contain the path to that file instead of the secret value.
 	/// The temporary file will be cleaned up when the resolved secrets are dropped.
-	#[serde(skip_serializing_if = "Option::is_none")]
 	pub as_path: Option<bool>,
-	/// The type of secret, used for generation (e.g., "password", "hex", "base64", "uuid", "command", "`rsa_private_key`")
-	#[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+	/// Encoding used for provider and cache storage. Logical values are encoded
+	/// before writes and decoded after reads. Decoded binary values can be
+	/// materialized with `as_path = true`; without `as_path`, the decoded bytes
+	/// must be valid UTF-8.
+	///
+	/// Available since Monosecret 0.19.
+	pub encoding: Option<SecretEncoding>,
+	/// Structured stored-value extraction applied after optional decoding.
+	/// JSON extraction uses an RFC 6901 pointer. Extracted secrets are
+	/// read-only because a selected value cannot reconstruct its containing
+	/// document for a storage write.
+	///
+	/// Available since Monosecret 0.19.
+	pub extract: Option<SecretExtract>,
+	/// The type of secret, used for generation (e.g., "password", "hex", "base64", "uuid", "command", "rsa_private_key")
 	pub secret_type: Option<String>,
 	/// Auto-generation configuration. Either `true` for defaults or a table with options.
-	#[serde(skip_serializing_if = "Option::is_none")]
 	pub generate: Option<GenerateConfig>,
+	/// Prompt securely when the value is missing during `monosecret run`.
+	/// The selected provider decides whether the answer is persisted. Available
+	/// since Monosecret 0.19.
+	pub prompt: Option<bool>,
+}
+
+impl TryFrom<SecretSerde> for Secret {
+	type Error = String;
+
+	fn try_from(value: SecretSerde) -> Result<Self, Self::Error> {
+		if value.reference.is_some() && value.refs.is_some() {
+			return Err("`ref` and `refs` cannot both be set; use `refs` for provider-scoped addresses or keep the legacy route-wide `ref`".into());
+		}
+		let (required, at_least_one, exactly_one) = match value.required {
+			Some(RequiredSetting::Bool(required)) => (Some(required), None, None),
+			Some(RequiredSetting::Groups(groups)) => {
+				if groups.at_least_one.is_none() && groups.exactly_one.is_none() {
+					return Err("`required` table must set `at_least_one` or `exactly_one`".into());
+				}
+				(None, groups.at_least_one, groups.exactly_one)
+			}
+			None => (None, None, None),
+		};
+
+		Ok(Self {
+			description: value.description,
+			required,
+			at_least_one,
+			exactly_one,
+			default: value.default,
+			groups: value.groups,
+			composed: value.composed,
+			providers: value.providers,
+			reference: value.reference,
+			refs: value.refs,
+			as_path: value.as_path,
+			encoding: value.encoding,
+			extract: value.extract,
+			secret_type: value.secret_type,
+			generate: value.generate,
+			prompt: value.prompt,
+		})
+	}
+}
+
+impl From<Secret> for SecretSerde {
+	fn from(value: Secret) -> Self {
+		let required = if value.at_least_one.is_some() || value.exactly_one.is_some() {
+			Some(RequiredSetting::Groups(RequiredGroups {
+				at_least_one: value.at_least_one,
+				exactly_one: value.exactly_one,
+			}))
+		} else {
+			value.required.map(RequiredSetting::Bool)
+		};
+
+		Self {
+			description: value.description,
+			required,
+			default: value.default,
+			groups: value.groups,
+			composed: value.composed,
+			providers: value.providers,
+			reference: value.reference,
+			refs: value.refs,
+			as_path: value.as_path,
+			encoding: value.encoding,
+			extract: value.extract,
+			secret_type: value.secret_type,
+			generate: value.generate,
+			prompt: value.prompt,
+		}
+	}
 }
 
 impl Secret {
@@ -1073,25 +2553,172 @@ impl Secret {
 	/// Ensures that required secrets don't have default values,
 	/// and that generation config is consistent with type.
 	pub fn validate(&self) -> Result<(), String> {
-		if let Some(desc) = &self.description {
-			if desc.is_empty() {
-				return Err("description cannot be empty".into());
-			}
-		} else {
-			return Err("missing description".into());
-		}
+		self.validate_description()?;
+		self.validate_required_default()?;
+		self.validate_semantics()
+	}
 
-		// If required is explicitly true and default is set, that's an error
+	/// Rules that apply to the effective (merged) configuration of a secret,
+	/// i.e. what a resolver actually acts on. `Config::validate` calls this on
+	/// the merged view so overrides may inherit fields (description, type,
+	/// generate, ...) from the default profile.
+	fn validate_effective(&self) -> Result<(), String> {
+		self.validate_description()?;
+		self.validate_semantics()
+	}
+
+	fn validate_description(&self) -> Result<(), String> {
+		match self.description.as_deref() {
+			Some("") => Err("description cannot be empty".into()),
+			None => Err("missing description".into()),
+			Some(_) => Ok(()),
+		}
+	}
+
+	/// If required is explicitly true and default is set, that's an error.
+	/// Checked on raw entries only, not on merged views (see
+	/// [`Profile::validate_raw`]).
+	fn validate_required_default(&self) -> Result<(), String> {
 		if self.required == Some(true) && self.default.is_some() {
 			return Err("Required secrets cannot have default values".into());
 		}
+		Ok(())
+	}
 
-		if let Some(reference) = &self.reference {
-			for (name, value) in reference.coordinates() {
-				if value.is_some_and(|value| value.trim().is_empty()) {
+	/// Whether this secret mints its own value: it declares an enabled
+	/// `generate` config. The single source of truth for "resolution can supply
+	/// this without a provider", shared by manifest compilation and semantic
+	/// validation.
+	pub(crate) fn would_generate(&self) -> bool {
+		self.generate.as_ref().is_some_and(|g| g.is_enabled())
+	}
+
+	/// Whether this declaration supplies an individual or grouped requiredness
+	/// policy. The three Rust fields serialize as one TOML field and therefore
+	/// inherit as one unit.
+	fn has_required_setting(&self) -> bool {
+		self.required.is_some() || self.at_least_one.is_some() || self.exactly_one.is_some()
+	}
+
+	fn validate_semantics(&self) -> Result<(), String> {
+		for (field, groups) in [
+			("at_least_one", self.at_least_one.as_deref()),
+			("exactly_one", self.exactly_one.as_deref()),
+		] {
+			let Some(groups) = groups else {
+				continue;
+			};
+			if groups.is_empty() {
+				return Err(format!("`{field}` must name at least one group"));
+			}
+			let mut unique = HashSet::new();
+			for group in groups {
+				if group.trim().is_empty() {
 					return Err(format!(
-						"`ref` coordinate `{name}` cannot be empty or whitespace"
+						"`{field}` group name cannot be empty or whitespace"
 					));
+				}
+				if !unique.insert(group) {
+					return Err(format!("`{field}` contains duplicate group name '{group}'"));
+				}
+			}
+		}
+
+		// A presence group governs when its members' absence is an error, so an
+		// explicit `required = true` on a member is a contradiction: it demands
+		// the secret individually while the group offers it as one alternative.
+		// The value can be inherited from the `default` profile, so this runs on
+		// the merged view; drop `required` or set it to false to join a group.
+		if self.required == Some(true)
+			&& (self.at_least_one.is_some() || self.exactly_one.is_some())
+		{
+			return Err(
+                "`required = true` cannot be combined with `at_least_one` or `exactly_one`; group membership governs the secret's presence, so drop `required` or set it to false"
+                    .into(),
+            );
+		}
+
+		if let Some(composed) = &self.composed {
+			Template::parse(composed)?;
+			if self.default.is_some()
+				|| self.providers.is_some()
+				|| self.reference.is_some()
+				|| self.refs.is_some()
+				|| self.encoding.is_some()
+				|| self.extract.is_some()
+				|| self.secret_type.is_some()
+				|| self.would_generate()
+				|| self.prompt == Some(true)
+			{
+				return Err(
+                    "`composed` secrets cannot also set `default`, `providers`, `ref`, `refs`, `encoding`, `extract`, `type`, enabled `generate`, or `prompt = true`"
+                        .into(),
+                );
+			}
+		}
+
+		if self.prompt == Some(true) {
+			if self.required == Some(false)
+				|| self.at_least_one.is_some()
+				|| self.exactly_one.is_some()
+			{
+				return Err(
+                    "`prompt = true` secrets must be individually required; omit `required` or set `required = true`"
+                        .into(),
+                );
+			}
+			if self.default.is_some() || self.would_generate() || self.extract.is_some() {
+				return Err(
+                    "`prompt = true` cannot be combined with `default`, enabled `generate`, or `extract`"
+                        .into(),
+                );
+			}
+		}
+
+		if let Some(extract) = &self.extract {
+			extract.validate()?;
+			if self.would_generate() {
+				return Err(
+                    "`extract` cannot be combined with enabled `generate`; extracted secrets are read-only"
+                        .into(),
+                );
+			}
+		}
+
+		// A `ref` supplies naming only: it composes with `providers` routing
+		// and with `generate` (a missing referenced secret is minted and
+		// written to its coordinates, like any other generated value).
+		if let Some(reference) = &self.reference {
+			// `coordinates()` yields `item` too, so this covers the required
+			// coordinate as well as the optional ones. Whitespace-only is a
+			// typo, not a name: no store has a secret titled "   ".
+			for (name, value) in reference.coordinates() {
+				if value.is_some_and(|v| v.trim().is_empty()) {
+					return Err(format!(
+						"`ref` coordinate `{}` cannot be empty or whitespace",
+						name
+					));
+				}
+			}
+		}
+
+		if self.reference.is_some() && self.refs.is_some() {
+			return Err("`ref` and `refs` cannot both be set; use `refs` for provider-scoped addresses or keep the legacy route-wide `ref`".into());
+		}
+		if let Some(references) = &self.refs {
+			if references.is_empty() {
+				return Err("`refs` must name at least one provider alias".into());
+			}
+			for (alias, reference) in references {
+				if alias.trim().is_empty() {
+					return Err("`refs` provider alias cannot be empty or whitespace".into());
+				}
+				for (name, value) in reference.coordinates() {
+					if value.is_some_and(|v| v.trim().is_empty()) {
+						return Err(format!(
+							"`refs.{alias}` coordinate `{name}` cannot be empty or whitespace"
+						));
+					}
 				}
 			}
 		}
@@ -1134,7 +2761,7 @@ impl Secret {
 				match t.as_str() {
 					"password" | "hex" | "base64" | "uuid" | "command" | "rsa_private_key" => {}
 					unknown => {
-						return Err(format!("unknown secret type '{unknown}'"));
+						return Err(format!("unknown secret type '{}'", unknown));
 					}
 				}
 			}
@@ -1142,23 +2769,104 @@ impl Secret {
 
 		// Validate type even without generate
 		if let Some(ref t) = self.secret_type
-			&& (self.generate.is_none() || self.generate.as_ref().is_some_and(|g| !g.is_enabled()))
+			&& !self.would_generate()
 		{
 			// Type is informational when not generating, but still validate known values
 			match t.as_str() {
 				"password" | "hex" | "base64" | "uuid" | "command" | "rsa_private_key" => {}
 				unknown => {
-					return Err(format!("unknown secret type '{unknown}'"));
+					return Err(format!("unknown secret type '{}'", unknown));
 				}
 			}
 		}
 
 		Ok(())
 	}
+
+	/// Field-level merge producing the effective configuration a resolver
+	/// acts on.
+	///
+	/// Precedence (highest to lowest): the current profile's entry, the
+	/// default profile's entry, then the current profile's `[defaults]` table
+	/// (for the fields it can supply). Shared by secret resolution
+	/// (`Secrets::resolve_secret_config`) and `Config::validate` so the two
+	/// can never disagree about what a merged secret looks like.
+	pub(crate) fn resolved(
+		current: Option<&Secret>,
+		default: Option<&Secret>,
+		defaults: Option<&ProfileDefaults>,
+	) -> Option<Secret> {
+		if current.is_none() && default.is_none() {
+			return None;
+		}
+
+		// One field's value from the profile entries in precedence order: the
+		// current profile's entry, then the default profile's. A missing
+		// entry simply contributes nothing. The `[defaults]` table tail is
+		// appended per field below, for the fields it can supply.
+		fn inherit<T>(
+			current: Option<&Secret>,
+			default: Option<&Secret>,
+			field: impl Fn(&Secret) -> Option<T>,
+		) -> Option<T> {
+			current
+				.and_then(&field)
+				.or_else(|| default.and_then(&field))
+		}
+
+		let composed = inherit(current, default, |s| s.composed.clone());
+		let required_source = current
+			.filter(|secret| secret.has_required_setting())
+			.or_else(|| default.filter(|secret| secret.has_required_setting()));
+		let (required, at_least_one, exactly_one) = if let Some(secret) = required_source {
+			(
+				secret.required,
+				secret.at_least_one.clone(),
+				secret.exactly_one.clone(),
+			)
+		} else {
+			(defaults.and_then(|d| d.required), None, None)
+		};
+		// A composed secret's source is its dependency graph, so the
+		// `[defaults]` storage fields (`default`, `providers`) do not apply.
+		let storage_defaults = if composed.is_some() { None } else { defaults };
+		// `ref` and `refs` are two serialized forms of one address-model
+		// setting. Select the pair from one profile entry so an explicit switch
+		// in either direction replaces, rather than combines with, the inherited
+		// form. A profile entry that sets neither still inherits the pair.
+		let reference_source = current
+			.filter(|secret| secret.reference.is_some() || secret.refs.is_some())
+			.or_else(|| {
+				default.filter(|secret| secret.reference.is_some() || secret.refs.is_some())
+			});
+		let (reference, refs) = reference_source.map_or((None, None), |secret| {
+			(secret.reference.clone(), secret.refs.clone())
+		});
+		Some(Secret {
+			description: inherit(current, default, |s| s.description.clone()),
+			required,
+			at_least_one,
+			exactly_one,
+			default: inherit(current, default, |s| s.default.clone())
+				.or_else(|| storage_defaults.and_then(|d| d.default.clone())),
+			groups: inherit(current, default, |s| s.groups.clone()),
+			composed,
+			providers: inherit(current, default, |s| s.providers.clone())
+				.or_else(|| storage_defaults.and_then(|d| d.providers.clone())),
+			reference,
+			refs,
+			as_path: inherit(current, default, |s| s.as_path),
+			encoding: inherit(current, default, |s| s.encoding),
+			extract: inherit(current, default, |s| s.extract.clone()),
+			secret_type: inherit(current, default, |s| s.secret_type.clone()),
+			generate: inherit(current, default, |s| s.generate.clone()),
+			prompt: inherit(current, default, |s| s.prompt),
+		})
+	}
 }
 
-/// Check if a string is a valid identifier.
-fn is_valid_identifier(s: &str) -> bool {
+/// Check if a string is a valid declared secret identifier.
+pub(crate) fn is_valid_identifier(s: &str) -> bool {
 	if s.is_empty() {
 		return false;
 	}
@@ -1178,75 +2886,6 @@ fn is_valid_identifier(s: &str) -> bool {
 ///
 /// This configuration is stored in the user's config directory and provides
 /// defaults that apply across all projects.
-/// Audit logging configuration, parsed from the top-level `[audit]` table in the
-/// user-global config (`~/.config/monosecret/config.toml`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct AuditConfig {
-	/// Whether to record secret access. Defaults to `true`.
-	pub enabled: bool,
-	/// Where to write the JSON Lines log. Must be an absolute path; `~` is expanded.
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub path: Option<PathBuf>,
-	/// Hard cap on the log file size in bytes.
-	pub max_size_bytes: u64,
-}
-
-impl Default for AuditConfig {
-	fn default() -> Self {
-		Self {
-			enabled: true,
-			path: None,
-			max_size_bytes: 1_048_576,
-		}
-	}
-}
-
-impl AuditConfig {
-	/// The resolved on-disk path: the configured `path` (with a leading `~`
-	/// expanded to the home directory), or the default per-user audit log location.
-	pub fn resolved_path(&self) -> Option<PathBuf> {
-		match self.path.clone() {
-			Some(path) => Some(expand_tilde(path)).filter(|path| path.is_absolute()),
-			None => default_audit_path(),
-		}
-	}
-
-	/// Whether a configured path is relative after `~` expansion.
-	pub fn has_relative_path(&self) -> bool {
-		self.path
-			.clone()
-			.map(expand_tilde)
-			.is_some_and(|path| !path.is_absolute())
-	}
-}
-
-fn default_audit_path() -> Option<PathBuf> {
-	use etcetera::app_strategy::AppStrategy;
-	use etcetera::app_strategy::choose_app_strategy;
-	let strategy = choose_app_strategy(etcetera::app_strategy::AppStrategyArgs {
-		top_level_domain: "dev".into(),
-		author: "monosecret".into(),
-		app_name: "monosecret".into(),
-	})
-	.ok()?;
-	let dir = strategy.state_dir().unwrap_or_else(|| strategy.data_dir());
-	Some(dir.join("audit.log"))
-}
-
-fn expand_tilde(path: PathBuf) -> PathBuf {
-	let s = path.to_string_lossy();
-	if s == "~" {
-		return etcetera::home_dir().unwrap_or(path);
-	}
-	if let Some(rest) = s.strip_prefix("~/")
-		&& let Ok(home) = etcetera::home_dir()
-	{
-		return home.join(rest);
-	}
-	path
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[doc(hidden)]
 pub struct GlobalConfig {
@@ -1276,11 +2915,11 @@ pub struct GlobalDefaults {
 	/// provider details in monosecret.toml. Example user config:
 	/// ```toml
 	/// [defaults.providers]
-	/// shared = "onepassword://vault/Shared"
+	/// shared = "onepassword://Shared"
 	/// local = "dotenv://.env.local"
 	/// ```
 	#[serde(skip_serializing_if = "Option::is_none")]
-	pub providers: Option<HashMap<String, String>>,
+	pub providers: Option<HashMap<String, ProviderAlias>>,
 }
 
 impl GlobalConfig {
@@ -1296,30 +2935,11 @@ impl GlobalConfig {
 	/// # Errors
 	///
 	/// Returns an error if the config directory cannot be determined
-	#[allow(clippy::collapsible_if)]
 	pub fn path() -> Result<PathBuf, io::Error> {
 		use etcetera::app_strategy::AppStrategy;
-		use etcetera::app_strategy::AppStrategyArgs;
 		use etcetera::app_strategy::choose_app_strategy;
-		let strategy = choose_app_strategy(AppStrategyArgs {
-			top_level_domain: String::new(),
-			author: String::new(),
-			app_name: "monosecret".into(),
-		})
-		.map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
-		Ok(strategy.config_dir().join("config.toml"))
-	}
-
-	fn legacy_path() -> Result<PathBuf, io::Error> {
-		use etcetera::app_strategy::AppStrategy;
-		use etcetera::app_strategy::AppStrategyArgs;
-		use etcetera::app_strategy::choose_app_strategy;
-		let strategy = choose_app_strategy(AppStrategyArgs {
-			top_level_domain: String::new(),
-			author: String::new(),
-			app_name: "secretspec".into(),
-		})
-		.map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
+		let strategy = choose_app_strategy(app_strategy_args())
+			.map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
 		Ok(strategy.config_dir().join("config.toml"))
 	}
 
@@ -1341,17 +2961,10 @@ impl GlobalConfig {
 		#[cfg(target_os = "macos")]
 		let config_path = Self::migrate_macos_config(&config_path).map_err(ParseError::Io)?;
 
-		let config_path = if config_path.try_exists().map_err(ParseError::Io)? {
-			config_path
-		} else {
-			let legacy_path = Self::legacy_path().map_err(ParseError::Io)?;
-			if legacy_path.try_exists().map_err(ParseError::Io)? {
-				legacy_path
-			} else {
-				return Ok(None);
-			}
-		};
-		let content = fs::read_to_string(&config_path).map_err(ParseError::Io)?;
+		if !config_path.try_exists().map_err(ParseError::Io)? {
+			return Ok(None);
+		}
+		let content = std::fs::read_to_string(&config_path).map_err(ParseError::Io)?;
 		toml::from_str(&content).map(Some).map_err(ParseError::Toml)
 	}
 
@@ -1368,12 +2981,12 @@ impl GlobalConfig {
 
 		// Ensure the parent directory exists
 		if let Some(parent) = config_path.parent() {
-			fs::create_dir_all(parent)?;
+			std::fs::create_dir_all(parent)?;
 		}
 
 		let content = toml::to_string_pretty(self)
 			.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-		fs::write(&config_path, content)?;
+		std::fs::write(&config_path, content)?;
 
 		Ok(())
 	}
@@ -1427,9 +3040,8 @@ impl GlobalConfig {
 		}
 
 		// Create parent directories for the new path
-		#[allow(clippy::collapsible_if)]
 		if let Some(parent) = new_path.parent() {
-			if let Err(err) = fs::create_dir_all(parent) {
+			if let Err(err) = std::fs::create_dir_all(parent) {
 				eprintln!(
 					"Warning: failed to create config directory {} while migrating from {}: {}. Continuing to use legacy config path.",
 					parent.display(),
@@ -1441,7 +3053,7 @@ impl GlobalConfig {
 		}
 
 		// Copy old config to new location
-		if let Err(err) = fs::copy(&old_path, new_path) {
+		if let Err(err) = std::fs::copy(&old_path, new_path) {
 			eprintln!(
 				"Warning: failed to migrate config from {} to {}: {}. Continuing to use legacy config path.",
 				old_path.display(),
@@ -1453,7 +3065,7 @@ impl GlobalConfig {
 
 		// Rename old file to indicate it has been migrated
 		let old_backup = old_path.with_extension("toml.old");
-		if let Err(err) = fs::rename(&old_path, &old_backup) {
+		if let Err(err) = std::fs::rename(&old_path, &old_backup) {
 			eprintln!(
 				"Warning: migrated config to {}, but failed to back up {} to {}: {}",
 				new_path.display(),
@@ -1477,8 +3089,8 @@ impl GlobalConfig {
 /// This generic struct wraps the actual secret values along with
 /// information about which provider and profile were used to retrieve them.
 /// The generic parameter `T` is typically a struct generated by the
-/// `monosecret_derive` macro containing the actual secret values.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `monosecret-derive` macro containing the actual secret values.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Resolved<T> {
 	/// The actual secret values, typically a generated struct
 	pub secrets: T,
@@ -1486,6 +3098,27 @@ pub struct Resolved<T> {
 	pub provider: String,
 	/// The profile that was active when retrieving these secrets
 	pub profile: String,
+	/// Resources whose lifetime must match the resolved secret values.
+	#[serde(skip)]
+	_resources: Option<Arc<ResolvedResources>>,
+}
+
+/// Owns temporary files referenced by typed `as_path` fields.
+///
+/// Sharing this owner makes cloning a [`Resolved`] value safe: the files are
+/// removed only after the final clone is dropped.
+struct ResolvedResources {
+	_temp_files: Vec<NamedTempFile>,
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for Resolved<T> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Resolved")
+			.field("secrets", &self.secrets)
+			.field("provider", &self.provider)
+			.field("profile", &self.profile)
+			.finish()
+	}
 }
 
 impl<T> Resolved<T> {
@@ -1501,7 +3134,26 @@ impl<T> Resolved<T> {
 			secrets,
 			provider,
 			profile,
+			_resources: None,
 		}
+	}
+
+	pub(crate) fn replace_secrets<U>(self, secrets: U) -> Resolved<U> {
+		Resolved {
+			secrets,
+			provider: self.provider,
+			profile: self.profile,
+			_resources: self._resources,
+		}
+	}
+
+	pub(crate) fn with_temp_files(mut self, temp_files: Vec<NamedTempFile>) -> Self {
+		if !temp_files.is_empty() {
+			self._resources = Some(Arc::new(ResolvedResources {
+				_temp_files: temp_files,
+			}));
+		}
+		self
 	}
 }
 
@@ -1529,17 +3181,21 @@ pub enum ParseError {
 impl std::fmt::Display for ParseError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			ParseError::Io(e) => write!(f, "I/O error: {e}"),
-			ParseError::Toml(e) => write!(f, "TOML parsing error: {e}"),
+			ParseError::Io(e) => write!(f, "I/O error: {}", e),
+			ParseError::Toml(e) => write!(f, "TOML parsing error: {}", e),
 			ParseError::UnsupportedRevision(rev) => {
-				write!(f, "Unsupported revision '{rev}'. Only '1.0' is supported.")
+				write!(
+					f,
+					"Unsupported revision '{}'. Only '1.0' is supported.",
+					rev
+				)
 			}
 			ParseError::CircularDependency(msg) => {
-				write!(f, "Circular dependency detected: {msg}")
+				write!(f, "Circular dependency detected: {}", msg)
 			}
-			ParseError::Validation(msg) => write!(f, "Validation error: {msg}"),
+			ParseError::Validation(msg) => write!(f, "Validation error: {}", msg),
 			ParseError::ExtendedConfigNotFound(path) => {
-				write!(f, "Extended config file not found: {path}")
+				write!(f, "Extended config file not found: {}", path)
 			}
 		}
 	}
@@ -1564,6 +3220,215 @@ impl From<io::Error> for ParseError {
 impl From<toml::de::Error> for ParseError {
 	fn from(e: toml::de::Error) -> Self {
 		ParseError::Toml(e)
+	}
+}
+
+#[cfg(test)]
+mod require_reason_tests {
+	use super::*;
+
+	fn parse(line: &str) -> Option<RequireReason> {
+		let toml = format!("name = \"t\"\nrevision = \"1.0\"\n{line}");
+		toml::from_str::<Project>(&toml).unwrap().require_reason
+	}
+
+	#[test]
+	fn accepts_bool_and_agents_string() {
+		assert_eq!(parse("require_reason = true"), Some(RequireReason::Always));
+		assert_eq!(parse("require_reason = false"), Some(RequireReason::Never));
+		assert_eq!(
+			parse("require_reason = \"agents\""),
+			Some(RequireReason::Agents)
+		);
+	}
+
+	#[test]
+	fn unspecified_require_reason_is_none_and_resolves_to_agents() {
+		// Absent in TOML parses to `None` so `extends` can fill it from a parent;
+		// the runtime default is applied at use via `unwrap_or_default`.
+		assert_eq!(parse(""), None);
+		assert_eq!(parse("").unwrap_or_default(), RequireReason::Agents);
+	}
+
+	#[test]
+	fn extends_inherits_parent_require_reason_when_unspecified() {
+		use std::collections::HashMap;
+		let cfg = |rr: Option<RequireReason>| {
+			Config {
+				project: Project {
+					name: "t".to_string(),
+					require_reason: rr,
+					..Default::default()
+				},
+				profiles: HashMap::new(),
+				providers: None,
+				groups: None,
+				scopes: None,
+			}
+		};
+
+		// `extends` folds least-specific (parent) into most-specific (child) via
+		// `overlay_with`: the later document wins, absent fields inherit.
+
+		// Child leaves the policy unspecified -> it inherits the parent's value.
+		let mut merged = cfg(Some(RequireReason::Always));
+		merged.overlay_with(cfg(None));
+		assert_eq!(merged.project.require_reason, Some(RequireReason::Always));
+
+		// Child sets the policy explicitly -> its own value wins over the parent's.
+		let mut merged = cfg(Some(RequireReason::Always));
+		merged.overlay_with(cfg(Some(RequireReason::Never)));
+		assert_eq!(merged.project.require_reason, Some(RequireReason::Never));
+	}
+
+	#[test]
+	fn rejects_unknown_or_wrong_typed_values() {
+		// Invalid values must surface as a parse error (not silently default), now
+		// that the policy is parsed through the canonical config path.
+		let base = "name = \"t\"\nrevision = \"1.0\"\n";
+
+		// An unknown string names the accepted values.
+		let err = toml::from_str::<Project>(&format!("{base}require_reason = \"nope\""))
+			.unwrap_err()
+			.to_string();
+		assert!(
+			err.contains("expected true, false, or \"agents\""),
+			"unexpected error: {err}"
+		);
+
+		// A wrong *type* reports a precise type mismatch rather than a vague
+		// "did not match any variant" message.
+		let err = toml::from_str::<Project>(&format!("{base}require_reason = 1"))
+			.unwrap_err()
+			.to_string();
+		assert!(
+			err.contains("invalid type") && err.contains("boolean or the string"),
+			"unexpected error: {err}"
+		);
+	}
+
+	#[test]
+	fn round_trips_through_serialize() {
+		// An unspecified policy (None) is omitted; explicit values are preserved.
+		let toml = toml::to_string(&Project {
+			name: "t".to_string(),
+			revision: "1.0".to_string(),
+			extends: None,
+			require_reason: None,
+		})
+		.unwrap();
+		assert!(!toml.contains("require_reason"));
+
+		let toml = toml::to_string(&Project {
+			name: "t".to_string(),
+			revision: "1.0".to_string(),
+			extends: None,
+			require_reason: Some(RequireReason::Always),
+		})
+		.unwrap();
+		assert_eq!(
+			toml::from_str::<Project>(&toml).unwrap().require_reason,
+			Some(RequireReason::Always)
+		);
+	}
+}
+
+#[cfg(test)]
+mod audit_config_tests {
+	use super::*;
+
+	fn with_path(path: &str) -> AuditConfig {
+		AuditConfig {
+			path: Some(PathBuf::from(path)),
+			..Default::default()
+		}
+	}
+
+	#[test]
+	fn resolved_path_keeps_absolute_and_rejects_relative() {
+		// An absolute configured path is honored verbatim. What counts as absolute
+		// is platform-specific (Windows requires a drive prefix), so pick one that
+		// `Path::is_absolute` accepts on the host.
+		let abs_path = if cfg!(windows) {
+			r"C:\var\log\monosecret\audit.log"
+		} else {
+			"/var/log/monosecret/audit.log"
+		};
+		let abs = with_path(abs_path);
+		assert_eq!(abs.resolved_path(), Some(PathBuf::from(abs_path)));
+		assert!(!abs.has_relative_path());
+
+		// A relative path (bare filename or nested) is rejected: it would resolve
+		// against the current working directory and scatter the log per-CWD.
+		for rel in ["audit.log", "logs/audit.log", "./audit.log"] {
+			let cfg = with_path(rel);
+			assert_eq!(
+				cfg.resolved_path(),
+				None,
+				"relative path {rel:?} must reject"
+			);
+			assert!(
+				cfg.has_relative_path(),
+				"{rel:?} should be flagged relative"
+			);
+		}
+	}
+
+	#[test]
+	fn unset_path_is_not_flagged_relative() {
+		// No configured path falls back to the per-user default and is never
+		// reported as a relative-path error.
+		let cfg = AuditConfig::default();
+		assert!(!cfg.has_relative_path());
+	}
+
+	#[test]
+	fn expand_tilde_expands_leading_tilde_only() {
+		// Paths without a leading `~` are returned unchanged...
+		assert_eq!(
+			expand_tilde(PathBuf::from("/abs/path")),
+			PathBuf::from("/abs/path")
+		);
+		assert_eq!(
+			expand_tilde(PathBuf::from("relative/path")),
+			PathBuf::from("relative/path")
+		);
+		// ...including a `~` that is not the leading component.
+		assert_eq!(
+			expand_tilde(PathBuf::from("/a/~/b")),
+			PathBuf::from("/a/~/b")
+		);
+
+		// A leading `~/...` expands against the resolved home directory.
+		if let Some(home) = home_dir() {
+			assert_eq!(
+				expand_tilde(PathBuf::from("~/.local/state/monosecret/audit.log")),
+				home.join(".local/state/monosecret/audit.log")
+			);
+		}
+	}
+
+	#[test]
+	fn audit_config_omitted_fields_default_to_on() {
+		// The security-relevant defaults: auditing on, no explicit path, 1 MiB cap.
+		// A missing field must not silently disable logging.
+		let cfg: AuditConfig = toml::from_str("").unwrap();
+		assert!(cfg.enabled);
+		assert_eq!(cfg.path, None);
+		assert_eq!(cfg.max_size_bytes, 1_048_576);
+	}
+
+	#[test]
+	fn global_config_wires_audit_table() {
+		// A present `[audit]` table populates `GlobalConfig::audit`...
+		let g: GlobalConfig =
+			toml::from_str("[defaults]\nprovider = \"keyring\"\n\n[audit]\nenabled = false\n")
+				.unwrap();
+		assert_eq!(g.audit.map(|a| a.enabled), Some(false));
+
+		// ...and an absent one leaves it unspecified (resolving to on-by-default).
+		let g: GlobalConfig = toml::from_str("[defaults]\nprovider = \"keyring\"\n").unwrap();
+		assert!(g.audit.is_none());
 	}
 }
 
@@ -1598,13 +3463,12 @@ mod validation_tests {
 		Config {
 			project: Project {
 				name: name.to_string(),
-				revision: "1.0".to_string(),
-				extends: None,
-				require_reason: None,
+				..Default::default()
 			},
 			profiles,
 			providers: None,
 			groups: None,
+			scopes: None,
 		}
 	}
 
@@ -1641,12 +3505,400 @@ mod validation_tests {
 		assert!(err.to_string().contains("at least one secret"));
 	}
 
+	/// Regression for https://github.com/cachix/monosecret/issues/144: an
+	/// explicitly declared empty profile inherits the complete default
+	/// profile and is therefore not empty from the resolver's perspective.
+	#[test]
+	fn config_validate_allows_empty_profile_to_inherit_default_secrets() {
+		let config: Config = toml::from_str(
+            r#"
+[project]
+name = "lm04-stats"
+revision = "1.0"
+
+[profiles.default]
+ADMIN_PASSWORD = { description = "Password securing the admin page", required = true, type = "password" }
+
+[profiles.production]
+"#,
+        )
+        .unwrap();
+
+		config.validate().unwrap();
+
+		let spec = crate::Secrets::new(config, None, None, Some("production".to_string()));
+		let resolved = spec
+			.resolve_secret_config("ADMIN_PASSWORD", Some("production"))
+			.expect("production should inherit ADMIN_PASSWORD from default");
+		assert_eq!(
+			resolved.description.as_deref(),
+			Some("Password securing the admin page")
+		);
+		assert_eq!(resolved.required, Some(true));
+		assert_eq!(resolved.secret_type.as_deref(), Some("password"));
+	}
+
+	#[test]
+	fn profile_can_disable_default_inheritance() {
+		let config: Config = toml::from_str(
+			r#"
+[project]
+name = "standalone"
+revision = "1.0"
+
+[profiles.default]
+SHARED_TOKEN = { description = "Shared token", default = "shared" }
+
+[profiles.deployment.defaults]
+inherit = false
+
+[profiles.deployment]
+DEPLOY_TOKEN = { description = "Deployment token" }
+"#,
+		)
+		.unwrap();
+
+		let compiled = config.validate_and_compile().unwrap();
+		let deployment = compiled.profile("deployment").unwrap();
+		assert!(deployment.secrets.contains_key("DEPLOY_TOKEN"));
+		assert!(!deployment.secrets.contains_key("SHARED_TOKEN"));
+	}
+
+	#[test]
+	fn standalone_profile_does_not_inherit_fields_from_matching_default_secret() {
+		let config: Config = toml::from_str(
+			r#"
+[project]
+name = "standalone"
+revision = "1.0"
+
+[profiles.default]
+API_KEY = { description = "Shared API key", default = "shared" }
+
+[profiles.deployment.defaults]
+inherit = false
+
+[profiles.deployment]
+API_KEY = { description = "Deployment API key" }
+"#,
+		)
+		.unwrap();
+
+		let compiled = config.validate_and_compile().unwrap();
+		let api_key = &compiled.profile("deployment").unwrap().secrets["API_KEY"];
+		assert_eq!(
+			api_key.config.description.as_deref(),
+			Some("Deployment API key")
+		);
+		assert_eq!(api_key.config.default, None);
+	}
+
+	#[test]
+	fn empty_standalone_profile_is_rejected() {
+		let config: Config = toml::from_str(
+			r#"
+[project]
+name = "standalone"
+revision = "1.0"
+
+[profiles.default]
+SHARED_TOKEN = { description = "Shared token" }
+
+[profiles.deployment.defaults]
+inherit = false
+
+[profiles.deployment]
+"#,
+		)
+		.unwrap();
+
+		let error = config.validate().unwrap_err().to_string();
+		assert!(error.contains("Profile 'deployment'"), "{error}");
+		assert!(error.contains("at least one secret"), "{error}");
+	}
+
+	#[test]
+	fn config_validate_accepts_presence_constraints_and_default_inheritance() {
+		let config: Config = toml::from_str(
+            r#"
+[project]
+name = "auth"
+revision = "1.0"
+
+[profiles.default]
+PASSWORD = { description = "Password", required = { at_least_one = ["auth", "fallback_auth"], exactly_one = "exclusive_auth" } }
+ACCESS_TOKEN = { description = "Access token", required = { at_least_one = ["auth", "fallback_auth"], exactly_one = "exclusive_auth" } }
+
+[profiles.production]
+"#,
+        )
+        .unwrap();
+
+		config.validate().unwrap();
+		let compiled = CompiledManifest::compile(&config);
+		let production = compiled.profile("production").unwrap();
+		assert_eq!(production.constraints.at_least_one[0].name, "auth");
+		assert_eq!(
+			production.constraints.at_least_one[0].members,
+			vec!["ACCESS_TOKEN".to_string(), "PASSWORD".to_string()]
+		);
+		assert_eq!(production.constraints.at_least_one[1].name, "fallback_auth");
+		assert_eq!(production.constraints.exactly_one[0].name, "exclusive_auth");
+		assert_eq!(production.constraints.exactly_one.len(), 1);
+
+		let rendered = toml::to_string(&config).unwrap();
+		assert!(
+			rendered.contains("[profiles.default.ACCESS_TOKEN.required]"),
+			"{rendered}"
+		);
+		assert!(rendered.contains(r#"at_least_one = ["auth", "fallback_auth"]"#));
+		assert!(rendered.contains(r#"exactly_one = "exclusive_auth""#));
+	}
+
+	#[test]
+	fn config_validate_rejects_invalid_presence_constraints() {
+		for (secrets, expected) in [
+			(
+				r#"PASSWORD = { description = "Password", required = { at_least_one = "auth" } }"#,
+				"at_least_one group 'auth' must contain at least two secrets",
+			),
+			(
+				r#"
+PASSWORD = { description = "Password", required = { at_least_one = " " } }
+ACCESS_TOKEN = { description = "Access token", required = { at_least_one = " " } }
+"#,
+				"`at_least_one` group name cannot be empty or whitespace",
+			),
+			(
+				r#"
+PASSWORD = { description = "Password", required = { at_least_one = [] } }
+ACCESS_TOKEN = { description = "Access token", required = { at_least_one = [] } }
+"#,
+				"`at_least_one` must name at least one group",
+			),
+			(
+				r#"
+PASSWORD = { description = "Password", required = { at_least_one = ["auth", "auth"] } }
+ACCESS_TOKEN = { description = "Access token", required = { at_least_one = "auth" } }
+"#,
+				"`at_least_one` contains duplicate group name 'auth'",
+			),
+			(
+				r#"
+PASSWORD = { description = "Password", required = { at_least_one = "auth" } }
+ACCESS_TOKEN = { description = "Access token", required = { exactly_one = "auth" } }
+"#,
+				"group 'auth' cannot mix at_least_one and exactly_one membership",
+			),
+		] {
+			let source = format!(
+				r#"
+[project]
+name = "auth"
+revision = "1.0"
+
+[profiles.default]
+{secrets}
+"#
+			);
+			let config: Config = toml::from_str(&source).unwrap();
+			let error = config.validate().unwrap_err().to_string();
+			assert!(error.contains(expected), "{error}");
+		}
+	}
+
+	#[test]
+	fn required_group_table_must_name_a_constraint() {
+		let error = toml::from_str::<Secret>(
+			r#"description = "d"
+required = {}"#,
+		)
+		.unwrap_err()
+		.to_string();
+		assert!(
+			error.contains("`required` table must set `at_least_one` or `exactly_one`"),
+			"{error}"
+		);
+	}
+
+	#[test]
+	fn grouped_requiredness_replaces_inherited_boolean_requiredness() {
+		let config: Config = toml::from_str(
+			r#"
+[project]
+name = "auth"
+revision = "1.0"
+
+[profiles.default]
+PASSWORD = { description = "Password", required = true }
+ACCESS_TOKEN = { description = "Access token" }
+
+[profiles.production]
+PASSWORD = { required = { at_least_one = "auth" } }
+ACCESS_TOKEN = { required = { at_least_one = "auth" } }
+"#,
+		)
+		.unwrap();
+
+		config.validate().unwrap();
+		let compiled = CompiledManifest::compile(&config);
+		let password = &compiled.profile("production").unwrap().secrets["PASSWORD"];
+		assert!(!password.declared_required);
+		assert_eq!(password.config.required, None);
+		assert_eq!(
+			password.config.at_least_one.as_deref(),
+			Some(&["auth".into()][..])
+		);
+	}
+
 	#[test]
 	fn config_validate_rejects_invalid_secret_name() {
 		let err = config_with("proj", vec![("default", vec![("1BAD", secret(Some("d")))])])
 			.validate()
 			.unwrap_err();
 		assert!(err.to_string().contains("Invalid secret name"));
+	}
+
+	#[test]
+	fn composed_references_are_validated_as_a_static_graph() {
+		let parse = |body: &str| {
+			toml::from_str::<Config>(&format!(
+				r#"
+[project]
+name = "composed"
+revision = "1.0"
+
+[profiles.default]
+{body}
+"#
+			))
+			.unwrap()
+		};
+
+		parse(
+			r#"
+USER = { description = "user" }
+HOST = { description = "host" }
+DSN = { description = "dsn", composed = "db://${USER}@${HOST}" }
+"#,
+		)
+		.validate()
+		.unwrap();
+
+		let unknown = parse(
+			r#"
+DSN = { description = "dsn", composed = "db://${AMBIENT_ENV}" }
+"#,
+		)
+		.validate()
+		.unwrap_err()
+		.to_string();
+		assert!(
+			unknown.contains("does not name a declared secret"),
+			"{unknown}"
+		);
+
+		let cycle = parse(
+			r#"
+A = { description = "a", composed = "${B}" }
+B = { description = "b", composed = "${C}" }
+C = { description = "c", composed = "${A}" }
+"#,
+		)
+		.validate()
+		.unwrap_err()
+		.to_string();
+		assert!(cycle.contains("A -> B -> C -> A"), "{cycle}");
+	}
+
+	#[test]
+	fn composed_rejects_operators_and_storage_sources() {
+		let invalid: Config = toml::from_str(
+			r#"
+[project]
+name = "composed"
+revision = "1.0"
+
+[profiles.default]
+A = { description = "a" }
+BAD = { description = "bad", composed = "${A:-fallback}" }
+"#,
+		)
+		.unwrap();
+		let error = invalid.validate().unwrap_err().to_string();
+		assert!(
+			error.contains("names must match `[A-Z][A-Z0-9_]*`"),
+			"{error}"
+		);
+
+		let conflicting: Config = toml::from_str(
+			r#"
+[project]
+name = "composed"
+revision = "1.0"
+
+[profiles.default]
+A = { description = "a" }
+BAD = { description = "bad", composed = "${A}", providers = ["keyring"] }
+"#,
+		)
+		.unwrap();
+		let error = conflicting.validate().unwrap_err().to_string();
+		assert!(error.contains("cannot also set"), "{error}");
+
+		let encoded: Config = toml::from_str(
+			r#"
+[project]
+name = "composed"
+revision = "1.0"
+
+[profiles.default]
+A = { description = "a" }
+BAD = { description = "bad", composed = "${A}", encoding = "base64" }
+"#,
+		)
+		.unwrap();
+		let error = encoded.validate().unwrap_err().to_string();
+		assert!(error.contains("`encoding`"), "{error}");
+
+		let extracted: Config = toml::from_str(
+			r#"
+[project]
+name = "composed"
+revision = "1.0"
+
+[profiles.default]
+A = { description = "a" }
+BAD = { description = "bad", composed = "${A}", extract = { format = "json", pointer = "/value" } }
+"#,
+		)
+		.unwrap();
+		let error = extracted.validate().unwrap_err().to_string();
+		assert!(error.contains("`extract`"), "{error}");
+	}
+
+	#[test]
+	fn composed_secrets_do_not_inherit_storage_profile_defaults() {
+		let config: Config = toml::from_str(
+			r#"
+[project]
+name = "composed"
+revision = "1.0"
+
+[profiles.default]
+PART = { description = "part" }
+RESULT = { description = "result", composed = "${PART}" }
+
+[profiles.default.defaults]
+default = "fallback"
+providers = ["keyring"]
+"#,
+		)
+		.unwrap();
+		let compiled = config.validate_and_compile().unwrap();
+		let result = &compiled.profile("default").unwrap().secrets["RESULT"].config;
+		assert!(result.default.is_none());
+		assert!(result.providers.is_none());
 	}
 
 	#[test]
@@ -1662,17 +3914,151 @@ mod validation_tests {
 	}
 
 	#[test]
-	fn config_validate_accepts_partial_profile_override() {
+	fn config_validate_allows_profile_override_to_inherit_description() {
+		// required = true in the default profile plus a default value from
+		// the override is also fine: only that combination within a single
+		// raw entry is a contradiction.
+		let config: Config = toml::from_str(
+			r#"
+[project]
+name = "tmp"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "Database connection string", required = true }
+
+[profiles.development]
+DATABASE_URL = { default = "sqlite:///dev.db" }
+"#,
+		)
+		.unwrap();
+
+		config.validate().unwrap();
+
+		let spec = crate::Secrets::new(config, None, None, Some("development".to_string()));
+		let resolved = spec
+			.resolve_secret_config("DATABASE_URL", Some("development"))
+			.unwrap();
+		assert_eq!(
+			resolved.description.as_deref(),
+			Some("Database connection string")
+		);
+		assert_eq!(resolved.default.as_deref(), Some("sqlite:///dev.db"));
+	}
+
+	#[test]
+	fn config_validate_requires_description_for_profile_only_secret() {
+		let config = config_with(
+			"proj",
+			vec![
+				("default", vec![("API_KEY", secret(Some("API key")))]),
+				("development", vec![("DATABASE_URL", secret(None))]),
+			],
+		);
+
+		let err = config.validate().unwrap_err();
+		assert!(err.to_string().contains("missing description"));
+	}
+
+	#[test]
+	fn config_validate_rejects_generate_and_default_split_across_profiles() {
+		// The merged production config carries generate (inherited) plus an
+		// inline default; the executor would generate and silently ignore the
+		// default, so validation must reject the combination.
+		let config: Config = toml::from_str(
+			r#"
+[project]
+name = "tmp"
+revision = "1.0"
+
+[profiles.default]
+API_TOKEN = { description = "t", type = "password", generate = true }
+
+[profiles.production]
+API_TOKEN = { default = "placeholder" }
+"#,
+		)
+		.unwrap();
+
+		let err = config.validate().unwrap_err().to_string();
+		assert!(err.contains("Profile 'production'"), "{err}");
 		assert!(
-			config_with(
+			err.contains("'generate' and 'default' cannot both be set"),
+			"{err}"
+		);
+	}
+
+	#[test]
+	fn config_validate_allows_generate_with_type_inherited_from_default_profile() {
+		// Resolution merges `type` from the default profile, so the override
+		// only enabling `generate` is a coherent effective config.
+		let config: Config = toml::from_str(
+			r#"
+[project]
+name = "tmp"
+revision = "1.0"
+
+[profiles.default]
+TOKEN = { description = "t", type = "password" }
+
+[profiles.production]
+TOKEN = { generate = true }
+"#,
+		)
+		.unwrap();
+
+		config.validate().unwrap();
+	}
+
+	#[test]
+	fn config_validate_blames_default_profile_for_empty_inherited_description() {
+		// The empty description lives in the default profile; the error must
+		// name that profile deterministically, not the override that inherits
+		// the empty value. The config is rebuilt each iteration so every
+		// HashMap gets a fresh hash seed and seed-dependent iteration order
+		// would surface here.
+		for _ in 0..8 {
+			let config = config_with(
 				"proj",
 				vec![
-					("default", vec![("API_KEY", secret(Some("inherited")))]),
-					("production", vec![("API_KEY", secret(None))]),
-				]
-			)
-			.validate()
-			.is_ok()
+					("default", vec![("DB", secret(Some("")))]),
+					("development", vec![("DB", secret(None))]),
+				],
+			);
+			let err = config.validate().unwrap_err().to_string();
+			assert!(err.contains("Profile 'default'"), "{err}");
+			assert!(err.contains("description cannot be empty"), "{err}");
+		}
+	}
+
+	#[test]
+	fn config_validate_checks_profile_defaults_in_merged_config() {
+		// A [defaults] table participates in resolution, so a default value it
+		// injects next to an inherited generate must fail validation too, even
+		// though the production profile never declares the secret itself.
+		let config: Config = toml::from_str(
+			r#"
+[project]
+name = "tmp"
+revision = "1.0"
+
+[profiles.default]
+API_TOKEN = { description = "t", type = "password", generate = true }
+
+[profiles.production]
+OTHER = { description = "o" }
+
+[profiles.production.defaults]
+default = "placeholder"
+"#,
+		)
+		.unwrap();
+
+		let err = config.validate().unwrap_err().to_string();
+		assert!(err.contains("Profile 'production'"), "{err}");
+		assert!(
+			err.contains("'generate' and 'default' cannot both be set"),
+			"{err}"
 		);
 	}
 
@@ -1711,6 +4097,67 @@ mod validation_tests {
 	}
 
 	#[test]
+	fn secret_prompt_parses_round_trips_and_inherits() {
+		let parsed: Secret =
+			toml::from_str("description = \"One-time deployment password\"\nprompt = true")
+				.unwrap();
+		assert_eq!(parsed.prompt, Some(true));
+		assert!(parsed.validate().is_ok());
+
+		let rendered = toml::to_string(&parsed).unwrap();
+		assert!(rendered.contains("prompt = true"), "{rendered}");
+
+		let inherited = Secret::resolved(None, Some(&parsed), None).unwrap();
+		assert_eq!(inherited.prompt, Some(true));
+		let disabled = Secret::resolved(
+			Some(&Secret {
+				prompt: Some(false),
+				..Default::default()
+			}),
+			Some(&parsed),
+			None,
+		)
+		.unwrap();
+		assert_eq!(disabled.prompt, Some(false));
+	}
+
+	#[test]
+	fn secret_prompt_rejects_ambiguous_missing_value_policies() {
+		for secret in [
+			Secret {
+				description: Some("d".to_string()),
+				prompt: Some(true),
+				default: Some("fallback".to_string()),
+				..Default::default()
+			},
+			Secret {
+				description: Some("d".to_string()),
+				prompt: Some(true),
+				required: Some(false),
+				..Default::default()
+			},
+			Secret {
+				description: Some("d".to_string()),
+				prompt: Some(true),
+				secret_type: Some("password".to_string()),
+				generate: Some(GenerateConfig::Bool(true)),
+				..Default::default()
+			},
+			Secret {
+				description: Some("d".to_string()),
+				prompt: Some(true),
+				extract: Some(SecretExtract {
+					format: ExtractFormat::Json,
+					pointer: "/password".to_string(),
+				}),
+				..Default::default()
+			},
+		] {
+			assert!(secret.validate().is_err());
+		}
+	}
+
+	#[test]
 	fn secret_validate_rejects_unknown_type() {
 		let s = Secret {
 			description: Some("d".to_string()),
@@ -1735,15 +4182,913 @@ mod validation_tests {
 		);
 	}
 
+	/// Shorthand for a native address in tests.
+	fn addr(item: &str, field: Option<&str>) -> NativeAddress {
+		NativeAddress {
+			item: item.to_string(),
+			field: field.map(str::to_string),
+			..Default::default()
+		}
+	}
+
+	#[test]
+	fn secret_validate_accepts_reference() {
+		let s = Secret {
+			description: Some("Sentry DSN".to_string()),
+			reference: Some(addr("shared", Some("SENTRY_DSN"))),
+			..Default::default()
+		};
+		assert!(s.validate().is_ok());
+	}
+
+	#[test]
+	fn scoped_refs_parse_and_cannot_mix_with_legacy_ref() {
+		let secret: Secret = toml::from_str(
+            r#"description = "token"
+providers = ["remote", "local"]
+refs = { remote = { vault = "Production", item = "shared", field = "token" }, local = { item = "TOKEN" } }"#,
+        )
+        .unwrap();
+		let refs = secret.refs.expect("scoped refs present");
+		assert_eq!(refs["remote"].item, "shared");
+		assert_eq!(refs["remote"].field.as_deref(), Some("token"));
+		assert_eq!(refs["local"].item, "TOKEN");
+
+		let error = toml::from_str::<Secret>(
+			r#"description = "token"
+ref = { item = "legacy" }
+refs = { remote = { item = "scoped" } }"#,
+		)
+		.unwrap_err();
+		assert!(error.to_string().contains("cannot both be set"), "{error}");
+	}
+
+	#[test]
+	fn profile_ref_override_replaces_the_inherited_address_model() {
+		let legacy = Secret {
+			description: Some("token".to_string()),
+			reference: Some(addr("legacy-token", None)),
+			..Default::default()
+		};
+		let scoped = Secret {
+			refs: Some(HashMap::from([(
+				"remote".to_string(),
+				addr("scoped-token", None),
+			)])),
+			..Default::default()
+		};
+
+		let resolved = Secret::resolved(Some(&scoped), Some(&legacy), None).unwrap();
+		assert!(
+			resolved.reference.is_none(),
+			"an explicit `refs` override must replace an inherited legacy `ref`"
+		);
+		assert_eq!(resolved.refs, scoped.refs);
+		resolved.validate().unwrap();
+
+		let resolved = Secret::resolved(Some(&legacy), Some(&scoped), None).unwrap();
+		assert_eq!(resolved.reference, legacy.reference);
+		assert!(
+			resolved.refs.is_none(),
+			"an explicit legacy `ref` override must replace inherited `refs`"
+		);
+		resolved.validate().unwrap();
+	}
+
+	/// A `ref` supplies naming and `providers` supplies routing; they compose.
+	#[test]
+	fn secret_validate_accepts_ref_with_providers() {
+		let s = Secret {
+			description: Some("d".to_string()),
+			reference: Some(addr("db", Some("password"))),
+			providers: Some(vec![ProviderRef::from("keyring")]),
+			..Default::default()
+		};
+		assert!(s.validate().is_ok());
+	}
+
+	#[test]
+	fn secret_validate_allows_ref_with_generate() {
+		// `ref` names where the secret lives; `generate` mints an initial
+		// value and sets it there when missing. The two compose.
+		let s = Secret {
+			description: Some("d".to_string()),
+			reference: Some(addr("db", Some("password"))),
+			secret_type: Some("password".to_string()),
+			generate: Some(GenerateConfig::Bool(true)),
+			..Default::default()
+		};
+		assert!(s.validate().is_ok());
+	}
+
+	#[test]
+	fn secret_validate_rejects_empty_ref_coordinates() {
+		let s = Secret {
+			description: Some("d".to_string()),
+			reference: Some(addr("", None)),
+			..Default::default()
+		};
+		assert!(s.validate().unwrap_err().contains("`item` cannot be empty"));
+
+		let s = Secret {
+			description: Some("d".to_string()),
+			reference: Some(addr("db", Some(""))),
+			..Default::default()
+		};
+		assert!(
+			s.validate()
+				.unwrap_err()
+				.contains("`field` cannot be empty")
+		);
+
+		// Whitespace-only is the same typo as empty: no store names a secret
+		// "   ", and an unrejected one resolves against the store verbatim.
+		for blank in ["   ", "\t", "\n"] {
+			let s = Secret {
+				description: Some("d".to_string()),
+				reference: Some(addr(blank, None)),
+				..Default::default()
+			};
+			assert!(
+				s.validate().unwrap_err().contains("`item` cannot be empty"),
+				"item {blank:?} should be rejected"
+			);
+
+			let s = Secret {
+				description: Some("d".to_string()),
+				reference: Some(addr("db", Some(blank))),
+				..Default::default()
+			};
+			assert!(
+				s.validate()
+					.unwrap_err()
+					.contains("`field` cannot be empty"),
+				"field {blank:?} should be rejected"
+			);
+		}
+	}
+
+	#[test]
+	fn secret_reference_round_trips_as_ref_in_toml() {
+		// The field is `reference` in Rust but `ref` in TOML, and is omitted
+		// when unset so `monosecret config`/init output stays clean.
+		let s = Secret {
+			description: Some("d".to_string()),
+			reference: Some(NativeAddress {
+				item: "db".to_string(),
+				field: Some("password".to_string()),
+				vault: Some("Production".to_string()),
+				..Default::default()
+			}),
+			..Default::default()
+		};
+		let toml = toml::to_string(&s).unwrap();
+		assert!(toml.contains("item = \"db\""), "{toml}");
+		let parsed = toml::from_str::<Secret>(&toml).unwrap();
+		assert_eq!(parsed.reference, s.reference);
+
+		let toml = toml::to_string(&Secret {
+			description: Some("d".to_string()),
+			..Default::default()
+		})
+		.unwrap();
+		assert!(!toml.contains("ref"));
+	}
+
+	#[test]
+	fn secret_encoding_parses_round_trips_and_inherits() {
+		for (spelling, expected) in [
+			("base64", SecretEncoding::Base64),
+			("base64url", SecretEncoding::Base64Url),
+			("hex", SecretEncoding::Hex),
+		] {
+			let secret: Secret = toml::from_str(&format!(
+				"description = \"encoded\"\nencoding = \"{spelling}\""
+			))
+			.unwrap();
+			assert_eq!(secret.encoding, Some(expected));
+			let rendered = toml::to_string(&secret).unwrap();
+			assert!(
+				rendered.contains(&format!("encoding = \"{spelling}\"")),
+				"{rendered}"
+			);
+		}
+
+		let inherited = Secret::resolved(
+			Some(&Secret {
+				description: Some("production".to_string()),
+				..Default::default()
+			}),
+			Some(&Secret {
+				description: Some("default".to_string()),
+				encoding: Some(SecretEncoding::Base64),
+				..Default::default()
+			}),
+			None,
+		)
+		.unwrap();
+		assert_eq!(inherited.encoding, Some(SecretEncoding::Base64));
+	}
+
+	#[test]
+	fn secret_encoding_rejects_unknown_name() {
+		let error = toml::from_str::<Secret>(
+			r#"description = "encoded"
+encoding = "rot13""#,
+		)
+		.unwrap_err()
+		.to_string();
+		assert!(error.contains("unknown variant `rot13`"), "{error}");
+	}
+
+	#[test]
+	fn secret_extract_parses_round_trips_and_inherits() {
+		let secret: Secret = toml::from_str(
+			r#"description = "selected"
+extract = { format = "json", pointer = "/database/password" }"#,
+		)
+		.unwrap();
+		assert_eq!(
+			secret.extract,
+			Some(SecretExtract {
+				format: ExtractFormat::Json,
+				pointer: "/database/password".to_string(),
+			})
+		);
+		let rendered = toml::to_string(&secret).unwrap();
+		assert!(rendered.contains("format = \"json\""), "{rendered}");
+		assert!(
+			rendered.contains("pointer = \"/database/password\""),
+			"{rendered}"
+		);
+
+		let inherited = Secret::resolved(
+			Some(&Secret {
+				description: Some("production".to_string()),
+				..Default::default()
+			}),
+			Some(&Secret {
+				description: Some("default".to_string()),
+				extract: secret.extract.clone(),
+				..Default::default()
+			}),
+			None,
+		)
+		.unwrap();
+		assert_eq!(inherited.extract, secret.extract);
+	}
+
+	#[test]
+	fn secret_extract_validates_json_pointer_and_table_shape() {
+		for pointer in ["database/password", "/bad~", "/bad~2escape"] {
+			let secret: Secret = toml::from_str(&format!(
+				"description = \"selected\"\nextract = {{ format = \"json\", pointer = \"{pointer}\" }}"
+			))
+			.unwrap();
+			let error = secret.validate().unwrap_err();
+			assert!(error.contains("`extract.pointer`"), "{error}");
+		}
+
+		let error = toml::from_str::<Secret>(
+			r#"description = "selected"
+extract = { format = "json", pointer = "/x", unknown = true }"#,
+		)
+		.unwrap_err()
+		.to_string();
+		assert!(error.contains("unknown field"), "{error}");
+
+		let error = toml::from_str::<Secret>(
+			r#"description = "selected"
+extract = { format = "yaml", pointer = "/x" }"#,
+		)
+		.unwrap_err()
+		.to_string();
+		assert!(error.contains("unknown variant `yaml`"), "{error}");
+	}
+
+	#[test]
+	fn secret_extract_accepts_root_and_escaped_json_pointers() {
+		for pointer in ["", "/a~1b/~0key", "/items/0"] {
+			let secret: Secret = toml::from_str(&format!(
+				"description = \"selected\"\nextract = {{ format = \"json\", pointer = \"{pointer}\" }}"
+			))
+			.unwrap();
+			secret.validate().unwrap();
+		}
+	}
+
+	#[test]
+	fn secret_extract_rejects_generation() {
+		let secret: Secret = toml::from_str(
+			r#"description = "selected"
+type = "password"
+generate = true
+extract = { format = "json", pointer = "/password" }"#,
+		)
+		.unwrap();
+		let error = secret.validate().unwrap_err();
+		assert!(error.contains("extracted secrets are read-only"), "{error}");
+	}
+
+	/// All coordinate keys parse from the inline table form.
+	#[test]
+	fn ref_table_parses_every_coordinate() {
+		let s: Secret = toml::from_str(
+			r#"description = "d"
+ref = { vault = "Production", item = "db", section = "api", field = "password", version = "3" }"#,
+		)
+		.unwrap();
+		let reference = s.reference.unwrap();
+		assert_eq!(reference.vault.as_deref(), Some("Production"));
+		assert_eq!(reference.item, "db");
+		assert_eq!(reference.section.as_deref(), Some("api"));
+		assert_eq!(reference.field.as_deref(), Some("password"));
+		assert_eq!(reference.version.as_deref(), Some("3"));
+	}
+
+	/// A misspelled coordinate fails with serde's precise unknown-field
+	/// message rather than an opaque untagged-enum error.
+	#[test]
+	fn ref_table_rejects_unknown_keys() {
+		let err = toml::from_str::<Secret>(
+			r#"description = "d"
+ref = { item = "db", filed = "password" }"#,
+		)
+		.unwrap_err();
+		assert!(err.to_string().contains("unknown field `filed`"), "{err}");
+	}
+
+	/// A string `ref` (the shape earlier iterations accepted) errors with the
+	/// exact table translation for the common `op://` paste.
+	#[test]
+	fn ref_string_gets_translation_hint() {
+		let err = toml::from_str::<Secret>(
+			r#"description = "d"
+ref = "op://Production/db/password""#,
+		)
+		.unwrap_err();
+		let msg = err.to_string();
+		assert!(
+			msg.contains("ref = { vault = \"Production\", item = \"db\", field = \"password\" }"),
+			"{msg}"
+		);
+
+		let err = toml::from_str::<Secret>(
+			r#"description = "d"
+ref = "just-a-string""#,
+		)
+		.unwrap_err();
+		assert!(
+			err.to_string()
+				.contains("table of native secret coordinates"),
+			"{err}"
+		);
+	}
+
+	/// A non-string, non-table value reports the expected shape.
+	#[test]
+	fn ref_wrong_type_reports_expected_shape() {
+		let err = toml::from_str::<Secret>(
+			r#"description = "d"
+ref = 3"#,
+		)
+		.unwrap_err();
+		assert!(
+			err.to_string().contains("native secret coordinates"),
+			"{err}"
+		);
+	}
+
 	#[test]
 	fn generate_config_is_enabled() {
 		assert!(!GenerateConfig::Bool(false).is_enabled());
 		assert!(GenerateConfig::Bool(true).is_enabled());
 		assert!(GenerateConfig::Options(GenerateOptions::default()).is_enabled());
 	}
+}
+
+#[cfg(test)]
+mod provider_alias_tests {
+	use super::*;
+
+	fn parse(providers_toml: &str) -> HashMap<String, ProviderAlias> {
+		toml::from_str(providers_toml).expect("valid [providers] table")
+	}
 
 	#[test]
-	fn manifest_applies_profile_defaults_and_default_profile_fallback() {
+	fn bare_string_parses_as_uri_without_credentials() {
+		let map = parse(r#"keyring = "keyring://""#);
+		assert_eq!(map["keyring"], ProviderAlias::from("keyring://"));
+		assert!(map["keyring"].credentials.is_empty());
+	}
+
+	#[test]
+	fn table_with_credentials_parses_uri_and_credentials() {
+		let map =
+			parse(r#"bws = { uri = "bws://proj", credentials = { access_token = "keyring" } }"#);
+		let alias = &map["bws"];
+		assert_eq!(alias.uri, "bws://proj");
+		let source = alias
+			.credentials
+			.get("access_token")
+			.expect("credentials carries the semantic name");
+		assert_eq!(source, &CredentialSource::from("keyring"));
+	}
+
+	#[test]
+	fn alias_ref_template_parses_expands_and_round_trips() {
+		let map = parse(
+			r#"op = { uri = "onepassword://Production", ref = { vault = "{profile}", item = "{project}-{key}", field = "password" } }"#,
+		);
+		let alias = &map["op"];
+		let template = alias.reference_template().expect("template present");
+		let expanded = template.expand("web", "prod", "DATABASE_URL").unwrap();
+		assert_eq!(expanded.vault.as_deref(), Some("prod"));
+		assert_eq!(expanded.item, "web-DATABASE_URL");
+		assert_eq!(expanded.field.as_deref(), Some("password"));
+		assert_eq!(
+			template
+				.expand("{key}", "prod", "DATABASE_URL")
+				.unwrap()
+				.item,
+			"{key}-DATABASE_URL",
+			"inserted values must not be interpreted as placeholders"
+		);
+
+		let serialized = toml::to_string(&map).unwrap();
+		assert_eq!(parse(&serialized), map);
+	}
+
+	#[test]
+	fn alias_ref_template_rejects_invalid_placeholders_and_cached_aliases() {
+		let error = toml::from_str::<HashMap<String, ProviderAlias>>(
+			r#"op = { uri = "onepassword://Production", ref = { item = "{secret}" } }"#,
+		)
+		.unwrap_err();
+		assert!(error.to_string().contains("unknown placeholder"), "{error}");
+
+		let error = toml::from_str::<HashMap<String, ProviderAlias>>(
+            r#"route = { fallback = ["remote"], cache = { provider = "local", max_age = "1h" }, ref = { item = "{key}" } }"#,
+        )
+        .unwrap_err();
+		assert!(
+			error.to_string().contains("cached provider alias"),
+			"{error}"
+		);
+	}
+
+	#[test]
+	fn credential_source_with_ref_parses_provider_and_coordinates() {
+		let map = parse(
+			r#"vault = { uri = "vault://kv", credentials = { role_id = { provider = "onepassword", ref = { vault = "Infra", item = "approle", field = "role_id" } } } }"#,
+		);
+		let source = map["vault"].credentials["role_id"].clone();
+		assert_eq!(source.provider, "onepassword");
+		let reference = source.reference.expect("ref present");
+		assert_eq!(reference.vault.as_deref(), Some("Infra"));
+		assert_eq!(reference.item, "approle");
+		assert_eq!(reference.field.as_deref(), Some("role_id"));
+	}
+
+	#[test]
+	fn credential_source_round_trips() {
+		let bare = CredentialSource::from("keyring");
+		let with_ref = CredentialSource {
+			provider: "onepassword".to_string(),
+			reference: Some(NativeAddress {
+				item: "approle".to_string(),
+				field: Some("role_id".to_string()),
+				..Default::default()
+			}),
+		};
+		for source in [bare, with_ref] {
+			let alias = ProviderAlias {
+				uri: "vault://kv".to_string(),
+				credentials: HashMap::from([("role_id".to_string(), source.clone())]),
+				..Default::default()
+			};
+			let map = HashMap::from([("vault".to_string(), alias.clone())]);
+			let serialized = toml::to_string(&map).unwrap();
+			assert_eq!(parse(&serialized)["vault"], alias);
+		}
+	}
+
+	#[test]
+	fn table_without_credentials_is_equivalent_to_bare_string() {
+		let map = parse(r#"bws = { uri = "bws://proj" }"#);
+		assert_eq!(map["bws"], ProviderAlias::from("bws://proj"));
+	}
+
+	#[test]
+	fn empty_credentials_table_is_equivalent_to_no_credentials() {
+		// `credentials = {}` declares nothing: the alias equals its bare-string form
+		// and serializes back to it.
+		let map = parse(r#"keyring = { uri = "keyring://", credentials = {} }"#);
+		assert_eq!(map["keyring"], ProviderAlias::from("keyring://"));
+	}
+
+	#[test]
+	fn cached_alias_parses_and_round_trips() {
+		let map = parse(
+			r#"myprovider = { fallback = ["azure", "env"], cache = { provider = "local", max_age = "8h" } }"#,
+		);
+		let alias = &map["myprovider"];
+		assert!(alias.is_cached());
+		assert_eq!(alias.fallback, ["azure", "env"]);
+		assert_eq!(
+			alias.cache.as_ref(),
+			Some(&ProviderCache::new("local", "8h").unwrap())
+		);
+		assert_eq!(alias.cache.as_ref().unwrap().max_age_secs(), 8 * 60 * 60);
+
+		let serialized = toml::to_string(&map).unwrap();
+		assert_eq!(parse(&serialized), map);
+	}
+
+	#[test]
+	fn inline_cached_uri_parses_and_round_trips_with_credentials() {
+		let map = parse(
+			r#"azure = { uri = "akv://team-vault", credentials = { client_secret = "keyring" }, cache = { provider = "local", max_age = "5m" } }"#,
+		);
+		let alias = &map["azure"];
+		assert_eq!(alias.uri, "akv://team-vault");
+		assert_eq!(
+			alias.credentials.get("client_secret"),
+			Some(&CredentialSource::from("keyring"))
+		);
+		assert!(alias.fallback.is_empty());
+		assert_eq!(
+			alias.cache.as_ref(),
+			Some(&ProviderCache::new("local", "5m").unwrap())
+		);
+
+		let serialized = toml::to_string(&map).unwrap();
+		assert!(serialized.contains("uri = \"akv://team-vault\""));
+		assert!(!serialized.contains("fallback"));
+		assert_eq!(parse(&serialized), map);
+	}
+
+	#[test]
+	fn cache_duration_supports_compound_values() {
+		assert_eq!(parse_cache_max_age("1h30m"), Ok(5_400));
+		assert_eq!(parse_cache_max_age("2d"), Ok(172_800));
+	}
+
+	#[test]
+	fn malformed_cached_aliases_are_rejected_precisely() {
+		for (toml, expected) in [
+			(
+				r#"p = { fallback = [], cache = { provider = "local", max_age = "1h" } }"#,
+				"at least one",
+			),
+			(
+				r#"p = { fallback = ["source"], cache = { provider = "", max_age = "1h" } }"#,
+				"cache.provider",
+			),
+			(
+				r#"p = { fallback = ["source"], cache = { provider = "local", max_age = "3600" } }"#,
+				"needs a unit",
+			),
+			(
+				r#"p = { uri = "env://", fallback = ["source"], cache = { provider = "local", max_age = "1h" } }"#,
+				"either",
+			),
+			(
+				r#"p = { fallback = ["source"], cache = { provider = "local", max_age = "1h" }, credentials = { token = "env" } }"#,
+				"cannot declare credentials",
+			),
+		] {
+			let error = toml::from_str::<HashMap<String, ProviderAlias>>(toml).unwrap_err();
+			assert!(
+				error.to_string().contains(expected),
+				"expected {expected:?} in {error}"
+			);
+		}
+	}
+
+	#[test]
+	fn unknown_table_field_is_rejected() {
+		let err = toml::from_str::<HashMap<String, ProviderAlias>>(
+			r#"bws = { uri = "bws://proj", oops = "x" }"#,
+		)
+		.unwrap_err();
+		assert!(
+			err.to_string().contains("oops") || err.to_string().contains("unknown"),
+			"error should point at the unknown field, got: {err}"
+		);
+	}
+
+	#[test]
+	fn environment_shaped_credential_field_is_rejected() {
+		let error = toml::from_str::<HashMap<String, ProviderAlias>>(
+			r#"bws = { uri = "bws://proj", env = { BWS_ACCESS_TOKEN = "keyring" } }"#,
+		)
+		.unwrap_err();
+		assert!(error.to_string().contains("env"), "{error}");
+	}
+
+	#[test]
+	fn credential_less_alias_round_trips_as_a_bare_string() {
+		let alias = ProviderAlias::from("keyring://");
+		let map = HashMap::from([("keyring".to_string(), alias.clone())]);
+		let serialized = toml::to_string(&map).unwrap();
+		// The bare-string form is preserved so existing configs are untouched.
+		assert_eq!(serialized.trim(), r#"keyring = "keyring://""#);
+		assert_eq!(parse(&serialized)["keyring"], alias);
+	}
+
+	#[test]
+	fn alias_with_credentials_round_trips_through_toml() {
+		let alias = ProviderAlias {
+			uri: "bws://proj".to_string(),
+			credentials: HashMap::from([(
+				"access_token".to_string(),
+				CredentialSource::from("keyring"),
+			)]),
+			..Default::default()
+		};
+		let map = HashMap::from([("bws".to_string(), alias.clone())]);
+		let serialized = toml::to_string(&map).unwrap();
+		assert_eq!(parse(&serialized)["bws"], alias);
+	}
+
+	#[test]
+	fn config_providers_accepts_both_forms_end_to_end() {
+		let config: Config = toml::from_str(
+			r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[providers]
+keyring = "keyring://"
+bws = { uri = "bws://proj", credentials = { access_token = "keyring" } }
+
+[profiles.default]
+API_KEY = { description = "key", required = true }
+"#,
+		)
+		.unwrap();
+		let providers = config.providers.expect("[providers] present");
+		assert_eq!(providers["keyring"], ProviderConfig::from("keyring://"));
+		assert_eq!(providers["bws"].uri(), "bws://proj");
+		assert!(matches!(
+			&providers["bws"],
+			ProviderConfig::Structured(config)
+				if config.credentials.contains_key("access_token")
+		));
+	}
+}
+
+#[cfg(test)]
+mod scope_tests {
+	use super::*;
+
+	fn parse(toml: &str) -> Result<Config, ParseError> {
+		Config::parse_document(toml)
+	}
+
+	const WITH_SCOPES: &str = r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+API_KEY = { description = "API key", required = true }
+QUEUE_TOKEN = { description = "Queue token", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "API_KEY"]
+
+[scopes.worker]
+secrets = ["DATABASE_URL", "QUEUE_TOKEN"]
+"#;
+
+	#[test]
+	fn scopes_parse_as_named_membership_lists() {
+		let config = parse(WITH_SCOPES).unwrap();
+		let scopes = config.scopes.as_ref().expect("[scopes] present");
+		assert_eq!(scopes["api"].secrets, vec!["DATABASE_URL", "API_KEY"]);
+		assert_eq!(
+			scopes["worker"].secrets,
+			vec!["DATABASE_URL", "QUEUE_TOKEN"]
+		);
+	}
+
+	#[test]
+	fn scopes_validate_against_the_union_of_all_profiles() {
+		// A scope may name a secret declared in a *different* profile than
+		// `default`; validation is against the union, not one profile.
+		let config = parse(
+			r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[profiles.production]
+SENTRY_DSN = { description = "Sentry", required = true }
+
+[scopes.observability]
+secrets = ["SENTRY_DSN"]
+"#,
+		)
+		.unwrap();
+		assert!(config.validate().is_ok());
+	}
+
+	#[test]
+	fn scope_referencing_an_undeclared_secret_is_rejected() {
+		let err = parse(
+			r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "TYPO_KEY"]
+"#,
+		)
+		.unwrap()
+		.validate()
+		.expect_err("undeclared secret in a scope is a config error");
+		let ParseError::Validation(msg) = err else {
+			panic!("expected a validation error, got {err:?}");
+		};
+		assert!(msg.contains("api"), "names the offending scope: {msg}");
+		assert!(
+			msg.contains("TYPO_KEY"),
+			"names the undeclared secret: {msg}"
+		);
+	}
+
+	/// An empty scope resolves to nothing: it contacts no provider, so `check
+	/// --scope` reports a clean `0 found, 0 missing` while `run --scope` starts
+	/// the command with every manifest secret scrubbed and none injected. That
+	/// green result guarantees nothing, so the manifest is rejected instead.
+	#[test]
+	fn scope_with_no_secrets_is_rejected() {
+		let err = parse(
+			r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.api]
+secrets = []
+"#,
+		)
+		.unwrap()
+		.validate()
+		.expect_err("an empty scope is a config error");
+		let ParseError::Validation(msg) = err else {
+			panic!("expected a validation error, got {err:?}");
+		};
+		assert!(msg.contains("api"), "names the offending scope: {msg}");
+		assert!(
+			msg.contains("at least one"),
+			"explains the requirement: {msg}"
+		);
+	}
+
+	#[test]
+	fn scope_listing_a_secret_twice_is_rejected() {
+		let err = parse(
+			r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+API_KEY = { description = "API key", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "API_KEY", "DATABASE_URL"]
+"#,
+		)
+		.unwrap()
+		.validate()
+		.expect_err("a repeated member is a config error");
+		let ParseError::Validation(msg) = err else {
+			panic!("expected a validation error, got {err:?}");
+		};
+		assert!(
+			msg.contains("api") && msg.contains("DATABASE_URL"),
+			"names the scope and the repeated secret: {msg}"
+		);
+	}
+
+	#[test]
+	fn scope_listing_a_blank_secret_name_is_rejected() {
+		let err = parse(
+			r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL", "  "]
+"#,
+		)
+		.unwrap()
+		.validate()
+		.expect_err("a blank member is a config error");
+		let ParseError::Validation(msg) = err else {
+			panic!("expected a validation error, got {err:?}");
+		};
+		assert!(msg.contains("api"), "names the offending scope: {msg}");
+	}
+
+	#[test]
+	fn blank_scope_name_is_rejected() {
+		let err = parse(
+			r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.""]
+secrets = ["DATABASE_URL"]
+"#,
+		)
+		.unwrap()
+		.validate()
+		.expect_err("a blank scope name is a config error");
+		assert!(matches!(err, ParseError::Validation(_)));
+	}
+
+	#[test]
+	fn valid_scopes_pass_validation() {
+		assert!(parse(WITH_SCOPES).unwrap().validate().is_ok());
+	}
+
+	#[test]
+	fn a_manifest_without_scopes_stays_valid_and_scope_free() {
+		let config = parse(
+			r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+"#,
+		)
+		.unwrap();
+		assert!(config.scopes.is_none());
+		assert!(config.validate().is_ok());
+	}
+
+	#[test]
+	fn later_documents_merge_scopes_like_providers() {
+		let mut base = parse(WITH_SCOPES).unwrap();
+		let overlay = parse(
+			r#"
+[project]
+name = "app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "DB", required = true }
+
+[scopes.api]
+secrets = ["DATABASE_URL"]
+
+[scopes.migration]
+secrets = ["DATABASE_URL"]
+"#,
+		)
+		.unwrap();
+		base.overlay_with(overlay);
+		let scopes = base.scopes.expect("scopes present after overlay");
+		// Later document wins on conflict; new scopes are added; untouched
+		// scopes are preserved.
+		assert_eq!(scopes["api"].secrets, vec!["DATABASE_URL"]);
+		assert_eq!(
+			scopes["worker"].secrets,
+			vec!["DATABASE_URL", "QUEUE_TOKEN"]
+		);
+		assert_eq!(scopes["migration"].secrets, vec!["DATABASE_URL"]);
+	}
+
+	#[test]
+	fn config_to_manifest_uses_effective_profiles_without_secret_values() {
 		let config: Config = r#"
 [project]
 name = "demo"
@@ -1753,65 +5098,34 @@ revision = "1.0"
 backend = "Backend services"
 
 [providers]
-private = "op+token://vault/item"
+private = "onepassword+token://inline-token@vault"
 
 [profiles.default]
-DATABASE_URL = { description = "Database", required = true, groups = ["backend"] }
-LOG_LEVEL = { description = "Log level", required = false, default = "info" }
-TLS_CERT = { description = "TLS certificate", as_path = true }
-
-[profiles.development.defaults]
-required = false
+DATABASE_URL = { default = "postgres://user:password@host/db", as_path = true, groups = ["backend"] }
+REQUIRED_TOKEN = { required = true }
 
 [profiles.development]
-DATABASE_URL = { description = "Development database", default = "sqlite://dev.db" }
-DEBUG_TOKEN = { description = "Debug token" }
-
-[profiles.production]
-API_KEY = { description = "API key", required = true }
+LOCAL_ONLY = { required = false }
 "#
 		.parse()
 		.expect("valid config");
 
 		let manifest = config.to_manifest();
-		let manifest_json = serde_json::to_value(&manifest).unwrap();
+		let development = &manifest.profiles["development"].secrets;
+		assert!(development["DATABASE_URL"].has_default);
+		assert!(development["DATABASE_URL"].as_path);
+		assert_eq!(development["DATABASE_URL"].groups, ["backend"]);
+		assert!(development["REQUIRED_TOKEN"].required);
+		assert!(!development["LOCAL_ONLY"].required);
 
+		let json = serde_json::to_string(&manifest).expect("serialize manifest");
 		assert!(
-			!serde_json::to_string(&manifest)
-				.unwrap()
-				.contains("op+token")
+			!json.contains("inline-token"),
+			"provider credential leaked: {json}"
 		);
-		insta::assert_json_snapshot!(manifest_json);
-	}
-
-	#[test]
-	fn manifest_secret_returns_none_for_unknown_secret() {
-		let config = config_with(
-			"demo",
-			vec![("default", vec![("TOKEN", secret(Some("Token")))])],
+		assert!(
+			!json.contains("password@host"),
+			"default value leaked: {json}"
 		);
-
-		assert_eq!(config.manifest_secret("MISSING", "default"), None);
-	}
-
-	#[test]
-	fn manifest_serializes_camel_case_metadata() {
-		let config = config_with(
-			"demo",
-			vec![(
-				"default",
-				vec![(
-					"TOKEN",
-					Secret {
-						description: Some("Token".to_string()),
-						as_path: Some(true),
-						..Default::default()
-					},
-				)],
-			)],
-		);
-
-		let json = serde_json::to_value(config.to_manifest()).unwrap();
-		insta::assert_json_snapshot!(json);
 	}
 }

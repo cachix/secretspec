@@ -6,6 +6,8 @@ info:
     - manifest
     - "--format"
     - json
+  env:
+    HOME: /tmp/monosecret-cli-snapshots-manifest-json
 ---
 success: true
 exit_code: 0

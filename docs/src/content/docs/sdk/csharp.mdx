@@ -1,0 +1,116 @@
+---
+title: C# SDK
+description: Resolve Monosecret secrets from C# and .NET
+---
+
+import { Code } from 'astro:components';
+import githubDark from 'shiki/themes/github-dark.mjs';
+import quickStartExample from './examples/csharp/quick-start.cs?raw';
+import oneShotExample from './examples/csharp/one-shot.cs?raw';
+import scopesExample from './examples/csharp/scopes.cs?raw';
+import aspNetCoreExample from './examples/csharp/aspnet-core.cs?raw';
+import reportExample from './examples/csharp/report.cs?raw';
+import typedAccessExample from './examples/csharp/typed-access.cs?raw';
+import asPathExample from './examples/csharp/as-path.cs?raw';
+
+> **Planned for Monosecret 0.2+:** Source and local tests are integrated, but
+> NuGet publication remains deferred. Installation commands show the intended
+> workflow after the package is released.
+
+The C# SDK (`Monosecret`) is a thin client over the same Rust resolver as
+the CLI. Every provider, fallback chain, profile, generator, reference, and
+`as_path` secret therefore works without C#-side resolution logic.
+
+## Install (planned for 0.2+)
+
+```bash
+$ dotnet add package Monosecret
+```
+
+The planned package targets .NET 8 and will include native resolvers for glibc and musl
+Linux x64/Arm64, macOS x64/Arm64, and Windows x64/Arm64. Windows assets
+statically include the C runtime. No separate Monosecret CLI, native library,
+Visual C++ Redistributable, or system `libdbus` installation is needed.
+
+The managed client is safe to trim and supports NativeAOT publishing. A
+NativeAOT application still carries the matching Monosecret native resolver
+beside its executable; `dotnet publish` selects and copies that runtime asset
+automatically.
+
+```bash
+$ dotnet publish -c Release -r linux-x64 --self-contained \
+  -p:PublishAot=true
+```
+
+## Quick start
+
+<Code code={quickStartExample} lang="csharp" theme={githubDark} meta='title="QuickStart.cs"' />
+
+`Get()` returns the inline value, or the readable file path for an `as_path`
+secret. A missing required secret throws `MissingRequiredException`; its
+`Missing` property contains the secret names. Other failures throw
+`MonosecretException`, whose `Kind` property is a stable error category.
+
+A one-shot form is also available:
+
+<Code code={oneShotExample} lang="csharp" theme={githubDark} meta='title="OneShot.cs"' />
+
+## Scopes (0.2+)
+
+Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `Resolved.Scope` and `ResolutionReport.Scope`:
+
+<Code code={scopesExample} lang="csharp" theme={githubDark} meta='title="Scopes.cs"' />
+
+## ASP.NET Core
+
+Resolve and export secrets before creating the application builder, so normal
+environment-variable configuration sees them:
+
+<Code code={aspNetCoreExample} lang="csharp" theme={githubDark} meta='title="AspNetCore.cs"' />
+
+For longer-lived services, you can instead register `resolved` in dependency
+injection and read `ResolvedSecret` objects directly. Keep the result alive for
+as long as consumers need any `as_path` file.
+
+## Value-free preflight
+
+`Report()` returns the inventory view exposed by `monosecret check --json`.
+It never carries values. Missing required secrets appear with
+`Status == "missing_required"` rather than throwing, so incomplete deployments
+can still be inspected.
+
+<Code code={reportExample} lang="csharp" theme={githubDark} meta='title="Report.cs"' />
+
+## Typed access
+
+Generate an idiomatic C# model from the manifest schema:
+
+```bash
+$ monosecret schema | \
+  quicktype -s schema --top-level AppSecrets --lang csharp -o AppSecrets.cs
+```
+
+Then deserialize the SDK's flat field map:
+
+<Code code={typedAccessExample} lang="csharp" theme={githubDark} meta='title="TypedAccess.cs"' />
+
+The schema models successful resolution: required, defaulted, and generated
+secrets are non-nullable, and profile-specific schemas include inherited
+default-profile fields.
+
+## Files (`as_path`)
+
+File-shaped secrets are materialized as mode-0400 temporary files. The returned
+path must remain valid after `Load()`, so the caller owns its lifetime.
+`Resolved` implements `IDisposable`; use a `using` declaration or call `Close()`
+to remove these files deterministically:
+
+<Code code={asPathExample} lang="csharp" theme={githubDark} meta='title="AsPath.cs"' />
+
+## Native loading
+
+The NuGet runtime asset is selected automatically. For local SDK development,
+`MONOSECRET_FFI_LIB` can point to a particular `libmonosecret_ffi` build. From
+a Monosecret source checkout, the SDK also searches an ancestor Cargo
+`target/debug` or `target/release` directory.

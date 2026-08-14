@@ -3,6 +3,7 @@ use std::io::Write;
 use std::io::{self};
 use std::process::Command;
 use std::process::Stdio;
+use std::sync::Mutex;
 
 use secrecy::ExposeSecret;
 use secrecy::SecretString;
@@ -15,18 +16,46 @@ use crate::provider::Address;
 use crate::provider::Provider;
 use crate::provider::ProviderUrl;
 
-const PROTON_PASS_AGENT_REASON_ENV: &str = "PROTON_PASS_AGENT_REASON";
+/// Environment variable pass-cli (>= 2.1.0) requires agent sessions to set before
+/// audited item operations (`item view`, `item create`, `item delete`, ...). For
+/// non-agent sessions and older pass-cli releases it is ignored, so setting it
+/// unconditionally is safe and backward compatible.
+const AGENT_REASON_ENV: &str = "PROTON_PASS_AGENT_REASON";
 
-fn normalize_agent_reason(reason: &str) -> Option<String> {
-	let trimmed = reason.trim();
-	(!trimmed.is_empty()).then(|| trimmed.to_string())
-}
+/// Reason recorded in Proton Pass' agent audit log when neither a session reason
+/// (via `Secrets::with_reason`) nor `PROTON_PASS_AGENT_REASON` is provided.
+/// Carries the monosecret version so the audit log identifies the exact client.
+const DEFAULT_AGENT_REASON: &str = concat!(
+	"monosecret/",
+	env!("CARGO_PKG_VERSION"),
+	" (https://monosecret.dev)"
+);
 
-fn default_agent_reason() -> String {
-	format!(
-		"monosecret/{} (https://ifiokjr.github.io/monosecret)",
-		env!("CARGO_PKG_VERSION")
-	)
+/// Session checks tried in order, so one build works across pass-cli releases
+/// that disagree about which of them exists.
+///
+/// `pass-cli info` runs behind the CLI's authentication gate, so it fails with
+/// "This operation requires an authenticated client" when no valid session is
+/// present. `pass-cli test` is the fallback for older releases: pass-cli 2.2.4
+/// removed it, and it only ever proved server connectivity rather than session
+/// validity, so it is a weaker check and deliberately second.
+const SESSION_PROBES: [&str; 2] = ["info", "test"];
+
+/// Whether a failed pass-cli call means the subcommand does not exist on this
+/// build, as opposed to the subcommand having run and reported a problem.
+///
+/// Only the first case may fall through to the next probe. pass-cli 2.2.4+
+/// rejects a removed subcommand with clap's `unrecognized subcommand 'test'`;
+/// the other spellings cover the clap 3 era wording, since the provider cannot
+/// assume which clap generation an old pass-cli was built against.
+fn is_unknown_subcommand(error: &MonosecretError) -> bool {
+	let MonosecretError::ProviderOperationFailed(message) = error else {
+		return false;
+	};
+	let message = message.to_lowercase();
+	message.contains("unrecognized subcommand")
+		|| message.contains("unknown subcommand")
+		|| message.contains("wasn't expected")
 }
 
 // You can get the shape of pass-cli data with commands such as:
@@ -35,7 +64,8 @@ fn default_agent_reason() -> String {
 //
 // or:
 // $ pass-cli item list <vault> --output json
-//   {"items": [{"id": "...", "share_id": "...", "content": {"title": "...", "note": "..."}}]}
+//   pass-cli <= 2.0.2: {"items": [{"id": "...", "share_id": "...", "content": {"title": "..."}}]}
+//   pass-cli >= 2.0.3: {"items": [{"id": "...", "share_id": "...", "title": "...", "item_type": "note"}]}
 //
 // We only use a limited subset of the full data.
 
@@ -47,8 +77,6 @@ struct ProtonPassItemContent {
 
 #[derive(Deserialize)]
 struct ProtonPassItemData {
-	id: String,
-	share_id: String,
 	content: ProtonPassItemContent,
 }
 
@@ -57,9 +85,37 @@ struct ProtonPassViewResponse {
 	item: ProtonPassItemData,
 }
 
+/// A single entry from `pass-cli item list ... --output json`.
+///
+/// The list payload changed shape in pass-cli 2.0.3 (protonpass/pass-cli commit
+/// 1c09fd8): the title moved from a nested `content.title` to a top-level
+/// `title`, and the per-item `content` object was dropped entirely from list
+/// output (it no longer carries any secret material). `id`/`share_id` remain
+/// top-level in both shapes, and only those plus the title are used here, so we
+/// accept either layout and keep working across pass-cli versions.
+#[derive(Deserialize)]
+struct ProtonPassListItem {
+	id: String,
+	share_id: String,
+	/// Top-level title (pass-cli >= 2.0.3).
+	title: Option<String>,
+	/// Legacy nested content carrying the title (pass-cli <= 2.0.2).
+	content: Option<ProtonPassItemContent>,
+}
+
+impl ProtonPassListItem {
+	/// The item title regardless of pass-cli version, preferring the top-level
+	/// field and falling back to the legacy nested `content.title`.
+	fn title(&self) -> Option<&str> {
+		self.title
+			.as_deref()
+			.or_else(|| self.content.as_ref().map(|c| c.title.as_str()))
+	}
+}
+
 #[derive(Deserialize)]
 struct ProtonPassListResponse {
-	items: Vec<ProtonPassItemData>,
+	items: Vec<ProtonPassListItem>,
 }
 
 // You can get the JSON template for this struct via:
@@ -121,7 +177,8 @@ impl TryFrom<&ProviderUrl> for ProtonPassConfig {
 /// Interactive: `pass-cli login`
 /// CI with a personal access token: `pass-cli login --pat $PROTON_PASS_PAT`
 ///
-/// The provider checks session validity via `pass-cli test` before operations.
+/// The provider checks session validity before operations, via `pass-cli info`
+/// or, on releases predating it, `pass-cli test`.
 ///
 /// # Storage
 ///
@@ -132,8 +189,10 @@ pub struct ProtonPassProvider {
 	/// Path to `pass-cli` binary.
 	/// Override with the `MONOSECRET_PROTONPASS_CLI_PATH` environment variable.
 	cli_binary_path: String,
-	/// Reason passed to Proton Pass agent sessions for audited operations.
-	reason: std::sync::RwLock<Option<String>>,
+	/// Session reason for the audit log, set via `set_reason` (last write wins). Uses
+	/// interior mutability because the provider is shared behind an `Arc` once
+	/// registered.
+	session_reason: Mutex<Option<String>>,
 }
 
 crate::register_provider! {
@@ -153,18 +212,71 @@ crate::register_provider! {
 impl ProtonPassProvider {
 	pub fn new(config: ProtonPassConfig) -> Self {
 		let cli_binary_path = std::env::var("MONOSECRET_PROTONPASS_CLI_PATH")
-			.or_else(|_| std::env::var("SECRETSPEC_PROTONPASS_CLI_PATH"))
 			.unwrap_or_else(|_| "pass-cli".to_string());
 		Self {
 			config,
 			cli_binary_path,
-			reason: std::sync::RwLock::new(None),
+			session_reason: Mutex::new(None),
 		}
 	}
 
+	/// Probes the CLI session once before the first read or write, trying each
+	/// [`SESSION_PROBES`] entry until one exists on the installed pass-cli.
+	///
+	/// Only a missing subcommand advances to the next probe. Any other failure
+	/// is the probe's answer (an unauthenticated session, an absent binary) and
+	/// is returned as-is, so a definitive "log in first" is never retried as if
+	/// the CLI were simply too old.
 	pub(crate) fn test_authentication(&self) -> Result<()> {
-		self.run_pass_cli(&["test"], None)?;
-		Ok(())
+		for probe in SESSION_PROBES {
+			match self.run_pass_cli(&[probe], None) {
+				Ok(_) => return Ok(()),
+				Err(e) if is_unknown_subcommand(&e) => continue,
+				Err(e) => return Err(e),
+			}
+		}
+
+		Err(MonosecretError::ProviderOperationFailed(format!(
+			"Proton Pass CLI at '{}' has none of the session checks Monosecret knows ({}), \
+             so it is not compatible with this Monosecret release.\n\n\
+             Install a pass-cli version this release supports, or select one with \
+             MONOSECRET_PROTONPASS_CLI_PATH:\n\
+             https://monosecret.dev/providers/protonpass/#pass-cli-compatibility",
+			self.cli_binary_path,
+			SESSION_PROBES
+				.iter()
+				.map(|probe| format!("`pass-cli {probe}`"))
+				.collect::<Vec<_>>()
+				.join(", "),
+		)))
+	}
+
+	/// Resolves the reason passed to `pass-cli` for agent-session audit logging.
+	///
+	/// Precedence: the session reason set via [`Secrets::with_reason`], then a
+	/// user-provided `PROTON_PASS_AGENT_REASON`, then a generic default. The value
+	/// is only consumed by `pass-cli` agent sessions; it is ignored otherwise.
+	///
+	/// [`Secrets::with_reason`]: crate::Secrets::with_reason
+	fn agent_reason(&self) -> String {
+		let session = self.session_reason.lock().unwrap().clone();
+		let env = std::env::var(AGENT_REASON_ENV).ok();
+		Self::resolve_reason(session, env)
+	}
+
+	/// Pure precedence logic for [`Self::agent_reason`], split out so it can be
+	/// tested without touching the process environment.
+	///
+	/// Each source is normalized via [`crate::secrets::normalize_reason`] *before*
+	/// falling through, so a blank/whitespace session reason does not shadow a
+	/// usable `PROTON_PASS_AGENT_REASON` (it falls through to it), and a blank env
+	/// value falls through to the default.
+	fn resolve_reason(session: Option<String>, env: Option<String>) -> String {
+		session
+			.as_deref()
+			.and_then(crate::secrets::normalize_reason)
+			.or_else(|| env.as_deref().and_then(crate::secrets::normalize_reason))
+			.unwrap_or_else(|| DEFAULT_AGENT_REASON.to_string())
 	}
 
 	fn get_vault_name(&self) -> &str {
@@ -183,24 +295,21 @@ impl ProtonPassProvider {
 			.replace("{key}", key)
 	}
 
-	fn agent_reason(&self) -> String {
-		self.reason
-			.read()
-			.ok()
-			.and_then(|reason| reason.clone())
-			.or_else(|| {
-				std::env::var(PROTON_PASS_AGENT_REASON_ENV)
-					.ok()
-					.and_then(|v| normalize_agent_reason(&v))
-			})
-			.unwrap_or_else(default_agent_reason)
+	/// Builds a `pass-cli` command with the agent-session reason wired in.
+	///
+	/// Both the single-shot [`Self::run_pass_cli`] and the parallel batch-fetch
+	/// threads go through here, so the `PROTON_PASS_AGENT_REASON` env var (required
+	/// by `pass-cli` >= 2.1.0) can never drift between the two paths. Takes the
+	/// resolved values by `&str` so the batch threads can call it without `&self`.
+	fn pass_cli_command(binary: &str, reason: &str) -> Command {
+		let mut cmd = Command::new(binary);
+		cmd.env(AGENT_REASON_ENV, reason);
+		cmd
 	}
 
 	fn run_pass_cli(&self, args: &[&str], stdin: Option<&str>) -> Result<String> {
-		let mut cmd = Command::new(&self.cli_binary_path);
+		let mut cmd = Self::pass_cli_command(&self.cli_binary_path, &self.agent_reason());
 		cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
-		let reason = self.agent_reason();
-		cmd.env(PROTON_PASS_AGENT_REASON_ENV, reason);
 
 		let output = if let Some(data) = stdin {
 			cmd.stdin(Stdio::piped());
@@ -248,66 +357,32 @@ impl ProtonPassProvider {
 			return Err(MonosecretError::ProviderOperationFailed(stderr.to_string()));
 		}
 
-		String::from_utf8(output.stdout)
-			.map_err(|e| MonosecretError::ProviderOperationFailed(e.to_string()))
+		String::from_utf8(output.stdout).map_err(|e| {
+			MonosecretError::ProviderOperationFailed(format!(
+				"Proton Pass CLI returned non-UTF-8 output: {}",
+				crate::error::display_error_chain(&e)
+			))
+		})
 	}
 }
 
 impl Provider for ProtonPassProvider {
-	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
-		match address {
-			Address::Convention {
-				project,
-				profile,
-				key,
-			} => self.get(project, key, profile),
-			Address::Native(native) => {
-				crate::provider::reject_unsupported_coords(
-					self.name(),
-					native,
-					self.supported_coords(),
-				)?;
-				let mut config = self.config.clone();
-				config.title_template = Some("{key}".to_string());
-				let provider = Self::new(config);
-				provider.get("", &native.item, "")
-			}
-		}
-	}
-
-	fn set_address(&self, address: Address<'_>, value: &SecretString) -> Result<()> {
-		match address {
-			Address::Convention {
-				project,
-				profile,
-				key,
-			} => self.set(project, key, value, profile),
-			Address::Native(native) => {
-				crate::provider::reject_unsupported_coords(
-					self.name(),
-					native,
-					self.supported_coords(),
-				)?;
-				let mut config = self.config.clone();
-				config.title_template = Some("{key}".to_string());
-				let provider = Self::new(config);
-				if let Ok(reason) = self.reason.read() {
-					provider.set_reason(reason.clone());
-				}
-				provider.set("", &native.item, value, "")
-			}
-		}
+	/// Convention items are titled by the title template,
+	/// `{project}/{profile}/{key}` by default.
+	fn convention_address(
+		&self,
+		project: &str,
+		profile: &str,
+		key: &str,
+	) -> Result<crate::config::NativeAddress> {
+		Ok(crate::config::NativeAddress {
+			item: self.format_item_title(project, profile, key),
+			..Default::default()
+		})
 	}
 
 	fn name(&self) -> &'static str {
 		Self::PROVIDER_NAME
-	}
-
-	fn set_reason(&self, reason: Option<String>) {
-		let normalized = reason.as_deref().and_then(normalize_agent_reason);
-		if let Ok(mut stored) = self.reason.write() {
-			*stored = normalized;
-		}
 	}
 
 	fn uri(&self) -> String {
@@ -324,7 +399,18 @@ impl Provider for ProtonPassProvider {
 		}
 	}
 
-	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
+	/// The session probe reads the CLI's login session, which every instance
+	/// using the same binary shares, so they share one preflight probe.
+	fn auth_scope_key(&self) -> Option<String> {
+		Some(self.cli_binary_path.clone())
+	}
+
+	fn set_reason(&self, reason: Option<String>) {
+		*self.session_reason.lock().unwrap() = reason;
+	}
+
+	fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+		let title = crate::provider::flat_item(self, addr)?;
 		match self.run_pass_cli(
 			&[
 				"item",
@@ -332,15 +418,20 @@ impl Provider for ProtonPassProvider {
 				"--vault-name",
 				self.get_vault_name(),
 				"--item-title",
-				&self.format_item_title(project, profile, key),
+				&title,
 				"--output",
 				"json",
 			],
 			None,
 		) {
 			Ok(output) => {
-				let response: ProtonPassViewResponse = serde_json::from_str(&output)
-					.map_err(|e| MonosecretError::ProviderOperationFailed(e.to_string()))?;
+				let response: ProtonPassViewResponse =
+					serde_json::from_str(&output).map_err(|e| {
+						MonosecretError::ProviderOperationFailed(format!(
+							"Failed to parse Proton Pass CLI response: {}",
+							crate::error::display_error_chain(&e)
+						))
+					})?;
 				Ok(response
 					.item
 					.content
@@ -355,8 +446,8 @@ impl Provider for ProtonPassProvider {
 		}
 	}
 
-	fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-		let title = self.format_item_title(project, profile, key);
+	fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+		let title = crate::provider::flat_item(self, addr)?;
 		let maybe_existing_item = {
 			let output = self.run_pass_cli(
 				&["item", "list", self.get_vault_name(), "--output", "json"],
@@ -367,7 +458,7 @@ impl Provider for ProtonPassProvider {
 			response
 				.items
 				.into_iter()
-				.find(|item| item.content.title == title)
+				.find(|item| item.title() == Some(&*title))
 		};
 
 		if let Some(existing_item) = maybe_existing_item {
@@ -385,10 +476,15 @@ impl Provider for ProtonPassProvider {
 		}
 
 		let template = serde_json::to_string(&ProtonPassNoteTemplate {
-			title,
+			title: title.into_owned(),
 			note: value.expose_secret().to_string(),
 		})
-		.map_err(|e| MonosecretError::ProviderOperationFailed(e.to_string()))?;
+		.map_err(|e| {
+			MonosecretError::ProviderOperationFailed(format!(
+				"Failed to encode Proton Pass CLI request: {}",
+				crate::error::display_error_chain(&e)
+			))
+		})?;
 
 		self.run_pass_cli(
 			&[
@@ -406,17 +502,18 @@ impl Provider for ProtonPassProvider {
 		Ok(())
 	}
 
-	#[allow(clippy::collapsible_if)]
-	fn get_batch(
-		&self,
-		project: &str,
-		keys: &[&str],
-		profile: &str,
-	) -> Result<HashMap<String, SecretString>> {
+	/// Serves every request, convention or `ref`, from one vault listing plus
+	/// parallel `item view` calls for the titles that exist.
+	fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
 		use std::thread;
 
-		if keys.is_empty() {
+		if requests.is_empty() {
 			return Ok(HashMap::new());
+		}
+
+		let mut titles = Vec::with_capacity(requests.len());
+		for (name, addr) in requests {
+			titles.push((*name, crate::provider::flat_item(self, *addr)?));
 		}
 
 		let list_response: ProtonPassListResponse = serde_json::from_str(&self.run_pass_cli(
@@ -428,28 +525,32 @@ impl Provider for ProtonPassProvider {
 		let item_map: HashMap<String, (String, String)> = list_response
 			.items
 			.into_iter()
-			.map(|item| (item.content.title, (item.share_id, item.id)))
+			.filter_map(|item| {
+				let title = item.title()?.to_string();
+				Some((title, (item.share_id, item.id)))
+			})
 			.collect();
 
-		let keys_to_fetch: Vec<(&str, String, String)> = keys
+		let keys_to_fetch: Vec<(&str, String, String)> = titles
 			.iter()
-			.filter_map(|key| {
-				let title = self.format_item_title(project, profile, key);
+			.filter_map(|(name, title)| {
 				item_map
-					.get(&title)
-					.map(|(share_id, id)| (*key, share_id.clone(), id.clone()))
+					.get(&**title)
+					.map(|(share_id, id)| (*name, share_id.clone(), id.clone()))
 			})
 			.collect();
 
 		let cli_command = self.cli_binary_path.clone();
+		let reason = self.agent_reason();
 
 		let handles: Vec<_> = keys_to_fetch
 			.into_iter()
 			.map(|(key, share_id, id)| {
 				let cmd = cli_command.clone();
+				let reason = reason.clone();
 				let key_owned = key.to_string();
 				thread::spawn(move || {
-					let output = Command::new(&cmd)
+					let output = Self::pass_cli_command(&cmd, &reason)
 						.args([
 							"item",
 							"view",
@@ -465,11 +566,9 @@ impl Provider for ProtonPassProvider {
 						Ok(output) if output.status.success() => {
 							let stdout = String::from_utf8_lossy(&output.stdout);
 							if let Ok(res) = serde_json::from_str::<ProtonPassViewResponse>(&stdout)
+								&& let Some(note) = res.item.content.note.filter(|n| !n.is_empty())
 							{
-								if let Some(note) = res.item.content.note.filter(|n| !n.is_empty())
-								{
-									return Some((key_owned, SecretString::new(note.into())));
-								}
+								return Some((key_owned, SecretString::new(note.into())));
 							}
 							None
 						}
@@ -493,5 +592,278 @@ impl Provider for ProtonPassProvider {
 impl Default for ProtonPassProvider {
 	fn default() -> Self {
 		Self::new(ProtonPassConfig::default())
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::sync::Arc;
+
+	use super::*;
+
+	#[test]
+	fn session_reason_is_used_and_trimmed() {
+		let provider = ProtonPassProvider::default();
+		provider.set_reason(Some("  deploy web frontend  ".to_string()));
+		assert_eq!(provider.agent_reason(), "deploy web frontend");
+	}
+
+	#[test]
+	fn set_reason_overwrites_previous_value() {
+		// set_reason is last-write-wins: a later reason must replace an earlier one
+		// (e.g. a default-reason build followed by an explicit reason).
+		let provider = ProtonPassProvider::default();
+		provider.set_reason(Some("first".to_string()));
+		provider.set_reason(Some("second".to_string()));
+		assert_eq!(provider.agent_reason(), "second");
+	}
+
+	#[test]
+	fn resolve_reason_precedence() {
+		let r = |s: Option<&str>, e: Option<&str>| {
+			ProtonPassProvider::resolve_reason(s.map(str::to_string), e.map(str::to_string))
+		};
+		// Session reason wins and is trimmed.
+		assert_eq!(r(Some("  session  "), Some("env")), "session");
+		// Env value is used (and trimmed) when no session reason is set.
+		assert_eq!(r(None, Some("  env reason  ")), "env reason");
+		// A blank/whitespace session reason must NOT shadow a usable env value: it
+		// falls through to `PROTON_PASS_AGENT_REASON` rather than the default.
+		assert_eq!(r(Some("   "), Some("audit env reason")), "audit env reason");
+		// With every source blank or absent, fall back to the versioned default.
+		assert_eq!(r(Some("   "), None), DEFAULT_AGENT_REASON);
+		assert_eq!(r(None, Some("   ")), DEFAULT_AGENT_REASON);
+		assert_eq!(r(None, None), DEFAULT_AGENT_REASON);
+	}
+
+	#[test]
+	fn default_reason_identifies_monosecret_with_version() {
+		assert!(DEFAULT_AGENT_REASON.starts_with("monosecret/"));
+		assert!(DEFAULT_AGENT_REASON.contains(env!("CARGO_PKG_VERSION")));
+	}
+
+	#[test]
+	fn pass_cli_command_sets_agent_reason_env() {
+		// Both the single-shot and batch-fetch paths build their command through
+		// this helper, so verifying it wires PROTON_PASS_AGENT_REASON keeps the two
+		// from drifting apart and silently re-introducing the >= 2.1.0 regression.
+		let cmd = ProtonPassProvider::pass_cli_command("pass-cli", "deploy web");
+		let found = cmd.get_envs().any(|(k, v)| {
+			k.to_str() == Some(AGENT_REASON_ENV) && v.and_then(|v| v.to_str()) == Some("deploy web")
+		});
+		assert!(found, "PROTON_PASS_AGENT_REASON must be set on the command");
+	}
+
+	/// Writes an executable stand-in for `pass-cli` into `dir` and returns its
+	/// path.
+	///
+	/// The script is renamed into place only after its write descriptor is
+	/// closed, so a subprocess forked by a concurrent test can never hold a
+	/// write descriptor to the file we are about to execute (`ETXTBSY`). The
+	/// same helper in [`crate::provider::bws`] documents that reasoning in full.
+	#[cfg(unix)]
+	fn install_fake_cli(dir: &std::path::Path, script: &str) -> std::path::PathBuf {
+		use std::os::unix::fs::PermissionsExt;
+
+		let scratch = dir.join("pass-cli.script");
+		std::fs::write(&scratch, script).unwrap();
+
+		let cli = dir.join("pass-cli");
+		std::fs::rename(&scratch, &cli).expect("install fake pass-cli script");
+
+		let mut permissions = std::fs::metadata(&cli).unwrap().permissions();
+		permissions.set_mode(0o700);
+		std::fs::set_permissions(&cli, permissions).unwrap();
+		cli
+	}
+
+	/// Builds a provider driving `cli`, bypassing the environment lookup in
+	/// [`ProtonPassProvider::new`] so tests never race over a shared variable.
+	#[cfg(unix)]
+	fn provider_using_cli(cli: &std::path::Path) -> ProtonPassProvider {
+		ProtonPassProvider {
+			config: ProtonPassConfig::default(),
+			cli_binary_path: cli.to_string_lossy().into_owned(),
+			session_reason: Mutex::new(None),
+		}
+	}
+
+	/// A fake pass-cli that logs each subcommand it is asked for and rejects
+	/// the ones absent from `known` the way clap does.
+	#[cfg(unix)]
+	fn fake_cli_script(args_log: &std::path::Path, known: &[&str]) -> String {
+		// With nothing known, match a word no subcommand can equal so every
+		// call falls through to the rejection arm.
+		let recognized = if known.is_empty() {
+			"__no_subcommand__".to_string()
+		} else {
+			known.join("|")
+		};
+		format!(
+			"#!/bin/sh\n\
+             printf '%s\\n' \"$1\" >> '{}'\n\
+             case \"$1\" in\n\
+             {recognized}) exit 0 ;;\n\
+             *) printf \"error: unrecognized subcommand '%s'\\n\" \"$1\" >&2; exit 2 ;;\n\
+             esac\n",
+			args_log.display(),
+		)
+	}
+
+	/// On a current pass-cli the probe is `info` and nothing else runs.
+	///
+	/// pass-cli 2.2.4 removed `test`, and the probe runs before every read and
+	/// write, so continuing to invoke it failed all Proton Pass operations
+	/// (issue #279).
+	#[cfg(unix)]
+	#[test]
+	fn preflight_probes_a_current_cli_with_info() {
+		let temp = tempfile::tempdir().unwrap();
+		let args_log = temp.path().join("args");
+		let cli = install_fake_cli(temp.path(), &fake_cli_script(&args_log, &["info"]));
+
+		provider_using_cli(&cli).test_authentication().unwrap();
+
+		assert_eq!(std::fs::read_to_string(args_log).unwrap(), "info\n");
+	}
+
+	/// A pass-cli without `info` falls through to `test`, so one build keeps
+	/// working across releases that disagree about which check exists.
+	#[cfg(unix)]
+	#[test]
+	fn preflight_falls_back_to_test_when_info_is_missing() {
+		let temp = tempfile::tempdir().unwrap();
+		let args_log = temp.path().join("args");
+		let cli = install_fake_cli(temp.path(), &fake_cli_script(&args_log, &["test"]));
+
+		provider_using_cli(&cli).test_authentication().unwrap();
+
+		assert_eq!(std::fs::read_to_string(args_log).unwrap(), "info\ntest\n");
+	}
+
+	/// A CLI with neither check is reported as incompatible, naming both
+	/// attempts, rather than passing clap's usage text through.
+	#[cfg(unix)]
+	#[test]
+	fn preflight_reports_a_cli_with_no_known_session_check() {
+		let temp = tempfile::tempdir().unwrap();
+		let args_log = temp.path().join("args");
+		let cli = install_fake_cli(temp.path(), &fake_cli_script(&args_log, &[]));
+
+		let err = provider_using_cli(&cli).test_authentication().unwrap_err();
+
+		assert_eq!(std::fs::read_to_string(args_log).unwrap(), "info\ntest\n");
+		let message = err.to_string();
+		assert!(message.contains("not compatible"), "{message}");
+		assert!(message.contains("`pass-cli info`"), "{message}");
+		assert!(message.contains("`pass-cli test`"), "{message}");
+	}
+
+	/// An unauthenticated session is the probe's answer, not a reason to try
+	/// the next one: `test` must not run, and the login hint must survive.
+	#[cfg(unix)]
+	#[test]
+	fn preflight_stops_at_an_authentication_failure() {
+		let temp = tempfile::tempdir().unwrap();
+		let args_log = temp.path().join("args");
+		let cli = install_fake_cli(
+			temp.path(),
+			&format!(
+				"#!/bin/sh\n\
+                 printf '%s\\n' \"$1\" >> '{}'\n\
+                 printf 'This operation requires an authenticated client\\n' >&2\n\
+                 exit 1\n",
+				args_log.display()
+			),
+		);
+
+		let err = provider_using_cli(&cli).test_authentication().unwrap_err();
+
+		assert_eq!(std::fs::read_to_string(args_log).unwrap(), "info\n");
+		assert!(err.to_string().contains("pass-cli login"), "{err}");
+	}
+
+	/// Only a missing subcommand may advance the probe chain.
+	#[test]
+	fn unknown_subcommand_is_distinguished_from_a_real_failure() {
+		let failed = |m: &str| MonosecretError::ProviderOperationFailed(m.to_string());
+		// Verbatim from pass-cli 2.2.5.
+		assert!(is_unknown_subcommand(&failed(
+			"error: unrecognized subcommand 'test'\n\n  tip: a similar subcommand exists: 'settings'"
+		)));
+		assert!(is_unknown_subcommand(&failed(
+			"error: unknown subcommand 'info'"
+		)));
+		assert!(!is_unknown_subcommand(&failed(
+			"Proton Pass authentication required. Please run 'pass-cli login' first."
+		)));
+		assert!(!is_unknown_subcommand(&failed(
+			"error: no vault named 'monosecret'"
+		)));
+	}
+
+	#[test]
+	fn list_response_parses_legacy_nested_title() {
+		// pass-cli <= 2.0.2: the title lives under a nested `content` object.
+		let json =
+			r#"{"items":[{"id":"i1","share_id":"s1","content":{"title":"proj/default/KEY"}}]}"#;
+		let response: ProtonPassListResponse = serde_json::from_str(json).unwrap();
+		assert_eq!(response.items.len(), 1);
+		assert_eq!(response.items[0].title(), Some("proj/default/KEY"));
+		assert_eq!(response.items[0].id, "i1");
+		assert_eq!(response.items[0].share_id, "s1");
+	}
+
+	#[test]
+	fn list_response_parses_top_level_title() {
+		// pass-cli >= 2.0.3: the title is top-level and `content` is gone from
+		// list output. Regression test for the issue where active secrets were
+		// reported as missing because this shape failed to deserialize.
+		let json = r#"{"items":[{"id":"i1","share_id":"s1","title":"proj/default/KEY","item_type":"note"}]}"#;
+		let response: ProtonPassListResponse = serde_json::from_str(json).unwrap();
+		assert_eq!(response.items.len(), 1);
+		assert_eq!(response.items[0].title(), Some("proj/default/KEY"));
+		assert_eq!(response.items[0].id, "i1");
+		assert_eq!(response.items[0].share_id, "s1");
+	}
+
+	#[test]
+	fn set_reason_reaches_provider_through_arc() {
+		// Preflight-enabled providers are stored behind an `Arc`, so the reason
+		// must propagate through the blanket `Provider for Arc<T>` impl.
+		let provider: Arc<ProtonPassProvider> = Arc::new(ProtonPassProvider::default());
+		Provider::set_reason(&provider, Some("via arc".to_string()));
+		assert_eq!(provider.agent_reason(), "via arc");
+	}
+
+	/// A native address names the item title directly via `item`, bypassing
+	/// the title template.
+	#[test]
+	fn native_address_names_the_title() {
+		let p = ProtonPassProvider::new(ProtonPassConfig {
+			title_template: Some("{project}/{key}".to_string()),
+			..Default::default()
+		});
+		let addr = crate::config::NativeAddress {
+			item: "my api token".into(),
+			..Default::default()
+		};
+		assert_eq!(
+			crate::provider::flat_item(&p, Address::Native(&addr)).unwrap(),
+			"my api token"
+		);
+	}
+
+	/// Note items carry the whole secret; a `field` coordinate is rejected.
+	#[test]
+	fn native_address_rejects_field() {
+		let p = ProtonPassProvider::new(ProtonPassConfig::default());
+		let addr = crate::config::NativeAddress {
+			item: "my api token".into(),
+			field: Some("password".into()),
+			..Default::default()
+		};
+		let err = crate::provider::flat_item(&p, Address::Native(&addr)).unwrap_err();
+		assert!(err.to_string().contains("`field`"), "{err}");
 	}
 }

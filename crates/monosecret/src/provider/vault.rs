@@ -1,590 +1,135 @@
-//! `HashiCorp` Vault / `OpenBao` provider
+//! HashiCorp Vault provider.
 //!
-//! This provider integrates with `HashiCorp` Vault and `OpenBao` to store and retrieve
-//! secrets using the KV (Key-Value) secrets engine (v1 and v2).
+//! This provider stores and retrieves secrets through the Vault KV (Key-Value)
+//! secrets engine, version 1 or 2.
 //!
 //! # Authentication
 //!
-//! Supports two authentication methods, selected via the `auth` query parameter:
+//! Select one of three methods with the `auth` query parameter:
 //!
-//! - Token (default) -- uses `VAULT_TOKEN` environment variable or `~/.vault-token` file
-//! - `AppRole` (`?auth=approle`) -- uses `VAULT_ROLE_ID` and `VAULT_SECRET_ID` environment
-//!   variables to perform an `AppRole` login
+//! - Token (default) -- reads the `token` provider credential, `VAULT_TOKEN`,
+//!   or `~/.vault-token`, in that order.
+//! - AppRole (`?auth=approle`) -- exchanges the required `role_id` and optional
+//!   `secret_id` provider credentials, or `VAULT_ROLE_ID` and
+//!   `VAULT_SECRET_ID`, for a client token. Starting with Monosecret 0.18, the
+//!   SecretID may be omitted when the AppRole has `bind_secret_id=false`.
+//! - JWT/OIDC (Monosecret 0.17+, `?auth=jwt`) -- logs in using `VAULT_JWT` or a
+//!   short-lived GitHub Actions / Forgejo Actions OIDC token. Starting with
+//!   Monosecret 0.18, the role may be omitted when the auth mount has a
+//!   `default_role`.
 //!
-//! # URI Format
+//! # URI format
 //!
 //! `vault://[namespace@]host[:port][/mount][?key=value&...]`
-//! `openbao://[namespace@]host[:port][/mount][?key=value&...]`
 //!
 //! Query parameters:
-//! - `auth` -- authentication method: `token` (default) or `approle`
+//!
+//! - `auth` -- `token` (default), `approle`, or `jwt` (0.17+)
 //! - `kv` -- KV engine version: `1` or `2` (default)
-//! - `tls` -- enable TLS: `true` (default) or `false`
+//! - `tls` -- `true` (default) or `false`; the latter is intended for dev mode
+//! - `auth_mount` -- non-default AppRole or JWT mount beneath `/v1/auth`
+//!   (Monosecret 0.18+)
+//! - `role` -- Vault role for JWT auth, falling back to `VAULT_JWT_ROLE`;
+//!   optional with a server-configured `default_role` (Monosecret 0.18+)
+//! - `audience` -- audience requested from the CI OIDC issuer, falling back to
+//!   `VAULT_JWT_AUDIENCE` (0.17+)
 //!
-//! # Examples
+//! Examples:
 //!
-//! - `vault://vault.example.com:8200/secret` -- KV v2, token auth
-//! - `vault://vault.example.com:8200/secret?auth=approle` -- `AppRole` auth
-//! - `vault://ns1@vault.example.com:8200/secret` -- with Vault namespace
-//! - `openbao://bao.internal:8200/secret` -- `OpenBao` server
-//! - `vault://127.0.0.1:8200/secret?kv=1` -- KV v1 engine
-//! - `vault://vault.example.com:8200/secret?tls=false` -- disable TLS (dev mode)
+//! - `vault://vault.example.com:8200/secret` -- KV v2 with token auth
+//! - `vault://vault.example.com:8200/secret?auth=approle` -- AppRole auth
+//! - `vault://vault.example.com:8200/secret?auth=approle&auth_mount=platform-approle`
+//!   -- custom AppRole mount (Monosecret 0.18+)
+//! - `vault://vault.example.com:8200/secret?auth=jwt&role=ci` -- JWT auth
+//! - `vault://vault.example.com:8200/secret?auth=jwt` -- JWT auth using the
+//!   mount's `default_role` (Monosecret 0.18+)
+//! - `vault://team-a@vault.example.com:8200/secret` -- Vault namespace
+//! - `vault://127.0.0.1:8200/secret?kv=1&tls=false` -- local KV v1 server
 //!
-//! When no host is provided, falls back to the `VAULT_ADDR` environment variable.
+//! With no URI host, `VAULT_ADDR` supplies the endpoint. With no URI username,
+//! `VAULT_NAMESPACE` supplies the namespace.
 //!
-//! # Secret Naming
+//! # Secret naming
 //!
-//! Secrets are stored at the path: `monosecret/{project}/{profile}/{key}`
-//! Each secret is stored as a KV entry with a `value` field.
-//!
-//! # Example
+//! Convention-addressed secrets live at
+//! `monosecret/{project}/{profile}/{key}` under the configured KV mount. Each
+//! entry is a map whose `value` field contains the Monosecret value. Native
+//! references name a KV path with `item` and select a map entry with `field`;
+//! they are read-only so changing one field cannot overwrite its siblings.
 //!
 //! ```bash
-//! # Set a secret
 //! monosecret set DATABASE_URL --provider vault://vault.example.com:8200/secret
-//!
-//! # Use with a namespace
 //! monosecret check --provider vault://team-a@vault.example.com:8200/secret
 //! ```
 
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderValue;
-use secrecy::ExposeSecret;
 use secrecy::SecretString;
-use serde::Deserialize;
-use serde::Serialize;
 
 use super::Address;
 use super::Provider;
+use super::ProviderCredentials;
 use super::ProviderUrl;
+use super::vault_common::KvConfig;
+use super::vault_common::KvProvider;
+use super::vault_common::Product;
+use super::vault_common::ROLE_ID;
+use super::vault_common::SECRET_ID;
+use super::vault_common::TOKEN;
 use crate::MonosecretError;
 use crate::Result;
+use crate::config::NativeAddress;
 
-/// KV secrets engine version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum KvVersion {
-	/// KV version 1 (no versioning).
-	V1,
-	/// KV version 2 (versioned, default).
-	#[default]
-	V2,
-}
-
-/// Authentication method for the Vault / `OpenBao` provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum AuthMethod {
-	/// Token-based authentication via `VAULT_TOKEN` or `~/.vault-token`.
-	#[default]
-	Token,
-	/// `AppRole` authentication via `VAULT_ROLE_ID` and `VAULT_SECRET_ID`.
-	AppRole,
-}
-
-/// Configuration for the Vault / `OpenBao` provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VaultConfig {
-	/// The Vault server endpoint URL (e.g., `https://vault.example.com:8200`).
-	pub endpoint: String,
-	/// The KV secrets engine mount path (default: `secret`).
-	pub mount: String,
-	/// The KV engine version (default: V2).
-	pub kv_version: KvVersion,
-	/// Optional Vault namespace.
-	pub namespace: Option<String>,
-	/// Authentication method (default: Token).
-	pub auth: AuthMethod,
-}
-
-impl Default for VaultConfig {
-	fn default() -> Self {
-		Self {
-			endpoint: "https://127.0.0.1:8200".to_string(),
-			mount: "secret".to_string(),
-			kv_version: KvVersion::default(),
-			namespace: None,
-			auth: AuthMethod::default(),
-		}
-	}
-}
+/// HashiCorp Vault provider configuration.
+///
+/// Parsing is intentionally product-specific even though the resulting KV
+/// coordinates are compatible with OpenBao. This keeps Vault's URI and
+/// environment contract from acquiring OpenBao-only behavior.
+#[derive(Debug, Clone, Default)]
+pub struct VaultConfig(KvConfig);
 
 impl TryFrom<&ProviderUrl> for VaultConfig {
 	type Error = MonosecretError;
 
-	fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
-		let scheme = url.scheme();
-		if scheme != "vault" && scheme != "openbao" {
-			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"Invalid scheme '{scheme}' for vault provider. Expected 'vault' or 'openbao'."
-			)));
-		}
-
-		// Determine TLS setting from query parameter (default: true)
-		let use_tls = url
-			.query_pairs()
-			.find(|(k, _)| k == "tls")
-			.is_none_or(|(_, v)| v != "false" && v != "0");
-
-		let http_scheme = if use_tls { "https" } else { "http" };
-
-		// Resolve endpoint: from URI host or VAULT_ADDR env var
-		let endpoint = match url.host().filter(|s| !s.is_empty()) {
-			Some(host) => {
-				if let Some(port) = url.port() {
-					format!("{http_scheme}://{host}:{port}")
-				} else {
-					format!("{http_scheme}://{host}")
-				}
-			}
-			None => {
-				std::env::var("VAULT_ADDR")
-					.ok()
-					.filter(|s| !s.is_empty())
-					.ok_or_else(|| {
-						MonosecretError::ProviderOperationFailed(
-							"No Vault address provided. Either specify a host in the URI \
-                         (e.g., vault://vault.example.com:8200) or set the VAULT_ADDR \
-                         environment variable."
-								.to_string(),
-						)
-					})?
-			}
-		};
-
-		// Mount path from URL path (strip leading slash, default to "secret")
-		let path = url.path();
-		let mount = path
-			.trim_start_matches('/')
-			.split('/')
-			.next()
-			.filter(|s| !s.is_empty())
-			.unwrap_or("secret")
-			.to_string();
-
-		// KV version from query parameter (default: V2)
-		let kv_version = url
-			.query_pairs()
-			.find(|(k, _)| k == "kv")
-			.map(|(_, v)| {
-				match v.as_ref() {
-					"1" | "v1" => KvVersion::V1,
-					_ => KvVersion::V2,
-				}
-			})
-			.unwrap_or_default();
-
-		// Namespace from URI username or VAULT_NAMESPACE env var
-		let namespace = {
-			let username = url.username();
-			if username.is_empty() {
-				std::env::var("VAULT_NAMESPACE")
-					.ok()
-					.filter(|s| !s.is_empty())
-			} else {
-				Some(username)
-			}
-		};
-
-		let auth = url
-			.query_pairs()
-			.find(|(k, _)| k == "auth")
-			.map(|(_, v)| {
-				match v.as_ref() {
-					"approle" => Ok(AuthMethod::AppRole),
-					"token" => Ok(AuthMethod::Token),
-					other => {
-						Err(MonosecretError::ProviderOperationFailed(format!(
-							"Unknown auth method '{other}'. Expected 'token' or 'approle'."
-						)))
-					}
-				}
-			})
-			.transpose()?
-			.unwrap_or_default();
-
-		Ok(Self {
-			endpoint,
-			mount,
-			kv_version,
-			namespace,
-			auth,
-		})
+	fn try_from(url: &ProviderUrl) -> Result<Self> {
+		KvConfig::parse(url, Product::Vault).map(Self)
 	}
 }
 
-/// `HashiCorp` Vault / `OpenBao` provider.
+/// HashiCorp Vault KV provider.
 ///
-/// Stores and retrieves secrets from a Vault or `OpenBao` server using the
-/// KV secrets engine (v1 or v2) with token-based authentication.
+/// The wrapper owns Vault's public identity and delegates compatible protocol
+/// operations to [`KvProvider`].
 pub struct VaultProvider {
-	config: VaultConfig,
+	core: KvProvider,
 }
 
 crate::register_provider! {
 	struct: VaultProvider,
 	config: VaultConfig,
 	name: "vault",
-	description: "HashiCorp Vault / OpenBao secret management",
-	schemes: ["vault", "openbao"],
-	examples: ["vault://vault.example.com:8200/secret", "openbao://bao.internal:8200/secret"],
+	description: "HashiCorp Vault secret management",
+	schemes: ["vault"],
+	examples: ["vault://vault.example.com:8200/secret"],
+	credential_names: [ROLE_ID, SECRET_ID, TOKEN],
+	deletes: true,
 }
 
 impl VaultProvider {
-	/// Creates a new `VaultProvider` with the given configuration.
+	/// Creates a Vault provider with the parsed product-specific configuration.
 	pub fn new(config: VaultConfig) -> Self {
-		Self { config }
-	}
-
-	/// Formats the secret path within the KV engine.
-	///
-	/// Uses the pattern: `monosecret/{project}/{profile}/{key}`
-	fn format_secret_path(project: &str, profile: &str, key: &str) -> Result<String> {
-		if project.is_empty() {
-			return Err(MonosecretError::ProviderOperationFailed(
-				"project cannot be empty".to_string(),
-			));
-		}
-		if profile.is_empty() {
-			return Err(MonosecretError::ProviderOperationFailed(
-				"profile cannot be empty".to_string(),
-			));
-		}
-		if key.is_empty() {
-			return Err(MonosecretError::ProviderOperationFailed(
-				"key cannot be empty".to_string(),
-			));
-		}
-
-		Ok(format!("monosecret/{project}/{profile}/{key}"))
-	}
-
-	/// Resolves the Vault token using the configured authentication method.
-	fn resolve_token(&self) -> Result<SecretString> {
-		match self.config.auth {
-			AuthMethod::Token => Self::resolve_token_auth(),
-			AuthMethod::AppRole => super::block_on(self.resolve_approle_auth()),
-		}
-	}
-
-	/// Resolves a token via static token sources.
-	#[allow(clippy::collapsible_if)]
-	fn resolve_token_auth() -> Result<SecretString> {
-		if let Ok(token) = std::env::var("VAULT_TOKEN") {
-			if !token.is_empty() {
-				return Ok(SecretString::new(token.into()));
-			}
-		}
-
-		let token_path = std::env::var_os("HOME")
-			.or_else(|| std::env::var_os("USERPROFILE"))
-			.map(|home| std::path::PathBuf::from(home).join(".vault-token"));
-
-		if let Some(path) = token_path {
-			if let Ok(token) = std::fs::read_to_string(&path) {
-				let token = token.trim();
-				if !token.is_empty() {
-					return Ok(SecretString::new(token.to_string().into()));
-				}
-			}
-		}
-
-		Err(MonosecretError::ProviderOperationFailed(
-			"No Vault token found. Set the VAULT_TOKEN environment variable \
-             or create a ~/.vault-token file."
-				.to_string(),
-		))
-	}
-
-	/// Authenticates via `AppRole` and returns a client token.
-	async fn resolve_approle_auth(&self) -> Result<SecretString> {
-		let role_id = std::env::var("VAULT_ROLE_ID").map_err(|_| {
-			MonosecretError::ProviderOperationFailed(
-				"VAULT_ROLE_ID environment variable is required for AppRole authentication."
-					.to_string(),
-			)
-		})?;
-
-		let secret_id = std::env::var("VAULT_SECRET_ID").map_err(|_| {
-			MonosecretError::ProviderOperationFailed(
-				"VAULT_SECRET_ID environment variable is required for AppRole authentication."
-					.to_string(),
-			)
-		})?;
-
-		let url = format!("{}/v1/auth/approle/login", self.config.endpoint);
-		let body = serde_json::json!({
-			"role_id": role_id,
-			"secret_id": secret_id,
-		});
-
-		let client = reqwest::Client::new();
-		let response = client.post(&url).json(&body).send().await.map_err(|e| {
-			MonosecretError::ProviderOperationFailed(format!("AppRole login failed: {e}"))
-		})?;
-
-		if !response.status().is_success() {
-			let status = response.status();
-			let body = response.text().await.unwrap_or_default();
-			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"AppRole login returned HTTP {status}: {body}"
-			)));
-		}
-
-		let resp: serde_json::Value = response.json().await.map_err(|e| {
-			MonosecretError::ProviderOperationFailed(format!(
-				"Failed to parse AppRole login response: {e}"
-			))
-		})?;
-
-		let token = resp["auth"]["client_token"].as_str().ok_or_else(|| {
-			MonosecretError::ProviderOperationFailed(
-				"AppRole login response missing auth.client_token".to_string(),
-			)
-		})?;
-
-		Ok(SecretString::new(token.to_string().into()))
-	}
-
-	/// Builds the common HTTP headers for Vault API requests.
-	fn build_headers(token: &SecretString, namespace: Option<&str>) -> Result<HeaderMap> {
-		let mut headers = HeaderMap::new();
-		headers.insert(
-			"X-Vault-Token",
-			HeaderValue::from_str(token.expose_secret()).map_err(|e| {
-				MonosecretError::ProviderOperationFailed(format!("Invalid token value: {e}"))
-			})?,
-		);
-		if let Some(ns) = namespace {
-			headers.insert(
-				"X-Vault-Namespace",
-				HeaderValue::from_str(ns).map_err(|e| {
-					MonosecretError::ProviderOperationFailed(format!(
-						"Invalid namespace value: {e}"
-					))
-				})?,
-			);
-		}
-		Ok(headers)
-	}
-
-	/// Builds the full Vault API URL for a secret path.
-	fn build_url(&self, secret_path: &str) -> String {
-		match self.config.kv_version {
-			KvVersion::V2 => {
-				format!(
-					"{}/v1/{}/data/{}",
-					self.config.endpoint, self.config.mount, secret_path
-				)
-			}
-			KvVersion::V1 => {
-				format!(
-					"{}/v1/{}/{}",
-					self.config.endpoint, self.config.mount, secret_path
-				)
-			}
-		}
-	}
-
-	/// Retrieves a secret from Vault asynchronously.
-	async fn get_secret_async(
-		&self,
-		project: &str,
-		key: &str,
-		profile: &str,
-	) -> Result<Option<SecretString>> {
-		let secret_path = Self::format_secret_path(project, profile, key)?;
-		let url = self.build_url(&secret_path);
-		let token = self.resolve_token()?;
-		let headers = Self::build_headers(&token, self.config.namespace.as_deref())?;
-
-		let client = reqwest::Client::new();
-		let response = client
-			.get(&url)
-			.headers(headers)
-			.send()
-			.await
-			.map_err(|e| {
-				MonosecretError::ProviderOperationFailed(format!(
-					"Failed to connect to Vault at {}: {}",
-					self.config.endpoint, e
-				))
-			})?;
-
-		match response.status().as_u16() {
-			200 => {
-				let body: serde_json::Value = response.json().await.map_err(|e| {
-					MonosecretError::ProviderOperationFailed(format!(
-						"Failed to parse Vault response: {e}"
-					))
-				})?;
-
-				let value = match self.config.kv_version {
-					KvVersion::V2 => {
-						body.get("data")
-							.and_then(|d| d.get("data"))
-							.and_then(|d| d.get("value"))
-							.and_then(|v| v.as_str())
-					}
-					KvVersion::V1 => {
-						body.get("data")
-							.and_then(|d| d.get("value"))
-							.and_then(|v| v.as_str())
-					}
-				};
-
-				Ok(value.map(|v| SecretString::new(v.to_string().into())))
-			}
-			404 => Ok(None),
-			403 => {
-				Err(MonosecretError::ProviderOperationFailed(
-					"Vault authentication failed (403 Forbidden). \
-                 Check your VAULT_TOKEN and ensure it has the required permissions."
-						.to_string(),
-				))
-			}
-			status => {
-				let body = response.text().await.unwrap_or_default();
-				Err(MonosecretError::ProviderOperationFailed(format!(
-					"Vault returned HTTP {status}: {body}"
-				)))
-			}
-		}
-	}
-
-	async fn get_native_async(&self, item: &str, field: &str) -> Result<Option<SecretString>> {
-		let url = self.build_url(item);
-		let token = self.resolve_token()?;
-		let headers = Self::build_headers(&token, self.config.namespace.as_deref())?;
-		let response = reqwest::Client::new()
-			.get(&url)
-			.headers(headers)
-			.send()
-			.await
-			.map_err(|error| {
-				MonosecretError::ProviderOperationFailed(format!(
-					"Failed to connect to Vault at {}: {error}",
-					self.config.endpoint
-				))
-			})?;
-		match response.status().as_u16() {
-			200 => {
-				let body: serde_json::Value = response.json().await.map_err(|error| {
-					MonosecretError::ProviderOperationFailed(format!(
-						"Failed to parse Vault response: {error}"
-					))
-				})?;
-				let data = match self.config.kv_version {
-					KvVersion::V2 => body.get("data").and_then(|data| data.get("data")),
-					KvVersion::V1 => body.get("data"),
-				};
-				Ok(data
-					.and_then(|data| data.get(field))
-					.and_then(serde_json::Value::as_str)
-					.map(|value| SecretString::new(value.to_string().into())))
-			}
-			404 => Ok(None),
-			403 => {
-				Err(MonosecretError::ProviderOperationFailed(
-					"Vault authentication failed (403 Forbidden)".into(),
-				))
-			}
-			status => {
-				Err(MonosecretError::ProviderOperationFailed(format!(
-					"Vault returned HTTP {status}"
-				)))
-			}
-		}
-	}
-
-	/// Writes a secret to Vault asynchronously.
-	async fn set_secret_async(
-		&self,
-		project: &str,
-		key: &str,
-		value: &SecretString,
-		profile: &str,
-	) -> Result<()> {
-		let secret_path = Self::format_secret_path(project, profile, key)?;
-		let url = self.build_url(&secret_path);
-		let token = self.resolve_token()?;
-		let headers = Self::build_headers(&token, self.config.namespace.as_deref())?;
-
-		let body = match self.config.kv_version {
-			KvVersion::V2 => {
-				serde_json::json!({ "data": { "value": value.expose_secret() } })
-			}
-			KvVersion::V1 => {
-				serde_json::json!({ "value": value.expose_secret() })
-			}
-		};
-
-		let client = reqwest::Client::new();
-		let response = client
-			.post(&url)
-			.headers(headers)
-			.json(&body)
-			.send()
-			.await
-			.map_err(|e| {
-				MonosecretError::ProviderOperationFailed(format!(
-					"Failed to connect to Vault at {}: {}",
-					self.config.endpoint, e
-				))
-			})?;
-
-		match response.status().as_u16() {
-			200 | 204 => Ok(()),
-			403 => {
-				Err(MonosecretError::ProviderOperationFailed(
-					"Vault authentication failed (403 Forbidden). \
-                 Check your VAULT_TOKEN and ensure it has write permissions."
-						.to_string(),
-				))
-			}
-			status => {
-				let body = response.text().await.unwrap_or_default();
-				Err(MonosecretError::ProviderOperationFailed(format!(
-					"Vault returned HTTP {status} while writing secret: {body}"
-				)))
-			}
+		Self {
+			core: KvProvider::new(config.0, Product::Vault),
 		}
 	}
 }
 
 impl Provider for VaultProvider {
-	fn supported_coords(&self) -> &'static [&'static str] {
-		&["field"]
+	/// Convention secrets use one KV path per secret and the `value` map field.
+	fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
+		self.core.convention_address(project, profile, key)
 	}
 
-	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
-		match address {
-			Address::Convention {
-				project,
-				profile,
-				key,
-			} => self.get(project, key, profile),
-			Address::Native(native) => {
-				if native.vault.is_some() || native.section.is_some() || native.version.is_some() {
-					return Err(MonosecretError::ProviderOperationFailed(
-						"the vault provider supports only `item` and `field` coordinates".into(),
-					));
-				}
-				let field = native.field.as_deref().ok_or_else(|| {
-					MonosecretError::ProviderOperationFailed(
-						"Vault refs require a `field` coordinate".into(),
-					)
-				})?;
-				super::block_on(self.get_native_async(&native.item, field))
-			}
-		}
-	}
-
-	fn check_writable(&self, address: Address<'_>) -> Result<()> {
-		if matches!(address, Address::Native(_)) {
-			return Err(MonosecretError::ProviderOperationFailed(
-				"Vault refs are read-only to avoid replacing sibling fields".into(),
-			));
-		}
-		Ok(())
+	fn with_credentials(&mut self, credentials: ProviderCredentials) {
+		self.core.with_credentials(credentials);
 	}
 
 	fn name(&self) -> &'static str {
@@ -592,116 +137,145 @@ impl Provider for VaultProvider {
 	}
 
 	fn uri(&self) -> String {
-		let mut uri = format!(
-			"vault://{}",
-			self.config
-				.endpoint
-				.trim_start_matches("https://")
-				.trim_start_matches("http://")
-		);
-		if self.config.mount != "secret" {
-			uri.push('/');
-			uri.push_str(&self.config.mount);
-		}
-		uri
+		self.core.uri()
 	}
 
-	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-		super::block_on(self.get_secret_async(project, key, profile))
+	fn storage_identity(&self) -> String {
+		self.core.storage_identity()
 	}
 
-	fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-		super::block_on(self.set_secret_async(project, key, value, profile))
+	fn supported_coords(&self) -> &'static [&'static str] {
+		self.core.supported_coords()
 	}
 
-	fn allows_set(&self) -> bool {
-		true
+	/// A native reference must identify the field inside the KV entry's map.
+	fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+		let coords = self.resolve_coords(addr)?;
+		self.core.get(&coords)
+	}
+
+	/// Reuses one operation-scoped login across the batch while retaining the
+	/// default address deduplication and concurrency cap.
+	fn get_many(
+		&self,
+		requests: &[(&str, Address<'_>)],
+	) -> Result<std::collections::HashMap<String, SecretString>> {
+		self.core.get_many(requests)
+	}
+
+	/// Only convention addresses are writable; see [`Self::check_writable`].
+	fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+		self.check_writable(addr)?;
+		let coords = self.resolve_coords(addr)?;
+		self.core.set(&coords, value)
+	}
+
+	/// KV v2 expires the written version through the path's
+	/// `delete_version_after` metadata, so a cached copy of another store's
+	/// secret disappears on its own.
+	fn set_expiring(
+		&self,
+		addr: Address<'_>,
+		value: &SecretString,
+		max_age: std::time::Duration,
+	) -> Result<()> {
+		self.check_writable(addr)?;
+		let coords = self.resolve_coords(addr)?;
+		self.core.set_expiring(&coords, value, max_age)
+	}
+
+	/// Deletes the whole KV path, so it is confined to entries Monosecret owns;
+	/// see [`Self::check_writable`] for the same reasoning about `ref`s.
+	fn delete(&self, addr: Address<'_>) -> Result<bool> {
+		self.core.check_deletable(addr)?;
+		let coords = self.resolve_coords(addr)?;
+		self.core.delete(&coords)
+	}
+
+	fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+		self.core.check_deletable(addr)
+	}
+
+	/// Refuses native writes because replacing a KV entry to change one field
+	/// would silently discard every sibling field.
+	fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+		self.core.check_writable(addr)
 	}
 }
 
 #[cfg(test)]
 mod tests {
+	use url::Url;
+
 	use super::*;
 
-	static VAULT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+	fn config(spec: &str) -> VaultConfig {
+		VaultConfig::try_from(&ProviderUrl::new(Url::parse(spec).unwrap())).unwrap()
+	}
 
 	#[test]
-	fn build_headers_includes_token() {
-		let token = SecretString::new("my-token".into());
-		let headers = VaultProvider::build_headers(&token, None).unwrap();
-		let snapshot = format!(
-			"X-Vault-Token: {}\nX-Vault-Namespace: {:?}",
-			headers.get("X-Vault-Token").unwrap().to_str().unwrap(),
-			headers.get("X-Vault-Namespace")
+	fn field_query_is_rejected_in_favour_of_a_ref() {
+		let err = VaultConfig::try_from(&ProviderUrl::new(
+			Url::parse("vault://vault.example.com:8200/secret?field=x").unwrap(),
+		))
+		.unwrap_err();
+		assert!(err.to_string().contains("ref = { item ="), "{err}");
+	}
+
+	#[test]
+	fn convention_address_is_the_writable_value_field() {
+		let provider = VaultProvider::new(config("vault://vault.example.com:8200/secret"));
+		let address = provider
+			.resolve_coords(Address::convention("app", "prod", "DATABASE_URL"))
+			.unwrap();
+		assert_eq!(address.item, "monosecret/app/prod/DATABASE_URL");
+		assert_eq!(address.field.as_deref(), Some("value"));
+		assert!(
+			provider
+				.check_writable(Address::convention("app", "prod", "DATABASE_URL"))
+				.is_ok()
 		);
-		insta::assert_snapshot!(snapshot);
 	}
 
 	#[test]
-	fn build_headers_includes_namespace_when_set() {
-		let token = SecretString::new("my-token".into());
-		let headers = VaultProvider::build_headers(&token, Some("ns1")).unwrap();
-		let snapshot = format!(
-			"X-Vault-Token: {}\nX-Vault-Namespace: {}",
-			headers.get("X-Vault-Token").unwrap().to_str().unwrap(),
-			headers.get("X-Vault-Namespace").unwrap().to_str().unwrap()
-		);
-		insta::assert_snapshot!(snapshot);
+	fn native_address_requires_a_field() {
+		let provider = VaultProvider::new(config("vault://vault.example.com:8200/secret"));
+		let address = NativeAddress {
+			item: "myapp/config".into(),
+			..Default::default()
+		};
+		let error = provider.get(Address::Native(&address)).unwrap_err();
+		assert!(error.to_string().contains("need a `field`"), "{error}");
 	}
 
 	#[test]
-	fn build_headers_rejects_invalid_token() {
-		let token = SecretString::new("bad\ntoken".into());
-		let err = VaultProvider::build_headers(&token, None).unwrap_err();
-		insta::assert_snapshot!(err.to_string());
-	}
-
-	#[test]
-	fn build_headers_rejects_invalid_namespace() {
-		let token = SecretString::new("my-token".into());
-		let err = VaultProvider::build_headers(&token, Some("bad\nns")).unwrap_err();
-		insta::assert_snapshot!(err.to_string());
-	}
-
-	#[test]
-	fn get_errors_on_invalid_namespace_before_network() {
-		let _guard = VAULT_TEST_LOCK.lock().unwrap();
-		unsafe {
-			std::env::set_var("VAULT_TOKEN", "test-token");
-		}
-		let provider = VaultProvider::new(VaultConfig {
-			endpoint: "http://127.0.0.1:1".to_string(),
-			mount: "secret".to_string(),
-			kv_version: KvVersion::V2,
-			namespace: Some("bad\nnamespace".to_string()),
-			auth: AuthMethod::Token,
-		});
-		let err = provider.get("project", "KEY", "default").unwrap_err();
-		insta::assert_snapshot!(err.to_string());
-		unsafe {
-			std::env::remove_var("VAULT_TOKEN");
-		}
-	}
-
-	#[test]
-	fn set_errors_on_invalid_namespace_before_network() {
-		let _guard = VAULT_TEST_LOCK.lock().unwrap();
-		unsafe {
-			std::env::set_var("VAULT_TOKEN", "test-token");
-		}
-		let provider = VaultProvider::new(VaultConfig {
-			endpoint: "http://127.0.0.1:1".to_string(),
-			mount: "secret".to_string(),
-			kv_version: KvVersion::V2,
-			namespace: Some("bad\nnamespace".to_string()),
-			auth: AuthMethod::Token,
-		});
-		let err = provider
-			.set("project", "KEY", &SecretString::new("v".into()), "default")
+	fn native_address_is_read_only() {
+		let provider = VaultProvider::new(config("vault://vault.example.com:8200/secret"));
+		let address = NativeAddress {
+			item: "myapp/config".into(),
+			field: Some("db_password".into()),
+			..Default::default()
+		};
+		let refusal = provider
+			.check_writable(Address::Native(&address))
 			.unwrap_err();
-		insta::assert_snapshot!(err.to_string());
-		unsafe {
-			std::env::remove_var("VAULT_TOKEN");
-		}
+		assert!(refusal.to_string().contains("read-only"), "{refusal}");
+		let error = provider
+			.set(Address::Native(&address), &SecretString::new("v".into()))
+			.unwrap_err();
+		assert_eq!(error.to_string(), refusal.to_string());
+	}
+
+	#[test]
+	fn native_address_rejects_version() {
+		let provider = VaultProvider::new(config("vault://vault.example.com:8200/secret"));
+		let address = NativeAddress {
+			item: "myapp/config".into(),
+			field: Some("db_password".into()),
+			version: Some("3".into()),
+			..Default::default()
+		};
+		let error = provider.get(Address::Native(&address)).unwrap_err();
+		assert!(error.to_string().contains("`version`"), "{error}");
 	}
 }

@@ -23,6 +23,7 @@ module Monosecret
   , withPath
   , withProvider
   , withProfile
+  , withScope
   , withReason
   , withNoValues
     -- * Resolve (value-carrying)
@@ -37,6 +38,8 @@ module Monosecret
     -- * Report (value-free)
   , Report(..)
   , SecretReport(..)
+  , ConstraintViolation(..)
+  , ConstraintViolationKind(..)
   , report
     -- * Errors
   , MonosecretError(..)
@@ -48,7 +51,7 @@ module Monosecret
 import           Control.Exception (Exception, finally, mask, throwIO)
 import           Control.Monad (forM_, unless, when)
 import           Data.Aeson (FromJSON (..), Value, eitherDecodeStrict, encode,
-                             object, withObject, (.!=), (.:), (.:?), (.=))
+                             object, withObject, withText, (.!=), (.:), (.:?), (.=))
 import           Data.Aeson.Types (parseEither)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
@@ -62,9 +65,9 @@ import           Foreign.Ptr (nullPtr)
 import           System.Directory (doesFileExist, removeFile)
 import qualified System.Environment.Blank as Env
 
--- The three C ABI functions, statically linked at build time (the archive
--- libmonosecret_ffi.a is embedded; -lmonosecret_ffi resolves to it). They are
--- declared @safe@ because @monosecret_resolve@ may block on provider I/O
+-- The three C ABI functions, linked at build time. The default build embeds the
+-- static archive; pkg-config builds may use a static or shared install. They
+-- are declared @safe@ because @monosecret_resolve@ may block on provider I/O
 -- (1Password, LastPass), and a @safe@ call lets other Haskell threads run.
 foreign import ccall safe "monosecret_resolve"
   c_monosecret_resolve :: CString -> IO CString
@@ -78,7 +81,7 @@ foreign import ccall safe "monosecret_abi_version"
 -- | Wire-format version of the value-carrying resolve response this SDK
 -- understands. Tracks @monosecret@'s @RESOLVE_SCHEMA_VERSION@.
 resolveSchemaVersion :: Int
-resolveSchemaVersion = 1
+resolveSchemaVersion = 2
 
 -- | Wire-format version of the value-free report. Tracks @monosecret@'s
 -- @RESOLUTION_REPORT_SCHEMA_VERSION@.
@@ -125,6 +128,8 @@ instance FromJSON ResolvedSecret where
 data Resolved = Resolved
   { resolvedProvider        :: Text
   , resolvedProfile         :: Text
+  -- | Selected manifest scope, or 'Nothing' for a full-profile resolve (0.17+).
+  , resolvedScope           :: Maybe Text
   , resolvedSecrets         :: Map Text ResolvedSecret
   , resolvedMissingOptional :: [Text]
   } deriving (Show, Eq)
@@ -152,12 +157,42 @@ instance FromJSON SecretReport where
       <*> o .:? "generated" .!= False
       <*> o .:? "as_path" .!= False
 
+-- | The kind of a failed cross-secret presence constraint.
+data ConstraintViolationKind = AtLeastOne | ExactlyOne
+  deriving (Show, Eq)
+
+instance FromJSON ConstraintViolationKind where
+  parseJSON = withText "ConstraintViolationKind" $ \kind ->
+    case kind of
+      "at_least_one" -> pure AtLeastOne
+      "exactly_one" -> pure ExactlyOne
+      _ -> fail ("unknown constraint violation kind: " ++ T.unpack kind)
+
+-- | A failed cross-secret presence constraint in a resolution report.
+data ConstraintViolation = ConstraintViolation
+  { violationKind    :: ConstraintViolationKind
+  , violationGroup   :: Text
+  , violationSecrets :: [Text]
+  , violationPresent :: [Text]
+  } deriving (Show, Eq)
+
+instance FromJSON ConstraintViolation where
+  parseJSON = withObject "ConstraintViolation" $ \o ->
+    ConstraintViolation
+      <$> o .: "kind"
+      <*> o .: "group"
+      <*> o .: "secrets"
+      <*> o .: "present"
+
 -- | A value-free resolution snapshot. Unlike 'Resolved', a missing required
 -- secret is a @"missing_required"@ status here, not an error.
 data Report = Report
-  { reportProvider :: Text
-  , reportProfile  :: Text
-  , reportSecrets  :: [SecretReport]
+  { reportProvider             :: Text
+  , reportProfile              :: Text
+  -- | Selected manifest scope, or 'Nothing' for a full-profile report (0.17+).
+  , reportScope                :: Maybe Text
+  , reportSecrets              :: [SecretReport]
+  , reportConstraintViolations :: [ConstraintViolation]
   } deriving (Show, Eq)
 
 -- | A resolution request. Build it from 'builder' with the @withX@ setters and
@@ -166,13 +201,14 @@ data Builder = Builder
   { bPath     :: Maybe Text
   , bProvider :: Maybe Text
   , bProfile  :: Maybe Text
+  , bScope    :: Maybe Text
   , bReason   :: Maybe Text
   , bNoValues :: Bool
   }
 
 -- | A builder with no options set.
 builder :: Builder
-builder = Builder Nothing Nothing Nothing Nothing False
+builder = Builder Nothing Nothing Nothing Nothing Nothing False
 
 -- | Resolve from a manifest at this path instead of walking up from the working
 -- directory.
@@ -186,6 +222,10 @@ withProvider v b = b { bProvider = Just v }
 -- | Override the profile.
 withProfile :: Text -> Builder -> Builder
 withProfile v b = b { bProfile = Just v }
+
+-- | Limit resolution to a named manifest scope (Monosecret 0.17+).
+withScope :: Text -> Builder -> Builder
+withScope v b = b { bScope = Just v }
 
 -- | Set a human-readable reason for this access (for audited providers).
 withReason :: Text -> Builder -> Builder
@@ -249,15 +289,16 @@ load :: Builder -> IO Resolved
 load b = do
   resp <- callNative (requestBytes b Nothing)
   value <- responseValue resp resolveSchemaVersion "resolve"
-  (prov, prof, secs, mreq, mopt) <- fromResult (parseEither pResolve value)
+  (prov, prof, scope, secs, mreq, mopt) <- fromResult (parseEither pResolve value)
   case mreq of
-    [] -> pure (Resolved prov prof secs mopt)
+    [] -> pure (Resolved prov prof scope secs mopt)
     xs -> throwIO (MissingRequiredError xs)
   where
     pResolve = withObject "response" $ \o ->
-      (,,,,)
+      (,,,,,)
         <$> o .: "provider"
         <*> o .: "profile"
+        <*> o .:? "scope"
         <*> o .:? "secrets" .!= Map.empty
         <*> o .:? "missing_required" .!= []
         <*> o .:? "missing_optional" .!= []
@@ -270,14 +311,16 @@ report :: Builder -> IO Report
 report b = do
   resp <- callNative (requestBytes b (Just "report"))
   value <- responseValue resp reportSchemaVersion "report"
-  (prov, prof, secs) <- fromResult (parseEither pReport value)
-  pure (Report prov prof secs)
+  (prov, prof, scope, secs, violations) <- fromResult (parseEither pReport value)
+  pure (Report prov prof scope secs violations)
   where
     pReport = withObject "response" $ \o ->
-      (,,)
+      (,,,,)
         <$> o .: "provider"
         <*> o .: "profile"
+        <*> o .:? "scope"
         <*> o .:? "secrets" .!= []
+        <*> o .:? "constraint_violations" .!= []
 
 -- Build the request JSON for a resolve (@mode = Nothing@) or report
 -- (@mode = Just "report"@), omitting unset options.
@@ -288,6 +331,7 @@ requestBytes b mode =
       [ ("path" .=) <$> bPath b
       , ("provider" .=) <$> bProvider b
       , ("profile" .=) <$> bProfile b
+      , ("scope" .=) <$> bScope b
       , ("reason" .=) <$> bReason b
       ]
       ++ ["no_values" .= True | bNoValues b]

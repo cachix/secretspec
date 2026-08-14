@@ -14,13 +14,19 @@ set -euo pipefail
 pkg_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo_root="$(cd "$pkg_dir/../.." && pwd)"
 
-cargo build -p monosecret_ffi --release --manifest-path "$repo_root/Cargo.toml"
+goos="$(go env GOOS)"
+goarch="$(go env GOARCH)"
+
+build_args=(
+	-p monosecret_ffi
+	--release
+	--manifest-path "$repo_root/Cargo.toml"
+)
+cargo build "${build_args[@]}"
 
 target_dir="$(cargo metadata --no-deps --format-version 1 --manifest-path "$repo_root/Cargo.toml" |
 	grep -o '"target_directory":"[^"]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/')"
 
-goos="$(go env GOOS)"
-goarch="$(go env GOARCH)"
 case "$goos" in
 darwin)
 	src="libmonosecret_ffi.dylib"

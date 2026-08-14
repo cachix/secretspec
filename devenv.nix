@@ -10,11 +10,34 @@ let
   currentDir = dirOf __curPos.file;
   custom = inputs.ifiokjr-nixpkgs.packages.${pkgs.stdenv.system};
   dartPkgs = import inputs.dart-nixpkgs { system = pkgs.stdenv.system; };
+  phpWithFfi = pkgs.php.buildEnv {
+    extensions =
+      { enabled, all }:
+      enabled ++ [ all.ffi ];
+    extraConfig = ''
+      ffi.enable = true
+    '';
+  };
 in
 {
+  # The C# SDK (`dotnet/monosecret_dotnet`) loads the Monosecret C ABI through
+  # P/Invoke. Release packaging remains deferred; local conformance tests use the
+  # native library prepared by `scripts/ci-sdks.sh`.
+  languages.dotnet.enable = true;
+
+  # The PHP SDK (`php/monosecret_php`) supports both an ext-php-rs extension that
+  # embeds the resolver and an ext-ffi fallback that loads the Monosecret C ABI.
+  # Composer comes from the devenv PHP module; the FFI extension is enabled only
+  # for development and conformance testing.
+  languages.php = {
+    enable = true;
+    package = phpWithFfi;
+  };
+
   packages =
     with pkgs;
     [
+      cargo-c
       cargo-insta
       custom.monochange
       custom.op
@@ -30,6 +53,17 @@ in
       cabal-install
       dbus
       pkg-config
+      # Provider integration and documentation tooling.
+      bitwarden-cli
+      sops
+      lychee
+      # Building `monosecret_php_native` needs php-config, PHP headers, and
+      # bindgen's Clang environment in addition to the PHP runtime above.
+      (lib.lowPrio php.unwrapped.dev)
+      rustPlatform.bindgenHook
+      # Client only: the Vaultwarden harness uses the developer's existing
+      # Docker-compatible runtime (Docker Desktop, Colima, or Podman).
+      (docker_29.override { clientOnly = true; })
       actionlint
       dprint
       gitleaks
@@ -49,6 +83,21 @@ in
     ++ lib.optionals stdenv.isDarwin [
       coreutils
     ];
+
+  # Fully static musl builds of the Go SDK need a target-scoped C linker. Keep
+  # these Linux-only and reference the cross toolchain by store path rather than
+  # adding it to `packages`, which would pollute host linker flags.
+  env = lib.optionalAttrs pkgs.stdenv.isLinux (
+    let
+      muslcc = "${pkgs.pkgsCross.musl64.stdenv.cc}/bin/x86_64-unknown-linux-musl-gcc";
+    in
+    {
+      CC_x86_64_unknown_linux_musl = muslcc;
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = muslcc;
+      MUSL_CC = muslcc;
+      MUSL_STATIC_LDFLAGS = "-L${pkgs.pkgsStatic.libunwind}/lib";
+    }
+  );
 
   enterShell = ''
     set -euo pipefail
@@ -368,7 +417,7 @@ in
         package:dart:check
         package:sdks:check
       '';
-      description = "Validate Rust, npm, and Dart package publish metadata.";
+      description = "Validate publish metadata and deferred SDK package readiness without publishing.";
       binary = "bash";
     };
     "package:rust:check" = {
@@ -414,8 +463,20 @@ in
         package:ruby:source-check
         (cd haskell/monosecret_hs && cabal check && cabal sdist)
         (cd go/monosecret_go && go list ./...)
+        composer validate --strict --no-check-publish
+        dotnet pack dotnet/monosecret_dotnet/src/Monosecret/Monosecret.csproj --output target/dotnet-pack
+        # The devenv Nix SDK (DEVELOPER_DIR/SDKROOT) is built with an older Swift
+        # than the system toolchain, which breaks manifest compilation. Unset it
+        # so `swift package` uses the system SDK. The Swift SDK is deferred, so a
+        # toolchain crash (e.g. stack smashing on some Linux runners) is a warning,
+        # not a packaging failure.
+        if env -u SDKROOT -u SDK_NAME -u NIX_SDKROOT -u DEVELOPER_DIR swift package dump-package >/dev/null 2>&1; then
+          :
+        else
+          echo "warning: swift manifest check skipped (toolchain unavailable or crashing on this runner)"
+        fi
       '';
-      description = "Run non-publishing Python, Ruby source, Haskell, and Go package checks.";
+      description = "Check staged SDK packages, including deferred PHP, C#, and Swift package metadata, without publishing.";
       binary = "bash";
     };
 

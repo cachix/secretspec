@@ -48,6 +48,7 @@ class Resolved {
   Resolved({
     required this.provider,
     required this.profile,
+    required this.scope,
     required Map<String, ResolvedSecret> secrets,
     required Iterable<String> missingOptional,
   }) : secrets = Map.unmodifiable(secrets),
@@ -55,6 +56,7 @@ class Resolved {
 
   final String provider;
   final String profile;
+  final String? scope;
   final Map<String, ResolvedSecret> secrets;
   final List<String> missingOptional;
 
@@ -100,17 +102,41 @@ class SecretReport {
   final bool asPath;
 }
 
+/// The kind of a failed cross-secret presence constraint.
+enum ConstraintViolationKind { atLeastOne, exactlyOne }
+
+/// A failed cross-secret presence constraint in a resolution report.
+class ConstraintViolation {
+  ConstraintViolation({
+    required this.kind,
+    required this.group,
+    required Iterable<String> secrets,
+    required Iterable<String> present,
+  }) : secrets = List.unmodifiable(secrets),
+       present = List.unmodifiable(present);
+
+  final ConstraintViolationKind kind;
+  final String group;
+  final List<String> secrets;
+  final List<String> present;
+}
+
 /// A value-free resolution snapshot.
 class ResolutionReport {
   ResolutionReport({
     required this.provider,
     required this.profile,
+    required this.scope,
     required Iterable<SecretReport> secrets,
-  }) : secrets = List.unmodifiable(secrets);
+    Iterable<ConstraintViolation> constraintViolations = const [],
+  }) : secrets = List.unmodifiable(secrets),
+       constraintViolations = List.unmodifiable(constraintViolations);
 
   final String provider;
   final String profile;
+  final String? scope;
   final List<SecretReport> secrets;
+  final List<ConstraintViolation> constraintViolations;
 }
 
 Resolved parseResolved(Map<String, Object?> response) {
@@ -136,6 +162,7 @@ Resolved parseResolved(Map<String, Object?> response) {
   return Resolved(
     provider: _string(response, 'provider'),
     profile: _string(response, 'profile'),
+    scope: response['scope'] as String?,
     secrets: secrets,
     missingOptional: _stringList(response['missing_optional']),
   );
@@ -153,6 +180,7 @@ ResolutionReport parseReport(Map<String, Object?> response) {
   return ResolutionReport(
     provider: _string(response, 'provider'),
     profile: _string(response, 'profile'),
+    scope: response['scope'] as String?,
     secrets: rawSecrets.map((value) {
       final secret = _map(value, 'response.secrets[]');
       return SecretReport(
@@ -165,8 +193,30 @@ ResolutionReport parseReport(Map<String, Object?> response) {
         asPath: secret['as_path'] as bool? ?? false,
       );
     }),
+    constraintViolations:
+        (response['constraint_violations'] as List<Object?>? ?? const []).map((
+          value,
+        ) {
+          final violation = _map(value, 'response.constraint_violations[]');
+          return ConstraintViolation(
+            kind: _constraintViolationKind(_string(violation, 'kind')),
+            group: _string(violation, 'group'),
+            secrets: _stringList(violation['secrets']),
+            present: _stringList(violation['present']),
+          );
+        }),
   );
 }
+
+ConstraintViolationKind _constraintViolationKind(String value) =>
+    switch (value) {
+      'at_least_one' => ConstraintViolationKind.atLeastOne,
+      'exactly_one' => ConstraintViolationKind.exactlyOne,
+      _ => throw MonosecretException(
+        'ffi',
+        'Native report response has an invalid constraint kind: $value.',
+      ),
+    };
 
 Map<String, Object?> parseEnvelope(
   Object? decoded, {

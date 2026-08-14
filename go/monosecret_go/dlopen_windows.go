@@ -1,4 +1,4 @@
-//go:build windows && !monosecret_static
+//go:build windows && !monosecret_static && !pkgconfig
 
 package monosecret
 

@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// Create a .env file for testing
 	std::fs::write(
 		".env",
-		"DATABASE_URL=postgres://localhost/testdb\nAPI_KEY=test-key-123\nREDIS_URL=redis://localhost:6379\n",
+		"DATABASE_URL=postgres://localhost/testdb\nAPI_KEY=test-key-123\nREDIS_URL=redis://localhost:6379\nSESSION_SECRET=test-session-secret\n",
 	)?;
 
 	// Example 1: Load with builder pattern
@@ -20,20 +20,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 				result.provider, result.profile
 			);
 			let secrets = &result.secrets;
-			if let Some(database_url) = &secrets.database_url {
-				println!("   - Database URL: {database_url}");
-			}
-			if let Some(api_key) = &secrets.api_key {
-				println!("   - API Key: {api_key} (found)");
-			} else {
-				println!("   - API Key: None");
-			}
-			if let Some(redis_url) = &secrets.redis_url {
-				println!("   - Redis URL: {redis_url}");
-			}
-			if let Some(log_level) = &secrets.log_level {
-				println!("   - Log Level: {log_level}");
-			}
+			println!("   - Database URL: {}", secrets.database_url);
+			println!("   - API Key: {} (found)", secrets.api_key);
+			println!("   - Redis URL: {}", secrets.redis_url);
+			println!("   - Session secret: {} (found)", secrets.session_secret);
 		}
 		Err(e) => {
 			println!("   ✗ Failed to load secrets: {e}");
@@ -53,20 +43,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 				result.provider, result.profile
 			);
 			let secrets = &result.secrets;
-			if let Some(database_url) = &secrets.database_url {
-				println!("   - Database URL: {database_url}");
-			}
-			if let Some(api_key) = &secrets.api_key {
-				println!("   - API Key: {api_key} (found)");
-			} else {
-				println!("   - API Key: None");
-			}
-			if let Some(redis_url) = &secrets.redis_url {
-				println!("   - Redis URL: {redis_url}");
-			}
-			if let Some(log_level) = &secrets.log_level {
-				println!("   - Log Level: {log_level}");
-			}
+			println!("   - Database URL: {}", secrets.database_url);
+			println!("   - API Key: {} (found)", secrets.api_key);
+			println!("   - Redis URL: {}", secrets.redis_url);
+			println!("   - Session secret: {} (found)", secrets.session_secret);
 		}
 		Err(e) => {
 			println!("   ✗ Failed to load development profile: {e}");
@@ -130,11 +110,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 				MonosecretProfile::Production {
 					database_url,
 					api_key,
-					..
+					redis_url,
+					session_secret,
 				} => {
 					println!("   - Production secrets are strongly typed");
 					println!("   - Database URL: {database_url}"); // String, not Option<String>
 					println!("   - API Key: {api_key}"); // String, not Option<String>
+					println!("   - Redis URL: {redis_url}"); // String, not Option<String>
+					println!("   - Session secret: {session_secret}"); // String, not Option<String>
 				}
 				_ => println!("   - Got different profile"),
 			}

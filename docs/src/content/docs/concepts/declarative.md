@@ -16,7 +16,7 @@ extends = ["../shared/common"] # Optional: inherit from other configs
 [profiles.default]
 DATABASE_URL = { description = "PostgreSQL connection string", required = true }
 API_KEY = { description = "External API key", required = true }
-LOG_LEVEL = { description = "Logging verbosity", required = false, default = "info" }
+SESSION_SECRET = { description = "Session signing secret", required = true, type = "password", generate = true }
 ```
 
 ## Secret Declarations
@@ -33,16 +33,23 @@ SECRET_NAME = {
 
 **Options:**
 
-- `description`: Explains the secret's purpose (required)
+- `description`: Explains the secret's purpose (required in the `default` profile; profile overrides inherit it when omitted)
 - `required`: Whether the secret must be provided (default: `true`)
 - `default`: Fallback value for optional secrets
+- `composed` (0.2+): Derive a read-only value from other declared secrets (see [Composed Secrets](/concepts/composed-secrets/) for the strict template and dependency semantics)
 - `type`: Secret type for auto-generation (`password`, `hex`, `base64`, `uuid`, `command`)
 - `generate`: Enable auto-generation when the secret is missing (`true` or a table with options)
+- `prompt` (0.2+): Securely ask for a missing value during `monosecret run` and
+  let the selected provider decide whether to save the answer
 
 ## Related Concepts
 
 - [Configuration Inheritance](/concepts/inheritance/) lets projects share common secret definitions via the `extends` field
 - [Secret Generation](/concepts/generation/) auto-creates passwords, tokens, and keys when secrets are missing
+- [Run prompts (0.2+)](/reference/configuration/#prompt-on-missing-during-run-019)
+  provision stored secrets on first use, or remain invocation-only with `null`
+- [Composed Secrets (0.2+)](/concepts/composed-secrets/) derive values from
+  other declared secrets without dotenv or shell expansion
 
 ## Best Practices
 
@@ -56,11 +63,11 @@ SECRET_NAME = {
 ```toml
 [project]
 name = "web-api"
-revision = "2.1.0"
+revision = "1.0"
 extends = ["../shared/base", "../shared/auth"]
 
 [profiles.default]
-# Inherits DATABASE_URL, LOG_LEVEL from base
+# Inherits DATABASE_URL, INTERNAL_API_KEY from base
 # Inherits JWT_SECRET, SESSION_SECRET from auth
 # Service-specific additions:
 STRIPE_API_KEY = { description = "Stripe payment API", required = true }

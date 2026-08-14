@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { unlinkSync } from "node:fs";
 
-const RESOLVE_SCHEMA_VERSION = 1;
+const RESOLVE_SCHEMA_VERSION = 2;
 const REPORT_SCHEMA_VERSION = 1;
 
 const platformPackages: Readonly<Record<string, string>> = {
@@ -104,6 +104,7 @@ interface ResolveResponse {
   schema_version: number;
   provider: string;
   profile: string;
+  scope?: string | null;
   secrets?: Record<string, SecretEntry>;
   missing_required?: string[];
   missing_optional?: string[];
@@ -112,12 +113,14 @@ interface ResolveResponse {
 export class Resolved implements Disposable {
   readonly provider: string;
   readonly profile: string;
+  readonly scope: string | null;
   readonly secrets: Readonly<Record<string, ResolvedSecret>>;
   readonly missingOptional: readonly string[];
 
   constructor(response: ResolveResponse) {
     this.provider = response.provider;
     this.profile = response.profile;
+    this.scope = response.scope ?? null;
     this.secrets = Object.fromEntries(
       Object.entries(response.secrets ?? {}).map(([name, entry]) => [
         name,
@@ -191,22 +194,53 @@ export class SecretReport {
   }
 }
 
+export type ConstraintViolationKind = "at_least_one" | "exactly_one";
+
+interface ConstraintViolationEntry {
+  kind: ConstraintViolationKind;
+  group: string;
+  secrets: string[];
+  present: string[];
+}
+
+export class ConstraintViolation {
+  readonly kind: ConstraintViolationKind;
+  readonly group: string;
+  readonly secrets: readonly string[];
+  readonly present: readonly string[];
+
+  constructor(entry: ConstraintViolationEntry) {
+    this.kind = entry.kind;
+    this.group = entry.group;
+    this.secrets = [...entry.secrets];
+    this.present = [...entry.present];
+  }
+}
+
 interface ReportResponse {
   schema_version: number;
   provider: string;
   profile: string;
+  scope?: string | null;
   secrets?: SecretReportEntry[];
+  constraint_violations?: ConstraintViolationEntry[];
 }
 
 export class Report {
   readonly provider: string;
   readonly profile: string;
+  readonly scope: string | null;
   readonly secrets: readonly SecretReport[];
+  readonly constraintViolations: readonly ConstraintViolation[];
 
   constructor(response: ReportResponse) {
     this.provider = response.provider;
     this.profile = response.profile;
+    this.scope = response.scope ?? null;
     this.secrets = (response.secrets ?? []).map((entry) => new SecretReport(entry));
+    this.constraintViolations = (response.constraint_violations ?? []).map(
+      (entry) => new ConstraintViolation(entry),
+    );
   }
 }
 
@@ -257,6 +291,21 @@ export class Builder {
 
   withProfile(profile: string | null | undefined): this {
     if (profile != null) this.request.profile = profile;
+    return this;
+  }
+
+  withScope(scope: string | null | undefined): this {
+    if (scope != null) this.request.scope = scope;
+    return this;
+  }
+
+  withInclude(include: readonly string[]): this {
+    this.request.include = [...include];
+    return this;
+  }
+
+  withGroups(groups: readonly string[]): this {
+    this.request.groups = [...groups];
     return this;
   }
 

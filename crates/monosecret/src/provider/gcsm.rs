@@ -66,7 +66,8 @@ fn validate_gcp_project_id(project_id: &str) -> std::result::Result<(), Monosecr
 	let len = project_id.len();
 	if !(6..=30).contains(&len) {
 		return Err(MonosecretError::ProviderOperationFailed(format!(
-			"GCP project ID must be 6-30 characters, got {len}"
+			"GCP project ID must be 6-30 characters, got {}",
+			len
 		)));
 	}
 
@@ -86,8 +87,9 @@ fn validate_gcp_project_id(project_id: &str) -> std::result::Result<(), Monosecr
 	for c in chars {
 		if !c.is_ascii_lowercase() && !c.is_ascii_digit() && c != '-' {
 			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"GCP project ID contains invalid character '{c}'. \
-                Only lowercase letters, digits, and hyphens are allowed"
+				"GCP project ID contains invalid character '{}'. \
+                Only lowercase letters, digits, and hyphens are allowed",
+				c
 			)));
 		}
 	}
@@ -123,6 +125,26 @@ impl TryFrom<&ProviderUrl> for GcsmConfig {
 		// Validate project ID format
 		validate_gcp_project_id(&project_id)?;
 
+		// The path reference form from earlier iterations is rejected with a
+		// pointer at the `ref` table, instead of being silently ignored and
+		// reading the conventional layout.
+		let path = url.path();
+		let trimmed = path.trim_start_matches('/');
+		if !trimmed.is_empty() {
+			let id = trimmed
+				.strip_prefix("secrets/")
+				.unwrap_or(trimmed)
+				.split('/')
+				.next()
+				.unwrap_or(trimmed);
+			let hint = crate::config::ref_table_hint(None, id, None, None);
+			return Err(MonosecretError::ProviderOperationFailed(format!(
+				"gcsm URIs take no path: address the secret with \
+                 {hint} on the secret instead \
+                 (add version = \"<n>\" to pin a version)"
+			)));
+		}
+
 		Ok(Self { project_id })
 	}
 }
@@ -145,7 +167,7 @@ crate::register_provider! {
 }
 
 impl GcsmProvider {
-	/// Creates a new `GcsmProvider` with the given configuration.
+	/// Creates a new GcsmProvider with the given configuration.
 	pub fn new(config: GcsmConfig) -> Self {
 		Self { config }
 	}
@@ -156,15 +178,17 @@ impl GcsmProvider {
 	fn validate_name_component(name: &str, component: &str) -> Result<()> {
 		if component.is_empty() {
 			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"{name} cannot be empty"
+				"{} cannot be empty",
+				name
 			)));
 		}
 
 		for c in component.chars() {
 			if !c.is_ascii_alphanumeric() && c != '_' && c != '-' {
 				return Err(MonosecretError::ProviderOperationFailed(format!(
-					"{name} contains invalid character '{c}'. \
-                    Only alphanumeric characters, underscores, and hyphens are allowed"
+					"{} contains invalid character '{}'. \
+                    Only alphanumeric characters, underscores, and hyphens are allowed",
+					name, c
 				)));
 			}
 		}
@@ -180,13 +204,13 @@ impl GcsmProvider {
 	/// GCP Secret Manager secret IDs must:
 	/// - Be 1-255 characters long
 	/// - Contain only alphanumeric characters, hyphens, and underscores
-	fn format_secret_name(project: &str, profile: &str, key: &str) -> Result<String> {
+	fn format_secret_name(&self, project: &str, profile: &str, key: &str) -> Result<String> {
 		// Validate each component
 		Self::validate_name_component("project", project)?;
 		Self::validate_name_component("profile", profile)?;
 		Self::validate_name_component("key", key)?;
 
-		let secret_name = format!("monosecret-{project}-{profile}-{key}");
+		let secret_name = format!("monosecret-{}-{}-{}", project, profile, key);
 
 		// GCP secret IDs must be 1-255 characters
 		if secret_name.len() > 255 {
@@ -200,43 +224,43 @@ impl GcsmProvider {
 	}
 
 	/// Checks if an error indicates the resource was not found.
-	fn is_not_found_error(e: &impl std::error::Error) -> bool {
-		let s = e.to_string();
+	fn is_not_found_error(e: &(impl std::error::Error + 'static)) -> bool {
+		let s = crate::error::display_error_chain(e);
 		s.contains("NOT_FOUND") || s.contains("notFound")
 	}
 
 	/// Checks if an error indicates the resource already exists.
-	fn is_already_exists_error(e: &impl std::error::Error) -> bool {
-		let s = e.to_string();
+	fn is_already_exists_error(e: &(impl std::error::Error + 'static)) -> bool {
+		let s = crate::error::display_error_chain(e);
 		s.contains("ALREADY_EXISTS") || s.contains("alreadyExists")
 	}
 
-	/// Creates a `SecretManagerService` client.
+	/// Creates a SecretManagerService client.
 	async fn create_client(&self) -> Result<SecretManagerService> {
 		SecretManagerService::builder().build().await.map_err(|e| {
 			MonosecretError::ProviderOperationFailed(format!(
-				"Failed to create GCP Secret Manager client: {e}\n\n\
+				"Failed to create GCP Secret Manager client: {}\n\n\
                 Ensure Application Default Credentials are configured:\n  \
                 - Local development: Run 'gcloud auth application-default login'\n  \
                 - Service account: Set GOOGLE_APPLICATION_CREDENTIALS environment variable\n  \
-                - GKE: Configure Workload Identity"
+                - GKE: Configure Workload Identity",
+				crate::error::display_error_chain(&e)
 			))
 		})
 	}
 
-	/// Retrieves a secret value from GCP Secret Manager.
-	async fn get_secret_async(
+	/// Resolves coordinates to a version resource and reads it, mapping "not
+	/// found" to `None`: `item` is the secret id, `version` the version to read
+	/// (defaulting to the latest).
+	async fn get_coords_async(
 		&self,
-		project: &str,
-		key: &str,
-		profile: &str,
+		coords: &crate::config::NativeAddress,
 	) -> Result<Option<SecretString>> {
-		let secret_name = Self::format_secret_name(project, profile, key)?;
+		let version = coords.version.as_deref().unwrap_or("latest");
 		let secret_version_path = format!(
-			"projects/{}/secrets/{}/versions/latest",
-			self.config.project_id, secret_name
+			"projects/{}/secrets/{}/versions/{}",
+			self.config.project_id, coords.item, version
 		);
-
 		let client = self.create_client().await?;
 
 		match client
@@ -249,7 +273,8 @@ impl GcsmProvider {
 				if let Some(payload) = response.payload {
 					let data = String::from_utf8(payload.data.to_vec()).map_err(|e| {
 						MonosecretError::ProviderOperationFailed(format!(
-							"Secret data is not valid UTF-8: {e}"
+							"Secret data is not valid UTF-8: {}",
+							e
 						))
 					})?;
 					Ok(Some(SecretString::new(data.into())))
@@ -263,41 +288,11 @@ impl GcsmProvider {
 					Ok(None)
 				} else {
 					Err(MonosecretError::ProviderOperationFailed(format!(
-						"Failed to access secret '{secret_name}': {e}"
+						"Failed to access secret '{}': {}",
+						coords.item,
+						crate::error::display_error_chain(&e)
 					)))
 				}
-			}
-		}
-	}
-
-	async fn get_native_async(
-		&self,
-		item: &str,
-		version: Option<&str>,
-	) -> Result<Option<SecretString>> {
-		let version = version.unwrap_or("latest");
-		let path = format!(
-			"projects/{}/secrets/{item}/versions/{version}",
-			self.config.project_id
-		);
-		let client = self.create_client().await?;
-		match client.access_secret_version().set_name(&path).send().await {
-			Ok(response) => {
-				let Some(payload) = response.payload else {
-					return Ok(None);
-				};
-				let value = String::from_utf8(payload.data.to_vec()).map_err(|error| {
-					MonosecretError::ProviderOperationFailed(format!(
-						"Secret data is not valid UTF-8: {error}"
-					))
-				})?;
-				Ok(Some(SecretString::new(value.into())))
-			}
-			Err(error) if Self::is_not_found_error(&error) => Ok(None),
-			Err(error) => {
-				Err(MonosecretError::ProviderOperationFailed(format!(
-					"Failed to access secret '{item}' version '{version}': {error}"
-				)))
 			}
 		}
 	}
@@ -306,22 +301,14 @@ impl GcsmProvider {
 	///
 	/// Always attempts to create the secret first (idempotent operation), then adds a new version.
 	/// This avoids TOCTOU race conditions by not checking existence before creation.
-	#[allow(clippy::collapsible_if)]
-	async fn set_secret_async(
-		&self,
-		project: &str,
-		key: &str,
-		value: &SecretString,
-		profile: &str,
-	) -> Result<()> {
-		let secret_name = Self::format_secret_name(project, profile, key)?;
+	async fn set_secret_async(&self, secret_name: &str, value: &SecretString) -> Result<()> {
 		let client = self.create_client().await?;
 
 		// Always try to create the secret first (idempotent - ALREADY_EXISTS is expected for existing secrets)
 		let create_result = client
 			.create_secret()
 			.set_parent(format!("projects/{}", self.config.project_id))
-			.set_secret_id(&secret_name)
+			.set_secret_id(secret_name)
 			.set_secret(Secret::default().set_replication(
 				Replication::default().set_automatic(replication::Automatic::default()),
 			))
@@ -329,14 +316,16 @@ impl GcsmProvider {
 			.await;
 
 		// Only fail on errors OTHER than ALREADY_EXISTS
-		if let Err(e) = create_result {
-			if !Self::is_already_exists_error(&e) {
-				return Err(MonosecretError::ProviderOperationFailed(format!(
-					"Failed to create secret '{secret_name}': {e}"
-				)));
-			}
-			// ALREADY_EXISTS is expected for existing secrets, continue to add version
+		if let Err(e) = create_result
+			&& !Self::is_already_exists_error(&e)
+		{
+			return Err(MonosecretError::ProviderOperationFailed(format!(
+				"Failed to create secret '{}': {}",
+				secret_name,
+				crate::error::display_error_chain(&e)
+			)));
 		}
+		// ALREADY_EXISTS is expected for existing secrets, continue to add version
 
 		// Add a new version with the secret data
 		client
@@ -352,7 +341,9 @@ impl GcsmProvider {
 			.await
 			.map_err(|e| {
 				MonosecretError::ProviderOperationFailed(format!(
-					"Failed to add secret version for '{secret_name}': {e}"
+					"Failed to add secret version for '{}': {}",
+					secret_name,
+					crate::error::display_error_chain(&e)
 				))
 			})?;
 
@@ -361,36 +352,19 @@ impl GcsmProvider {
 }
 
 impl Provider for GcsmProvider {
-	fn supported_coords(&self) -> &'static [&'static str] {
-		&["version"]
-	}
-
-	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
-		match address {
-			Address::Convention {
-				project,
-				profile,
-				key,
-			} => self.get(project, key, profile),
-			Address::Native(native) => {
-				if native.field.is_some() || native.vault.is_some() || native.section.is_some() {
-					return Err(MonosecretError::ProviderOperationFailed(
-						"the gcsm provider supports only `item` and `version` coordinates".into(),
-					));
-				}
-				super::block_on(self.get_native_async(&native.item, native.version.as_deref()))
-			}
-		}
-	}
-
-	fn check_writable(&self, address: Address<'_>) -> Result<()> {
-		if matches!(address, Address::Native(_)) {
-			return Err(MonosecretError::ProviderOperationFailed(
-				"GCP Secret Manager refs are read-only; write convention-addressed secrets instead"
-					.into(),
-			));
-		}
-		Ok(())
+	/// Convention secrets are ids of the form
+	/// `monosecret-{project}-{profile}-{key}` (GCP secret ids cannot contain
+	/// slashes), read at their latest version.
+	fn convention_address(
+		&self,
+		project: &str,
+		profile: &str,
+		key: &str,
+	) -> Result<crate::config::NativeAddress> {
+		Ok(crate::config::NativeAddress {
+			item: self.format_secret_name(project, profile, key)?,
+			..Default::default()
+		})
 	}
 
 	fn name(&self) -> &'static str {
@@ -401,81 +375,92 @@ impl Provider for GcsmProvider {
 		format!("gcsm://{}", self.config.project_id)
 	}
 
-	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-		super::block_on(self.get_secret_async(project, key, profile))
+	/// An optional `version` pins the secret version to read.
+	fn supported_coords(&self) -> &'static [&'static str] {
+		&["version"]
 	}
 
-	fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-		super::block_on(self.set_secret_async(project, key, value, profile))
+	fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+		let coords = self.resolve_coords(addr)?;
+		super::block_on(self.get_coords_async(&coords))
 	}
 
-	fn allows_set(&self) -> bool {
-		true
+	fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+		self.check_writable(addr)?;
+		let coords = self.resolve_coords(addr)?;
+		super::block_on(self.set_secret_async(&coords.item, value))
+	}
+
+	/// Native addresses are read-only: they name an existing (often
+	/// version-pinned) secret, and writing would mean minting a new version of
+	/// someone else's secret.
+	fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+		match addr {
+			Address::Convention { .. } => Ok(()),
+			Address::Native(_) => {
+				Err(MonosecretError::ProviderOperationFailed(
+					"gcsm secret references are read-only and cannot be written".to_string(),
+				))
+			}
+		}
 	}
 }
 
 #[cfg(test)]
-mod tests {
+mod reference_tests {
+	use url::Url;
+
 	use super::*;
 
+	/// A path that is not a `secrets/...` resource is rejected.
 	#[test]
-	fn format_secret_name_builds_valid_name() {
-		let name = GcsmProvider::format_secret_name("my-project", "default", "API_KEY").unwrap();
-		insta::assert_snapshot!(name);
+	fn path_is_rejected_with_ref_hint() {
+		let err = GcsmConfig::try_from(&ProviderUrl::new(
+			Url::parse("gcsm://my-project/secrets/db-url/versions/3").unwrap(),
+		))
+		.unwrap_err();
+		assert!(
+			err.to_string().contains("ref = { item = \"db-url\" }"),
+			"{err}"
+		);
 	}
 
+	/// Native addresses are read-only: writing would mint a new version of a
+	/// secret managed outside Monosecret.
 	#[test]
-	fn format_secret_name_rejects_empty_component() {
-		let errors = [
-			GcsmProvider::format_secret_name("", "default", "KEY").unwrap_err(),
-			GcsmProvider::format_secret_name("proj", "", "KEY").unwrap_err(),
-			GcsmProvider::format_secret_name("proj", "default", "").unwrap_err(),
-		]
-		.map(|err| err.to_string())
-		.join("\n");
-		insta::assert_snapshot!(errors);
-	}
-
-	#[test]
-	fn format_secret_name_rejects_invalid_characters() {
-		let errors = [
-			GcsmProvider::format_secret_name("bad/project", "default", "KEY").unwrap_err(),
-			GcsmProvider::format_secret_name("proj", "default", "bad key").unwrap_err(),
-		]
-		.map(|err| err.to_string())
-		.join("\n");
-		insta::assert_snapshot!(errors);
-	}
-
-	#[test]
-	fn format_secret_name_rejects_overlong_name() {
-		let long = "a".repeat(300);
-		let err = GcsmProvider::format_secret_name("proj", "default", &long).unwrap_err();
-		insta::assert_snapshot!(err.to_string());
-	}
-
-	#[test]
-	fn get_rejects_invalid_key_before_network() {
-		let provider = GcsmProvider::new(GcsmConfig {
-			project_id: "valid-proj".to_string(),
-		});
-		let err = provider.get("project", "bad key", "default").unwrap_err();
-		insta::assert_snapshot!(err.to_string());
-	}
-
-	#[test]
-	fn set_rejects_invalid_key_before_network() {
-		let provider = GcsmProvider::new(GcsmConfig {
-			project_id: "valid-proj".to_string(),
-		});
-		let err = provider
+	fn native_address_is_read_only() {
+		let c = GcsmConfig::try_from(&ProviderUrl::new(Url::parse("gcsm://my-project").unwrap()))
+			.unwrap();
+		let p = GcsmProvider::new(c);
+		let addr = crate::config::NativeAddress {
+			item: "db-url".into(),
+			..Default::default()
+		};
+		let refusal = p.check_writable(Address::Native(&addr)).unwrap_err();
+		assert!(refusal.to_string().contains("read-only"), "{refusal}");
+		// `set` refuses with the same reason, so the pre-check cannot drift.
+		let err = p
 			.set(
-				"project",
-				"bad/key",
-				&SecretString::new("v".into()),
-				"default",
+				Address::Native(&addr),
+				&secrecy::SecretString::new("v".into()),
 			)
 			.unwrap_err();
-		insta::assert_snapshot!(err.to_string());
+		assert_eq!(err.to_string(), refusal.to_string());
+	}
+
+	/// GCSM secrets have no fields; the coordinate is rejected before any
+	/// network I/O.
+	#[test]
+	fn native_address_rejects_field() {
+		let c = GcsmConfig::try_from(&ProviderUrl::new(Url::parse("gcsm://my-project").unwrap()))
+			.unwrap();
+		let p = GcsmProvider::new(c);
+		let addr = crate::config::NativeAddress {
+			item: "db-url".into(),
+			field: Some("x".into()),
+			..Default::default()
+		};
+		let err = p.get(Address::Native(&addr)).unwrap_err();
+		assert!(err.to_string().contains("`field`"), "{err}");
 	}
 }

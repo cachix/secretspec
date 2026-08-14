@@ -25,7 +25,10 @@ APP_TOKEN = { description = "application token", ref = { item = "STORE_NATIVE_NA
 	.expect("write config");
 
 	let mut secrets = Secrets::load_from(&config_path).expect("load valid config");
-	secrets.set_provider(format!("dotenv:{}", env_path.display()));
+	secrets.set_provider(format!(
+		"dotenv:{}",
+		env_path.display().to_string().replace('\\', "/")
+	));
 	let response = secrets.resolve().expect("resolve native reference");
 	let token = response.secrets.get("APP_TOKEN").expect("resolved token");
 	assert_eq!(token.value.as_deref(), Some("from-native-ref"));
@@ -33,15 +36,29 @@ APP_TOKEN = { description = "application token", ref = { item = "STORE_NATIVE_NA
 }
 
 #[test]
-fn legacy_op_uri_paths_still_parse() {
+fn legacy_op_uri_paths_are_rejected_with_ref_guidance() {
 	for uri in [
 		"op://Production/github/password",
 		"op://Production/github/credentials/password",
-		"op+token://token@Production/github/password",
 	] {
-		let provider = Box::<dyn Provider>::try_from(uri).expect("legacy op URI remains valid");
-		assert!(provider.uri().starts_with("op"));
+		let Err(error) = Box::<dyn Provider>::try_from(uri) else {
+			panic!("item paths require a ref");
+		};
+		let message = error.to_string();
+		assert!(message.contains("secret's `ref`"), "{message}");
 	}
+
+	let Err(error) =
+		Box::<dyn Provider>::try_from("onepassword+token://token@Production/github/password")
+	else {
+		panic!("tokens in provider URIs are unsafe");
+	};
+	assert!(
+		error
+			.to_string()
+			.contains("no longer accepts the service account token"),
+		"{error}"
+	);
 }
 
 #[test]
@@ -63,7 +80,10 @@ TOKEN = { description = "generated token", type = "password", generate = { lengt
 	.expect("write config");
 
 	let mut secrets = Secrets::load_from(&config_path).expect("load valid config");
-	secrets.set_provider(format!("dotenv:{}", env_path.display()));
+	secrets.set_provider(format!(
+		"dotenv:{}",
+		env_path.display().to_string().replace('\\', "/")
+	));
 	let response = secrets
 		.resolve_without_values()
 		.expect("value-free resolution succeeds");
@@ -108,7 +128,10 @@ TOKEN = { description = "production token", required = true }
 	.expect("write config");
 
 	let mut secrets = Secrets::load_from(&config_path).expect("load valid config");
-	secrets.set_provider(format!("dotenv:{}", env_path.display()));
+	secrets.set_provider(format!(
+		"dotenv:{}",
+		env_path.display().to_string().replace('\\', "/")
+	));
 	secrets.set_profile("production");
 	let response = secrets.resolve().expect("resolve inherited ref");
 	assert_eq!(
@@ -142,7 +165,10 @@ TOKEN = { description = "token", ref = { item = "TOKEN", field = "password" } }
 	.expect("write config");
 
 	let mut secrets = Secrets::load_from(&config_path).expect("load valid config");
-	secrets.set_provider(format!("dotenv:{}", env_path.display()));
+	secrets.set_provider(format!(
+		"dotenv:{}",
+		env_path.display().to_string().replace('\\', "/")
+	));
 	let error = secrets
 		.resolve()
 		.expect_err("dotenv has no field coordinate");

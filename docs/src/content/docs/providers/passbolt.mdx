@@ -1,0 +1,279 @@
+---
+title: Passbolt Provider
+description: Store and read Monosecret values in a self-hosted Passbolt server
+---
+
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
+The Passbolt provider reads and writes resources in a self-hosted
+[Passbolt](https://www.passbolt.com/) server through the community-maintained
+[`go-passbolt-cli`](https://github.com/passbolt/go-passbolt-cli).
+
+:::note[Version compatibility]
+The Passbolt provider is added in Monosecret 0.2.
+:::
+
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `passbolt` (0.2+) |
+| URI | `passbolt://[?server=URL][&folder=ID][&template=PATTERN]` |
+| Access | Read and write |
+| Best for | Teams using a self-hosted Passbolt server |
+| Authentication | OpenPGP private key and passphrase, through provider credentials or `go-passbolt-cli` configuration |
+| Availability | Built into Monosecret 0.2+ |
+| Default storage | Resource `monosecret/{project}/{profile}/{key}`, field `password` |
+
+## Quick start
+
+Complete [Setup](#setup) first, then use the provider alias from the project
+configuration below:
+
+```bash
+# Store a secret in Passbolt
+$ monosecret set DATABASE_URL --provider passbolt_team
+
+# Read it back
+$ monosecret get DATABASE_URL --provider passbolt_team
+
+# Resolve the active profile and run a command
+$ monosecret run --provider passbolt_team -- npm start
+```
+
+## Setup
+
+### Prerequisites
+
+- Monosecret 0.2 or newer
+- A Passbolt account with permission to read the selected resources and update
+  resources when using `set`
+- [`go-passbolt-cli`](https://github.com/passbolt/go-passbolt-cli) installed as
+  `passbolt` on `PATH`
+
+When the executable has another name or location, set
+`MONOSECRET_PASSBOLT_CLI_PATH` to its path. For example, `go install` currently
+names the executable `go-passbolt-cli`:
+
+```bash
+$ export MONOSECRET_PASSBOLT_CLI_PATH="$(go env GOPATH)/bin/go-passbolt-cli"
+```
+
+Run `passbolt verify` once when your deployment uses the CLI's server
+verification workflow.
+
+### Authentication with provider credentials
+
+Monosecret 0.2+ declares the OpenPGP `private_key` and `passphrase` as
+[provider credentials](/reference/provider-credentials/). Load both from a
+bootstrap provider instead of putting them in `monosecret.toml` or the Passbolt
+URI:
+
+```toml title="monosecret.toml"
+[providers]
+bootstrap = "keyring://"
+
+[providers.passbolt_team]
+uri = "passbolt://?server=https://pass.example.com"
+credentials = { private_key = "bootstrap", passphrase = "bootstrap" }
+
+[profiles.production]
+DATABASE_URL = { description = "Database URL", providers = ["passbolt_team"] }
+```
+
+Store the two declared credentials once:
+
+```bash
+$ monosecret config provider login passbolt_team
+Enter private_key for provider 'passbolt_team' (source: bootstrap): ****
+Enter passphrase for provider 'passbolt_team' (source: bootstrap): ****
+```
+
+The provider passes the private key and passphrase only to the child process's
+environment, not its command-line arguments.
+
+### Environment fallback
+
+For environments without a bootstrap provider, use these fallbacks:
+
+```bash
+$ export MONOSECRET_PASSBOLT_SERVER=https://pass.example.com
+
+$ export MONOSECRET_PASSBOLT_PRIVATE_KEY="$(cat private-key.asc)"
+
+$ export MONOSECRET_PASSBOLT_PASSPHRASE="$CI_PASSBOLT_PASSPHRASE"
+```
+
+`MONOSECRET_PASSBOLT_PRIVATE_KEY_FILE` can select a private-key file instead of
+an inline key. An explicit `private_key` provider credential takes precedence;
+without one, the key-file fallback takes precedence over
+`MONOSECRET_PASSBOLT_PRIVATE_KEY`.
+
+### Use the CLI configuration
+
+Alternatively, save the server, key, passphrase, and optional MFA settings in
+the CLI's own configuration:
+
+```bash
+$ passbolt configure \
+  --serverAddress https://pass.example.com \
+  --userPrivateKeyFile private-key.asc \
+  --userPassword "$PASSBOLT_PASSPHRASE"
+```
+
+When none of the provider credentials or `MONOSECRET_PASSBOLT_*` fallbacks are
+set, Monosecret inherits that CLI configuration.
+
+For MFA accounts, configure `go-passbolt-cli` for non-interactive TOTP before
+using it through Monosecret. The CLI supports TOTP MFA only; accounts whose
+policy requires Duo or YubiKey cannot authenticate through this provider. An
+interactive password or TOTP prompt cannot be answered by a provider
+operation, so Monosecret reports an actionable error instead of the CLI's raw
+end-of-file message.
+
+## Provider credentials
+
+<ProviderCredentials provider="passbolt" />
+
+## Configuration
+
+### URI format
+
+```text
+passbolt://[?server=URL][&folder=ID][&template=PATTERN]
+```
+
+- `server` overrides the server stored in the CLI configuration or
+  `MONOSECRET_PASSBOLT_SERVER`.
+- `folder` scopes resource-name lookups and creates new convention resources
+  inside that folder.
+- `template` replaces the complete convention resource name. It supports
+  `{project}`, `{profile}`, and `{key}` and defaults to
+  `monosecret/{project}/{profile}/{key}`.
+
+### URI examples
+
+```text
+passbolt://
+passbolt://?server=https://pass.example.com
+passbolt://?folder=a9230ec4-5507-4870-b8b5-b3f500587e4c
+passbolt://?template=teams/{project}/{profile}/{key}
+passbolt://?server=https://pass.example.com&folder=a9230ec4-5507-4870-b8b5-b3f500587e4c&template=teams/{project}/{profile}/{key}
+```
+
+### Project configuration
+
+```toml title="monosecret.toml"
+[providers]
+bootstrap = "keyring://"
+
+[providers.passbolt_team]
+uri = "passbolt://?server=https://pass.example.com&folder=a9230ec4-5507-4870-b8b5-b3f500587e4c"
+credentials = { private_key = "bootstrap", passphrase = "bootstrap" }
+
+[profiles.production]
+DATABASE_URL = { description = "Database URL", providers = ["passbolt_team"] }
+API_KEY = { description = "API key", providers = ["passbolt_team"] }
+```
+
+## Storage model
+
+Every convention secret maps to one Passbolt resource:
+
+```text
+resource name: monosecret/{project}/{profile}/{key}
+field:         password
+```
+
+For project `storefront`, profile `production`, and key `DATABASE_URL`, the
+resource is named `monosecret/storefront/production/DATABASE_URL`. Exact-name
+duplicates are rejected as ambiguous; Monosecret never chooses one
+arbitrarily.
+
+A custom `template` may intentionally omit a placeholder, but doing so reduces
+isolation. Omitting `{key}`, for example, makes every declaration in that
+project/profile target the same resource and password field.
+
+## Use existing resources
+
+A secret's [`ref`](/reference/configuration/#secret-references) selects an
+existing Passbolt resource by UUID or exact name. The optional `field` is one
+of `password` (the default), `username`, `uri`, or `description`:
+
+```toml title="monosecret.toml"
+[providers]
+passbolt_team = "passbolt://?server=https://pass.example.com"
+
+[profiles.production]
+STRIPE_SECRET_KEY = {
+  description = "Stripe key",
+  providers = ["passbolt_team"],
+  ref = { item = "a9230ec4-5507-4870-b8b5-b3f500587e4c" }
+}
+SERVICE_USER = {
+  description = "Service account user",
+  providers = ["passbolt_team"],
+  ref = { item = "Payments service account", field = "username" }
+}
+```
+
+UUIDs are recommended because Passbolt permits duplicate names. Reads and
+writes target the existing resource in place. A write through `ref` never
+creates a missing name- or UUID-addressed resource; create and share it in
+Passbolt first.
+
+These coordinates cover the standard fields exposed by `go-passbolt-cli`.
+Passbolt resource types that omit the selected field read as unset, and custom
+resource-type fields are not addressable through this provider.
+
+## Discover declarations
+
+Monosecret 0.2+ can create a manifest from convention resources without
+reading their values:
+
+```bash
+$ monosecret init \
+  --from "passbolt://?server=https://pass.example.com&folder=a9230ec4-5507-4870-b8b5-b3f500587e4c" \
+  --project storefront \
+  --profile production
+```
+
+Discovery requires `?folder=` because the CLI cannot safely scope account-wide
+listings by a resource-name prefix. Monosecret renders the configured `template`
+for that project and profile, lists only that folder, and turns the part
+represented by `{key}` into secret names. The template must contain `{key}`
+exactly once. Nested matches and duplicates are rejected.
+
+## CI/CD
+
+Prefer provider credentials sourced from a CI bootstrap provider. When that is
+not available, inject the inline private key and passphrase through protected
+CI variables:
+
+```bash
+$ export MONOSECRET_PASSBOLT_PRIVATE_KEY="$CI_PASSBOLT_PRIVATE_KEY"
+
+$ export MONOSECRET_PASSBOLT_PASSPHRASE="$CI_PASSBOLT_PASSPHRASE"
+
+$ monosecret run --provider "passbolt://?server=https://pass.example.com" -- ./deploy
+```
+
+Grant the CI identity read access only to the resources it needs. Grant update
+permission only when the job must run `set` or persist generated values.
+
+## Security considerations and limitations
+
+- Provider credentials and inline authentication material are passed through
+  the child environment and are never included in the reported provider URI.
+- `go-passbolt-cli` currently accepts resource values for create/update only as
+  command-line flags. Values written by `monosecret set`, `check`, generation,
+  or import are therefore visible in the `passbolt` child process's argv (for
+  example through `ps` or `/proc/<pid>/cmdline`) until that process exits. Use
+  the provider read-only when this exposure is unacceptable.
+- Empty writes are rejected because the CLI treats empty update fields as a
+  successful no-op.
+- Name lookups list the configured folder, or the accessible account when no
+  folder is configured. Prefer UUID refs and a folder scope in large accounts.
+- A folder limits lookup and creation, but it is not an independent permission
+  boundary. Passbolt evaluates access to an existing item from that resource's
+  permissions, which may differ from the folder's permissions.

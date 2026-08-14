@@ -1,16 +1,13 @@
-//go:build monosecret_static
+//go:build monosecret_static || pkgconfig
 
 package monosecret
 
-// Static binding: cgo links libmonosecret_ffi.a directly into the Go binary, so
-// the Rust resolver is embedded (fully static on Linux/musl with
-// `-ldflags '-linkmode external -extldflags "-static"'`). The archive path and
-// its transitive native deps come from the generated, per-platform
-// cgo_ldflags_<os>_<arch>.go (produced by scripts/stage-staticlib.sh); the header
-// is vendored under include/.
+// Linked binding: cgo links the Rust resolver at build time. The link inputs
+// come from files staged by scripts/stage-staticlib.sh (`-tags monosecret_static`) or from
+// monosecret_ffi.pc (`-tags pkgconfig`). The installed library selected by the
+// latter may be static or shared.
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/include
 #include <stdlib.h>
 #include "monosecret.h"
 */
@@ -18,7 +15,7 @@ import "C"
 
 import "unsafe"
 
-// ensureLoaded is a no-op: the resolver is linked in, nothing to load.
+// ensureLoaded is a no-op: the platform linker loads the resolver.
 func ensureLoaded() error { return nil }
 
 // nativeResolve calls monosecret_resolve and returns the owned response, freeing

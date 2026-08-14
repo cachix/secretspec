@@ -103,6 +103,7 @@ $fields
     ${names.profileEnum}? profile,
     String? provider,
     String? file,
+    String? scope,
     String? reason,
     Iterable<${names.secretEnum}>? include,
 $groupParameter  }) async {
@@ -112,6 +113,7 @@ $groupParameter  }) async {
 $groupArgument      profile: profile?.name,
       provider: provider,
       file: file,
+      scope: scope,
       reason: reason,
     );
 
@@ -150,6 +152,7 @@ String _extensionDeclaration(
     ${names.profileEnum}? profile,
     String? provider,
     String? file,
+    String? scope,
     String? reason,
   }) {
     return get(
@@ -157,6 +160,7 @@ String _extensionDeclaration(
       profile: profile?.name,
       provider: provider,
       file: file,
+      scope: scope,
       reason: reason,
     );
   }
@@ -165,6 +169,7 @@ String _extensionDeclaration(
     ${names.profileEnum}? profile,
     String? provider,
     String? file,
+    String? scope,
     String? reason,
     Iterable<${names.secretEnum}>? include,
 $groupParameter  }) {
@@ -173,6 +178,7 @@ $groupParameter  }) {
       profile: profile,
       provider: provider,
       file: file,
+      scope: scope,
       reason: reason,
       include: include,
 $groupArgument    );

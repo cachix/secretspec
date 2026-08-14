@@ -12,7 +12,14 @@ fn write_config(dir: &TempDir, content: &str) {
 	fs::write(dir.path().join("monosecret.toml"), content).unwrap();
 }
 
+/// Convert backslashes to forward slashes so Windows paths interpolated into
+/// TOML double-quoted strings are not interpreted as escape sequences.
+fn forward_slashes(p: &std::path::Path) -> String {
+	p.display().to_string().replace('\\', "/")
+}
+
 fn base_config(dotenv_path: &str) -> String {
+	let dotenv_path = dotenv_path.replace('\\', "/");
 	format!(
 		r#"
 [project]
@@ -45,7 +52,7 @@ fn run_include_injects_only_selected_secret() {
 		"WEB_TOKEN=web\nWORKER_TOKEN=worker\nSHARED_TOKEN=shared\n",
 	)
 	.unwrap();
-	write_config(&dir, &base_config(&dotenv.display().to_string()));
+	write_config(&dir, &base_config(&forward_slashes(&dotenv)));
 
 	let output = Command::new(bin())
 		.current_dir(dir.path())
@@ -78,7 +85,7 @@ fn run_group_selects_group_union_and_skips_unselected_required() {
 		"WEB_TOKEN=web\nWORKER_TOKEN=worker\nSHARED_TOKEN=shared\n",
 	)
 	.unwrap();
-	write_config(&dir, &base_config(&dotenv.display().to_string()));
+	write_config(&dir, &base_config(&forward_slashes(&dotenv)));
 
 	let output = Command::new(bin())
         .current_dir(dir.path())
@@ -114,7 +121,7 @@ fn run_include_and_group_are_union_and_comma_aware() {
 		"WEB_TOKEN=web\nWORKER_TOKEN=worker\nSHARED_TOKEN=shared\n",
 	)
 	.unwrap();
-	write_config(&dir, &base_config(&dotenv.display().to_string()));
+	write_config(&dir, &base_config(&forward_slashes(&dotenv)));
 
 	let output = Command::new(bin())
 		.current_dir(dir.path())
@@ -193,7 +200,7 @@ OVERRIDE = {{ description = "override", groups = ["web"], providers = ["local"] 
 [profiles.production]
 OVERRIDE = {{ groups = ["worker"] }}
 "#,
-			dotenv.display()
+			forward_slashes(&dotenv)
 		),
 	);
 
@@ -225,7 +232,7 @@ fn missing_group_filter_errors() {
 	let dir = TempDir::new().unwrap();
 	let dotenv = dir.path().join(".env");
 	fs::write(&dotenv, "WEB_TOKEN=web\n").unwrap();
-	write_config(&dir, &base_config(&dotenv.display().to_string()));
+	write_config(&dir, &base_config(&forward_slashes(&dotenv)));
 
 	let output = Command::new(bin())
 		.current_dir(dir.path())
@@ -255,7 +262,7 @@ fn no_filters_injects_all_defined_secrets() {
 		"WEB_TOKEN=web\nWORKER_TOKEN=worker\nSHARED_TOKEN=shared\nMISSING_REQUIRED=present\n",
 	)
 	.unwrap();
-	write_config(&dir, &base_config(&dotenv.display().to_string()));
+	write_config(&dir, &base_config(&forward_slashes(&dotenv)));
 
 	let output = run_capture(
 		&dir,
@@ -288,7 +295,7 @@ fn repeated_include_and_group_flags_are_union_based() {
 		"WEB_TOKEN=web\nWORKER_TOKEN=worker\nSHARED_TOKEN=shared\n",
 	)
 	.unwrap();
-	write_config(&dir, &base_config(&dotenv.display().to_string()));
+	write_config(&dir, &base_config(&forward_slashes(&dotenv)));
 
 	let output = run_capture(
 		&dir,
@@ -329,7 +336,7 @@ fn group_flag_accepts_comma_separated_values() {
 		"WEB_TOKEN=web\nWORKER_TOKEN=worker\nSHARED_TOKEN=shared\n",
 	)
 	.unwrap();
-	write_config(&dir, &base_config(&dotenv.display().to_string()));
+	write_config(&dir, &base_config(&forward_slashes(&dotenv)));
 
 	let output = run_capture(
 		&dir,
@@ -357,7 +364,7 @@ fn include_unknown_secret_errors_before_running_command() {
 	let dir = TempDir::new().unwrap();
 	let dotenv = dir.path().join(".env");
 	fs::write(&dotenv, "WEB_TOKEN=web\n").unwrap();
-	write_config(&dir, &base_config(&dotenv.display().to_string()));
+	write_config(&dir, &base_config(&forward_slashes(&dotenv)));
 
 	let output = run_capture(
 		&dir,
@@ -429,7 +436,7 @@ local = "dotenv://{}"
 OPTIONAL_TOKEN = {{ description = "optional", required = false, groups = ["optional"], providers = ["local"] }}
 REQUIRED_TOKEN = {{ description = "required", providers = ["local"] }}
 "#,
-			dotenv.display()
+			forward_slashes(&dotenv)
 		),
 	);
 
@@ -476,8 +483,8 @@ broken = "dotenv://{}"
 WEB_TOKEN = {{ description = "web", providers = ["local"] }}
 BROKEN_TOKEN = {{ description = "broken", providers = ["broken"] }}
 "#,
-			dotenv.display(),
-			missing.display()
+			forward_slashes(&dotenv),
+			forward_slashes(&missing)
 		),
 	);
 
@@ -530,8 +537,8 @@ as = "UPSTREAM_TOKEN"
 APP_SECRET = {{ description = "app", providers = ["needs_dep"] }}
 PROVIDER_TOKEN = {{ description = "provider auth", providers = ["bootstrap"] }}
 "#,
-			auth = auth_dotenv.display(),
-			app = app_dotenv.display()
+			auth = forward_slashes(&auth_dotenv),
+			app = forward_slashes(&app_dotenv)
 		),
 	);
 
@@ -584,8 +591,8 @@ as = "UPSTREAM_TOKEN"
 APP_SECRET = {{ description = "app", providers = ["needs_dep"] }}
 PROVIDER_TOKEN = {{ description = "provider auth", providers = ["bootstrap"] }}
 "#,
-			auth = auth_dotenv.display(),
-			app = app_dotenv.display()
+			auth = forward_slashes(&auth_dotenv),
+			app = forward_slashes(&app_dotenv)
 		),
 	);
 
@@ -655,7 +662,7 @@ local = "dotenv://{}"
 [profiles.default]
 CHILD_TOKEN = {{ description = "child", groups = ["child"], providers = ["local"] }}
 "#,
-			dotenv.display()
+			forward_slashes(&dotenv)
 		),
 	);
 
@@ -688,7 +695,11 @@ fn config_init_from_dotenv_keeps_group_declarations_empty() {
 
 	let output = run_capture(
 		&dir,
-		&["init", "--from", &format!("dotenv://{}", dotenv.display())],
+		&[
+			"init",
+			"--from",
+			&format!("dotenv://{}", forward_slashes(&dotenv)),
+		],
 	);
 
 	assert!(
@@ -752,7 +763,7 @@ providers = ["local"]
 [profiles.staging]
 TOKEN = {{ description = "staging token" }}
 "#,
-			dotenv.display()
+			forward_slashes(&dotenv)
 		),
 	);
 

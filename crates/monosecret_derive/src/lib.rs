@@ -1,5 +1,3 @@
-#![allow(clippy::indexing_slicing)]
-
 //! # Monosecret Derive Macros
 //!
 //! This crate provides procedural macros for the Monosecret library, enabling compile-time
@@ -25,7 +23,10 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 use monosecret::Config;
-use monosecret::Secret;
+use monosecret::codegen::CodegenIr;
+use monosecret::codegen::IrField;
+use monosecret::codegen::build_ir;
+use monosecret::codegen::capitalize;
 use proc_macro::TokenStream;
 use quote::format_ident;
 use quote::quote;
@@ -41,8 +42,8 @@ use syn::parse_macro_input;
 ///
 /// # Fields
 ///
-/// * `name` - The original secret name (e.g., "`DATABASE_URL`")
-/// * `field_type` - The Rust type for this field (String, `PathBuf`, or Option variants)
+/// * `name` - The original secret name (e.g., "DATABASE_URL")
+/// * `field_type` - The Rust type for this field (String, PathBuf, or Option variants)
 /// * `is_optional` - Whether this field is optional across all profiles
 /// * `as_path` - Whether this field represents a path to a temporary file
 #[derive(Clone)]
@@ -54,12 +55,12 @@ struct FieldInfo {
 }
 
 impl FieldInfo {
-	/// Creates a new `FieldInfo` instance.
+	/// Creates a new FieldInfo instance.
 	///
 	/// # Arguments
 	///
 	/// * `name` - The secret name as defined in the config
-	/// * `field_type` - The generated Rust type (String, `PathBuf`, or Option variants)
+	/// * `field_type` - The generated Rust type (String, PathBuf, or Option variants)
 	/// * `is_optional` - Whether the field should be optional
 	/// * `as_path` - Whether this field represents a path to a temporary file
 	fn new(
@@ -76,6 +77,17 @@ impl FieldInfo {
 		}
 	}
 
+	/// Build a `FieldInfo` from a shared-IR field. The IR is the single source
+	/// of the optionality/as_path decisions; this only maps them to a Rust type.
+	fn from_ir(field: &IrField) -> Self {
+		Self::new(
+			field.name.clone(),
+			ir_field_type(field),
+			field.optional,
+			field.as_path,
+		)
+	}
+
 	/// Get the field name as a Rust identifier.
 	///
 	/// Converts the secret name to a valid Rust field name by:
@@ -84,8 +96,8 @@ impl FieldInfo {
 	///
 	/// # Example
 	///
-	/// - "`DATABASE_URL`" becomes `database_url`
-	/// - "`API_KEY`" becomes `api_key`
+	/// - "DATABASE_URL" becomes `database_url`
+	/// - "API_KEY" becomes `api_key`
 	fn field_name(&self) -> proc_macro2::Ident {
 		field_name_ident(&self.name)
 	}
@@ -112,7 +124,7 @@ impl FieldInfo {
 
 	/// Generate a field assignment from a secrets map.
 	///
-	/// Creates code to assign a value from a `HashMap`<String, String> to this field.
+	/// Creates code to assign a value from a HashMap<String, String> to this field.
 	/// Handles both required and optional fields appropriately.
 	///
 	/// # Arguments
@@ -122,7 +134,7 @@ impl FieldInfo {
 	/// # Returns
 	///
 	/// Token stream for the field assignment, with proper error handling for required fields
-	fn generate_assignment(&self, source: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+	fn generate_assignment(&self, source: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
 		generate_secret_assignment(
 			&self.field_name(),
 			&self.name,
@@ -136,7 +148,7 @@ impl FieldInfo {
 	///
 	/// Creates code to set an environment variable from this field's value.
 	/// For optional fields, only sets the variable if a value is present.
-	/// For `PathBuf` fields, converts to string using `to_string_lossy()`.
+	/// For PathBuf fields, converts to string using to_string_lossy().
 	///
 	/// # Safety
 	///
@@ -207,7 +219,7 @@ struct ProfileVariant {
 }
 
 impl ProfileVariant {
-	/// Creates a new `ProfileVariant` with automatic capitalization.
+	/// Creates a new ProfileVariant with automatic capitalization.
 	///
 	/// # Arguments
 	///
@@ -221,7 +233,7 @@ impl ProfileVariant {
 	/// // variant.capitalized == "Production"
 	/// ```
 	fn new(name: String) -> Self {
-		let capitalized = capitalize_first(&name);
+		let capitalized = capitalize(&name);
 		Self { name, capitalized }
 	}
 
@@ -229,7 +241,7 @@ impl ProfileVariant {
 	///
 	/// # Returns
 	///
-	/// A `proc_macro2::Ident` suitable for use as an enum variant
+	/// A proc_macro2::Ident suitable for use as an enum variant
 	fn as_ident(&self) -> proc_macro2::Ident {
 		format_ident!("{}", self.capitalized)
 	}
@@ -278,7 +290,7 @@ pub fn declare_secrets(input: TokenStream) -> TokenStream {
 	let config: Config = match Config::try_from(full_path.as_path()) {
 		Ok(config) => config,
 		Err(e) => {
-			let error = format!("Failed to parse TOML: {e}");
+			let error = format!("Failed to parse TOML: {}", e);
 			return quote! { compile_error!(#error); }.into();
 		}
 	};
@@ -293,7 +305,7 @@ pub fn declare_secrets(input: TokenStream) -> TokenStream {
 	}
 
 	// Generate all the code
-	let output = generate_secret_spec_code(&config);
+	let output = generate_secret_spec_code(config);
 	output.into()
 }
 
@@ -352,7 +364,7 @@ fn validate_config_for_codegen(config: &Config) -> Result<(), Vec<String>> {
 ///
 /// - Secret names with invalid characters (e.g., "my-secret" with hyphen)
 /// - Secret names that are Rust keywords (e.g., "TYPE", "IMPL")
-/// - Multiple secrets producing the same field name (e.g., "`API_KEY`" and "`api_key`")
+/// - Multiple secrets producing the same field name (e.g., "API_KEY" and "api_key")
 fn validate_rust_identifiers(config: &Config, errors: &mut Vec<String>) {
 	let rust_keywords = [
 		"as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
@@ -371,21 +383,24 @@ fn validate_rust_identifiers(config: &Config, errors: &mut Vec<String>) {
 			// Check if it produces a valid Rust identifier
 			if !is_valid_rust_identifier(&field_name) {
 				errors.push(format!(
-					"Secret '{secret_name}' in profile '{profile_name}' produces invalid Rust field name '{field_name}'"
+					"Secret '{}' in profile '{}' produces invalid Rust field name '{}'",
+					secret_name, profile_name, field_name
 				));
 			}
 
 			// Check for Rust keywords
 			if rust_keywords.contains(&field_name.as_str()) {
 				errors.push(format!(
-					"Secret '{secret_name}' in profile '{profile_name}' produces Rust keyword '{field_name}' as field name"
+					"Secret '{}' in profile '{}' produces Rust keyword '{}' as field name",
+					secret_name, profile_name, field_name
 				));
 			}
 
 			// Check for duplicate field names within the same profile
 			if !profile_field_names.insert(field_name.clone()) {
 				errors.push(format!(
-                    "Profile '{profile_name}' has multiple secrets that produce the same field name '{field_name}' (names are case-insensitive)"
+                    "Profile '{}' has multiple secrets that produce the same field name '{}' (names are case-insensitive)",
+                    profile_name, field_name
                 ));
 			}
 		}
@@ -448,10 +463,11 @@ fn is_valid_rust_identifier(s: &str) -> bool {
 /// - Profile names with invalid characters (e.g., "prod-env")
 fn validate_profile_identifiers(config: &Config, errors: &mut Vec<String>) {
 	for profile_name in config.profiles.keys() {
-		let variant_name = capitalize_first(profile_name);
+		let variant_name = capitalize(profile_name);
 		if !is_valid_rust_identifier(&variant_name) {
 			errors.push(format!(
-				"Profile '{profile_name}' produces invalid Rust enum variant '{variant_name}'"
+				"Profile '{}' produces invalid Rust enum variant '{}'",
+				profile_name, variant_name
 			));
 		}
 	}
@@ -469,7 +485,7 @@ fn validate_profile_identifiers(config: &Config, errors: &mut Vec<String>) {
 ///
 /// # Returns
 ///
-/// A `proc_macro2::Ident` suitable for use as a struct field
+/// A proc_macro2::Ident suitable for use as a struct field
 ///
 /// # Example
 ///
@@ -481,83 +497,20 @@ fn field_name_ident(name: &str) -> proc_macro2::Ident {
 	format_ident!("{}", name.to_lowercase())
 }
 
-/// Helper function to check if a secret is optional.
+/// Map a shared-IR field's optionality and path-ness to its Rust type.
 ///
-/// A secret is considered optional only if:
-/// - It has `required = false` in the config
-///
-/// Having a default value does not make a secret optional.
-///
-/// # Arguments
-///
-/// * `secret_config` - The secret's configuration
-///
-/// # Returns
-///
-/// `true` if the secret is optional, `false` if required
-fn is_secret_optional(secret_config: &Secret) -> bool {
-	secret_config.required != Some(true)
-}
-
-/// Determines if a field should be optional across all profiles.
-///
-/// For the union struct (Monosecret), a field is optional if it's optional
-/// in ANY profile or missing from ANY profile. This ensures the union type
-/// can safely represent secrets from any profile.
-///
-/// # Arguments
-///
-/// * `secret_name` - The name of the secret to check
-/// * `config` - The project configuration
-///
-/// # Returns
-///
-/// `true` if the field should be Option<String> in the union struct
-///
-/// # Logic
-///
-/// - If the secret is missing from any profile → optional
-/// - If the secret is optional in any profile → optional
-/// - Only if required in ALL profiles → not optional
-fn is_field_optional_across_profiles(secret_name: &str, config: &Config) -> bool {
-	// Check each profile
-	for profile_config in config.profiles.values() {
-		if let Some(secret_config) = profile_config.secrets.get(secret_name) {
-			if is_secret_optional(secret_config) {
-				return true;
-			}
-		} else {
-			// Secret doesn't exist in this profile, so it's optional
-			return true;
-		}
+/// This is the only typing decision the derive macro still makes locally; the
+/// underlying optional/as_path facts come from [`monosecret::codegen`].
+fn ir_field_type(field: &IrField) -> proc_macro2::TokenStream {
+	match (field.optional, field.as_path) {
+		(true, true) => quote! { Option<std::path::PathBuf> },
+		(true, false) => quote! { Option<String> },
+		(false, true) => quote! { std::path::PathBuf },
+		(false, false) => quote! { String },
 	}
-	false
 }
 
-/// Check if a field should be represented as a path across all profiles.
-///
-/// A field is considered `as_path` if any profile defines it with `as_path = true`.
-///
-/// # Arguments
-///
-/// * `secret_name` - The name of the secret to check
-/// * `config` - The configuration to analyze
-///
-/// # Returns
-///
-/// `true` if any profile has this secret with `as_path = true`, `false` otherwise
-fn is_field_as_path(secret_name: &str, config: &Config) -> bool {
-	for profile_config in config.profiles.values() {
-		if let Some(secret_config) = profile_config.secrets.get(secret_name)
-			&& secret_config.as_path == Some(true)
-		{
-			return true;
-		}
-	}
-	false
-}
-
-/// Generate a unified secret assignment from a `HashMap`.
+/// Generate a unified secret assignment from a HashMap.
 ///
 /// Creates the code to assign a value from a secrets map to a struct field,
 /// with appropriate error handling based on whether the field is optional.
@@ -568,7 +521,7 @@ fn is_field_as_path(secret_name: &str, config: &Config) -> bool {
 /// * `secret_name` - The key to look up in the map
 /// * `source` - Token stream representing the source map
 /// * `is_optional` - Whether to generate Option<T> or T assignment
-/// * `as_path` - Whether to generate `PathBuf` or String
+/// * `as_path` - Whether to generate PathBuf or String
 ///
 /// # Generated Code
 ///
@@ -579,7 +532,7 @@ fn is_field_as_path(secret_name: &str, config: &Config) -> bool {
 ///     .expose_secret().to_string()
 /// ```
 ///
-/// For required `PathBuf` fields:
+/// For required PathBuf fields:
 /// ```ignore
 /// field_name: std::path::PathBuf::from(source.get("SECRET_NAME")
 ///     .ok_or_else(|| MonosecretError::RequiredSecretMissing("SECRET_NAME".to_string()))?
@@ -594,7 +547,7 @@ fn is_field_as_path(secret_name: &str, config: &Config) -> bool {
 fn generate_secret_assignment(
 	field_name: &proc_macro2::Ident,
 	secret_name: &str,
-	source: &proc_macro2::TokenStream,
+	source: proc_macro2::TokenStream,
 	is_optional: bool,
 	as_path: bool,
 ) -> proc_macro2::TokenStream {
@@ -633,78 +586,27 @@ fn generate_secret_assignment(
 	}
 }
 
-/// Analyzes all profiles to determine field types for the union struct.
+/// Build the union struct's fields from the shared IR.
 ///
-/// This function examines all secrets across all profiles to determine:
-/// - Which secrets exist across profiles
-/// - Whether each secret should be optional in the union type
-/// - The appropriate Rust type for each field
-///
-/// # Arguments
-///
-/// * `config` - The project configuration
-///
-/// # Returns
-///
-/// A `BTreeMap` (for consistent ordering) mapping secret names to their `FieldInfo`
-///
-/// # Algorithm
-///
-/// 1. Collect all unique secret names from all profiles
-/// 2. For each secret, determine if it's optional across profiles
-/// 3. Generate appropriate type (String or Option<String>)
-/// 4. Create `FieldInfo` with all metadata needed for code generation
-fn analyze_field_types(config: &Config) -> BTreeMap<String, FieldInfo> {
-	let mut field_info = BTreeMap::new();
-
-	// Collect all unique secrets across all profiles
-	for profile_config in config.profiles.values() {
-		for secret_name in profile_config.secrets.keys() {
-			field_info.entry(secret_name.clone()).or_insert_with(|| {
-				let is_optional = is_field_optional_across_profiles(secret_name, config);
-				let as_path = is_field_as_path(secret_name, config);
-				let field_type = match (is_optional, as_path) {
-					(true, true) => quote! { Option<std::path::PathBuf> },
-					(true, false) => quote! { Option<String> },
-					(false, true) => quote! { std::path::PathBuf },
-					(false, false) => quote! { String },
-				};
-				FieldInfo::new(secret_name.clone(), field_type, is_optional, as_path)
-			});
-		}
-	}
-
-	field_info
+/// The IR already determined the union field set and each field's
+/// optionality/as_path; this just maps them to `FieldInfo`, keyed and ordered
+/// by name (the IR union is pre-sorted).
+fn union_field_info(ir: &CodegenIr) -> BTreeMap<String, FieldInfo> {
+	ir.union
+		.iter()
+		.map(|field| (field.name.clone(), FieldInfo::from_ir(field)))
+		.collect()
 }
 
-/// Get normalized profile variants for enum generation.
+/// Profile variants for enum generation, taken from the shared IR.
 ///
-/// Converts profile names into `ProfileVariant` structs, handling the special
-/// case of empty profiles (generates a "Default" variant).
-///
-/// # Arguments
-///
-/// * `profiles` - Set of profile names from the configuration
-///
-/// # Returns
-///
-/// A sorted vector of `ProfileVariant` structs
-///
-/// # Special Cases
-///
-/// - Empty profiles → returns vec![ProfileVariant("default", "Default")]
-/// - Otherwise → sorted list of profile variants
-fn get_profile_variants(profiles: &HashSet<String>) -> Vec<ProfileVariant> {
-	if profiles.is_empty() {
-		vec![ProfileVariant::new("default".to_string())]
-	} else {
-		let mut variants: Vec<_> = profiles
-			.iter()
-			.map(|name| ProfileVariant::new(name.clone()))
-			.collect();
-		variants.sort_by(|a, b| a.name.cmp(&b.name));
-		variants
-	}
+/// The IR's profile list is already sorted and already substitutes a single
+/// `default` profile when the manifest declares none, so this is a direct map.
+fn profile_variants_from_ir(ir: &CodegenIr) -> Vec<ProfileVariant> {
+	ir.profiles
+		.iter()
+		.map(|name| ProfileVariant::new(name.clone()))
+		.collect()
 }
 
 // ===== Profile Generation Module =====
@@ -713,8 +615,8 @@ fn get_profile_variants(profiles: &HashSet<String>) -> Vec<ProfileVariant> {
 ///
 /// This module handles:
 /// - Profile enum definition
-/// - `TryFrom` implementations for string conversion
-/// - `as_str()` method for profile serialization
+/// - TryFrom implementations for string conversion
+/// - as_str() method for profile serialization
 mod profile_generation {
 	use super::*;
 
@@ -750,7 +652,7 @@ mod profile_generation {
 		}
 	}
 
-	/// Generate `TryFrom` implementations for Profile.
+	/// Generate TryFrom implementations for Profile.
 	///
 	/// Creates implementations to convert strings to Profile enum variants,
 	/// supporting both &str and String inputs.
@@ -793,7 +695,7 @@ mod profile_generation {
 		}
 	}
 
-	/// Generate `as_str` implementation for Profile.
+	/// Generate as_str implementation for Profile.
 	///
 	/// Creates a method to convert Profile enum variants back to their string representation.
 	///
@@ -843,8 +745,8 @@ mod profile_generation {
 	///
 	/// Complete token stream containing:
 	/// - Profile enum definition
-	/// - `TryFrom` implementations
-	/// - `as_str()` method
+	/// - TryFrom implementations
+	/// - as_str() method
 	pub fn generate_all(variants: &[ProfileVariant]) -> proc_macro2::TokenStream {
 		let enum_def = generate_enum(variants);
 		let try_from_impls = generate_try_from_impls(variants);
@@ -864,7 +766,7 @@ mod profile_generation {
 ///
 /// This module handles:
 /// - Monosecret struct (union of all secrets)
-/// - `MonosecretProfile` enum (profile-specific types)
+/// - MonosecretProfile enum (profile-specific types)
 /// - Loading implementations
 /// - Environment variable integration
 mod secret_spec_generation {
@@ -890,10 +792,9 @@ mod secret_spec_generation {
 	/// }
 	/// ```
 	pub fn generate_struct(field_info: &BTreeMap<String, FieldInfo>) -> proc_macro2::TokenStream {
-		let fields = field_info.values().map(FieldInfo::generate_struct_field);
+		let fields = field_info.values().map(|info| info.generate_struct_field());
 
 		quote! {
-			#[allow(clippy::unsafe_derive_deserialize)]
 			#[derive(Debug, serde::Serialize, serde::Deserialize)]
 			pub struct Monosecret {
 				#(#fields,)*
@@ -901,7 +802,7 @@ mod secret_spec_generation {
 		}
 	}
 
-	/// Generate the `MonosecretProfile` enum.
+	/// Generate the MonosecretProfile enum.
 	///
 	/// Creates an enum where each variant contains only the secrets defined
 	/// for that specific profile. This provides stronger type safety when
@@ -931,7 +832,6 @@ mod secret_spec_generation {
 		profile_variants: &[proc_macro2::TokenStream],
 	) -> proc_macro2::TokenStream {
 		quote! {
-			#[allow(clippy::unsafe_derive_deserialize)]
 			#[derive(Debug, serde::Serialize, serde::Deserialize)]
 			pub enum MonosecretProfile {
 				#(#profile_variants,)*
@@ -939,9 +839,9 @@ mod secret_spec_generation {
 		}
 	}
 
-	/// Generate `MonosecretProfile` enum variants.
+	/// Generate MonosecretProfile enum variants.
 	///
-	/// Creates the individual variants for the `MonosecretProfile` enum,
+	/// Creates the individual variants for the MonosecretProfile enum,
 	/// each containing only the fields defined for that profile.
 	///
 	/// # Arguments
@@ -958,57 +858,33 @@ mod secret_spec_generation {
 	///
 	/// - Empty profiles → generates a Default variant with all fields
 	/// - Each profile → generates variant with profile-specific fields
-	pub fn generate_profile_enum_variants(
-		config: &Config,
-		field_info: &BTreeMap<String, FieldInfo>,
-		variants: &[ProfileVariant],
-	) -> Vec<proc_macro2::TokenStream> {
-		if config.profiles.is_empty() {
-			// If no profiles, create a Default variant with all fields
-			let fields = field_info.values().map(FieldInfo::generate_struct_field);
-			vec![quote! {
-				Default {
-					#(#fields,)*
+	pub fn generate_profile_enum_variants(ir: &CodegenIr) -> Vec<proc_macro2::TokenStream> {
+		// The IR's per-profile field sets already handle the empty-profiles case
+		// (a single `default` profile carrying the union), so there is no special
+		// branch here: one variant per IR profile, with that profile's exact
+		// (raw, non-merged) fields.
+		ir.profile_fields
+			.iter()
+			.map(|profile| {
+				let variant_ident = ProfileVariant::new(profile.name.clone()).as_ident();
+				let fields = profile.fields.iter().map(|field| {
+					let field_name = field_name_ident(&field.name);
+					let field_type = ir_field_type(field);
+					quote! { #field_name: #field_type }
+				});
+				quote! {
+					#variant_ident {
+						#(#fields,)*
+					}
 				}
-			}]
-		} else {
-			variants
-				.iter()
-				.filter_map(|variant| {
-					config.profiles.get(&variant.name).map(|profile_config| {
-						let variant_ident = variant.as_ident();
-						let fields =
-							profile_config
-								.secrets
-								.iter()
-								.map(|(secret_name, secret_config)| {
-									let field_name = field_name_ident(secret_name);
-									let is_optional = is_secret_optional(secret_config);
-									let as_path = secret_config.as_path.unwrap_or(false);
-									let field_type = match (is_optional, as_path) {
-										(true, true) => quote! { Option<std::path::PathBuf> },
-										(true, false) => quote! { Option<String> },
-										(false, true) => quote! { std::path::PathBuf },
-										(false, false) => quote! { String },
-									};
-									quote! { #field_name: #field_type }
-								});
-
-						quote! {
-							#variant_ident {
-								#(#fields,)*
-							}
-						}
-					})
-				})
-				.collect()
-		}
+			})
+			.collect()
 	}
 
-	/// Generate `load_profile` match arms.
+	/// Generate load_profile match arms.
 	///
 	/// Creates the match arms for loading profile-specific secrets into
-	/// the appropriate `MonosecretProfile` variant.
+	/// the appropriate MonosecretProfile variant.
 	///
 	/// # Arguments
 	///
@@ -1030,58 +906,35 @@ mod secret_spec_generation {
 	///     api_key: secrets.get("API_KEY").cloned(),
 	/// })
 	/// ```
-	pub fn generate_load_profile_arms(
-		config: &Config,
-		field_info: &BTreeMap<String, FieldInfo>,
-		variants: &[ProfileVariant],
-	) -> Vec<proc_macro2::TokenStream> {
-		if config.profiles.is_empty() {
-			// Handle Default profile
-			let assignments = field_info
-				.values()
-				.map(|info| info.generate_assignment(&quote! { secrets }));
-
-			vec![quote! {
-				Profile::Default => Ok(MonosecretProfile::Default {
-					#(#assignments,)*
-				})
-			}]
-		} else {
-			variants
-				.iter()
-				.filter_map(|variant| {
-					config.profiles.get(&variant.name).map(|profile_config| {
-						let variant_ident = variant.as_ident();
-						let assignments =
-							profile_config
-								.secrets
-								.iter()
-								.map(|(secret_name, secret_config)| {
-									let field_name = field_name_ident(secret_name);
-									generate_secret_assignment(
-										&field_name,
-										secret_name,
-										&quote! { secrets },
-										is_secret_optional(secret_config),
-										secret_config.as_path.unwrap_or(false),
-									)
-								});
-
-						quote! {
-							Profile::#variant_ident => Ok(MonosecretProfile::#variant_ident {
-								#(#assignments,)*
-							})
-						}
+	pub fn generate_load_profile_arms(ir: &CodegenIr) -> Vec<proc_macro2::TokenStream> {
+		// One arm per IR profile, assigning that profile's exact fields. The
+		// empty-profiles case is already a single `default` profile in the IR.
+		ir.profile_fields
+			.iter()
+			.map(|profile| {
+				let variant_ident = ProfileVariant::new(profile.name.clone()).as_ident();
+				let assignments = profile.fields.iter().map(|field| {
+					generate_secret_assignment(
+						&field_name_ident(&field.name),
+						&field.name,
+						quote! { secrets },
+						field.optional,
+						field.as_path,
+					)
+				});
+				quote! {
+					Profile::#variant_ident => Ok(MonosecretProfile::#variant_ident {
+						#(#assignments,)*
 					})
-				})
-				.collect()
-		}
+				}
+			})
+			.collect()
 	}
 
-	/// Generate the shared `load_internal` implementation.
+	/// Generate the shared load_internal implementation.
 	///
 	/// Creates a helper function that handles the common loading logic
-	/// for both Monosecret and `MonosecretProfile` loading methods.
+	/// for both Monosecret and MonosecretProfile loading methods.
 	///
 	/// # Generated Function
 	///
@@ -1094,18 +947,37 @@ mod secret_spec_generation {
 			fn load_internal(
 				provider_str: Option<String>,
 				profile_str: Option<String>,
+				reason: Option<String>,
 			) -> Result<monosecret::ValidatedSecrets, monosecret::MonosecretError> {
 				let mut spec = monosecret::Secrets::load()?;
+				// A typed loader expects the full generated struct shape, so an
+				// ambient `MONOSECRET_SCOPE` must not silently narrow it below that
+				// shape (which would surface as a spurious `RequiredSecretMissing`).
+				// The untyped CLI/SDK paths keep honoring the env scope.
+				spec.set_ignore_ambient_scope(true);
 				if let Some(provider) = provider_str {
 					spec.set_provider(provider);
 				}
 				if let Some(profile) = profile_str {
 					spec.set_profile(profile);
 				}
+				// Apply an explicit builder reason on top of any MONOSECRET_REASON
+				// already resolved by `Secrets::load`. Required to satisfy the
+				// `require_reason` policy (default "agents") from typed SDK code,
+				// which otherwise has no way to supply a reason. A blank reason is
+				// ignored by `with_reason`, leaving the env-resolved value intact.
+				if let Some(reason) = reason {
+					spec = spec.with_reason(reason);
+				}
 				match spec.validate()? {
 					Ok(valid_secrets) => Ok(valid_secrets),
-					Err(validation_errors) => Err(monosecret::MonosecretError::RequiredSecretMissing(
-						validation_errors.missing_required.join(", ")
+					Err(validation_errors) if validation_errors.constraint_violations.is_empty() => {
+						Err(monosecret::MonosecretError::RequiredSecretMissing(
+							validation_errors.missing_required.join(", ")
+						))
+					}
+					Err(validation_errors) => Err(monosecret::MonosecretError::ValidationFailed(
+						Box::new(validation_errors)
 					))
 				}
 			}
@@ -1115,9 +987,9 @@ mod secret_spec_generation {
 	/// Generate Monosecret implementation.
 	///
 	/// Creates the impl block for Monosecret with:
-	/// - `builder()` method for creating a builder
-	/// - `load()` method for loading with union types
-	/// - `set_as_env_vars()` method for environment variable integration
+	/// - builder() method for creating a builder
+	/// - load() method for loading with union types
+	/// - set_as_env_vars() method for environment variable integration
 	///
 	/// # Arguments
 	///
@@ -1127,12 +999,12 @@ mod secret_spec_generation {
 	///
 	/// # Generated Methods
 	///
-	/// - `builder()` - Creates a new `MonosecretBuilder`
+	/// - `builder()` - Creates a new MonosecretBuilder
 	/// - `load()` - Loads secrets with optional provider/profile
 	/// - `set_as_env_vars()` - Sets all secrets as environment variables
 	pub fn generate_impl(
 		load_assignments: &[proc_macro2::TokenStream],
-		env_setters: &[proc_macro2::TokenStream],
+		env_setters: Vec<proc_macro2::TokenStream>,
 		_field_info: &BTreeMap<String, FieldInfo>,
 	) -> proc_macro2::TokenStream {
 		quote! {
@@ -1158,20 +1030,19 @@ mod secret_spec_generation {
 						None => std::env::var("MONOSECRET_PROFILE").ok(),
 					};
 
-					let validation_result = load_internal(provider_str, profile_str)?;
-					let provider_name = validation_result.resolved.provider.clone();
-					let profile = validation_result.resolved.profile.clone();
-					let secrets = validation_result.resolved.secrets;
+					// The static `load` has no reason parameter; a reason is supplied
+					// via the MONOSECRET_REASON env var (honored by `Secrets::load`)
+					// or through `Monosecret::builder().with_reason(...)`.
+					let validation_result = load_internal(provider_str, profile_str, None)?;
 
-					let data = Self {
-						#(#load_assignments,)*
+					let data = {
+						let secrets = &validation_result.resolved.secrets;
+						Self {
+							#(#load_assignments,)*
+						}
 					};
 
-					Ok(monosecret::Resolved::new(
-						data,
-						provider_name,
-						profile
-					))
+					Ok(validation_result.into_resolved(data))
 				}
 
 				pub fn set_as_env_vars(&self) {
@@ -1205,6 +1076,7 @@ mod builder_generation {
 	/// pub struct MonosecretBuilder {
 	///     provider: Option<Box<dyn FnOnce() -> Result<Box<dyn monosecret::Provider>, String>>>,
 	///     profile: Option<Box<dyn FnOnce() -> Result<Profile, String>>>,
+	///     reason: Option<String>,
 	/// }
 	/// ```
 	pub fn generate_struct() -> proc_macro2::TokenStream {
@@ -1212,6 +1084,7 @@ mod builder_generation {
 			pub struct MonosecretBuilder {
 				provider: Option<Box<dyn FnOnce() -> Result<Box<dyn monosecret::Provider>, String>>>,
 				profile: Option<Box<dyn FnOnce() -> Result<Profile, String>>>,
+				reason: Option<String>,
 			}
 		}
 	}
@@ -1220,13 +1093,13 @@ mod builder_generation {
 	///
 	/// Creates the foundational builder methods:
 	/// - Default implementation
-	/// - `new()` constructor
-	/// - `with_provider()` for setting provider
-	/// - `with_profile()` for setting profile
+	/// - new() constructor
+	/// - with_provider() for setting provider
+	/// - with_profile() for setting profile
 	///
 	/// # Type Flexibility
 	///
-	/// Both `with_provider` and `with_profile` accept anything that can be
+	/// Both with_provider and with_profile accept anything that can be
 	/// converted to the target type (Uri or Profile), providing flexibility:
 	///
 	/// ```ignore
@@ -1248,7 +1121,23 @@ mod builder_generation {
 					Self {
 						provider: None,
 						profile: None,
+						reason: None,
 					}
+				}
+
+				/// Set a human-readable reason for this session's secret access.
+				///
+				/// Required to satisfy the project's `require_reason` policy
+				/// (`[project].require_reason` in monosecret.toml, default `"agents"`)
+				/// when loading from agent contexts, and recorded in the audit log.
+				/// Mirrors the CLI `--reason` flag and `Secrets::with_reason`. A blank
+				/// reason is ignored, falling back to the `MONOSECRET_REASON` env var.
+				pub fn with_reason<T>(mut self, reason: T) -> Self
+				where
+					T: Into<String>,
+				{
+					self.reason = Some(reason.into());
+					self
 				}
 
 				pub fn with_provider<T>(mut self, provider: T) -> Self
@@ -1294,10 +1183,10 @@ mod builder_generation {
 	/// # Generated Logic
 	///
 	/// 1. If provider is set, call the closure to get the Provider instance
-	/// 2. Convert any errors to `MonosecretError`
+	/// 2. Convert any errors to MonosecretError
 	/// 3. Extract the provider name to pass to the loading system
 	fn generate_provider_resolution(
-		provider_expr: &proc_macro2::TokenStream,
+		provider_expr: proc_macro2::TokenStream,
 	) -> proc_macro2::TokenStream {
 		quote! {
 			let provider_str = if let Some(provider_fn) = #provider_expr {
@@ -1322,10 +1211,10 @@ mod builder_generation {
 	/// # Generated Logic
 	///
 	/// 1. If profile is set, call the closure to get the Profile
-	/// 2. Convert any errors to `MonosecretError`
+	/// 2. Convert any errors to MonosecretError
 	/// 3. Convert Profile to string for the loading system
 	fn generate_profile_resolution(
-		profile_expr: &proc_macro2::TokenStream,
+		profile_expr: proc_macro2::TokenStream,
 	) -> proc_macro2::TokenStream {
 		quote! {
 			let profile_str = if let Some(profile_fn) = #profile_expr {
@@ -1342,7 +1231,7 @@ mod builder_generation {
 	///
 	/// Creates two loading methods:
 	/// - `load()` - Returns Monosecret (union type)
-	/// - `load_profile()` - Returns `MonosecretProfile` (profile-specific type)
+	/// - `load_profile()` - Returns MonosecretProfile (profile-specific type)
 	///
 	/// # Arguments
 	///
@@ -1359,44 +1248,48 @@ mod builder_generation {
 		load_profile_arms: &[proc_macro2::TokenStream],
 		first_profile_variant: &proc_macro2::Ident,
 	) -> proc_macro2::TokenStream {
-		let provider_expr = quote! { self.provider.take() };
-		let profile_expr = quote! { self.profile.take() };
-		let resolve_provider_load = generate_provider_resolution(&provider_expr);
-		let resolve_profile_load = generate_profile_resolution(&profile_expr);
-		let resolve_provider_profile = generate_provider_resolution(&provider_expr);
+		let resolve_provider_load = generate_provider_resolution(quote! { self.provider.take() });
+		let resolve_profile_load = generate_profile_resolution(quote! { self.profile.take() });
+		let resolve_provider_profile =
+			generate_provider_resolution(quote! { self.provider.take() });
 
 		quote! {
 			impl MonosecretBuilder {
 				pub fn load(mut self) -> Result<monosecret::Resolved<Monosecret>, monosecret::MonosecretError> {
 					#resolve_provider_load
 					#resolve_profile_load
+					let reason_str = self.reason.take();
 
-					let validation_result = load_internal(provider_str, profile_str)?;
-					let provider_name = validation_result.resolved.provider.clone();
-					let profile = validation_result.resolved.profile.clone();
-					let secrets = validation_result.resolved.secrets;
+					let validation_result = load_internal(provider_str, profile_str, reason_str)?;
 
-					let data = Monosecret {
-						#(#load_assignments,)*
+					let data = {
+						let secrets = &validation_result.resolved.secrets;
+						Monosecret {
+							#(#load_assignments,)*
+						}
 					};
 
-					Ok(monosecret::Resolved::new(
-						data,
-						provider_name,
-						profile
-					))
+					Ok(validation_result.into_resolved(data))
 				}
 
 				pub fn load_profile(mut self) -> Result<monosecret::Resolved<MonosecretProfile>, monosecret::MonosecretError> {
 					#resolve_provider_profile
+					let reason_str = self.reason.take();
 
 					let (profile_str, selected_profile) = if let Some(profile_fn) = self.profile.take() {
 						let profile = profile_fn()
 							.map_err(|e| monosecret::MonosecretError::InvalidProfile(e))?;
 						(Some(profile.as_str().to_string()), profile)
 					} else {
-						// Check env var for profile
-						let profile_str = std::env::var("MONOSECRET_PROFILE").ok();
+						// Check env var for profile. A blank value is treated as
+						// unset (matching `monosecret::Secrets`) and a padded
+						// value is trimmed, so a stray empty var or a `$(cat
+						// file)` trailing newline neither errors here nor selects
+						// a nonexistent profile.
+						let profile_str = std::env::var("MONOSECRET_PROFILE")
+							.ok()
+							.map(|s| s.trim().to_string())
+							.filter(|s| !s.is_empty());
 						let selected_profile = if let Some(ref profile_name) = profile_str {
 							Profile::try_from(profile_name.as_str())?
 						} else {
@@ -1405,21 +1298,17 @@ mod builder_generation {
 						(profile_str, selected_profile)
 					};
 
-					let validation_result = load_internal(provider_str, profile_str)?;
-					let provider_name = validation_result.resolved.provider.clone();
-					let profile = validation_result.resolved.profile.clone();
-					let secrets = validation_result.resolved.secrets;
+					let validation_result = load_internal(provider_str, profile_str, reason_str)?;
 
-					let data_result: LoadResult<MonosecretProfile> = match selected_profile {
-						#(#load_profile_arms,)*
+					let data_result: LoadResult<MonosecretProfile> = {
+						let secrets = &validation_result.resolved.secrets;
+						match selected_profile {
+							#(#load_profile_arms,)*
+						}
 					};
 					let data = data_result?;
 
-					Ok(monosecret::Resolved::new(
-						data,
-						provider_name,
-						profile
-					))
+					Ok(validation_result.into_resolved(data))
 				}
 			}
 		}
@@ -1440,7 +1329,7 @@ mod builder_generation {
 	/// Complete token stream containing:
 	/// - Builder struct definition
 	/// - Basic builder methods
-	/// - Loading methods (load and `load_profile`)
+	/// - Loading methods (load and load_profile)
 	pub fn generate_all(
 		load_assignments: &[proc_macro2::TokenStream],
 		load_profile_arms: &[proc_macro2::TokenStream],
@@ -1477,27 +1366,30 @@ mod builder_generation {
 /// 1. Analyze profiles and field types
 /// 2. Generate Profile enum and implementations
 /// 3. Generate Monosecret struct (union type)
-/// 4. Generate `MonosecretProfile` enum (profile-specific types)
+/// 4. Generate MonosecretProfile enum (profile-specific types)
 /// 5. Generate builder pattern implementation
 /// 6. Combine all components with necessary imports
-fn generate_secret_spec_code(config: &Config) -> proc_macro2::TokenStream {
-	// Collect all profiles
-	let all_profiles: HashSet<String> = config.profiles.keys().cloned().collect();
-	let profile_variants = get_profile_variants(&all_profiles);
+fn generate_secret_spec_code(config: Config) -> proc_macro2::TokenStream {
+	// Reduce the manifest to the shared codegen IR once. Every typing decision
+	// (union vs per-profile fields, optionality, as_path, profile list) comes
+	// from here, so this macro and the other-language emitters cannot drift.
+	let ir = build_ir(&config);
 
-	// Analyze field types
-	let field_info = analyze_field_types(config);
+	let profile_variants = profile_variants_from_ir(&ir);
+
+	// Union struct fields.
+	let field_info = union_field_info(&ir);
 
 	// Generate field assignments for load()
 	let load_assignments: Vec<_> = field_info
 		.values()
-		.map(|info| info.generate_assignment(&quote! { secrets }))
+		.map(|info| info.generate_assignment(quote! { secrets }))
 		.collect();
 
 	// Generate env var setters
 	let env_setters: Vec<_> = field_info
 		.values()
-		.map(FieldInfo::generate_env_setter)
+		.map(|info| info.generate_env_setter())
 		.collect();
 
 	// Generate profile components
@@ -1505,24 +1397,20 @@ fn generate_secret_spec_code(config: &Config) -> proc_macro2::TokenStream {
 
 	// Generate Monosecret components
 	let secret_spec_struct = secret_spec_generation::generate_struct(&field_info);
-	let profile_enum_variants = secret_spec_generation::generate_profile_enum_variants(
-		config,
-		&field_info,
-		&profile_variants,
-	);
+	let profile_enum_variants = secret_spec_generation::generate_profile_enum_variants(&ir);
 	let secret_spec_profile_enum =
 		secret_spec_generation::generate_profile_enum(&profile_enum_variants);
-	let load_profile_arms =
-		secret_spec_generation::generate_load_profile_arms(config, &field_info, &profile_variants);
+	let load_profile_arms = secret_spec_generation::generate_load_profile_arms(&ir);
 	let load_internal = secret_spec_generation::generate_load_internal();
 	let secret_spec_impl =
-		secret_spec_generation::generate_impl(&load_assignments, &env_setters, &field_info);
+		secret_spec_generation::generate_impl(&load_assignments, env_setters, &field_info);
 
 	// Get first profile variant for defaults
 	// Get first profile variant for defaults
 	let first_profile_variant = profile_variants
 		.first()
-		.map_or_else(|| format_ident!("Default"), ProfileVariant::as_ident);
+		.map(|v| v.as_ident())
+		.unwrap_or_else(|| format_ident!("Default"));
 
 	// Generate builder
 	let builder_code = builder_generation::generate_all(
@@ -1549,33 +1437,6 @@ fn generate_secret_spec_code(config: &Config) -> proc_macro2::TokenStream {
 	}
 }
 
-/// Capitalize the first character of a string.
-///
-/// Used to convert profile names to enum variant names.
-///
-/// # Arguments
-///
-/// * `s` - The string to capitalize
-///
-/// # Returns
-///
-/// A new string with the first character capitalized
-///
-/// # Examples
-///
-/// ```ignore
-/// assert_eq!(capitalize_first("production"), "Production");
-/// assert_eq!(capitalize_first("test_env"), "Test_env");
-/// assert_eq!(capitalize_first(""), "");
-/// ```
-fn capitalize_first(s: &str) -> String {
-	let mut chars = s.chars();
-	match chars.next() {
-		None => String::new(),
-		Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-	}
-}
-
 #[cfg(test)]
 #[path = "tests.rs"]
-mod tests;
+mod derive_tests;

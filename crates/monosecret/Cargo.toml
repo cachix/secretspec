@@ -19,88 +19,92 @@ path = "src/bin/monosecret.rs"
 required-features = ["cli"]
 
 [dependencies]
+age = { workspace = true, optional = true }
 aws-config = { workspace = true, optional = true, default-features = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true, default-features = true }
-bitwarden = { workspace = true, optional = true, default-features = true }
+aws-sdk-ssm = { workspace = true, optional = true, default-features = true }
+azure_core = { workspace = true, optional = true }
+azure_identity = { workspace = true, optional = true }
+azure_security_keyvault_secrets = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
 clap.workspace = true
-clap.default-features = true
 colored.workspace = true
-colored.default-features = true
 data-encoding.workspace = true
-data-encoding.default-features = true
 detect-coding-agent.workspace = true
-detect-coding-agent.default-features = true
 dotenvy.workspace = true
-dotenvy.default-features = true
 etcetera.workspace = true
-etcetera.default-features = true
-google-cloud-secretmanager-v1 = { workspace = true, optional = true, default-features = true }
+google-cloud-secretmanager-v1 = { workspace = true, optional = true }
 inquire.workspace = true
-inquire.default-features = true
 jiff.workspace = true
-jiff.default-features = true
-keyring-core = { workspace = true, optional = true, default-features = true }
+keepass = { workspace = true, optional = true }
+keeper-secrets-manager-core = { workspace = true, optional = true }
+keyring = { workspace = true, optional = true }
 linkme.workspace = true
-linkme.default-features = true
 miette.workspace = true
-miette.default-features = true
 percent-encoding.workspace = true
-percent-encoding.default-features = true
 rand.workspace = true
-rand.default-features = true
-reqwest = { workspace = true, optional = true, default-features = true }
+reqwest = { workspace = true, optional = true }
 rsa.workspace = true
-rsa.default-features = true
-rustls = { workspace = true, optional = true, default-features = true }
+same-file.workspace = true
 secrecy.workspace = true
-secrecy.default-features = true
 serde.workspace = true
-serde.default-features = true
 serde_json.workspace = true
-serde_json.default-features = true
 tempfile.workspace = true
-tempfile.default-features = true
 thiserror.workspace = true
-thiserror.default-features = true
 tokio.workspace = true
-tokio.default-features = true
 toml.workspace = true
-toml.default-features = true
-toml_edit = { workspace = true, optional = true, default-features = true }
+toml_edit = { workspace = true, optional = true }
 tracing.workspace = true
-tracing.default-features = true
 url.workspace = true
-url.default-features = true
 uuid.workspace = true
-uuid.default-features = true
-whoami = { workspace = true, optional = true, default-features = true }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-apple-native-keyring-store = { workspace = true, optional = true }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-native-keyring-store = { workspace = true, optional = true }
-
-[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
-zbus-secret-service-keyring-store = { workspace = true, optional = true }
+whoami = { workspace = true, optional = true }
 
 [features]
-default = ["cli", "keyring", "gcsm", "awssm", "vault", "bws"]
-cli = ["dep:toml_edit"]
-keyring = [
-  "dep:apple-native-keyring-store",
-  "dep:keyring-core",
-  "dep:whoami",
-  "dep:windows-native-keyring-store",
-  "dep:zbus-secret-service-keyring-store",
+default = [
+  "cli",
+  "keyring",
+  "kdbx",
+  "keeper",
+  "gcsm",
+  "awssm",
+  "awsps",
+  "vault",
+  "openbao",
+  "bws",
+  "akv",
+  "infisical",
+  "bw",
+  "age",
+  "scaleway",
+  "sops",
 ]
+cli = ["dep:toml_edit"]
+keyring = ["dep:keyring", "dep:whoami"]
+kdbx = ["dep:keepass"]
+keeper = ["dep:keeper-secrets-manager-core"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]
-awssm = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
-vault = ["dep:reqwest"]
-bws = ["dep:bitwarden", "dep:rustls"]
+awssm = [
+  "dep:aws-config",
+  "dep:aws-sdk-secretsmanager",
+  "aws-config/credentials-login",
+]
+awsps = ["dep:aws-config", "dep:aws-sdk-ssm"]
+vault = ["dep:reqwest", "tokio/sync"]
+scaleway = ["dep:reqwest"]
+openbao = ["dep:reqwest", "tokio/sync"]
+infisical = ["dep:reqwest", "tokio/sync"]
+bws = []
+bw = ["dep:base64"]
+akv = [
+  "dep:azure_core",
+  "dep:azure_identity",
+  "dep:azure_security_keyvault_secrets",
+]
+age = ["dep:age"]
+sops = []
 
 [dev-dependencies]
 insta.workspace = true
-insta.default-features = true
 insta-cmd.workspace = true
-insta-cmd.default-features = true
+jsonschema = { version = "0.48.5", default-features = false }
+proptest.workspace = true

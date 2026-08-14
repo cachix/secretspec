@@ -17,8 +17,11 @@ revision = "1.0"
 
 [profiles.default]
 DATABASE_URL = { description = "DB", required = true }
-LOG_LEVEL = { description = "log", required = false, default = "info" }
+DEV_SESSION_SECRET = { description = "Development-only session secret", required = false, default = "development-only-secret" }
 SENTRY_DSN = { description = "sentry", required = false }
+
+[scopes.database]
+secrets = ["DATABASE_URL"]
 `
 
 // TestMain builds the monosecret_ffi cdylib and points the SDK at it, unless
@@ -113,9 +116,9 @@ func TestLoadValuesAndProvenance(t *testing.T) {
 		t.Fatalf("DATABASE_URL provenance: source=%q provider=%v", db.Source, db.SourceProvider)
 	}
 
-	log := resolved.Secrets["LOG_LEVEL"]
-	if log.Get() != "info" || log.Source != "default" {
-		t.Fatalf("LOG_LEVEL = %q source=%q", log.Get(), log.Source)
+	session := resolved.Secrets["DEV_SESSION_SECRET"]
+	if session.Get() != "development-only-secret" || session.Source != "default" {
+		t.Fatalf("DEV_SESSION_SECRET = %q source=%q", session.Get(), session.Source)
 	}
 
 	if len(resolved.MissingOptional) != 1 || resolved.MissingOptional[0] != "SENTRY_DSN" {
@@ -123,6 +126,37 @@ func TestLoadValuesAndProvenance(t *testing.T) {
 	}
 	if _, ok := resolved.Secrets["SENTRY_DSN"]; ok {
 		t.Fatal("missing optional should not appear in secrets")
+	}
+}
+
+func TestScope(t *testing.T) {
+	manifestPath, provider := writeProject(
+		t,
+		"DATABASE_URL=postgres://db\nSENTRY_DSN=https://sentry\n",
+	)
+	builder := New().
+		WithPath(manifestPath).
+		WithProvider(provider).
+		WithScope("database").
+		WithReason("go scoped test")
+
+	resolved, err := builder.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Scope == nil || *resolved.Scope != "database" {
+		t.Fatalf("scope = %v", resolved.Scope)
+	}
+	if len(resolved.Secrets) != 1 {
+		t.Fatalf("scoped secrets = %v", resolved.Secrets)
+	}
+
+	report, err := builder.Report()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Scope == nil || *report.Scope != "database" || len(report.Secrets) != 1 {
+		t.Fatalf("scoped report = %+v", report)
 	}
 }
 
@@ -182,8 +216,9 @@ TLS_CERT = { description = "cert", required = true, as_path = true }
 // write in the setters.
 func TestZeroValueBuilderDoesNotPanic(t *testing.T) {
 	var b Builder
-	got := b.WithPath("x").WithProvider("env://").WithProfile("p")
-	if got.req["path"] != "x" || got.req["provider"] != "env://" || got.req["profile"] != "p" {
+	got := b.WithPath("x").WithProvider("env://").WithProfile("p").WithScope("s")
+	if got.req["path"] != "x" || got.req["provider"] != "env://" ||
+		got.req["profile"] != "p" || got.req["scope"] != "s" {
 		t.Fatalf("zero-value builder did not record fields: %+v", got.req)
 	}
 }

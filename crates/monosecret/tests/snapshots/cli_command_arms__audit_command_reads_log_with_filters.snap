@@ -12,8 +12,8 @@ info:
     - "1"
     - "--json"
   env:
-    HOME: /private/var/folders/lm/90xr38kd5y52p5y6jj2ny_dr0000gn/T/zed-agent-terminal-aWF7zb/.tmp7nHfMR
-    XDG_CONFIG_HOME: /private/var/folders/lm/90xr38kd5y52p5y6jj2ny_dr0000gn/T/zed-agent-terminal-aWF7zb/.tmp7nHfMR/.config
+    HOME: /tmp/monosecret-cli-arms-audit
+    XDG_CONFIG_HOME: /tmp/monosecret-cli-arms-audit-config
 ---
 success: true
 exit_code: 0

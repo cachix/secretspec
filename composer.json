@@ -1,0 +1,44 @@
+{
+  "name": "ifiokjr/monosecret",
+  "description": "PHP SDK for Monosecret, a declarative secrets manager. A thin client over the shared Rust resolver; sources live in php/monosecret_php/.",
+  "type": "library",
+  "keywords": ["secrets", "secret", "configuration", "environment", "dotenv", "monosecret", "vault"],
+  "homepage": "https://ifiokjr.github.io/monosecret",
+  "license": "Apache-2.0",
+  "support": {
+    "issues": "https://github.com/ifiokjr/monosecret/issues",
+    "source": "https://github.com/ifiokjr/monosecret"
+  },
+  "require": {
+    "php": ">=8.1",
+    "ext-json": "*"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^10.5 || ^11.0"
+  },
+  "suggest": {
+    "ext-ffi": "Zero-install backend (set ffi.enable for web/FPM); run vendor/bin/monosecret-install-lib to fetch the native library",
+    "ext-monosecret-php-native": "Native extension that embeds the resolver; works under FPM with no ffi.enable (see https://ifiokjr.github.io/monosecret/sdk/php)"
+  },
+  "autoload": {
+    "psr-4": {
+      "Monosecret\\": "php/monosecret_php/src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Monosecret\\Tests\\": "php/monosecret_php/tests/"
+    }
+  },
+  "bin": [
+    "php/monosecret_php/bin/monosecret-install-lib"
+  ],
+  "scripts": {
+    "test": "phpunit -c php/monosecret_php/phpunit.xml.dist",
+    "monosecret:install-lib": "@php php/monosecret_php/scripts/install-ffi-lib.php"
+  },
+  "config": {
+    "sort-packages": true,
+    "vendor-dir": "php/monosecret_php/vendor"
+  }
+}

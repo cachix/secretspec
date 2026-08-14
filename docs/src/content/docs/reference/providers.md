@@ -5,81 +5,252 @@ description: Complete reference for Monosecret storage providers and their URI c
 
 Monosecret supports multiple storage backends for secrets. Each provider has its own URI format and configuration options.
 
-## DotEnv Provider
+This page is a compact URI reference. For installation, authentication,
+copyable project configuration, storage behavior, and CI/CD guidance, follow
+the link for the individual provider. For the semantic authentication names
+accepted by those providers and their environment fallbacks, see the
+[provider credentials reference](/reference/provider-credentials/).
+
+## Dotenv Provider
 
 **URI**: `dotenv://[path]` - Stores secrets in `.env` files
 
-```bash
+```text
 dotenv://                    # Uses default .env
 dotenv:///config/.env        # Custom path
 dotenv://config/.env         # Relative path
+dotenv://~/.config/app/.env  # Home-relative path (0.2+)
 ```
 
 **Features**: Read/write, profiles, human-readable, no encryption
+
+## File Provider (0.2+)
+
+:::caution[Version compatibility]
+The `file` provider is added in Monosecret 0.2.
+:::
+
+**URI**: `file:ROOT` - Stores one plaintext UTF-8 file per secret beneath an
+explicitly configured local directory
+
+`ROOT` is required. The bare `file` provider name is rejected.
+
+```text
+file:./.secrets              # Relative to monosecret.toml
+file:///run/secrets          # Absolute directory
+```
+
+**Features**: Read/write/delete, project and profile isolation, exact UTF-8
+text, atomic writes, nested relative `ref.item` paths
+**Storage**: `ROOT/{project}/{profile}/{key}` by convention. A `ref.item`
+replaces the convention path with a relative path beneath `ROOT`.
+**Security**: No encryption. New files use mode `0600` on Unix; traversal and
+symbolic links inside the configured store are rejected.
 
 ## Environment Provider
 
 **URI**: `env://` - Read-only access to system environment variables
 
-```bash
+```text
 env://                       # Current process environment
 ```
 
 **Features**: Read-only, no setup required, no persistence
 
+## Null Provider (0.2+)
+
+:::caution[Version compatibility]
+The `null` provider is added in Monosecret 0.2.
+:::
+
+**URI**: `null://` - Always reports a missing value so the declaration's
+committed `default`, configured generator, or `prompt = true` run input (0.2+)
+supplies the value
+
+```text
+null://                      # No configuration or storage
+```
+
+**Features**: No I/O, no authentication, no persistence, ordinary writes
+rejected; generated and prompted values are returned only for the current
+resolution or child invocation
+**Use case**: Non-sensitive configuration from the version-controlled manifest,
+or ephemeral generated/operator-supplied values that should be fresh for every
+resolution or run
+
+## systemd Credential Provider (0.2+)
+
+:::caution[Version compatibility]
+The `systemd-credential` provider is added in Monosecret 0.2.
+:::
+
+**URI**: `systemd-credential://` - Reads credentials passed to the current
+service by systemd
+
+```text
+systemd-credential://          # $CREDENTIALS_DIRECTORY
+```
+
+**Features**: Read-only, flat credential names, immutable service-lifetime
+values, provider-credential source support
+**Prerequisites**: A process started by systemd with `LoadCredential=`,
+`LoadCredentialEncrypted=`, `SetCredential=`, or `SetCredentialEncrypted=`
+**Storage**: One runtime file per credential under `$CREDENTIALS_DIRECTORY`;
+convention addresses use the Monosecret key as the filename, and `ref.item`
+selects a different credential name
+
+## Gopass Provider
+
+Available starting with Monosecret 0.2.
+
+**URI**: `gopass://[host][path]` - Uses `gopass`, a multi-user and multi-store abstraction layer over `pass`, with GPG encryption
+
+```text
+gopass://                                    # Default folder prefix
+gopass://monosecret/shared/{profile}/{key}   # Custom folder prefix with placeholders
+```
+
+**Features**: Read/write, GPG encryption, git-backed sync, profiles, local storage
+**Prerequisites**: `gopass` CLI, initialized password store
+**Storage**: Path `monosecret/{project}/{profile}/{key}` by default; the URI host and path override the folder prefix and support `{project}`, `{profile}`, and `{key}` placeholders
+
+Gopass entries store a single line; multiline secrets are truncated to their first line when read.
+
 ## Keyring Provider
 
 **URI**: `keyring://` - Uses system keychain/keyring for secure storage
 
-```bash
+```text
 keyring://                   # System default keychain
 ```
 
 **Features**: Read/write, secure encryption, profiles, cross-platform
-**Storage**: Service `monosecret/{project}`, username `{profile}:{key}`
+**Storage**: Service `monosecret/{project}/{profile}/{key}`, with the current
+operating-system username as the account
+
+## KeePass KDBX Provider (0.2+)
+
+:::caution[Version compatibility]
+The `kdbx` provider is added in Monosecret 0.2.
+:::
+
+**URI**: `kdbx:PATH[?keyfile=PATH][&prefix=TEMPLATE]` - Stores secrets in a
+KeePass-compatible encrypted database
+
+```text
+kdbx:./secrets.kdbx
+kdbx:/var/lib/myapp/secrets.kdbx
+kdbx:./secrets.kdbx?keyfile=./secrets.key
+kdbx:./shared.kdbx?prefix=teams/{project}/{profile}/{key}
+```
+
+**Features**: KDBX 3 read, KDBX 4 read/write, password and key-file
+authentication, standard and custom entry fields, profiles
+**Prerequisites**: Master password, key file, or both; build with
+`--features kdbx` (0.2+)
+**Authentication**: [`password` provider credential](/providers/kdbx/#provider-credentials)
+from a bootstrap provider (recommended), or the discouraged
+`MONOSECRET_KDBX_PASSWORD` fallback; optional `?keyfile=PATH`
+**Storage**: Entry path `monosecret/{project}/{profile}/{key}`, field `Password`
+by default. A secret `ref` uses `item` for the complete group path and entry
+title, and optional `field` for a standard or custom field.
 
 ## LastPass Provider
 
-**URI**: `lastpass://[folder]` - Integrates with LastPass via `lpass` CLI
+**URI**: `lastpass://[item_template]` - Integrates with LastPass via `lpass` CLI
 
-```bash
-lastpass://work              # Store in work folder
-lastpass:///personal/projects # Nested folder
-lastpass://localhost         # Root (no folder)
+```text
+lastpass://                                      # Default layout
+lastpass://Work/Monosecret/{project}/{profile}/{key} # Custom item template
 ```
 
 **Features**: Read/write, cloud sync, profiles via folders, auto-sync
 **Prerequisites**: `lpass` CLI, authenticated with `lpass login`
-**Storage**: Item name `{folder}/{profile}/{project}/{key}`
+**Storage**: Item name `monosecret/{project}/{profile}/{key}` by default. A URI
+item template replaces the default and supports `{project}`, `{profile}`, and
+`{key}` placeholders.
 
-## OnePassword Provider
+## Dashlane Provider (0.2+)
 
-**URI**: `onepassword://[account@]vault`, `onepassword+token://user:token@vault`, `op://vault/item`, or `op+token://user:token@vault/item`
+**URI**: `dashlane://[item_type]` - Integrates with Dashlane via the `dcli` CLI
 
-```bash
-onepassword://MyVault                           # Monosecret-owned storage
-onepassword://work@CompanyVault                 # Specific account
-onepassword+token://user:op_token@SecureVault   # Service account
-op://Development/dotfiles/forges                # Native 1Password reference prefix
-op+token://user:op_token@Development/dotfiles   # Native reference with service account
+```text
+dashlane://          # Search secrets, then logins, then notes
+dashlane://note      # Secure notes only
+dashlane://secret    # Dashlane Secrets only (Business plans)
+dashlane://password  # Logins only
 ```
 
-**Features**: Read/write, cloud sync, profiles via vaults, service accounts, native `op://` references
-**Prerequisites**: `op` CLI, authenticated with `op signin` or a service account token
-**Storage**: `onepassword://` uses Monosecret-owned items; `op://` reads native 1Password references and can edit existing fields
+**Features**: Read-only, reads a locally synced vault, profiles via item titles
+**Prerequisites**: `dcli` CLI, device registered with `dcli sync`, or
+`DASHLANE_SERVICE_DEVICE_KEYS` for a non-interactive device
+**Storage**: Item titled `monosecret/{project}/{profile}/{key}`. The value is
+the item's default field: `content` for a secret or note, `password` for a
+login. `dcli` cannot create or edit vault items, so `monosecret set` fails;
+author items in a Dashlane app and run `dcli sync`.
 
-For `onepassword://`, the URI path configures Monosecret-owned storage. For
-`op://`, it is a native item/section prefix used by convention secrets and
-detailed `providers` entries. To give one secret complete provider-independent
-coordinates, use its `ref` table
+With `DASHLANE_SERVICE_DEVICE_KEYS` set, `dcli` runs against a private,
+owner-only state directory per credential, since it otherwise prefers an
+already-registered device and reads that identity's vault instead. That state
+is separate from your own, so `dcli configure disable-auto-sync true` does not
+apply to it and those reads sync hourly.
+
+## 1Password Provider
+
+**URI**: `onepassword://[account@]vault` or `onepassword+token://vault`
+
+```text
+onepassword://MyVault              # Default account
+onepassword://work@CompanyVault    # Specific account
+onepassword+token://SecureVault    # Service account
+```
+
+The `onepassword+token://` scheme selects service account authentication; the
+token comes from the `service_account_token` provider credential or
+`OP_SERVICE_ACCOUNT_TOKEN`. Putting the token in the URI
+(`onepassword+token://token@vault`) is rejected from 0.2 on, since a URI ends
+up in committed manifests, shell history, and CI logs.
+
+**Features**: Read/write, cloud sync, profiles via vaults, service accounts
+**Prerequisites**: `op` CLI, authenticated through desktop app integration, a
+service account token, or a legacy `op signin` shell session
+**Storage**: Secure Note named `monosecret/{project}/{profile}/{key}`, with tags
+`automated` and `{project}`
+
+The URI names a vault only; item paths on the URI are rejected. To read and
+write an existing item's field in place, name it with the `ref` field
 (`SECRET = { description = "…", ref = { item = "…", field = "…" } }`); see
 [Secret References](/reference/configuration/#secret-references).
+
+## Keeper Secrets Manager Provider (0.2+)
+
+:::caution[Version compatibility]
+The `keeper` provider is added in Monosecret 0.2.
+:::
+
+**URI**: `keeper://FOLDER_UID[?config_file=PATH]` - Stores records in
+Keeper Secrets Manager through Keeper's official Rust SDK
+
+```text
+keeper://SHARED_FOLDER_UID
+keeper://SHARED_FOLDER_UID?config_file=.keeper/client-config.json
+```
+
+**Features**: Read/write/delete, end-to-end encryption, profile-aware record
+titles, standard and custom field references, batched retrieval
+**Prerequisites**: A Keeper Secrets Manager application with access to the
+selected folder; build with `--features keeper` (0.2+)
+**Authentication**: [`config` or `token` provider credentials](/providers/keeper/#provider-credentials),
+with `KSM_CONFIG` and `KSM_TOKEN` fallbacks; alternatively a bound `config_file`.
+**Storage**: Login record titled `monosecret/{project}/{profile}/{key}`, field
+`password`. A `ref` selects an existing record by UID or exact title and an
+optional standard/custom `field`.
 
 ## Pass Provider
 
 **URI**: `pass://` - Uses Unix password manager with GPG encryption
 
-```bash
+```text
 pass://                       # Default password store
 ```
 
@@ -91,7 +262,7 @@ pass://                       # Default password store
 
 **URI**: `protonpass://[vault[/title-template]]` - Stores secrets in Proton Pass via the official `pass-cli`
 
-```bash
+```text
 protonpass://                                      # Default vault ("monosecret")
 protonpass://Work                                  # Specific vault
 protonpass://Work/{project}/{profile}/{key}        # Custom vault and title template
@@ -101,11 +272,42 @@ protonpass://Work/{project}/{profile}/{key}        # Custom vault and title temp
 **Prerequisites**: `pass-cli`, authenticated with `pass-cli login` (or `pass-cli login --pat $PAT` for CI)
 **Storage**: Note item titled `{project}/{profile}/{key}` inside the configured vault
 
+`pass-cli` ships backward incompatible changes in patch releases without
+advance notice, so a CLI upgrade can break secret resolution on its own.
+`pass-cli` 2.2.4 removed `pass-cli test`, which Monosecret 0.2.0 and earlier
+use to check the session before every read and write; those releases need
+`pass-cli` 2.2.3 or earlier, while Monosecret 0.2+ tries `pass-cli info` and
+falls back to `pass-cli test`, working with either. Pin a tested build and
+select it with
+`MONOSECRET_PROTONPASS_CLI_PATH`. See
+[`pass-cli` compatibility](/providers/protonpass/#pass-cli-compatibility).
+
+## Passbolt provider (0.2+)
+
+**Availability**: Added in Monosecret 0.2.
+
+**URI**: `passbolt://[?server=URL][&folder=ID][&template=PATTERN]` - Reads and writes resources in a self-hosted Passbolt server through `go-passbolt-cli`
+
+```text
+passbolt://                                           # Default resource template
+passbolt://?server=https://pass.example.com           # Select a server
+passbolt://?folder=<folder-id>                         # Scope lookup and creation
+passbolt://?template=teams/{project}/{profile}/{key}   # Replace the convention template
+```
+
+**Features**: Read/write, self-hosted, provider credentials, `init --from`, and `ref` by resource UUID or exact name (standard fields: `password`/`username`/`uri`/`description`; custom resource-type fields are not addressable)
+
+**Prerequisites**: `go-passbolt-cli`, an OpenPGP private key, and its passphrase. Use the `private_key` and `passphrase` provider credentials, their `MONOSECRET_PASSBOLT_*` environment fallbacks, or the CLI configuration. For MFA, the CLI supports TOTP only.
+
+**Storage**: Resource `monosecret/{project}/{profile}/{key}`, field `password`. Missing resources named through `ref` are never created.
+
+**Write limitation**: `go-passbolt-cli` accepts created/updated values only as flags, so a value being written is visible in the child process argv until it exits. See the [Passbolt provider security notes](/providers/passbolt/#security-considerations-and-limitations).
+
 ## Google Cloud Secret Manager Provider
 
 **URI**: `gcsm://PROJECT_ID` - Stores secrets in Google Cloud Secret Manager
 
-```bash
+```text
 gcsm://my-gcp-project         # GCP project ID
 ```
 
@@ -117,7 +319,7 @@ gcsm://my-gcp-project         # GCP project ID
 
 **URI**: `awssm://[profile@]REGION` - Stores secrets in AWS Secrets Manager
 
-```bash
+```text
 awssm://us-east-1             # Specific AWS region
 awssm://production@us-east-1  # Specific AWS profile and region
 awssm://                      # SDK default region and credentials
@@ -127,40 +329,252 @@ awssm://                      # SDK default region and credentials
 **Prerequisites**: AWS credentials configured, build with `--features awssm`
 **Storage**: Secret name `monosecret/{project}/{profile}/{key}`
 
-## Vault / OpenBao Provider
+## AWS Systems Manager Parameter Store Provider (0.2+)
 
-**URI**: `vault://[namespace@]host[:port][/mount]` or `openbao://[namespace@]host[:port][/mount]` - Stores secrets in HashiCorp Vault or OpenBao KV engine
+:::caution[Version compatibility]
+The `awsps` provider is added in Monosecret 0.2.
+:::
 
-```bash
+**URI (0.2+)**:
+`awsps://[profile@]REGION[?prefix=PATH&template=TEMPLATE&kms_key_id=KEY&tier=TIER]`
+
+- Stores secrets as encrypted AWS Systems Manager Parameter Store values;
+  `prefix` and `template` are mutually exclusive.
+
+```text
+awsps://us-east-1                                  # Specific AWS region
+awsps://production@us-east-1                       # AWS profile and region
+awsps://us-east-1?prefix=/team                     # Additional hierarchy
+awsps://us-east-1?template=/{profile}/{project}/{key} # Replace the hierarchy
+awsps://us-east-1?kms_key_id=alias/key&tier=advanced
+awsps://                                           # SDK defaults
+```
+
+**Features (0.2+)**: Read/write, `SecureString` encryption, cloud sync,
+profiles, IAM/SSO authentication, batched reads, version- or label-pinned
+read-only refs, writable unversioned parameter-name refs; ARN refs are
+read-only
+**Prerequisites (0.2+)**: AWS credentials configured, build with
+`--features awsps`
+**Storage (0.2+)**: Parameter
+`[/prefix]/monosecret/{project}/{profile}/{key}`. `template` replaces the
+complete layout and must end in `/{key}`; `kms_key_id` selects a customer-managed
+key, while `tier` accepts `standard`, `advanced`, or `intelligent-tiering`
+**Discovery (0.2+)**: Bounded declaration discovery through `init --from`
+
+## Scaleway Secret Manager Provider (0.2+)
+
+**URI**: `scaleway://[REGION][?project_id=UUID&path=/folder]` - Stores secrets in Scaleway Secret Manager
+
+```text
+scaleway://fr-par                                    # Region, project from SCW_DEFAULT_PROJECT_ID
+scaleway://nl-ams?project_id=PROJECT_UUID            # Region and project
+scaleway://fr-par?project_id=PROJECT_UUID&path=/team # Nest under a folder
+scaleway://                                          # Region from SCW_DEFAULT_REGION, else fr-par
+```
+
+**Features**: Read/write, cloud sync, profiles via folders, version-pinned refs, JSON-key refs
+**Prerequisites**: Scaleway API secret key (`secret_key` credential or `SCW_SECRET_KEY`), build with `--features scaleway`
+**Storage**: Folder `[{base}/]monosecret/{project}/{profile}`, secret name `{key}`
+
+## Vault Provider
+
+**URI**: `vault://[namespace@]host[:port][/mount][?options]` - Stores secrets in HashiCorp Vault's KV engine
+
+```text
 vault://vault.example.com:8200/secret       # KV v2 at "secret" mount
 vault://vault.example.com:8200              # Default "secret" mount
 vault://ns1@vault.example.com:8200/secret   # With namespace
-openbao://bao.internal:8200/secret          # OpenBao server
+vault://vault.example.com:8200/secret?auth=approle
+# Monosecret 0.2+
+vault://vault.example.com:8200/secret?auth=jwt&role=ci
+# Monosecret 0.2+
+vault://vault.example.com:8200/secret?auth=approle&auth_mount=platform-approle
+# Monosecret 0.2+, with default_role configured on the JWT auth mount
+vault://vault.example.com:8200/secret?auth=jwt
 vault://127.0.0.1:8200/secret?kv=1         # KV v1 engine
 vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
 ```
 
-**Features**: Read/write, KV v1 and v2, namespaces, OpenBao compatible
-**Prerequisites**: Vault/OpenBao server, `VAULT_TOKEN` env var or `~/.vault-token`, build with `--features vault`
+**Features**: Read/write, KV v1 and v2, namespaces; token and AppRole authentication, including AppRoles without SecretID binding (0.2+); JWT/OIDC authentication (0.2+); custom AppRole/JWT mounts and server-default JWT roles (0.2+)
+**Prerequisites**: Vault server, authentication credentials, build with `--features vault`
 **Storage**: KV path `monosecret/{project}/{profile}/{key}` with a `value` field
+
+## OpenBao Provider (0.2+)
+
+:::caution[Version compatibility]
+The `openbao` provider is added in Monosecret 0.2.
+:::
+
+**URI**: `openbao://[namespace@]host[:port][/mount][?options]` - Stores secrets in OpenBao's KV engine
+
+```text
+openbao://bao.example.com:8200/secret
+openbao://team-a@bao.example.com:8200/secret
+openbao://bao.example.com:8200/secret?auth=approle
+openbao://bao.example.com:8200/secret?auth=jwt&role=ci
+# Monosecret 0.2+
+openbao://bao.example.com:8200/secret?auth=jwt&auth_mount=ci-jwt&role=ci
+# Monosecret 0.2+, with default_role configured on the JWT auth mount
+openbao://bao.example.com:8200/secret?auth=jwt
+openbao://127.0.0.1:8200/secret?kv=1&tls=false
+```
+
+**Features**: Read/write, KV v1 and v2, namespaces; token, AppRole, and JWT/OIDC authentication; AppRoles without SecretID binding, custom AppRole/JWT mounts, and server-default JWT roles (0.2+); documented OpenBao CLI variables plus Monosecret-defined `BAO_*` AppRole/JWT inputs, all with `VAULT_*` compatibility fallbacks
+**Prerequisites**: OpenBao server, authentication credentials, build with `--features openbao` (0.2+)
+**Storage**: KV path `monosecret/{project}/{profile}/{key}` with a `value` field
+
+## Bitwarden Password Manager Provider (0.2+)
+
+**URI**: `bw://[COLLECTION]` - Stores secrets in a Bitwarden Password Manager vault via the `bw` CLI
+
+```text
+bw://                                   # Personal vault
+bw://dev-secrets                        # Collection, by name or ID
+bw://myorg@dev-secrets                  # Organization and collection
+bw://?server=https://vault.company.com  # Expected self-hosted server (guard)
+bw://?type=login&field=username         # Default item type and field
+```
+
+Organizations and collections may be named or given as IDs; Monosecret resolves
+a name to the ID the CLI requires, matching case-insensitively. The organization
+scopes and validates the collection rather than filtering alongside it: it
+selects which `dev-secrets` is meant when more than one exists, and must match
+the collection's actual organization. Naming it is optional when the collection
+name is unambiguous. Addresses that resolve to nothing fail with the
+organizations or collections that do exist.
+
+Item names match the same way — **in full and case-insensitively** (0.2+), so
+`API_KEY` never resolves `API_KEY_OLD`. Names are not unique in Bitwarden, and a
+name matching several items is refused with their ids rather than resolved to an
+arbitrary one; address a single item by using its id as the `item`. `?type=`
+narrows both reads and writes to that item type, keeping a Card and a same-named
+Login separately addressable. An unsupported `?type=`, or an unknown query
+parameter, is rejected when the address is parsed rather than ignored.
+
+`?server=` does not configure the CLI. The `bw` CLI takes its server only from
+`bw config server`, which must be run while logged out, so self-hosted users
+configure the CLI themselves and Monosecret verifies the setting matches before
+each operation. See the [provider guide](/providers/bw/#self-hosted-servers).
+
+**Features**: Read/write, all vault item types (logins, cards, identities, SSH keys, secure notes), organization/collection addressing by name or ID, field selection, `ref = { item, field }` mapping in `monosecret.toml`, declaration discovery through `init --from` (0.2+)
+**Prerequisites**: Bitwarden CLI (`bw`), signed in and unlocked (`BW_SESSION` env var), self-hosted servers set with `bw config server` before login, build with `--features bw`
+**Storage**: One vault item per secret; reads use per-type default fields unless `?field=` or a `ref` mapping selects one
 
 ## Bitwarden Secrets Manager Provider
 
 **URI**: `bws://[SERVER_BASE@]PROJECT_UUID` - Stores secrets in Bitwarden Secrets Manager
 
-```bash
+```text
 bws://a9230ec4-5507-4870-b8b5-b3f500587e4c                    # US cloud (default)
 bws://vault.bitwarden.eu@a9230ec4-5507-4870-b8b5-b3f500587e4c # EU cloud
 bws://bw.example.com@a9230ec4-5507-4870-b8b5-b3f500587e4c     # Self hosted
 ```
 
-`SERVER_BASE` is the bare hostname of the Bitwarden instance; the identity and
-API endpoints are derived as `https://SERVER_BASE/identity` and
-`https://SERVER_BASE/api`. Omit it to use the `bitwarden.com` US cloud.
+`SERVER_BASE` is the bare hostname of the Bitwarden instance. Monosecret 0.2+
+passes `https://SERVER_BASE` to `bws --server-url`; Monosecret 0.2 and earlier
+derive the `https://SERVER_BASE/identity` and `https://SERVER_BASE/api`
+endpoints through the SDK. Omit it to use the `bitwarden.com` US cloud.
 
 **Features**: Read/write, cloud sync, project-scoped, end-to-end encryption
 **Prerequisites**: BWS subscription, machine account access token, build with `--features bws`
 **Storage**: Flat key names in the specified BWS project
+
+Monosecret 0.2 and later require the official `bws` CLI 0.3.0 or later on
+`PATH` and invoke it for all reads and writes; set `MONOSECRET_BWS_CLI_PATH` to
+use another executable path. The access token is supplied through the child
+process environment. Secret values passed to the CLI for creation or editing
+may briefly be visible to same-user process-inspection tools.
+
+## Azure Key Vault Provider
+
+**URI**: `akv://VAULT_NAME[?auth=env|cli|managed_identity|workload_identity][&suffix=DNS_SUFFIX]` - Stores secrets in Azure Key Vault
+
+```text
+akv://myvault                            # Service principal env vars, falling back to `az login`
+akv://myvault?auth=managed_identity      # VM / App Service / AKS system-assigned managed identity
+akv://myvault?auth=workload_identity     # AKS workload identity federation
+akv://myvault.vault.azure.cn             # Sovereign cloud (full DNS name)
+akv://myvault?suffix=vault.azure.cn      # Sovereign cloud (explicit suffix, bare vault name)
+```
+
+**Features**: Read/write, cloud sync, profiles, service principal/managed identity/workload identity auth
+**Prerequisites**: An Azure Key Vault instance, authenticated via one of the methods above, build with `--features akv`
+**Storage**: Secret name `monosecret--{base32(project)}--{base32(profile)}--{base32(key)}` (lowercase, unpadded Base32 preserves case and punctuation distinctions within Azure's case-insensitive secret-name namespace)
+
+## Infisical Provider
+
+Available since Monosecret 0.2.
+
+**URI**: `infisical://[HOST]/PROJECT_ID[?env=SLUG][&path=/PREFIX][&tls=false]` - Stores secrets in Infisical
+
+```text
+infisical://app.infisical.com/7e2f1a4c-...            # Infisical Cloud (US)
+infisical://eu.infisical.com/7e2f1a4c-...             # Infisical Cloud (EU)
+infisical://vault.example.com/7e2f1a4c-...?env=prod   # Read every profile from one environment
+infisical://localhost:8080/7e2f1a4c-...?tls=false     # Self-hosted over plain HTTP
+```
+
+The project is Infisical's project **UUID** (Project Settings → Project ID); its API does not
+accept the project slug. Without a host, the provider reads `INFISICAL_DOMAIN`, then Infisical's
+legacy `INFISICAL_API_URL`, then defaults to Infisical Cloud.
+
+**Features**: Read/write, cloud sync, profiles, machine-identity (Universal Auth) or token auth, secret references, version-pinned refs
+**Prerequisites**: An Infisical project, a machine identity with access to it, build with `--features infisical`
+**Authentication**: `INFISICAL_CLIENT_ID` + `INFISICAL_CLIENT_SECRET` (Universal Auth), or a ready-made `INFISICAL_TOKEN`. Service tokens are not supported; Infisical deprecated them in favour of machine identities.
+**Storage**: Secret `{key}` in folder `/monosecret/{project}/{profile}`, in the environment named by the profile (or by `?env=`). Keys are stored verbatim.
+
+By default the Monosecret profile names the Infisical environment, so a `production` profile reads
+the `production` environment. Projects whose environments do not correspond to profiles pin one with
+`?env=`; the profile still names the folder, so profiles never share a secret.
+
+Values are read with Infisical's secret references expanded, matching its own CLI, so a value of
+`postgres://${DB_USER}@host` arrives resolved.
+
+## age Provider (0.2+)
+
+> **Version compatibility:** The age provider is added in Monosecret 0.2.
+
+**URI**: `age://PATH[?identity=FILE][&recipients-file=FILE][&armor=false]` - Stores secrets in a single age-encrypted file committed alongside code
+
+```text
+age://secrets.age                                        # Encrypt to your own identity
+age://secrets.age?identity=/home/alice/.config/age/plugin-identity.txt
+age://secrets.age?recipients-file=secrets.age.recipients # Share with a roster
+```
+
+**Features**: Read/write, committed-file storage, X25519 and SSH keys, native tagged recipients, and non-interactive `age-plugin-*` recipients and identities
+**Prerequisites**: An age identity; hybrid ML-KEM-768 + X25519 keys from `age-keygen -pq` are recommended for new setups and currently require the non-interactive `age-plugin-pq` compatibility plugin. Build with `--features age`.
+**Authentication**: The `identity` credential, `AGE_IDENTITY`, or `?identity=`; recipients from `?recipients-file=` or derived from the identity
+**Storage**: One `KEY=value` entry per secret inside the encrypted blob at PATH
+
+## SOPS Provider (0.2+)
+
+:::caution[Version compatibility]
+The `sops` provider is added in Monosecret 0.2.
+:::
+
+**URI**: `sops://PATH[?format=yaml|json|dotenv|ini]` - Stores secrets in a
+SOPS-encrypted file or a templated set of files
+
+```text
+sops://secrets.enc.yaml
+sops://secrets/{project}/{profile}.enc.json
+sops://secrets/{project}/.env.{profile}.enc?format=dotenv
+```
+
+**Features**: Read/write, YAML, JSON, dotenv, and INI files, SOPS key-service
+support, and profile-aware templated paths
+**Prerequisites**: The `sops` CLI and the required SOPS key configuration;
+build with `--features sops` (0.2+)
+**Authentication**: SOPS environment variables or the
+[supported provider credentials](/providers/sops/#provider-credentials)
+**Storage**: Single-file YAML and JSON convention writes use
+`[project][profile][key]`; single-file INI uses `[profile][key]`, and dotenv is
+flat. Templated paths use a root key (or `[DEFAULT][key]` for INI) in one file
+per project/profile. A single-file provider supports `ref = { item = "..." }`
+as a root key (or a key in `[DEFAULT]` for INI); extra coordinates and refs
+through templated paths are rejected.
 
 ## Provider Selection
 
@@ -168,35 +582,56 @@ API endpoints are derived as `https://SERVER_BASE/identity` and
 
 ```bash
 # Simple provider names
-monosecret get API_KEY --provider keyring
-monosecret get API_KEY --provider dotenv
-monosecret get API_KEY --provider env
+$ monosecret get API_KEY --provider keyring
+
+$ monosecret get API_KEY --provider dotenv
+
+$ monosecret get API_KEY --provider env
 
 # URIs with configuration
-monosecret get API_KEY --provider dotenv:/path/to/.env
-monosecret get API_KEY --provider onepassword://vault
-monosecret get API_KEY --provider "onepassword://account@vault"
+$ monosecret get API_KEY --provider dotenv:/path/to/.env
+
+$ monosecret get API_KEY --provider onepassword://vault
+
+$ monosecret get API_KEY --provider "onepassword://account@vault"
 ```
 
 ### Environment Variables
 
 ```bash
-export MONOSECRET_PROVIDER=keyring
-export MONOSECRET_PROVIDER="dotenv:///config/.env"
+$ export MONOSECRET_PROVIDER=keyring
+
+$ export MONOSECRET_PROVIDER="dotenv:///config/.env"
 ```
 
 ## Security Considerations
 
-| Provider      | Encryption           | Storage Location     | Network Access |
-| ------------- | -------------------- | -------------------- | -------------- |
-| DotEnv        | ❌ Plain text        | Local filesystem     | ❌ No          |
-| Environment   | ❌ Plain text        | Process memory       | ❌ No          |
-| Keyring       | ✅ System encryption | System keychain      | ❌ No          |
-| Pass          | ✅ GPG encryption    | Local filesystem     | ❌ No          |
-| Proton Pass   | ✅ End-to-end        | Cloud (Proton)       | ✅ Yes         |
-| LastPass      | ✅ End-to-end        | Cloud (LastPass)     | ✅ Yes         |
-| OnePassword   | ✅ End-to-end        | Cloud (OnePassword)  | ✅ Yes         |
-| GCSM          | ✅ Google-managed    | Cloud (GCP)          | ✅ Yes         |
-| AWSSM         | ✅ AWS KMS           | Cloud (AWS)          | ✅ Yes         |
-| Vault/OpenBao | ✅ Vault encryption  | Vault/OpenBao server | ✅ Yes         |
-| BWS           | ✅ End-to-end        | Cloud (Bitwarden)    | ✅ Yes         |
+| Provider                   | Encryption                    | Storage Location                 | Network Access                    |
+| -------------------------- | ----------------------------- | -------------------------------- | --------------------------------- |
+| Dotenv                     | ❌ Plain text                 | Local filesystem                 | ❌ No                             |
+| File (0.2+)                | ❌ Plain text                 | Local filesystem                 | ❌ No                             |
+| Environment                | ❌ Plain text                 | Process memory                   | ❌ No                             |
+| Null (0.2+)                | N/A — no stored value         | None                             | ❌ No                             |
+| systemd Credential (0.2+)  | Depends on unit source        | systemd-managed runtime memory   | ❌ No                             |
+| Keyring                    | ✅ System encryption          | System keychain                  | ❌ No                             |
+| KeePass KDBX (0.2+)        | ✅ KDBX encryption            | Local filesystem                 | ❌ No                             |
+| Pass                       | ✅ GPG encryption             | Local filesystem                 | ❌ No                             |
+| Gopass                     | ✅ GPG encryption             | Local filesystem                 | ❌ No                             |
+| Proton Pass                | ✅ End-to-end                 | Cloud (Proton)                   | ✅ Yes                            |
+| Passbolt (0.2+)            | ✅ End-to-end                 | Self-hosted (Passbolt server)    | ✅ Yes                            |
+| LastPass                   | ✅ End-to-end                 | Cloud (LastPass)                 | ✅ Yes                            |
+| Dashlane (0.2+)            | ✅ End-to-end                 | Cloud (Dashlane), synced locally | Yes — `dcli` auto-syncs hourly    |
+| 1Password                  | ✅ End-to-end                 | Cloud (1Password)                | ✅ Yes                            |
+| Keeper (0.2+)              | ✅ End-to-end                 | Cloud (Keeper)                   | ✅ Yes                            |
+| GCSM                       | ✅ Google-managed             | Cloud (GCP)                      | ✅ Yes                            |
+| AWSSM                      | ✅ AWS KMS                    | Cloud (AWS)                      | ✅ Yes                            |
+| AWS Parameter Store (0.2+) | ✅ AWS KMS (`SecureString`)   | Cloud (AWS)                      | ✅ Yes                            |
+| Scaleway (0.2+)            | ✅ Scaleway-managed           | Cloud (Scaleway)                 | ✅ Yes                            |
+| Vault                      | ✅ Vault encryption           | Vault server                     | ✅ Yes                            |
+| OpenBao (0.2+)             | ✅ OpenBao encryption         | OpenBao server                   | ✅ Yes                            |
+| BW (0.2+)                  | ✅ End-to-end                 | Cloud (Bitwarden) or self-hosted | ✅ Yes                            |
+| BWS                        | ✅ End-to-end                 | Cloud (Bitwarden)                | ✅ Yes                            |
+| AKV                        | ✅ Azure-managed              | Cloud (Azure)                    | ✅ Yes                            |
+| Infisical                  | ✅ Infisical-managed          | Cloud (Infisical) or self-hosted | ✅ Yes                            |
+| age (0.2+)                 | ✅ age encryption             | Local filesystem                 | ❌ No                             |
+| SOPS (0.2+)                | ✅ Configured SOPS encryption | Local filesystem                 | Depends on configured key service |

@@ -23,8 +23,11 @@ MANIFEST = <<~TOML
 
   [profiles.default]
   DATABASE_URL = { description = "DB", required = true }
-  LOG_LEVEL = { description = "log", required = false, default = "info" }
+  DEV_SESSION_SECRET = { description = "Development-only session secret", required = false, default = "development-only-secret" }
   SENTRY_DSN = { description = "sentry", required = false }
+
+  [scopes.database]
+  secrets = ["DATABASE_URL"]
 TOML
 
 def project(dir, dotenv, manifest: MANIFEST)
@@ -56,9 +59,9 @@ class ResolveTest < Minitest::Test
       assert_equal "provider", db.source
       refute_nil db.source_provider
 
-      log = resolved.secrets["LOG_LEVEL"]
-      assert_equal "info", log.get
-      assert_equal "default", log.source
+      session = resolved.secrets["DEV_SESSION_SECRET"]
+      assert_equal "development-only-secret", session.get
+      assert_equal "default", session.source
 
       assert_equal ["SENTRY_DSN"], resolved.missing_optional
       refute resolved.secrets.key?("SENTRY_DSN")
@@ -78,6 +81,28 @@ class ResolveTest < Minitest::Test
                             .set_as_env!
 
       assert_equal "postgres://db", ENV.fetch("DATABASE_URL")
+    end
+  end
+
+  def test_scope_is_selected_and_returned
+    Dir.mktmpdir do |dir|
+      manifest, provider = project(
+        dir,
+        "DATABASE_URL=postgres://db\nSENTRY_DSN=https://sentry\n"
+      )
+      builder = Monosecret.builder
+                                       .with_path(manifest)
+                                       .with_provider(provider)
+                                       .with_scope("database")
+                                       .with_reason("rb scoped test")
+
+      resolved = builder.load
+      assert_equal "database", resolved.scope
+      assert_equal ["DATABASE_URL"], resolved.secrets.keys
+
+      report = builder.report
+      assert_equal "database", report.scope
+      assert_equal ["DATABASE_URL"], report.secrets.map(&:name)
     end
   end
 
@@ -139,6 +164,7 @@ end
 # produces the canonical result every other SDK must also produce.
 class ConformanceTest < Minitest::Test
   FIXTURES = File.expand_path("../../../conformance/fixtures", __dir__)
+  CONSTRAINTS = File.expand_path("../../../conformance/constraint-violations", __dir__)
 
   def canonical(resolved)
     secrets = {}
@@ -176,6 +202,16 @@ class ConformanceTest < Minitest::Test
                           .with_path(File.join(dir, "monosecret.toml"))
                           .with_provider("dotenv://#{File.join(dir, '.env')}")
                           .with_reason("conformance")
+  end
+
+  def test_conformance_typed_constraint_violations
+    report = conformance_builder(CONSTRAINTS).report
+    by_kind = report.constraint_violations.to_h { |violation| [violation.kind, violation] }
+
+    assert_equal "cloud", by_kind.fetch("at_least_one").group
+    assert_empty by_kind.fetch("at_least_one").present
+    assert_equal "token", by_kind.fetch("exactly_one").group
+    assert_equal %w[FALLBACK PRIMARY], by_kind.fetch("exactly_one").present
   end
 
   Dir.glob(File.join(FIXTURES, "*")).select { |p| File.directory?(p) }.sort.each do |dir|

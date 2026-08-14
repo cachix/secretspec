@@ -4,7 +4,7 @@
 #
 # Builds the monosecret_ffi cdylib once, then runs every SDK's conformance suite
 # against the shared fixtures and reports a combined result. Run inside the
-# project devenv shell (which provides cargo, python, go, ruby, node):
+# project devenv shell (which provides all nine SDK toolchains):
 #
 #     devenv shell -- bash conformance/run.sh
 #
@@ -66,12 +66,33 @@ run_python() { (
 	cd python/monosecret_py
 	python -m pytest tests/test_conformance.py -q
 ); }
-run_go() { (cd go/monosecret_go && go test -run TestConformance ./...); }
+run_go() { (cd go/monosecret_go && go test -run 'Test(Conformance|ConstraintViolations)' ./...); }
 run_ruby() { (cd ruby/monosecret_rb && ruby test/test_resolve.rb -n "/conformance/"); }
 run_node() {
 	pnpm --filter @monosecret/client run build:native &&
 		pnpm --filter @monosecret/client run test
 }
+run_php() {
+	composer install --no-interaction --no-progress &&
+		(cd php/monosecret_php && ./vendor/bin/phpunit -c phpunit.xml.dist tests/ConformanceTest.php)
+}
+run_dotnet() {
+	dotnet run --project dotnet/monosecret_dotnet/tests/Monosecret.Tests/Monosecret.Tests.csproj
+}
+run_swift() { (
+	xcode_developer_dir="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+	if [[ ! -d "$xcode_developer_dir" ]]; then
+		xcode_developer_dir="$(/usr/bin/xcode-select -p)"
+	fi
+	xcode_sdk="$xcode_developer_dir/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+	xcode_swift="$xcode_developer_dir/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
+	DEVELOPER_DIR="$xcode_developer_dir" SDKROOT="$xcode_sdk" \
+		bash swift/monosecret_swift/scripts/stage-local-xcframework.sh
+	# Package.swift selects the local binary by file existence; bypass a cached
+	# pre-staging manifest that may still point at the deferred release artifact.
+	DEVELOPER_DIR="$xcode_developer_dir" SDKROOT="$xcode_sdk" \
+		"$xcode_swift" test --manifest-cache none
+); }
 run_haskell() { (
 	cd haskell/monosecret_hs
 	# The Haskell SDK statically links the monosecret_ffi archive at build time, so
@@ -93,13 +114,21 @@ run_haskell() { (
 	done
 	cabal test --extra-lib-dirs="$hs_lib_dir" "${ghc_optl[@]}" --test-show-details=streaming
 ); }
-
 run "Dart" dart run_dart
 run "Python" python run_python
 run "Go" go run_go
 run "Ruby" ruby run_ruby
 run "Node" node run_node
 run "Haskell" cabal run_haskell
+run "PHP" composer run_php
+run ".NET" dotnet run_dotnet
+if [[ "$(uname -s)" == "Darwin" ]]; then
+	run "Swift" swift run_swift
+else
+	echo "==> SKIP Swift (macOS-only SDK)"
+	names+=("Swift")
+	statuses+=("SKIP")
+fi
 
 echo
 echo "==> Conformance summary"

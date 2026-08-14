@@ -1,0 +1,86 @@
+---
+title: Go SDK
+description: Resolve Monosecret secrets from Go
+---
+
+import { Code } from 'astro:components';
+import quickStartExample from '../../../../../go/monosecret_go/examples/quick_start/main.go?raw';
+import scopesExample from '../../../../../go/monosecret_go/examples/scopes/main.go?raw';
+import typedAccessExample from '../../../../../go/monosecret_go/examples/typed_access/main.go?raw';
+
+The Go SDK (`monosecret_go`) is a thin client over the `monosecret_ffi` C ABI,
+loaded via [purego](https://github.com/ebitengine/purego) (dlopen, no cgo).
+Resolution happens in the Rust core, so the SDK inherits every provider with no
+Go-side logic.
+
+## Quick start
+
+<Code code={quickStartExample} lang="go" meta='title="quick_start/main.go"' />
+
+A missing required secret returns `*MissingRequiredError`; any other failure
+returns `*Error` (with a stable `.Kind`).
+
+## Scopes (0.2+)
+
+Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `Resolved.Scope` and `Report.Scope`:
+
+<Code code={scopesExample} lang="go" meta='title="scopes/main.go"' />
+
+## Typed access (codegen)
+
+Generate typed structs with `monosecret schema` plus
+[quicktype](https://quicktype.io), then unmarshal `resolved.FieldsJSON()`:
+
+```bash
+$ monosecret schema | quicktype -s schema --top-level Monosecret --lang go -o secrets_gen.go
+```
+
+<Code code={typedAccessExample} lang="go" meta='title="typed_access/main.go"' />
+
+## Library discovery
+
+The native `monosecret_ffi` cdylib is resolved at runtime, in order:
+
+1. The `MONOSECRET_FFI_LIB` environment variable (an explicit path).
+2. A library embedded at build time with `-tags embed_lib`.
+3. A Cargo `target` directory found by searching up from the working directory
+   (the development path).
+
+The SDK uses [purego](https://github.com/ebitengine/purego), so the cdylib is
+loaded at runtime, not linked. Either install/build `libmonosecret_ffi` and set
+`MONOSECRET_FFI_LIB`, or stage the per-platform library into `lib/` and build
+with `-tags embed_lib` for a self-contained binary. The embedded library is
+extracted to a per-user, owner-only cache directory at first use, and is not
+distributed through the Go module proxy.
+
+## Static linking
+
+For a self-contained binary with no runtime library to locate, build with
+`-tags static` instead. This uses cgo and links `libmonosecret_ffi.a` directly
+into the Go binary. In a development checkout:
+
+```bash
+$ bash scripts/stage-staticlib.sh
+
+$ CGO_ENABLED=1 go build -tags static ./...
+```
+
+## Linking with pkg-config (0.2+)
+
+Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
+
+```bash
+# Use "static" (the default) or "shared"; use separate prefixes for both.
+$ bash monosecret_ffi/scripts/cinstall.sh "$PREFIX" static
+```
+
+Then use the same build command for either type:
+
+```bash
+$ PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" CGO_ENABLED=1 go build -tags pkgconfig ./...
+```
+
+Unlike staging, this also works for a `go get` dependency. A shared install in
+a non-system prefix also requires `PREFIX/lib` in the platform's runtime
+library search path.

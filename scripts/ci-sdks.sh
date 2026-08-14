@@ -109,4 +109,34 @@ echo "==> Haskell"
 		--write-ghc-environment-files=always
 )
 
+echo "==> PHP (ext-ffi)"
+composer install --no-interaction --no-progress
+(cd php/monosecret_php && ./vendor/bin/phpunit -c phpunit.xml.dist)
+
+echo "==> PHP (native extension)"
+MONOSECRET_PHP_PROFILE=debug bash php/monosecret_php/scripts/build-ext.sh
+(cd php/monosecret_php && php -d extension="$repo_root/php/monosecret_php/lib/monosecret.so" ./vendor/bin/phpunit -c phpunit.xml.dist)
+
+echo "==> .NET"
+dotnet run --project dotnet/monosecret_dotnet/tests/Monosecret.Tests/Monosecret.Tests.csproj
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+	echo "==> Swift"
+	# Unset Nix-provided SDK env vars so Swift uses the system Xcode toolchain.
+	# The devenv apple-sdk does not include a Swift binary and its DEVELOPER_DIR
+	# points at a bare SDK, not a full Xcode installation.
+	unset DEVELOPER_DIR SDKROOT SDK_NAME NIX_SDKROOT
+	xcode_developer_dir="$(/usr/bin/xcode-select -p)"
+	xcode_sdk="$xcode_developer_dir/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+	xcode_swift="$xcode_developer_dir/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
+	DEVELOPER_DIR="$xcode_developer_dir" SDKROOT="$xcode_sdk" \
+		bash swift/monosecret_swift/scripts/stage-local-xcframework.sh
+	DEVELOPER_DIR="$xcode_developer_dir" SDKROOT="$xcode_sdk" \
+		"$xcode_swift" package dump-package >/dev/null
+	DEVELOPER_DIR="$xcode_developer_dir" SDKROOT="$xcode_sdk" \
+		"$xcode_swift" test
+else
+	echo "==> Swift (skipped: macOS-only SDK)"
+fi
+
 echo "==> All SDK suites passed"

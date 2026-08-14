@@ -1,10 +1,9 @@
 # monosecret_rb (Ruby SDK)
 
-The `monosecret_rb` gem (required as `monosecret`) provides Ruby bindings for [Monosecret](https://ifiokjr.github.io/monosecret/), a declarative secrets
-manager. A thin client over the `monosecret_ffi` C ABI, statically linked into a
-native C extension at build time (no runtime library to locate). Resolution
-happens in the Rust core, so the SDK inherits every provider with no Ruby-side
-logic.
+Ruby bindings for [Monosecret](https://monosecret.dev/), a declarative secrets
+manager. A thin client over the `monosecret_ffi` C ABI, linked into a native C
+extension at build time. Resolution happens in the Rust core, so the SDK
+inherits every provider with no Ruby-side logic.
 
 ```ruby
 require "monosecret"
@@ -24,6 +23,15 @@ resolved.set_as_env!    # export everything into ENV
 A missing required secret raises `Monosecret::MissingRequiredError`; any other
 failure raises `Monosecret::Error` (with a stable `#kind`).
 
+## Scopes (0.17+)
+
+Use `.with_scope("api")` to resolve only a named `[scopes.api]` subset. Both
+`resolved.scope` and `report.scope` return the selected scope:
+
+```ruby
+resolved = Monosecret::Monosecret.builder.with_scope("api").load
+```
+
 ## Cleanup
 
 `as_path` secrets are materialized to temp files that outlive the call. Pass a
@@ -41,13 +49,30 @@ report = Monosecret.builder.with_profile("production").report
 report.secrets.each { |s| puts [s.name, s.status, s.required].join(" ") }
 ```
 
-## Native extension
+## Building
 
-The resolver is statically linked into the gem's native C extension for local
-source builds. Future platform gems will be self-contained: requiring
-`monosecret` will not load a separate `cdylib`, and `MONOSECRET_FFI_LIB` will not
-be used at runtime.
+The extension links the `monosecret_ffi` archive statically. In a development
+checkout:
 
-Platform-gem assembly, smoke installation, and publication are deferred. The
-current package check validates only source-gem metadata and source inclusion;
-it does not claim that the unstaged source gem is independently installable.
+```bash
+bash scripts/build-ext.sh
+```
+
+### Linking with pkg-config (0.19+)
+
+Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
+
+```bash
+# Use "static" (the default) or "shared"; use separate prefixes for both.
+bash crates/monosecret_ffi/scripts/cinstall.sh "$PREFIX" static
+```
+
+Then use the same extension flag for either type:
+
+```bash
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" gem install monosecret -- --enable-pkg-config
+```
+
+The same flag works in a checkout: `bash scripts/build-ext.sh --enable-pkg-config`.
+A shared install in a non-system prefix also requires `PREFIX/lib` in the
+platform's runtime library search path.

@@ -11,7 +11,7 @@ A [`monosecret.toml`](/concepts/declarative/) file lists the secrets your projec
 
 ## Use profiles for environments
 
-[Profiles](/concepts/profiles/) let you vary secret requirements per environment. A `production` profile can enforce strict requirements while a `development` profile provides safe defaults. All profiles inherit from `default`, so you only specify what changes.
+[Profiles](/concepts/profiles/) let you vary secret requirements per environment. A `production` profile can enforce strict requirements while a `development` profile provides safe defaults. Non-default profiles inherit from `default` when it exists, so you only specify what changes; Monosecret 0.2+ also supports standalone profiles that opt out of this inheritance.
 
 ## Store secrets anywhere with providers
 
@@ -33,4 +33,8 @@ Each concern is independent: you can change your storage backend without touchin
 ## Additional concepts
 
 - [Configuration Inheritance](/concepts/inheritance/) lets projects share common secret definitions via `extends`
+- [Scopes (0.2+)](/concepts/scopes/) let each service or task resolve
+  only its declared subset of a profile
 - [Secret Generation](/concepts/generation/) auto-creates passwords, tokens, and keys when secrets are missing
+- [Composed Secrets (0.2+)](/concepts/composed-secrets/) derive read-only
+  values from other declared secrets

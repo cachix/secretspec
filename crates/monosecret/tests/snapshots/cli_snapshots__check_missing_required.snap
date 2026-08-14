@@ -9,6 +9,8 @@ info:
     - "--no-prompt"
     - "--provider"
     - local
+  env:
+    HOME: /tmp/monosecret-cli-snapshots-check-missing-required
 ---
 success: false
 exit_code: 1

@@ -29,18 +29,33 @@ type ProviderMetadata = {
 };
 
 const providerMetadata: ProviderMetadata[] = [
-  { icon: 'apple', slug: 'keyring', label: 'macOS Keychain' },
+  { icon: 'apple', slug: 'keyring', label: 'System keyring' },
+  { icon: 'dotenv', slug: 'dotenv', label: '.env files' },
+  { slug: 'env', label: 'Environment variables' },
   { icon: '1password', slug: 'onepassword', label: '1Password' },
   { icon: 'lastpass', slug: 'lastpass', label: 'LastPass' },
-  { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden' },
-  { icon: 'vault', slug: 'vault', label: 'Vault / OpenBao' },
+  { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden Secrets Manager' },
+  { icon: 'vault', slug: 'vault', label: 'HashiCorp Vault' },
   { slug: 'awssm', label: 'AWS Secrets Manager' },
   { icon: 'googlecloud', slug: 'gcsm', label: 'Google Cloud Secret Manager' },
   { slug: 'protonpass', label: 'Proton Pass' },
   { icon: 'gnuprivacyguard', slug: 'pass', label: 'Pass (GPG)' },
-  { icon: 'dotenv', slug: 'dotenv', label: '.env files' },
-  { icon: 'linux', slug: 'keyring', label: 'Secret Service' },
-  { slug: 'keyring', label: 'Credential Manager' },
+  { slug: 'age', label: 'age (0.2+)' },
+  { slug: 'akv', label: 'Azure Key Vault (0.2+)' },
+  { slug: 'awsps', label: 'AWS Parameter Store (0.2+)' },
+  { icon: 'bitwarden', slug: 'bw', label: 'Bitwarden Password Manager (0.2+)' },
+  { icon: 'dashlane', slug: 'dashlane', label: 'Dashlane (0.2+)' },
+  { slug: 'file', label: 'Plaintext files (0.2+)' },
+  { icon: 'gnuprivacyguard', slug: 'gopass', label: 'Gopass (0.2+)' },
+  { slug: 'infisical', label: 'Infisical (0.2+)' },
+  { slug: 'kdbx', label: 'KeePass KDBX (0.2+)' },
+  { slug: 'keeper', label: 'Keeper Secrets Manager (0.2+)' },
+  { slug: 'null', label: 'Null / ephemeral (0.2+)' },
+  { icon: 'vault', slug: 'openbao', label: 'OpenBao (0.2+)' },
+  { slug: 'passbolt', label: 'Passbolt (0.2+)' },
+  { slug: 'scaleway', label: 'Scaleway Secret Manager (0.2+)' },
+  { slug: 'sops', label: 'SOPS (0.2+)' },
+  { icon: 'systemd', slug: 'systemd-credential', label: 'systemd credentials (0.2+)' },
 ];
 
 
@@ -51,7 +66,7 @@ const sitePath = (path: string) => `${import.meta.env.BASE_URL.replace(/\/$/, ''
 <StarlightPage
   frontmatter={{
     title: 'Declare secrets once. Store them anywhere.',
-    description: 'Declare what your application needs in monosecret.toml — store the values in any of 11 backends. No secrets in git. Same code, every environment.',
+    description: 'Declare what your application needs in monosecret.toml — store the values in any of 27 providers. No secrets in git. Same code, every environment.',
     template: 'splash',
     hero: { tagline: '' },
   }}
@@ -83,7 +98,7 @@ const sitePath = (path: string) => `${import.meta.env.BASE_URL.replace(/\/$/, ''
       <p class="landing-badge">Declarative secrets manager</p>
       <h1 id="_top" class="landing-hero-title">Declare secrets once.<br>Store them anywhere.</h1>
       <p class="landing-hero-subtitle">
-        Stop leaking <code class="inline-code">.env</code> files. Define what your application needs in <code class="inline-code">monosecret.toml</code>, then plug in keyring, 1Password, Vault, AWS, or any of 11 backends — same code, every environment.
+        Stop leaking <code class="inline-code">.env</code> files. Define what your application needs in <code class="inline-code">monosecret.toml</code>, then plug in keyring, 1Password, Vault, AWS, or any of 27 providers — same code, every environment.
       </p>
       <div class="landing-hero-actions">
         <a href={sitePath('/quick-start/')} class="landing-btn landing-btn-primary">Get Started</a>
@@ -129,6 +144,7 @@ $ monosecret init --from dotenv
 
 <span class="tok-com"># 2. Pick a storage backend (one-time)</span>
 $ monosecret config init
+? Default provider: keyring, dotenv, env, onepassword, lastpass, bws, vault, awssm, gcsm, protonpass, pass, age (0.2+), akv (0.2+), awsps (0.2+), bw (0.2+), dashlane (0.2+), file (0.2+), gopass (0.2+), infisical (0.2+), kdbx (0.2+), keeper (0.2+), null (0.2+), openbao (0.2+), passbolt (0.2+), scaleway (0.2+), sops (0.2+), systemd-credential (0.2+)
 <span class="tok-str">✓</span> Saved to ~/.config/monosecret/config.toml
 
 <span class="tok-com"># 3. Run your app with secrets injected</span>
@@ -187,9 +203,9 @@ $ monosecret run --profile production -- npm start
       <div class="landing-step">
         <span class="landing-step-num">2</span>
         <p class="landing-step-title">Configure</p>
-        <p class="landing-step-desc">Pick a backend: system keyring, 1Password, Vault, AWS, GCP, Bitwarden, Pass, dotenv, or env vars.</p>
+        <p class="landing-step-desc">Pick any supported provider, from a local keyring or encrypted file to a team password manager or cloud secret store.</p>
         <pre is:raw class="landing-step-code"><code>$ monosecret config init
-? Default provider: keyring</code></pre>
+? Default provider: keyring, dotenv, env, onepassword, lastpass, bws, vault, awssm, gcsm, protonpass, pass, age (0.2+), akv (0.2+), awsps (0.2+), bw (0.2+), dashlane (0.2+), file (0.2+), gopass (0.2+), infisical (0.2+), kdbx (0.2+), keeper (0.2+), null (0.2+), openbao (0.2+), passbolt (0.2+), scaleway (0.2+), sops (0.2+), systemd-credential (0.2+)</code></pre>
       </div>
 
       <div class="landing-step">
@@ -214,9 +230,9 @@ $ monosecret run --profile production -- npm start
 
     <div class="landing-bento">
       <a href={sitePath('/concepts/providers/')} class="landing-bento-card is-link landing-bento-2">
-        <div class="landing-bento-big-num">11</div>
+        <div class="landing-bento-big-num">27</div>
         <p class="landing-bento-title">Providers</p>
-        <p class="landing-bento-desc">Keyring · 1Password · LastPass · Bitwarden · Vault · AWS · GCP · Pass · Proton Pass · dotenv · env — pluggable trait-based architecture.</p>
+        <p class="landing-bento-desc">Local keyrings and files, password managers, cloud secret stores, Vault-compatible servers, encrypted files, and ephemeral values — one pluggable interface.</p>
       </a>
 
       <a href={sitePath('/concepts/profiles/')} class="landing-bento-card is-link landing-bento-2">
@@ -271,7 +287,7 @@ println!("{}", s.secrets.database_url);</code></pre>
       <span class="landing-showcase-eyebrow">Declaration vs storage</span>
       <h2 class="landing-section-title">Declare a secret. Swap the source.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Your <code class="inline-code">monosecret.toml</code> never changes. The same code reads from Keychain, 1Password, Vault, AWS, or any of 11 backends.
+        Your <code class="inline-code">monosecret.toml</code> never changes. The same code reads from Keychain, 1Password, Vault, AWS, or any of 27 providers.
       </p>
     </div>
 
@@ -387,7 +403,7 @@ println!("{}", s.secrets.database_url);</code></pre>
           <span class="landing-terminal-title">monosecret.toml</span>
         </div>
         <pre is:raw class="landing-terminal-body"><code><span class="tok-sec">[providers]</span>
-<span class="tok-key">team_vault</span> <span class="tok-pun">=</span> <span class="tok-str">"onepassword://vault/Shared"</span>
+<span class="tok-key">team_vault</span> <span class="tok-pun">=</span> <span class="tok-str">"onepassword://Shared"</span>
 <span class="tok-key">keyring</span>    <span class="tok-pun">=</span> <span class="tok-str">"keyring://"</span>
 <span class="tok-key">env</span>        <span class="tok-pun">=</span> <span class="tok-str">"env://"</span>
 
@@ -542,7 +558,7 @@ REDIS_URL=redis://…</code></pre>
       <span class="landing-showcase-eyebrow">devenv &amp; Nix</span>
       <h2 class="landing-section-title">Native devenv &amp; Nix integration.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        Enable Monosecret in your <code class="inline-code">devenv.yaml</code> and every secret declared in <code class="inline-code">monosecret.toml</code> is loaded into <code class="inline-code">config.monosecret.secrets</code> — wire them into env vars, services, or processes from <code class="inline-code">devenv.nix</code>. <a href="https://devenv.sh/integrations/secretspec/" class="landing-link">devenv docs →</a>
+        Enable Monosecret in your <code class="inline-code">devenv.yaml</code> and every secret declared in <code class="inline-code">monosecret.toml</code> is loaded into <code class="inline-code">config.monosecret.secrets</code> — wire them into env vars, services, or processes from <code class="inline-code">devenv.nix</code>.
       </p>
     </div>
 
@@ -598,10 +614,10 @@ REDIS_URL=redis://…</code></pre>
         <span class="landing-community-label">Chat with the team</span>
         <span class="landing-community-desc">Get help, share setups, follow what's coming next.</span>
       </a>
-      <a href="https://devenv.sh/blog/2025/07/21/announcing-secretspec-declarative-secrets-management/" class="landing-community-card">
-        <span class="landing-community-stat">Blog</span>
-        <span class="landing-community-label">Original SecretSpec announcement</span>
-        <span class="landing-community-desc">The design rationale behind separating declaration from storage.</span>
+      <a href={sitePath('/blog/secretspec-0-12-audit-logs-and-coding-agents/')} class="landing-community-card">
+        <span class="landing-community-stat">History</span>
+        <span class="landing-community-label">SecretSpec 0.12 archive</span>
+        <span class="landing-community-desc">The preserved upstream release article with original attribution.</span>
       </a>
       <a href={sitePath('/reference/adding-providers/')} class="landing-community-card">
         <span class="landing-community-stat">Add a provider</span>

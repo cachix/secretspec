@@ -1,0 +1,95 @@
+---
+title: Haskell SDK
+description: Resolve Monosecret secrets from Haskell
+---
+
+import { Code } from 'astro:components';
+import quickStartExample from '../../../../../haskell/monosecret_hs/examples/QuickStart.hs?raw';
+import scopesExample from '../../../../../haskell/monosecret_hs/examples/Scopes.hs?raw';
+import reportExample from '../../../../../haskell/monosecret_hs/examples/Report.hs?raw';
+
+The Haskell SDK (`monosecret_hs`) is a thin client over the `monosecret_ffi` C
+ABI, linked at build time via the Haskell FFI. Resolution happens in the Rust
+core, so the SDK inherits every provider with no Haskell-side logic.
+
+## Quick start
+
+<Code code={quickStartExample} lang="haskell" meta='title="QuickStart.hs"' />
+
+A missing required secret throws `MissingRequiredError`; any other failure
+throws `MonosecretError` (with a stable `errorKind`).
+
+`as_path` secrets are materialized to temp files that outlive the call; call
+`S.close resolved` when done so they do not accumulate in the temp dir.
+
+## Scopes (0.2+)
+
+Use `withScope "api"` to resolve only a named `[scopes.api]` subset. The
+selected name is available through `resolvedScope` and `reportScope`:
+
+<Code code={scopesExample} lang="haskell" meta='title="Scopes.hs"' />
+
+## Value-free report
+
+`S.report` returns the inventory/preflight view: per-secret status and
+provenance, never a value. Unlike `load`, it does not throw when a required
+secret is missing — that secret appears as a `SecretReport` with `srStatus`
+`"missing_required"`.
+
+<Code code={reportExample} lang="haskell" meta='title="Report.hs"' />
+
+## Typed access (codegen)
+
+Generate a typed record with `monosecret schema` plus
+[quicktype](https://quicktype.io), then decode `S.fieldsJson resolved`:
+
+```bash
+$ monosecret schema | quicktype -s schema --top-level Monosecret --lang haskell -o Secrets.hs
+```
+
+## Building
+
+The build links the `monosecret_ffi` archive statically. Stage the `.a` in a
+directory of its own (so the linker picks the archive, not the co-located
+`.so`) and pass its native dependencies to the linker:
+
+```bash
+$ cargo build -p monosecret_ffi
+
+$ TARGET="$(cargo metadata --no-deps --format-version 1 \
+  | grep -o '"target_directory":"[^"]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/')"
+
+# Stage the staticlib alone, and capture its native-static-libs for the linker.
+$ LIBDIR="$(mktemp -d)"
+
+$ cp "$TARGET/debug/libmonosecret_ffi.a" "$LIBDIR/"
+
+$ NATIVE_LIBS="$(cargo rustc -q -p monosecret_ffi --crate-type staticlib -- \
+  --print native-static-libs 2>&1 | sed -n 's/^note: native-static-libs: //p' | tail -1)"
+
+$ cabal build --extra-lib-dirs="$LIBDIR" --ghc-options="-optl${NATIVE_LIBS// / -optl}"
+
+$ cabal test  --extra-lib-dirs="$LIBDIR" --ghc-options="-optl${NATIVE_LIBS// / -optl}"
+```
+
+### Linking with pkg-config (0.2+)
+
+Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
+
+```bash
+# Use "static" (the default) or "shared"; use separate prefixes for both.
+$ bash monosecret_ffi/scripts/cinstall.sh "$PREFIX" static
+```
+
+Then use the same Cabal flag for either type:
+
+```bash
+$ cd monosecret_hs
+
+$ PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal build -f use-pkg-config
+
+$ PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal test  -f use-pkg-config
+```
+
+A shared install in a non-system prefix also requires `PREFIX/lib` in the
+platform's runtime library search path.

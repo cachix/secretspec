@@ -1,0 +1,41 @@
+---
+title: Node.js SDK
+description: Resolve Monosecret secrets from Node.js and TypeScript
+---
+
+import { Code } from 'astro:components';
+import quickStartExample from '../../../../../npm/monosecret__client/examples/quick_start.js?raw';
+import scopesExample from '../../../../../npm/monosecret__client/examples/scopes.js?raw';
+import typedAccessExample from '../../../../../npm/monosecret__client/examples/typed_access.ts?raw';
+
+The Node.js / TypeScript SDK (`monosecret`) is a thin wrapper over a
+[napi-rs](https://napi.rs/) native addon that embeds the resolver. Resolution
+happens in the Rust core, so the SDK inherits every provider with no JS-side
+logic. The addon is built from the Rust core with `scripts/build-addon.sh`;
+prebuilt per-platform npm packages are a follow-up. TypeScript declarations ship
+in `index.d.ts`.
+
+## Quick start
+
+<Code code={quickStartExample} lang="js" meta='title="quick_start.js"' />
+
+A missing required secret throws `MissingRequiredError`; any other failure
+throws `MonosecretError` (with a stable `.kind`).
+
+## Scopes (0.2+)
+
+Use `.withScope('api')` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `resolved.scope` and `report.scope`:
+
+<Code code={scopesExample} lang="js" meta='title="scopes.js"' />
+
+## Typed access (codegen)
+
+Generate typed interfaces with `monosecret schema` plus
+[quicktype](https://quicktype.io), then convert `resolved.fieldsJson()`:
+
+```bash
+$ monosecret schema | quicktype -s schema --top-level Monosecret --lang typescript -o secrets_gen.ts
+```
+
+<Code code={typedAccessExample} lang="ts" meta='title="typed_access.ts"' />

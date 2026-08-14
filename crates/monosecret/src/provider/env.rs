@@ -4,6 +4,7 @@ use secrecy::SecretString;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::Address;
 use super::Provider;
 use super::ProviderUrl;
 use crate::MonosecretError;
@@ -29,9 +30,9 @@ impl TryFrom<&ProviderUrl> for EnvConfig {
 
 	/// Creates an `EnvConfig` from a URL.
 	///
-	/// This method validates that the URL has the correct scheme ("env")
-	/// and returns an `EnvConfig` instance. The environment provider
-	/// doesn't require any additional configuration from the URL.
+	/// Validates the scheme is "env" and that the URI carries no authority:
+	/// the provider reads the variable named after each secret, and a specific
+	/// variable is addressed with `ref = { item = "VARNAME" }`, not in the URI.
 	///
 	/// # Example
 	///
@@ -49,7 +50,14 @@ impl TryFrom<&ProviderUrl> for EnvConfig {
 			)));
 		}
 
-		Ok(Self::default())
+		if let Some(host) = url.host().filter(|h| !h.is_empty()) {
+			let hint = crate::config::ref_table_hint(None, &host, None, None);
+			return Err(MonosecretError::ProviderOperationFailed(format!(
+				"env:// takes no authority: to read one specific variable, use \
+                 {hint} on the secret instead"
+			)));
+		}
+		Ok(Self {})
 	}
 }
 
@@ -78,10 +86,7 @@ impl EnvConfig {}
 /// let provider = EnvProvider::new(EnvConfig::default());
 /// // Can only read values, not set them
 /// ```
-pub struct EnvProvider {
-	#[allow(dead_code)]
-	config: EnvConfig,
-}
+pub struct EnvProvider;
 
 crate::register_provider! {
 	struct: EnvProvider,
@@ -97,7 +102,8 @@ impl EnvProvider {
 	///
 	/// # Arguments
 	///
-	/// * `config` - The configuration for the provider (currently unused)
+	/// * `_config` - The configuration for the provider; the process
+	///   environment is global, so there is nothing to configure.
 	///
 	/// # Example
 	///
@@ -106,18 +112,32 @@ impl EnvProvider {
 	/// let config = EnvConfig::default();
 	/// let provider = EnvProvider::new(config);
 	/// ```
-	pub fn new(config: EnvConfig) -> Self {
-		Self { config }
+	pub fn new(_config: EnvConfig) -> Self {
+		Self
 	}
 }
 
 impl Provider for EnvProvider {
+	/// Convention names map straight to the environment variable named by the
+	/// secret key; project and profile don't exist in a process environment.
+	fn convention_address(
+		&self,
+		_project: &str,
+		_profile: &str,
+		key: &str,
+	) -> Result<crate::config::NativeAddress> {
+		Ok(crate::config::NativeAddress {
+			item: key.to_string(),
+			..Default::default()
+		})
+	}
+
 	fn name(&self) -> &'static str {
 		Self::PROVIDER_NAME
 	}
 
 	fn uri(&self) -> String {
-		// Env can be "env", "env:", or "env://"
+		// Env can be "env", "env:", or "env://".
 		"env".to_string()
 	}
 
@@ -145,11 +165,12 @@ impl Provider for EnvProvider {
 	/// # use monosecret::provider::{Provider, env::{EnvProvider, EnvConfig}};
 	/// # unsafe { std::env::set_var("MY_SECRET", "value123"); }
 	/// let provider = EnvProvider::new(EnvConfig::default());
-	/// let value = provider.get("myproject", "MY_SECRET", "production").unwrap();
+	/// let value = provider.get(Address::convention("myproject", "production", "MY_SECRET")).unwrap();
 	/// assert_eq!(value, Some("value123".to_string()));
 	/// ```
-	fn get(&self, _project: &str, key: &str, _profile: &str) -> Result<Option<SecretString>> {
-		Ok(env::var(key).ok().map(|v| SecretString::new(v.into())))
+	fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+		let var = super::flat_item(self, addr)?;
+		Ok(env::var(&*var).ok().map(|v| SecretString::new(v.into())))
 	}
 
 	/// Attempts to set a secret value (always fails).
@@ -175,27 +196,67 @@ impl Provider for EnvProvider {
 	/// ```ignore
 	/// # use monosecret::provider::{Provider, env::{EnvProvider, EnvConfig}};
 	/// let provider = EnvProvider::new(EnvConfig::default());
-	/// let result = provider.set("myproject", "MY_SECRET", "value", "production");
+	/// let result = provider.set(Address::convention("myproject", "production", "MY_SECRET"), "value");
 	/// assert!(result.is_err());
 	/// ```
-	fn set(&self, _project: &str, _key: &str, _value: &SecretString, _profile: &str) -> Result<()> {
-		// Environment variables are read-only in this backend
-		// Setting environment variables at runtime doesn't persist across processes
-		Err(MonosecretError::ProviderOperationFailed(
+	fn set(&self, addr: Address<'_>, _value: &SecretString) -> Result<()> {
+		self.check_writable(addr)
+	}
+
+	/// Always read-only: setting environment variables at runtime doesn't
+	/// persist across processes. Stating the reason here lets the CLI refuse
+	/// the write before prompting for a value, with the same message `set`
+	/// would return.
+	fn check_writable(&self, _addr: Address<'_>) -> Result<()> {
+		Err(crate::MonosecretError::ProviderOperationFailed(
             "Environment variable provider is read-only. Set variables in your shell or process environment.".to_string()
         ))
 	}
+}
 
-	/// Indicates whether this provider supports setting values.
-	///
-	/// Always returns `false` for the environment provider since it's
-	/// a read-only provider. This allows the CLI and other consumers
-	/// to check capabilities before attempting operations.
-	///
-	/// # Returns
-	///
-	/// Always returns `false`
-	fn allows_set(&self) -> bool {
-		false
+#[cfg(test)]
+mod tests {
+	use url::Url;
+
+	use super::*;
+
+	/// A native address reads the variable its `item` names, regardless of any
+	/// instance configuration.
+	#[test]
+	fn native_address_reads_the_named_variable() {
+		let p = EnvProvider::new(EnvConfig::default());
+		let addr = crate::config::NativeAddress {
+			item: "PATH".into(),
+			..Default::default()
+		};
+		// PATH is set in every test environment.
+		assert!(p.get(Address::Native(&addr)).unwrap().is_some());
+	}
+
+	/// The authority form (`env://VARNAME`) from earlier iterations is
+	/// rejected with a pointer at the `ref` table, instead of being silently
+	/// ignored and reading the wrong variable.
+	#[test]
+	fn authority_is_rejected_with_ref_hint() {
+		let err = EnvConfig::try_from(&ProviderUrl::new(Url::parse("env://SOME_VAR").unwrap()))
+			.unwrap_err();
+		assert!(
+			err.to_string().contains("ref = { item = \"SOME_VAR\" }"),
+			"{err}"
+		);
+	}
+
+	/// Environment variables have no sub-components, so a `field` coordinate is
+	/// rejected instead of silently reading the wrong thing.
+	#[test]
+	fn native_address_rejects_field() {
+		let p = EnvProvider::new(EnvConfig::default());
+		let addr = crate::config::NativeAddress {
+			item: "PATH".into(),
+			field: Some("x".into()),
+			..Default::default()
+		};
+		let err = p.get(Address::Native(&addr)).unwrap_err();
+		assert!(err.to_string().contains("`field`"), "{err}");
 	}
 }

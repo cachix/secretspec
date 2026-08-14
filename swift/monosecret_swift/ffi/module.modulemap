@@ -1,0 +1,4 @@
+module CMonosecret {
+  header "monosecret.h"
+  export *
+}

@@ -9,7 +9,7 @@
       "default_applied": false,
       "source_provider": true
     },
-    "LOG_LEVEL": {
+    "DEV_SESSION_SECRET": {
       "status": "resolved",
       "required": false,
       "as_path": false,

@@ -1,6 +1,8 @@
 export {
   abiVersion,
   Builder,
+  ConstraintViolation,
+  type ConstraintViolationKind,
   MissingRequiredError,
   Monosecret,
   MonosecretError,
@@ -31,6 +33,7 @@ export interface MonosecretClientOptions {
 
 export interface SecretSelectorOptions {
   profile?: string;
+  scope?: string;
   provider?: string;
   file?: string;
 }
@@ -170,6 +173,7 @@ export function parseEnvironment(stdout: string): Record<string, string> {
 function selectorArgs(options: SecretSelectorOptions): string[] {
   return [
     ...(options.profile !== undefined ? ["--profile", options.profile] : []),
+    ...(options.scope !== undefined ? ["--scope", options.scope] : []),
     ...(options.provider !== undefined ? ["--provider", options.provider] : []),
     ...(options.file !== undefined ? ["--file", options.file] : []),
   ];

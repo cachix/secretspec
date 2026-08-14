@@ -1,6 +1,4 @@
-use std::sync::Once;
-
-use keyring_core::Entry;
+use keyring::Entry;
 use secrecy::ExposeSecret;
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -11,8 +9,6 @@ use super::Provider;
 use super::ProviderUrl;
 use crate::MonosecretError;
 use crate::Result;
-
-static SET_CREDENTIAL_STORE: Once = Once::new();
 
 /// Configuration for the keyring provider.
 ///
@@ -30,10 +26,12 @@ pub struct KeyringConfig {
 impl TryFrom<&ProviderUrl> for KeyringConfig {
 	type Error = MonosecretError;
 
-	/// Creates a new `KeyringConfig` from a URL.
+	/// Creates a new KeyringConfig from a URL.
 	///
 	/// The URL must have the scheme "keyring" (e.g., "keyring://" or
-	/// "<keyring://monosecret/shared/{profile}/{key>}").
+	/// "keyring://monosecret/shared/{profile}/{key}"). One specific
+	/// `(service, account)` entry is addressed with a secret's
+	/// `ref = { item = "<service>", field = "<account>" }`, not in the URI.
 	fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
 		if url.scheme() != "keyring" {
 			return Err(MonosecretError::ProviderOperationFailed(format!(
@@ -45,8 +43,7 @@ impl TryFrom<&ProviderUrl> for KeyringConfig {
 		let mut config = Self::default();
 
 		if let Some(host) = url.host() {
-			let path = url.path();
-			config.folder_prefix = Some(format!("{host}{path}"));
+			config.folder_prefix = Some(format!("{}{}", host, url.path()));
 		}
 
 		Ok(config)
@@ -55,11 +52,11 @@ impl TryFrom<&ProviderUrl> for KeyringConfig {
 
 /// Provider for storing secrets in the system keychain.
 ///
-/// The `KeyringProvider` uses the operating system's native secure credential
+/// The KeyringProvider uses the operating system's native secure credential
 /// storage mechanism:
 /// - macOS: Keychain
 /// - Windows: Credential Manager
-/// - Linux/Unix: Secret Service API
+/// - Linux: Secret Service API (via libsecret)
 ///
 /// Secrets are stored with a hierarchical key structure using a configurable
 /// format string that defaults to: `monosecret/{project}/{profile}/{key}`.
@@ -77,10 +74,11 @@ crate::register_provider! {
 	description: "Uses system keychain (Recommended)",
 	schemes: ["keyring"],
 	examples: ["keyring://", "keyring://monosecret/shared/{profile}/{key}"],
+	deletes: true,
 }
 
 impl KeyringProvider {
-	/// Creates a new `KeyringProvider` with the given configuration.
+	/// Creates a new KeyringProvider with the given configuration.
 	///
 	/// # Arguments
 	///
@@ -88,19 +86,14 @@ impl KeyringProvider {
 	///
 	/// # Returns
 	///
-	/// A new instance of `KeyringProvider`
+	/// A new instance of KeyringProvider
 	pub fn new(config: KeyringConfig) -> Self {
 		Self { config }
 	}
 
-	fn entry(service: &str, username: &str) -> Result<Entry> {
-		SET_CREDENTIAL_STORE.call_once(set_credential_store);
-		Entry::new(service, username).map_err(Into::into)
-	}
-
 	/// Formats the service name for a secret in the keyring.
 	///
-	/// Uses `folder_prefix` as a format string with {project}, {profile}, and {key} placeholders.
+	/// Uses folder_prefix as a format string with {project}, {profile}, and {key} placeholders.
 	/// Defaults to "monosecret/{project}/{profile}/{key}" if not configured.
 	fn format_service(&self, project: &str, profile: &str, key: &str) -> String {
 		let format_string = self
@@ -114,61 +107,60 @@ impl KeyringProvider {
 			.replace("{profile}", profile)
 			.replace("{key}", key)
 	}
+
+	/// Resolves the `(service, account)` an operation targets: `item` is the
+	/// service, `field` the account, defaulting to the current system
+	/// username (the account convention entries live under).
+	fn entry_target(&self, addr: Address<'_>) -> Result<(String, String)> {
+		let coords = self.entry_coordinates(addr)?;
+		let account = coords
+			.field
+			.clone()
+			.expect("entry coordinates always contain the keyring account");
+		Ok((coords.item.clone(), account))
+	}
+
+	/// The current system username, the account convention entries live under.
+	fn current_username() -> Result<String> {
+		whoami::username().map_err(|e| {
+			MonosecretError::ProviderOperationFailed(format!(
+				"Failed to determine the current username for keyring storage: {}",
+				crate::error::display_error_chain(&e)
+			))
+		})
+	}
 }
 
 impl Provider for KeyringProvider {
+	/// Convention entries use the folder-prefix format string as the service
+	/// name, `monosecret/{project}/{profile}/{key}` by default; the account
+	/// (the `field` coordinate) is resolved at operation time.
+	fn convention_address(
+		&self,
+		project: &str,
+		profile: &str,
+		key: &str,
+	) -> Result<crate::config::NativeAddress> {
+		Ok(crate::config::NativeAddress {
+			item: self.format_service(project, profile, key),
+			..Default::default()
+		})
+	}
+
+	/// `field` is the keyring account within the service entry.
 	fn supported_coords(&self) -> &'static [&'static str] {
 		&["field"]
 	}
 
-	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
-		let Address::Native(native) = address else {
-			return match address {
-				Address::Convention {
-					project,
-					profile,
-					key,
-				} => self.get(project, key, profile),
-				Address::Native(_) => unreachable!(),
-			};
-		};
-		super::reject_unsupported_coords(self.name(), native, self.supported_coords())?;
-		let account = match native.field.as_deref() {
-			Some(account) => account.to_string(),
-			None => {
-				whoami::username()
-					.map_err(|error| MonosecretError::ProviderOperationFailed(error.to_string()))?
-			}
-		};
-		let entry = Self::entry(&native.item, &account)?;
-		match entry.get_password() {
-			Ok(password) => Ok(Some(SecretString::new(password.into()))),
-			Err(keyring_core::Error::NoEntry) => Ok(None),
-			Err(error) => Err(error.into()),
+	fn entry_coordinates<'a>(
+		&self,
+		addr: Address<'a>,
+	) -> Result<std::borrow::Cow<'a, crate::config::NativeAddress>> {
+		let mut coords = self.resolve_coords(addr)?.into_owned();
+		if coords.field.is_none() {
+			coords.field = Some(Self::current_username()?);
 		}
-	}
-
-	fn set_address(&self, address: Address<'_>, value: &SecretString) -> Result<()> {
-		let Address::Native(native) = address else {
-			return match address {
-				Address::Convention {
-					project,
-					profile,
-					key,
-				} => self.set(project, key, value, profile),
-				Address::Native(_) => unreachable!(),
-			};
-		};
-		super::reject_unsupported_coords(self.name(), native, self.supported_coords())?;
-		let account = match native.field.as_deref() {
-			Some(account) => account.to_string(),
-			None => {
-				whoami::username()
-					.map_err(|error| MonosecretError::ProviderOperationFailed(error.to_string()))?
-			}
-		};
-		Self::entry(&native.item, &account)?.set_password(value.expose_secret())?;
-		Ok(())
+		Ok(std::borrow::Cow::Owned(coords))
 	}
 
 	fn name(&self) -> &'static str {
@@ -183,20 +175,24 @@ impl Provider for KeyringProvider {
 		}
 	}
 
+	/// The configured prefix selects a service entry inside the current user's
+	/// keyring; it does not select another keyring store.
+	fn entry_container_identity(&self) -> String {
+		"keyring".to_string()
+	}
+
 	/// Retrieves a secret from the system keychain.
 	///
 	/// The secret is looked up using a hierarchical key structure determined
-	/// by the `folder_prefix` format string (defaults to `monosecret/{project}/{profile}/{key}`).
+	/// by the folder_prefix format string (defaults to `monosecret/{project}/{profile}/{key}`).
 	///
 	/// The current system username is used as the account identifier.
-	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-		let service = self.format_service(project, profile, key);
-		let username = whoami::username()
-			.map_err(|e| MonosecretError::ProviderOperationFailed(e.to_string()))?;
-		let entry = Self::entry(&service, &username)?;
+	fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+		let (service, username) = self.entry_target(addr)?;
+		let entry = Entry::new(&service, &username)?;
 		match entry.get_password() {
 			Ok(password) => Ok(Some(SecretString::new(password.into()))),
-			Err(keyring_core::Error::NoEntry) => Ok(None),
+			Err(keyring::Error::NoEntry) => Ok(None),
 			Err(e) => Err(e.into()),
 		}
 	}
@@ -204,42 +200,24 @@ impl Provider for KeyringProvider {
 	/// Stores a secret in the system keychain.
 	///
 	/// The secret is stored with a hierarchical key structure determined
-	/// by the `folder_prefix` format string (defaults to `monosecret/{project}/{profile}/{key}`).
+	/// by the folder_prefix format string (defaults to `monosecret/{project}/{profile}/{key}`).
 	///
 	/// The current system username is used as the account identifier.
 	/// If a secret already exists with the same key, it will be overwritten.
-	fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-		let service = self.format_service(project, profile, key);
-		let username = whoami::username()
-			.map_err(|e| MonosecretError::ProviderOperationFailed(e.to_string()))?;
-		let entry = Self::entry(&service, &username)?;
+	fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+		let (service, username) = self.entry_target(addr)?;
+		let entry = Entry::new(&service, &username)?;
 		entry.set_password(value.expose_secret())?;
 		Ok(())
 	}
-}
 
-fn set_credential_store() {
-	#[cfg(target_os = "macos")]
-	{
-		if let Ok(store) = apple_native_keyring_store::keychain::Store::new() {
-			keyring_core::set_default_store(store);
-		}
-	}
-
-	#[cfg(target_os = "windows")]
-	{
-		if let Ok(store) = windows_native_keyring_store::Store::new() {
-			keyring_core::set_default_store(store);
-		}
-	}
-
-	#[cfg(all(
-		unix,
-		not(any(target_os = "macos", target_os = "ios", target_os = "android"))
-	))]
-	{
-		if let Ok(store) = zbus_secret_service_keyring_store::Store::new() {
-			keyring_core::set_default_store(store);
+	fn delete(&self, addr: Address<'_>) -> Result<bool> {
+		let (service, username) = self.entry_target(addr)?;
+		let entry = Entry::new(&service, &username)?;
+		match entry.delete_credential() {
+			Ok(()) => Ok(true),
+			Err(keyring::Error::NoEntry) => Ok(false),
+			Err(error) => Err(error.into()),
 		}
 	}
 }
@@ -308,5 +286,72 @@ mod tests {
 		});
 		// The space must be percent-encoded.
 		assert_eq!(provider.uri(), "keyring://my%20vault/{key}");
+	}
+
+	/// A native address maps `item` to the service and `field` to the account.
+	#[test]
+	fn native_address_maps_item_and_field_to_service_and_account() {
+		let p = KeyringProvider::new(KeyringConfig::default());
+		let addr = crate::config::NativeAddress {
+			item: "com.example.app".into(),
+			field: Some("alice".into()),
+			..Default::default()
+		};
+		assert_eq!(
+			p.entry_target(Address::Native(&addr)).unwrap(),
+			("com.example.app".to_string(), "alice".to_string())
+		);
+	}
+
+	/// Without a `field`, the account defaults to the current system username,
+	/// matching where convention entries are stored.
+	#[test]
+	fn native_address_account_defaults_to_current_username() {
+		let p = KeyringProvider::new(KeyringConfig::default());
+		let addr = crate::config::NativeAddress {
+			item: "com.example.app".into(),
+			..Default::default()
+		};
+		let (service, account) = p.entry_target(Address::Native(&addr)).unwrap();
+		assert_eq!(service, "com.example.app");
+		assert_eq!(account, whoami::username().unwrap());
+	}
+
+	#[test]
+	fn same_entries_treats_the_implicit_account_as_the_current_username() {
+		let provider = KeyringProvider::new(KeyringConfig::default());
+		let implicit = crate::config::NativeAddress {
+			item: "com.example.app".into(),
+			..Default::default()
+		};
+		let explicit = crate::config::NativeAddress {
+			item: "com.example.app".into(),
+			field: Some(whoami::username().unwrap()),
+			..Default::default()
+		};
+
+		assert!(
+			provider
+				.same_entries(
+					Address::Native(&implicit),
+					&provider,
+					Address::Native(&explicit),
+				)
+				.unwrap(),
+			"addresses that operations send to one keyring entry must compare equal"
+		);
+	}
+
+	/// Keyring entries have no versions; the coordinate is rejected.
+	#[test]
+	fn native_address_rejects_version() {
+		let p = KeyringProvider::new(KeyringConfig::default());
+		let addr = crate::config::NativeAddress {
+			item: "com.example.app".into(),
+			version: Some("3".into()),
+			..Default::default()
+		};
+		let err = p.entry_target(Address::Native(&addr)).unwrap_err();
+		assert!(err.to_string().contains("`version`"), "{err}");
 	}
 }

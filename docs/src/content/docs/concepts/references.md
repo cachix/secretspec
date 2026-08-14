@@ -4,8 +4,7 @@ description: Point a secret at one already managed in a provider's store, by the
 ---
 
 :::note
-Monosecret includes native secret references from its upstream SecretSpec 0.14
-integration.
+Secret references are available since version 0.1.
 :::
 
 By default, Monosecret owns the naming: it stores each secret under its own
@@ -66,7 +65,7 @@ exactly how each provider maps the coordinates.
 
 A `ref` supplies naming only. It does not pin the secret to a particular store.
 Which provider actually resolves the coordinates follows the ordinary
-[provider resolution order](/concepts/providers/): a `--provider` override, then
+[provider resolution order](/concepts/providers/fallback/): a `--provider` override, then
 the secret's `providers` chain, then the profile and global defaults.
 
 This is the difference from pasting a store URL into your config. Because the
@@ -90,6 +89,48 @@ file without touching the manifest.
 $ monosecret run --provider dotenv:.env.fixtures -- cargo test
 ```
 
+## Different coordinates per provider (0.2+)
+
+:::caution[Version compatibility]
+Provider-scoped `refs` and provider-alias `ref` templates are available
+starting with Monosecret 0.2.
+:::
+
+The original `ref` remains useful when every provider understands one address.
+When endpoints organize the same logical secret differently, attach a template
+to each leaf alias and use `refs` only for exceptions:
+
+```toml
+[providers]
+remote = { uri = "onepassword://Production", ref = { item = "{project}-{profile}", field = "{key}" } }
+local = { uri = "dotenv://.env", ref = { item = "{key}" } }
+legacy = "onepassword://Legacy"
+
+[profiles.production]
+API_KEY = { description = "API key", providers = [
+  "remote",
+  "local",
+], refs = { legacy = { item = "old-api-item", field = "token" } } }
+```
+
+Monosecret resolves each endpoint independently: `refs.<selected-alias>` wins,
+then that alias's template, then convention naming. This applies to primary and
+fallback reads, writes, and both sides of `import`; the `legacy` ref above can
+therefore describe an import source without adding it to the normal read route.
+Templates support `{project}`, `{profile}`, and `{key}` in every coordinate.
+
+Scoped refs deliberately key on aliases, not resolved URIs. Literal provider
+URIs and bare provider names use convention naming because they have no alias
+identity. Cached route aliases cannot own a template or scoped ref; configure
+their individual leaf aliases instead. `refs` and legacy route-wide `ref` are
+mutually exclusive.
+
+For profile inheritance, `ref` and `refs` (0.2+) are two forms of one address
+model. A profile that explicitly declares either form replaces the form
+inherited from `[profiles.default]`: `refs` can replace an inherited `ref`, and
+`ref` can replace inherited `refs`. A profile entry that declares neither keeps
+the inherited form. See [Profiles: Switching reference models](/concepts/profiles/#switching-reference-models-019) for an example.
+
 ## How it works
 
 - `item` is required; `field`, `vault`, `section`, and `version` are optional and
@@ -97,8 +138,9 @@ $ monosecret run --provider dotenv:.env.fixtures -- cargo test
 - Reads and writes are symmetric: `monosecret set` and interactive `check` write
   through the coordinates in place wherever the store supports writes. Read-only
   stores fail with a clear error.
-- `ref` is always a table. String and URI forms (`ref = "op://vault/item/field"`)
-  are rejected, with an error that spells out the equivalent table.
+- `ref` and every provider-scoped `refs.<alias>` value are tables. String and
+  URI forms (`ref = "op://vault/item/field"`) are rejected, with an error that
+  spells out the equivalent table.
 - Secrets sharing identical coordinates and store are fetched once, and
   [audit log](/concepts/audit/) events carry the coordinates.
 

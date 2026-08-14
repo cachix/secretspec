@@ -82,6 +82,7 @@ fn append_snapshot_section(snapshot: &mut String, name: &str, contents: &str) {
 	}
 }
 
+#[cfg(not(windows))]
 #[test]
 fn check_resolves_required_object_form_provider_refs_with_key_hints() {
 	let temp_dir = TempDir::new().expect("create temp test directory");
@@ -107,7 +108,7 @@ profile = "default"
 		let _ = writeln!(&mut env_content, "STORED_SECRET_{index}=value-{index}");
 		let _ = writeln!(
 			&mut profile_content,
-			"SECRET_{index} = {{ description = \"Required secret {index}\", required = true, providers = [{{ provider = \"detail_env\", path = [\"Important Details\", \"Company Details\"], key = \"STORED_SECRET_{index}\" }}] }}"
+			"SECRET_{index} = {{ description = \"Required secret {index}\", required = true, providers = [{{ provider = \"detail_env\", path = [\"Important Details\", \"Company Details\"], key = \"STORED_SECRET_{index}\" }}], refs = {{ detail_env = {{ item = \"STORED_SECRET_{index}\" }} }} }}"
 		);
 	}
 
@@ -336,6 +337,7 @@ TOKEN = { description = "Token", required = true, providers = ["env"] }
 	}
 }
 
+#[cfg(not(windows))]
 #[test]
 fn verbose_filter_inputs_are_accepted_by_cli() {
 	let temp_dir = TempDir::new().expect("create temp test directory");

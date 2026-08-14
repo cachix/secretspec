@@ -1,0 +1,433 @@
+{
+  "schema_version": "0.4",
+  "kind": "monochange.releaseRecord",
+  "created_at": "2026-08-12T23:31:44Z",
+  "command": "preview",
+  "version": "0.3.0",
+  "versions": {
+    "monosecret": "0.3.0"
+  },
+  "release_targets": [
+    {
+      "id": "monosecret",
+      "kind": "group",
+      "version": "0.3.0",
+      "version_format": "primary",
+      "tag": true,
+      "release": true,
+      "tag_name": "v0.3.0",
+      "members": [
+        "rust:monosecret",
+        "rust:monosecret_derive",
+        "rust:monosecret_ffi",
+        "@monosecret/cli",
+        "@monosecret/client",
+        "@monosecret/client-darwin-arm64",
+        "@monosecret/client-linux-arm64-gnu",
+        "@monosecret/client-linux-x64-gnu",
+        "@monosecret/client-win32-x64-msvc",
+        "@monosecret/skill",
+        "@monosecret/cli-darwin-arm64",
+        "@monosecret/cli-darwin-x64",
+        "@monosecret/cli-linux-arm64-gnu",
+        "@monosecret/cli-linux-arm64-musl",
+        "@monosecret/cli-linux-x64-gnu",
+        "@monosecret/cli-linux-x64-musl",
+        "@monosecret/cli-win32-arm64-msvc",
+        "@monosecret/cli-win32-x64-msvc",
+        "dart",
+        "dart:monosecret_builder"
+      ]
+    }
+  ],
+  "released_packages": [
+    "@monosecret/cli",
+    "@monosecret/cli-darwin-arm64",
+    "@monosecret/cli-darwin-x64",
+    "@monosecret/cli-linux-arm64-gnu",
+    "@monosecret/cli-linux-arm64-musl",
+    "@monosecret/cli-linux-x64-gnu",
+    "@monosecret/cli-linux-x64-musl",
+    "@monosecret/cli-win32-arm64-msvc",
+    "@monosecret/cli-win32-x64-msvc",
+    "@monosecret/client",
+    "@monosecret/client-darwin-arm64",
+    "@monosecret/client-linux-arm64-gnu",
+    "@monosecret/client-linux-x64-gnu",
+    "@monosecret/client-win32-x64-msvc",
+    "@monosecret/skill",
+    "monosecret",
+    "monosecret_builder",
+    "monosecret_derive",
+    "monosecret_ffi"
+  ],
+  "changed_files": [
+    "CHANGELOG.md",
+    "Cargo.lock",
+    "Cargo.toml",
+    "Package.swift",
+    "crates/monosecret/CHANGELOG.md",
+    "crates/monosecret/Cargo.toml",
+    "crates/monosecret_derive/CHANGELOG.md",
+    "crates/monosecret_derive/Cargo.toml",
+    "crates/monosecret_ffi/Cargo.toml",
+    "dart/monosecret/CHANGELOG.md",
+    "dart/monosecret/lib/src/version.dart",
+    "dart/monosecret/pubspec.yaml",
+    "dart/monosecret_builder/CHANGELOG.md",
+    "dart/monosecret_builder/pubspec.yaml",
+    "dotnet/monosecret_dotnet/src/Monosecret/Monosecret.csproj",
+    "haskell/monosecret_hs/monosecret.cabal",
+    "npm/monosecret__cli/package.json",
+    "npm/monosecret__cli-darwin-arm64/package.json",
+    "npm/monosecret__cli-darwin-x64/package.json",
+    "npm/monosecret__cli-linux-arm64-gnu/package.json",
+    "npm/monosecret__cli-linux-arm64-musl/package.json",
+    "npm/monosecret__cli-linux-x64-gnu/package.json",
+    "npm/monosecret__cli-linux-x64-musl/package.json",
+    "npm/monosecret__cli-win32-arm64-msvc/package.json",
+    "npm/monosecret__cli-win32-x64-msvc/package.json",
+    "npm/monosecret__client/package.json",
+    "npm/monosecret__client-darwin-arm64/package.json",
+    "npm/monosecret__client-linux-arm64-gnu/package.json",
+    "npm/monosecret__client-linux-x64-gnu/package.json",
+    "npm/monosecret__client-win32-x64-msvc/package.json",
+    "npm/monosecret__skill/package.json",
+    "pubspec.yaml",
+    "python/monosecret_py/pyproject.toml",
+    "ruby/monosecret_rb/monosecret_rb.gemspec"
+  ],
+  "package_publications": [
+    {
+      "package": "@monosecret/cli",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.3.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-darwin-arm64",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.3.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-darwin-x64",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.3.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-linux-arm64-gnu",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.3.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-linux-arm64-musl",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.3.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-linux-x64-gnu",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.3.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-linux-x64-musl",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.3.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-win32-arm64-msvc",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.3.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-win32-x64-msvc",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.3.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/skill",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.3.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "dart",
+      "ecosystem": "dart",
+      "registry": "pub_dev",
+      "version": "0.3.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "dart:monosecret_builder",
+      "ecosystem": "dart",
+      "registry": "pub_dev",
+      "version": "0.3.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "rust:monosecret",
+      "ecosystem": "cargo",
+      "registry": "crates_io",
+      "version": "0.3.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "rust:monosecret_derive",
+      "ecosystem": "cargo",
+      "registry": "crates_io",
+      "version": "0.3.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    }
+  ],
+  "updated_changelogs": [
+    "CHANGELOG.md",
+    "crates/monosecret/CHANGELOG.md",
+    "crates/monosecret_derive/CHANGELOG.md",
+    "dart/monosecret/CHANGELOG.md",
+    "dart/monosecret_builder/CHANGELOG.md"
+  ],
+  "deleted_changesets": [],
+  "changesets": [
+    {
+      "path": ".changeset/sync-upstream-secretspec-0-19.md",
+      "summary": "Sync upstream SecretSpec through v0.19.0",
+      "details": "Merge `cachix/secretspec` v0.15.0 through v0.19.0 and rebrand into the\n`crates/monosecret`, `crates/monosecret_derive`, and per-language\n`monosecret_*` SDK layout.\n\n##### What breaks\n\n- Provider URIs may no longer carry credentials (`scheme://user:secret@host`\n  is rejected) and `onepassword+token://` no longer accepts the service\n  account token in its userinfo. Supply credentials through provider\n  credentials (`monosecret config provider login <alias>`, or\n  `credentials = { ... }` on the provider) instead.\n- Native secret `ref` coordinates replace provider-specific addressing for\n  externally managed secrets; provider implementations must migrate to the\n  address-oriented `Provider` trait APIs.\n\n##### What's new\n\n- Native secret references (`ref`) with provider-independent coordinates,\n  `resolve_named` / `with_default_reason` Rust SDK APIs, `prompt = true`\n  hidden-value prompting, `set`/`check` preview, profile opt-out of\n  `[profiles.default]` inheritance.\n- New providers: passbolt, null, file, age, akv, awsps, dashlane, gopass,\n  infisical, kdbx, keeper, openbao, scaleway, systemd_credential.\n- SOPS provider (directory + single-file, multiple formats).\n- Cached provider aliases, provider credential declarations, base64/urlsafe\n  /hex value decoders, RFC 6901 JSON pointer selection, composition,\n  manifest scopes.\n- PHP, C#/.NET, and Swift language SDKs (rebranded under `monosecret_*`).\n- FFI static-link contract, `cinstall` header, `schema`/`check --json`,\n  non-UTF-8 env handling.\n\n##### Preserved fork-only behavior\n\n- `monosecret env` / `load-env` shell command and `monosecret audit` CLI.\n- Dart typed SDK generator (`monosecret_builder`), `@monosecret/client`\n  TypeScript client, `@monosecret/cli` npm packages.\n- `monochange` release workflows and `SECRETSPEC_*` legacy env-var aliases.",
+      "targets": [
+        {
+          "id": "monosecret",
+          "kind": "group",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "breaking"
+        }
+      ],
+      "context": {
+        "provider": "github",
+        "host": "github.com",
+        "capabilities": {
+          "commit_web_urls": true,
+          "actor_profiles": true,
+          "review_request_lookup": true,
+          "related_issues": true,
+          "issue_comments": true
+        },
+        "introduced": null,
+        "last_updated": null,
+        "related_issues": []
+      }
+    }
+  ],
+  "changelogs": [
+    {
+      "owner_id": "monosecret",
+      "owner_kind": "group",
+      "path": "CHANGELOG.md",
+      "format": "keep_a_changelog",
+      "notes": {
+        "title": "[0.3.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.3.0) (2026-08-12)",
+        "summary": [
+          "Grouped release for `monosecret`."
+        ],
+        "sections": [
+          {
+            "title": "Breaking",
+            "collapsed": false,
+            "entries": [
+              "#### Sync upstream SecretSpec through v0.19.0\n_Packages:_ _monosecret_\n\nMerge `cachix/secretspec` v0.15.0 through v0.19.0 and rebrand into the\n`crates/monosecret`, `crates/monosecret_derive`, and per-language\n`monosecret_*` SDK layout.\n\n##### What breaks\n\n- Provider URIs may no longer carry credentials (`scheme://user:secret@host`\n  is rejected) and `onepassword+token://` no longer accepts the service\n  account token in its userinfo. Supply credentials through provider\n  credentials (`monosecret config provider login <alias>`, or\n  `credentials = { ... }` on the provider) instead.\n- Native secret `ref` coordinates replace provider-specific addressing for\n  externally managed secrets; provider implementations must migrate to the\n  address-oriented `Provider` trait APIs.\n\n##### What's new\n\n- Native secret references (`ref`) with provider-independent coordinates,\n  `resolve_named` / `with_default_reason` Rust SDK APIs, `prompt = true`\n  hidden-value prompting, `set`/`check` preview, profile opt-out of\n  `[profiles.default]` inheritance.\n- New providers: passbolt, null, file, age, akv, awsps, dashlane, gopass,\n  infisical, kdbx, keeper, openbao, scaleway, systemd_credential.\n- SOPS provider (directory + single-file, multiple formats).\n- Cached provider aliases, provider credential declarations, base64/urlsafe\n  /hex value decoders, RFC 6901 JSON pointer selection, composition,\n  manifest scopes.\n- PHP, C#/.NET, and Swift language SDKs (rebranded under `monosecret_*`).\n- FFI static-link contract, `cinstall` header, `schema`/`check --json`,\n  non-UTF-8 env handling.\n\n##### Preserved fork-only behavior\n\n- `monosecret env` / `load-env` shell command and `monosecret audit` CLI.\n- Dart typed SDK generator (`monosecret_builder`), `@monosecret/client`\n  TypeScript client, `@monosecret/cli` npm packages.\n- `monochange` release workflows and `SECRETSPEC_*` legacy env-var aliases."
+            ]
+          }
+        ]
+      },
+      "rendered": "## [0.3.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.3.0) (2026-08-12)\n\nGrouped release for `monosecret`.\n### Breaking\n\n#### Sync upstream SecretSpec through v0.19.0\n_Packages:_ _monosecret_\n\nMerge `cachix/secretspec` v0.15.0 through v0.19.0 and rebrand into the\n`crates/monosecret`, `crates/monosecret_derive`, and per-language\n`monosecret_*` SDK layout.\n\n##### What breaks\n\n- Provider URIs may no longer carry credentials (`scheme://user:secret@host`\n  is rejected) and `onepassword+token://` no longer accepts the service\n  account token in its userinfo. Supply credentials through provider\n  credentials (`monosecret config provider login <alias>`, or\n  `credentials = { ... }` on the provider) instead.\n- Native secret `ref` coordinates replace provider-specific addressing for\n  externally managed secrets; provider implementations must migrate to the\n  address-oriented `Provider` trait APIs.\n\n##### What's new\n\n- Native secret references (`ref`) with provider-independent coordinates,\n  `resolve_named` / `with_default_reason` Rust SDK APIs, `prompt = true`\n  hidden-value prompting, `set`/`check` preview, profile opt-out of\n  `[profiles.default]` inheritance.\n- New providers: passbolt, null, file, age, akv, awsps, dashlane, gopass,\n  infisical, kdbx, keeper, openbao, scaleway, systemd_credential.\n- SOPS provider (directory + single-file, multiple formats).\n- Cached provider aliases, provider credential declarations, base64/urlsafe\n  /hex value decoders, RFC 6901 JSON pointer selection, composition,\n  manifest scopes.\n- PHP, C#/.NET, and Swift language SDKs (rebranded under `monosecret_*`).\n- FFI static-link contract, `cinstall` header, `schema`/`check --json`,\n  non-UTF-8 env handling.\n\n##### Preserved fork-only behavior\n\n- `monosecret env` / `load-env` shell command and `monosecret audit` CLI.\n- Dart typed SDK generator (`monosecret_builder`), `@monosecret/client`\n  TypeScript client, `@monosecret/cli` npm packages.\n- `monochange` release workflows and `SECRETSPEC_*` legacy env-var aliases."
+    },
+    {
+      "owner_id": "rust:monosecret",
+      "owner_kind": "package",
+      "path": "crates/monosecret/CHANGELOG.md",
+      "format": "keep_a_changelog",
+      "notes": {
+        "title": "[0.3.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.3.0) (2026-08-12)",
+        "summary": [],
+        "sections": [
+          {
+            "title": "Changed",
+            "collapsed": false,
+            "entries": [
+              "- No package-specific changes were recorded; `monosecret` was updated to 0.3.0 as part of group `monosecret`."
+            ]
+          }
+        ]
+      },
+      "rendered": "## [0.3.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.3.0) (2026-08-12)\n\n### Changed\n\n- No package-specific changes were recorded; `monosecret` was updated to 0.3.0 as part of group `monosecret`."
+    },
+    {
+      "owner_id": "rust:monosecret_derive",
+      "owner_kind": "package",
+      "path": "crates/monosecret_derive/CHANGELOG.md",
+      "format": "keep_a_changelog",
+      "notes": {
+        "title": "[0.3.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.3.0) (2026-08-12)",
+        "summary": [],
+        "sections": [
+          {
+            "title": "Changed",
+            "collapsed": false,
+            "entries": [
+              "- No package-specific changes were recorded; `monosecret_derive` was updated to 0.3.0 as part of group `monosecret`."
+            ]
+          }
+        ]
+      },
+      "rendered": "## [0.3.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.3.0) (2026-08-12)\n\n### Changed\n\n- No package-specific changes were recorded; `monosecret_derive` was updated to 0.3.0 as part of group `monosecret`."
+    },
+    {
+      "owner_id": "dart",
+      "owner_kind": "package",
+      "path": "dart/monosecret/CHANGELOG.md",
+      "format": "keep_a_changelog",
+      "notes": {
+        "title": "[0.3.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.3.0) (2026-08-12)",
+        "summary": [],
+        "sections": [
+          {
+            "title": "Changed",
+            "collapsed": false,
+            "entries": [
+              "- No package-specific changes were recorded; `monosecret` was updated to 0.3.0 as part of group `monosecret`."
+            ]
+          }
+        ]
+      },
+      "rendered": "## [0.3.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.3.0) (2026-08-12)\n\n### Changed\n\n- No package-specific changes were recorded; `monosecret` was updated to 0.3.0 as part of group `monosecret`."
+    },
+    {
+      "owner_id": "dart:monosecret_builder",
+      "owner_kind": "package",
+      "path": "dart/monosecret_builder/CHANGELOG.md",
+      "format": "keep_a_changelog",
+      "notes": {
+        "title": "[0.3.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.3.0) (2026-08-12)",
+        "summary": [],
+        "sections": [
+          {
+            "title": "Changed",
+            "collapsed": false,
+            "entries": [
+              "- No package-specific changes were recorded; `monosecret_builder` was updated to 0.3.0 as part of group `monosecret`."
+            ]
+          }
+        ]
+      },
+      "rendered": "## [0.3.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.3.0) (2026-08-12)\n\n### Changed\n\n- No package-specific changes were recorded; `monosecret_builder` was updated to 0.3.0 as part of group `monosecret`."
+    }
+  ],
+  "provider": {
+    "kind": "github",
+    "owner": "ifiokjr",
+    "repo": "monosecret",
+    "host": null
+  }
+}

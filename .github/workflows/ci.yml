@@ -58,6 +58,9 @@ jobs:
       - name: taplo
         run: git ls-files -z '*.toml' | xargs -0 taplo fmt --check
         shell: devenv shell -- bash -e {0}
+      - name: actionlint
+        run: actionlint .github/workflows/*.yml
+        shell: devenv shell -- bash -e {0}
       - name: dart format
         run: dart format --output=none --set-exit-if-changed dart/monosecret dart/monosecret_builder
         shell: devenv shell -- bash -e {0}
@@ -69,6 +72,38 @@ jobs:
         shell: devenv shell -- bash -e {0}
       - name: validate monochange configuration
         run: monochange step validate
+        shell: devenv shell -- bash -e {0}
+
+  standalone_features:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: setup
+        uses: ./.github/actions/devenv
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          install-dart: "false"
+          install-node: "false"
+      - name: check each feature standalone
+        run: |
+          set -euo pipefail
+          mapfile -t features < <(
+            cargo metadata --locked --no-deps --format-version 1 |
+              jq -r '.packages[] | select(.name == "monosecret") | .features | keys[] | select(. != "default")'
+          )
+          if [ "${#features[@]}" -eq 0 ]; then
+            echo "::error::No Monosecret features found"
+            exit 1
+          fi
+          for feature in "${features[@]}"; do
+            echo "::group::$feature"
+            cargo check --package monosecret --no-default-features --features "$feature" --locked
+            echo "::endgroup::"
+          done
         shell: devenv shell -- bash -e {0}
 
   test:
@@ -101,6 +136,25 @@ jobs:
       - name: native language SDK tests
         run: bash scripts/ci-sdks.sh
         shell: devenv shell -- bash -e {0}
+
+  windows_test:
+    timeout-minutes: 60
+    runs-on: windows-latest
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: setup rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch snapshot; installs stable
+        with:
+          toolchain: stable
+      - name: cache rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          prefix-key: windows-tests
+      - name: rust tests
+        run: cargo test --workspace --all-features --locked
 
   build:
     timeout-minutes: 60
@@ -149,6 +203,14 @@ jobs:
         uses: ./.github/actions/devenv
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: verify packaged schema fixture
+        run: |
+          set -euo pipefail
+          fixture="src/fixtures/resolution-report.schema.json"
+          cmp schema/resolution-report.schema.json "crates/monosecret/$fixture"
+          cargo package --package monosecret --allow-dirty --locked --list |
+            grep -Fx "$fixture"
+        shell: devenv shell -- bash -e {0}
       - name: cargo package dry-run
         run: cargo package -p monosecret -p monosecret_derive --allow-dirty --locked
         shell: devenv shell -- bash -e {0}

@@ -5,7 +5,7 @@ import 'models.dart';
 import 'native_bindings.dart';
 import 'version.dart';
 
-const _resolveSchemaVersion = 1;
+const _resolveSchemaVersion = 2;
 const _reportSchemaVersion = 1;
 
 /// Entry point for native Monosecret resolution.
@@ -23,6 +23,8 @@ class MonosecretBuilder {
       _set('provider', provider);
 
   MonosecretBuilder withProfile(String? profile) => _set('profile', profile);
+
+  MonosecretBuilder withScope(String? scope) => _set('scope', scope);
 
   MonosecretBuilder withReason(String? reason) => _set('reason', reason);
 
@@ -79,6 +81,7 @@ class MonosecretClient {
     String? path,
     String? profile,
     String? provider,
+    String? scope,
     String? reason,
     Iterable<String> include = const [],
     Iterable<String> groups = const [],
@@ -88,6 +91,7 @@ class MonosecretClient {
         .withPath(path)
         .withProfile(profile)
         .withProvider(provider)
+        .withScope(scope)
         .withReason(reason)
         .withInclude(include)
         .withGroups(groups)
@@ -99,6 +103,7 @@ class MonosecretClient {
     String? path,
     String? profile,
     String? provider,
+    String? scope,
     String? reason,
     Iterable<String> include = const [],
     Iterable<String> groups = const [],
@@ -107,6 +112,7 @@ class MonosecretClient {
         .withPath(path)
         .withProfile(profile)
         .withProvider(provider)
+        .withScope(scope)
         .withReason(reason)
         .withInclude(include)
         .withGroups(groups)
@@ -122,12 +128,14 @@ class MonosecretClient {
     String? profile,
     String? provider,
     String? file,
+    String? scope,
     String? reason,
   }) async {
     final resolved = await resolve(
       path: file,
       profile: profile,
       provider: provider,
+      scope: scope,
       reason: reason,
       include: [name],
     );
@@ -160,12 +168,14 @@ class MonosecretClient {
     String? profile,
     String? provider,
     String? file,
+    String? scope,
     String? reason,
   }) async {
     final resolved = await resolve(
       path: file,
       profile: profile,
       provider: provider,
+      scope: scope,
       reason: reason,
       include: include,
       groups: groups,

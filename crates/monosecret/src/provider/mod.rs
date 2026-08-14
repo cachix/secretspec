@@ -15,11 +15,31 @@
 //!
 //! ## Available Providers
 //!
-//! - [`KeyringProvider`]: System keyring integration (default)
-//! - [`DotEnvProvider`]: `.env` file support
-//! - [`EnvProvider`]: Environment variables (read-only)
-//! - [`OnePasswordProvider`]: `OnePassword` integration
-//! - [`LastPassProvider`]: `LastPass` integration
+//! - [`keyring::KeyringProvider`]: System keyring integration (default)
+//! - [`kdbx::KdbxProvider`]: KeePass KDBX database integration (0.17+)
+//! - [`keeper::KeeperProvider`]: Keeper Secrets Manager integration (0.18+)
+//! - [`dotenv::DotEnvProvider`]: `.env` file support
+//! - [`env::EnvProvider`]: Environment variables (read-only)
+//! - [`null::NullProvider`]: Defaults, generation, or run prompts without storage (0.19+)
+//! - [`file::FileProvider`]: Plaintext file-per-secret storage (0.19+)
+//! - [`pass::PassProvider`]: Pass integration
+//! - [`gopass::GoPassProvider`]: Gopass integration
+//! - [`systemd_credential::SystemdCredentialProvider`]: systemd service credentials (0.17+)
+//! - [`protonpass::ProtonPassProvider`]: Proton Pass integration
+//! - [`passbolt::PassboltProvider`]: Passbolt integration through go-passbolt-cli (0.19+)
+//! - [`onepassword::OnePasswordProvider`]: 1Password integration
+//! - [`lastpass::LastPassProvider`]: LastPass integration
+//! - [`dashlane::DashlaneProvider`]: Dashlane integration, read-only (0.18+)
+//! - [`gcsm::GcsmProvider`]: Google Cloud Secret Manager integration
+//! - [`awssm::AwssmProvider`]: AWS Secrets Manager integration
+//! - [`awsps::AwspsProvider`]: AWS Systems Manager Parameter Store integration (0.18+)
+//! - [`vault::VaultProvider`]: HashiCorp Vault integration
+//! - [`openbao::OpenBaoProvider`]: OpenBao integration (0.17+)
+//! - [`bws::BwsProvider`]: Bitwarden Secrets Manager integration
+//! - [`akv::AkvProvider`]: Azure Key Vault integration
+//! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
+//! - [`bw::BitwardenProvider`]: Bitwarden Password Manager (0.18+)
+//! - [`sops::SopsProvider`]: SOPS-encrypted file integration (0.17+)
 //!
 //! ## URI-Based Configuration
 //!
@@ -28,43 +48,97 @@
 //! ```text
 //! keyring://
 //! dotenv://.env.production
-//! onepassword://vault/items
+//! null://  # Use defaults, generation, or run prompts without storage, 0.19+
+//! file:./.secrets  # One plaintext file per secret, 0.19+
+//! onepassword://vault
 //! lastpass://folder
+//! keeper://SHARED_FOLDER_UID  # Keeper, 0.18+
 //! ```
 //!
 //! ## Example
 //!
 //! ```rust,ignore
-//! use monosecret::provider::Provider;
+//! use monosecret::provider::{Address, Provider};
 //! use std::convert::TryFrom;
 //!
 //! // Create a provider from a URI string
 //! let provider = Box::<dyn Provider>::try_from("keyring://")?;
 //!
+//! let addr = Address::convention("myproject", "production", "API_KEY");
+//!
 //! // Store a secret
-//! provider.set("myproject", "API_KEY", "secret123", "production")?;
+//! provider.set(addr, &"secret123".to_string().into())?;
 //!
 //! // Retrieve a secret
-//! if let Some(value) = provider.get("myproject", "API_KEY", "production")? {
-//!     println!("API_KEY: {}", value);
+//! if let Some(value) = provider.get(addr)? {
+//!     println!("API_KEY retrieved");
 //! }
 //! ```
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 
 use percent_encoding::AsciiSet;
 use percent_encoding::CONTROLS;
 use percent_encoding::percent_decode_str;
 use percent_encoding::percent_encode;
+use secrecy::ExposeSecret;
 use secrecy::SecretString;
 use url::Url;
 
 use crate::MonosecretError;
 use crate::Result;
 use crate::config::NativeAddress;
-use crate::config::SecretRequest;
+
+/// Credentials handed to a provider at construction.
+///
+/// Maps semantic provider-specific names (for example `access_token`) to
+/// secret values. Providers may retain environment-variable fallback for
+/// standalone compatibility, but environment names are not part of this API.
+pub(crate) type ProviderCredentials = HashMap<String, SecretString>;
+
+/// Resolves a semantic provider credential, falling back to the provider's
+/// conventional environment variable when no explicit credential was supplied.
+pub(crate) fn credential_or_env(
+	credentials: &ProviderCredentials,
+	name: &str,
+	env_var: &str,
+) -> Option<String> {
+	credential_or_envs(credentials, name, &[env_var])
+}
+
+/// Resolves a semantic provider credential, falling back through the provider's
+/// conventional environment variables in order.
+pub(crate) fn credential_or_envs(
+	credentials: &ProviderCredentials,
+	name: &str,
+	env_vars: &[&str],
+) -> Option<String> {
+	credentials
+		.get(name)
+		.map(|secret| secret.expose_secret().to_string())
+		.filter(|value| !value.is_empty())
+		.or_else(|| preferred_env(env_vars))
+}
+
+/// Returns the first configured environment variable in precedence order.
+///
+/// A present but empty (or non-Unicode) value resolves to `None` without
+/// falling through to the next name. This matches OpenBao's `BAO_*` behavior:
+/// presence overrides the corresponding `VAULT_*` compatibility variable.
+pub(crate) fn preferred_env(names: &[&str]) -> Option<String> {
+	for name in names {
+		if let Some(value) = std::env::var_os(name) {
+			return value.into_string().ok().filter(|value| !value.is_empty());
+		}
+	}
+	None
+}
 
 /// Characters that are invalid in URI hosts but might appear in provider config
 /// values like vault names (e.g., 1Password vault "Home Lab").
@@ -80,6 +154,11 @@ pub(crate) const URI_ENCODE_SET: &AsciiSet = &CONTROLS
 	.add(b'^')
 	.add(b'\\');
 
+/// Like [`URI_ENCODE_SET`] but also encodes `:`. Used for Windows absolute paths
+/// (e.g. `C:\path`) where the drive-letter colon would otherwise be read as a
+/// `host:port` separator and fail parsing with "invalid port number".
+const WINDOWS_PATH_ENCODE_SET: &AsciiSet = &URI_ENCODE_SET.add(b':');
+
 /// Like [`URI_ENCODE_SET`] but also encodes the characters that are structurally
 /// significant inside a URI query string. Query *values* (e.g. the `V` in
 /// `?key=V`) are read back with `application/x-www-form-urlencoded` semantics via
@@ -90,6 +169,12 @@ pub(crate) const URI_ENCODE_SET: &AsciiSet = &CONTROLS
 /// makes [`ProviderUrl::encode_query`] a true inverse of that parsing, so query
 /// values round-trip. Path and host components keep using [`URI_ENCODE_SET`].
 const QUERY_ENCODE_SET: &AsciiSet = &URI_ENCODE_SET.add(b'%').add(b'#').add(b'&').add(b'+');
+
+/// Detects a Windows-style absolute path such as `C:\path` or `C:/path`.
+fn is_windows_abs_path(s: &str) -> bool {
+	let b = s.as_bytes();
+	b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
+}
 
 /// A URL wrapper that automatically percent-decodes all accessors.
 ///
@@ -135,12 +220,11 @@ impl ProviderUrl {
 			.into_owned()
 	}
 
-	#[allow(dead_code)]
+	#[cfg(any(feature = "infisical", feature = "openbao", feature = "vault", test))]
 	pub fn port(&self) -> Option<u16> {
 		self.0.port()
 	}
 
-	#[allow(dead_code)]
 	pub fn query_pairs(&self) -> url::form_urlencoded::Parse<'_> {
 		self.0.query_pairs()
 	}
@@ -154,6 +238,12 @@ impl ProviderUrl {
 			.find(|(k, _)| k == key)
 			.map(|(_, v)| v.into_owned())
 			.filter(|v| !v.is_empty())
+	}
+
+	/// Whether the provider URI contains a query component, including an
+	/// explicitly empty one.
+	pub(crate) fn has_query(&self) -> bool {
+		self.0.query().is_some()
 	}
 
 	/// Percent-encode a value for use in a URI path or host component (e.g., in
@@ -172,12 +262,18 @@ impl ProviderUrl {
 	}
 }
 
+impl std::fmt::Display for ProviderUrl {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{}", self.0)
+	}
+}
+
 /// Executes an async future in a blocking context.
 ///
 /// If already inside a tokio runtime, uses `block_in_place` with the
 /// existing runtime handle. Otherwise, creates a new runtime.
 #[allow(dead_code)]
-pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
+pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
 	match tokio::runtime::Handle::try_current() {
 		Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
 		Err(_) => {
@@ -190,23 +286,51 @@ pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
 	}
 }
 
+#[cfg(feature = "age")]
+pub mod age;
+#[cfg(feature = "akv")]
+pub mod akv;
+#[cfg(feature = "awsps")]
+pub mod awsps;
 #[cfg(feature = "awssm")]
 pub mod awssm;
+#[cfg(feature = "bw")]
+pub mod bw;
 #[cfg(feature = "bws")]
 pub mod bws;
+pub mod dashlane;
 pub mod dotenv;
 pub mod env;
+pub mod file;
 #[cfg(feature = "gcsm")]
 pub mod gcsm;
+pub mod gopass;
+#[cfg(feature = "infisical")]
+pub mod infisical;
+#[cfg(feature = "kdbx")]
+pub mod kdbx;
+#[cfg(feature = "keeper")]
+pub mod keeper;
 #[cfg(feature = "keyring")]
 pub mod keyring;
 pub mod lastpass;
+pub mod null;
 pub mod onepassword;
 pub mod onepassword_env;
+#[cfg(feature = "openbao")]
+pub mod openbao;
 pub mod pass;
+pub mod passbolt;
 pub mod protonpass;
+#[cfg(feature = "scaleway")]
+pub mod scaleway;
+#[cfg(feature = "sops")]
+pub mod sops;
+pub mod systemd_credential;
 #[cfg(feature = "vault")]
 pub mod vault;
+#[cfg(any(feature = "openbao", feature = "vault"))]
+mod vault_common;
 #[macro_use]
 pub mod macros;
 
@@ -217,18 +341,18 @@ pub(crate) mod tests;
 ///
 /// Contains metadata used for displaying available providers to users,
 /// including the provider's name, description, and example URIs.
-#[cfg_attr(not(feature = "cli"), allow(dead_code))]
 #[derive(Debug, Clone)]
 pub struct ProviderInfo {
 	/// The canonical name of the provider (e.g., "keyring", "1password").
 	pub name: &'static str,
 	/// A human-readable description of what the provider does.
+	#[cfg_attr(not(any(feature = "cli", test)), allow(dead_code))]
 	pub description: &'static str,
 	/// Example URIs showing how to configure this provider.
+	#[cfg_attr(not(any(feature = "cli", test)), allow(dead_code))]
 	pub examples: &'static [&'static str],
 }
 
-#[cfg_attr(not(feature = "cli"), allow(dead_code))]
 impl ProviderInfo {
 	/// Formats the provider information for display, including examples if available.
 	///
@@ -251,6 +375,7 @@ impl ProviderInfo {
 	///     "onepassword: OnePassword password manager (e.g., onepassword://vault, onepassword://work@Production)"
 	/// );
 	/// ```
+	#[cfg(any(feature = "cli", test))]
 	pub fn display_with_examples(&self) -> String {
 		if self.examples.is_empty() {
 			format!("{}: {}", self.name, self.description)
@@ -265,10 +390,150 @@ impl ProviderInfo {
 	}
 }
 
+/// How a provider operation addresses a secret.
+///
+/// Every read and write names its secret one of two ways:
+///
+/// - [`Convention`](Address::Convention): Monosecret's own naming scheme. The
+///   provider maps `(project, profile, key)` into its namespace, by default
+///   `{provider}/{project}/{profile}/{key}` or the provider's configured
+///   format string.
+/// - [`Native`](Address::Native): explicit coordinates from a secret's `ref`
+///   field, naming one externally managed secret in the provider's own terms
+///   (item, field, ...). The provider translates the coordinates and rejects
+///   any it has no equivalent for.
+///
+/// Which stores are consulted is decided entirely by provider resolution
+/// (chains, overrides, defaults); the address only supplies the name to look
+/// up in one selected endpoint. Monosecret may derive a different address for
+/// another provider alias in the same logical route.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Address<'a> {
+	/// Monosecret's `{project}/{profile}/{key}` naming convention.
+	Convention {
+		project: &'a str,
+		profile: &'a str,
+		key: &'a str,
+	},
+	/// Native coordinates of one externally managed secret (a `ref`).
+	Native(&'a NativeAddress),
+}
+
+/// Owned counterpart to [`Address`], used by plans that must retain distinct
+/// source and destination addresses before provider operations begin.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum OwnedAddress {
+	Convention {
+		project: String,
+		profile: String,
+		key: String,
+	},
+	Native(NativeAddress),
+}
+
+impl OwnedAddress {
+	pub(crate) fn convention(project: &str, profile: &str, key: &str) -> Self {
+		Self::Convention {
+			project: project.to_string(),
+			profile: profile.to_string(),
+			key: key.to_string(),
+		}
+	}
+
+	pub(crate) fn as_address(&self) -> Address<'_> {
+		match self {
+			Self::Convention {
+				project,
+				profile,
+				key,
+			} => {
+				Address::Convention {
+					project,
+					profile,
+					key,
+				}
+			}
+			Self::Native(reference) => Address::Native(reference),
+		}
+	}
+
+	pub(crate) fn native(&self) -> Option<&NativeAddress> {
+		match self {
+			Self::Native(reference) => Some(reference),
+			Self::Convention { .. } => None,
+		}
+	}
+}
+
+impl<'a> Address<'a> {
+	/// Convention-scheme constructor, in the enum's own field order.
+	pub fn convention(project: &'a str, profile: &'a str, key: &'a str) -> Self {
+		Address::Convention {
+			project,
+			profile,
+			key,
+		}
+	}
+}
+
+/// Rejects native-address coordinates a provider has no equivalent for.
+///
+/// Enforced once for every address inside the default
+/// [`resolve_coords`](Provider::resolve_coords), against the provider's
+/// declared [`supported_coords`](Provider::supported_coords): a coordinate the
+/// provider does not name produces an error that names the coordinate, the ref
+/// it came from, and how to fix it, so a `ref` written for one store fails
+/// loudly when routing points it at a store that cannot honor those
+/// coordinates, instead of silently resolving something else.
+///
+/// Both remedies are offered because dropping the coordinate is only right when
+/// every endpoint should share one address. When the coordinate is meaningful to
+/// the store the ref was written for — a Bitwarden or 1Password item field, say —
+/// and this store simply organizes the secret differently, the fix is a
+/// per-provider address (0.19+), not a lossy edit to the ref.
+fn reject_unsupported_coords(
+	provider: &str,
+	addr: &NativeAddress,
+	supported: &[&str],
+) -> Result<()> {
+	for (name, value) in addr.coordinates() {
+		// `item` is the one coordinate every provider consumes.
+		if name == "item" || value.is_none() {
+			continue;
+		}
+		if !supported.contains(&name) {
+			return Err(MonosecretError::ProviderOperationFailed(format!(
+				"the {provider} provider does not support the `{name}` coordinate. \
+                 Drop `{name}` from the ref for `{item}`, or give this provider its \
+                 own address with `refs.<alias>` or an alias `ref` template (0.19+): \
+                 https://monosecret.dev/concepts/references/#different-coordinates-per-provider-019",
+				item = addr.item
+			)));
+		}
+	}
+	Ok(())
+}
+
+/// Resolves an address for flat stores whose secrets have no sub-components:
+/// any address, convention or `ref`, names the entry via `item` alone, every
+/// other coordinate having been rejected by the provider's empty
+/// [`supported_coords`](Provider::supported_coords).
+pub(crate) fn flat_item<'a, P: Provider + ?Sized>(
+	provider: &P,
+	addr: Address<'a>,
+) -> Result<Cow<'a, str>> {
+	match provider.resolve_coords(addr)? {
+		Cow::Borrowed(native) => Ok(Cow::Borrowed(native.item.as_str())),
+		Cow::Owned(native) => Ok(Cow::Owned(native.item)),
+	}
+}
+
 /// Macro support types
 pub use macros::PROVIDER_REGISTRY;
 /// Macro support types
 pub use macros::ProviderRegistration;
+/// Macro support types
+pub use macros::declared_flag;
 
 /// Returns a list of all available providers with their metadata.
 ///
@@ -278,7 +543,7 @@ pub use macros::ProviderRegistration;
 /// # Returns
 ///
 /// A vector of `ProviderInfo` structs containing metadata for each provider.
-#[cfg_attr(not(feature = "cli"), allow(dead_code))]
+#[cfg(feature = "cli")]
 pub fn providers() -> Vec<ProviderInfo> {
 	PROVIDER_REGISTRY
 		.iter()
@@ -286,43 +551,131 @@ pub fn providers() -> Vec<ProviderInfo> {
 		.collect()
 }
 
-/// Provider-independent address passed to storage backends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Address<'a> {
-	/// Monosecret's conventional `{project}/{profile}/{key}` layout.
-	Convention {
-		project: &'a str,
-		profile: &'a str,
-		key: &'a str,
-	},
-	/// Store-native coordinates from a secret's `ref` table.
-	Native(&'a NativeAddress),
-}
-
-impl<'a> Address<'a> {
-	pub(crate) fn convention(project: &'a str, profile: &'a str, key: &'a str) -> Self {
-		Self::Convention {
-			project,
-			profile,
-			key,
-		}
+/// Splits a provider spec at the first `:` into its scheme token and the rest
+/// (empty for a bare provider name). The one definition of "the scheme",
+/// shared by the `TryFrom<&str>` URI parser and [`spec_names_known_provider`],
+/// so the two cannot disagree on how a spec is split.
+fn split_spec(spec: &str) -> (&str, &str) {
+	match spec.find(':') {
+		Some(pos) => (&spec[..pos], &spec[pos + 1..]),
+		None => (spec, ""),
 	}
 }
 
-pub(crate) fn reject_unsupported_coords(
-	provider: &str,
-	address: &NativeAddress,
-	supported: &[&str],
-) -> Result<()> {
-	for (name, value) in address.coordinates() {
-		if name != "item" && value.is_some() && !supported.contains(&name) {
-			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"the {provider} provider does not support the `{name}` coordinate in ref `{}`",
-				address.render()
-			)));
-		}
+/// The registry entry whose schemes contain `scheme`. The one definition of
+/// "which registration a scheme resolves to", shared by every lookup below and
+/// by [`provider_from_url`], so they cannot drift on the matching rule.
+fn registration_for_scheme(scheme: &str) -> Option<&'static ProviderRegistration> {
+	PROVIDER_REGISTRY
+		.iter()
+		.find(|reg| reg.schemes.contains(&scheme))
+}
+
+/// Whether `spec` names a registered provider: a bare name (`keyring`), a
+/// `scheme:path` shorthand (`dotenv:.env.production`), or a full URI. Checks
+/// the leading scheme token against the registry without constructing a
+/// provider, so alias resolution can tell a valid provider spec apart from an
+/// undefined alias.
+///
+/// The common `1password` misspelling of `onepassword` errors with its
+/// corrective "use `onepassword` instead" message. Both the `TryFrom<&str>`
+/// URI parser and alias resolution gate specs through here, so the correction
+/// fires in one place no matter which path first sees the spec.
+pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
+	let (scheme, rest) = split_spec(spec);
+	if scheme == "1password" {
+		return Err(MonosecretError::ProviderOperationFailed(
+			"Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault)"
+				.to_string(),
+		));
 	}
-	Ok(())
+	// The URL parser normalizes `file://` to `file:///`, making an omitted
+	// path indistinguishable from an explicitly selected filesystem root.
+	// Reject pathless spellings before parsing so only `file:/` or `file:///`
+	// can intentionally select the absolute root.
+	if scheme == "file" && (rest.is_empty() || rest == "//") {
+		return Err(MonosecretError::ProviderOperationFailed(
+			file::MISSING_DIRECTORY_ERROR.to_string(),
+		));
+	}
+	Ok(registration_for_scheme(scheme).is_some())
+}
+
+/// The semantic credential names accepted by the provider named by `spec`, or
+/// an empty slice for an unknown scheme. Lets alias validation reject a
+/// declaration the provider would silently ignore.
+pub(crate) fn credential_names_for_spec(spec: &str) -> &'static [&'static str] {
+	let (scheme, _) = split_spec(spec);
+	registration_for_scheme(scheme).map_or(&[], |reg| reg.credential_names)
+}
+
+/// Whether the provider `spec` names implements [`Provider::delete`].
+///
+/// Read from the registration, so routing that requires an invalidatable store
+/// can be rejected while planning rather than discovered the first time an
+/// invalidation is attempted. An unknown scheme is `false`; callers reach here
+/// only after the spec resolved to a registered provider.
+pub(crate) fn spec_provider_deletes(spec: &str) -> bool {
+	let (scheme, _) = split_spec(spec);
+	registration_for_scheme(scheme).is_some_and(|reg| reg.deletes)
+}
+
+/// The names of every provider that implements deletion, sorted. Used to say
+/// which providers a cache can live in without hardcoding a list that would
+/// drift as providers gain the capability.
+pub(crate) fn deleting_provider_names() -> Vec<&'static str> {
+	let mut names: Vec<&'static str> = PROVIDER_REGISTRY
+		.iter()
+		.filter(|reg| reg.deletes)
+		.map(|reg| reg.info.name)
+		.collect();
+	names.sort_unstable();
+	names
+}
+
+/// The registered display name for the provider `spec` names, falling back to
+/// the spec's scheme token. Pure registry lookup: lets callers show which
+/// provider a spec routes to without constructing it (construction now fetches
+/// provider credentials, so a display-only build could fail or do I/O).
+pub(crate) fn provider_display_name_for_spec(spec: &str) -> String {
+	let (scheme, _) = split_spec(spec);
+	registration_for_scheme(scheme)
+		.map(|reg| reg.info.name.to_string())
+		.unwrap_or_else(|| scheme.to_string())
+}
+
+/// Context supplied when a provider discovers secret declarations.
+///
+/// Available starting with Monosecret 0.18. Hierarchical providers use the
+/// project and profile to render a bounded namespace before listing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DiscoveryContext<'a> {
+	pub project: &'a str,
+	pub profile: &'a str,
+}
+
+impl<'a> DiscoveryContext<'a> {
+	pub const fn new(project: &'a str, profile: &'a str) -> Self {
+		Self { project, profile }
+	}
+}
+
+/// Whether a value Monosecret produces after a provider miss is written back
+/// to the primary provider.
+///
+/// This capability is available since Monosecret 0.19. It is deliberately
+/// separate from read and write support: a provider may reject ordinary writes
+/// while explicitly allowing Monosecret to return a generated or prompted
+/// value for the current resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProducedValuePersistence {
+	/// Store the produced value through [`Provider::set`] and reuse it on
+	/// subsequent resolutions. This is the default for storage providers.
+	Persist,
+	/// Return the produced value only from the current materializing
+	/// resolution. No provider write or cache refresh is performed.
+	Ephemeral,
 }
 
 /// Trait defining the interface for secret storage providers.
@@ -345,126 +698,72 @@ pub(crate) fn reject_unsupported_coords(
 ///
 /// - Providers should handle their own error cases and return appropriate `Result` types
 /// - Storage paths should follow the pattern: `{provider}/{project}/{profile}/{key}`
-/// - Providers may choose to be read-only by overriding [`allows_set`](Provider::allows_set)
+/// - Providers may choose to be read-only by overriding [`check_writable`](Provider::check_writable)
 /// - Provider names should be lowercase and descriptive
 pub trait Provider: Send + Sync {
-	/// Optional native coordinates supported in addition to the universal `item`.
+	/// Compiles Monosecret's `{project}/{profile}/{key}` naming convention into
+	/// this store's native coordinates: the same address space a secret's
+	/// `ref` uses.
+	///
+	/// This is the single owner of the provider's convention layout (format
+	/// strings, path shapes, default vaults); the operation methods resolve
+	/// every address through [`resolve_coords`](Provider::resolve_coords) and
+	/// never re-derive names. Pure naming, no I/O.
+	///
+	/// # Errors
+	///
+	/// Returns an error when the convention inputs cannot form a valid name in
+	/// this store (e.g. empty components, length limits).
+	fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress>;
+
+	/// The optional [`NativeAddress`] coordinates this store can honor, beyond
+	/// the universally consumed `item` (e.g. `["field"]`).
+	///
+	/// Declared as data rather than checked per operation: the default
+	/// [`resolve_coords`](Provider::resolve_coords) rejects every coordinate a
+	/// provider does not name here, so a store whose secrets have no
+	/// sub-components gets the correct behavior from the empty default without
+	/// writing any validation.
 	fn supported_coords(&self) -> &'static [&'static str] {
 		&[]
 	}
 
-	/// Retrieves a secret through either conventional or native addressing.
-	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
-		match address {
+	/// Resolves any [`Address`] to this store's native coordinates: a `ref`'s
+	/// coordinates pass through as-is, a convention address is compiled via
+	/// [`convention_address`](Provider::convention_address). Coordinates
+	/// outside [`supported_coords`](Provider::supported_coords) are rejected,
+	/// so every operation that resolves an address inherits the check.
+	fn resolve_coords<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
+		let coords = match addr {
+			Address::Native(native) => Cow::Borrowed(native),
 			Address::Convention {
 				project,
 				profile,
 				key,
-			} => self.get(project, key, profile),
-			Address::Native(native) => {
-				reject_unsupported_coords(self.name(), native, self.supported_coords())?;
-				self.get("", &native.item, "")
-			}
-		}
+			} => Cow::Owned(self.convention_address(project, profile, key)?),
+		};
+		reject_unsupported_coords(self.name(), &coords, self.supported_coords())?;
+		Ok(coords)
 	}
 
-	/// Writes a secret through either conventional or native addressing.
-	fn set_address(&self, address: Address<'_>, value: &SecretString) -> Result<()> {
-		self.check_writable(address)?;
-		match address {
-			Address::Convention {
-				project,
-				profile,
-				key,
-			} => self.set(project, key, value, profile),
-			Address::Native(native) => self.set("", &native.item, value, ""),
-		}
-	}
-
-	/// Verifies that an address can be written before prompting or generating.
-	fn check_writable(&self, address: Address<'_>) -> Result<()> {
-		if let Address::Native(native) = address {
-			reject_unsupported_coords(self.name(), native, self.supported_coords())?;
-		}
-		if self.allows_set() {
-			Ok(())
-		} else {
-			Err(MonosecretError::ProviderOperationFailed(format!(
-				"Provider '{}' is read-only and does not support setting values",
-				self.name()
-			)))
-		}
-	}
-
-	/// Retrieves named addresses, deduplicating coordinates and fetching unique
-	/// addresses concurrently. Providers retain their existing optimized
-	/// convention-only `get_batch` API for backwards compatibility.
-	fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
-		// Preserve provider-specific bulk APIs for the conventional homogeneous
-		// case (AWS chunks, 1Password/BWS/Proton listings, cached env reads).
-		if let Some((
-			_,
-			Address::Convention {
-				project, profile, ..
-			},
-		)) = requests.first()
-			&& requests.iter().all(|(name, address)| {
-				matches!(
-					address,
-					Address::Convention {
-						project: candidate_project,
-						profile: candidate_profile,
-						key,
-					} if candidate_project == project && candidate_profile == profile && key == name
-				)
-			}) {
-			let keys = requests.iter().map(|(name, _)| *name).collect::<Vec<_>>();
-			return self.get_batch(project, &keys, profile);
-		}
-
-		let mut groups: HashMap<Address<'_>, Vec<&str>> = HashMap::new();
-		for (name, address) in requests {
-			groups.entry(*address).or_default().push(name);
-		}
-
-		let fetched = std::thread::scope(|scope| {
-			groups
-				.into_iter()
-				.map(|(address, names)| {
-					let handle = scope.spawn(move || self.get_address(address));
-					(names, handle)
-				})
-				.collect::<Vec<_>>()
-				.into_iter()
-				.map(|(names, handle)| {
-					let result = handle.join().map_err(|_| {
-						MonosecretError::ProviderOperationFailed(
-							"provider fetch worker panicked".to_string(),
-						)
-					})?;
-					Ok((names, result?))
-				})
-				.collect::<Result<Vec<_>>>()
-		})?;
-
-		let mut values = HashMap::new();
-		for (names, value) in fetched {
-			if let Some(value) = value {
-				for name in names {
-					values.insert(name.to_string(), value.clone());
-				}
-			}
-		}
-		Ok(values)
-	}
-
-	/// Retrieves a secret value from the provider.
+	/// Resolves the canonical coordinates an operation uses to identify one
+	/// physical entry. Available since Monosecret 0.19.
 	///
-	/// # Arguments
+	/// The default is the validated address returned by
+	/// [`resolve_coords`](Provider::resolve_coords). Providers that interpret
+	/// an omitted coordinate as a concrete default must override this method
+	/// and fill that default, so destructive preflight compares the same
+	/// identity that `get`, `set`, and `delete` operate on.
+	fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
+		self.resolve_coords(addr)
+	}
+
+	/// Retrieves the secret named by `addr`.
 	///
-	/// * `project` - The project namespace for the secret
-	/// * `key` - The secret key/name to retrieve
-	/// * `profile` - The profile context (e.g., "default", "production")
+	/// See [`Address`] for the two naming schemes. A provider that cannot
+	/// interpret a [`Native`](Address::Native) coordinate (e.g. a `field` on a
+	/// store whose secrets have no sub-components) returns an error naming the
+	/// coordinate rather than guessing.
 	///
 	/// # Returns
 	///
@@ -475,58 +774,15 @@ pub trait Provider: Send + Sync {
 	/// # Example
 	///
 	/// ```rust,ignore
-	/// match provider.get("myapp", "DATABASE_URL", "production")? {
+	/// let addr = Address::Convention { project: "myapp", profile: "production", key: "DATABASE_URL" };
+	/// match provider.get(addr)? {
 	///     Some(url) => println!("Database URL: {}", url),
 	///     None => println!("DATABASE_URL not found"),
 	/// }
 	/// ```
-	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>>;
+	fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>>;
 
-	/// Stores a secret value in the provider.
-	///
-	/// # Arguments
-	///
-	/// * `project` - The project namespace for the secret
-	/// * `key` - The secret key/name to store
-	/// * `value` - The secret value to store
-	/// * `profile` - The profile context (e.g., "default", "production")
-	///
-	/// # Returns
-	///
-	/// - `Ok(())` if the secret was successfully stored
-	/// - `Err` if there was an error or the provider is read-only
-	///
-	/// # Errors
-	///
-	/// This method should return an error if [`allows_set`](Provider::allows_set) returns `false`.
-	///
-	/// # Example
-	///
-	/// ```rust,ignore
-	/// provider.set("myapp", "API_KEY", "secret123", "production")?;
-	/// ```
-	fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()>;
-
-	/// Stores a secret value using provider-relative request hints.
-	fn set_with_request(
-		&self,
-		project: &str,
-		key: &str,
-		value: &SecretString,
-		profile: &str,
-		request: &SecretRequest,
-	) -> Result<()> {
-		let storage_key = request.key.as_deref().unwrap_or(key);
-		self.set(project, storage_key, value, profile)
-	}
-
-	/// Applies resolved provider dependency secrets before the provider is used.
-	///
-	/// The default implementation ignores dependency secrets. Providers that
-	/// need scoped authentication material should copy only the dependencies
-	/// they understand into provider-local state and pass them directly to
-	/// child commands or SDK clients, rather than mutating process-global
-	/// environment variables.
+	/// Supplies fork-compatible provider bootstrap secrets before first use.
 	fn configure_dependency_secrets(
 		&mut self,
 		_dependencies: &[(String, SecretString)],
@@ -534,27 +790,147 @@ pub trait Provider: Send + Sync {
 		Ok(())
 	}
 
-	/// Returns whether this provider supports setting values.
-	///
-	/// By default, providers are assumed to support writing. Read-only providers
-	/// (like environment variables) should override this to return `false`.
+	/// Stores a secret value at `addr`.
 	///
 	/// # Returns
 	///
-	/// - `true` if the provider supports [`set`](Provider::set) operations
-	/// - `false` if the provider is read-only
+	/// - `Ok(())` if the secret was successfully stored
+	/// - `Err` if there was an error or the address is read-only
+	///
+	/// # Errors
+	///
+	/// This method should return an error whenever
+	/// [`check_writable`](Provider::check_writable) does, for the same address.
+	fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()>;
+
+	/// Writes a secret at `addr` that need not outlive `max_age`. Available
+	/// since Monosecret 0.17.
+	///
+	/// The default ignores the hint and writes a plain value, which is always
+	/// correct: Monosecret's own cache envelope carries the expiration time and
+	/// remains the freshness authority. A provider whose store can drop a value
+	/// on its own overrides this, so a cached secret stops existing even if
+	/// Monosecret never runs again — a store-side bound on how long a copy of
+	/// someone else's secret sits there.
+	///
+	/// A provider that cannot apply the expiry it was asked for must return an
+	/// error rather than write an unexpiring value: the caller asked for a
+	/// bounded copy, and silently storing an unbounded one is worse than not
+	/// caching at all.
+	fn set_expiring(
+		&self,
+		addr: Address<'_>,
+		value: &SecretString,
+		max_age: std::time::Duration,
+	) -> Result<()> {
+		let _ = max_age;
+		self.set(addr, value)
+	}
+
+	/// Deletes a secret at `addr`. Available since Monosecret 0.17.
+	///
+	/// Providers opt into deletion explicitly. This is used by cache
+	/// invalidation and, starting in Monosecret 0.18, by `monosecret delete`
+	/// and `monosecret import --delete-source`. It defaults to a clear
+	/// unsupported-operation error so adding the method does not silently make
+	/// destructive behavior available to every provider.
+	///
+	/// Deleting is idempotent: an address that holds nothing is `Ok(false)`,
+	/// not an error. The `bool` reports whether an entry was actually removed,
+	/// so callers can tell a real invalidation from a no-op instead of counting
+	/// addresses they merely asked about.
+	fn delete(&self, addr: Address<'_>) -> Result<bool> {
+		let _ = addr;
+		Err(MonosecretError::ProviderOperationFailed(format!(
+			"provider '{}' does not support deleting secrets",
+			self.name()
+		)))
+	}
+
+	/// Reports whether this provider can delete `addr`, without changing the
+	/// store. Available since Monosecret 0.19.
+	///
+	/// Destructive multi-secret operations use this during preflight so an
+	/// unsupported native address cannot be discovered only after earlier
+	/// source entries have already been removed. Providers with deletion
+	/// policies beyond coordinate support must override this method and have
+	/// [`delete`](Provider::delete) enforce the same policy.
+	fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+		self.resolve_coords(addr).map(|_| ())
+	}
+
+	/// Reports whether this provider can write to `addr`, and why not when it
+	/// cannot.
+	///
+	/// Callers use this to refuse a write before prompting for a value, so the
+	/// error must be the same one [`set`](Provider::set) would return: state
+	/// the policy here and have `set` call this method, rather than writing the
+	/// rule twice.
+	///
+	/// By default, providers are assumed to support writing. Read-only
+	/// providers (like environment variables) reject every address; providers
+	/// that can write their own layout but not externally managed secrets
+	/// reject only [`Native`](Address::Native) addresses, and say so — a
+	/// generic "provider is read-only" would be untrue of the store as a whole.
 	///
 	/// # Example
 	///
 	/// ```rust,ignore
-	/// if provider.allows_set() {
-	///     provider.set("myapp", "TOKEN", "value", "default")?;
-	/// } else {
-	///     eprintln!("Provider is read-only");
-	/// }
+	/// provider.check_writable(addr)?;
+	/// provider.set(addr, &value)?;
 	/// ```
-	fn allows_set(&self) -> bool {
-		true
+	fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+		let _ = addr;
+		Ok(())
+	}
+
+	/// Controls whether Monosecret persists a value produced by a declaration's
+	/// `generate` configuration after this provider's read route misses.
+	/// Available since Monosecret 0.19.
+	///
+	/// [`ProducedValuePersistence::Ephemeral`] affects only automatic
+	/// generation. Ordinary [`set`](Provider::set), deletion, imports, and
+	/// provider reads keep their usual behavior. The capability must be pure:
+	/// callers may inspect it without running authentication preflight or other
+	/// provider I/O.
+	fn generated_value_persistence(&self) -> ProducedValuePersistence {
+		ProducedValuePersistence::Persist
+	}
+
+	/// Controls whether a value entered for a `prompt = true` declaration is
+	/// stored after the provider's read route misses. Available since
+	/// Monosecret 0.19.
+	///
+	/// The default persists the answer through [`Provider::set`], making the
+	/// prompt a first-use provisioning step. A provider that cannot or must not
+	/// retain values can return [`ProducedValuePersistence::Ephemeral`] so the
+	/// answer is used only by the current `run` resolution.
+	fn prompted_value_persistence(&self) -> ProducedValuePersistence {
+		ProducedValuePersistence::Persist
+	}
+
+	/// Describes the provider-native destination that a write to `addr` will
+	/// change. Available since Monosecret 0.19.
+	///
+	/// The description is intended for a pre-write CLI preview and must not
+	/// contain credentials. Providers with file-backed or otherwise structured
+	/// storage should override this when their URI plus native coordinates do
+	/// not identify the resolved file/container and selector clearly. The
+	/// default renders the provider-native coordinates.
+	fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
+		Ok(self.resolve_coords(addr)?.render())
+	}
+
+	/// Identifies the shared authentication state this instance's preflight
+	/// check probes, when that state outlives the instance.
+	///
+	/// Instances of the same provider returning equal keys share one probe
+	/// result process-wide. This matters because a secret's `providers` chain
+	/// builds a fresh provider instance per (secret, URI) pair — without a
+	/// scope key, N secrets would run N identical auth probes (each typically a
+	/// CLI round-trip). The default `None` keeps the probe per-instance.
+	fn auth_scope_key(&self) -> Option<String> {
+		None
 	}
 
 	/// Returns the name of this provider.
@@ -565,8 +941,93 @@ pub trait Provider: Send + Sync {
 	/// Returns the full URI representation of this provider.
 	///
 	/// This includes any configuration like vault names, paths, etc.
-	/// For example: "<onepassword://VaultName>" or "<dotenv://.env.production>"
+	/// For example: "onepassword://VaultName" or "dotenv://.env.production"
+	///
+	/// # Contract: the returned URI must be credential-free
+	///
+	/// The audit log records this URI and the fallback-chain warnings print it,
+	/// so it must never contain a secret the user embedded in the source URI
+	/// (e.g. a `:password` or service-account token). Reconstruct the URI from
+	/// non-secret attribution only — account, profile, namespace, host, path —
+	/// and drop any credential, which authentication resolves from the
+	/// environment or a token field instead. This contract is enforced for every
+	/// registered scheme by `uri_never_echoes_a_userinfo_password` in
+	/// `provider::tests`.
 	fn uri(&self) -> String;
+
+	/// Returns a credential-free identity for the physical store this provider
+	/// addresses.
+	///
+	/// Unlike [`Self::uri`], this value is not user-facing attribution. It is
+	/// used when Monosecret must decide whether two differently configured
+	/// providers can read and write the same storage location, such as when
+	/// ensuring a cache is distinct from its authoritative sources. Authentication
+	/// choices that do not change the store must therefore not change this
+	/// identity, and protocol-compatible provider names should return the same
+	/// identity when they target the same store.
+	///
+	/// Most providers have one public spelling for a store, so the default uses
+	/// their canonical URI. Providers with equivalent spellings or compatible
+	/// identities should override this method.
+	fn storage_identity(&self) -> String {
+		self.uri()
+	}
+
+	/// Returns the identity of the container holding a resolved secret entry.
+	/// Available since Monosecret 0.18.
+	///
+	/// This differs from [`Self::storage_identity`] only for providers whose
+	/// public URI contains an addressing template. Cache routing must retain
+	/// that template so sibling address spaces remain distinct, while
+	/// destructive operations compare the template's resolved native
+	/// coordinates separately and need the identity of the underlying
+	/// container here.
+	fn entry_container_identity(&self) -> String {
+		self.storage_identity()
+	}
+
+	/// Returns whether `self` and `other` resolve `addr` to the same physical
+	/// secret entry. Available since Monosecret 0.18.
+	///
+	/// This compatibility method applies one address to both providers. New
+	/// cross-endpoint operations should use [`Self::same_entries`] when source
+	/// and destination can have independent refs.
+	fn same_entry(&self, other: &dyn Provider, addr: Address<'_>) -> Result<bool> {
+		self.same_entries(addr, other, addr)
+	}
+
+	/// Returns whether `self` and `other` resolve their respective addresses to
+	/// the same physical secret entry. Available since Monosecret 0.19.
+	///
+	/// Destructive cross-provider operations must use this instead of comparing
+	/// [`uri`](Provider::uri) strings: one store may have multiple equivalent
+	/// spellings, and provider URIs can include convention templates that are
+	/// only meaningful after resolving a concrete address. The physical store
+	/// and the resolved native coordinates must both match before an entry is
+	/// considered shared.
+	fn same_entries(
+		&self,
+		self_addr: Address<'_>,
+		other: &dyn Provider,
+		other_addr: Address<'_>,
+	) -> Result<bool> {
+		if !same_storage_container(self, other) {
+			return Ok(false);
+		}
+
+		Ok(self.entry_coordinates(self_addr)? == other.entry_coordinates(other_addr)?)
+	}
+
+	/// Returns the path that identifies a filesystem-backed store, if any.
+	/// Available since Monosecret 0.18.
+	///
+	/// The path is compared using filesystem identity when it exists, catching
+	/// lexical aliases, symlinks, and hard links. Providers that are not backed
+	/// by one path keep the default and are identified by
+	/// [`storage_identity`](Provider::storage_identity).
+	fn physical_store_path(&self) -> Option<&std::path::Path> {
+		None
+	}
 
 	/// Records a human-readable reason for the secrets access happening in this
 	/// session (e.g. "monosecret run: deploy"), set via [`Secrets::with_reason`].
@@ -581,117 +1042,289 @@ pub trait Provider: Send + Sync {
 	/// [`Secrets::with_reason`]: crate::Secrets::with_reason
 	fn set_reason(&self, _reason: Option<String>) {}
 
-	/// Discovers and returns all secrets available in this provider.
+	/// Rebases any relative filesystem paths the provider holds against
+	/// `base_dir`, the directory containing the `monosecret.toml` that
+	/// configured it.
 	///
-	/// This method is used to introspect the provider and find all available secrets.
-	/// It's particularly useful for importing secrets from external sources.
+	/// File-backed providers (e.g. `dotenv`) take paths from the config or its
+	/// provider aliases. Those paths must resolve relative to the project root,
+	/// not the process's current working directory — otherwise running from a
+	/// subdirectory with `--file ../monosecret.toml` looks for the `.env` file
+	/// in the wrong place. [`Secrets`] calls this once at construction, before
+	/// the provider performs any I/O. The default implementation does nothing,
+	/// which is correct for providers that hold no relative paths.
 	///
-	/// # Returns
+	/// [`Secrets`]: crate::Secrets
+	fn with_base_dir(&mut self, _base_dir: &std::path::Path) {}
+
+	/// Hands semantic credentials to the provider.
 	///
-	/// A `HashMap` where keys are secret names and values are `Secret` configurations.
-	/// The default implementation returns an empty map, indicating the provider
-	/// doesn't support reflection.
+	/// Called once inside the registration factory, on the concrete provider
+	/// value *before* any `Arc`/`Box` wrapping. This must not be a
+	/// post-construction call on a `Box<dyn Provider>`: like [`with_base_dir`],
+	/// a `&mut self` hook cannot be forwarded through the blanket
+	/// `impl Provider for Arc<T>` (an `Arc` gives no `&mut` access to its
+	/// inner value), so a preflight provider — wrapped as `Box<Arc<P>>` — would
+	/// silently receive the default no-op. The default implementation ignores
+	/// the values, which is correct for providers that need no credentials.
+	///
+	/// [`with_base_dir`]: Provider::with_base_dir
+	fn with_credentials(&mut self, _credentials: ProviderCredentials) {}
+
+	/// Discovers declarations using the project and profile that the new
+	/// manifest will contain. Available starting with Monosecret 0.18.
+	///
+	/// Providers whose namespace does not depend on that context can ignore
+	/// it. Hierarchical providers should use it so discovery stays inside the
+	/// same namespace as [`convention_address`](Provider::convention_address).
+	/// The default implementation returns an unsupported-operation error.
 	///
 	/// # Example
 	///
 	/// ```rust,ignore
-	/// let secrets = provider.reflect()?;
+	/// let context = DiscoveryContext::new("payments", "production");
+	/// let secrets = provider.reflect(context)?;
 	/// for (name, secret) in secrets {
 	///     println!("Found secret: {} = {:?}", name, secret);
 	/// }
 	/// ```
-	fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
+	fn reflect(
+		&self,
+		_context: DiscoveryContext<'_>,
+	) -> Result<HashMap<String, crate::config::Secret>> {
 		Err(MonosecretError::ProviderOperationFailed(format!(
 			"Provider '{}' does not support reflection",
 			self.name()
 		)))
 	}
 
-	/// Retrieves multiple secrets from the provider in a single batch operation.
+	/// Retrieves multiple secrets in one batch operation.
 	///
-	/// This method allows providers to optimize fetching multiple secrets at once,
-	/// which can significantly improve performance for providers with high latency
-	/// per request (like cloud-based secret managers).
+	/// Each request pairs a secret name (the key of the returned map) with the
+	/// [`Address`] to fetch it from, so a batch mixes convention secrets and
+	/// `ref` secrets freely. Secrets that don't exist are omitted from the
+	/// result.
 	///
-	/// # Arguments
+	/// # Contract
 	///
-	/// * `project` - The project namespace for the secrets
-	/// * `keys` - A slice of secret keys to retrieve
-	/// * `profile` - The profile context (e.g., "default", "production")
-	///
-	/// # Returns
-	///
-	/// A `HashMap` where keys are the secret names and values are the secret values.
-	/// Secrets that don't exist are not included in the result.
+	/// Requests naming identical addresses (several secrets sharing one `ref`)
+	/// must be fetched once and share the value.
 	///
 	/// # Default Implementation
 	///
-	/// The default implementation calls `get()` for each key sequentially.
-	/// Providers should override this for better performance when possible.
-	fn get_batch(
-		&self,
-		project: &str,
-		keys: &[&str],
-		profile: &str,
-	) -> Result<HashMap<String, SecretString>> {
-		let mut results = HashMap::new();
-		for key in keys {
-			if let Some(value) = self.get(project, key, profile)? {
-				results.insert((*key).to_string(), value);
-			}
-		}
-		Ok(results)
-	}
-
-	/// Look up a single secret with an optional provider-relative location.
-	///
-	/// The default implementation delegates to [`get`](Provider::get), using
-	/// `request.key` as an alternate storage key when present. Providers that
-	/// support richer path navigation (e.g. `OnePassword` with section/field
-	/// lookup) should override this.
-	fn get_with_request(
-		&self,
-		project: &str,
-		key: &str,
-		profile: &str,
-		request: &SecretRequest,
-	) -> Result<Option<SecretString>> {
-		let storage_key = request.key.as_deref().unwrap_or(key);
-		self.get(project, storage_key, profile)
+	/// The default deduplicates identical addresses and fetches each unique
+	/// address once, concurrently. Providers with a real batch surface (one
+	/// listing, a bulk API) should override this to cut round-trips further.
+	fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+		get_each(self, requests)
 	}
 }
 
+/// Returns a stable lexical identity for a filesystem store that may not exist
+/// yet. Canonicalizing the parent resolves symlink aliases without requiring
+/// the destination file itself to exist.
+fn comparable_missing_file_path(path: &std::path::Path) -> std::path::PathBuf {
+	let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+	let Some(parent) = absolute.parent() else {
+		return absolute;
+	};
+	let Some(file_name) = absolute.file_name() else {
+		return absolute;
+	};
+
+	std::fs::canonicalize(parent)
+		.map(|parent| parent.join(file_name))
+		.unwrap_or(absolute)
+}
+
+/// Returns whether two providers address the same physical storage container,
+/// without comparing any one secret's resolved coordinates.
+///
+/// This is the store half of [`Provider::same_entries`]. Keeping it here lets
+/// non-destructive diagnostics use exactly the same filesystem and provider
+/// identity rules as destructive import preflight, including symlinks, hard
+/// links, missing file paths, and provider-specific container identities.
+pub(crate) fn same_storage_container<L, R>(left: &L, right: &R) -> bool
+where
+	L: Provider + ?Sized,
+	R: Provider + ?Sized,
+{
+	match (left.physical_store_path(), right.physical_store_path()) {
+		(Some(left), Some(right)) => {
+			same_file::is_same_file(left, right).unwrap_or_else(|_| {
+				let left = comparable_missing_file_path(left);
+				let right = comparable_missing_file_path(right);
+				left == right
+			})
+		}
+		(None, None) => left.entry_container_identity() == right.entry_container_identity(),
+		_ => false,
+	}
+}
+
+/// Default max concurrent unique-address fetches in [`get_each`].
+///
+/// Providers that open one TCP connection per concurrent `get` (cold HTTP
+/// clients, reverse proxies in front of Vault/OpenBao, rate-limited APIs) can
+/// drop part of an unbounded burst. A modest default keeps resolution fast
+/// without stampeding the store. Override with [`get_each_concurrency`].
+const DEFAULT_GET_EACH_CONCURRENCY: usize = 8;
+
+/// Env var that caps concurrent unique-address fetches in [`get_each`].
+///
+/// Must parse as an integer ≥ 1; invalid or missing values fall back to
+/// [`DEFAULT_GET_EACH_CONCURRENCY`].
+pub(crate) const GET_EACH_CONCURRENCY_ENV: &str = "MONOSECRET_PROVIDER_CONCURRENCY";
+
+/// Resolved concurrency limit for [`get_each`].
+pub(crate) fn get_each_concurrency() -> usize {
+	std::env::var(GET_EACH_CONCURRENCY_ENV)
+		.ok()
+		.and_then(|value| value.parse::<usize>().ok())
+		.filter(|&n| n >= 1)
+		.unwrap_or(DEFAULT_GET_EACH_CONCURRENCY)
+}
+
+/// Applies `map` in bounded, thread-scoped waves while preserving input order.
+///
+/// Shared by provider batch reads and higher-level fallback-chain reads so both
+/// honor [`GET_EACH_CONCURRENCY_ENV`] without an additional thread-pool
+/// dependency.
+pub(crate) fn map_concurrently<T, R, F>(items: &[T], concurrency: usize, map: F) -> Vec<R>
+where
+	T: Sync,
+	R: Send,
+	F: Fn(&T) -> R + Sync,
+{
+	let concurrency = concurrency.max(1);
+	if items.len() <= 1 || concurrency == 1 {
+		return items.iter().map(map).collect();
+	}
+
+	let mut mapped = Vec::with_capacity(items.len());
+	for chunk in items.chunks(concurrency) {
+		std::thread::scope(|scope| {
+			let handles: Vec<_> = chunk.iter().map(|item| scope.spawn(|| map(item))).collect();
+			mapped.extend(
+				handles
+					.into_iter()
+					.map(|handle| handle.join().expect("concurrent map thread panicked")),
+			);
+		});
+	}
+	mapped
+}
+
+/// Shared fallback used by the default [`Provider::get_many`] and by batch
+/// overrides for the part of a request set their bulk surface cannot serve:
+/// deduplicates identical addresses and fetches each unique address once,
+/// concurrently (capped), mirroring the per-item threading batch overrides do.
+pub(crate) fn get_each<P: Provider + ?Sized>(
+	provider: &P,
+	requests: &[(&str, Address<'_>)],
+) -> Result<HashMap<String, SecretString>> {
+	get_each_with(requests, |addr| provider.get(addr))
+}
+
+/// [`get_each`] with an operation-scoped fetch function.
+///
+/// Providers can use this when the per-address reads need to share state that
+/// belongs to exactly one `get_many` call, such as a short-lived login token.
+pub(crate) fn get_each_with<'a, F>(
+	requests: &[(&str, Address<'a>)],
+	fetch: F,
+) -> Result<HashMap<String, SecretString>>
+where
+	F: Fn(Address<'a>) -> Result<Option<SecretString>> + Sync,
+{
+	let mut groups: HashMap<Address<'_>, Vec<&str>> = HashMap::new();
+	for (name, addr) in requests {
+		groups.entry(*addr).or_default().push(name);
+	}
+
+	// Stable vec so we can process in concurrency-sized waves. HashMap
+	// iteration order is irrelevant: each address is independent.
+	let groups: Vec<(Address<'_>, Vec<&str>)> = groups.into_iter().collect();
+
+	// One address is the common case (a single secret, or several sharing a
+	// `ref`); `map_concurrently` keeps it on this thread. Larger sets fan out in
+	// capped waves so they do not stampede a provider.
+	let fetched: Vec<(Vec<&str>, Result<Option<SecretString>>)> =
+		map_concurrently(&groups, get_each_concurrency(), |(addr, names)| {
+			(names.clone(), fetch(*addr))
+		});
+
+	let mut results = HashMap::new();
+	for (names, result) in fetched {
+		if let Some(value) = result? {
+			for name in names {
+				results.insert(name.to_string(), value.clone());
+			}
+		}
+	}
+	Ok(results)
+}
+
 impl<T: Provider> Provider for std::sync::Arc<T> {
+	fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
+		(**self).convention_address(project, profile, key)
+	}
+
 	fn supported_coords(&self) -> &'static [&'static str] {
 		(**self).supported_coords()
 	}
 
-	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
-		(**self).get_address(address)
+	fn resolve_coords<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
+		(**self).resolve_coords(addr)
 	}
 
-	fn set_address(&self, address: Address<'_>, value: &SecretString) -> Result<()> {
-		(**self).set_address(address, value)
+	fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
+		(**self).entry_coordinates(addr)
 	}
 
-	fn check_writable(&self, address: Address<'_>) -> Result<()> {
-		(**self).check_writable(address)
+	fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+		(**self).get(addr)
 	}
 
-	fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
-		(**self).get_many(requests)
+	fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+		(**self).set(addr, value)
 	}
 
-	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-		(**self).get(project, key, profile)
+	fn set_expiring(
+		&self,
+		addr: Address<'_>,
+		value: &SecretString,
+		max_age: std::time::Duration,
+	) -> Result<()> {
+		(**self).set_expiring(addr, value, max_age)
 	}
 
-	fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-		(**self).set(project, key, value, profile)
+	fn delete(&self, addr: Address<'_>) -> Result<bool> {
+		(**self).delete(addr)
 	}
 
-	fn allows_set(&self) -> bool {
-		(**self).allows_set()
+	fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+		(**self).check_deletable(addr)
+	}
+
+	fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+		(**self).check_writable(addr)
+	}
+
+	fn generated_value_persistence(&self) -> ProducedValuePersistence {
+		(**self).generated_value_persistence()
+	}
+
+	fn prompted_value_persistence(&self) -> ProducedValuePersistence {
+		(**self).prompted_value_persistence()
+	}
+
+	fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
+		(**self).describe_write_target(addr)
+	}
+
+	fn auth_scope_key(&self) -> Option<String> {
+		(**self).auth_scope_key()
 	}
 
 	fn name(&self) -> &'static str {
@@ -702,31 +1335,44 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
 		(**self).uri()
 	}
 
+	fn same_entry(&self, other: &dyn Provider, addr: Address<'_>) -> Result<bool> {
+		(**self).same_entry(other, addr)
+	}
+
+	fn same_entries(
+		&self,
+		self_addr: Address<'_>,
+		other: &dyn Provider,
+		other_addr: Address<'_>,
+	) -> Result<bool> {
+		(**self).same_entries(self_addr, other, other_addr)
+	}
+
+	fn storage_identity(&self) -> String {
+		(**self).storage_identity()
+	}
+
+	fn entry_container_identity(&self) -> String {
+		(**self).entry_container_identity()
+	}
+
+	fn physical_store_path(&self) -> Option<&std::path::Path> {
+		(**self).physical_store_path()
+	}
+
 	fn set_reason(&self, reason: Option<String>) {
 		(**self).set_reason(reason);
 	}
 
-	fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
-		(**self).reflect()
+	fn reflect(
+		&self,
+		context: DiscoveryContext<'_>,
+	) -> Result<HashMap<String, crate::config::Secret>> {
+		(**self).reflect(context)
 	}
 
-	fn get_batch(
-		&self,
-		project: &str,
-		keys: &[&str],
-		profile: &str,
-	) -> Result<HashMap<String, SecretString>> {
-		(**self).get_batch(project, keys, profile)
-	}
-
-	fn get_with_request(
-		&self,
-		project: &str,
-		key: &str,
-		profile: &str,
-		request: &SecretRequest,
-	) -> Result<Option<SecretString>> {
-		(**self).get_with_request(project, key, profile, request)
+	fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+		(**self).get_many(requests)
 	}
 }
 
@@ -736,6 +1382,68 @@ pub(crate) struct ProviderWithPreflight {
 	pub provider: Box<dyn Provider>,
 	pub preflight: Option<Box<dyn Fn() -> Result<()> + Send + Sync>>,
 }
+
+/// Process-wide deduplication of provider auth probes.
+///
+/// Caching the preflight check per provider *instance* was enough when one
+/// instance served every secret, but a secret's `providers` fallback chain
+/// builds a fresh instance per (secret, URI) pair, so N secrets would run N
+/// identical auth probes (each a CLI round-trip). Providers whose auth state is
+/// shared across instances advertise that via [`Provider::auth_scope_key`], and
+/// [`PreflightGuard`] keys their probe here instead: the first caller per key
+/// runs it, concurrent callers block on the same cell, and later callers
+/// reuse the result.
+///
+/// Failures are returned to every caller waiting on the in-flight probe but
+/// are not cached beyond that: the user may fix auth mid-process (e.g. unlock
+/// the desktop app in a long-lived SDK process), so the next check re-probes.
+type AuthCheckResult = std::result::Result<(), String>;
+type AuthCheckCell = Arc<OnceLock<AuthCheckResult>>;
+
+pub(crate) struct AuthCheckCache<K> {
+	cells: Mutex<HashMap<K, AuthCheckCell>>,
+}
+
+impl<K> Default for AuthCheckCache<K> {
+	fn default() -> Self {
+		Self {
+			cells: Mutex::new(HashMap::new()),
+		}
+	}
+}
+
+impl<K: std::hash::Hash + Eq + Clone> AuthCheckCache<K> {
+	pub(crate) fn check(
+		&self,
+		key: K,
+		probe: impl FnOnce() -> std::result::Result<(), String>,
+	) -> std::result::Result<(), String> {
+		let cell = self
+			.cells
+			.lock()
+			.unwrap()
+			.entry(key.clone())
+			.or_default()
+			.clone();
+		let result = cell.get_or_init(probe).clone();
+		if result.is_err() {
+			// Drop the failed cell so a later retry re-probes, but only if it
+			// is still ours: another thread may have already replaced it.
+			let mut cells = self.cells.lock().unwrap();
+			if let Some(existing) = cells.get(&key)
+				&& Arc::ptr_eq(existing, &cell)
+			{
+				cells.remove(&key);
+			}
+		}
+		result
+	}
+}
+
+/// Auth probes shared across provider instances (see
+/// [`Provider::auth_scope_key`]), keyed by provider name plus scope.
+static PREFLIGHT_AUTH_CACHE: LazyLock<AuthCheckCache<(&'static str, String)>> =
+	LazyLock::new(AuthCheckCache::default);
 
 /// Wrapper that runs a preflight check exactly once before any provider
 /// operation, caching the result for all subsequent calls.
@@ -755,13 +1463,22 @@ impl PreflightGuard {
 	}
 
 	fn check(&self) -> Result<()> {
-		let result = self.result.get_or_init(|| {
-			if let Some(f) = &self.preflight {
-				f().map_err(|e| e.to_string())
-			} else {
-				Ok(())
-			}
-		});
+		let Some(f) = &self.preflight else {
+			return Ok(());
+		};
+		// A provider with a shared auth scope dedupes the probe process-wide
+		// in PREFLIGHT_AUTH_CACHE, so the per-instance providers that a
+		// secret's `providers` chain creates all reuse one probe.
+		if let Some(scope) = self.inner.auth_scope_key() {
+			return PREFLIGHT_AUTH_CACHE
+				.check((self.inner.name(), scope), || {
+					f().map_err(|e| crate::error::display_error_chain(&e))
+				})
+				.map_err(MonosecretError::ProviderOperationFailed);
+		}
+		let result = self
+			.result
+			.get_or_init(|| f().map_err(|e| crate::error::display_error_chain(&e)));
 		match result {
 			Ok(()) => Ok(()),
 			Err(msg) => Err(MonosecretError::ProviderOperationFailed(msg.clone())),
@@ -770,41 +1487,76 @@ impl PreflightGuard {
 }
 
 impl Provider for PreflightGuard {
+	fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
+		// Pure naming, no I/O: needs no auth preflight.
+		self.inner.convention_address(project, profile, key)
+	}
+
 	fn supported_coords(&self) -> &'static [&'static str] {
 		self.inner.supported_coords()
 	}
 
-	fn get_address(&self, address: Address<'_>) -> Result<Option<SecretString>> {
+	fn resolve_coords<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
+		// Pure naming, no I/O: needs no auth preflight.
+		self.inner.resolve_coords(addr)
+	}
+
+	fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
+		// Pure naming, no I/O: needs no auth preflight.
+		self.inner.entry_coordinates(addr)
+	}
+
+	fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
 		self.check()?;
-		self.inner.get_address(address)
+		self.inner.get(addr)
 	}
 
-	fn set_address(&self, address: Address<'_>, value: &SecretString) -> Result<()> {
+	fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
 		self.check()?;
-		self.inner.set_address(address, value)
+		self.inner.set(addr, value)
 	}
 
-	fn check_writable(&self, address: Address<'_>) -> Result<()> {
-		self.inner.check_writable(address)
-	}
-
-	fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+	/// Forwarded rather than left to the trait default, which would call
+	/// `self.set` and drop the expiry the inner provider can honor.
+	fn set_expiring(
+		&self,
+		addr: Address<'_>,
+		value: &SecretString,
+		max_age: std::time::Duration,
+	) -> Result<()> {
 		self.check()?;
-		self.inner.get_many(requests)
+		self.inner.set_expiring(addr, value, max_age)
 	}
 
-	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
+	fn delete(&self, addr: Address<'_>) -> Result<bool> {
 		self.check()?;
-		self.inner.get(project, key, profile)
+		self.inner.delete(addr)
 	}
 
-	fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-		self.check()?;
-		self.inner.set(project, key, value, profile)
+	fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+		self.inner.check_deletable(addr)
 	}
 
-	fn allows_set(&self) -> bool {
-		self.inner.allows_set()
+	fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+		self.inner.check_writable(addr)
+	}
+
+	fn generated_value_persistence(&self) -> ProducedValuePersistence {
+		// Capability inspection is pure and must not trigger authentication.
+		self.inner.generated_value_persistence()
+	}
+
+	fn prompted_value_persistence(&self) -> ProducedValuePersistence {
+		// Capability inspection is pure and must not trigger authentication.
+		self.inner.prompted_value_persistence()
+	}
+
+	fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
+		self.inner.describe_write_target(addr)
+	}
+
+	fn auth_scope_key(&self) -> Option<String> {
+		self.inner.auth_scope_key()
 	}
 
 	fn name(&self) -> &'static str {
@@ -815,34 +1567,54 @@ impl Provider for PreflightGuard {
 		self.inner.uri()
 	}
 
+	fn same_entry(&self, other: &dyn Provider, addr: Address<'_>) -> Result<bool> {
+		self.inner.same_entry(other, addr)
+	}
+
+	fn same_entries(
+		&self,
+		self_addr: Address<'_>,
+		other: &dyn Provider,
+		other_addr: Address<'_>,
+	) -> Result<bool> {
+		self.inner.same_entries(self_addr, other, other_addr)
+	}
+
+	fn storage_identity(&self) -> String {
+		self.inner.storage_identity()
+	}
+
+	fn entry_container_identity(&self) -> String {
+		self.inner.entry_container_identity()
+	}
+
+	fn physical_store_path(&self) -> Option<&std::path::Path> {
+		self.inner.physical_store_path()
+	}
+
 	fn set_reason(&self, reason: Option<String>) {
 		self.inner.set_reason(reason);
 	}
 
-	fn reflect(&self) -> Result<HashMap<String, crate::config::Secret>> {
-		self.check()?;
-		self.inner.reflect()
+	fn with_base_dir(&mut self, base_dir: &std::path::Path) {
+		self.inner.with_base_dir(base_dir);
 	}
 
-	fn get_batch(
-		&self,
-		project: &str,
-		keys: &[&str],
-		profile: &str,
-	) -> Result<HashMap<String, SecretString>> {
-		self.check()?;
-		self.inner.get_batch(project, keys, profile)
+	fn with_credentials(&mut self, credentials: ProviderCredentials) {
+		self.inner.with_credentials(credentials);
 	}
 
-	fn get_with_request(
+	fn reflect(
 		&self,
-		project: &str,
-		key: &str,
-		profile: &str,
-		request: &SecretRequest,
-	) -> Result<Option<SecretString>> {
+		context: DiscoveryContext<'_>,
+	) -> Result<HashMap<String, crate::config::Secret>> {
 		self.check()?;
-		self.inner.get_with_request(project, key, profile, request)
+		self.inner.reflect(context)
+	}
+
+	fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+		self.check()?;
+		self.inner.get_many(requests)
 	}
 }
 
@@ -856,7 +1628,7 @@ impl TryFrom<String> for Box<dyn Provider> {
 	///
 	/// # URI Formats
 	///
-	/// - **Full URI**: `scheme://authority/path` (e.g., `onepassword://vault/Production`)
+	/// - **Full URI**: `scheme://authority/path` (e.g., `onepassword://Production`)
 	///
 	/// # Special Cases
 	///
@@ -872,7 +1644,7 @@ impl TryFrom<String> for Box<dyn Provider> {
 	/// let provider = Box::<dyn Provider>::try_from("keyring".to_string())?;
 	///
 	/// // Full URI with configuration
-	/// let provider = Box::<dyn Provider>::try_from("onepassword://vault/Production".to_string())?;
+	/// let provider = Box::<dyn Provider>::try_from("onepassword://Production".to_string())?;
 	///
 	/// // Dotenv with path
 	/// let provider = Box::<dyn Provider>::try_from("dotenv:.env.production".to_string())?;
@@ -886,120 +1658,76 @@ impl TryFrom<&str> for Box<dyn Provider> {
 	type Error = MonosecretError;
 
 	fn try_from(s: &str) -> Result<Self> {
-		// Parse the scheme from the input string
-		let (scheme, rest) = if let Some(pos) = s.find(':') {
-			let scheme = &s[..pos];
-			let rest = &s[pos + 1..];
-			(scheme, rest)
+		provider_from_spec(s, ProviderCredentials::new())
+	}
+}
+
+/// Builds a boxed provider from a spec string (a bare name, `scheme:...`
+/// shorthand, or full URI), handing it the supplied credentials. The shared
+/// body of the string `TryFrom` impls: construction funnels here so URL
+/// normalization and credential injection have exactly one home.
+pub(crate) fn provider_from_spec(
+	s: &str,
+	credentials: ProviderCredentials,
+) -> Result<Box<dyn Provider>> {
+	// Parse the scheme from the input string
+	let (scheme, rest) = split_spec(s);
+
+	// Reject the `1password` misspelling (with its corrective error) and
+	// check the scheme against the registry, through the same gate alias
+	// resolution uses.
+	if !spec_names_known_provider(s)? {
+		// Check if it's a known provider name to give a better error
+		if PROVIDER_REGISTRY.iter().any(|reg| reg.info.name == scheme) {
+			return Err(MonosecretError::ProviderOperationFailed(format!(
+				"Provider '{}' exists but URI parsing failed",
+				scheme
+			)));
 		} else {
-			// Just a provider name, no URI components
-			(s, "")
-		};
-
-		// Validate scheme first
-		if scheme == "1password" {
-			return Err(MonosecretError::ProviderOperationFailed(
-                "Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault/path)".to_string()
-            ));
-		}
-
-		// Check if the scheme is registered
-		let is_valid_scheme = PROVIDER_REGISTRY
-			.iter()
-			.any(|reg| reg.schemes.contains(&scheme));
-
-		if !is_valid_scheme {
-			// Check if it's a known provider name to give a better error
-			if PROVIDER_REGISTRY.iter().any(|reg| reg.info.name == scheme) {
-				return Err(MonosecretError::ProviderOperationFailed(format!(
-					"Provider '{scheme}' exists but URI parsing failed"
-				)));
-			}
 			return Err(MonosecretError::ProviderNotFound(scheme.to_string()));
 		}
+	}
 
-		// Build a proper URL with the correct scheme
+	// Build a proper URL with the correct scheme.
+	//
+	// Windows absolute paths (e.g. `dotenv://C:\path\.env`) need special care:
+	// the drive-letter colon looks like a `host:port` separator and parsing
+	// fails with "invalid port number". Custom schemes carry the encoded path
+	// in an opaque host so it round-trips through `ProviderUrl::host()`; the
+	// special `file` scheme uses its standard `file:///C:/...` form instead. A
+	// Unix absolute path already parses cleanly as `scheme:///abs/path`.
+	let path_candidate = rest.trim_start_matches('/');
+	let url_string = if is_windows_abs_path(path_candidate) {
+		if scheme == "file" {
+			// `file` is a special URL scheme, so an encoded drive path cannot
+			// live in its host as it does for custom schemes. Use the standard
+			// authority-less file URL and normalize Windows separators.
+			let path = path_candidate.replace('\\', "/");
+			format!(
+				"file:///{}",
+				percent_encode(path.as_bytes(), URI_ENCODE_SET)
+			)
+		} else {
+			format!(
+				"{}://{}",
+				scheme,
+				percent_encode(path_candidate.as_bytes(), WINDOWS_PATH_ENCODE_SET)
+			)
+		}
+	} else {
 		let url_string = match rest {
 			// Just scheme name (e.g., "keyring")
-			"" | ":" => format!("{scheme}://"),
-			// Standard URI format already has // (e.g., "onepassword://vault/path")
-			s if s.starts_with("//") => format!("{scheme}:{s}"),
+			"" | ":" => format!("{}://", scheme),
+			// Standard URI format already has // (e.g., "onepassword://vault")
+			s if s.starts_with("//") => format!("{}:{}", scheme, s),
 			// Path only format (e.g., "dotenv:/path/to/.env")
-			s if s.starts_with('/') => format!("{scheme}://{s}"),
+			s if s.starts_with('/') => format!("{}://{}", scheme, s),
 			// Everything else - assume it's a host or path component
-			s => format!("{scheme}://{s}"),
+			s => format!("{}://{}", scheme, s),
 		};
 
 		// Percent-encode characters that are invalid in URIs but might appear in
 		// provider config values (e.g., spaces in 1Password vault names like "Home Lab")
-		let url_string = {
-			let scheme_end = url_string.find("://").unwrap() + 3;
-			let (prefix, rest) = url_string.split_at(scheme_end);
-			format!(
-				"{}{}",
-				prefix,
-				percent_encode(rest.as_bytes(), URI_ENCODE_SET)
-			)
-		};
-
-		let proper_url = Url::parse(&url_string).map_err(|e| {
-			MonosecretError::ProviderOperationFailed(format!(
-				"Invalid provider specification '{s}': {e}"
-			))
-		})?;
-
-		provider_from_url_with_dependencies(&ProviderUrl::new(proper_url), &[])
-	}
-}
-
-impl TryFrom<&Url> for Box<dyn Provider> {
-	type Error = MonosecretError;
-
-	fn try_from(url: &Url) -> Result<Self> {
-		provider_from_url_with_dependencies(&ProviderUrl::new(url.clone()), &[])
-	}
-}
-
-pub(crate) fn provider_from_spec_with_dependencies(
-	s: &str,
-	dependencies: &[(String, SecretString)],
-) -> Result<Box<dyn Provider>> {
-	let (scheme, rest) = if let Some(pos) = s.find(':') {
-		let scheme = &s[..pos];
-		let rest = &s[pos + 1..];
-		(scheme, rest)
-	} else {
-		(s, "")
-	};
-
-	if scheme == "1password" {
-		return Err(MonosecretError::ProviderOperationFailed(
-            "Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault/path)"
-                .to_string(),
-        ));
-	}
-
-	let is_valid_scheme = PROVIDER_REGISTRY
-		.iter()
-		.any(|reg| reg.schemes.contains(&scheme));
-
-	if !is_valid_scheme {
-		if PROVIDER_REGISTRY.iter().any(|reg| reg.info.name == scheme) {
-			return Err(MonosecretError::ProviderOperationFailed(format!(
-				"Provider '{scheme}' exists but URI parsing failed"
-			)));
-		}
-		return Err(MonosecretError::ProviderNotFound(scheme.to_string()));
-	}
-
-	let url_string = match rest {
-		"" | ":" => format!("{scheme}://"),
-		s if s.starts_with("//") => format!("{scheme}:{s}"),
-		s if s.starts_with('/') => format!("{scheme}://{s}"),
-		s => format!("{scheme}://{s}"),
-	};
-
-	let url_string = {
 		let scheme_end = url_string.find("://").unwrap() + 3;
 		let (prefix, rest) = url_string.split_at(scheme_end);
 		format!(
@@ -1010,31 +1738,155 @@ pub(crate) fn provider_from_spec_with_dependencies(
 	};
 
 	let proper_url = Url::parse(&url_string).map_err(|e| {
+		// Redacted: a spec that fails to parse can still carry a credential in
+		// its userinfo, and this message is printed. The rejection in
+		// `reject_uri_credential` only runs once parsing succeeds.
 		MonosecretError::ProviderOperationFailed(format!(
-			"Invalid provider specification '{s}': {e}"
+			"Invalid provider specification '{}': {}",
+			crate::audit::redact_uri_strict(s),
+			e
 		))
 	})?;
 
-	provider_from_url_with_dependencies(&ProviderUrl::new(proper_url), dependencies)
+	provider_from_url(&ProviderUrl::new(proper_url), credentials)
 }
 
-fn provider_from_url_with_dependencies(
+impl TryFrom<&Url> for Box<dyn Provider> {
+	type Error = MonosecretError;
+
+	fn try_from(url: &Url) -> Result<Self> {
+		provider_from_url(&ProviderUrl::new(url.clone()), ProviderCredentials::new())
+	}
+}
+
+/// Refuses a provider URI that carries a credential in its password position.
+///
+/// A URI is the wrong place for a secret: it is committed to `monosecret.toml`,
+/// echoed into shell history, and printed by CI. Redacting it at the terminal
+/// does not unpublish it from any of those. Provider credentials exist for this
+/// (`credentials = { … }` on the alias, `monosecret config provider login`, or
+/// the provider's environment fallback), so the password position is rejected
+/// outright rather than read, ignored, or scrubbed.
+///
+/// Only the password position is universal. Every provider that reads the
+/// username reads a non-secret from it (a Vault namespace, an AWS profile, a
+/// Bitwarden organization, a 1Password account), so a scheme whose username
+/// carries a credential rejects it itself.
+///
+/// Since Monosecret 0.19.
+fn reject_uri_credential(url: &ProviderUrl) -> Result<()> {
+	if url.password().is_none() {
+		return Ok(());
+	}
+	let scheme = url.scheme();
+	let registration = registration_for_scheme(scheme);
+	// Name the credentials this provider actually accepts, straight from its
+	// registration, so the remedy is concrete rather than a pointer to the
+	// general mechanism. A provider that accepts none never had a use for the
+	// password either, so say that instead of suggesting a credential.
+	let remedy = match registration {
+		Some(reg) if !reg.credential_names.is_empty() => {
+			let names = reg
+				.credential_names
+				.iter()
+				.map(|name| format!("`{name}`"))
+				.collect::<Vec<_>>()
+				.join(", ");
+			format!(
+				"Supply it as the {names} provider credential instead \
+                 (`monosecret config provider login <alias>`, or `credentials = \
+                 {{ ... }}` on the alias), or use the provider's environment \
+                 variable. See https://monosecret.dev/providers/{}/",
+				reg.info.name
+			)
+		}
+		Some(reg) => {
+			format!(
+				"The {} provider takes no credentials, so remove the userinfo from \
+             the URI. See https://monosecret.dev/providers/{}/",
+				reg.info.name, reg.info.name
+			)
+		}
+		None => "See https://monosecret.dev/reference/provider-credentials/".to_string(),
+	};
+	Err(MonosecretError::ProviderOperationFailed(format!(
+		"provider URI '{}' carries a password. Monosecret does not accept \
+         credentials in URIs: a URI reaches committed manifests, shell history, \
+         and CI logs, so a credential written there is already disclosed. {remedy}",
+		crate::audit::redact_uri_strict(url.0.as_str()),
+	)))
+}
+
+pub(crate) fn provider_from_url(
 	url: &ProviderUrl,
-	dependencies: &[(String, SecretString)],
+	credentials: ProviderCredentials,
 ) -> Result<Box<dyn Provider>> {
+	reject_uri_credential(url)?;
 	let scheme = url.scheme();
 
-	// Find the provider registration for this scheme
-	let registration = PROVIDER_REGISTRY
-		.iter()
-		.find(|reg| reg.schemes.contains(&scheme))
+	let registration = registration_for_scheme(scheme)
 		.ok_or_else(|| MonosecretError::ProviderNotFound(scheme.to_string()))?;
 
-	let pwp = (registration.factory)(url, dependencies)?;
+	let pwp = (registration.factory)(url, credentials)?;
 	if pwp.preflight.is_some() {
 		Ok(Box::new(PreflightGuard::new(pwp)))
 	} else {
 		Ok(pwp.provider)
+	}
+}
+
+#[cfg(test)]
+mod auth_cache_tests {
+	use std::cell::Cell;
+
+	use super::AuthCheckCache;
+
+	#[test]
+	fn success_probes_once_per_key() {
+		let cache = AuthCheckCache::default();
+		let probes = Cell::new(0);
+		for _ in 0..3 {
+			let result = cache.check("key", || {
+				probes.set(probes.get() + 1);
+				Ok(())
+			});
+			assert_eq!(result, Ok(()));
+		}
+		assert_eq!(probes.get(), 1);
+	}
+
+	#[test]
+	fn failure_is_not_cached() {
+		let cache = AuthCheckCache::default();
+		assert_eq!(
+			cache.check("key", || Err("not signed in".to_string())),
+			Err("not signed in".to_string())
+		);
+		// A later check re-probes and can observe recovered auth
+		// (e.g. after `op signin`).
+		assert_eq!(cache.check("key", || Ok(())), Ok(()));
+		// ...and the recovery is then cached.
+		let probes = Cell::new(0);
+		assert_eq!(
+			cache.check("key", || {
+				probes.set(probes.get() + 1);
+				Ok(())
+			}),
+			Ok(())
+		);
+		assert_eq!(probes.get(), 0);
+	}
+
+	#[test]
+	fn keys_are_independent() {
+		let cache = AuthCheckCache::default();
+		assert_eq!(cache.check("a", || Ok(())), Ok(()));
+		assert_eq!(
+			cache.check("b", || Err("nope".to_string())),
+			Err("nope".to_string())
+		);
+		// "a" stays cached despite "b" failing.
+		assert_eq!(cache.check("a", || Err("unused".to_string())), Ok(()));
 	}
 }
 
@@ -1079,6 +1931,36 @@ mod url_tests {
 	}
 
 	#[test]
+	fn detects_windows_absolute_paths() {
+		assert!(is_windows_abs_path(r"C:\Users\foo"));
+		assert!(is_windows_abs_path("C:/Users/foo"));
+		assert!(is_windows_abs_path(r"d:\x"));
+		// Not absolute Windows paths:
+		assert!(!is_windows_abs_path("/tmp/foo"));
+		assert!(!is_windows_abs_path("relative/path"));
+		assert!(!is_windows_abs_path("C:"));
+		assert!(!is_windows_abs_path("vault"));
+	}
+
+	#[test]
+	fn windows_dotenv_path_parses_instead_of_failing_on_port() {
+		// The drive-letter colon must not be read as a `host:port` separator.
+		let provider = Box::<dyn Provider>::try_from(r"dotenv://C:\Users\foo\.env");
+		assert!(
+			provider.is_ok(),
+			"Windows dotenv path should parse, got {:?}",
+			provider.err()
+		);
+	}
+
+	#[test]
+	fn windows_file_path_uses_a_standard_file_url() {
+		let provider = Box::<dyn Provider>::try_from(r"file://C:\Users\foo\secrets").unwrap();
+		assert_eq!(provider.name(), "file");
+		assert_eq!(provider.uri(), "file:///C:/Users/foo/secrets");
+	}
+
+	#[test]
 	fn query_pairs_are_decoded() {
 		let u = url("keyring://h/p?prefix=a%20b&kv=v2");
 		let pairs: HashMap<String, String> = u
@@ -1093,6 +1975,25 @@ mod url_tests {
 	fn encode_escapes_spaces_but_keeps_plain() {
 		assert_eq!(ProviderUrl::encode("plain"), "plain");
 		assert_eq!(ProviderUrl::encode("Home Lab"), "Home%20Lab");
+	}
+
+	#[test]
+	fn windows_drive_paths_parse_as_provider_specs() {
+		// "C:" must not be treated as host:port ("invalid port number").
+		for spec in [
+			r"dotenv://C:\Users\me\.env",
+			r"dotenv://C:/Users/me/.env",
+			r"dotenv:C:\Users\me\.env",
+		] {
+			assert!(
+				Box::<dyn Provider>::try_from(spec).is_ok(),
+				"should parse: {}",
+				spec
+			);
+		}
+		// Unix and relative forms are unaffected.
+		assert!(Box::<dyn Provider>::try_from("dotenv:///tmp/.env").is_ok());
+		assert!(Box::<dyn Provider>::try_from("dotenv://.env").is_ok());
 	}
 
 	#[test]
@@ -1142,99 +2043,140 @@ mod url_tests {
 	}
 }
 
-mod dependency_factory_tests {
-	use std::sync::Mutex;
+#[cfg(test)]
+mod provider_credentials_tests {
+	use secrecy::SecretString;
 
-	use secrecy::ExposeSecret;
+	use super::ProviderCredentials;
+	use super::credential_or_env;
+	use super::preferred_env;
+	use crate::tests::EnvVarGuard;
 
-	use super::*;
-
-	static CAPTURED_DEPENDENCIES: Mutex<Vec<Vec<(String, String)>>> = Mutex::new(Vec::new());
-
-	struct DependencyTestConfig;
-
-	impl TryFrom<&ProviderUrl> for DependencyTestConfig {
-		type Error = MonosecretError;
-
-		fn try_from(_url: &ProviderUrl) -> Result<Self> {
-			Ok(Self)
-		}
-	}
-
-	struct DependencyTestProvider;
-
-	impl DependencyTestProvider {
-		fn new(_config: DependencyTestConfig) -> Self {
-			Self
-		}
-	}
-
-	crate::register_provider! {
-		struct: DependencyTestProvider,
-		config: DependencyTestConfig,
-		name: "dependency-test",
-		description: "Dependency injection test provider",
-		schemes: ["dependency-test"],
-		examples: ["dependency-test://"],
-	}
-
-	impl Provider for DependencyTestProvider {
-		fn configure_dependency_secrets(
-			&mut self,
-			dependencies: &[(String, SecretString)],
-		) -> Result<()> {
-			CAPTURED_DEPENDENCIES.lock().unwrap().push(
-				dependencies
-					.iter()
-					.map(|(name, value)| (name.clone(), value.expose_secret().to_string()))
-					.collect(),
-			);
-			Ok(())
-		}
-
-		fn name(&self) -> &'static str {
-			Self::PROVIDER_NAME
-		}
-
-		fn uri(&self) -> String {
-			"dependency-test://".to_string()
-		}
-
-		fn get(&self, _project: &str, _key: &str, _profile: &str) -> Result<Option<SecretString>> {
-			Ok(None)
-		}
-
-		fn set(
-			&self,
-			_project: &str,
-			_key: &str,
-			_value: &SecretString,
-			_profile: &str,
-		) -> Result<()> {
-			Ok(())
-		}
+	fn credentials(name: &str, value: &str) -> ProviderCredentials {
+		let mut credentials = ProviderCredentials::new();
+		credentials.insert(name.to_string(), SecretString::new(value.into()));
+		credentials
 	}
 
 	#[test]
-	fn provider_factory_passes_dependencies_to_provider_before_use() {
-		CAPTURED_DEPENDENCIES.lock().unwrap().clear();
+	fn explicit_credential_wins_over_environment() {
+		// The lock guard serializes all env mutation across the test binary;
+		// the var guard restores the previous value even if an assert panics.
+		let _lock = crate::tests::scrub_resolution_env();
+		const NAME: &str = "access_token";
+		const ENV_VAR: &str = "MONOSECRET_TEST_PROVIDER_CREDENTIAL";
+		let _var = EnvVarGuard::set(ENV_VAR, "from-env");
 
-		let provider = provider_from_spec_with_dependencies(
-			"dependency-test://",
-			&[
-				("FIRST".into(), SecretString::new("one".into())),
-				("SECOND".into(), SecretString::new("two".into())),
-			],
-		)
-		.unwrap();
-
-		assert_eq!(provider.name(), "dependency-test");
 		assert_eq!(
-			CAPTURED_DEPENDENCIES.lock().unwrap().as_slice(),
-			&[vec![
-				("FIRST".to_string(), "one".to_string()),
-				("SECOND".to_string(), "two".to_string()),
-			]]
+			credential_or_env(&credentials(NAME, "explicit"), NAME, ENV_VAR).as_deref(),
+			Some("explicit"),
 		);
+	}
+
+	#[test]
+	fn environment_is_a_fallback() {
+		let _lock = crate::tests::scrub_resolution_env();
+		const NAME: &str = "access_token";
+		const ENV_VAR: &str = "MONOSECRET_TEST_PROVIDER_CREDENTIAL_FALLBACK";
+		let _var = EnvVarGuard::set(ENV_VAR, "from-env");
+
+		// With no explicit credential, the provider's conventional environment
+		// variable remains available as a fallback.
+		assert_eq!(
+			credential_or_env(&ProviderCredentials::new(), NAME, ENV_VAR).as_deref(),
+			Some("from-env"),
+		);
+		// Empty explicit values are ignored and fall through as well.
+		assert_eq!(
+			credential_or_env(&credentials(NAME, ""), NAME, ENV_VAR).as_deref(),
+			Some("from-env"),
+		);
+	}
+
+	#[test]
+	fn a_present_preferred_environment_variable_blocks_compatibility_fallback() {
+		let _lock = crate::tests::scrub_resolution_env();
+		const PREFERRED: &str = "MONOSECRET_TEST_PREFERRED_ENV";
+		const FALLBACK: &str = "MONOSECRET_TEST_COMPATIBILITY_ENV";
+
+		{
+			let _preferred = EnvVarGuard::set(PREFERRED, "");
+			let _fallback = EnvVarGuard::set(FALLBACK, "from-fallback");
+			assert_eq!(preferred_env(&[PREFERRED, FALLBACK]), None);
+		}
+
+		{
+			let _preferred = EnvVarGuard::remove(PREFERRED);
+			let _fallback = EnvVarGuard::set(FALLBACK, "from-fallback");
+			assert_eq!(
+				preferred_env(&[PREFERRED, FALLBACK]).as_deref(),
+				Some("from-fallback")
+			);
+		}
+	}
+}
+
+/// Property tests for the URI encoding every provider's `uri()` runs through.
+///
+/// `QUERY_ENCODE_SET` states its own contract: it "makes `ProviderUrl::encode_query`
+/// a true inverse of that parsing, so query values round-trip". That is a claim
+/// about every string, checked today against one hand-written value in one
+/// provider's tests. These quantify it.
+#[cfg(test)]
+mod encoding_properties {
+	use proptest::prelude::*;
+
+	use super::*;
+
+	/// Reads a query value back the way a provider's `TryFrom` does.
+	fn query_value_of(uri: &str, key: &str) -> Option<String> {
+		let url = ProviderUrl::new(Url::parse(uri).ok()?);
+		url.query_pairs()
+			.find(|(k, _)| k == key)
+			.map(|(_, v)| v.into_owned())
+	}
+
+	proptest! {
+		/// A query value survives `encode_query` -> parse unchanged.
+		///
+		/// The characters that break this are the ones form-urlencoded parsing
+		/// claims: `&` splits a pair, `+` becomes a space, `%` starts an escape,
+		/// `#` ends the query. Each silently truncates or mangles a value rather
+		/// than failing, so the store a provider ends up talking to is not the
+		/// one the URI named.
+		#[test]
+		fn encode_query_round_trips(value in ".*") {
+			let uri = format!("keyring://?v={}", ProviderUrl::encode_query(&value));
+			let decoded = query_value_of(&uri, "v");
+			prop_assert_eq!(
+				decoded.as_deref(),
+				Some(value.as_str()),
+				"value {:?} did not survive the round-trip through {:?}",
+				value,
+				uri,
+			);
+		}
+
+		/// Encoding is deterministic: the same value always encodes the same
+		/// way, so a `uri()` rendering is stable across runs (it lands in audit
+		/// records, which are compared).
+		#[test]
+		fn encode_query_is_deterministic(value in ".*") {
+			prop_assert_eq!(
+				ProviderUrl::encode_query(&value),
+				ProviderUrl::encode_query(&value),
+			);
+		}
+
+		/// An encoded value never carries a character that would end the query
+		/// or start a new pair, whatever went in.
+		#[test]
+		fn encoded_values_are_query_safe(value in ".*") {
+			let encoded = ProviderUrl::encode_query(&value);
+			prop_assert!(
+				!encoded.contains('&') && !encoded.contains('#') && !encoded.contains('+'),
+				"encoded {encoded:?} still carries a query-structural character",
+			);
+		}
 	}
 }

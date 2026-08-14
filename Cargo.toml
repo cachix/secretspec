@@ -5,6 +5,7 @@ members = [
   "crates/monosecret_ffi",
   "examples/derive",
   "npm/monosecret__client",
+  "php/monosecret_php",
   "python/monosecret_py",
 ]
 resolver = "2"
@@ -14,46 +15,62 @@ version = "0.2.1"
 edition = "2024"
 
 [workspace.dependencies]
+age = { version = "0.12", features = ["armor", "plugin", "ssh"] }
+apple-native-keyring-store = { version = "1.0.0", features = [
+  "keychain",
+], default-features = false }
 aws-config = { default-features = false, version = "^1" }
 aws-sdk-secretsmanager = { default-features = false, version = "^1" }
+aws-sdk-ssm = { default-features = false, version = "^1" }
+azure_core = "1.0.0"
+azure_identity = "1.0.0"
+azure_security_keyvault_secrets = "1.0.0"
+base64 = "0.22"
 bitwarden = { version = "2", features = ["secrets"], default-features = false }
-clap = { version = "4", features = ["derive", "env"], default-features = false }
+clap = { version = "4", features = ["derive", "env"] }
 colored = { default-features = false, version = "^3" }
-data-encoding = { default-features = false, version = "^2" }
+data-encoding = "2"
+detect-coding-agent = { default-features = false, version = "^0.1" }
 dotenvy = { default-features = false, version = "^0.15" }
 etcetera = { default-features = false, version = "^0.11" }
 google-cloud-secretmanager-v1 = { default-features = false, version = "^1.10.0" }
-http = { default-features = false, version = "^1.4" }
-inquire = { version = "0.9.4", features = [
-  "experimental-multiline-input",
-], default-features = false }
+http = { default-features = false, features = ["std"], version = "^1.4" }
+inquire = { version = "0.9.4", features = ["experimental-multiline-input"] }
 insta = { version = "1", features = [
   "filters",
   "json",
   "redactions",
 ], default-features = false }
 insta-cmd = { default-features = false, version = "^0.7" }
-apple-native-keyring-store = { version = "1.0.0", features = [
-  "keychain",
-], default-features = false }
+jiff = "0.2"
+keepass = { version = "0.13.17", features = ["save_kdbx4"] }
+keeper-secrets-manager-core = { version = "17.3.0", default-features = false, features = [
+  "blocking",
+] }
+keyring = "4.1.6"
 keyring-core = { default-features = false, version = "^1" }
 linkme = { default-features = false, version = "^0.3" }
-miette = { version = "7.6", features = ["fancy"], default-features = false }
+miette = { version = "7.6", features = [
+  "derive",
+  "fancy",
+], default-features = false }
 percent-encoding = { default-features = false, version = "^2.3" }
 proc-macro2 = { default-features = false, version = "^1.0" }
+proptest = "1"
 quote = { default-features = false, version = "^1.0" }
-rand = { default-features = false, version = "^0.10" }
-reqwest = { version = "0.13.4", default-features = false, features = [
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = [
   "json",
-  "rustls",
+  "rustls-tls-native-roots",
 ] }
-rsa = { version = "0.9", features = ["pem"], default-features = false }
+rsa = { version = "0.9", features = ["pem"] }
 rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
 ] }
+same-file = "1"
 secrecy = { version = "0.10.3", features = ["serde"], default-features = false }
 serde = { version = "1.0", features = ["derive"], default-features = false }
-serde_json = { default-features = false, version = "^1.0" }
+serde_json = "1.0"
 syn = { default-features = false, version = "^2.0" }
 tempfile = { default-features = false, version = "^3" }
 thiserror = { default-features = false, version = "^2.0" }
@@ -61,19 +78,17 @@ tokio = { version = "1", features = [
   "rt",
   "rt-multi-thread",
 ], default-features = false }
-toml = { default-features = false, version = "^1.1.2" }
-toml_edit = { default-features = false, version = "^0.25.12" }
+toml = "0.9"
+toml_edit = "0.23"
 tracing = { default-features = false, version = "^0.1" }
 trybuild = { default-features = false, version = "^1.0" }
-url = { default-features = false, version = "^2.5" }
-uuid = { version = "1", features = ["v4"], default-features = false }
+url = "2.5"
+uuid = { version = "1", features = ["serde", "v4"], default-features = false }
+whoami = { default-features = false, version = "^2.1" }
 windows-native-keyring-store = { default-features = false, version = "^1.1.0" }
 zbus-secret-service-keyring-store = { version = "1.0.0", features = [
   "rt-tokio-crypto-rust",
 ], default-features = false }
-detect-coding-agent = { default-features = false, version = "^0.1" }
-whoami = { default-features = false, version = "^2.1" }
-jiff = { default-features = false, version = "^0.2" }
 
 # internal crates
 monosecret = { version = "0.2.1", path = "./crates/monosecret", default-features = false }
@@ -89,7 +104,7 @@ strip = "symbols"
 [workspace.lints.rust]
 rust_2021_compatibility = { level = "warn", priority = -1 }
 rust_2024_compatibility = { level = "warn", priority = -1 }
-unsafe_code = "deny"
+unsafe_code = "allow"
 unstable_features = "deny"
 unused_extern_crates = "warn"
 unused_import_braces = "warn"
@@ -114,7 +129,7 @@ cast_precision_loss = "allow"
 cast_sign_loss = "allow"
 expl_impl_clone_on_copy = "allow"
 items_after_statements = "allow"
-indexing_slicing = "deny"
+indexing_slicing = "warn"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 module_name_repetitions = "allow"

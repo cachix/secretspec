@@ -16,7 +16,7 @@ name = "common"
 
 [profiles.default]
 DATABASE_URL = { description = "Main database", required = true }
-LOG_LEVEL = { description = "Log verbosity", required = false, default = "info" }
+INTERNAL_API_KEY = { description = "Internal service API key", required = true }
 ```
 
 A project that extends it:
@@ -58,5 +58,15 @@ extends = ["../../shared/base", "../../shared/database", "../../shared/auth"]
 
 - Child definitions completely replace parent definitions for the same secret
 - Later sources in `extends` override earlier ones
+- Shared ancestors are applied once, so diamond-shaped inheritance is supported
 - Each profile is merged independently
+- Profile `[defaults]` inherit field by field across source files
+- The `inherit` profile-default field (0.2+) follows that same `extends`
+  precedence. A child profile keeps an inherited `inherit = false` unless a
+  later source explicitly sets it to `true`.
+- A child `[scopes.<name>]` completely replaces the parent scope of the same
+  name — its `secrets` list wins outright; the two lists are **not** unioned.
+  Scopes defined only in a parent are inherited. (Whole-value replacement is the
+  safe default for an allowlist: extending a config cannot silently widen a scope
+  the parent narrowed.) Available from Monosecret 0.2.
 - Paths are relative to the containing `monosecret.toml` file

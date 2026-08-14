@@ -186,6 +186,22 @@ _Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #11](https://gi
 
 ### Added
 
+- Synced upstream SecretSpec v0.15-v0.19 functionality into Monosecret. New
+  providers cover Gopass, Azure Key Vault, Infisical, SOPS, Scaleway Secret
+  Manager, age, systemd credentials, KeePass KDBX, OpenBao, Bitwarden Password
+  Manager, Dashlane, Keeper Secrets Manager, AWS Systems Manager Parameter Store,
+  Passbolt, and the `file` and `null` providers. Core resolution now supports
+  provider-sourced credentials, ordered fallbacks with ownership-aware expiring
+  caches, provider-scoped references and templates, composed and scoped secrets,
+  required groups, prompting, JSON extraction, value encoding, profile inheritance
+  opt-out, safe single-secret reads, and rejection and redaction of credentials in
+  provider URIs. The Monosecret CLI adds `export`, `add`, `delete`, `cache clear`,
+  provider-login and global-config workflows, broader `init --from` discovery,
+  safer `import --delete-source`, and `set`/interactive `check` write-destination
+  previews. C#, PHP, and Swift SDKs join updated Rust and cross-language SDK/FFI
+  APIs; code-generation and resolution-report schemas now cover scopes,
+  provenance, single-secret resolution, path-backed and encoded values, precise
+  nullability and requiredness, and inherited profiles.
 - `--reason` CLI flag (and `MONOSECRET_REASON` env var) records a human-readable
   reason for a session's secret access, forwarded to providers that support audit
   logging. `MONOSECRET_REASON` is honored across the SDK/library too: it is resolved

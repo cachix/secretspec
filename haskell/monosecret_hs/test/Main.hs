@@ -35,12 +35,15 @@ import           System.Process (callProcess, readProcess)
 main :: IO ()
 main = do
   fixturesDir <- canonicalizePath ("." </> ".." </> ".." </> "conformance" </> "fixtures")
+  constraintsDir <- canonicalizePath ("." </> ".." </> ".." </> "conformance" </> "constraint-violations")
   names <- listDirectory fixturesDir
   fixtures <- filterM doesDirectoryExist (map (fixturesDir </>) (sort names))
 
   let tests =
         [ ("abi_version_nonempty", testAbiVersion)
         , ("missing_required_throws", testMissingRequired)
+        , ("scoped_resolution", testScope)
+        , ("constraint_violations", testConstraintViolations constraintsDir)
         , ("codegen", testCodegen)
         ]
           ++ concatMap conformanceTests fixtures
@@ -93,6 +96,57 @@ testMissingRequired = do
     Left _  -> pure ()
     Right _ -> ioError (userError "expected MissingRequiredError")
 
+testScope :: IO ()
+testScope = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell/monosecret_hs-scope"
+  createDirectoryIfMissing True dir
+  writeFile (dir </> "monosecret.toml") $
+    unlines
+      [ "[project]"
+      , "name = \"hs-scope\""
+      , "revision = \"1.0\""
+      , ""
+      , "[profiles.default]"
+      , "DATABASE_URL = { description = \"DB\", required = true }"
+      , "SENTRY_DSN = { description = \"Sentry\", required = false }"
+      , ""
+      , "[scopes.database]"
+      , "secrets = [\"DATABASE_URL\"]"
+      ]
+  writeFile
+    (dir </> ".env")
+    "DATABASE_URL=postgres://db\nSENTRY_DSN=https://sentry\n"
+  let scoped = fixtureBuilder dir & S.withScope "database"
+
+  resolved <- S.load scoped
+  expect (S.resolvedScope resolved == Just "database") "resolve scope was not returned"
+  expect
+    (Map.keys (S.resolvedSecrets resolved) == ["DATABASE_URL"])
+    "resolve exposed an out-of-scope secret"
+
+  rep <- S.report scoped
+  expect (S.reportScope rep == Just "database") "report scope was not returned"
+  expect
+    (map S.srName (S.reportSecrets rep) == ["DATABASE_URL"])
+    "report exposed an out-of-scope secret"
+
+testConstraintViolations :: FilePath -> IO ()
+testConstraintViolations dir = do
+  rep <- S.report (fixtureBuilder dir)
+  let violations = S.reportConstraintViolations rep
+      atLeast = [v | v <- violations, S.violationKind v == S.AtLeastOne]
+      exactly = [v | v <- violations, S.violationKind v == S.ExactlyOne]
+  expect (length violations == 2) "expected two constraint violations"
+  expect
+    (map S.violationGroup atLeast == ["cloud"] && null (S.violationPresent (head atLeast)))
+    "unexpected at_least_one violation"
+  expect
+    ( map S.violationGroup exactly == ["token"]
+        && S.violationPresent (head exactly) == ["FALLBACK", "PRIMARY"]
+    )
+    "unexpected exactly_one violation"
+
 -- End-to-end codegen: monosecret schema -> quicktype --lang haskell -> compile
 -- the generated module and decode the SDK's own fieldsJson output with it, so
 -- the schema -> fields() linkage is exercised, not just hand-written JSON. Skips
@@ -123,7 +177,7 @@ runCodegen bin = do
       , ""
       , "[profiles.default]"
       , "DATABASE_URL = { description = \"DB\", required = true }"
-      , "LOG_LEVEL = { description = \"log\", required = false, default = \"info\" }"
+      , "DEV_SESSION_SECRET = { description = \"Development-only session secret\", required = false, default = \"development-only-secret\" }"
       ]
   writeFile (dir </> ".env") "DATABASE_URL=postgres://db\n"
 

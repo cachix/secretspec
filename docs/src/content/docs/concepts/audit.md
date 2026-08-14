@@ -3,9 +3,10 @@ title: Audit Logging
 description: A local, append-only record of every secret access for after-the-fact review
 ---
 
-Monosecret records every secret access to a local audit log so you can review,
+monosecret records every secret access to a local audit log so you can review,
 after the fact, **what** secret was accessed, **when**, by **whom**, with what
-**reason**, and what the **outcome** was. Auditing is **on by default**.
+**reason, if supplied**, and what the **outcome** was. Auditing is **on by
+default**.
 
 Secret values are never written to the log. Only metadata is recorded, and any
 credentials embedded in a provider URI are redacted.
@@ -20,13 +21,13 @@ in [JSON Lines](https://jsonlines.org/) format:
 | Linux    | `~/.local/state/monosecret/audit.log` |
 | macOS    | `~/.local/state/monosecret/audit.log` |
 
-(Monosecret follows the XDG state-directory convention on macOS too, matching
+(monosecret follows the XDG state-directory convention on macOS too, matching
 where it keeps its config, so the path is the same as on Linux. Set `[audit]
 path` to override it.)
 
 The file is created with owner-only permissions (`0600` on Unix), inside an
 owner-only directory (`0700`). The first time
-Monosecret writes to it, it prints a one-time note telling you where the log is
+monosecret writes to it, it prints a one-time note telling you where the log is
 and how to turn it off.
 
 ## What a record looks like
@@ -46,31 +47,33 @@ and how to turn it off.
   "outcome": "found",
   "reason": "deploy web frontend",
   "actor": { "user": "alice", "agent": "claude-code", "is_agent": true },
-  "version": "0.11.0"
+  "version": "0.2.0"
 }
 ```
 
-| Field                 | Meaning                                                                                                  |
-| --------------------- | -------------------------------------------------------------------------------------------------------- |
-| `v`                   | Schema version of the record                                                                             |
-| `id`                  | Unique id for this event                                                                                 |
-| `ts`                  | RFC 3339 UTC timestamp                                                                                   |
-| `session_id`          | Shared by every event from one `monosecret` invocation                                                   |
-| `seq`                 | Monotonic sequence within that invocation                                                                |
-| `action`              | The operation: `get`, `set`, `check`, `run`, or `import`                                                 |
-| `project` / `profile` | The project and profile in effect                                                                        |
-| `key`                 | The secret name for single-secret actions (`get`/`set`); never its value                                 |
-| `keys`                | The set of secret names for bulk actions (`check`/`run`/`import`)                                        |
-| `command`             | For `run`, the executed program (argv[0] only — never its arguments, which may contain secrets)          |
-| `provider`            | The provider URI that served the access, with credentials redacted                                       |
-| `outcome`             | `found`, `missing`, `default`, `written`, `started` (a `run` launched its command), or `error`           |
-| `error_kind`          | A non-sensitive tag when `outcome` is `error`                                                            |
-| `reason`              | The reason supplied via `--reason` / `MONOSECRET_REASON` (legacy: `SECRETSPEC_REASON`) / the SDK, if any |
-| `actor`               | The OS user, the detected coding agent (if any), and whether this is an agent session                    |
+| Field                 | Meaning                                                                                                                                                                                                                              |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `v`                   | Schema version of the record                                                                                                                                                                                                         |
+| `id`                  | Unique id for this event                                                                                                                                                                                                             |
+| `ts`                  | RFC 3339 UTC timestamp                                                                                                                                                                                                               |
+| `session_id`          | Shared by every event from one `monosecret` invocation                                                                                                                                                                               |
+| `seq`                 | Monotonic sequence within that invocation                                                                                                                                                                                            |
+| `action`              | The operation: `get`, `set`, `check`, `run`, `import`, `export`, `cache_clear` / `cache_refresh` (0.2+), or `delete` (0.2+)                                                                                                          |
+| `project` / `profile` | The project and profile in effect                                                                                                                                                                                                    |
+| `scope`               | The named scope for a scoped `check`, `run`, or `export`; omitted otherwise (Monosecret 0.2+)                                                                                                                                        |
+| `key`                 | The secret name for single-secret actions (`get`/`set`, and `delete` in 0.2+); never its value                                                                                                                                       |
+| `keys`                | The set of secret names for bulk actions (`check`/`run`/`import`/`export`)                                                                                                                                                           |
+| `command`             | For `run`, the executed program (argv[0] only — never its arguments, which may contain secrets)                                                                                                                                      |
+| `provider`            | The provider URI that served the access, with credentials redacted                                                                                                                                                                   |
+| `outcome`             | `found`, `missing`, `default`, `written`, `deleted` (0.2+ cache clear), `started` (a `run` launched its command), or `error`                                                                                                         |
+|                       | A cached route writing its local entry is recorded as `cache_refresh`/`written`, never as `set`: no authoritative store was written. Dropping an entry — `cache clear`, or an entry a write superseded — is `cache_clear`/`deleted`. |
+| `error_kind`          | A non-sensitive tag when `outcome` is `error`                                                                                                                                                                                        |
+| `reason`              | The reason supplied via `--reason` / `MONOSECRET_REASON` / the SDK, if any                                                                                                                                                           |
+| `actor`               | The OS user, the detected coding agent (if any), and whether this is an agent session                                                                                                                                                |
 
 This pairs naturally with the [`require_reason`](/reference/configuration/#requiring-a-reason-for-secret-access)
-policy: the policy makes callers state _why_ they need a secret, and the audit
-log records that reason alongside the access.
+policy: when that policy applies, Monosecret requires the caller to state _why_
+before proceeding and records the supplied reason alongside the access.
 
 ## Reading the log
 
@@ -80,13 +83,13 @@ and a readable summary:
 
 ```bash
 # Last 20 entries, formatted
-monosecret audit -n 20
+$ monosecret audit -n 20
 
 # Only `run` events for one project
-monosecret audit --project my-app --action run
+$ monosecret audit --project my-app --action run
 
 # Raw JSON Lines, piped to jq
-monosecret audit --json | jq 'select(.outcome == "missing")'
+$ monosecret audit --json | jq 'select(.outcome == "missing")'
 ```
 
 ## Size cap
@@ -100,7 +103,7 @@ retention on its own. Forward it to a central system if you need that.
 ## Reliability
 
 Auditing never blocks secret access. If the log cannot be written (for example, a
-read-only filesystem), Monosecret prints a `warning:` to stderr and continues —
+read-only filesystem), monosecret prints a `warning:` to stderr and continues —
 your `get`, `set`, and `run` still work.
 
 ## Configuration

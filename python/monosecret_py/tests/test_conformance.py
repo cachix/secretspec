@@ -8,7 +8,8 @@ import pytest
 
 from monosecret import Monosecret
 
-FIXTURES = pathlib.Path(__file__).resolve().parents[3] / "conformance" / "fixtures"
+CONFORMANCE = pathlib.Path(__file__).resolve().parents[3] / "conformance"
+FIXTURES = CONFORMANCE / "fixtures"
 
 
 def _canonical(resolved) -> dict:
@@ -88,6 +89,16 @@ def test_conformance_no_values(fixture):
         assert resolved.fields() == expected
     finally:
         resolved.close()
+
+
+def test_constraint_violations_are_typed():
+    report = _builder(CONFORMANCE / "constraint-violations").report()
+    by_kind = {violation.kind: violation for violation in report.constraint_violations}
+
+    assert by_kind["at_least_one"].group == "cloud"
+    assert by_kind["at_least_one"].present == []
+    assert by_kind["exactly_one"].group == "token"
+    assert by_kind["exactly_one"].present == ["FALLBACK", "PRIMARY"]
 
 
 @pytest.mark.parametrize("fixture", _fixtures())

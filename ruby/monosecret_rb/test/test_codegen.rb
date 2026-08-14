@@ -47,7 +47,7 @@ class CodegenTest < Minitest::Test
 
         [profiles.default]
         DATABASE_URL = { description = "DB", required = true }
-        LOG_LEVEL = { description = "log", required = false, default = "info" }
+        DEV_SESSION_SECRET = { description = "Development-only session secret", required = false, default = "development-only-secret" }
       TOML
       File.write(env_path, "DATABASE_URL=postgres://db\n")
 
@@ -77,7 +77,7 @@ class CodegenTest < Minitest::Test
                                        .load
       typed = MonosecretFields.from_dynamic!(resolved.fields)
       assert_equal "postgres://db", typed.database_url
-      assert_equal "info", typed.log_level
+      assert_equal "development-only-secret", typed.dev_session_secret
     end
   end
 end

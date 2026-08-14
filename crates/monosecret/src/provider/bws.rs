@@ -1,15 +1,21 @@
 //! Bitwarden Secrets Manager (BWS) provider
 //!
-//! This provider integrates with Bitwarden Secrets Manager to store and retrieve secrets.
+//! This provider integrates with Bitwarden Secrets Manager to store and retrieve secrets
+//! through the official `bws` command-line interface in Monosecret 0.17 and later.
 //!
 //! # Authentication
 //!
-//! Uses a machine account access token via the `BWS_ACCESS_TOKEN` environment variable.
+//! Uses a machine account access token supplied as a provider credential or via
+//! the `BWS_ACCESS_TOKEN` environment variable.
 //! Generate access tokens from the Bitwarden Secrets Manager web interface.
+//! The `bws` executable must be installed and available on `PATH`.
 //!
 //! # URI Format
 //!
-//! `bws://project-uuid`
+//! `bws://[server-base@]project-uuid`
+//!
+//! Server Base is a hostname pointing to the bitwarden vault instance.
+//! Defaults to bitwarden.com
 //!
 //! The UUID identifies the Bitwarden Secrets Manager project where secrets are stored.
 //! This provides namespace isolation — different projects use different BWS project IDs.
@@ -34,22 +40,21 @@
 //! ```
 
 use std::collections::HashMap;
+use std::io;
+use std::process::Command;
+use std::process::Stdio;
 use std::sync::OnceLock;
 
-use bitwarden::Client;
-use bitwarden::auth::login::AccessTokenLoginRequest;
-use bitwarden::secrets_manager::secrets::SecretCreateRequest;
-use bitwarden::secrets_manager::secrets::SecretIdentifiersByProjectRequest;
-use bitwarden::secrets_manager::secrets::SecretPutRequest;
-use bitwarden::secrets_manager::secrets::SecretResponse;
-use bitwarden::secrets_manager::secrets::SecretsGetRequest;
 use secrecy::ExposeSecret;
 use secrecy::SecretString;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::Address;
 use super::Provider;
+use super::ProviderCredentials;
 use super::ProviderUrl;
+use super::credential_or_env;
 use crate::MonosecretError;
 use crate::Result;
 
@@ -60,6 +65,9 @@ use crate::Result;
 pub struct BwsConfig {
 	/// The BWS project UUID (e.g., "a9230ec4-5507-4870-b8b5-b3f500587e4c")
 	pub project_id: uuid::Uuid,
+
+	/// The Bitwarden instance base URL (e.g., "https://vault.bitwarden.eu")
+	pub server_base: Option<String>,
 }
 
 impl TryFrom<&ProviderUrl> for BwsConfig {
@@ -82,11 +90,22 @@ impl TryFrom<&ProviderUrl> for BwsConfig {
 
 		let project_id = uuid::Uuid::parse_str(&project_id_str).map_err(|e| {
 			MonosecretError::ProviderOperationFailed(format!(
-				"Invalid BWS project UUID '{project_id_str}': {e}. Use format: bws://a9230ec4-5507-4870-b8b5-b3f500587e4c"
+				"Invalid BWS project UUID '{}': {}. Use format: bws://a9230ec4-5507-4870-b8b5-b3f500587e4c",
+				project_id_str, e
 			))
 		})?;
 
-		Ok(Self { project_id })
+		// Extract server base URL from the username: bws://[server-base@]project-uuid
+		let server_base = if !url.username().is_empty() {
+			Some(url.username())
+		} else {
+			None
+		};
+
+		Ok(Self {
+			project_id,
+			server_base,
+		})
 	}
 }
 
@@ -97,152 +116,170 @@ impl TryFrom<&ProviderUrl> for BwsConfig {
 /// the BWS project ID specified in the provider URI.
 pub struct BwsProvider {
 	config: BwsConfig,
-	client: OnceLock<Client>,
-	secrets_cache: OnceLock<Vec<SecretResponse>>,
+	secrets_cache: OnceLock<Vec<BwsSecret>>,
+	/// Credentials supplied by the provider alias.
+	credentials: ProviderCredentials,
+	/// Path to the official Bitwarden Secrets Manager CLI.
+	cli_binary_path: String,
+}
+
+const ACCESS_TOKEN: &str = "access_token";
+const BWS_ACCESS_TOKEN_ENV: &str = "BWS_ACCESS_TOKEN";
+const BWS_CLI_PATH_ENV: &str = "MONOSECRET_BWS_CLI_PATH";
+const DEFAULT_SERVER_URL: &str = "https://bitwarden.com";
+
+/// Fields consumed from `bws secret list --output json`.
+#[derive(Debug, Clone, Deserialize)]
+struct BwsSecret {
+	id: String,
+	key: String,
+	value: String,
 }
 
 crate::register_provider! {
 	struct: BwsProvider,
 	config: BwsConfig,
 	name: "bws",
-	description: "Bitwarden Secrets Manager",
+	description: "Bitwarden Secrets Manager via official bws CLI",
 	schemes: ["bws"],
 	examples: ["bws://a9230ec4-5507-4870-b8b5-b3f500587e4c"],
+	credential_names: [ACCESS_TOKEN],
 }
 
 impl BwsProvider {
-	/// Creates a new `BwsProvider` with the given configuration.
+	/// Creates a new BwsProvider with the given configuration.
 	pub fn new(config: BwsConfig) -> Self {
 		Self {
 			config,
-			client: OnceLock::new(),
 			secrets_cache: OnceLock::new(),
+			credentials: ProviderCredentials::new(),
+			cli_binary_path: std::env::var(BWS_CLI_PATH_ENV).unwrap_or_else(|_| "bws".to_string()),
 		}
 	}
 
+	/// Resolves the supplied access token, with the conventional environment
+	/// variable retained as a provider-level fallback.
+	fn access_token(&self) -> Option<String> {
+		credential_or_env(&self.credentials, ACCESS_TOKEN, BWS_ACCESS_TOKEN_ENV)
+	}
+
 	/// Strips the BWS access token from error messages to avoid leaking credentials.
-	#[allow(clippy::collapsible_if)]
-	fn sanitize_error(message: &str) -> String {
-		if let Ok(token) = std::env::var("BWS_ACCESS_TOKEN") {
-			if !token.is_empty() {
-				return message.replace(&token, "[REDACTED]");
-			}
+	fn sanitize_error(&self, message: &str) -> String {
+		if let Some(token) = self.access_token()
+			&& !token.is_empty()
+		{
+			return message.replace(&token, "[REDACTED]");
 		}
 		message.to_string()
 	}
 
-	/// Returns a reference to the authenticated Client, creating it if needed.
-	///
-	/// Reads `BWS_ACCESS_TOKEN` from the environment and authenticates on first call.
-	/// Subsequent calls return the cached client.
-	async fn ensure_client(&self) -> Result<&Client> {
-		if let Some(client) = self.client.get() {
-			return Ok(client);
-		}
-
-		let token = std::env::var("BWS_ACCESS_TOKEN").map_err(|_| {
+	/// Builds an authenticated `bws` command without exposing the token in its arguments.
+	fn command(&self) -> Result<Command> {
+		let token = self.access_token().ok_or_else(|| {
 			MonosecretError::ProviderOperationFailed(
-				"BWS_ACCESS_TOKEN environment variable is not set. \
-                 Generate an access token from the Bitwarden Secrets Manager web interface \
-                 and set it as BWS_ACCESS_TOKEN."
+				"BWS access_token credential is not set. Configure \
+                 credentials.access_token or set the BWS_ACCESS_TOKEN environment variable."
 					.to_string(),
 			)
 		})?;
 
 		if token.is_empty() {
 			return Err(MonosecretError::ProviderOperationFailed(
-				"BWS_ACCESS_TOKEN environment variable is empty. \
-                 Generate an access token from the Bitwarden Secrets Manager web interface."
+				"BWS access_token credential is empty. Configure \
+                 credentials.access_token or set a non-empty BWS_ACCESS_TOKEN environment variable."
 					.to_string(),
 			));
 		}
 
-		// The bitwarden crate uses rustls for TLS but doesn't install a crypto
-		// provider. Install the aws-lc-rs provider (already a transitive dependency)
-		// before creating the client. ok() ignores if already installed.
-		let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+		let mut command = Command::new(&self.cli_binary_path);
+		command
+			.env(BWS_ACCESS_TOKEN_ENV, token)
+			.arg("--color")
+			.arg("no")
+			.stdout(Stdio::piped())
+			.stderr(Stdio::piped());
 
-		let client = Client::new(None);
+		let server_url = self.config.server_base.as_ref().map_or_else(
+			|| DEFAULT_SERVER_URL.to_string(),
+			|base| format!("https://{base}"),
+		);
+		command.arg("--server-url").arg(server_url);
 
-		client
-			.auth()
-			.login_access_token(&AccessTokenLoginRequest {
-				access_token: token,
-				state_file: None,
-			})
-			.await
-			.map_err(|e| {
-				MonosecretError::ProviderOperationFailed(Self::sanitize_error(&format!(
-					"Failed to authenticate with Bitwarden Secrets Manager: {e}"
-				)))
-			})?;
+		Ok(command)
+	}
 
-		Ok(self.client.get_or_init(|| client))
+	/// Runs the official BWS CLI and returns its UTF-8 stdout.
+	fn run_bws(&self, args: &[&str], action: &str) -> Result<String> {
+		let output = self.command()?.args(args).output().map_err(|error| {
+			match error.kind() {
+				io::ErrorKind::NotFound => {
+					MonosecretError::ProviderOperationFailed(format!(
+						"Bitwarden Secrets Manager CLI (bws) is not installed or was not found at \
+                     '{}'. Install it from https://bitwarden.com/help/secrets-manager-cli/ \
+                     and ensure it is on PATH.",
+						self.cli_binary_path
+					))
+				}
+				_ => {
+					MonosecretError::ProviderOperationFailed(format!(
+						"Failed to start Bitwarden Secrets Manager CLI (bws): {error}"
+					))
+				}
+			}
+		})?;
+
+		if !output.status.success() {
+			let stderr = String::from_utf8_lossy(&output.stderr);
+			let detail = if stderr.trim().is_empty() {
+				format!("bws exited with status {}", output.status)
+			} else {
+				stderr.trim().to_string()
+			};
+			return Err(MonosecretError::ProviderOperationFailed(
+				self.sanitize_error(&format!("Failed to {action} using BWS CLI: {detail}")),
+			));
+		}
+
+		String::from_utf8(output.stdout).map_err(|error| {
+			MonosecretError::ProviderOperationFailed(format!(
+				"BWS CLI returned non-UTF-8 output while attempting to {action}: {error}"
+			))
+		})
 	}
 
 	/// Returns a reference to the cached list of secrets in the project, fetching if needed.
-	///
-	/// Uses a two-step process: first lists secret identifiers by project (which only returns
-	/// IDs and key names), then fetches full secret values by IDs.
-	async fn ensure_secrets(&self) -> Result<&Vec<SecretResponse>> {
+	fn ensure_secrets(&self) -> Result<&Vec<BwsSecret>> {
 		if let Some(secrets) = self.secrets_cache.get() {
 			return Ok(secrets);
 		}
 
-		let secrets = self.fetch_secrets().await?;
+		let secrets = self.fetch_secrets()?;
 		Ok(self.secrets_cache.get_or_init(|| secrets))
 	}
 
-	/// Fetches all secrets from the BWS project (always makes API calls, no caching).
-	async fn fetch_secrets(&self) -> Result<Vec<SecretResponse>> {
-		let client = self.ensure_client().await?;
+	/// Fetches all secrets from the BWS project (always invokes the CLI, no caching).
+	fn fetch_secrets(&self) -> Result<Vec<BwsSecret>> {
+		let project_id = self.config.project_id.to_string();
+		let output = self.run_bws(
+			&["secret", "list", &project_id, "--output", "json"],
+			&format!("list secrets in BWS project '{}'", self.config.project_id),
+		)?;
 
-		// Step 1: List secret identifiers in the project
-		let identifiers = client
-			.secrets()
-			.list_by_project(&SecretIdentifiersByProjectRequest {
-				project_id: self.config.project_id,
-			})
-			.await
-			.map_err(|e| {
-				MonosecretError::ProviderOperationFailed(Self::sanitize_error(&format!(
-					"Failed to list secrets in BWS project '{}': {}",
-					self.config.project_id, e
-				)))
-			})?;
-
-		if identifiers.data.is_empty() {
-			return Ok(Vec::new());
-		}
-
-		// Step 2: Fetch full secret values by IDs
-		let ids: Vec<uuid::Uuid> = identifiers.data.iter().map(|s| s.id).collect();
-		let secrets = client
-			.secrets()
-			.get_by_ids(SecretsGetRequest { ids })
-			.await
-			.map_err(|e| {
-				MonosecretError::ProviderOperationFailed(Self::sanitize_error(&format!(
-					"Failed to fetch secret values from BWS project '{}': {}",
-					self.config.project_id, e
-				)))
-			})?;
-
-		Ok(secrets.data)
+		serde_json::from_str(&output).map_err(|error| {
+			MonosecretError::ProviderOperationFailed(format!(
+				"Failed to parse JSON returned by BWS CLI while listing project '{}': {error}",
+				self.config.project_id
+			))
+		})
 	}
 
-	/// Retrieves a secret value from BWS by key name.
-	async fn get_secret_async(
-		&self,
-		_project: &str,
-		key: &str,
-		_profile: &str,
-	) -> Result<Option<SecretString>> {
-		let secrets = self.ensure_secrets().await?;
+	/// Retrieves a secret value from BWS by its resolved key name.
+	fn get_secret(&self, target: &str) -> Result<Option<SecretString>> {
+		let secrets = self.ensure_secrets()?;
 
-		// BWS uses flat key names -- match directly on the key
+		// BWS uses flat key names -- match directly.
 		for secret in secrets {
-			if secret.key == key {
+			if secret.key == target {
 				return Ok(Some(SecretString::new(secret.value.clone().into())));
 			}
 		}
@@ -250,136 +287,144 @@ impl BwsProvider {
 		Ok(None)
 	}
 
-	/// Creates or updates a secret in BWS.
-	async fn set_secret_async(
-		&self,
-		_project: &str,
-		key: &str,
-		value: &SecretString,
-		_profile: &str,
-	) -> Result<()> {
-		let client = self.ensure_client().await?;
-
-		// get_access_token_organization() is not part of the public stable API surface
-		// of bitwarden-core, but it is the only way to retrieve the organization ID
-		// from the access token after authentication.
-		// See: https://github.com/bitwarden/sdk-sm/issues/944
-		let org_id = client.get_access_token_organization().ok_or_else(|| {
-			MonosecretError::ProviderOperationFailed(
-				"Failed to determine organization ID from BWS access token. \
-                     Ensure the access token is valid."
-					.to_string(),
-			)
-		})?;
-
+	/// Creates or updates a secret in BWS at its resolved key name.
+	fn set_secret(&self, key: &str, value: &SecretString) -> Result<()> {
 		// Fetch fresh secrets list (not cached) to avoid stale data when writing
-		let fresh_secrets = self.fetch_secrets().await?;
+		let fresh_secrets = self.fetch_secrets()?;
 
 		// Look for an existing secret with the same key name
 		let existing = fresh_secrets.iter().find(|s| s.key == key);
+		let secret_value = value.expose_secret();
 
 		if let Some(existing_secret) = existing {
-			// Update existing secret
-			client
-				.secrets()
-				.update(&SecretPutRequest {
-					id: existing_secret.id,
-					organization_id: org_id.into(),
-					key: key.to_string(),
-					value: value.expose_secret().to_string(),
-					note: existing_secret.note.clone(),
-					project_ids: existing_secret.project_id.map(|id| vec![id]),
-				})
-				.await
-				.map_err(|e| {
-					MonosecretError::ProviderOperationFailed(Self::sanitize_error(&format!(
-						"Failed to update secret '{key}' in BWS: {e}"
-					)))
-				})?;
+			// Keep option-like values attached to the option so clap cannot
+			// interpret them as another flag.
+			let value_arg = format!("--value={secret_value}");
+			self.run_bws(
+				&[
+					"secret",
+					"edit",
+					&existing_secret.id,
+					&value_arg,
+					"--output",
+					"none",
+				],
+				&format!("update secret '{key}' in BWS"),
+			)?;
 		} else {
-			// Create new secret
-			client
-				.secrets()
-				.create(&SecretCreateRequest {
-					organization_id: org_id.into(),
-					key: key.to_string(),
-					value: value.expose_secret().to_string(),
-					note: String::new(),
-					project_ids: Some(vec![self.config.project_id]),
-				})
-				.await
-				.map_err(|e| {
-					MonosecretError::ProviderOperationFailed(Self::sanitize_error(&format!(
-						"Failed to create secret '{key}' in BWS: {e}"
-					)))
-				})?;
+			let project_id = self.config.project_id.to_string();
+			self.run_bws(
+				&[
+					"secret",
+					"create",
+					"--output",
+					"none",
+					"--",
+					key,
+					secret_value,
+					&project_id,
+				],
+				&format!("create secret '{key}' in BWS"),
+			)?;
 		}
 
 		Ok(())
 	}
-
-	/// Retrieves multiple secrets in a single batch using the cached secrets list.
-	async fn get_batch_async(
-		&self,
-		_project: &str,
-		keys: &[&str],
-		_profile: &str,
-	) -> Result<HashMap<String, SecretString>> {
-		let secrets = self.ensure_secrets().await?;
-		let mut results = HashMap::new();
-
-		for secret in secrets {
-			if keys.contains(&secret.key.as_str()) {
-				results.insert(
-					secret.key.clone(),
-					SecretString::new(secret.value.clone().into()),
-				);
-			}
-		}
-
-		Ok(results)
-	}
 }
 
 impl Provider for BwsProvider {
+	/// Convention names map straight to the BWS key named after the secret;
+	/// the project UUID in the URI provides namespace isolation instead.
+	fn convention_address(
+		&self,
+		_project: &str,
+		_profile: &str,
+		key: &str,
+	) -> Result<crate::config::NativeAddress> {
+		Ok(crate::config::NativeAddress {
+			item: key.to_string(),
+			..Default::default()
+		})
+	}
+
+	fn with_credentials(&mut self, credentials: ProviderCredentials) {
+		self.credentials = credentials;
+	}
+
 	fn name(&self) -> &'static str {
 		Self::PROVIDER_NAME
 	}
 
 	fn uri(&self) -> String {
-		format!("bws://{}", self.config.project_id)
+		match self.config.server_base {
+			Some(ref server_base) => format!("bws://{server_base}@{}", self.config.project_id),
+			None => format!("bws://{}", self.config.project_id),
+		}
 	}
 
-	fn get(&self, project: &str, key: &str, profile: &str) -> Result<Option<SecretString>> {
-		super::block_on(self.get_secret_async(project, key, profile))
+	fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+		let target = super::flat_item(self, addr)?;
+		self.get_secret(&target)
 	}
 
-	fn set(&self, project: &str, key: &str, value: &SecretString, profile: &str) -> Result<()> {
-		super::block_on(self.set_secret_async(project, key, value, profile))
+	fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+		let target = super::flat_item(self, addr)?;
+		self.set_secret(&target, value)
 	}
 
-	fn allows_set(&self) -> bool {
-		true
-	}
+	/// Serves every request, convention or `ref`, from one cached listing of
+	/// the project's secrets.
+	fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+		if requests.is_empty() {
+			return Ok(HashMap::new());
+		}
+		let mut targets = Vec::with_capacity(requests.len());
+		for (name, addr) in requests {
+			targets.push((*name, super::flat_item(self, *addr)?));
+		}
 
-	fn get_batch(
-		&self,
-		project: &str,
-		keys: &[&str],
-		profile: &str,
-	) -> Result<HashMap<String, SecretString>> {
-		super::block_on(self.get_batch_async(project, keys, profile))
+		let secrets = self.ensure_secrets()?;
+		let by_key: HashMap<&str, &str> = secrets
+			.iter()
+			.map(|s| (s.key.as_str(), s.value.as_str()))
+			.collect();
+
+		let mut results = HashMap::new();
+		for (name, target) in targets {
+			if let Some(value) = by_key.get(&*target) {
+				results.insert(
+					name.to_string(),
+					SecretString::new((*value).to_string().into()),
+				);
+			}
+		}
+		Ok(results)
 	}
 }
 
 #[cfg(test)]
 mod tests {
+	use secrecy::ExposeSecret;
 	use url::Url;
 
 	use super::*;
 
 	fn provider_url(s: &str) -> ProviderUrl {
 		ProviderUrl::new(Url::parse(s).unwrap())
+	}
+
+	fn provider_with_credentials(server_base: Option<&str>) -> BwsProvider {
+		let mut provider = BwsProvider::new(BwsConfig {
+			project_id: uuid::Uuid::parse_str("a9230ec4-5507-4870-b8b5-b3f500587e4c").unwrap(),
+			server_base: server_base.map(str::to_string),
+		});
+		let mut credentials = ProviderCredentials::new();
+		credentials.insert(
+			ACCESS_TOKEN.to_string(),
+			SecretString::new("token-from-provider".to_string().into()),
+		);
+		provider.with_credentials(credentials);
+		provider
 	}
 
 	#[test]
@@ -400,8 +445,17 @@ mod tests {
 		let err_msg = result.unwrap_err().to_string();
 		assert!(
 			err_msg.contains("project ID is required"),
-			"Error should mention project ID is required, got: {err_msg}"
+			"Error should mention project ID is required, got: {}",
+			err_msg
 		);
+	}
+
+	#[test]
+	fn test_bws_config_read_server_base() {
+		let url = provider_url("bws://bw.home.internal@a9230ec4-5507-4870-b8b5-b3f500587e4c");
+		let result = BwsConfig::try_from(&url).unwrap();
+
+		assert_eq!(result.server_base, Some("bw.home.internal".to_string()));
 	}
 
 	#[test]
@@ -412,7 +466,8 @@ mod tests {
 		let err_msg = result.unwrap_err().to_string();
 		assert!(
 			err_msg.contains("Invalid BWS project UUID"),
-			"Error should mention invalid UUID, got: {err_msg}"
+			"Error should mention invalid UUID, got: {}",
+			err_msg
 		);
 	}
 
@@ -424,7 +479,25 @@ mod tests {
 		let err_msg = result.unwrap_err().to_string();
 		assert!(
 			err_msg.contains("Invalid scheme"),
-			"Error should mention invalid scheme, got: {err_msg}"
+			"Error should mention invalid scheme, got: {}",
+			err_msg
+		);
+	}
+
+	/// A native address names the BWS key directly via `item`.
+	#[test]
+	fn native_address_names_the_key() {
+		let config =
+			BwsConfig::try_from(&provider_url("bws://a9230ec4-5507-4870-b8b5-b3f500587e4c"))
+				.unwrap();
+		let p = BwsProvider::new(config);
+		let addr = crate::config::NativeAddress {
+			item: "prod-db-url".into(),
+			..Default::default()
+		};
+		assert_eq!(
+			crate::provider::flat_item(&p, Address::Native(&addr)).unwrap(),
+			"prod-db-url"
 		);
 	}
 
@@ -432,12 +505,34 @@ mod tests {
 	fn test_bws_provider_metadata() {
 		let config = BwsConfig {
 			project_id: uuid::Uuid::parse_str("a9230ec4-5507-4870-b8b5-b3f500587e4c").unwrap(),
+			server_base: Some("vault.bitwarden.com".to_string()),
+		};
+		let provider = BwsProvider::new(config);
+
+		assert_eq!(provider.name(), "bws");
+		assert_eq!(
+			provider.uri(),
+			"bws://vault.bitwarden.com@a9230ec4-5507-4870-b8b5-b3f500587e4c"
+		);
+		assert!(
+			provider
+				.check_writable(Address::convention("proj", "default", "KEY"))
+				.is_ok()
+		);
+
+		let config = BwsConfig {
+			project_id: uuid::Uuid::parse_str("a9230ec4-5507-4870-b8b5-b3f500587e4c").unwrap(),
+			server_base: None,
 		};
 		let provider = BwsProvider::new(config);
 
 		assert_eq!(provider.name(), "bws");
 		assert_eq!(provider.uri(), "bws://a9230ec4-5507-4870-b8b5-b3f500587e4c");
-		assert!(provider.allows_set());
+		assert!(
+			provider
+				.check_writable(Address::convention("proj", "default", "KEY"))
+				.is_ok()
+		);
 	}
 
 	#[test]
@@ -448,15 +543,231 @@ mod tests {
 
 		let config = BwsConfig {
 			project_id: uuid::Uuid::parse_str("a9230ec4-5507-4870-b8b5-b3f500587e4c").unwrap(),
+			server_base: None,
 		};
 		let provider = BwsProvider::new(config);
 
-		let result = provider.get("test_project", "TEST_KEY", "default");
+		let result = provider.get(Address::convention("test_project", "default", "TEST_KEY"));
 		assert!(result.is_err());
 		let err_msg = result.unwrap_err().to_string();
 		assert!(
 			err_msg.contains("BWS_ACCESS_TOKEN"),
-			"Error should mention BWS_ACCESS_TOKEN, got: {err_msg}"
+			"Error should mention BWS_ACCESS_TOKEN, got: {}",
+			err_msg
 		);
+	}
+
+	#[test]
+	fn command_passes_token_via_environment_and_server_as_argument() {
+		let provider = provider_with_credentials(Some("vault.bitwarden.eu"));
+		let command = provider.command().unwrap();
+		let args: Vec<_> = command
+			.get_args()
+			.map(|arg| arg.to_string_lossy().into_owned())
+			.collect();
+		let token = command
+			.get_envs()
+			.find(|(name, _)| *name == BWS_ACCESS_TOKEN_ENV)
+			.and_then(|(_, value)| value)
+			.unwrap();
+
+		assert_eq!(token, "token-from-provider");
+		assert!(!args.iter().any(|arg| arg == "token-from-provider"));
+		assert_eq!(
+			args,
+			[
+				"--color",
+				"no",
+				"--server-url",
+				"https://vault.bitwarden.eu"
+			]
+		);
+	}
+
+	#[test]
+	fn command_pins_default_server_as_argument() {
+		let provider = provider_with_credentials(None);
+		let command = provider.command().unwrap();
+		let args: Vec<_> = command
+			.get_args()
+			.map(|arg| arg.to_string_lossy().into_owned())
+			.collect();
+
+		assert_eq!(
+			args,
+			["--color", "no", "--server-url", "https://bitwarden.com"]
+		);
+	}
+
+	/// Installs an executable fake `bws` in `dir`, returning its path.
+	///
+	/// The script is written to a scratch file and renamed into place after the
+	/// write descriptor is closed, so this process never holds a write descriptor
+	/// to the file it is about to execute.
+	///
+	/// That indirection is the whole point. libtest runs this crate's tests as
+	/// threads of one process, and several of them spawn subprocesses. `fork`
+	/// copies the descriptor table, so a child forked by another thread while we
+	/// held a write descriptor to this script would keep that descriptor open
+	/// until its own `exec` — and the kernel refuses to `execve` a file that any
+	/// process has open for writing (`ETXTBSY`, "Text file busy"). Keeping the
+	/// descriptor out of our table means the window cannot exist, rather than
+	/// retrying until it closes. `chmod` needs no descriptor, and the scratch
+	/// file is never executed, so a descriptor to *it* is harmless.
+	#[cfg(unix)]
+	fn install_fake_cli(dir: &std::path::Path, script: &str) -> std::path::PathBuf {
+		use std::os::unix::fs::PermissionsExt;
+
+		let scratch = dir.join("bws.script");
+		std::fs::write(&scratch, script).unwrap();
+
+		let cli = dir.join("bws");
+		std::fs::rename(&scratch, &cli).expect("install fake bws script");
+
+		let mut permissions = std::fs::metadata(&cli).unwrap().permissions();
+		permissions.set_mode(0o700);
+		std::fs::set_permissions(&cli, permissions).unwrap();
+		cli
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn get_reads_json_from_bws_cli_and_caches_the_project_listing() {
+		let temp = tempfile::tempdir().unwrap();
+		let count = temp.path().join("count");
+		let cli = install_fake_cli(
+			temp.path(),
+			&format!(
+				"#!/bin/sh\n\
+                 test \"$BWS_ACCESS_TOKEN\" = token-from-provider || exit 41\n\
+                 printf x >> '{}'\n\
+                 printf '%s' '[{{\"id\":\"11111111-1111-1111-1111-111111111111\",\
+                 \"key\":\"DATABASE_URL\",\"value\":\"postgres://db\"}}]'\n",
+				count.display()
+			),
+		);
+
+		let mut provider = provider_with_credentials(None);
+		provider.cli_binary_path = cli.to_string_lossy().into_owned();
+
+		let first = provider
+			.get(Address::convention("project", "default", "DATABASE_URL"))
+			.unwrap()
+			.unwrap();
+		let second = provider
+			.get(Address::convention("project", "default", "DATABASE_URL"))
+			.unwrap()
+			.unwrap();
+
+		assert_eq!(first.expose_secret(), "postgres://db");
+		assert_eq!(second.expose_secret(), "postgres://db");
+		assert_eq!(std::fs::read_to_string(count).unwrap(), "x");
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn set_updates_an_existing_secret_through_bws_cli() {
+		let temp = tempfile::tempdir().unwrap();
+		let args_log = temp.path().join("args");
+		let cli = install_fake_cli(
+			temp.path(),
+			&format!(
+				"#!/bin/sh\n\
+                 case \" $* \" in\n\
+                 *' secret list '*)\n\
+                   printf '%s' '[{{\"id\":\"11111111-1111-1111-1111-111111111111\",\
+                   \"key\":\"DATABASE_URL\",\"value\":\"old\"}}]'\n\
+                   ;;\n\
+                 *)\n\
+                   for argument in \"$@\"; do printf '%s\\n' \"$argument\"; done > '{}'\n\
+                   ;;\n\
+                 esac\n",
+				args_log.display()
+			),
+		);
+
+		let mut provider = provider_with_credentials(None);
+		provider.cli_binary_path = cli.to_string_lossy().into_owned();
+		provider
+			.set(
+				Address::convention("project", "default", "DATABASE_URL"),
+				&SecretString::new("--password".to_string().into()),
+			)
+			.unwrap();
+
+		assert_eq!(
+			std::fs::read_to_string(args_log).unwrap(),
+			"--color\nno\n--server-url\nhttps://bitwarden.com\nsecret\nedit\n\
+             11111111-1111-1111-1111-111111111111\n--value=--password\n--output\nnone\n"
+		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn set_creates_a_missing_secret_through_bws_cli() {
+		let temp = tempfile::tempdir().unwrap();
+		let args_log = temp.path().join("args");
+		let cli = install_fake_cli(
+			temp.path(),
+			&format!(
+				"#!/bin/sh\n\
+                 case \" $* \" in\n\
+                 *' secret list '*) printf '%s' '[]' ;;\n\
+                 *) for argument in \"$@\"; do printf '%s\\n' \"$argument\"; done > '{}' ;;\n\
+                 esac\n",
+				args_log.display()
+			),
+		);
+
+		let mut provider = provider_with_credentials(None);
+		provider.cli_binary_path = cli.to_string_lossy().into_owned();
+		provider
+			.set(
+				Address::convention("project", "default", "--API_KEY"),
+				&SecretString::new("--password".to_string().into()),
+			)
+			.unwrap();
+
+		assert_eq!(
+			std::fs::read_to_string(args_log).unwrap(),
+			"--color\nno\n--server-url\nhttps://bitwarden.com\nsecret\ncreate\n--output\nnone\n--\n\
+             --API_KEY\n--password\na9230ec4-5507-4870-b8b5-b3f500587e4c\n"
+		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn cli_errors_redact_the_access_token() {
+		let temp = tempfile::tempdir().unwrap();
+		let cli = install_fake_cli(
+			temp.path(),
+			"#!/bin/sh\nprintf 'rejected %s\\n' \"$BWS_ACCESS_TOKEN\" >&2\nexit 1\n",
+		);
+
+		let mut provider = provider_with_credentials(None);
+		provider.cli_binary_path = cli.to_string_lossy().into_owned();
+
+		let error = provider
+			.get(Address::convention("project", "default", "DATABASE_URL"))
+			.unwrap_err()
+			.to_string();
+		assert!(error.contains("[REDACTED]"), "{error}");
+		assert!(!error.contains("token-from-provider"), "{error}");
+	}
+
+	/// BWS secrets are flat key/value pairs; a `field` coordinate is rejected.
+	#[test]
+	fn native_address_rejects_field() {
+		let config =
+			BwsConfig::try_from(&provider_url("bws://a9230ec4-5507-4870-b8b5-b3f500587e4c"))
+				.unwrap();
+		let p = BwsProvider::new(config);
+		let addr = crate::config::NativeAddress {
+			item: "prod-db-url".into(),
+			field: Some("password".into()),
+			..Default::default()
+		};
+		let err = crate::provider::flat_item(&p, Address::Native(&addr)).unwrap_err();
+		assert!(err.to_string().contains("`field`"), "{err}");
 	}
 }

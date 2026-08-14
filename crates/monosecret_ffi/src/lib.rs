@@ -2,9 +2,8 @@
 //!
 //! The entire native surface is three functions. Richness lives in the
 //! versioned JSON contract, not in a wide C API, so that every consumer of
-//! this ABI (Dart via `dart:ffi`, Go via purego, Ruby via ffi, and Haskell via
-//! the GHC FFI) stays a thin shell: marshal a request string in, get a response
-//! string out, free it.
+//! this ABI (Go via purego, Ruby via ffi, Haskell via the GHC FFI) stays a
+//! thin shell: marshal a request string in, get a response string out, free it.
 //! Python (pyo3) and Node (napi-rs) skip this C ABI and call
 //! `monosecret::resolve_json` directly, but share the same JSON envelope
 //! contract. Resolution logic lives only in the `monosecret` crate; this is a
@@ -21,36 +20,58 @@
 //!
 //! ```json
 //! { "path": "…/monosecret.toml", "provider": "keyring://",
-//!   "profile": "production", "reason": "boot", "no_values": false,
-//!   "include": ["API_TOKEN"], "groups": ["backend"], "mode": "resolve" }
+//!   "profile": "production", "scope": "api", "reason": "boot",
+//!   "no_values": false, "mode": "resolve" }
 //! ```
 //!
 //! All fields are optional. `path` omitted means "walk up from the working
-//! directory" like the CLI. `include` and `groups` select a union before
-//! validation. `no_values` strips secret values from a resolve response, while
-//! `mode: "report"` returns a value-free resolution report.
+//! directory" like the CLI. `scope` selects a `[scopes]` subset of the active
+//! profile (Monosecret 0.17+).
+//!
+//! `mode` selects which shape comes back, and defaults to `"resolve"`:
+//!
+//! - `"resolve"` — the value-carrying [`monosecret::ResolveResponse`]. Set
+//!   `no_values` to strip the values from it.
+//! - `"report"` — the value-free [`monosecret::ResolutionReport`]: the
+//!   inventory/preflight view the CLI exposes as `check --json`.
+//!
+//! Any other value is rejected with an `invalid_request` error.
+//!
+//! ### `no_values` is not `mode: "report"`
+//!
+//! They are different shapes, and a consumer that wants an inventory wants
+//! `report`:
+//!
+//! - `no_values` returns a `ResolveResponse` with the values blanked. Its
+//!   `secrets` is an object keyed by name, it never reports whether a secret is
+//!   *declared* required, and when a required secret is missing that object is
+//!   **empty** — so the one case a preflight check exists to describe is the case
+//!   it tells you least about.
+//! - `report` returns a `ResolutionReport`, whose `secrets` is an **array** of
+//!   per-secret entries carrying `name`, `required`, `status`
+//!   (`resolved` / `missing_required` / `missing_optional`) and provenance. Every
+//!   declared secret is listed whether or not it resolved. `required` is
+//!   reachable *only* here.
 //!
 //! ## Response envelope
 //!
 //! ```json
-//! { "ok": true,  "response": { …ResolveResponse… } }
+//! { "ok": true,  "response": { …ResolveResponse | ResolutionReport… } }
 //! { "ok": false, "error": { "kind": "io", "message": "…" } }
 //! ```
 //!
-//! `ok: true` carries either the value-carrying [`monosecret::ResolveResponse`]
-//! (which still reports domain failures like `missing_required` in its own
-//! fields) or the requested value-free report. `ok: false` means the call itself
-//! failed (bad manifest, provider error, reason policy). This separates
-//! transport failure from "a required secret is missing", which the SDK
+//! `ok: true` carries whichever shape `mode` selected. `ok: false` means the call
+//! itself failed (bad manifest, provider error, reason policy, unknown `mode`).
+//! This separates transport failure from "a required secret is missing", which is
+//! a domain result reported inside an `ok: true` response and which the SDK
 //! surfaces differently.
 //!
 //! # Safety
 //!
-//! Resolve response strings carry secret values unless `no_values` is set;
-//! report responses never do. Treat value-carrying strings as sensitive and
-//! free them promptly. Host-language heap values cannot be reliably zeroized;
-//! for file-shaped secrets prefer `as_path`, whose value never crosses the
-//! boundary (only the temp-file path does).
+//! Returned response strings carry secret values (unless `no_values`). Treat
+//! them as sensitive and free them promptly. The host language's heap cannot be
+//! zeroized; for file-shaped secrets prefer `as_path`, whose value never crosses
+//! the boundary (only the temp-file path does).
 
 use std::ffi::CStr;
 use std::ffi::CString;

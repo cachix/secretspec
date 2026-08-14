@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::process::Command;
 use std::sync::Mutex;
 
@@ -10,6 +9,7 @@ use serde::Serialize;
 
 use crate::MonosecretError;
 use crate::Result;
+use crate::provider::Address;
 use crate::provider::Provider;
 use crate::provider::ProviderUrl;
 use crate::provider::onepassword::strip_op_session_env;
@@ -244,22 +244,39 @@ impl Provider for OnePasswordEnvProvider {
 		Ok(())
 	}
 
-	fn get(&self, _project: &str, key: &str, _profile: &str) -> Result<Option<SecretString>> {
+	fn convention_address(
+		&self,
+		_project: &str,
+		_profile: &str,
+		key: &str,
+	) -> Result<crate::config::NativeAddress> {
+		Ok(crate::config::NativeAddress {
+			item: key.to_string(),
+			field: None,
+			vault: None,
+			section: None,
+			version: None,
+		})
+	}
+
+	fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+		let key = match addr {
+			Address::Convention { key, .. } => key,
+			Address::Native(reference) => reference.field.as_deref().unwrap_or(&reference.item),
+		};
 		let guard = self.cached_variables()?;
 		let vars = guard.as_ref().expect("cache was just populated");
 		Ok(vars.get(key).cloned())
 	}
 
-	fn set(&self, _project: &str, _key: &str, _value: &SecretString, _profile: &str) -> Result<()> {
-		Err(MonosecretError::ProviderOperationFailed(
-            "1Password Environments provider is read-only. \
-             Manage environment variables in the 1Password desktop app (Developer > View Environments)."
-                .into(),
-        ))
+	fn set(&self, addr: Address<'_>, _value: &SecretString) -> Result<()> {
+		self.check_writable(addr)
 	}
 
-	fn allows_set(&self) -> bool {
-		false
+	fn check_writable(&self, _addr: Address<'_>) -> Result<()> {
+		Err(MonosecretError::ProviderOperationFailed(
+			"1Password Environments provider is read-only. Manage environment variables in the 1Password desktop app (Developer > View Environments).".into(),
+		))
 	}
 
 	fn name(&self) -> &'static str {
@@ -278,23 +295,6 @@ impl Provider for OnePasswordEnvProvider {
 		}
 		uri.push_str(&self.config.environment_id);
 		uri
-	}
-
-	fn get_batch(
-		&self,
-		_project: &str,
-		keys: &[&str],
-		_profile: &str,
-	) -> Result<HashMap<String, SecretString>> {
-		let guard = self.cached_variables()?;
-		let vars = guard.as_ref().expect("cache was just populated");
-		let key_set: HashSet<&str> = keys.iter().copied().collect();
-		let results = vars
-			.iter()
-			.filter(|(k, _)| key_set.contains(k.as_str()))
-			.map(|(k, v)| (k.clone(), v.clone()))
-			.collect();
-		Ok(results)
 	}
 }
 
@@ -345,11 +345,11 @@ printf 'API_KEY=%s\nOTHER=value\n' "$OP_SERVICE_ACCOUNT_TOKEN"
 			.unwrap();
 
 		let first = provider
-			.get("project", "API_KEY", "default")
+			.get(Address::convention("project", "default", "API_KEY"))
 			.unwrap()
 			.unwrap();
 		let second = provider
-			.get("project", "API_KEY", "default")
+			.get(Address::convention("project", "default", "API_KEY"))
 			.unwrap()
 			.unwrap();
 
@@ -379,7 +379,7 @@ printf 'API_KEY=%s\nOTHER=value\n' "$OP_SERVICE_ACCOUNT_TOKEN"
 			.unwrap();
 
 		let value = provider
-			.get("project", "API_KEY", "default")
+			.get(Address::convention("project", "default", "API_KEY"))
 			.unwrap()
 			.unwrap();
 

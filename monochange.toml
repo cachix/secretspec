@@ -172,6 +172,8 @@ versioned_files = [
   { path = "ruby/monosecret_rb/monosecret_rb.gemspec", regex = 'spec[.]version *= *"(?<version>[0-9]+[.][0-9]+[.][0-9]+[^\"]*)"' },
   { path = "haskell/monosecret_hs/monosecret.cabal", regex = 'version: *(?<version>[0-9]+[.][0-9]+[.][0-9]+)' },
   { path = "dart/monosecret/lib/src/version.dart", regex = "const monosecretVersion = '(?<version>[^']+)';" },
+  { path = "dotnet/monosecret_dotnet/src/Monosecret/Monosecret.csproj", regex = '<Version>(?<version>[0-9]+[.][0-9]+[.][0-9]+[^<]*)</Version>' },
+  { path = "Package.swift", regex = 'let monosecretBinaryVersion = "(?<version>[0-9]+[.][0-9]+[.][0-9]+[^"]*)"' },
 ]
 
 [ecosystems.cargo]

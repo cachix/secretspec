@@ -28,25 +28,25 @@ The proc macro generates types like this:
 ```rust
 // Union type struct (safe for any profile)
 pub struct Monosecret {
-    pub database_url: Option<String>,  // Optional because it has default in dev
-    pub api_key: Option<String>,       // Optional because it has default in dev
-    pub redis_url: Option<String>,     // Optional with default
-    pub log_level: Option<String>,     // Optional with default
+    pub database_url: String,
+    pub api_key: String,
+    pub redis_url: String,
+    pub session_secret: String,
 }
 
 // Profile-specific enum
 pub enum MonosecretProfile {
     Development {
-        database_url: Option<String>,  // Has default in dev profile
-        api_key: Option<String>,       // Has default in dev profile
-        redis_url: Option<String>,     // Optional with default
-        log_level: Option<String>,     // Optional with default
+        database_url: Option<String>,
+        api_key: Option<String>,
+        redis_url: Option<String>,
+        session_secret: Option<String>,
     },
     Production {
-        database_url: String,          // Required in production
-        api_key: String,               // Required in production
-        redis_url: Option<String>,     // Optional with default
-        log_level: Option<String>,     // Optional with default
+        database_url: String,
+        api_key: String,
+        redis_url: String,
+        session_secret: String,
     }
 }
 

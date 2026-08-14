@@ -10,9 +10,32 @@ import { Monosecret } from "../src/index.js";
 const packageDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
 const repository = join(packageDirectory, "..", "..");
 const fixtures = join(repository, "conformance", "fixtures");
+const constraintViolations = join(repository, "conformance", "constraint-violations");
 const nativeBuilt = existsSync(join(packageDirectory, "monosecret-client.node"));
 
 describe.skipIf(!nativeBuilt)("embedded native resolver", () => {
+  it("exposes typed constraint violations", async () => {
+    const report = await Monosecret.builder()
+      .withPath(join(constraintViolations, "monosecret.toml"))
+      .withProvider(`dotenv://${join(constraintViolations, ".env")}`)
+      .withReason("constraint violation test")
+      .reportAsync();
+    const byKind = Object.fromEntries(
+      report.constraintViolations.map((violation) => [violation.kind, violation]),
+    );
+
+    expect(byKind.at_least_one).toMatchObject({
+      kind: "at_least_one",
+      group: "cloud",
+      present: [],
+    });
+    expect(byKind.exactly_one).toMatchObject({
+      kind: "exactly_one",
+      group: "token",
+      present: ["FALLBACK", "PRIMARY"],
+    });
+  });
+
   it("matches every shared conformance fixture", async () => {
     for (const fixture of await readdir(fixtures)) {
       const directory = join(fixtures, fixture);

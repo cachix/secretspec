@@ -30,6 +30,15 @@ main = do
 A missing required secret throws `MissingRequiredError`; any other failure
 throws `MonosecretError` (with a stable `errorKind`).
 
+## Scopes (0.17+)
+
+Use `withScope "api"` to resolve only a named `[scopes.api]` subset. Both
+`resolvedScope` and `reportScope` return the selected scope:
+
+```haskell
+resolved <- S.load (S.builder & S.withScope "api")
+```
+
 ## Cleanup
 
 `as_path` secrets are materialized to temp files that outlive the call. Call
@@ -59,11 +68,9 @@ monosecret schema | quicktype -s schema --top-level Monosecret --lang haskell -o
 
 ## Building
 
-The `monosecret_ffi` archive is statically linked at build time, so the resolver
-is embedded in the binary — no `cdylib` and no `LD_LIBRARY_PATH` at runtime.
-Stage the `.a` in a directory of its own (so `-lmonosecret_ffi` resolves to the
-archive, not the co-located `.so`) and pass its transitive native dependencies to
-the linker:
+The build links the `monosecret_ffi` archive statically. Stage the `.a` in a
+directory of its own (so the linker picks the archive, not the co-located
+`.so`) and pass its native dependencies to the linker:
 
 ```bash
 cargo build -p monosecret_ffi
@@ -74,8 +81,27 @@ LIBDIR="$(mktemp -d)"
 cp "$TARGET/debug/libmonosecret_ffi.a" "$LIBDIR/"
 NATIVE_LIBS="$(cargo rustc -q -p monosecret_ffi --crate-type staticlib -- \
   --print native-static-libs 2>&1 | sed -n 's/^note: native-static-libs: //p' | tail -1)"
-OPTL=(); for l in $NATIVE_LIBS; do OPTL+=("--ghc-options=-optl$l"); done
 
-cabal build --extra-lib-dirs="$LIBDIR" "${OPTL[@]}"
-cabal test  --extra-lib-dirs="$LIBDIR" "${OPTL[@]}"
+cabal build --extra-lib-dirs="$LIBDIR" --ghc-options="-optl${NATIVE_LIBS// / -optl}"
+cabal test  --extra-lib-dirs="$LIBDIR" --ghc-options="-optl${NATIVE_LIBS// / -optl}"
 ```
+
+### Linking with pkg-config (0.19+)
+
+Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
+
+```bash
+# Use "static" (the default) or "shared"; use separate prefixes for both.
+bash crates/monosecret_ffi/scripts/cinstall.sh "$PREFIX" static
+```
+
+Then use the same Cabal flag for either type:
+
+```bash
+cd haskell/monosecret_hs
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal build -f use-pkg-config
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" cabal test  -f use-pkg-config
+```
+
+A shared install in a non-system prefix also requires `PREFIX/lib` in the
+platform's runtime library search path.

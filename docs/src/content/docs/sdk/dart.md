@@ -3,7 +3,7 @@ title: Dart SDK
 description: Native server-side Dart access to Monosecret secrets
 ---
 
-The `monosecret` Dart package resolves secrets through the bundled `monosecret_ffi` C ABI. A separate `monosecret` CLI installation is not required at runtime.
+The `monosecret` Dart package (available since Monosecret 0.1) resolves secrets through the bundled `monosecret_ffi` C ABI. A separate `monosecret` CLI installation is not required at runtime.
 
 ## Supported environments
 

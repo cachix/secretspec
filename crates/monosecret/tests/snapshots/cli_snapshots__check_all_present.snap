@@ -9,6 +9,8 @@ info:
     - "--no-prompt"
     - "--provider"
     - local
+  env:
+    HOME: /tmp/monosecret-cli-snapshots-check-all-present
 ---
 success: true
 exit_code: 0

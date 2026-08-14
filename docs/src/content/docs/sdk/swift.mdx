@@ -1,0 +1,110 @@
+---
+title: Swift SDK
+description: Resolve Monosecret secrets from Swift on macOS
+---
+
+import { Code } from 'astro:components';
+import quickStartExample from './examples/swift/quick-start.swift?raw';
+import errorsExample from './examples/swift/errors.swift?raw';
+import oneShotExample from './examples/swift/one-shot.swift?raw';
+import scopesExample from './examples/swift/scopes.swift?raw';
+import reportExample from './examples/swift/report.swift?raw';
+import typedAccessExample from './examples/swift/typed-access.swift?raw';
+
+> **Planned for Monosecret 0.2+:** Source and local tests are integrated, but
+> the tagged SwiftPM/XCFramework release remains deferred. Installation examples
+> show the intended workflow after release.
+
+The Swift SDK is a thin `Codable` wrapper over the same Rust resolver and
+versioned C ABI as the other language SDKs. Every provider, fallback chain,
+profile, scope, generator, reference, and `as_path` secret therefore works
+without Swift-side resolution logic.
+
+## Install (planned for 0.2+)
+
+In Xcode, choose **File → Add Package Dependencies** and enter:
+
+```text
+https://github.com/ifiokjr/monosecret
+```
+
+Or add the package to `Package.swift`:
+
+```swift
+dependencies: [
+    .package(
+        url: "https://github.com/ifiokjr/monosecret",
+        from: "0.2.0"
+    ),
+],
+targets: [
+    .target(
+        name: "MyApp",
+        dependencies: [
+            .product(name: "Monosecret", package: "monosecret"),
+        ]
+    ),
+]
+```
+
+The package supports macOS 12 or later on Intel and Apple silicon. Its
+checksummed XCFramework contains the native Rust resolver, so consumers need
+neither Rust nor a separately installed Monosecret library. Monosecret is a
+development-workflow secrets manager with filesystem, process, and desktop
+credential-store integrations; the SDK does not target iOS, watchOS, tvOS, or
+visionOS.
+
+## Quick start
+
+<Code code={quickStartExample} lang="swift" meta='title="QuickStart.swift"' />
+
+`get()` returns the inline value, or the readable file path for an `as_path`
+secret. A missing required secret throws `MissingRequiredError`; its `missing`
+property contains the unresolved names. Other failures throw
+`MonosecretError`, whose `kind` property is a stable error category:
+
+<Code code={errorsExample} lang="swift" meta='title="Errors.swift"' />
+
+A one-shot form is also available:
+
+<Code code={oneShotExample} lang="swift" meta='title="OneShot.swift"' />
+
+## Scopes
+
+Use `withScope("api")` to resolve only a named `[scopes.api]` subset. The
+selected name is available through `resolved.scope` and `report.scope`:
+
+<Code code={scopesExample} lang="swift" meta='title="Scopes.swift"' />
+
+## Value-free preflight
+
+`report()` returns the inventory view exposed by `monosecret check --json`. It
+never carries values. A missing required secret appears with
+`status == "missing_required"` rather than throwing, so an incomplete
+deployment can still be inspected.
+
+<Code code={reportExample} lang="swift" meta='title="Report.swift"' />
+
+## Typed access
+
+Generate an idiomatic Swift model from the manifest schema:
+
+```bash
+$ monosecret schema | \
+  quicktype -s schema --top-level AppSecrets --lang swift -o AppSecrets.swift
+```
+
+Then decode the SDK's flat field map:
+
+<Code code={typedAccessExample} lang="swift" meta='title="TypedAccess.swift"' />
+
+The schema models successful resolution: required, defaulted, and generated
+secrets are non-nullable, and profile schemas include inherited
+default-profile fields.
+
+## Files (`as_path`)
+
+File-shaped secrets are materialized as mode-0400 temporary files. Call
+`resolved.close()` after the last consumer finishes with those paths.
+`Resolved` also performs best-effort cleanup when it is deinitialized, but
+explicit cleanup gives deterministic lifetime and reports filesystem errors.

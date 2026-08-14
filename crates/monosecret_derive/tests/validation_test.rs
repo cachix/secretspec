@@ -34,6 +34,7 @@ mod test_valid {
 
 	#[test]
 	fn test_basic_compiles() {
-		// If this test runs, the macro validated successfully.
+		// If we get here, the macro validated successfully
+		let _ = std::mem::size_of::<Monosecret>();
 	}
 }

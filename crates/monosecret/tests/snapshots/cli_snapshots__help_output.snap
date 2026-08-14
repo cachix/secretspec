@@ -1,6 +1,5 @@
 ---
 source: crates/monosecret/tests/cli_snapshots.rs
-assertion_line: 45
 info:
   program: monosecret
   args:
@@ -9,28 +8,32 @@ info:
 success: true
 exit_code: 0
 ----- stdout -----
-Declarative secrets, every environment, any provider - https://ifiokjr.github.io/monosecret
+A declarative interface for every secret provider. https://monosecret.dev
 
 Usage: monosecret [OPTIONS] <COMMAND>
 
 Commands:
   init      Initialize a new monosecret.toml (optionally, from a provider)
+  add       Add a secret declaration to monosecret.toml (0.18+)
   set       Set a secret value
   get       Get a secret value
+  delete    Delete stored secret values from a provider (0.18+)
   run       Run a command with secrets injected
   manifest  Emit a secret-value-free manifest for SDK code generation
+  export    Resolve secrets and print them for another tool to consume
   check     Check if all required secrets are in the provider, if not set them
-  schema    Emit JSON Schema for the union or one profile's typed shape
-  config    Init or show ~/.config/monosecret/config.toml
+  schema    Emit a JSON Schema for the manifest's typed shape
+  config    Manage Monosecret configuration
   import    Import secrets from a provider to another provider
+  cache     Manage cached provider values (0.17+)
   audit     Show the local audit log of secret access
-  env       Load resolved secrets into the surrounding shell or a CI environment
+  env       Load resolved secrets into a shell or CI environment
   help      Print this message or the help of the given subcommand(s)
 
 Options:
   -f, --file <FILE>      Path to monosecret.toml (default: auto-detect by walking up from current directory) [env: MONOSECRET_FILE=]
-  -v, --verbose...       Increase diagnostic logging (-v/--verbose for debug, -vv/--verbose --verbose for trace). Can also use `RUST_LOG=debug/trace`
-      --reason <REASON>  Reason for accessing secrets. Env: `MONOSECRET_REASON` (legacy: `SECRETSPEC_REASON`) [env: MONOSECRET_REASON=]
+  -v, --verbose...       Increase diagnostic logging (`-v` for debug, `-vv` for trace). Can also use `RUST_LOG=debug` or `RUST_LOG=trace`
+      --reason <REASON>  Reason for accessing secrets, recorded by providers that support audit logging (e.g. Proton Pass agent sessions). Takes precedence over the PROTON_PASS_AGENT_REASON environment variable [env: MONOSECRET_REASON=]
   -h, --help             Print help
   -V, --version          Print version
 

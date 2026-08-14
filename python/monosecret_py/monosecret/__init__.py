@@ -18,13 +18,13 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Literal, Optional
 
 from monosecret import _native
 
 # Response wire-format version this SDK understands. Tracks monosecret_ffi's
 # RESOLVE_SCHEMA_VERSION; a mismatch means the loaded library is incompatible.
-_RESOLVE_SCHEMA_VERSION = 1
+_RESOLVE_SCHEMA_VERSION = 2
 
 # Wire-format version of the value-free report. Tracks monosecret's
 # RESOLUTION_REPORT_SCHEMA_VERSION.
@@ -36,6 +36,7 @@ __all__ = [
     "ResolvedSecret",
     "Report",
     "SecretReport",
+    "ConstraintViolation",
     "MonosecretError",
     "MissingRequiredError",
     "resolve",
@@ -87,6 +88,7 @@ class Resolved:
     profile: str
     secrets: dict[str, ResolvedSecret]
     missing_optional: list[str] = field(default_factory=list)
+    scope: Optional[str] = None
 
     def set_as_env(self) -> None:
         """Export each resolved secret into ``os.environ`` by its declared name."""
@@ -144,6 +146,16 @@ class SecretReport:
 
 
 @dataclass(frozen=True)
+class ConstraintViolation:
+    """A failed cross-secret presence constraint in a resolution report."""
+
+    kind: Literal["at_least_one", "exactly_one"]
+    group: str
+    secrets: list[str]
+    present: list[str]
+
+
+@dataclass(frozen=True)
 class Report:
     """A value-free resolution snapshot. Unlike :class:`Resolved`, a missing
     required secret is a ``missing_required`` status here, not an error, so a
@@ -152,6 +164,8 @@ class Report:
     provider: str
     profile: str
     secrets: list[SecretReport]
+    scope: Optional[str] = None
+    constraint_violations: list[ConstraintViolation] = field(default_factory=list)
 
 
 def abi_version() -> str:
@@ -193,6 +207,7 @@ def resolve(
     path: Optional[str] = None,
     provider: Optional[str] = None,
     profile: Optional[str] = None,
+    scope: Optional[str] = None,
     reason: Optional[str] = None,
 ) -> Resolved:
     """Resolve secrets and return a :class:`Resolved`.
@@ -200,9 +215,15 @@ def resolve(
     Raises :class:`MissingRequiredError` if a required secret is missing, and
     :class:`MonosecretError` for any other failure.
     """
-    return Monosecret.builder().with_path(path).with_provider(provider).with_profile(
-        profile
-    ).with_reason(reason).load()
+    return (
+        Monosecret.builder()
+        .with_path(path)
+        .with_provider(provider)
+        .with_profile(profile)
+        .with_scope(scope)
+        .with_reason(reason)
+        .load()
+    )
 
 
 def report(
@@ -210,6 +231,7 @@ def report(
     path: Optional[str] = None,
     provider: Optional[str] = None,
     profile: Optional[str] = None,
+    scope: Optional[str] = None,
     reason: Optional[str] = None,
 ) -> Report:
     """Resolve a value-free :class:`Report` (the inventory/preflight view).
@@ -218,9 +240,15 @@ def report(
     required secret appears as a :class:`SecretReport` with status
     ``"missing_required"``.
     """
-    return Monosecret.builder().with_path(path).with_provider(provider).with_profile(
-        profile
-    ).with_reason(reason).report()
+    return (
+        Monosecret.builder()
+        .with_path(path)
+        .with_provider(provider)
+        .with_profile(profile)
+        .with_scope(scope)
+        .with_reason(reason)
+        .report()
+    )
 
 
 class Monosecret:
@@ -248,6 +276,12 @@ class _Builder:
     def with_profile(self, profile: Optional[str]) -> "_Builder":
         if profile is not None:
             self._request["profile"] = profile
+        return self
+
+    def with_scope(self, scope: Optional[str]) -> "_Builder":
+        """Limit resolution to a named manifest scope (Monosecret 0.17+)."""
+        if scope is not None:
+            self._request["scope"] = scope
         return self
 
     def with_reason(self, reason: Optional[str]) -> "_Builder":
@@ -281,6 +315,7 @@ class _Builder:
             provider=response["provider"],
             profile=response["profile"],
             secrets=secrets,
+            scope=response.get("scope"),
             missing_optional=response.get("missing_optional", []),
         )
 
@@ -310,4 +345,14 @@ class _Builder:
             provider=response["provider"],
             profile=response["profile"],
             secrets=secrets,
+            scope=response.get("scope"),
+            constraint_violations=[
+                ConstraintViolation(
+                    kind=violation["kind"],
+                    group=violation["group"],
+                    secrets=violation["secrets"],
+                    present=violation["present"],
+                )
+                for violation in response.get("constraint_violations", [])
+            ],
         )

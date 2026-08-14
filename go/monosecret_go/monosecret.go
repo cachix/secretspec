@@ -5,14 +5,16 @@
 // package marshals a JSON request to monosecret_resolve, parses the response
 // envelope, and exposes it with the same vocabulary as the Rust derive crate.
 //
-// Two bindings select the native resolver at build time:
+// Three build modes select the native resolver:
 //   - default (no build tag): purego (dlopen, no cgo). The library is located via
 //     the MONOSECRET_FFI_LIB environment variable, an embedded copy, or a Cargo
 //     target directory. This keeps `go get` toolchain-free.
 //   - `-tags monosecret_static`: cgo statically links libmonosecret_ffi.a, so the resolver
-//     is embedded in the Go binary (fully static on Linux/musl). See README.
+//     is embedded in the Go binary (fully static on Linux/musl).
+//   - `-tags pkgconfig` (0.19+): cgo links the installed static or shared library
+//     described by monosecret_ffi.pc. See README.
 //
-// Both bindings implement the same hooks (ensureLoaded, nativeResolve,
+// All bindings implement the same hooks (ensureLoaded, nativeResolve,
 // nativeABIVersion); the code below is binding-agnostic.
 package monosecret
 
@@ -27,7 +29,7 @@ import (
 // It tracks monosecret_ffi's RESOLVE_SCHEMA_VERSION; a mismatch means the loaded
 // library is incompatible with this SDK, so Load reports it rather than silently
 // misparsing.
-const resolveSchemaVersion = 1
+const resolveSchemaVersion = 2
 
 // Error is a resolution failure (bad manifest, provider error, reason policy).
 type Error struct {
@@ -85,8 +87,10 @@ func (s ResolvedSecret) Get() string {
 
 // Resolved is a successful resolution, mirroring the Rust Resolved wrapper.
 type Resolved struct {
-	Provider        string
-	Profile         string
+	Provider string
+	Profile  string
+	// Scope is the selected manifest scope, or nil for a full-profile resolve (0.17+).
+	Scope           *string
 	Secrets         map[string]ResolvedSecret
 	MissingOptional []string
 }
@@ -176,9 +180,12 @@ func (b *Builder) set(key string, value any) *Builder {
 	return b
 }
 
-func (b *Builder) WithPath(path string) *Builder     { return b.set("path", path) }
-func (b *Builder) WithProvider(p string) *Builder    { return b.set("provider", p) }
-func (b *Builder) WithProfile(p string) *Builder     { return b.set("profile", p) }
+func (b *Builder) WithPath(path string) *Builder  { return b.set("path", path) }
+func (b *Builder) WithProvider(p string) *Builder { return b.set("provider", p) }
+func (b *Builder) WithProfile(p string) *Builder  { return b.set("profile", p) }
+
+// WithScope limits resolution to a named manifest scope (Monosecret 0.17+).
+func (b *Builder) WithScope(scope string) *Builder   { return b.set("scope", scope) }
 func (b *Builder) WithReason(reason string) *Builder { return b.set("reason", reason) }
 func (b *Builder) WithNoValues(v bool) *Builder      { return b.set("no_values", v) }
 
@@ -207,6 +214,7 @@ type responseJSON struct {
 	SchemaVersion   int                   `json:"schema_version"`
 	Provider        string                `json:"provider"`
 	Profile         string                `json:"profile"`
+	Scope           *string               `json:"scope"`
 	Secrets         map[string]secretJSON `json:"secrets"`
 	MissingRequired []string              `json:"missing_required"`
 	MissingOptional []string              `json:"missing_optional"`
@@ -283,6 +291,7 @@ func (b *Builder) Load() (*Resolved, error) {
 	return &Resolved{
 		Provider:        resp.Provider,
 		Profile:         resp.Profile,
+		Scope:           resp.Scope,
 		Secrets:         secrets,
 		MissingOptional: resp.MissingOptional,
 	}, nil
@@ -304,6 +313,22 @@ type SecretReport struct {
 	AsPath         bool
 }
 
+// ConstraintViolationKind identifies a cross-secret presence constraint.
+type ConstraintViolationKind string
+
+const (
+	ConstraintViolationAtLeastOne ConstraintViolationKind = "at_least_one"
+	ConstraintViolationExactlyOne ConstraintViolationKind = "exactly_one"
+)
+
+// ConstraintViolation describes a failed cross-secret presence constraint.
+type ConstraintViolation struct {
+	Kind    ConstraintViolationKind `json:"kind"`
+	Group   string                  `json:"group"`
+	Secrets []string                `json:"secrets"`
+	Present []string                `json:"present"`
+}
+
 // Report is a value-free resolution snapshot: every declared secret and how it
 // would resolve, never a value. Unlike Load, a missing required secret is
 // reported as a SecretReport with Status "missing_required" rather than an
@@ -311,7 +336,10 @@ type SecretReport struct {
 type Report struct {
 	Provider string
 	Profile  string
-	Secrets  []SecretReport
+	// Scope is the selected manifest scope, or nil for a full-profile report (0.17+).
+	Scope                *string
+	Secrets              []SecretReport
+	ConstraintViolations []ConstraintViolation
 }
 
 type secretReportJSON struct {
@@ -325,10 +353,12 @@ type secretReportJSON struct {
 }
 
 type reportResponseJSON struct {
-	SchemaVersion int                `json:"schema_version"`
-	Provider      string             `json:"provider"`
-	Profile       string             `json:"profile"`
-	Secrets       []secretReportJSON `json:"secrets"`
+	SchemaVersion        int                   `json:"schema_version"`
+	Provider             string                `json:"provider"`
+	Profile              string                `json:"profile"`
+	Scope                *string               `json:"scope"`
+	Secrets              []secretReportJSON    `json:"secrets"`
+	ConstraintViolations []ConstraintViolation `json:"constraint_violations"`
 }
 
 // Report resolves the value-free report (the inventory/preflight view, the same
@@ -363,5 +393,15 @@ func (b *Builder) Report() (*Report, error) {
 	for i, s := range resp.Secrets {
 		secrets[i] = SecretReport(s)
 	}
-	return &Report{Provider: resp.Provider, Profile: resp.Profile, Secrets: secrets}, nil
+	constraintViolations := resp.ConstraintViolations
+	if constraintViolations == nil {
+		constraintViolations = []ConstraintViolation{}
+	}
+	return &Report{
+		Provider:             resp.Provider,
+		Profile:              resp.Profile,
+		Scope:                resp.Scope,
+		Secrets:              secrets,
+		ConstraintViolations: constraintViolations,
+	}, nil
 }

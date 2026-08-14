@@ -29,7 +29,7 @@ describe("MonosecretClient.get", () => {
     await expect(client.get("API_KEY")).resolves.toBe("secret-value");
   });
 
-  it("passes secret name and optional profile/provider/file flags", async () => {
+  it("passes secret name and optional profile/scope/provider/file flags", async () => {
     const argsFile = await tempFile("args.json");
     const cli = await fakeCli({ argsFile, stdout: "value\n" });
     const client = nodeClient(cli);
@@ -37,6 +37,7 @@ describe("MonosecretClient.get", () => {
     await client.get("DATABASE_URL", {
       file: "monosecret.production.toml",
       profile: "production",
+      scope: "database",
       provider: "op",
     });
 
@@ -45,6 +46,8 @@ describe("MonosecretClient.get", () => {
       "DATABASE_URL",
       "--profile",
       "production",
+      "--scope",
+      "database",
       "--provider",
       "op",
       "--file",
@@ -62,6 +65,7 @@ describe("MonosecretClient.check", () => {
     await client.check({
       file: "monosecret.ci.toml",
       profile: "ci",
+      scope: "deploy",
       provider: "env",
     });
 
@@ -70,6 +74,8 @@ describe("MonosecretClient.check", () => {
       "--no-prompt",
       "--profile",
       "ci",
+      "--scope",
+      "deploy",
       "--provider",
       "env",
       "--file",
@@ -105,6 +111,7 @@ describe("MonosecretClient.loadEnvironment", () => {
       groups: ["backend", "workers"],
       include: ["DATABASE_URL", "API_KEY"],
       profile: "development",
+      scope: "backend",
       provider: "dotenv",
     });
 
@@ -116,6 +123,8 @@ describe("MonosecretClient.loadEnvironment", () => {
       "run",
       "--profile",
       "development",
+      "--scope",
+      "backend",
       "--provider",
       "dotenv",
       "--file",

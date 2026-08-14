@@ -5,69 +5,19 @@ description: AWS Secrets Manager integration
 
 The AWS Secrets Manager provider integrates with AWS for centralized secret management.
 
-## Prerequisites
+## At a glance
 
-- AWS account with Secrets Manager access
-- AWS credentials configured (CLI, environment variables, IAM roles, or SSO)
-- Build with `--features awssm`
+|                 |                                                 |
+| --------------- | ----------------------------------------------- |
+| Provider        | `awssm`                                         |
+| URI             | `awssm://[AWS_PROFILE@]REGION[?options]`        |
+| Access          | Read and write; secret references are read-only |
+| Best for        | Workloads and teams on AWS                      |
+| Authentication  | Standard AWS SDK credential chain               |
+| Build feature   | `awssm`                                         |
+| Default storage | `[prefix/]monosecret/{project}/{profile}/{key}` |
 
-## Configuration
-
-### URI Format
-
-```
-awssm://[AWS_PROFILE@]REGION[?prefix=PREFIX]
-```
-
-- `REGION`: AWS region (e.g., `us-east-1`). If omitted, the SDK default region chain is used.
-- `AWS_PROFILE`: Optional AWS profile from `~/.aws/credentials`. If omitted, the SDK default credential chain is used.
-- `PREFIX`: Optional root prefix prepended to all secret names. Useful when IAM policies scope access by prefix (e.g., only allow `myteam/*`).
-
-### Examples
-
-```bash
-# Set a secret (SDK default credentials)
-$ monosecret set DATABASE_URL --provider awssm://us-east-1
-
-# Use a specific AWS profile
-$ monosecret check --provider awssm://production@us-east-1
-
-# Use a prefix to scope secrets under "myteam/"
-$ monosecret set DATABASE_URL --provider "awssm://us-east-1?prefix=myteam"
-
-# Get a secret
-$ monosecret get DATABASE_URL --provider awssm://us-east-1
-
-# Run with secrets
-$ monosecret run --provider awssm://us-east-1 -- npm start
-
-# Use SDK defaults for both profile and region
-$ monosecret set DATABASE_URL --provider awssm
-```
-
-## Secret References
-
-By default each secret is stored under `monosecret/{project}/{profile}/{key}`. A
-secret's [`ref`](/reference/configuration/#secret-references) field names an
-existing secret instead: `item` is the secret name (or ARN), and the optional
-`field` selects one key of a JSON secret value. Without `field`, the whole
-secret string is returned. References are **read-only** in this provider.
-
-```toml
-[profiles.production]
-# Whole secret value
-DATABASE_URL = { description = "DB", ref = { item = "prod/database-url" }, providers = [
-  "awssm://us-east-1",
-] }
-# One key of a JSON secret value
-DB_PASSWORD = { description = "DB pw", ref = { item = "prod/db-credentials", field = "password" }, providers = [
-  "awssm://us-east-1",
-] }
-```
-
-## Usage
-
-### Basic Commands
+## Quick start
 
 ```bash
 # Set a secret
@@ -75,17 +25,17 @@ $ monosecret set DATABASE_URL --provider awssm://us-east-1
 Enter value for DATABASE_URL: postgresql://localhost/mydb
 ✓ Secret 'DATABASE_URL' saved to awssm (profile: default)
 
-# Import from .env
-$ monosecret import dotenv://.env
+# Run with secrets
+$ monosecret run --provider awssm://us-east-1 -- npm start
 ```
 
-### Secret Naming
+## Setup
 
-Secrets are stored as: `[prefix/]monosecret/{project}/{profile}/{key}`
+### Prerequisites
 
-Example: `monosecret/myapp/production/DATABASE_URL`
-
-With `?prefix=myteam`: `myteam/monosecret/myapp/production/DATABASE_URL`
+- AWS account with Secrets Manager access
+- AWS credentials configured (CLI, environment variables, IAM roles, or SSO)
+- Build with `--features awssm`
 
 ### Authentication
 
@@ -96,7 +46,7 @@ AWS Secrets Manager uses the standard AWS SDK credential chain:
 3. AWS SSO (`aws sso login`)
 4. IAM roles (EC2 instance profiles, ECS task roles, Lambda execution roles)
 
-### Required IAM Permissions
+### Required IAM permissions
 
 ```json
 {
@@ -116,22 +66,106 @@ AWS Secrets Manager uses the standard AWS SDK credential chain:
 }
 ```
 
-If you use a prefix (e.g., `?prefix=myteam`), adjust the resource ARN accordingly:
+If you use a prefix such as `?prefix=myteam`, adjust the resource ARN:
 
 ```
 arn:aws:secretsmanager:*:*:secret:myteam/monosecret/*
 ```
 
 :::note
-The `BatchGetSecretValue` permission is required for batch fetching, which is used automatically during `check` and `run` commands to reduce API calls. If your IAM policy was created before this feature, you may need to add this permission.
+The `BatchGetSecretValue` permission is required for batch fetching, which is
+used automatically during `check` and `run` commands to reduce API calls.
 :::
 
-### CI/CD
+:::note
+Using `tag.NAME=VALUE` additionally requires `secretsmanager:TagResource`, and a
+`kms_key_id` requires `kms:GenerateDataKey` and `kms:Decrypt` on that key.
+:::
+
+## Configuration
+
+### URI format
+
+```
+awssm://[AWS_PROFILE@]REGION[?prefix=PREFIX][&kms_key_id=KEY][&tag.NAME=VALUE...]
+```
+
+- `REGION`: AWS region (e.g., `us-east-1`). If omitted, the SDK default region chain is used.
+- `AWS_PROFILE`: Optional AWS profile from `~/.aws/credentials`. If omitted, the SDK default credential chain is used.
+- `PREFIX`: Optional root prefix prepended to all secret names. Useful when IAM policies scope access by prefix (e.g., only allow `myteam/*`).
+- `kms_key_id`: Optional KMS key (id, ARN, or `alias/...`) used to encrypt secrets that monosecret creates.
+- `tag.NAME=VALUE`: Optional tags applied to secrets that monosecret creates. Repeat for multiple tags.
+
+`kms_key_id` and `tag.NAME=VALUE` are applied **only when monosecret creates a
+secret** (`CreateSecret`); updating a value (`PutSecretValue`) accepts neither,
+and a pre-existing secret keeps the key and tags it was created with. This
+supports AWS "tag-on-create" guardrails, where an SCP or IAM condition denies
+`CreateSecret` unless required `aws:RequestTag/*` tags (and often a
+customer-managed key) are present in the same call.
+
+### URI examples
+
+```text
+awssm://us-east-1
+awssm://production@us-east-1
+awssm://us-east-1?prefix=myteam
+awssm://prod@us-east-1?kms_key_id=alias/my-key&tag.team=platform&tag.env=prod
+awssm
+```
+
+### Project configuration
+
+Because guardrail tags and keys usually vary per environment, they are a natural
+fit for a checked-in [provider alias](/reference/configuration/) in
+`monosecret.toml`:
+
+```toml
+[providers]
+prod = "awssm://prod@us-east-1?kms_key_id=alias/my-key&tag.team=platform&tag.env=prod"
+```
+
+Route secrets through the alias in project configuration:
+
+```toml title="monosecret.toml"
+[profiles.production]
+DATABASE_URL = { description = "Database URL", providers = ["prod"] }
+```
+
+## Storage model
+
+Secrets are stored as `[prefix/]monosecret/{project}/{profile}/{key}`.
+
+For example, `DATABASE_URL` in project `myapp` and profile `production` is
+stored as `monosecret/myapp/production/DATABASE_URL`. With `?prefix=myteam`,
+it becomes `myteam/monosecret/myapp/production/DATABASE_URL`.
+
+## Use existing secrets
+
+A secret's [`ref`](/reference/configuration/#secret-references) field names an
+existing secret instead: `item` is the secret name (or ARN), and the optional
+`field` selects one key of a JSON secret value. Without `field`, the whole
+secret string is returned. References are **read-only** in this provider.
+
+```toml
+[profiles.production]
+# Whole secret value
+DATABASE_URL = { description = "DB", ref = { item = "prod/database-url" }, providers = [
+  "awssm://us-east-1",
+] }
+# One key of a JSON secret value
+DB_PASSWORD = { description = "DB pw", ref = { item = "prod/db-credentials", field = "password" }, providers = [
+  "awssm://us-east-1",
+] }
+```
+
+## CI/CD
 
 ```bash
 # Using environment variables
 $ export AWS_ACCESS_KEY_ID=AKIA...
+
 $ export AWS_SECRET_ACCESS_KEY=...
+
 $ export AWS_DEFAULT_REGION=us-east-1
 
 # Run command

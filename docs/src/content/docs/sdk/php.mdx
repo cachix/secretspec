@@ -1,0 +1,176 @@
+---
+title: PHP SDK
+description: Resolve Monosecret secrets from PHP, Laravel, and Symfony
+---
+
+import { Code } from 'astro:components';
+import quickStartExample from './examples/php/quick-start.php?raw';
+import oneShotExample from './examples/php/one-shot.php?raw';
+import scopesExample from './examples/php/scopes.php?raw';
+import laravelExample from './examples/php/laravel.php?raw';
+import symfonyExample from './examples/php/symfony.php?raw';
+import plainPhpExample from './examples/php/plain.php?raw';
+import typedAccessExample from './examples/php/typed-access.php?raw';
+import asPathExample from './examples/php/as-path.php?raw';
+
+> **Planned for Monosecret 0.2+:** The source is integrated for local testing,
+> but Composer and native artifact publication remain deferred. Installation
+> commands below describe the intended post-release workflow.
+
+The PHP SDK (`ifiokjr/monosecret`) is a thin client over the same Rust resolver
+every other Monosecret SDK uses, so it inherits every provider, chain, profile,
+and generator with no PHP-side logic. It reaches the resolver through one of two
+native backends over an identical JSON contract:
+
+- **The `monosecret` PHP extension** (built with
+  [ext-php-rs](https://github.com/davidcole1340/ext-php-rs)) embeds the resolver
+  the way `pdo` or `redis` do. It needs no `ffi.enable` and works under PHP-FPM
+  and the web SAPI out of the box — the recommended path for Laravel and Symfony.
+- **`ext-ffi`** dlopens the `monosecret_ffi` shared library at runtime. Nothing
+  to compile, ideal for CLI tools and local development; requires the FFI
+  extension enabled.
+
+The SDK prefers the extension whenever it is loaded and transparently falls back
+to `ext-ffi`, so your application code is the same either way.
+
+## Install (planned for 0.2+)
+
+```bash
+$ composer require ifiokjr/monosecret
+```
+
+Once published, that will install the pure-PHP client. Then provide the native resolver with **one**
+of the backends below.
+
+### Option A — the PHP extension (recommended for web / FPM)
+
+The `monosecret-php-native` extension embeds the resolver, so it works under
+PHP-FPM with no `ffi.enable` and nothing to locate at runtime — the same
+operational model as `ext-redis` or `ext-imagick` (the binary is provisioned at
+the image/host level, not by Composer). Install it one of three ways:
+
+- **Prebuilt binary** — download the `monosecret-php-native-<php>-nts-<target>`
+  shared object for your PHP version and platform from the
+  [GitHub release](https://github.com/ifiokjr/monosecret/releases), then enable
+  it in `php.ini`:
+
+  ```ini
+  extension=/path/to/monosecret-php-native.so
+  ```
+
+  In an official PHP Docker image, drop it into the extension dir and
+  `docker-php-ext-enable monosecret-php-native`.
+
+- **Build from source** (needs the Rust toolchain, `php-config`, and libclang):
+
+  ```bash
+  cargo build --release -p monosecret-php-native
+  # then point extension= at target/release/libmonosecret_php_native.so
+  ```
+
+Once loaded, `php -m` lists `monosecret-php-native` and the SDK uses it
+automatically.
+
+### Option B — ext-ffi (quick start / CLI)
+
+The FFI backend dlopens the `monosecret_ffi` library at runtime. Enable the
+bundled FFI extension — in CLI it is on by default; for the web SAPI set:
+
+```ini
+extension=ffi
+ffi.enable=true
+```
+
+Then fetch the native library for your platform (a one-time step; Composer does
+not run it automatically):
+
+```bash
+$ vendor/bin/monosecret-install-lib
+```
+
+That downloads the right `monosecret_ffi` library from the matching GitHub
+release into the package. Alternatively, point `MONOSECRET_FFI_LIB` at a library
+you built or placed yourself. The SDK looks at `MONOSECRET_FFI_LIB` first, then
+the downloaded copy, then a local Cargo `target/` directory.
+
+## Quick start
+
+<Code code={quickStartExample} lang="php" meta='title="quick_start.php"' />
+
+A missing required secret throws `Monosecret\MissingRequiredException` (with a
+`->missing` list); any other failure throws `Monosecret\MonosecretException`
+(with a stable `->kind`).
+
+There is also a one-shot form using named arguments:
+
+<Code code={oneShotExample} lang="php" meta='title="one_shot.php"' />
+
+## Scopes (0.2+)
+
+Use `withScope('api')` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `$resolved->scope` and `$report->scope`:
+
+<Code code={scopesExample} lang="php" meta='title="scopes.php"' />
+
+## Laravel
+
+Resolve your secrets early and export them so Laravel's `env()` and config see
+them. A service provider is a natural home:
+
+<Code code={laravelExample} lang="php" meta='title="laravel.php"' />
+
+Register it first in `bootstrap/providers.php` so the secrets are present before
+other providers read configuration. Because `setAsEnv()` also populates `$_ENV`
+and `$_SERVER`, the `env()` helper and any `config/*.php` that calls `env(...)`
+resolve normally.
+
+> If you run `php artisan config:cache`, configuration is frozen at cache time
+> and `env()` is not read per request. Either resolve before caching, or bind the
+> `Resolved` into the container and read secrets from it directly where you need
+> them.
+
+## Symfony
+
+Export the secrets in the front controller and `bin/console`, before the kernel
+boots, so `%env(DATABASE_URL)%` in your config resolves:
+
+<Code code={symfonyExample} lang="php" meta='title="symfony.php"' />
+
+`setAsEnv()` sets `$_ENV`, `$_SERVER`, and `putenv()`, all three of which
+Symfony's env-var processors read, so no bundle or extra configuration is needed.
+
+## Plain PHP
+
+Point the builder at a specific manifest and provider and read the values back:
+
+<Code code={plainPhpExample} lang="php" meta='title="plain_php.php"' />
+
+## Typed access (codegen)
+
+Generate a typed class with `monosecret schema` plus
+[quicktype](https://quicktype.io), then build it from `$resolved->fields()`:
+
+```bash
+$ monosecret schema | quicktype -s schema --top-level Monosecret --lang php -o MonosecretTyped.php
+```
+
+<Code code={typedAccessExample} lang="php" meta='title="typed_access.php"' />
+
+## Files (`as_path`)
+
+Secrets declared `as_path` are materialized to a temporary file and come back as
+a readable path; `$secret->get()` returns the path. The SDK persists the file
+(mode 0400) so the path stays valid after `load()` returns — you own its
+lifetime. Call `$resolved->close()` when done to remove those temp files:
+
+<Code code={asPathExample} lang="php" meta='title="as_path.php"' />
+
+## Native backends
+
+The SDK chooses a backend automatically: if the `monosecret-php-native` extension
+is loaded it is used directly (no `ffi.enable`, no library to locate); otherwise
+the SDK dlopens the `monosecret_ffi` library via `ext-ffi`, looking first at
+`MONOSECRET_FFI_LIB`, then the copy `vendor/bin/monosecret-install-lib` places in
+the package, then a local Cargo `target/` directory. Both backends call the
+identical Rust `resolve_json`, so the result is the same — a cross-language
+conformance suite asserts it.

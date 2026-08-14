@@ -12,10 +12,10 @@
 //! mismatched version rather than silently misparse. The canonical JSON Schema
 //! lives at `schema/resolution-report.schema.json` in the repository root.
 
-use std::fmt::Write as _;
-
 use serde::Deserialize;
 use serde::Serialize;
+
+use crate::validation::ConstraintViolation;
 
 /// Version of the [`ResolutionReport`] wire format.
 ///
@@ -36,14 +36,18 @@ pub enum ResolutionStatus {
 }
 
 /// The resolution outcome for one declared secret. Never carries the value.
-#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecretResolution {
 	/// The declared secret name (the `UPPER_SNAKE` key from the manifest).
 	pub name: String,
 	/// Whether the secret resolved, and if not, whether that is an error.
 	pub status: ResolutionStatus,
-	/// Whether the active profile marks this secret as required.
+	/// Whether the secret is *declared* required in the active profile: `true`
+	/// when it is marked `required = true` or has neither a `default` nor a
+	/// `generate`. A secret carrying a committed `default`/`generate` is not
+	/// required (it always resolves), even when written as `required = true` in
+	/// one profile and overridden with a default in another. Orthogonal to
+	/// [`status`](Self::status), which reports whether it actually resolved.
 	pub required: bool,
 	/// Credential-free URI of the provider that actually answered, when the
 	/// value came from a provider. `None` when generated, defaulted, or missing.
@@ -53,6 +57,11 @@ pub struct SecretResolution {
 	pub default_applied: bool,
 	/// Whether the value was freshly minted by the secret's `generate` config.
 	pub generated: bool,
+	/// Whether the value was derived from other declared secrets.
+	/// Internal provenance used by human-readable output and the value-carrying
+	/// resolve response; omitted from the report v1 wire format.
+	#[serde(skip)]
+	pub composed: bool,
 	/// Whether the value is materialized to a temp file and exposed as a path.
 	pub as_path: bool,
 }
@@ -62,12 +71,24 @@ pub struct SecretResolution {
 pub struct ResolutionReport {
 	/// Wire-format version; see [`RESOLUTION_REPORT_SCHEMA_VERSION`].
 	pub schema_version: u32,
-	/// Credential-free URI of the provider resolution reported against.
+	/// Credential-free URI of the provider resolution reported against. Empty
+	/// when no provider was contacted, which happens when a scope's intersection
+	/// with the selected profile is empty and there is nothing to resolve.
 	pub provider: String,
 	/// The profile that was resolved.
 	pub profile: String,
+	/// The active secret scope, when resolution was scoped (`--scope`,
+	/// `MONOSECRET_SCOPE`, or the SDK builder). `None` — the whole profile
+	/// resolved — is omitted from JSON, so unscoped output is unchanged.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub scope: Option<String>,
 	/// One entry per declared secret, sorted by name for deterministic output.
 	pub secrets: Vec<SecretResolution>,
+	/// Cross-secret presence constraints that failed.
+	///
+	/// Available since Monosecret 0.17. Omitted when all constraints pass.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub constraint_violations: Vec<ConstraintViolation>,
 }
 
 impl ResolutionReport {
@@ -80,36 +101,55 @@ impl ResolutionReport {
 			schema_version: RESOLUTION_REPORT_SCHEMA_VERSION,
 			provider,
 			profile,
+			// Set by `Secrets::report` for a scoped resolution; unscoped stays None.
+			scope: None,
 			secrets,
+			constraint_violations: Vec::new(),
 		}
+	}
+
+	pub(crate) fn with_constraint_violations(
+		mut self,
+		violations: Vec<ConstraintViolation>,
+	) -> Self {
+		self.constraint_violations = violations;
+		self
 	}
 
 	/// True when no required secret is missing (i.e. resolution would succeed).
 	pub fn all_required_present(&self) -> bool {
-		!self
-			.secrets
-			.iter()
-			.any(|s| s.status == ResolutionStatus::MissingRequired)
+		self.constraint_violations.is_empty()
+			&& !self
+				.secrets
+				.iter()
+				.any(|s| s.status == ResolutionStatus::MissingRequired)
 	}
 
 	/// Render a human-readable resolution trace. Value-free, word-based status
 	/// (no reliance on color) for accessibility.
 	pub fn to_explain_string(&self) -> String {
 		let mut out = String::new();
-		let _ = writeln!(out, "profile:  {}", self.profile);
-		let _ = writeln!(out, "provider: {}", self.provider);
+		out.push_str(&format!("profile:  {}\n", self.profile));
+		out.push_str(&format!("provider: {}\n", self.provider));
+		if let Some(scope) = &self.scope {
+			out.push_str(&format!("scope:    {}\n", scope));
+		}
 
 		let width = self.secrets.iter().map(|s| s.name.len()).max().unwrap_or(0);
 
 		for s in &self.secrets {
 			let detail = match s.status {
 				ResolutionStatus::Resolved => {
+					// Same provenance order as `resolve_impl`'s `ResolvedSource`
+					// mapping; the flags are mutually exclusive.
 					if s.generated {
 						"ok        generated".to_string()
 					} else if s.default_applied {
 						"ok        default value".to_string()
+					} else if s.composed {
+						"ok        composed".to_string()
 					} else if let Some(uri) = &s.source_provider {
-						format!("ok        source {uri}")
+						format!("ok        source {}", uri)
 					} else {
 						"ok".to_string()
 					}
@@ -118,14 +158,16 @@ impl ResolutionReport {
 				ResolutionStatus::MissingOptional => "missing   optional".to_string(),
 			};
 			let path = if s.as_path { "  (as path)" } else { "" };
-			let _ = writeln!(
-				out,
-				"  {:width$}  {}{}",
+			out.push_str(&format!(
+				"  {:width$}  {}{}\n",
 				s.name,
 				detail,
 				path,
 				width = width
-			);
+			));
+		}
+		for violation in &self.constraint_violations {
+			out.push_str(&format!("  CONSTRAINT  FAILED    {}\n", violation));
 		}
 		out
 	}
@@ -139,7 +181,7 @@ mod tests {
 		// Deliberately unsorted input to exercise the sort in `new`.
 		ResolutionReport::new(
 			"keyring://".to_string(),
-			"production".to_string(),
+			"development".to_string(),
 			vec![
 				SecretResolution {
 					name: "STRIPE_KEY".to_string(),
@@ -148,6 +190,7 @@ mod tests {
 					source_provider: None,
 					default_applied: false,
 					generated: false,
+					composed: false,
 					as_path: false,
 				},
 				SecretResolution {
@@ -157,6 +200,7 @@ mod tests {
 					source_provider: Some("keyring://".to_string()),
 					default_applied: false,
 					generated: false,
+					composed: false,
 					as_path: false,
 				},
 				SecretResolution {
@@ -166,15 +210,17 @@ mod tests {
 					source_provider: None,
 					default_applied: false,
 					generated: true,
+					composed: false,
 					as_path: false,
 				},
 				SecretResolution {
-					name: "LOG_LEVEL".to_string(),
+					name: "DEV_SESSION_SECRET".to_string(),
 					status: ResolutionStatus::Resolved,
 					required: false,
 					source_provider: None,
 					default_applied: true,
 					generated: false,
+					composed: false,
 					as_path: false,
 				},
 				SecretResolution {
@@ -184,6 +230,7 @@ mod tests {
 					source_provider: None,
 					default_applied: false,
 					generated: false,
+					composed: false,
 					as_path: false,
 				},
 			],
@@ -198,8 +245,8 @@ mod tests {
 			names,
 			vec![
 				"DATABASE_URL",
+				"DEV_SESSION_SECRET",
 				"JWT_SECRET",
-				"LOG_LEVEL",
 				"SENTRY_DSN",
 				"STRIPE_KEY"
 			]
@@ -214,6 +261,59 @@ mod tests {
 			.secrets
 			.retain(|s| s.status != ResolutionStatus::MissingRequired);
 		assert!(report.all_required_present());
+	}
+
+	#[test]
+	fn explain_string_renders_resolution_details() {
+		assert_eq!(
+			sample().to_explain_string(),
+			concat!(
+				"profile:  development\n",
+				"provider: keyring://\n",
+				"  DATABASE_URL        ok        source keyring://\n",
+				"  DEV_SESSION_SECRET  ok        default value\n",
+				"  JWT_SECRET          ok        generated\n",
+				"  SENTRY_DSN          missing   optional\n",
+				"  STRIPE_KEY          MISSING   required\n",
+			)
+		);
+	}
+
+	#[test]
+	fn explain_string_marks_plain_resolved_secrets_exposed_as_paths() {
+		let report = ResolutionReport::new(
+			"env://".to_string(),
+			"development".to_string(),
+			vec![SecretResolution {
+				name: "FILE".to_string(),
+				status: ResolutionStatus::Resolved,
+				required: true,
+				source_provider: None,
+				default_applied: false,
+				generated: false,
+				composed: false,
+				as_path: true,
+			}],
+		);
+
+		assert_eq!(
+			report.to_explain_string(),
+			"profile:  development\nprovider: env://\n  FILE  ok  (as path)\n"
+		);
+	}
+
+	#[test]
+	fn explain_string_handles_a_report_without_secrets() {
+		let report = ResolutionReport::new(
+			"dotenv://.env".to_string(),
+			"default".to_string(),
+			Vec::new(),
+		);
+
+		assert_eq!(
+			report.to_explain_string(),
+			"profile:  default\nprovider: dotenv://.env\n"
+		);
 	}
 
 	/// Locks the wire format. The golden file is the contract other-language

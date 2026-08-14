@@ -10,6 +10,8 @@ info:
     - dotenv
     - "--provider"
     - local
+  env:
+    HOME: /tmp/monosecret-cli-snapshots-env-dotenv
 ---
 success: true
 exit_code: 0

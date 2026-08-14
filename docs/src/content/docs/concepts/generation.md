@@ -4,7 +4,7 @@ description: Automatically generating passwords, tokens, and keys for missing se
 ---
 
 :::note
-Secret generation is available since version 0.7.
+Secret generation is available since version 0.1.
 :::
 
 Secrets can be declared with `type` and `generate` to be auto-generated when missing. This is useful for passwords, tokens, and keys that do not need to be shared across developers.
@@ -45,8 +45,32 @@ MONGO_KEY = { description = "MongoDB keyfile", type = "command", generate = { co
 - Generation only triggers when a secret is **missing**. Existing secrets are never overwritten.
 - Generated values are stored via the secret's configured provider (or the default provider).
 - Subsequent runs find the stored value and skip generation (idempotent).
+- The `null` provider (0.2+) instead returns a fresh generated value for only the current resolution.
 - `generate` and `default` cannot both be set on the same secret.
 - Setting `type` without `generate` is informational only and does not trigger auto-generation.
+
+## Ephemeral generation with null (0.2+)
+
+:::caution[Version compatibility]
+Ephemeral generation through the `null` provider requires Monosecret 0.2 or
+newer.
+:::
+
+Use `providers = ["null"]` when the value should be generated on demand and
+never written to provider storage:
+
+```toml
+[profiles.default]
+SESSION_SECRET = { description = "Per-run session secret", type = "base64", generate = { bytes = 32 }, providers = [
+  "null",
+] }
+```
+
+One materializing resolution receives one value. The next `run`, `get`,
+`check`, or SDK value-carrying resolution receives a new one. Value-free
+reports describe the value as generated without minting it. Use a writable
+provider instead when another process or later invocation must retrieve the
+same value.
 
 ## Example
 

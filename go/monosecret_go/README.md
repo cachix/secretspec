@@ -5,7 +5,8 @@ manager. A thin client over the `monosecret_ffi` C ABI. Resolution happens in th
 Rust core, so the SDK inherits every provider with no Go-side logic. By default
 the resolver is loaded at runtime via
 [purego](https://github.com/ebitengine/purego) (dlopen, no cgo), keeping `go get`
-toolchain-free; `-tags monosecret_static` instead links it in statically (see below).
+toolchain-free. Use `-tags monosecret_static` to stage and embed the archive, or
+`-tags pkgconfig` (0.19+) to link an installed library (see below).
 
 ```go
 package main
@@ -36,6 +37,15 @@ func main() {
 
 A missing required secret returns `*MissingRequiredError`; any other failure
 returns `*Error` (with a stable `.Kind`).
+
+## Scopes (0.17+)
+
+Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. Both
+`Resolved.Scope` and `Report.Scope` return the selected scope:
+
+```go
+resolved, err := monosecret.New().WithScope("api").Load()
+```
 
 ## Cleanup
 
@@ -99,5 +109,24 @@ CGO_ENABLED=1 go build -tags monosecret_static \
 ```
 
 macOS links the archive in but stays self-contained-except-system-frameworks (no
-static libSystem). Windows stays on the default purego path. Prebuilt archive
-distribution automation is deferred.
+static libSystem). Windows stays on the default purego path. The prebuilt
+archives are attached to GitHub releases (`go-static.yml`).
+
+## Linking with pkg-config (0.19+)
+
+Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
+
+```bash
+# Use "static" (the default) or "shared"; use separate prefixes for both.
+bash crates/monosecret_ffi/scripts/cinstall.sh "$PREFIX" static
+```
+
+Then use the same build command for either type:
+
+```bash
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" CGO_ENABLED=1 go build -tags pkgconfig ./...
+```
+
+Unlike staging, this also works for a `go get` dependency. A shared install in
+a non-system prefix also requires `PREFIX/lib` in the platform's runtime
+library search path.

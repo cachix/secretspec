@@ -2476,6 +2476,267 @@ mod tests {
     }
 
     #[test]
+    fn failed_retry_falls_back_to_reads_for_retained_refs_only() {
+        use std::sync::{Arc, Mutex};
+
+        let calls = Arc::new(Mutex::new(Vec::<(Vec<String>, Option<String>)>::new()));
+        let observed = Arc::clone(&calls);
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new(move |command, stdin| {
+            let args = command_args(command);
+            let mut log = observed.lock().unwrap();
+            let call_index = log.len();
+            log.push((args.clone(), stdin.map(str::to_string)));
+            drop(log);
+            match call_index {
+                0 => Err(SecretSpecError::ProviderOperationFailed(
+                    "[ERROR] could not resolve item UUID for item Ghost: could not find item Ghost in vault abc".to_string(),
+                )),
+                1 => {
+                    assert_eq!(args, ["item", "list", "--vault", "Personal", "--include-archive", "--format", "json"]);
+                    Ok(r#"[{"id":"aaa111","title":"API Key"},{"id":"bbb222","title":"Database"}]"#.to_string())
+                }
+                2 => {
+                    assert!(args.contains(&"inject".to_string()));
+                    Err(SecretSpecError::ProviderOperationFailed(
+                        "[ERROR] item 'Personal/API Key' does not have a field 'password'".to_string(),
+                    ))
+                }
+                index => {
+                    assert_eq!(args[0], "read", "post-retry recovery must use per-ref reads");
+                    let uri = &args[2];
+                    assert!(!uri.contains("Ghost"), "dropped ref must not be individually read");
+                    assert!(index <= 4, "exactly one read per retained ref");
+                    if uri.contains("API Key") {
+                        Err(SecretSpecError::ProviderOperationFailed(
+                            "[ERROR] item Personal/API Key doesn't have a field password".to_string(),
+                        ))
+                    } else {
+                        Ok("beta".to_string())
+                    }
+                }
+            }
+        }));
+
+        let first = crate::config::NativeAddress {
+            item: "API Key".to_string(),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+        let ghost = crate::config::NativeAddress {
+            item: "Ghost".to_string(),
+            field: Some("credential".to_string()),
+            ..Default::default()
+        };
+        let second = crate::config::NativeAddress {
+            item: "Database".to_string(),
+            field: Some("secret".to_string()),
+            ..Default::default()
+        };
+        let results = provider
+            .get_many(&[
+                ("FIRST", Address::Native(&first)),
+                ("GHOST", Address::Native(&ghost)),
+                ("SECOND", Address::Native(&second)),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            calls.lock().unwrap().len(),
+            5,
+            "inject, list, retry inject, 2 reads"
+        );
+        assert!(
+            !results.contains_key("GHOST"),
+            "listed-missing ref stays absent, never read"
+        );
+        assert!(
+            !results.contains_key("FIRST"),
+            "field-miss on read resolves as absent"
+        );
+        assert!(secret_matches(&results, "SECOND", "beta"));
+    }
+
+    #[test]
+    fn failed_item_list_falls_back_to_reads_for_all_refs() {
+        use std::sync::{Arc, Mutex};
+
+        let calls = Arc::new(Mutex::new(Vec::<(Vec<String>, Option<String>)>::new()));
+        let observed = Arc::clone(&calls);
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new(move |command, stdin| {
+            let args = command_args(command);
+            let mut log = observed.lock().unwrap();
+            let call_index = log.len();
+            log.push((args.clone(), stdin.map(str::to_string)));
+            drop(log);
+            match call_index {
+                0 => Err(SecretSpecError::ProviderOperationFailed(
+                    "[ERROR] could not resolve item UUID for item Ghost: could not find item Ghost in vault abc".to_string(),
+                )),
+                1 => {
+                    assert_eq!(args, ["item", "list", "--vault", "Personal", "--include-archive", "--format", "json"]);
+                    Err(SecretSpecError::ProviderOperationFailed(
+                        "[ERROR] vault listing unavailable".to_string(),
+                    ))
+                }
+                index => {
+                    assert_eq!(args[0], "read", "full fallback must use per-ref reads");
+                    let uri = &args[2];
+                    assert!(index <= 4, "exactly one read per ref, including the dropped one");
+                    if uri.contains("Ghost") {
+                        Err(SecretSpecError::ProviderOperationFailed(
+                            "[ERROR] \"Ghost\" isn't an item in this vault".to_string(),
+                        ))
+                    } else if uri.contains("API Key") {
+                        Ok("alpha".to_string())
+                    } else {
+                        Ok("beta".to_string())
+                    }
+                }
+            }
+        }));
+
+        let first = crate::config::NativeAddress {
+            item: "API Key".to_string(),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+        let ghost = crate::config::NativeAddress {
+            item: "Ghost".to_string(),
+            field: Some("credential".to_string()),
+            ..Default::default()
+        };
+        let second = crate::config::NativeAddress {
+            item: "Database".to_string(),
+            field: Some("secret".to_string()),
+            ..Default::default()
+        };
+        let results = provider
+            .get_many(&[
+                ("FIRST", Address::Native(&first)),
+                ("GHOST", Address::Native(&ghost)),
+                ("SECOND", Address::Native(&second)),
+            ])
+            .unwrap();
+
+        let observed_calls = calls.lock().unwrap();
+        assert_eq!(observed_calls.len(), 5, "inject, list, 3 reads");
+        assert!(
+            observed_calls[2..]
+                .iter()
+                .any(|(args, _)| args[2].contains("Ghost")),
+            "an unresolvable vault listing must still individually read every ref, including Ghost"
+        );
+        drop(observed_calls);
+        assert!(
+            !results.contains_key("GHOST"),
+            "missing item resolves as absent"
+        );
+        assert!(secret_matches(&results, "FIRST", "alpha"));
+        assert!(secret_matches(&results, "SECOND", "beta"));
+    }
+
+    #[test]
+    fn auth_error_on_retry_inject_fails_fast() {
+        use std::sync::{Arc, Mutex};
+
+        let calls = Arc::new(Mutex::new(Vec::<(Vec<String>, Option<String>)>::new()));
+        let observed = Arc::clone(&calls);
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new(move |command, stdin| {
+            let args = command_args(command);
+            let mut log = observed.lock().unwrap();
+            let call_index = log.len();
+            log.push((args.clone(), stdin.map(str::to_string)));
+            drop(log);
+            match call_index {
+                0 => Err(SecretSpecError::ProviderOperationFailed(
+                    "[ERROR] could not resolve item UUID for item Ghost: could not find item Ghost in vault abc".to_string(),
+                )),
+                1 => {
+                    assert_eq!(args, ["item", "list", "--vault", "Personal", "--include-archive", "--format", "json"]);
+                    Ok(r#"[{"id":"aaa111","title":"API Key"},{"id":"bbb222","title":"Database"}]"#.to_string())
+                }
+                2 => {
+                    assert!(args.contains(&"inject".to_string()));
+                    Err(SecretSpecError::ProviderOperationFailed(
+                        "[ERROR] error initializing client: found no accounts for filter \"x\"".to_string(),
+                    ))
+                }
+                _ => panic!("no calls after auth failure"),
+            }
+        }));
+
+        let first = crate::config::NativeAddress {
+            item: "API Key".to_string(),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+        let ghost = crate::config::NativeAddress {
+            item: "Ghost".to_string(),
+            field: Some("credential".to_string()),
+            ..Default::default()
+        };
+        let second = crate::config::NativeAddress {
+            item: "Database".to_string(),
+            field: Some("secret".to_string()),
+            ..Default::default()
+        };
+        let error = provider
+            .get_many(&[
+                ("FIRST", Address::Native(&first)),
+                ("GHOST", Address::Native(&ghost)),
+                ("SECOND", Address::Native(&second)),
+            ])
+            .unwrap_err();
+
+        assert!(error.to_string().contains("error initializing client"));
+        assert_eq!(calls.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn missing_item_check_matches_by_id() {
+        use std::sync::{Arc, Mutex};
+
+        let calls = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+        let observed = Arc::clone(&calls);
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new(move |command, _stdin| {
+            let args = command_args(command);
+            observed.lock().unwrap().push(args.clone());
+            assert_eq!(
+                args,
+                [
+                    "item",
+                    "list",
+                    "--vault",
+                    "Personal",
+                    "--include-archive",
+                    "--format",
+                    "json"
+                ]
+            );
+            Ok(r#"[{"id":"aaa111","title":"Something Else"}]"#.to_string())
+        }));
+
+        let refs = vec![BatchRef {
+            uri: "op://Personal/aaa111/password".to_string(),
+            vault: "Personal".to_string(),
+            item: "aaa111".to_string(),
+        }];
+
+        let flags = provider.flag_refs_with_existing_items(&refs).unwrap();
+
+        assert_eq!(
+            flags,
+            [true],
+            "a ref whose item matches the listing entry's id (not its title) must be retained, not dropped"
+        );
+        assert_eq!(calls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
     fn mixed_whole_items_and_field_refs_keep_both_batch_paths() {
         use std::sync::{Arc, Mutex};
 

@@ -335,6 +335,41 @@ impl InfisicalProvider {
             .map(str::to_string)
     }
 
+    /// Renders the provider URI with the supplied environment identity.
+    ///
+    /// The public URI passes the configured environment through. Entry
+    /// comparison omits it from the container and resolves it alongside the
+    /// address instead, so a profile-derived environment and an equivalent
+    /// explicit `?env=` can name the same entry without changing the provider's
+    /// cache identity.
+    fn render_uri(&self, environment: Option<&str>) -> String {
+        let plain_http = self.config.endpoint.starts_with("http://");
+        let host = self
+            .config
+            .endpoint
+            .trim_start_matches("https://")
+            .trim_start_matches("http://");
+        let mut uri = format!("infisical://{host}/{}", self.config.project_id);
+        let mut query = Vec::new();
+        if let Some(env) = environment {
+            query.push(format!("env={}", ProviderUrl::encode_query(env)));
+        }
+        if self.config.path != DEFAULT_PATH {
+            query.push(format!(
+                "path={}",
+                ProviderUrl::encode_query(&self.config.path)
+            ));
+        }
+        if plain_http {
+            query.push("tls=false".to_string());
+        }
+        if !query.is_empty() {
+            uri.push('?');
+            uri.push_str(&query.join("&"));
+        }
+        uri
+    }
+
     /// Resolves an address to one secret's Infisical location.
     ///
     /// `item` carries the folder and the key together, so convention and `ref`
@@ -993,6 +1028,36 @@ impl Provider for InfisicalProvider {
         })
     }
 
+    /// Resolves every part of the entry identity that Infisical sends to the
+    /// API. In particular, the environment may come from session profile
+    /// context rather than the provider URI or native coordinates.
+    fn entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, NativeAddress>> {
+        let loc = self.locate(addr)?;
+        let version = match addr {
+            Address::Native(native) => native.version.clone(),
+            Address::Convention { .. } => None,
+        };
+
+        // NativeAddress has no environment coordinate. Encode the resolved
+        // Infisical tuple into its canonical item identity; query encoding
+        // keeps the component boundaries unambiguous. This value is used only
+        // for comparisons and is never sent to Infisical.
+        let item = format!(
+            "environment={}&path={}&key={}",
+            ProviderUrl::encode_query(&loc.environment),
+            ProviderUrl::encode_query(&loc.secret_path),
+            ProviderUrl::encode_query(&loc.key),
+        );
+        Ok(std::borrow::Cow::Owned(NativeAddress {
+            item,
+            version,
+            ..Default::default()
+        }))
+    }
+
     fn with_credentials(&mut self, credentials: ProviderCredentials) {
         self.credentials = credentials;
     }
@@ -1006,31 +1071,16 @@ impl Provider for InfisicalProvider {
     /// back as the same store. `tls` is the one that bites -- a plain-HTTP
     /// endpoint rendered without it comes back as HTTPS.
     fn uri(&self) -> String {
-        let plain_http = self.config.endpoint.starts_with("http://");
-        let host = self
-            .config
-            .endpoint
-            .trim_start_matches("https://")
-            .trim_start_matches("http://");
-        let mut uri = format!("infisical://{host}/{}", self.config.project_id);
-        let mut query = Vec::new();
-        if let Some(env) = &self.config.environment {
-            query.push(format!("env={}", ProviderUrl::encode_query(env)));
-        }
-        if self.config.path != DEFAULT_PATH {
-            query.push(format!(
-                "path={}",
-                ProviderUrl::encode_query(&self.config.path)
-            ));
-        }
-        if plain_http {
-            query.push("tls=false".to_string());
-        }
-        if !query.is_empty() {
-            uri.push('?');
-            uri.push_str(&query.join("&"));
-        }
-        uri
+        self.render_uri(self.config.environment.as_deref())
+    }
+
+    /// The environment is part of the resolved entry coordinates, not the
+    /// Infisical instance and project container. Omitting it here lets an
+    /// unpinned provider under profile `prod` compare equal to `?env=prod`;
+    /// [`storage_identity`](Provider::storage_identity) remains the public URI
+    /// and therefore never absorbs session profile context.
+    fn entry_container_identity(&self) -> String {
+        self.render_uri(None)
     }
 
     /// Infisical versions its secrets, so a `ref` may pin one. Its values are
@@ -1559,6 +1609,35 @@ mod tests {
         p.set_profile("prod");
         assert_eq!(p.uri(), before);
         assert_eq!(p.storage_identity(), before);
+    }
+
+    /// Entry collision checks must see the environment that operations resolve,
+    /// even when one alias derives it from the profile and another pins it in
+    /// the URI. The profile remains absent from the cache storage identity.
+    #[test]
+    fn entry_identity_resolves_the_profile_environment() {
+        let implicit = provider(&format!("infisical://app.infisical.com/{PROJECT}"));
+        implicit.set_profile("prod");
+        let pinned_prod = provider(&format!("infisical://app.infisical.com/{PROJECT}?env=prod"));
+        let pinned_dev = provider(&format!("infisical://app.infisical.com/{PROJECT}?env=dev"));
+        let addr = NativeAddress {
+            item: "/DB_PASSWORD".into(),
+            ..Default::default()
+        };
+
+        assert_ne!(implicit.storage_identity(), pinned_prod.storage_identity());
+        assert!(
+            implicit
+                .same_entries(Address::Native(&addr), &pinned_prod, Address::Native(&addr),)
+                .unwrap(),
+            "profile prod and ?env=prod reach the same Infisical secret"
+        );
+        assert!(
+            !implicit
+                .same_entries(Address::Native(&addr), &pinned_dev, Address::Native(&addr),)
+                .unwrap(),
+            "different Infisical environments must remain distinct"
+        );
     }
 
     /// `set_profile` is shared by every provider, and a preflight-enabled one is

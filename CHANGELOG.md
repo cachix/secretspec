@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Provider behavior, configuration, and supported URIs remain unchanged after
+  reorganizing the shared provider infrastructure into focused modules.
+
 ### Added
 
 - The Fly.io `fly` provider publishes and deletes application secrets with

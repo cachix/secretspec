@@ -9,15 +9,15 @@ The Fly.io provider publishes declared values to an application's encrypted
 secret vault through [`flyctl`](https://fly.io/docs/flyctl/).
 
 :::note[Version compatibility]
-The Fly.io `flyctl` provider is added in SecretSpec 0.20.
+The Fly.io `fly` provider is added in SecretSpec 0.20.
 :::
 
 ## At a glance
 
 | | |
 | --- | --- |
-| Provider | `flyctl` (0.20+) |
-| URI | `flyctl://APP[?stage=true][&detach=true]` |
+| Provider | `fly` (0.20+) |
+| URI | `fly://APP[?stage=true][&detach=true]` |
 | Access | Write, delete, and discover names; plaintext values cannot be read back |
 | Best for | Publishing secrets to a Fly.io app from a separate source of truth |
 | Authentication | `flyctl` login or an app-scoped deploy token |
@@ -76,7 +76,7 @@ Load that token from a bootstrap provider instead of committing it in the URI:
 bootstrap = "keyring://"
 
 [providers.fly_prod]
-uri = "flyctl://my-app"
+uri = "fly://my-app"
 credentials = { access_token = "bootstrap" }
 
 [profiles.production]
@@ -106,14 +106,14 @@ session.
 
 ## Provider credentials
 
-<ProviderCredentials provider="flyctl" />
+<ProviderCredentials provider="fly" />
 
 ## Configuration
 
 ### URI format
 
 ```text
-flyctl://APP[?stage=true][&detach=true]
+fly://APP[?stage=true][&detach=true]
 ```
 
 - `APP` is required and always passed through `--app`; the provider does not
@@ -129,10 +129,10 @@ canonical URI.
 ### URI examples
 
 ```text
-flyctl://my-app
-flyctl://my-app?stage=true
-flyctl://my-app?detach=true
-flyctl://my-app?stage=true&detach=true
+fly://my-app
+fly://my-app?stage=true
+fly://my-app?detach=true
+fly://my-app?stage=true&detach=true
 ```
 
 ### Project configuration
@@ -142,8 +142,8 @@ that deploy to different apps should select different aliases:
 
 ```toml title="secretspec.toml"
 [providers]
-fly_staging = "flyctl://my-app-staging?stage=true"
-fly_prod = "flyctl://my-app-production"
+fly_staging = "fly://my-app-staging?stage=true"
+fly_prod = "fly://my-app-production"
 
 [profiles.staging]
 DATABASE_URL = { description = "Staging database URL" }
@@ -184,7 +184,7 @@ name updated or deleted by SecretSpec:
 
 ```toml title="secretspec.toml"
 [providers]
-fly_prod = "flyctl://my-app-production"
+fly_prod = "fly://my-app-production"
 
 [profiles.production]
 DATABASE_URL = {
@@ -203,7 +203,7 @@ digests, and deployment status.
 declarations without reading values:
 
 ```bash
-$ secretspec init --from flyctl://my-app-production \
+$ secretspec init --from fly://my-app-production \
     --project my-app --profile production
 ```
 

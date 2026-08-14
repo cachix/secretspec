@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- The Fly.io `flyctl` provider publishes and deletes application secrets with
+- The Fly.io `fly` provider publishes and deletes application secrets with
   `secretspec set` and `secretspec delete`, and discovers their names with
   `init --from`. Fly.io never exposes plaintext secret values, so the provider
   clearly rejects read operations and CLI guidance recommends only supported

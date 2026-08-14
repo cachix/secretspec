@@ -40,7 +40,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [environment variables](https://secretspec.dev/providers/env)
   - [null](https://secretspec.dev/providers/null) (0.19+)
   - [systemd credentials](https://secretspec.dev/providers/systemd-credential) (0.17+)
-  - [Fly.io application secrets](https://secretspec.dev/providers/flyctl) (0.20+, write-only)
+  - [Fly.io application secrets](https://secretspec.dev/providers/fly) (0.20+, write-only)
   - [Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)
   - [AWS Secrets Manager](https://secretspec.dev/providers/awssm)
   - [AWS Systems Manager Parameter Store](https://secretspec.dev/providers/awsps) (0.18+)
@@ -86,7 +86,7 @@ $ secretspec config global init  # 0.17+
   env: Read-only environment variables
   null: Use defaults, generation, or run prompts without storage (0.19+)
   systemd-credential: Read-only systemd service credentials (0.17+)
-  flyctl: Fly.io application secrets via flyctl, write-only (0.20+)
+  fly: Fly.io application secrets via flyctl, write-only (0.20+)
   pass: Unix password manager with GPG encryption
   gopass: Gopass CLI password manager with GPG encryption (0.15+)
   protonpass: Proton Pass via official pass-cli
@@ -205,7 +205,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Environment variables](https://secretspec.dev/providers/env)** - Read-only for CI/CD
 - **[Null](https://secretspec.dev/providers/null)** (0.19+) - Use committed defaults, ephemeral generation, or ephemeral run prompts without secret storage
 - **[systemd credentials](https://secretspec.dev/providers/systemd-credential)** (0.17+) - Read-only credentials passed to the current service
-- **[Fly.io application secrets](https://secretspec.dev/providers/flyctl)** (0.20+) - Write and delete app secrets through `flyctl`; Fly.io does not expose plaintext values
+- **[Fly.io application secrets](https://secretspec.dev/providers/fly)** (0.20+) - Write and delete app secrets through `flyctl`; Fly.io does not expose plaintext values
 - **[Pass](https://secretspec.dev/providers/pass)** - Unix password manager with GPG encryption
 - **[Gopass](https://secretspec.dev/providers/gopass)** (0.15+) - GPG-based password manager with git-synced password store
 - **[Proton Pass](https://secretspec.dev/providers/protonpass)** - End-to-end encrypted via Proton's official pass-cli

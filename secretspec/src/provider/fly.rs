@@ -21,7 +21,7 @@ const CLI_PATH_ENV: &str = "SECRETSPEC_FLYCTL_PATH";
 
 /// Configuration for one Fly.io application's secrets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FlyctlConfig {
+pub struct FlyConfig {
     /// Fly.io application name.
     pub app: String,
     /// Register changes without immediately updating the app's Machines.
@@ -30,34 +30,33 @@ pub struct FlyctlConfig {
     pub detach: bool,
 }
 
-impl TryFrom<&ProviderUrl> for FlyctlConfig {
+impl TryFrom<&ProviderUrl> for FlyConfig {
     type Error = SecretSpecError;
 
     fn try_from(url: &ProviderUrl) -> std::result::Result<Self, Self::Error> {
-        if url.scheme() != "flyctl" {
+        if url.scheme() != "fly" {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
-                "Invalid scheme '{}' for flyctl provider",
+                "Invalid scheme '{}' for fly provider",
                 url.scheme()
             )));
         }
 
         if !url.username().is_empty() {
             return Err(SecretSpecError::ProviderOperationFailed(
-                "flyctl:// takes the Fly.io app name as its authority, not a username".to_string(),
+                "fly:// takes the Fly.io app name as its authority, not a username".to_string(),
             ));
         }
 
         let app = url.host().filter(|app| !app.is_empty()).ok_or_else(|| {
             SecretSpecError::ProviderOperationFailed(
-                "flyctl provider requires a Fly.io app name, for example flyctl://my-app"
-                    .to_string(),
+                "fly provider requires a Fly.io app name, for example fly://my-app".to_string(),
             )
         })?;
 
         let path = url.path();
         if !path.is_empty() && path != "/" {
             return Err(SecretSpecError::ProviderOperationFailed(
-                "flyctl:// takes no path; put the Fly.io app name in the URI authority".to_string(),
+                "fly:// takes no path; put the Fly.io app name in the URI authority".to_string(),
             ));
         }
 
@@ -69,13 +68,13 @@ impl TryFrom<&ProviderUrl> for FlyctlConfig {
                 "detach" => &mut detach,
                 unknown => {
                     return Err(SecretSpecError::ProviderOperationFailed(format!(
-                        "unknown flyctl query parameter '{unknown}'; supported parameters are `stage` and `detach`"
+                        "unknown fly query parameter '{unknown}'; supported parameters are `stage` and `detach`"
                     )));
                 }
             };
             if slot.is_some() {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
-                    "duplicate flyctl query parameter '{key}'"
+                    "duplicate fly query parameter '{key}'"
                 )));
             }
             *slot = Some(parse_bool(&key, &value)?);
@@ -94,7 +93,7 @@ fn parse_bool(name: &str, value: &str) -> Result<bool> {
         "true" => Ok(true),
         "false" => Ok(false),
         _ => Err(SecretSpecError::ProviderOperationFailed(format!(
-            "flyctl query parameter `{name}` must be `true` or `false`"
+            "fly query parameter `{name}` must be `true` or `false`"
         ))),
     }
 }
@@ -106,26 +105,26 @@ struct ListedSecret {
 }
 
 /// A write-only provider for Fly.io application secrets.
-pub struct FlyctlProvider {
-    config: FlyctlConfig,
+pub struct FlyProvider {
+    config: FlyConfig,
     credentials: ProviderCredentials,
     cli_binary_path: String,
 }
 
 crate::register_provider! {
-    struct: FlyctlProvider,
-    config: FlyctlConfig,
-    name: "flyctl",
+    struct: FlyProvider,
+    config: FlyConfig,
+    name: "fly",
     description: "Fly.io application secrets via flyctl, write-only (0.20+)",
-    schemes: ["flyctl"],
-    examples: ["flyctl://my-app", "flyctl://my-app?stage=true"],
+    schemes: ["fly"],
+    examples: ["fly://my-app", "fly://my-app?stage=true"],
     credential_names: [ACCESS_TOKEN],
     reads: false,
     deletes: true,
 }
 
-impl FlyctlProvider {
-    pub fn new(config: FlyctlConfig) -> Self {
+impl FlyProvider {
+    pub fn new(config: FlyConfig) -> Self {
         Self {
             config,
             credentials: ProviderCredentials::new(),
@@ -236,7 +235,7 @@ impl FlyctlProvider {
     }
 }
 
-impl Provider for FlyctlProvider {
+impl Provider for FlyProvider {
     /// Fly application secrets become environment variables, so convention
     /// addresses use the declared key directly. The app URI provides project
     /// and environment isolation.
@@ -268,7 +267,7 @@ impl Provider for FlyctlProvider {
         if self.config.detach {
             parameters.push("detach=true");
         }
-        let base = format!("flyctl://{}", ProviderUrl::encode(&self.config.app));
+        let base = format!("fly://{}", ProviderUrl::encode(&self.config.app));
         if parameters.is_empty() {
             base
         } else {
@@ -279,13 +278,13 @@ impl Provider for FlyctlProvider {
     /// Deployment options change how an update is rolled out, not which Fly
     /// vault stores the secret.
     fn storage_identity(&self) -> String {
-        format!("flyctl://{}", self.config.app)
+        format!("fly://{}", self.config.app)
     }
 
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
         let _ = self.secret_name(addr)?;
         Err(SecretSpecError::ProviderOperationFailed(
-            "Fly.io application secrets are write-only and their plaintext values cannot be read back; use the flyctl provider with `secretspec set`, `secretspec delete`, or `secretspec init --from`"
+            "Fly.io application secrets are write-only and their plaintext values cannot be read back; use the fly provider with `secretspec set`, `secretspec delete`, or `secretspec init --from`"
                 .to_string(),
         ))
     }
@@ -397,15 +396,15 @@ mod tests {
         ProviderUrl::new(url::Url::parse(spec).unwrap())
     }
 
-    fn config(spec: &str) -> FlyctlConfig {
-        FlyctlConfig::try_from(&provider_url(spec)).unwrap()
+    fn config(spec: &str) -> FlyConfig {
+        FlyConfig::try_from(&provider_url(spec)).unwrap()
     }
 
     #[test]
     fn parses_app_and_rollout_options() {
         assert_eq!(
-            config("flyctl://my-app?stage=true&detach=true"),
-            FlyctlConfig {
+            config("fly://my-app?stage=true&detach=true"),
+            FlyConfig {
                 app: "my-app".to_string(),
                 stage: true,
                 detach: true,
@@ -416,30 +415,27 @@ mod tests {
     #[test]
     fn rejects_missing_app_path_and_bad_queries() {
         for spec in [
-            "flyctl://",
-            "flyctl://my-app/path",
-            "flyctl://my-app?unknown=true",
-            "flyctl://my-app?stage=yes",
-            "flyctl://my-app?stage=true&stage=false",
+            "fly://",
+            "fly://my-app/path",
+            "fly://my-app?unknown=true",
+            "fly://my-app?stage=yes",
+            "fly://my-app?stage=true&stage=false",
         ] {
-            assert!(
-                FlyctlConfig::try_from(&provider_url(spec)).is_err(),
-                "{spec}"
-            );
+            assert!(FlyConfig::try_from(&provider_url(spec)).is_err(), "{spec}");
         }
     }
 
     #[test]
     fn uri_round_trips_and_store_identity_ignores_rollout() {
-        let provider = FlyctlProvider::new(config("flyctl://my-app?stage=true&detach=true"));
-        assert_eq!(provider.uri(), "flyctl://my-app?stage=true&detach=true");
-        assert_eq!(provider.storage_identity(), "flyctl://my-app");
+        let provider = FlyProvider::new(config("fly://my-app?stage=true&detach=true"));
+        assert_eq!(provider.uri(), "fly://my-app?stage=true&detach=true");
+        assert_eq!(provider.storage_identity(), "fly://my-app");
         assert_eq!(config(&provider.uri()), provider.config);
     }
 
     #[test]
     fn convention_uses_the_environment_variable_name_directly() {
-        let provider = FlyctlProvider::new(config("flyctl://my-app"));
+        let provider = FlyProvider::new(config("fly://my-app"));
         let address = provider
             .convention_address("project", "production", "DATABASE_URL")
             .unwrap();
@@ -449,7 +445,7 @@ mod tests {
 
     #[test]
     fn reads_explain_fly_write_only_semantics() {
-        let provider = FlyctlProvider::new(config("flyctl://my-app"));
+        let provider = FlyProvider::new(config("fly://my-app"));
         let error = provider
             .get(Address::convention("project", "default", "API_KEY"))
             .unwrap_err();
@@ -459,7 +455,7 @@ mod tests {
 
     #[test]
     fn invalid_secret_names_are_rejected_before_a_write() {
-        let provider = FlyctlProvider::new(config("flyctl://my-app"));
+        let provider = FlyProvider::new(config("fly://my-app"));
         for item in ["", "BAD=NAME", "BAD\0NAME"] {
             let native = NativeAddress {
                 item: item.to_string(),
@@ -473,18 +469,18 @@ mod tests {
     fn registration_declares_the_provider_capabilities() {
         let registration = crate::provider::PROVIDER_REGISTRY
             .iter()
-            .find(|registration| registration.info.name == "flyctl")
+            .find(|registration| registration.info.name == "fly")
             .unwrap();
         assert_eq!(registration.credential_names, &[ACCESS_TOKEN]);
         assert!(!registration.reads);
-        assert!(!crate::provider::spec_provider_reads("flyctl://my-app"));
+        assert!(!crate::provider::spec_provider_reads("fly://my-app"));
         assert!(crate::provider::spec_provider_reads("dotenv://.env"));
         assert!(registration.deletes);
     }
 
     #[test]
     fn injected_access_token_is_applied_to_the_child_environment() {
-        let mut provider = FlyctlProvider::new(config("flyctl://my-app"));
+        let mut provider = FlyProvider::new(config("fly://my-app"));
         let mut credentials = ProviderCredentials::new();
         credentials.insert(
             ACCESS_TOKEN.to_string(),
@@ -518,7 +514,7 @@ mod tests {
 
     #[test]
     fn command_without_a_selected_token_scrubs_fly_credentials() {
-        let provider = FlyctlProvider::new(config("flyctl://my-app"));
+        let provider = FlyProvider::new(config("fly://my-app"));
         let command = provider.command_with_access_token(None);
         for credential_env in [API_TOKEN_ENV, ACCESS_TOKEN_ENV] {
             let override_value = command
@@ -535,7 +531,7 @@ mod tests {
     #[cfg(unix)]
     struct FakeFlyctl {
         dir: tempfile::TempDir,
-        provider: FlyctlProvider,
+        provider: FlyProvider,
     }
 
     #[cfg(unix)]
@@ -574,7 +570,7 @@ esac
             )
             .unwrap();
 
-            let mut provider = FlyctlProvider::new(config(spec));
+            let mut provider = FlyProvider::new(config(spec));
             provider.cli_binary_path = binary.to_string_lossy().into_owned();
             let mut credentials = ProviderCredentials::new();
             credentials.insert(
@@ -593,7 +589,7 @@ esac
     #[cfg(unix)]
     #[test]
     fn set_keeps_the_value_off_argv_and_sends_it_on_stdin() {
-        let fake = FakeFlyctl::new("flyctl://my-app?stage=true&detach=true");
+        let fake = FakeFlyctl::new("fly://my-app?stage=true&detach=true");
         let value = SecretString::new("super-secret-value\nwith-newline".into());
         fake.provider
             .set(
@@ -615,7 +611,7 @@ esac
     #[cfg(unix)]
     #[test]
     fn set_rejects_boundary_whitespace_before_invoking_flyctl() {
-        let fake = FakeFlyctl::new("flyctl://my-app");
+        let fake = FakeFlyctl::new("fly://my-app");
         for value in [" leading", "trailing ", "final-newline\n"] {
             let error = fake
                 .provider
@@ -633,7 +629,7 @@ esac
     #[cfg(unix)]
     #[test]
     fn delete_is_idempotent_and_unsets_existing_names() {
-        let fake = FakeFlyctl::new("flyctl://my-app?stage=true");
+        let fake = FakeFlyctl::new("fly://my-app?stage=true");
         assert!(
             fake.provider
                 .delete(Address::convention("project", "production", "EXISTING"))
@@ -657,7 +653,7 @@ esac
     #[cfg(unix)]
     #[test]
     fn discovery_uses_names_without_trying_to_read_values() {
-        let fake = FakeFlyctl::new("flyctl://my-app");
+        let fake = FakeFlyctl::new("fly://my-app");
         let reflected = fake
             .provider
             .reflect(DiscoveryContext::new("project", "production"))

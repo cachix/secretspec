@@ -22,7 +22,7 @@
 //! - [`env::EnvProvider`]: Environment variables (read-only)
 //! - [`null::NullProvider`]: Defaults, generation, or run prompts without storage (0.19+)
 //! - [`file::FileProvider`]: Plaintext file-per-secret storage (0.19+)
-//! - [`flyctl::FlyctlProvider`]: Fly.io application secrets, write-only (0.20+)
+//! - [`fly::FlyProvider`]: Fly.io application secrets, write-only (0.20+)
 //! - [`pass::PassProvider`]: Pass integration
 //! - [`gopass::GoPassProvider`]: Gopass integration
 //! - [`systemd_credential::SystemdCredentialProvider`]: systemd service credentials (0.17+)
@@ -291,7 +291,7 @@ pub mod dashlane;
 pub mod dotenv;
 pub mod env;
 pub mod file;
-pub mod flyctl;
+pub mod fly;
 #[cfg(feature = "gcsm")]
 pub mod gcsm;
 pub mod gopass;

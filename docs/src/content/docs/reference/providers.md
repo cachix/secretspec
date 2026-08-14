@@ -307,13 +307,13 @@ passbolt://?template=teams/{project}/{profile}/{key}   # Replace the convention 
 
 **Availability**: Added in SecretSpec 0.20.
 
-**URI**: `flyctl://APP[?stage=true][&detach=true]` - Publishes application
+**URI**: `fly://APP[?stage=true][&detach=true]` - Publishes application
 secrets through `flyctl secrets`
 
 ```text
-flyctl://my-app                    # Update Machines and monitor the rollout
-flyctl://my-app?stage=true         # Register changes without deploying them
-flyctl://my-app?detach=true        # Start the rollout without monitoring it
+fly://my-app                    # Update Machines and monitor the rollout
+fly://my-app?stage=true         # Register changes without deploying them
+fly://my-app?detach=true        # Start the rollout without monitoring it
 ```
 
 **Features (0.20+)**: Write, delete, provider credentials, and name-only
@@ -330,7 +330,7 @@ SecretSpec project or profile name, supplies isolation.
 **Read limitation**: Fly.io exposes secret names and digests but never
 plaintext values. `get`, `check`, `run`, fallback reads, generation-on-miss,
 and prompting-on-miss cannot use this write-only provider. See the
-[Fly.io provider guide](/providers/flyctl/).
+[Fly.io provider guide](/providers/fly/).
 
 **Write limitation (0.20+)**: `flyctl` trims values read from stdin. SecretSpec
 rejects leading or trailing whitespace rather than silently publishing a

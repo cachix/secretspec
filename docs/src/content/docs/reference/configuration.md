@@ -857,7 +857,7 @@ entry declares neither, it inherits whichever form `[profiles.default]` uses.
 | [file (0.19+)](/providers/file/#use-existing-files) | Relative file path beneath the configured root | Rejected | Reads the complete UTF-8 file | ✅ |
 | [env](/providers/env/#use-existing-secrets) | Variable name | Rejected | Reads the variable | — (read-only) |
 | [systemd credentials (0.17+)](/providers/systemd-credential/#use-an-existing-credential-name) | Credential filename | Rejected | Reads the credential | — (read-only) |
-| [Fly.io secrets (0.20+)](/providers/flyctl/#use-existing-secrets) | Fly app secret name | Rejected | Error: Fly.io does not expose plaintext values | ✅ write-only via `flyctl secrets set` |
+| [Fly.io secrets (0.20+)](/providers/fly/#use-existing-secrets) | Fly app secret name | Rejected | Error: Fly.io does not expose plaintext values | ✅ write-only via `flyctl secrets set` |
 | [pass](/providers/pass/#use-existing-secrets) | Entry path | Rejected | Reads the entry | ✅ |
 | [Gopass (0.15+)](/providers/gopass/#use-existing-secrets) | Entry path, including any mount-point prefix | Rejected | Reads the entry | ✅ |
 | [LastPass](/providers/lastpass/#use-existing-secrets) | Item name | Rejected | Reads the item | ✅ |

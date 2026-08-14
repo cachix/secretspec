@@ -704,7 +704,7 @@ impl OnePasswordProvider {
     /// cannot positively identify-and-retry lands in the per-secret
     /// fallback, preserving the pre-recovery behavior exactly.
     fn recover_reference_uris(&self, refs: &[BatchRef]) -> Result<Vec<Option<SecretString>>> {
-        let Some(retained_flags) = self.flag_refs_with_existing_items(refs) else {
+        let Some(retained_flags) = self.flag_refs_with_existing_items(refs)? else {
             return self.read_uris_with_fallback(refs);
         };
         if retained_flags.iter().all(|&retained| retained) {
@@ -764,15 +764,16 @@ impl OnePasswordProvider {
         .collect()
     }
 
-    /// Returns per-ref "item exists" flags, or `None` when any vault listing
-    /// fails (caller then treats every ref as retained via full fallback).
+    /// Returns per-ref "item exists" flags, or `None` when a vault listing
+    /// fails for a recoverable reason (caller then treats every ref as retained
+    /// via full fallback). Global auth and installation errors are preserved.
     /// A ref is flagged missing ONLY on a successful listing with no match
     /// by id or case-insensitive title — when in doubt, keep it.
     ///
     /// Lists with `--include-archive`: archived items are absent from the
     /// default listing but still resolvable by `op read`/`inject`, so
     /// omitting the flag would misclassify their refs as missing.
-    fn flag_refs_with_existing_items(&self, refs: &[BatchRef]) -> Option<Vec<bool>> {
+    fn flag_refs_with_existing_items(&self, refs: &[BatchRef]) -> Result<Option<Vec<bool>>> {
         use std::collections::{HashMap, HashSet};
 
         #[derive(Deserialize)]
@@ -784,21 +785,26 @@ impl OnePasswordProvider {
         let vaults: HashSet<&str> = refs.iter().map(|r| r.vault.as_str()).collect();
         let mut known: HashMap<&str, (HashSet<String>, HashSet<String>)> = HashMap::new();
         for vault in vaults {
-            let output = self
-                .execute_op_command(
-                    &[
-                        "item",
-                        "list",
-                        "--vault",
-                        vault,
-                        "--include-archive",
-                        "--format",
-                        "json",
-                    ],
-                    None,
-                )
-                .ok()?;
-            let items: Vec<ListItem> = serde_json::from_str(&output).ok()?;
+            let output = match self.execute_op_command(
+                &[
+                    "item",
+                    "list",
+                    "--vault",
+                    vault,
+                    "--include-archive",
+                    "--format",
+                    "json",
+                ],
+                None,
+            ) {
+                Ok(output) => output,
+                Err(error) if inject_error_is_recoverable(&error) => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            let items: Vec<ListItem> = match serde_json::from_str(&output) {
+                Ok(items) => items,
+                Err(_) => return Ok(None),
+            };
             let mut ids = HashSet::new();
             let mut titles = HashSet::new();
             for entry in items {
@@ -808,14 +814,14 @@ impl OnePasswordProvider {
             known.insert(vault, (ids, titles));
         }
 
-        Some(
+        Ok(Some(
             refs.iter()
                 .map(|r| {
                     let (ids, titles) = &known[r.vault.as_str()];
                     ids.contains(&r.item) || titles.contains(&r.item.trim().to_lowercase())
                 })
                 .collect(),
-        )
+        ))
     }
 
     /// Writes a value to the pinned reference via `op item edit` in the given
@@ -1085,6 +1091,14 @@ const AUTH_ERROR_PATTERNS: &[&str] = &[
 ];
 
 fn inject_error_is_recoverable(error: &SecretSpecError) -> bool {
+    if matches!(
+        error,
+        SecretSpecError::ProviderOperationFailed(message)
+            if message == OP_NOT_INSTALLED_HELP
+    ) {
+        return false;
+    }
+
     let message = error.to_string().to_lowercase();
     !AUTH_ERROR_PATTERNS
         .iter()
@@ -2201,6 +2215,8 @@ mod tests {
         let auth_error_initializing_client = SecretSpecError::ProviderOperationFailed(
             "[ERROR] 2026/08/14 00:00:00 error initializing client: found no accounts for filter \"x\"".to_string(),
         );
+        let cli_not_installed =
+            SecretSpecError::ProviderOperationFailed(OP_NOT_INSTALLED_HELP.to_string());
         let data = SecretSpecError::ProviderOperationFailed(
             "[ERROR] 2026/08/14 00:00:00 could not resolve item UUID for item X: could not find item X in vault abc".to_string(),
         );
@@ -2209,6 +2225,7 @@ mod tests {
         assert!(!inject_error_is_recoverable(
             &auth_error_initializing_client
         ));
+        assert!(!inject_error_is_recoverable(&cli_not_installed));
         assert!(inject_error_is_recoverable(&data));
     }
 
@@ -2638,6 +2655,55 @@ mod tests {
     }
 
     #[test]
+    fn auth_error_on_item_list_fails_fast() {
+        use std::sync::{Arc, Mutex};
+
+        let calls = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+        let observed = Arc::clone(&calls);
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new(move |command, _stdin| {
+            let args = command_args(command);
+            let mut calls = observed.lock().unwrap();
+            let call_index = calls.len();
+            calls.push(args.clone());
+            drop(calls);
+            match call_index {
+                0 => Err(SecretSpecError::ProviderOperationFailed(
+                    "[ERROR] could not resolve item UUID for item Ghost: could not find item Ghost in vault abc".to_string(),
+                )),
+                1 => {
+                    assert_eq!(args.first().map(String::as_str), Some("item"));
+                    Err(SecretSpecError::ProviderOperationFailed(
+                        "[ERROR] error initializing client: found no accounts for filter \"x\""
+                            .to_string(),
+                    ))
+                }
+                _ => panic!("no per-reference reads after an auth failure"),
+            }
+        }));
+
+        let first = crate::config::NativeAddress {
+            item: "API Key".to_string(),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+        let ghost = crate::config::NativeAddress {
+            item: "Ghost".to_string(),
+            field: Some("credential".to_string()),
+            ..Default::default()
+        };
+        let error = provider
+            .get_many(&[
+                ("FIRST", Address::Native(&first)),
+                ("GHOST", Address::Native(&ghost)),
+            ])
+            .unwrap_err();
+
+        assert!(error.to_string().contains("error initializing client"));
+        assert_eq!(calls.lock().unwrap().len(), 2, "inject, item list");
+    }
+
+    #[test]
     fn auth_error_on_retry_inject_fails_fast() {
         use std::sync::{Arc, Mutex};
 
@@ -2726,7 +2792,10 @@ mod tests {
             item: "aaa111".to_string(),
         }];
 
-        let flags = provider.flag_refs_with_existing_items(&refs).unwrap();
+        let flags = provider
+            .flag_refs_with_existing_items(&refs)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(
             flags,

@@ -27,8 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   calls when some referenced items don't exist. The provider now identifies
   missing items with one `op item list` per vault and retries the batch once
   without them (measured: 153-secret resolve with 3 missing items dropped
-  from ~32s to ~6s). Authentication errors during batch resolution now fail
-  immediately instead of retrying every secret individually.
+  from ~32s to ~6s). Authentication and unavailable-CLI errors during batch
+  resolution now fail immediately instead of retrying every secret
+  individually.
 
 ## [0.19.1] - 2026-08-11
 

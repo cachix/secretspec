@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1](https://github.com/ifiokjr/monosecret/releases/tag/v0.2.1) (2026-08-14)
+
+Grouped release for `monosecret`.
+
+### Fixes
+
+#### Remove stale proc-macro-error2 crates-io git patch
+
+_Packages:_ _monosecret_
+
+The .cargo/config.toml [patch.crates-io] section pointed at a git fork of proc-macro-error2 that nothing in the dependency graph uses (the Cargo.lock entries are [[patch.unused]]). cargo still tries to fetch the git source during resolution, which breaks offline vendored builds (e.g. nixpkgs' buildRustPackage). Removing the patch and pruning the stale lockfile entries fixes the offline build.
+
+_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #33](https://github.com/ifiokjr/monosecret/pull/33)
+
 ## [0.2.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.2.0) (2026-08-13)
 
 Grouped release for `monosecret`.

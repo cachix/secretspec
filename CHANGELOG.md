@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   secret names, providers, aliases, paths, and commands. Completion reads
   configuration metadata only; it never queries providers or reads secret
   values.
+- OnePassword: a batch resolution no longer degrades to per-secret `op read`
+  calls when some referenced items don't exist. The provider now identifies
+  missing items with one `op item list` per vault and retries the batch once
+  without them (measured: 153-secret resolve with 3 missing items dropped
+  from ~32s to ~6s). Authentication and unavailable-CLI errors during batch
+  resolution now fail immediately instead of retrying every secret
+  individually.
+- OnePassword optional references whose item names resemble authentication
+  diagnostics are omitted as missing instead of aborting batch resolution.
 
 ## [0.19.1] - 2026-08-11
 

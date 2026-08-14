@@ -6945,13 +6945,3 @@ dependencies = [
  "wasm-bindgen",
  "web-sys",
 ]
-
-[[patch.unused]]
-name = "proc-macro-error-attr2"
-version = "2.0.0"
-source = "git+https://github.com/GnomedDev/proc-macro-error-2.git?rev=9170a9d18fef904daf611c95256d90e0b86f0890#9170a9d18fef904daf611c95256d90e0b86f0890"
-
-[[patch.unused]]
-name = "proc-macro-error2"
-version = "2.0.1"
-source = "git+https://github.com/GnomedDev/proc-macro-error-2.git?rev=9170a9d18fef904daf611c95256d90e0b86f0890#9170a9d18fef904daf611c95256d90e0b86f0890"

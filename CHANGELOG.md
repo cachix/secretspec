@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configuration metadata only; it never queries providers or reads secret
   values.
 
+### Fixed
+
+- 1Password batches no longer fall back to one CLI process per reference when
+  optional items are absent. SecretSpec inventories the referenced vaults,
+  omits absent items, and retries the remaining references as one batch. An
+  authentication failure now stops before fallback instead of fanning out into
+  concurrent doomed reads.
+
 ## [0.19.1] - 2026-08-11
 
 Republishes 0.19.0's command-line artifacts. The library and CLI behave exactly

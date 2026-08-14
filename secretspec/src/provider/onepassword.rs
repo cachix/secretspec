@@ -2,7 +2,7 @@ use crate::provider::{Address, Provider, ProviderCredentials, ProviderUrl, crede
 use crate::{Result, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 
 /// Represents a OnePassword item retrieved from the CLI.
@@ -82,6 +82,26 @@ pub struct SecretReference {
     pub section: Option<String>,
     /// The field label or ID to read and write.
     pub field: String,
+}
+
+/// A rendered field reference together with the coordinates needed to check
+/// item existence without parsing `op`'s human-readable error messages.
+#[derive(Clone, Debug)]
+struct ReferenceUri {
+    rendered: String,
+    vault: String,
+    item: String,
+}
+
+impl ReferenceUri {
+    fn new(vault: String, reference: &SecretReference) -> Self {
+        let rendered = OnePasswordProvider::reference_uri(&vault, reference);
+        Self {
+            rendered,
+            vault,
+            item: reference.item.clone(),
+        }
+    }
 }
 
 /// Collision-resistant framing around each `op inject` expression.
@@ -653,19 +673,30 @@ impl OnePasswordProvider {
 
     /// Resolves unique field references with one textual `op inject` batch.
     ///
-    /// A failed inject is retried with bounded concurrent reads because `op
-    /// inject` fails the entire template when any field is missing. Individual
-    /// reads retain the provider's missing-value and detailed error semantics.
-    fn read_reference_uris(&self, reference_uris: &[String]) -> Result<Vec<Option<SecretString>>> {
-        if reference_uris.is_empty() {
+    /// When inject fails, the provider inventories each referenced vault. Item
+    /// references absent from that structured listing are omitted and the
+    /// remaining references get one more batch attempt. This keeps optional,
+    /// unprovisioned items from forcing every present reference through its own
+    /// `op read`, and makes authentication/listing failures stop before a read
+    /// fan-out. Individual reads remain the correctness fallback for missing
+    /// fields on items that do exist.
+    fn read_reference_uris(
+        &self,
+        references: &[ReferenceUri],
+    ) -> Result<Vec<Option<SecretString>>> {
+        if references.is_empty() {
             return Ok(Vec::new());
         }
-        if reference_uris.len() == 1 {
-            return Ok(vec![self.read_reference_uri(&reference_uris[0])?]);
+        if references.len() == 1 {
+            return Ok(vec![self.read_reference_uri(&references[0].rendered)?]);
         }
 
+        let reference_uris: Vec<String> = references
+            .iter()
+            .map(|reference| reference.rendered.clone())
+            .collect();
         let nonce = uuid::Uuid::new_v4().simple().to_string();
-        let template = InjectTemplate::new(reference_uris, &nonce);
+        let template = InjectTemplate::new(&reference_uris, &nonce);
         match self.execute_op_command(&["inject"], Some(&template.input)) {
             Ok(output) => template.parse(&output).map(|values| {
                 values
@@ -673,14 +704,155 @@ impl OnePasswordProvider {
                     .map(|value| Some(SecretString::new(value.into())))
                     .collect()
             }),
-            Err(_) => super::map_concurrently(
-                reference_uris,
-                super::get_each_concurrency(),
-                |reference_uri| self.read_reference_uri(reference_uri),
-            )
-            .into_iter()
-            .collect(),
+            Err(error) => {
+                // `execute_op_command` normalizes the CLI's known authentication
+                // diagnostics. Preserve those (and the installation failure)
+                // immediately instead of probing or fanning out further.
+                let fail_fast = matches!(
+                    &error,
+                    SecretSpecError::ProviderOperationFailed(message)
+                        if message == AUTH_REQUIRED_HELP || message == OP_NOT_INSTALLED_HELP
+                );
+                if fail_fast {
+                    Err(error)
+                } else {
+                    self.read_reference_uris_after_inject_failure(references)
+                }
+            }
         }
+    }
+
+    /// Recovers from `op inject`'s all-or-nothing handling of missing items.
+    fn read_reference_uris_after_inject_failure(
+        &self,
+        references: &[ReferenceUri],
+    ) -> Result<Vec<Option<SecretString>>> {
+        let mut seen_vaults = HashSet::new();
+        let vaults: Vec<String> = references
+            .iter()
+            .filter(|reference| seen_vaults.insert(reference.vault.clone()))
+            .map(|reference| reference.vault.clone())
+            .collect();
+
+        let listed = super::map_concurrently(&vaults, super::get_each_concurrency(), |vault| {
+            (vault.clone(), self.list_item_identifiers(vault))
+        });
+        let mut items_by_vault = HashMap::with_capacity(listed.len());
+        for (vault, items) in listed {
+            items_by_vault.insert(vault, items?);
+        }
+
+        let present: Vec<(usize, &ReferenceUri)> = references
+            .iter()
+            .enumerate()
+            .filter(|(_, reference)| {
+                items_by_vault
+                    .get(&reference.vault)
+                    .is_some_and(|items| items.contains(&reference.item))
+            })
+            .collect();
+
+        // The inject failed even though every referenced item exists. Preserve
+        // field-level missing/error semantics through the established bounded
+        // individual-read fallback.
+        if present.len() == references.len() {
+            let references: Vec<&ReferenceUri> = references.iter().collect();
+            return self.read_reference_uris_individually(&references);
+        }
+
+        let mut values = vec![None; references.len()];
+        if present.is_empty() {
+            return Ok(values);
+        }
+
+        let present_references: Vec<&ReferenceUri> =
+            present.iter().map(|(_, reference)| *reference).collect();
+        let retry = if present_references.len() == 1 {
+            vec![self.read_reference_uri(&present_references[0].rendered)]
+        } else {
+            let reference_uris: Vec<String> = present_references
+                .iter()
+                .map(|reference| reference.rendered.clone())
+                .collect();
+            let nonce = uuid::Uuid::new_v4().simple().to_string();
+            let template = InjectTemplate::new(&reference_uris, &nonce);
+            match self.execute_op_command(&["inject"], Some(&template.input)) {
+                Ok(output) => template
+                    .parse(&output)?
+                    .into_iter()
+                    .map(|value| Ok(Some(SecretString::new(value.into()))))
+                    .collect(),
+                Err(_) => {
+                    return self.merge_individual_reference_values(
+                        references.len(),
+                        &present,
+                        &present_references,
+                    );
+                }
+            }
+        };
+
+        for ((index, _), value) in present.into_iter().zip(retry) {
+            values[index] = value?;
+        }
+        Ok(values)
+    }
+
+    /// Reads one reference before starting the bounded concurrent remainder.
+    /// Global failures such as authentication or transport errors therefore
+    /// stop after one verification read even if an inventory command happened
+    /// to succeed from cached metadata.
+    fn read_reference_uris_individually(
+        &self,
+        references: &[&ReferenceUri],
+    ) -> Result<Vec<Option<SecretString>>> {
+        let Some((first, remaining)) = references.split_first() else {
+            return Ok(Vec::new());
+        };
+
+        let mut values = Vec::with_capacity(references.len());
+        values.push(self.read_reference_uri(&first.rendered)?);
+        let remaining =
+            super::map_concurrently(remaining, super::get_each_concurrency(), |reference| {
+                self.read_reference_uri(&reference.rendered)
+            });
+        for value in remaining {
+            values.push(value?);
+        }
+        Ok(values)
+    }
+
+    fn merge_individual_reference_values(
+        &self,
+        total: usize,
+        present: &[(usize, &ReferenceUri)],
+        present_references: &[&ReferenceUri],
+    ) -> Result<Vec<Option<SecretString>>> {
+        let mut values = vec![None; total];
+        let present_values = self.read_reference_uris_individually(present_references)?;
+        for ((index, _), value) in present.iter().zip(present_values) {
+            values[*index] = value;
+        }
+        Ok(values)
+    }
+
+    /// Lists the item IDs and titles visible in a vault.
+    fn list_item_identifiers(&self, vault: &str) -> Result<HashSet<String>> {
+        #[derive(Deserialize)]
+        struct ListItem {
+            id: String,
+            title: String,
+        }
+
+        let output = self.execute_op_command(
+            &["item", "list", "--vault", vault, "--format", "json"],
+            None,
+        )?;
+        let items: Vec<ListItem> = serde_json::from_str(&output)?;
+        Ok(items
+            .into_iter()
+            .flat_map(|item| [item.id, item.title])
+            .collect())
     }
 
     /// Writes a value to the pinned reference via `op item edit` in the given
@@ -1175,17 +1347,17 @@ impl Provider for OnePasswordProvider {
         // Field references retain first-seen order while the index deduplicates
         // identical physical addresses and records every request name to fan out.
         let mut field_ref_indices: HashMap<String, usize> = HashMap::new();
-        let mut field_refs: Vec<(String, Vec<String>)> = Vec::new();
+        let mut field_refs: Vec<(ReferenceUri, Vec<String>)> = Vec::new();
         for (name, addr) in requests {
             let coords = self.operation_coordinates(*addr)?;
             let (vault, reference) = self.native_reference(&coords)?;
             match reference {
                 Some(reference) => {
-                    let reference_uri = Self::reference_uri(&vault, &reference);
-                    if let Some(index) = field_ref_indices.get(&reference_uri) {
+                    let reference_uri = ReferenceUri::new(vault, &reference);
+                    if let Some(index) = field_ref_indices.get(&reference_uri.rendered) {
                         field_refs[*index].1.push(name.to_string());
                     } else {
-                        field_ref_indices.insert(reference_uri.clone(), field_refs.len());
+                        field_ref_indices.insert(reference_uri.rendered.clone(), field_refs.len());
                         field_refs.push((reference_uri, vec![name.to_string()]));
                     }
                 }
@@ -1201,7 +1373,7 @@ impl Provider for OnePasswordProvider {
             results.extend(self.get_items_batch(&vault, items)?);
         }
 
-        let reference_uris: Vec<String> = field_refs
+        let reference_uris: Vec<ReferenceUri> = field_refs
             .iter()
             .map(|(reference_uri, _)| reference_uri.clone())
             .collect();
@@ -1865,6 +2037,130 @@ mod tests {
     }
 
     #[test]
+    fn inject_failure_retries_batch_without_absent_items() {
+        use std::sync::{Arc, Mutex};
+
+        let calls = Arc::new(Mutex::new(Vec::<(Vec<String>, Option<String>)>::new()));
+        let observed = Arc::clone(&calls);
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new(move |command, stdin| {
+            let args = command_args(command);
+            let template = stdin.map(str::to_string);
+            observed
+                .lock()
+                .unwrap()
+                .push((args.clone(), template.clone()));
+            match args.first().map(String::as_str) {
+                Some("inject") => {
+                    let template = template.expect("inject stdin");
+                    if template.contains("PYLON_APP_ID") {
+                        Err(SecretSpecError::ProviderOperationFailed(
+                            "could not resolve one of the items".to_string(),
+                        ))
+                    } else {
+                        Ok(template
+                            .replace("{{ op://Personal/DATABASE_URL/password }}", "available")
+                            .replace(
+                                "{{ op://Personal/REDIS_URL/password }}",
+                                "redis available",
+                            ))
+                    }
+                }
+                Some("item") => Ok(
+                    r#"[{"id":"database-id","title":"DATABASE_URL"},{"id":"redis-id","title":"REDIS_URL"}]"#
+                        .to_string(),
+                ),
+                Some("read") => panic!("absent-item recovery should not use individual reads"),
+                _ => unreachable!("unexpected mocked command"),
+            }
+        }));
+
+        let address = |item: &str| crate::config::NativeAddress {
+            item: item.to_string(),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+        let present = address("DATABASE_URL");
+        let second_present = address("REDIS_URL");
+        let pylon_app_id = address("PYLON_APP_ID");
+        let pylon_identity_secret = address("PYLON_IDENTITY_SECRET");
+        let siem_token = address("SIEM_SELF_INGEST_TOKEN");
+        let results = provider
+            .get_many(&[
+                ("DATABASE_URL", Address::Native(&present)),
+                ("REDIS_URL", Address::Native(&second_present)),
+                ("PYLON_APP_ID", Address::Native(&pylon_app_id)),
+                (
+                    "PYLON_IDENTITY_SECRET",
+                    Address::Native(&pylon_identity_secret),
+                ),
+                ("SIEM_SELF_INGEST_TOKEN", Address::Native(&siem_token)),
+            ])
+            .unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].0, ["inject"]);
+        assert_eq!(calls[1].0[..2], ["item", "list"]);
+        assert_eq!(calls[2].0, ["inject"]);
+        let retry_template = calls[2].1.as_deref().expect("retry inject stdin");
+        assert!(retry_template.contains("DATABASE_URL"));
+        assert!(retry_template.contains("REDIS_URL"));
+        assert!(!retry_template.contains("PYLON_APP_ID"));
+        assert!(!retry_template.contains("PYLON_IDENTITY_SECRET"));
+        assert!(!retry_template.contains("SIEM_SELF_INGEST_TOKEN"));
+        assert!(secret_matches(&results, "DATABASE_URL", "available"));
+        assert!(secret_matches(&results, "REDIS_URL", "redis available"));
+        assert!(!results.contains_key("PYLON_APP_ID"));
+        assert!(!results.contains_key("PYLON_IDENTITY_SECRET"));
+        assert!(!results.contains_key("SIEM_SELF_INGEST_TOKEN"));
+    }
+
+    #[test]
+    fn inject_auth_failure_does_not_start_fallback() {
+        use std::sync::{Arc, Mutex};
+
+        let calls = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+        let observed = Arc::clone(&calls);
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new(move |command, _stdin| {
+            let args = command_args(command);
+            observed.lock().unwrap().push(args.clone());
+            match args.first().map(String::as_str) {
+                Some("inject") => Err(SecretSpecError::ProviderOperationFailed(
+                    AUTH_REQUIRED_HELP.to_string(),
+                )),
+                Some("item") | Some("read") => {
+                    panic!("authentication failure must not start fallback commands")
+                }
+                _ => unreachable!("unexpected mocked command"),
+            }
+        }));
+
+        let first = crate::config::NativeAddress {
+            item: "First".to_string(),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+        let second = crate::config::NativeAddress {
+            item: "Second".to_string(),
+            field: Some("password".to_string()),
+            ..Default::default()
+        };
+        let error = provider
+            .get_many(&[
+                ("FIRST", Address::Native(&first)),
+                ("SECOND", Address::Native(&second)),
+            ])
+            .unwrap_err();
+
+        assert!(error.to_string().contains("authentication required"));
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0], ["inject"]);
+    }
+
+    #[test]
     fn inject_failure_falls_back_and_omits_missing_references() {
         use std::sync::{Arc, Mutex};
 
@@ -1878,6 +2174,7 @@ mod tests {
                 Some("inject") => Err(SecretSpecError::ProviderOperationFailed(
                     "one field is missing".to_string(),
                 )),
+                Some("item") => Ok(r#"[{"id":"item-id","title":"Item"}]"#.to_string()),
                 Some("read") if args.last().is_some_and(|arg| arg.ends_with("/present")) => {
                     Ok("available".to_string())
                 }
@@ -1907,8 +2204,9 @@ mod tests {
             .unwrap();
 
         let calls = calls.lock().unwrap();
-        assert_eq!(calls.len(), 3);
+        assert_eq!(calls.len(), 4);
         assert_eq!(calls[0], ["inject"]);
+        assert_eq!(calls[1][..2], ["item", "list"]);
         assert_eq!(calls.iter().filter(|args| args[0] == "read").count(), 2);
         assert!(secret_matches(&results, "PRESENT", "available"));
         assert!(!results.contains_key("MISSING"));
@@ -1944,6 +2242,11 @@ mod tests {
                         "one field is missing".to_string(),
                     ));
                 }
+                if args.first().is_some_and(|arg| arg == "item")
+                    && args.get(1).is_some_and(|arg| arg == "list")
+                {
+                    return Ok(r#"[{"id":"item-id","title":"Item"}]"#.to_string());
+                }
 
                 assert_eq!(args.first().map(String::as_str), Some("read"));
                 reads.fetch_add(1, Ordering::SeqCst);
@@ -1955,8 +2258,17 @@ mod tests {
             }
         }));
 
-        let references: Vec<String> = (0..10)
-            .map(|index| format!("op://Personal/Item/field-{index}"))
+        let references: Vec<ReferenceUri> = (0..10)
+            .map(|index| {
+                ReferenceUri::new(
+                    "Personal".to_string(),
+                    &SecretReference {
+                        item: "Item".to_string(),
+                        section: None,
+                        field: format!("field-{index}"),
+                    },
+                )
+            })
             .collect();
         let values = provider.read_reference_uris(&references).unwrap();
 
@@ -1972,7 +2284,7 @@ mod tests {
         assert!(values.iter().zip(&references).all(|(value, reference)| {
             value
                 .as_ref()
-                .is_some_and(|value| value.expose_secret() == reference)
+                .is_some_and(|value| value.expose_secret() == reference.rendered)
         }));
     }
 

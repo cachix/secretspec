@@ -1074,35 +1074,71 @@ impl OnePasswordProvider {
     }
 }
 
-/// Error fragments from `op` that indicate the CLI cannot serve ANY request
-/// (authentication/session/account problems). Matched case-insensitively
-/// against the provider error text. A batch failure matching one of these
-/// must surface immediately: retrying or fanning out per-secret reads would
-/// repeat the same failure N times, slowly.
+/// Diagnostic prefixes from `op` that indicate the CLI cannot serve ANY
+/// request (authentication/session/account problems). Matching is
+/// case-insensitive, after the `[ERROR]` log prefix and optional timestamp. A
+/// batch failure matching one of these must surface immediately: retrying or
+/// fanning out per-secret reads would repeat the same failure N times, slowly.
 const AUTH_ERROR_PATTERNS: &[&str] = &[
     // Verbatim fragments pinned in the Findings Log (Task 1, live `op` 2.35.0 probes).
-    // "authentication required" catches execute_op_command's own canned
-    // AUTH_REQUIRED_HELP substitution for "not currently signed in" / "no
-    // active session" / "could not find session token" / "account is not
-    // signed in" — those raw phrases never reach this classifier verbatim.
+    // execute_op_command's canned AUTH_REQUIRED_HELP is matched exactly below;
+    // the pattern also recognizes the equivalent structured `op` diagnostic.
     "authentication required",
     "authorization prompt",
     "error initializing client",
 ];
 
 fn inject_error_is_recoverable(error: &SecretSpecError) -> bool {
-    if matches!(
-        error,
-        SecretSpecError::ProviderOperationFailed(message)
-            if message == OP_NOT_INSTALLED_HELP
-    ) {
+    let SecretSpecError::ProviderOperationFailed(message) = error else {
+        return true;
+    };
+
+    if message == OP_NOT_INSTALLED_HELP || message == AUTH_REQUIRED_HELP {
         return false;
     }
 
-    let message = error.to_string().to_lowercase();
-    !AUTH_ERROR_PATTERNS
-        .iter()
-        .any(|pattern| message.contains(pattern))
+    !message.lines().any(|line| {
+        let Some(diagnostic) = op_error_diagnostic(line) else {
+            return false;
+        };
+        let diagnostic = diagnostic.to_ascii_lowercase();
+        AUTH_ERROR_PATTERNS
+            .iter()
+            .any(|pattern| diagnostic.starts_with(pattern))
+    })
+}
+
+/// Extracts the start of an `op` structured diagnostic without scanning its payload,
+/// which may contain user-controlled vault, item, section, or field names.
+fn op_error_diagnostic(line: &str) -> Option<&str> {
+    let line = line.trim_start();
+    let diagnostic = line.strip_prefix("[ERROR]")?.trim_start();
+
+    let mut parts = diagnostic.splitn(3, char::is_whitespace);
+    let Some(date) = parts.next() else {
+        return Some(diagnostic);
+    };
+    let Some(time) = parts.next() else {
+        return Some(diagnostic);
+    };
+    let Some(message) = parts.next() else {
+        return Some(diagnostic);
+    };
+
+    let is_date = date.split('/').count() == 3
+        && date.split('/').all(|component| {
+            !component.is_empty() && component.chars().all(|c| c.is_ascii_digit())
+        });
+    let is_time = time.split(':').count() == 3
+        && time.split(':').all(|component| {
+            !component.is_empty() && component.chars().all(|c| c.is_ascii_digit())
+        });
+
+    if is_date && is_time {
+        Some(message.trim_start())
+    } else {
+        Some(diagnostic)
+    }
 }
 
 impl OnePasswordProvider {
@@ -2227,6 +2263,20 @@ mod tests {
         ));
         assert!(!inject_error_is_recoverable(&cli_not_installed));
         assert!(inject_error_is_recoverable(&data));
+
+        for item in [
+            "Authentication Required",
+            "Authorization Prompt",
+            "Error Initializing Client",
+        ] {
+            let missing_item = SecretSpecError::ProviderOperationFailed(format!(
+                "[ERROR] 2026/08/14 00:00:00 could not resolve item UUID for item {item}: could not find item {item} in vault abc"
+            ));
+            assert!(
+                inject_error_is_recoverable(&missing_item),
+                "auth-like item name {item:?} must remain a recoverable data error"
+            );
+        }
     }
 
     #[test]

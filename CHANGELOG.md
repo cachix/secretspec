@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from ~32s to ~6s). Authentication and unavailable-CLI errors during batch
   resolution now fail immediately instead of retrying every secret
   individually.
+- OnePassword optional references whose item names resemble authentication
+  diagnostics are omitted as missing instead of aborting batch resolution.
 
 ## [0.19.1] - 2026-08-11
 

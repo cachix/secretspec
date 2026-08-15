@@ -38,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OnePassword optional references whose item names resemble authentication
   diagnostics are omitted as missing instead of aborting batch resolution.
 
+### Fixed
+
+- The `awssm` provider now accepts a trailing slash in `?prefix=` without
+  inserting a second slash into the AWS secret name. For example,
+  `?prefix=myteam/` resolves to `myteam/secretspec/...`, matching
+  `?prefix=myteam`, and both spellings share one provider identity so import
+  diagnostics still recognize alias-specific references. This avoids silently
+  treating the secret as missing or writing to a distinct double-slash name. Closes
+  [#344](https://github.com/cachix/secretspec/issues/344).
+
 ## [0.19.1] - 2026-08-11
 
 Republishes 0.19.0's command-line artifacts. The library and CLI behave exactly

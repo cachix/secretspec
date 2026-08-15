@@ -38,7 +38,8 @@
 //! ```
 
 use super::{
-    Address, Provider, ProviderCredentials, ProviderUrl, credential_or_envs, preferred_env,
+    Address, Provider, ProviderCredentials, ProviderUrl, credential_or_envs, join_slash_path,
+    preferred_env,
 };
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
@@ -185,10 +186,8 @@ impl ScalewayProvider {
                 )));
             }
         }
-        // `base` is already normalized ("/" or "/prefix"); trim its slash so we
-        // never emit a double slash when composing the hierarchy.
-        let base = base.trim_end_matches('/');
-        Ok(format!("{base}/secretspec/{project}/{profile}/{key}"))
+        let convention_name = format!("secretspec/{project}/{profile}/{key}");
+        Ok(join_slash_path(base, &convention_name))
     }
 
     /// Splits an absolute item path into `(secret_path, secret_name)`. The path

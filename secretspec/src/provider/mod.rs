@@ -81,6 +81,7 @@ mod credentials;
 mod factory;
 #[macro_use]
 pub mod macros;
+mod path;
 mod preflight;
 mod registry;
 mod runtime;
@@ -105,6 +106,8 @@ pub(crate) use credentials::{ProviderCredentials, credential_or_env, credential_
 pub(crate) use factory::provider_from_spec;
 #[cfg(test)]
 pub(crate) use factory::provider_from_url;
+#[cfg(any(feature = "awssm", feature = "infisical", feature = "scaleway", test))]
+pub(crate) use path::join_slash_path;
 pub(crate) use preflight::ProviderWithPreflight;
 #[cfg(any(feature = "cli", test))]
 pub(crate) use registry::spec_provider_reads;

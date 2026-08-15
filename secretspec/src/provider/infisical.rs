@@ -68,7 +68,9 @@
 //! Infisical's own precedence: a secret defined directly in the folder wins
 //! over an imported one, and a later import wins over an earlier one.
 
-use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
+use super::{
+    Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env, join_slash_path,
+};
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use reqwest::StatusCode;
@@ -402,9 +404,7 @@ impl InfisicalProvider {
                 let secret_path = match folder {
                     "" => "/".to_string(),
                     relative if !relative.starts_with('/') => {
-                        // The prefix is `/` at the root, where a naive join
-                        // would double the separator.
-                        format!("{}/{relative}", self.config.path.trim_end_matches('/'))
+                        join_slash_path(&self.config.path, relative)
                     }
                     absolute => absolute.to_string(),
                 };

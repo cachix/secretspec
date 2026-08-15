@@ -40,6 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The `awssm` provider now accepts a trailing slash in `?prefix=` without
+  inserting a second slash into the AWS secret name. For example,
+  `?prefix=myteam/` resolves to `myteam/secretspec/...`, matching
+  `?prefix=myteam`, and both spellings share one provider identity so import
+  diagnostics still recognize alias-specific references. This avoids silently
+  treating the secret as missing or writing to a distinct double-slash name. Closes
+  [#344](https://github.com/cachix/secretspec/issues/344).
+
 - Infisical secret references no longer require `?env=` in the provider URI: a
   `ref` names a folder and key but never an environment, so it now falls back to
   the profile the run resolves under. One alias can therefore serve every profile

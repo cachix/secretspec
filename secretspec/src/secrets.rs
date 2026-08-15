@@ -1,5 +1,6 @@
 //! Core secrets management functionality
 
+use crate::CallerContext;
 use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
 use crate::cache::{self, CacheEntryStatus, CacheOwnership};
 use crate::config::{
@@ -563,6 +564,9 @@ pub struct Secrets {
     /// Reason for this session's secret access, forwarded to providers that
     /// support audit logging (set via [`Secrets::with_reason`]).
     reason: Option<String>,
+    /// Software integration that invoked SecretSpec. This is audit context, not
+    /// a user-supplied reason, and never satisfies `require_reason`.
+    caller: Option<CallerContext>,
     /// Project policy (`[project].require_reason` in secretspec.toml) controlling
     /// when secret access requires an explicit reason.
     require_reason: RequireReason,
@@ -777,6 +781,7 @@ impl Secrets {
             scope: None,
             ignore_ambient_scope: false,
             reason: None,
+            caller: None,
             require_reason: RequireReason::Never,
             audit: None,
             provider_credentials_cache: ProviderCredentialsCache::default(),
@@ -861,6 +866,7 @@ impl Secrets {
             scope: None,
             ignore_ambient_scope: false,
             reason: env_reason(),
+            caller: None,
             audit,
             provider_credentials_cache: ProviderCredentialsCache::default(),
             write_target_reporter: None,
@@ -1005,6 +1011,38 @@ impl Secrets {
         self
     }
 
+    /// Records the software integration that invoked SecretSpec.
+    ///
+    /// Caller context describes *what* is requesting secrets, while
+    /// [`Secrets::with_reason`] records the user-supplied explanation of *why*.
+    /// It is included in audit events and forwarded to providers, but it never
+    /// satisfies the project's `require_reason` policy.
+    ///
+    /// Blank names are ignored. Optional fields are trimmed and blank values are
+    /// dropped. The context is caller-asserted metadata rather than an
+    /// authenticated identity; it must not contain credentials or secret values.
+    ///
+    /// Available since SecretSpec 0.20.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use secretspec::{CallerContext, Secrets};
+    ///
+    /// let spec = Secrets::load().unwrap().with_caller(
+    ///     CallerContext::new("git")
+    ///         .with_operation("credential_get")
+    ///         .with_resource("github.com"),
+    /// );
+    /// spec.check(false).unwrap();
+    /// ```
+    pub fn with_caller(mut self, caller: CallerContext) -> Self {
+        if let Some(caller) = caller.normalized() {
+            self.caller = Some(caller);
+        }
+        self
+    }
+
     /// Sets a session reason only when none is already in effect.
     ///
     /// This is the "supply a fallback" form of [`Secrets::with_reason`]: an
@@ -1018,6 +1056,9 @@ impl Secrets {
     /// whitespace-only argument still leaves the session without a reason rather
     /// than storing an empty one. Precedence is therefore: an explicit
     /// [`Secrets::with_reason`], then `SECRETSPEC_REASON`, then this default.
+    /// A default reason still counts as a reason for policy purposes. An
+    /// integration that only wants to identify itself should use
+    /// [`Secrets::with_caller`] instead.
     ///
     /// Available since SecretSpec 0.19.
     ///
@@ -1180,7 +1221,7 @@ impl Secrets {
 
     /// The shared construction body behind generic, routed, and credential
     /// source providers: alias expansion, error enrichment, and the
-    /// base-dir/reason hooks live only here, so those paths cannot drift.
+    /// base-dir/reason/caller hooks live only here, so those paths cannot drift.
     fn build_provider_with_credentials(
         &self,
         spec: &str,
@@ -1201,6 +1242,7 @@ impl Secrets {
             .map_err(|err| self.explain_unknown_provider(err, &resolved))?;
         provider.with_base_dir(&self.config_dir);
         provider.set_reason(self.reason.clone());
+        provider.set_caller(self.caller.clone());
         // Context a native address cannot carry: a `ref` names coordinates only,
         // so a provider whose store is partitioned by something outside them
         // (Infisical's environment) reads the operation's profile here. It is
@@ -1455,9 +1497,9 @@ impl Secrets {
     }
 
     /// Records one audit event with the given variable fields, if auditing is
-    /// enabled (a no-op otherwise). Session-constant fields — project, the session
-    /// reason, and whether auditing is on — are filled here so call sites specify
-    /// only what varies. Single-secret (`get`/`set`/`delete`) and bulk
+    /// enabled (a no-op otherwise). Session-constant fields — project, caller,
+    /// session reason, and whether auditing is on — are filled here so call sites
+    /// specify only what varies. Single-secret (`get`/`set`/`delete`) and bulk
     /// (`check`/`run`/`import`) events go through this one method.
     fn record(
         &self,
@@ -1495,6 +1537,7 @@ impl Secrets {
                     outcome,
                     error_kind: fields.error_kind,
                     reason: self.reason.as_deref(),
+                    caller: self.caller.as_ref(),
                 },
             );
         }
@@ -6517,6 +6560,38 @@ mod policy_tests {
             spec().with_reason("deploy").with_default_reason("").reason,
             Some("deploy".to_string())
         );
+    }
+
+    #[test]
+    fn caller_context_is_normalized_but_never_counts_as_a_reason() {
+        let mut spec = Secrets::new(
+            crate::tests::resolve_test_config(HashMap::new()),
+            None,
+            None,
+            None,
+        )
+        .with_caller(
+            CallerContext::new("  git  ")
+                .with_operation(" credential_get ")
+                .with_resource(" github.com "),
+        );
+
+        assert_eq!(
+            spec.caller,
+            Some(
+                CallerContext::new("git")
+                    .with_operation("credential_get")
+                    .with_resource("github.com")
+            )
+        );
+        spec.require_reason = RequireReason::Always;
+        assert!(matches!(
+            spec.ensure_reason(),
+            Err(SecretSpecError::ReasonRequired)
+        ));
+
+        // A real reason remains independent and satisfies the policy.
+        assert!(spec.with_reason("release package").ensure_reason().is_ok());
     }
 
     #[test]

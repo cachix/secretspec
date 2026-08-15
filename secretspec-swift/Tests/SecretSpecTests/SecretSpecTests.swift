@@ -28,6 +28,24 @@ final class SecretSpecTests: XCTestCase {
         XCTAssertFalse(try SecretSpec.abiVersion().isEmpty)
     }
 
+    func testCallerContextCanAccompanyASeparateReason() throws {
+        let project = try Project(
+            manifest: Self.manifest,
+            dotenv: "DATABASE_URL=postgres://db\n"
+        )
+        let resolved = try project.builder()
+            .withCaller(CallerContext(
+                name: "git",
+                version: "2.51.0",
+                operation: "credential_get",
+                resource: "github.com"
+            ))
+            .withReason("push the release tag")
+            .load()
+        defer { try? resolved.close() }
+        XCTAssertEqual(resolved.secrets["DATABASE_URL"]?.get(), "postgres://db")
+    }
+
     func testLoadValuesAndProvenance() throws {
         let project = try Project(
             manifest: Self.manifest,

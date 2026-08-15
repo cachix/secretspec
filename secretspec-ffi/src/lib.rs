@@ -21,12 +21,16 @@
 //! ```json
 //! { "path": "…/secretspec.toml", "provider": "keyring://",
 //!   "profile": "production", "scope": "api", "reason": "boot",
+//!   "caller": { "name": "git", "operation": "credential_get", "resource": "github.com" },
 //!   "no_values": false, "mode": "resolve" }
 //! ```
 //!
 //! All fields are optional. `path` omitted means "walk up from the working
 //! directory" like the CLI. `scope` selects a `[scopes]` subset of the active
 //! profile (SecretSpec 0.17+).
+//! `caller` supplies structured, caller-asserted integration context and is
+//! available in SecretSpec 0.20+; unlike `reason`, it never satisfies the
+//! `require_reason` policy.
 //!
 //! `mode` selects which shape comes back, and defaults to `"resolve"`:
 //!

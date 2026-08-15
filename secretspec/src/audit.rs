@@ -24,6 +24,7 @@
 //! processes. Operators who need strong guarantees should give each concurrent
 //! context its own `[audit] path`.
 
+use crate::CallerContext;
 use crate::config::AuditConfig;
 use crate::secrets::{detect_agent_id, running_as_agent};
 use colored::Colorize;
@@ -142,6 +143,7 @@ pub(crate) struct AuditContext<'a> {
     pub outcome: AuditOutcome,
     pub error_kind: Option<&'a str>,
     pub reason: Option<&'a str>,
+    pub caller: Option<&'a CallerContext>,
 }
 
 /// One serialized audit record (one JSON Lines entry).
@@ -182,6 +184,9 @@ struct AuditEvent<'a> {
     error_kind: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'a str>,
+    /// Caller-asserted software integration metadata (SecretSpec 0.20+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller: Option<&'a CallerContext>,
     actor: &'a Actor,
     /// secretspec version that produced the event.
     version: &'static str,
@@ -408,6 +413,7 @@ impl AuditLogger {
             outcome: ctx.outcome,
             error_kind: ctx.error_kind,
             reason: ctx.reason,
+            caller: ctx.caller,
             actor: &self.actor,
             version: env!("CARGO_PKG_VERSION"),
         };
@@ -658,6 +664,12 @@ mod tests {
                 outcome: AuditOutcome::Found,
                 error_kind: None,
                 reason: Some("deploy web frontend"),
+                caller: Some(
+                    &CallerContext::new("git")
+                        .with_version("2.51.0")
+                        .with_operation("credential_get")
+                        .with_resource("github.com"),
+                ),
             },
         );
 
@@ -672,6 +684,10 @@ mod tests {
         assert_eq!(event["profile"], "production");
         assert_eq!(event["key"], "DATABASE_URL");
         assert_eq!(event["reason"], "deploy web frontend");
+        assert_eq!(event["caller"]["name"], "git");
+        assert_eq!(event["caller"]["version"], "2.51.0");
+        assert_eq!(event["caller"]["operation"], "credential_get");
+        assert_eq!(event["caller"]["resource"], "github.com");
         assert_eq!(event["session_id"], "test-session");
         assert_eq!(event["seq"], 0);
         // Provider credentials (the `:password`) are redacted; the username,
@@ -701,6 +717,7 @@ mod tests {
                 outcome: AuditOutcome::Found,
                 error_kind: None,
                 reason: None,
+                caller: None,
             },
         );
 
@@ -734,6 +751,7 @@ mod tests {
                     outcome: AuditOutcome::Written,
                     error_kind: None,
                     reason: None,
+                    caller: None,
                 },
             );
         }
@@ -892,6 +910,7 @@ mod tests {
                 outcome: AuditOutcome::Found,
                 error_kind: None,
                 reason: None,
+                caller: None,
             },
         );
 

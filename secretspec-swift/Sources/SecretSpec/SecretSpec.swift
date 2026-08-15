@@ -3,12 +3,33 @@ import Foundation
 private let resolveSchemaVersion = 2
 private let reportSchemaVersion = 1
 
+/// Caller-asserted software-integration context (SecretSpec 0.20+).
+public struct CallerContext: Encodable, Sendable {
+    public let name: String
+    public let version: String?
+    public let operation: String?
+    public let resource: String?
+
+    public init(
+        name: String,
+        version: String? = nil,
+        operation: String? = nil,
+        resource: String? = nil
+    ) {
+        self.name = name
+        self.version = version
+        self.operation = operation
+        self.resource = resource
+    }
+}
+
 private struct ResolveRequest: Encodable, Sendable {
     var path: String? = nil
     var provider: String? = nil
     var profile: String? = nil
     var scope: String? = nil
     var reason: String? = nil
+    var caller: CallerContext? = nil
     var noValues: Bool? = nil
     var mode: String? = nil
 
@@ -18,6 +39,7 @@ private struct ResolveRequest: Encodable, Sendable {
         case profile
         case scope
         case reason
+        case caller
         case noValues = "no_values"
         case mode
     }
@@ -95,6 +117,11 @@ public struct SecretSpecBuilder: Sendable {
 
     public func withReason(_ reason: String?) -> Self {
         setting(\.reason, to: reason)
+    }
+
+    /// Identifies the invoking software integration (SecretSpec 0.20+).
+    public func withCaller(_ caller: CallerContext?) -> Self {
+        setting(\.caller, to: caller)
     }
 
     public func withNoValues(_ noValues: Bool = true) -> Self {
@@ -224,14 +251,16 @@ public enum SecretSpec {
         provider: String? = nil,
         profile: String? = nil,
         scope: String? = nil,
-        reason: String? = nil
+        reason: String? = nil,
+        caller: CallerContext? = nil
     ) throws -> Resolved {
         try configured(
             path: path,
             provider: provider,
             profile: profile,
             scope: scope,
-            reason: reason
+            reason: reason,
+            caller: caller
         ).load()
     }
 
@@ -241,14 +270,16 @@ public enum SecretSpec {
         provider: String? = nil,
         profile: String? = nil,
         scope: String? = nil,
-        reason: String? = nil
+        reason: String? = nil,
+        caller: CallerContext? = nil
     ) throws -> ResolutionReport {
         try configured(
             path: path,
             provider: provider,
             profile: profile,
             scope: scope,
-            reason: reason
+            reason: reason,
+            caller: caller
         ).report()
     }
 
@@ -262,7 +293,8 @@ public enum SecretSpec {
         provider: String?,
         profile: String?,
         scope: String?,
-        reason: String?
+        reason: String?,
+        caller: CallerContext?
     ) -> SecretSpecBuilder {
         builder()
             .withPath(path)
@@ -270,5 +302,6 @@ public enum SecretSpec {
             .withProfile(profile)
             .withScope(scope)
             .withReason(reason)
+            .withCaller(caller)
     }
 }

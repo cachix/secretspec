@@ -941,6 +941,7 @@ mod secret_spec_generation {
                 provider_str: Option<String>,
                 profile_str: Option<String>,
                 reason: Option<String>,
+                caller: Option<secretspec::CallerContext>,
             ) -> Result<secretspec::ValidatedSecrets, secretspec::SecretSpecError> {
                 let mut spec = secretspec::Secrets::load()?;
                 // A typed loader expects the full generated struct shape, so an
@@ -961,6 +962,9 @@ mod secret_spec_generation {
                 // ignored by `with_reason`, leaving the env-resolved value intact.
                 if let Some(reason) = reason {
                     spec = spec.with_reason(reason);
+                }
+                if let Some(caller) = caller {
+                    spec = spec.with_caller(caller);
                 }
                 match spec.validate()? {
                     Ok(valid_secrets) => Ok(valid_secrets),
@@ -1026,7 +1030,7 @@ mod secret_spec_generation {
                     // The static `load` has no reason parameter; a reason is supplied
                     // via the SECRETSPEC_REASON env var (honored by `Secrets::load`)
                     // or through `SecretSpec::builder().with_reason(...)`.
-                    let validation_result = load_internal(provider_str, profile_str, None)?;
+                    let validation_result = load_internal(provider_str, profile_str, None, None)?;
 
                     let data = {
                         let secrets = &validation_result.resolved.secrets;
@@ -1070,6 +1074,7 @@ mod builder_generation {
     ///     provider: Option<Box<dyn FnOnce() -> Result<Box<dyn secretspec::Provider>, String>>>,
     ///     profile: Option<Box<dyn FnOnce() -> Result<Profile, String>>>,
     ///     reason: Option<String>,
+    ///     caller: Option<secretspec::CallerContext>,
     /// }
     /// ```
     pub fn generate_struct() -> proc_macro2::TokenStream {
@@ -1078,6 +1083,7 @@ mod builder_generation {
                 provider: Option<Box<dyn FnOnce() -> Result<Box<dyn secretspec::Provider>, String>>>,
                 profile: Option<Box<dyn FnOnce() -> Result<Profile, String>>>,
                 reason: Option<String>,
+                caller: Option<secretspec::CallerContext>,
             }
         }
     }
@@ -1115,6 +1121,7 @@ mod builder_generation {
                         provider: None,
                         profile: None,
                         reason: None,
+                        caller: None,
                     }
                 }
 
@@ -1130,6 +1137,14 @@ mod builder_generation {
                     T: Into<String>,
                 {
                     self.reason = Some(reason.into());
+                    self
+                }
+
+                /// Set structured context for the software integration invoking
+                /// SecretSpec (0.20+). This metadata is audited but never satisfies
+                /// the `require_reason` policy.
+                pub fn with_caller(mut self, caller: secretspec::CallerContext) -> Self {
+                    self.caller = Some(caller);
                     self
                 }
 
@@ -1252,8 +1267,14 @@ mod builder_generation {
                     #resolve_provider_load
                     #resolve_profile_load
                     let reason_str = self.reason.take();
+                    let caller = self.caller.take();
 
-                    let validation_result = load_internal(provider_str, profile_str, reason_str)?;
+                    let validation_result = load_internal(
+                        provider_str,
+                        profile_str,
+                        reason_str,
+                        caller,
+                    )?;
 
                     let data = {
                         let secrets = &validation_result.resolved.secrets;
@@ -1268,6 +1289,7 @@ mod builder_generation {
                 pub fn load_profile(mut self) -> Result<secretspec::Resolved<SecretSpecProfile>, secretspec::SecretSpecError> {
                     #resolve_provider_profile
                     let reason_str = self.reason.take();
+                    let caller = self.caller.take();
 
                     let (profile_str, selected_profile) = if let Some(profile_fn) = self.profile.take() {
                         let profile = profile_fn()
@@ -1291,7 +1313,12 @@ mod builder_generation {
                         (profile_str, selected_profile)
                     };
 
-                    let validation_result = load_internal(provider_str, profile_str, reason_str)?;
+                    let validation_result = load_internal(
+                        provider_str,
+                        profile_str,
+                        reason_str,
+                        caller,
+                    )?;
 
                     let data_result: LoadResult<SecretSpecProfile> = {
                         let secrets = &validation_result.resolved.secrets;

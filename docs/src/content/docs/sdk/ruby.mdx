@@ -19,6 +19,22 @@ core, so the SDK inherits every provider with no Ruby-side logic.
 A missing required secret raises `Secretspec::MissingRequiredError`; any other
 failure raises `Secretspec::Error` (with a stable `#kind`).
 
+## Caller context (0.20+)
+
+```ruby
+builder = Secretspec::SecretSpec.builder.with_caller(
+  Secretspec::CallerContext.new(
+    name: "git",
+    version: "2.51.0",
+    operation: "credential_get",
+    resource: "github.com"
+  )
+)
+```
+
+Caller context identifies the invoking integration in audit records but never
+satisfies `require_reason`. Do not put credentials or secret values in it.
+
 ## Scopes (0.17+)
 
 Use `.with_scope("api")` to resolve only a named `[scopes.api]` subset. The

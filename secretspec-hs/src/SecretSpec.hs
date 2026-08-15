@@ -19,12 +19,14 @@
 module SecretSpec
   ( -- * Builder
     Builder
+  , CallerContext(..)
   , builder
   , withPath
   , withProvider
   , withProfile
   , withScope
   , withReason
+  , withCaller
   , withNoValues
     -- * Resolve (value-carrying)
   , Resolved(..)
@@ -173,12 +175,22 @@ data Builder = Builder
   , bProfile  :: Maybe Text
   , bScope    :: Maybe Text
   , bReason   :: Maybe Text
+  , bCaller   :: Maybe CallerContext
   , bNoValues :: Bool
   }
 
+-- | Caller-asserted software-integration context (SecretSpec 0.20+). It is
+-- audit metadata and never supplies the user access reason.
+data CallerContext = CallerContext
+  { callerName      :: Text
+  , callerVersion   :: Maybe Text
+  , callerOperation :: Maybe Text
+  , callerResource  :: Maybe Text
+  } deriving (Show, Eq)
+
 -- | A builder with no options set.
 builder :: Builder
-builder = Builder Nothing Nothing Nothing Nothing Nothing False
+builder = Builder Nothing Nothing Nothing Nothing Nothing Nothing False
 
 -- | Resolve from a manifest at this path instead of walking up from the working
 -- directory.
@@ -200,6 +212,10 @@ withScope v b = b { bScope = Just v }
 -- | Set a human-readable reason for this access (for audited providers).
 withReason :: Text -> Builder -> Builder
 withReason v b = b { bReason = Just v }
+
+-- | Identify the invoking software integration (SecretSpec 0.20+).
+withCaller :: CallerContext -> Builder -> Builder
+withCaller v b = b { bCaller = Just v }
 
 -- | Omit secret values, returning only structure and provenance.
 withNoValues :: Bool -> Builder -> Builder
@@ -302,9 +318,17 @@ requestBytes b mode =
       , ("profile" .=) <$> bProfile b
       , ("scope" .=) <$> bScope b
       , ("reason" .=) <$> bReason b
+      , ("caller" .=) . callerValue <$> bCaller b
       ]
       ++ ["no_values" .= True | bNoValues b]
       ++ ["mode" .= m | Just m <- [mode]]
+  where
+    callerValue caller = object . catMaybes $
+      [ Just ("name" .= callerName caller)
+      , ("version" .=) <$> callerVersion caller
+      , ("operation" .=) <$> callerOperation caller
+      , ("resource" .=) <$> callerResource caller
+      ]
 
 -- Marshal a request to secretspec_resolve and copy the response out before
 -- freeing the native allocation.

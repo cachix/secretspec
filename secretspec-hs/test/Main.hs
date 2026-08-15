@@ -40,6 +40,7 @@ main = do
 
   let tests =
         [ ("abi_version_nonempty", testAbiVersion)
+        , ("caller_context_builder", testCallerContextBuilder)
         , ("missing_required_throws", testMissingRequired)
         , ("scoped_resolution", testScope)
         , ("codegen", testCodegen)
@@ -71,6 +72,13 @@ testAbiVersion :: IO ()
 testAbiVersion = do
   v <- S.abiVersion
   expect (not (T.null v)) "abi version was empty"
+
+testCallerContextBuilder :: IO ()
+testCallerContextBuilder = do
+  let caller = S.CallerContext "git" (Just "2.51.0")
+        (Just "credential_get") (Just "github.com")
+      configured = S.builder & S.withCaller caller
+  configured `seq` pure ()
 
 testMissingRequired :: IO ()
 testMissingRequired = do

@@ -22,6 +22,7 @@ internal static class Program
     private static readonly List<(string Name, Action Test)> Tests =
     [
         ("ABI version", TestAbiVersion),
+        ("caller context", TestCallerContext),
         ("load values and provenance", TestLoad),
         ("scoped resolution", TestScope),
         ("missing required exception", TestMissingRequired),
@@ -62,6 +63,22 @@ internal static class Program
 
     private static void TestAbiVersion() =>
         Assert(!string.IsNullOrWhiteSpace(SecretSpecClient.AbiVersion()), "ABI version was empty");
+
+    private static void TestCallerContext()
+    {
+        using var project = Project.Create(Manifest, "DATABASE_URL=postgres://db\n");
+        using var resolved = project.Builder()
+            .WithCaller(new CallerContext
+            {
+                Name = "git",
+                Version = "2.51.0",
+                Operation = "credential_get",
+                Resource = "github.com",
+            })
+            .WithReason("push the release tag")
+            .Load();
+        Equal("postgres://db", resolved.Secrets["DATABASE_URL"].Get());
+    }
 
     private static void TestLoad()
     {

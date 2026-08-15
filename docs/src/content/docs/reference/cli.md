@@ -13,10 +13,30 @@ These options are available on every command:
 |--------|-------------|
 | `-f, --file <FILE>` | Path to `secretspec.toml` (default: auto-detect). Env: `SECRETSPEC_FILE` |
 | `--reason <REASON>` | Reason for accessing secrets, recorded by providers that support audit logging (e.g. Proton Pass agent sessions). Takes precedence over `PROTON_PASS_AGENT_REASON`. Env: `SECRETSPEC_REASON` |
+| `--caller <NAME>` | Software integration invoking SecretSpec; recorded separately from the user reason (0.20+) |
+| `--caller-version <VERSION>` | Version of `--caller`; requires `--caller` (0.20+) |
+| `--caller-operation <OPERATION>` | Integration operation; requires `--caller` (0.20+) |
+| `--caller-resource <RESOURCE>` | Non-secret resource being accessed; requires `--caller` (0.20+) |
 
 ```bash
 $ secretspec run --reason "Deploying web frontend" -- ./deploy.sh
 ```
+
+SecretSpec 0.20+ lets a Git integration identify itself without replacing the
+user-supplied reason:
+
+```bash
+$ secretspec get GITHUB_TOKEN \
+    --caller git \
+    --caller-version 2.51.0 \
+    --caller-operation credential_get \
+    --caller-resource github.com \
+    --reason "push the release tag"
+```
+
+Caller context is caller-asserted audit metadata, not an authenticated identity,
+and never satisfies `require_reason`. Do not put credentials or secret values in
+these fields.
 
 ## Commands
 
@@ -670,8 +690,8 @@ The log location is read from your user-global config (`[audit]` in `~/.config/s
 
 **Example:**
 ```bash
-$ secretspec audit --action run -n 5
-2026-06-04T18:06:29Z  run    found  ./deploy.sh  API_KEY,DATABASE_URL  (my-app/production)  reason: deploy  [claude-code]
+$ secretspec audit --action get -n 5
+2026-06-04T18:06:29Z  get    found  GITHUB_TOKEN  (my-app/production)  reason: push release tag  caller: git@2.51.0/credential_get github.com
 
 # Pipe raw entries to jq
 $ secretspec audit --json | jq 'select(.outcome == "missing")'

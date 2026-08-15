@@ -67,6 +67,20 @@ A one-shot form is also available:
 
 <Code code={oneShotExample} lang="swift" meta='title="OneShot.swift"' />
 
+## Caller context (0.20+)
+
+```swift
+let builder = SecretSpec.builder().withCaller(CallerContext(
+    name: "git",
+    version: "2.51.0",
+    operation: "credential_get",
+    resource: "github.com"
+))
+```
+
+Caller context identifies the invoking integration in audit records but never
+satisfies `require_reason`. Do not put credentials or secret values in it.
+
 ## Scopes
 
 Use `withScope("api")` to resolve only a named `[scopes.api]` subset. The

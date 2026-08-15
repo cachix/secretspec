@@ -46,6 +46,16 @@ type MissingRequiredError struct {
 	Missing []string
 }
 
+// CallerContext identifies the software integration invoking SecretSpec.
+// It is caller-asserted audit metadata and never supplies an access reason.
+// Available since SecretSpec 0.20.
+type CallerContext struct {
+	Name      string `json:"name"`
+	Version   string `json:"version,omitempty"`
+	Operation string `json:"operation,omitempty"`
+	Resource  string `json:"resource,omitempty"`
+}
+
 func (e *MissingRequiredError) Error() string {
 	return "missing required secret(s): " + strings.Join(e.Missing, ", ")
 }
@@ -187,7 +197,10 @@ func (b *Builder) WithProfile(p string) *Builder  { return b.set("profile", p) }
 // WithScope limits resolution to a named manifest scope (SecretSpec 0.17+).
 func (b *Builder) WithScope(scope string) *Builder   { return b.set("scope", scope) }
 func (b *Builder) WithReason(reason string) *Builder { return b.set("reason", reason) }
-func (b *Builder) WithNoValues(v bool) *Builder      { return b.set("no_values", v) }
+func (b *Builder) WithCaller(caller CallerContext) *Builder {
+	return b.set("caller", caller)
+}
+func (b *Builder) WithNoValues(v bool) *Builder { return b.set("no_values", v) }
 
 // envelope is the response wrapper shared by the resolve and report paths,
 // generic over its inner response type R.

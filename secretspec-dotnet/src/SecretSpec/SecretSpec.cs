@@ -12,8 +12,9 @@ public static class SecretSpec
         string? provider = null,
         string? profile = null,
         string? reason = null,
-        string? scope = null) =>
-        Configured(path, provider, profile, scope, reason).Load();
+        string? scope = null,
+        CallerContext? caller = null) =>
+        Configured(path, provider, profile, scope, reason, caller).Load();
 
     /// <summary>Builds a value-free inventory report in one call.</summary>
     public static ResolutionReport Report(
@@ -21,8 +22,9 @@ public static class SecretSpec
         string? provider = null,
         string? profile = null,
         string? reason = null,
-        string? scope = null) =>
-        Configured(path, provider, profile, scope, reason).Report();
+        string? scope = null,
+        CallerContext? caller = null) =>
+        Configured(path, provider, profile, scope, reason, caller).Report();
 
     /// <summary>The ABI version reported by the loaded native resolver.</summary>
     public static string AbiVersion() => Native.AbiVersion();
@@ -32,11 +34,13 @@ public static class SecretSpec
         string? provider,
         string? profile,
         string? scope,
-        string? reason) =>
+        string? reason,
+        CallerContext? caller) =>
         Builder()
             .WithPath(path)
             .WithProvider(provider)
             .WithProfile(profile)
             .WithScope(scope)
-            .WithReason(reason);
+            .WithReason(reason)
+            .WithCaller(caller);
 }

@@ -56,6 +56,16 @@ final class Builder
         return $this->set('reason', $reason);
     }
 
+    /** Identify the invoking software integration (SecretSpec 0.20+). */
+    public function withCaller(?CallerContext $caller): self
+    {
+        if ($caller !== null) {
+            $this->request['caller'] = $caller->toArray();
+        }
+
+        return $this;
+    }
+
     /** Set a request field when the value is provided; a no-op for null. */
     private function set(string $key, ?string $value): self
     {

@@ -101,6 +101,23 @@ There is also a one-shot form using named arguments:
 
 <Code code={oneShotExample} lang="php" meta='title="one_shot.php"' />
 
+## Caller context (0.20+)
+
+```php
+use Secretspec\CallerContext;
+use Secretspec\SecretSpec;
+
+$builder = SecretSpec::builder()->withCaller(new CallerContext(
+    name: 'git',
+    version: '2.51.0',
+    operation: 'credential_get',
+    resource: 'github.com',
+));
+```
+
+Caller context identifies the invoking integration in audit records but never
+satisfies `require_reason`. Do not put credentials or secret values in it.
+
 ## Scopes (0.17+)
 
 Use `withScope('api')` to resolve only a named `[scopes.api]` subset. The

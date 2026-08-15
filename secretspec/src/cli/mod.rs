@@ -1,5 +1,7 @@
 use crate::provider::{Provider, providers, spec_names_known_provider};
-use crate::{Config, ExportFormat, GlobalConfig, GlobalDefaults, Profile, Project, Secrets};
+use crate::{
+    CallerContext, Config, ExportFormat, GlobalConfig, GlobalDefaults, Profile, Project, Secrets,
+};
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use std::collections::{HashMap, HashSet};
@@ -29,6 +31,23 @@ struct Cli {
     /// PROTON_PASS_AGENT_REASON environment variable.
     #[arg(long, global = true, env = "SECRETSPEC_REASON")]
     reason: Option<String>,
+
+    /// Software integration invoking SecretSpec, recorded as caller context
+    /// without satisfying the access-reason policy (0.20+)
+    #[arg(long, global = true)]
+    caller: Option<String>,
+
+    /// Version of the software integration named by --caller (0.20+)
+    #[arg(long, global = true)]
+    caller_version: Option<String>,
+
+    /// Operation the software integration is performing (0.20+)
+    #[arg(long, global = true)]
+    caller_operation: Option<String>,
+
+    /// Non-secret resource the software integration is accessing (0.20+)
+    #[arg(long, global = true)]
+    caller_resource: Option<String>,
 
     /// The subcommand to execute
     #[command(subcommand)]
@@ -713,8 +732,13 @@ fn add_follow_up_command(name: &str, profile: &str, file: Option<&Path>) -> Stri
 }
 
 /// Loads secrets using an explicit path or auto-detection, applying the optional
-/// session reason (from `--reason`/`SECRETSPEC_REASON`).
-fn load_secrets(file: &Option<PathBuf>, reason: &Option<String>) -> miette::Result<Secrets> {
+/// session reason (from `--reason`/`SECRETSPEC_REASON`) and structured caller
+/// context supplied by an integration.
+fn load_secrets(
+    file: &Option<PathBuf>,
+    reason: &Option<String>,
+    caller: &Option<CallerContext>,
+) -> miette::Result<Secrets> {
     let mut secrets = match file {
         Some(path) => Secrets::load_from(path),
         None => Secrets::load(),
@@ -732,8 +756,12 @@ fn load_secrets(file: &Option<PathBuf>, reason: &Option<String>) -> miette::Resu
         );
     });
 
-    Ok(match reason {
+    let secrets = match reason {
         Some(reason) => secrets.with_reason(reason.clone()),
+        None => secrets,
+    };
+    Ok(match caller {
+        Some(caller) => secrets.with_caller(caller.clone()),
         None => secrets,
     })
 }
@@ -841,6 +869,36 @@ fn select_config_init_profile(profile: Option<String>) -> Result<Option<String>>
     Ok((profile_choice != "none").then(|| profile_choice.to_string()))
 }
 
+/// Builds the structured caller context from global CLI flags. Clap global
+/// arguments may appear on either side of the subcommand, so dependency
+/// validation lives here instead of `requires = "caller"` (which treats a
+/// parent and subcommand occurrence as different scopes).
+fn caller_context(cli: &Cli) -> Result<Option<CallerContext>> {
+    let Some(name) = &cli.caller else {
+        if cli.caller_version.is_some()
+            || cli.caller_operation.is_some()
+            || cli.caller_resource.is_some()
+        {
+            return Err(miette!(
+                "--caller-version, --caller-operation, and --caller-resource require --caller"
+            ));
+        }
+        return Ok(None);
+    };
+
+    let mut context = CallerContext::new(name);
+    if let Some(version) = &cli.caller_version {
+        context = context.with_version(version);
+    }
+    if let Some(operation) = &cli.caller_operation {
+        context = context.with_operation(operation);
+    }
+    if let Some(resource) = &cli.caller_resource {
+        context = context.with_resource(resource);
+    }
+    Ok(Some(context))
+}
+
 /// Main entry point for the secretspec CLI application.
 ///
 /// Parses command-line arguments and executes the appropriate command.
@@ -854,6 +912,7 @@ fn select_config_init_profile(profile: Option<String>) -> Result<Option<String>>
 pub fn main() -> Result<()> {
     completion::complete();
     let cli = Cli::parse();
+    let caller = caller_context(&cli)?;
 
     match cli.command {
         // Initialize a new secretspec.toml configuration file
@@ -982,7 +1041,7 @@ pub fn main() -> Result<()> {
             description,
             profile,
         } => {
-            let app = load_secrets(&cli.file, &cli.reason)?;
+            let app = load_secrets(&cli.file, &cli.reason, &caller)?;
             let profile = app.resolve_profile_name(profile.as_deref());
             validate_add_target(&app, &profile, &name)?;
 
@@ -1190,7 +1249,7 @@ pub fn main() -> Result<()> {
                         Ok(())
                     }
                     ProviderAction::Login { name } => {
-                        let app = load_secrets(&cli.file, &cli.reason)?;
+                        let app = load_secrets(&cli.file, &cli.reason, &caller)?;
                         let credentials =
                             app.declared_provider_credentials(&name).into_diagnostic()?;
                         let provider_reads = crate::provider::spec_provider_reads(
@@ -1242,7 +1301,7 @@ pub fn main() -> Result<()> {
             provider,
             profile,
         } => {
-            let mut app = load_secrets(&cli.file, &cli.reason)?;
+            let mut app = load_secrets(&cli.file, &cli.reason, &caller)?;
             if let Some(p) = provider {
                 app.set_provider(p);
             }
@@ -1260,7 +1319,7 @@ pub fn main() -> Result<()> {
             provider,
             profile,
         } => {
-            let mut app = load_secrets(&cli.file, &cli.reason)?;
+            let mut app = load_secrets(&cli.file, &cli.reason, &caller)?;
             if let Some(p) = provider {
                 app.set_provider(p);
             }
@@ -1279,7 +1338,7 @@ pub fn main() -> Result<()> {
             provider,
             profile,
         } => {
-            let mut app = load_secrets(&cli.file, &cli.reason)?;
+            let mut app = load_secrets(&cli.file, &cli.reason, &caller)?;
             if let Some(provider) = provider {
                 app.set_provider(provider);
             }
@@ -1374,7 +1433,7 @@ pub fn main() -> Result<()> {
             profile,
             scope,
         } => {
-            let mut app = load_secrets(&cli.file, &cli.reason)?;
+            let mut app = load_secrets(&cli.file, &cli.reason, &caller)?;
             if let Some(p) = provider {
                 app.set_provider(p);
             }
@@ -1394,7 +1453,7 @@ pub fn main() -> Result<()> {
             scope,
             format,
         } => {
-            let mut app = load_secrets(&cli.file, &cli.reason)?;
+            let mut app = load_secrets(&cli.file, &cli.reason, &caller)?;
             if let Some(p) = provider {
                 app.set_provider(p);
             }
@@ -1417,7 +1476,7 @@ pub fn main() -> Result<()> {
             json,
             explain,
         } => {
-            let mut app = load_secrets(&cli.file, &cli.reason)?;
+            let mut app = load_secrets(&cli.file, &cli.reason, &caller)?;
             if let Some(p) = provider {
                 app.set_provider(p);
             }
@@ -1467,7 +1526,7 @@ pub fn main() -> Result<()> {
         }
         // Generate typed accessors for another language (value-free)
         Commands::Schema { profile, output } => {
-            let app = load_secrets(&cli.file, &cli.reason)?;
+            let app = load_secrets(&cli.file, &cli.reason, &caller)?;
             let ir = crate::codegen::build_ir(app.config());
             let schema = crate::codegen::schema::emit(&ir, profile.as_deref())
                 .map_err(|e| miette!("{e}"))?;
@@ -1488,7 +1547,7 @@ pub fn main() -> Result<()> {
             from_provider,
             delete_source,
         } => {
-            let app = load_secrets(&cli.file, &cli.reason)?;
+            let app = load_secrets(&cli.file, &cli.reason, &caller)?;
             if delete_source {
                 app.import_with_delete_source(&from_provider)
                     .into_diagnostic()
@@ -1502,7 +1561,7 @@ pub fn main() -> Result<()> {
         }
         Commands::Cache { action } => match action {
             CacheAction::Clear { name, profile } => {
-                let mut app = load_secrets(&cli.file, &cli.reason)?;
+                let mut app = load_secrets(&cli.file, &cli.reason, &caller)?;
                 if let Some(profile) = profile {
                     app.set_profile(profile);
                 }
@@ -1686,6 +1745,21 @@ fn format_audit_line(v: &serde_json::Value) -> String {
     if let Some(reason) = str_field("reason") {
         s += &format!("  reason: {}", sanitize_field(reason).italic());
     }
+    if let Some(caller) = v.get("caller").and_then(|value| value.as_object())
+        && let Some(name) = caller.get("name").and_then(|value| value.as_str())
+    {
+        let mut rendered = sanitize_field(name);
+        if let Some(version) = caller.get("version").and_then(|value| value.as_str()) {
+            rendered += &format!("@{}", sanitize_field(version));
+        }
+        if let Some(operation) = caller.get("operation").and_then(|value| value.as_str()) {
+            rendered += &format!("/{}", sanitize_field(operation));
+        }
+        if let Some(resource) = caller.get("resource").and_then(|value| value.as_str()) {
+            rendered += &format!(" {}", sanitize_field(resource));
+        }
+        s += &format!("  caller: {rendered}");
+    }
     if let Some(agent) = v
         .get("actor")
         .and_then(|a| a.get("agent"))
@@ -1851,7 +1925,9 @@ mod tests {
         let single: serde_json::Value = serde_json::from_str(
             r#"{"ts":"2026-06-07T00:00:00Z","action":"get","outcome":"found",
                 "project":"demo","profile":"prod","key":"DB","provider":"dotenv://.env",
-                "reason":"deploy","actor":{"agent":"claude-code"}}"#,
+                "reason":"deploy","caller":{"name":"git","version":"2.51.0",
+                "operation":"credential_get","resource":"github.com"},
+                "actor":{"agent":"claude-code"}}"#,
         )
         .unwrap();
         let line = format_audit_line(&single);
@@ -1860,6 +1936,7 @@ mod tests {
         assert!(line.contains("DB"));
         assert!(line.contains("(demo/prod via dotenv://.env)"));
         assert!(line.contains("reason: deploy"));
+        assert!(line.contains("caller: git@2.51.0/credential_get github.com"));
         assert!(line.contains("[claude-code]"));
 
         // A bulk entry joins `keys[]` and shows the executed command.
@@ -2378,6 +2455,38 @@ API_KEY = { description = "Existing" }
             }
             _ => panic!("expected Run command"),
         }
+    }
+
+    #[test]
+    fn caller_context_flags_are_global_and_details_require_a_name() {
+        let cli = Cli::try_parse_from([
+            "secretspec",
+            "--caller",
+            "git",
+            "--caller-version",
+            "2.51.0",
+            "run",
+            "--caller-operation",
+            "credential_get",
+            "--caller-resource",
+            "github.com",
+            "--",
+            "true",
+        ])
+        .unwrap();
+        assert_eq!(cli.caller.as_deref(), Some("git"));
+        assert_eq!(cli.caller_version.as_deref(), Some("2.51.0"));
+        assert_eq!(cli.caller_operation.as_deref(), Some("credential_get"));
+        assert_eq!(cli.caller_resource.as_deref(), Some("github.com"));
+
+        let missing_name = Cli::try_parse_from([
+            "secretspec",
+            "--caller-operation",
+            "credential_get",
+            "check",
+        ])
+        .unwrap();
+        assert!(caller_context(&missing_name).is_err());
     }
 
     #[test]

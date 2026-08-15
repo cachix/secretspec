@@ -396,6 +396,19 @@ pub trait Provider: Send + Sync {
     /// [`Secrets::with_reason`]: crate::Secrets::with_reason
     fn set_reason(&self, _reason: Option<String>) {}
 
+    /// Records structured context about the software integration invoking
+    /// SecretSpec, such as `git` performing `credential_get` for `github.com`.
+    ///
+    /// This metadata is distinct from the user-supplied access reason and never
+    /// satisfies `require_reason`. Providers may use it for their own audit or
+    /// approval surfaces. The default implementation ignores it.
+    ///
+    /// Takes `&self` for the same reason as [`Provider::set_reason`]: SecretSpec
+    /// applies it after providers may have been wrapped in `Arc`.
+    ///
+    /// Available since SecretSpec 0.20.
+    fn set_caller(&self, _caller: Option<crate::CallerContext>) {}
+
     /// Records the profile this session resolves under. Available starting with
     /// SecretSpec 0.20.
     ///
@@ -716,6 +729,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     }
     fn set_reason(&self, reason: Option<String>) {
         (**self).set_reason(reason);
+    }
+    fn set_caller(&self, caller: Option<crate::CallerContext>) {
+        (**self).set_caller(caller);
     }
     fn set_profile(&self, profile: &str) {
         (**self).set_profile(profile);

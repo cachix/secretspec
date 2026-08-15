@@ -183,6 +183,8 @@ class Builder {
   /** Limit resolution to a named manifest scope (SecretSpec 0.17+). */
   withScope(s) { if (s != null) this._request.scope = s; return this; }
   withReason(r) { if (r != null) this._request.reason = r; return this; }
+  /** Set structured software-integration context (SecretSpec 0.20+). */
+  withCaller(c) { if (c != null) this._request.caller = c; return this; }
   withNoValues(v = true) { this._request.no_values = v; return this; }
 
   /**

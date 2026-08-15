@@ -226,6 +226,10 @@ impl Provider for PreflightGuard {
         self.inner.set_reason(reason);
     }
 
+    fn set_caller(&self, caller: Option<crate::CallerContext>) {
+        self.inner.set_caller(caller);
+    }
+
     fn set_profile(&self, profile: &str) {
         self.inner.set_profile(profile);
     }

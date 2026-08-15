@@ -39,6 +39,13 @@ public sealed class SecretSpecBuilder
         return this;
     }
 
+    /// <summary>Identifies the invoking software integration (SecretSpec 0.20+).</summary>
+    public SecretSpecBuilder WithCaller(CallerContext? caller)
+    {
+        _request.Caller = caller;
+        return this;
+    }
+
     public SecretSpecBuilder WithNoValues(bool noValues = true)
     {
         _request.NoValues = noValues;

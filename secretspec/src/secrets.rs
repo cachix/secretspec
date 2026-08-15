@@ -1883,10 +1883,17 @@ impl Secrets {
         Ok(())
     }
 
-    /// Get a reference to the project configuration. Used by `secretspec
-    /// codegen` (which needs the manifest, not a provider) and by tests.
-    #[cfg(any(feature = "cli", test))]
-    pub(crate) fn config(&self) -> &Config {
+    /// Get a reference to the project configuration.
+    ///
+    /// Used by `secretspec codegen`, which needs the manifest rather than a
+    /// provider. `pub(crate)` behind the `cli` feature meant any other
+    /// embedder needing the manifest without a provider — an out-of-tree
+    /// plugin (#64) inspecting declared secrets, for instance — had no way to
+    /// reach it short of taking the whole `cli` feature or re-parsing the
+    /// manifest itself. Hidden from the public SDK surface: ordinary callers
+    /// resolve secrets, not manifests.
+    #[doc(hidden)]
+    pub fn config(&self) -> &Config {
         &self.config
     }
 

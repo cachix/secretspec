@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Secrets::config()` is now `#[doc(hidden)] pub` instead of `pub(crate)`
+  behind the `cli` feature. Any embedder that needs the manifest without a
+  provider — an out-of-tree plugin inspecting declared secrets, for
+  instance — can now reach it without taking the whole `cli` feature.
 - Structured caller context lets CLI and SDK integrations identify the invoking
   software, version, operation, and non-secret resource independently of the
   user-supplied access reason. Audit records and providers receive the context,

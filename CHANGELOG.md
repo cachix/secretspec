@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   software, version, operation, and non-secret resource independently of the
   user-supplied access reason. Audit records and providers receive the context,
   but it never satisfies the `require_reason` policy.
+- A secret's declared `description` now reaches the generated JSON Schema as
+  a `description` key on its property. [quicktype](https://quicktype.io)
+  turns that into a native docstring in every target language, so SDKs
+  generated from a manifest carry the same descriptions the manifest already
+  declares, instead of losing them at the schema boundary.
 - The Fly.io `fly` provider publishes and deletes application secrets with
   `secretspec set` and `secretspec delete`, and discovers their names with
   `init --from`. Fly.io never exposes plaintext secret values, so the provider

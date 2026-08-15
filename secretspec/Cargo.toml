@@ -60,7 +60,11 @@ age = { workspace = true, optional = true }
 
 [features]
 default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "infisical", "bw", "age", "scaleway", "sops"]
-cli = ["dep:toml_edit", "dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable"]
+cli = ["manifest-edit", "dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable"]
+# Pure manifest declaration edits (`add_secret_to_manifest`), split out so a
+# caller can perform them without the CLI-only tooling `cli` also pulls in
+# (shell-completion generation via clap_complete/is_executable).
+manifest-edit = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
 keeper = ["dep:keeper-secrets-manager-core"]

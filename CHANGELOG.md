@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Provider behavior, configuration, and supported URIs remain unchanged after
   reorganizing the shared provider infrastructure into focused modules.
+- `add_secret_to_manifest` moved from the `cli` module into a new
+  `manifest_edit` module, gated by its own `manifest-edit` feature (which
+  `cli` still enables). Behavior is unchanged; a caller that only needs to
+  add a secret declaration can now take that feature alone, without the
+  CLI's shell-completion tooling.
 
 ### Added
 

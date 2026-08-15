@@ -62,6 +62,11 @@ pub(crate) mod provider;
 #[cfg(feature = "cli")]
 pub mod cli;
 
+// Manifest declaration edits, split out so a caller can perform them without
+// the CLI-only shell-completion tooling `cli` also pulls in.
+#[cfg(feature = "manifest-edit")]
+pub mod manifest_edit;
+
 // Re-export only the types needed by users and generated code
 pub use caller::CallerContext;
 pub use config::Resolved;

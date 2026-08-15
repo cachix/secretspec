@@ -1,4 +1,4 @@
-# :schema ./docs/src/schemas/monochange.schema.json
+#:schema https://monochange.github.io/monochange/schemas/monochange.schema.json
 
 [defaults]
 parent_bump = "patch"

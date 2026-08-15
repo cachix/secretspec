@@ -48,6 +48,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   treating the secret as missing or writing to a distinct double-slash name. Closes
   [#344](https://github.com/cachix/secretspec/issues/344).
 
+- Infisical secret references no longer require `?env=` in the provider URI: a
+  `ref` names a folder and key but never an environment, so it now falls back to
+  the profile the run resolves under. One alias can therefore serve every profile
+  while naming secrets flat — `ref = { item = "/{key}" }` — instead of needing
+  one alias per environment. An explicit `?env=` still pins the environment.
+  Note that Infisical answers a missing secret, folder, environment and project
+  with the same 404, so a ref pointed at an environment that does not exist reads
+  as an unset secret rather than an error. A credential declared with a `ref`
+  still needs `?env=`, so it resolves the same way whichever profile is running.
+
+- `secretspec set` against an Infisical secret names the environment in its
+  pre-write preview, which the previous description left out.
+
+- Infisical import collision checks now recognize when aliases target the same
+  secret through a profile-derived versus explicit environment, or through an
+  absolute ref that overrides different configured path defaults, preventing
+  aliased destinations from overwriting one another.
+
 ## [0.19.1] - 2026-08-11
 
 Republishes 0.19.0's command-line artifacts. The library and CLI behave exactly

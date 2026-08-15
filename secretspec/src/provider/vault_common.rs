@@ -742,7 +742,7 @@ impl KvProvider {
                 Ok(())
             }
             Address::Native(coords) => {
-                super::reject_unsupported_coords(
+                super::address::reject_unsupported_coords(
                     self.product.scheme(),
                     coords,
                     self.supported_coords(),
@@ -778,7 +778,7 @@ impl KvProvider {
                 session.get(&coords)
             }
             Address::Native(coords) => {
-                super::reject_unsupported_coords(
+                super::address::reject_unsupported_coords(
                     self.product.scheme(),
                     coords,
                     self.supported_coords(),

@@ -570,7 +570,7 @@ can answer:
 |-------|------|----------|-------------|
 | `fallback` | array[string] | Yes | Non-empty authoritative provider route. Reads try entries in order; writes use the first entry. |
 | `cache` | table | Yes | Local cache policy containing `provider` and `max_age`. |
-| `cache.provider` | string | Yes | Leaf provider spec used to store cache entries. Must support deletion (keyring, pass, gopass, dotenv, Vault/OpenBao KV v2) and be a different store from every `fallback` entry. |
+| `cache.provider` | string | Yes | Leaf provider spec used to store cache entries. Must support deletion (keyring, pass, gopass, dotenv, age (0.20+), Vault/OpenBao KV v2) and be a different store from every `fallback` entry. |
 | `cache.max_age` | string | Yes | Positive duration with `s`, `m`, `h`, `d`, or `w` units, such as `30m`, `8h`, or `1d`. |
 
 ```toml title="secretspec.toml"
@@ -590,8 +590,9 @@ accept aliases, provider names, and URIs, but must resolve to leaf providers;
 cached aliases cannot be nested, and the cache must resolve to a different
 store than the route's own authoritative providers, since it holds its entries
 at the same logical address. The cache provider must also be one SecretSpec can
-delete from — keyring, pass, gopass, dotenv, or a Vault/OpenBao KV v2 mount —
-since every form of invalidation is a delete. Put credentials on leaf aliases
+delete from — keyring, pass, gopass, dotenv, age (0.20+), or a Vault/OpenBao
+KV v2 mount — since every form of invalidation is a delete. Put credentials on
+leaf aliases
 rather than the cached fallback alias.
 See [Provider caching](/concepts/providers/caching/)
 for freshness, failure, invalidation, and clearing behavior.
@@ -856,6 +857,7 @@ entry declares neither, it inherits whichever form `[profiles.default]` uses.
 | [file (0.19+)](/providers/file/#use-existing-files) | Relative file path beneath the configured root | Rejected | Reads the complete UTF-8 file | ✅ |
 | [env](/providers/env/#use-existing-secrets) | Variable name | Rejected | Reads the variable | — (read-only) |
 | [systemd credentials (0.17+)](/providers/systemd-credential/#use-an-existing-credential-name) | Credential filename | Rejected | Reads the credential | — (read-only) |
+| [Fly.io secrets (0.20+)](/providers/fly/#use-existing-secrets) | Fly app secret name | Rejected | Error: Fly.io does not expose plaintext values | ✅ write-only via `flyctl secrets set` |
 | [pass](/providers/pass/#use-existing-secrets) | Entry path | Rejected | Reads the entry | ✅ |
 | [Gopass (0.15+)](/providers/gopass/#use-existing-secrets) | Entry path, including any mount-point prefix | Rejected | Reads the entry | ✅ |
 | [LastPass](/providers/lastpass/#use-existing-secrets) | Item name | Rejected | Reads the item | ✅ |

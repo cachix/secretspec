@@ -1112,7 +1112,7 @@ impl Secrets {
     /// convention-path credentials live at `{project}/{profile}/{credential}`,
     /// so the provider must be built for the same profile its secrets are
     /// addressed under.
-    fn build_provider(
+    pub(crate) fn build_provider(
         &self,
         spec: String,
         profile: Option<&str>,
@@ -1158,7 +1158,12 @@ impl Secrets {
         let credentials = self
             .provider_credentials_cache
             .get_or_try_init(key, || self.resolve_provider_credentials(&spec, &profile))?;
-        self.build_provider_with_credentials(&spec, credentials, allow_inline_cached)
+        self.build_provider_with_credentials(
+            &spec,
+            credentials,
+            allow_inline_cached,
+            Some(&profile),
+        )
     }
 
     /// [`Self::build_provider`], memoized within one resolution so repeated
@@ -1197,8 +1202,21 @@ impl Secrets {
     /// credential source, so credential-source chains are at most one hop and
     /// cannot recurse, and for cache remediation, where the credential source
     /// itself may be what failed.
-    fn build_source_provider(&self, spec: &str) -> Result<Box<dyn ProviderTrait>> {
-        self.build_provider_with_credentials(spec, ProviderCredentials::new(), false)
+    ///
+    /// Deliberately hands the provider no profile: a credential belongs to the
+    /// alias rather than to any one profile ([`PROVIDER_CREDENTIAL_SCOPE`]), and
+    /// [`CredentialSource::address`] must round-trip whichever profile stores and
+    /// reads it. A `ref`-addressed credential would otherwise resolve in the
+    /// storing profile's Infisical environment and read from the reading
+    /// profile's, so a credential stored under `prod` would be missing under
+    /// `dev`. Such a ref keeps needing an explicit `?env=`, which is
+    /// profile-independent by construction.
+    ///
+    /// Cache remediation is the other caller and needs no profile either: it
+    /// addresses through [`Self::cache_address`], which is a convention address
+    /// carrying its own.
+    pub(crate) fn build_source_provider(&self, spec: &str) -> Result<Box<dyn ProviderTrait>> {
+        self.build_provider_with_credentials(spec, ProviderCredentials::new(), false, None)
     }
 
     /// The shared construction body behind generic, routed, and credential
@@ -1209,6 +1227,7 @@ impl Secrets {
         spec: &str,
         credentials: ProviderCredentials,
         allow_inline_cached: bool,
+        profile: Option<&str>,
     ) -> Result<Box<dyn ProviderTrait>> {
         // `build_source_provider` calls this body directly, so retain the guard
         // here as well as before credential initialization in the generic path.
@@ -1224,6 +1243,17 @@ impl Secrets {
         provider.with_base_dir(&self.config_dir);
         provider.set_reason(self.reason.clone());
         provider.set_caller(self.caller.clone());
+        // Context a native address cannot carry: a `ref` names coordinates only,
+        // so a provider whose store is partitioned by something outside them
+        // (Infisical's environment) reads the operation's profile here. It is
+        // the profile the caller already resolved, so a provider and the
+        // addresses handed to it never disagree about which profile is running.
+        // `None` is for a credential source, which is profile-independent by
+        // contract. Naming stays with the address; this never reaches
+        // `uri`/`storage_identity`.
+        if let Some(profile) = profile {
+            provider.set_profile(profile);
+        }
         Ok(provider)
     }
 
@@ -1350,10 +1380,11 @@ impl Secrets {
         value: &SecretString,
     ) -> Result<String> {
         self.ensure_reason_for(AuditAction::Set, Some(name))?;
-        let provider = self.build_source_provider(&source.provider)?;
         // The store location is profile-independent (see `PROVIDER_CREDENTIAL_SCOPE`);
-        // the session profile is used only to attribute the audit event.
+        // the session profile attributes the audit event, and is the session
+        // context handed to the provider.
         let profile = self.resolve_profile_name(None);
+        let provider = self.build_source_provider(&source.provider)?;
         let project = self.config.project.name.clone();
         let address = source.address(&project, name);
         let result = provider

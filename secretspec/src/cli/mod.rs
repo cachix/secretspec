@@ -2,7 +2,7 @@ use crate::provider::{Provider, providers, spec_names_known_provider};
 use crate::{
     CallerContext, Config, ExportFormat, GlobalConfig, GlobalDefaults, Profile, Project, Secrets,
 };
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -10,6 +10,8 @@ use std::io::{IsTerminal, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+
+mod completion;
 
 /// Main CLI structure for the secretspec application.
 ///
@@ -21,7 +23,7 @@ use std::path::{Path, PathBuf};
 #[command(version)]
 struct Cli {
     /// Path to secretspec.toml (default: auto-detect by walking up from current directory)
-    #[arg(short = 'f', long, global = true, env = "SECRETSPEC_FILE")]
+    #[arg(short = 'f', long, global = true, env = "SECRETSPEC_FILE", value_hint = ValueHint::FilePath)]
     file: Option<PathBuf>,
 
     /// Reason for accessing secrets, recorded by providers that support audit
@@ -52,6 +54,23 @@ struct Cli {
     command: Commands,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum CompletionShell {
+    /// Bourne Again Shell
+    Bash,
+    /// Elvish shell
+    Elvish,
+    /// Friendly Interactive Shell
+    Fish,
+    /// Nushell
+    Nushell,
+    /// PowerShell
+    #[value(name = "powershell")]
+    PowerShell,
+    /// Z shell
+    Zsh,
+}
+
 /// Available commands for the secretspec CLI.
 ///
 /// This enum defines all the subcommands that can be executed, including
@@ -63,13 +82,13 @@ enum Commands {
         /// Discover declarations from a provider (additional providers in 0.18+)
         ///
         /// Note: no short flag here — `-f` is the global `--file` option.
-        #[arg(long, default_value = "dotenv://.env")]
+        #[arg(long, default_value = "dotenv://.env", add = clap_complete::ArgValueCompleter::new(completion::providers))]
         from: String,
         /// Project used to select the provider namespace (0.18+; defaults to directory name)
         #[arg(long)]
         project: Option<String>,
         /// Profile used to select the provider namespace (0.18+)
-        #[arg(short = 'P', long, default_value = "default")]
+        #[arg(short = 'P', long, default_value = "default", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: String,
     },
     /// Add a secret declaration to secretspec.toml (0.18+)
@@ -80,37 +99,39 @@ enum Commands {
         #[arg(short, long)]
         description: Option<String>,
         /// Profile to add the secret to
-        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: Option<String>,
     },
     /// Set a secret value
     Set {
         /// Name of the secret
+        #[arg(add = clap_complete::ArgValueCompleter::new(completion::secrets))]
         name: String,
         /// Value of the secret (will prompt if not provided)
         value: Option<String>,
         /// Provider backend to use
-        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER", add = clap_complete::ArgValueCompleter::new(completion::providers))]
         provider: Option<String>,
         /// Profile to use
-        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: Option<String>,
     },
     /// Get a secret value
     Get {
         /// Name of the secret
+        #[arg(add = clap_complete::ArgValueCompleter::new(completion::secrets))]
         name: String,
         /// Provider backend to use
-        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER", add = clap_complete::ArgValueCompleter::new(completion::providers))]
         provider: Option<String>,
         /// Profile to use
-        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: Option<String>,
     },
     /// Delete stored secret values from a provider (0.18+)
     Delete {
         /// Names of the secrets to delete
-        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        #[arg(required_unless_present = "all", conflicts_with = "all", add = clap_complete::ArgValueCompleter::new(completion::secrets))]
         names: Vec<String>,
         /// Delete every provider-backed secret declared in the active profile
         #[arg(long)]
@@ -119,38 +140,38 @@ enum Commands {
         #[arg(short, long, requires = "all", conflicts_with = "names")]
         yes: bool,
         /// Provider backend to delete from
-        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER", add = clap_complete::ArgValueCompleter::new(completion::providers))]
         provider: Option<String>,
         /// Profile to use
-        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: Option<String>,
     },
     /// Run a command with secrets injected
     Run {
         /// Provider backend to use
-        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER", add = clap_complete::ArgValueCompleter::new(completion::providers))]
         provider: Option<String>,
         /// Profile to use
-        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: Option<String>,
         /// Scope to resolve (a `[scopes]` subset of the profile). Excluded
         /// secrets are removed from the child environment even if inherited.
-        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE")]
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE", add = clap_complete::ArgValueCompleter::new(completion::scopes))]
         scope: Option<String>,
         /// Command and arguments to run
-        #[arg(trailing_var_arg = true)]
+        #[arg(trailing_var_arg = true, value_hint = ValueHint::CommandWithArguments, add = clap_complete::ArgValueCompleter::new(completion::RunCompleter))]
         command: Vec<String>,
     },
     /// Resolve secrets and print them for another tool to consume
     Export {
         /// Provider backend to use
-        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER", add = clap_complete::ArgValueCompleter::new(completion::providers))]
         provider: Option<String>,
         /// Profile to use
-        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: Option<String>,
         /// Scope to resolve (a `[scopes]` subset of the profile)
-        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE")]
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE", add = clap_complete::ArgValueCompleter::new(completion::scopes))]
         scope: Option<String>,
         /// Output format
         #[arg(long, value_enum, default_value = "shell")]
@@ -159,13 +180,13 @@ enum Commands {
     /// Check if all required secrets are in the provider, if not set them
     Check {
         /// Provider backend to use
-        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER", add = clap_complete::ArgValueCompleter::new(completion::providers))]
         provider: Option<String>,
         /// Profile to use
-        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: Option<String>,
         /// Scope to check (a `[scopes]` subset of the profile)
-        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE")]
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE", add = clap_complete::ArgValueCompleter::new(completion::scopes))]
         scope: Option<String>,
         /// Don't prompt for missing secrets (exit with error if any are missing)
         #[arg(short = 'n', long)]
@@ -190,11 +211,17 @@ enum Commands {
     /// Example: `secretspec schema | quicktype -s schema --top-level SecretSpec --lang typescript`
     Schema {
         /// Emit the schema for this profile's fields instead of the union
-        #[arg(short = 'P', long)]
+        #[arg(short = 'P', long, add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: Option<String>,
         /// Write to this file instead of stdout
-        #[arg(short, long)]
+        #[arg(short, long, value_hint = ValueHint::FilePath)]
         output: Option<PathBuf>,
+    },
+    /// Generate shell completion scripts (0.20+)
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: CompletionShell,
     },
     /// Manage SecretSpec configuration
     Config {
@@ -204,6 +231,7 @@ enum Commands {
     /// Import secrets from a provider to another provider
     Import {
         /// Provider backend to import from (secrets will be imported to the default provider)
+        #[arg(add = clap_complete::ArgValueCompleter::new(completion::providers))]
         from_provider: String,
         /// Delete a source value only after the destination contains the same value (0.18+)
         #[arg(long)]
@@ -231,15 +259,20 @@ enum Commands {
     },
 }
 
+fn generate_completions(shell: CompletionShell, output: &mut dyn Write) -> std::io::Result<()> {
+    completion::generate(shell, output)
+}
+
 /// Cached provider maintenance commands (0.17+).
 #[derive(Subcommand)]
 enum CacheAction {
     /// Delete cached values for one secret, or all cached secrets (0.17+)
     Clear {
         /// Secret to clear; omit to clear every cached secret in the profile
+        #[arg(add = clap_complete::ArgValueCompleter::new(completion::secrets))]
         name: Option<String>,
         /// Profile whose cache entries should be cleared
-        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: Option<String>,
     },
 }
@@ -259,10 +292,10 @@ enum ConfigAction {
     #[command(hide = true)]
     Init {
         /// Provider backend to save without prompting (0.17+)
-        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER", add = clap_complete::ArgValueCompleter::new(completion::providers))]
         provider: Option<String>,
         /// Default profile to save without prompting; use "none" to clear it (0.17+)
-        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles_or_none))]
         profile: Option<String>,
     },
     /// Show current configuration
@@ -279,10 +312,10 @@ enum GlobalConfigAction {
     /// Initialize user-global defaults
     Init {
         /// Provider backend to save without prompting
-        #[arg(short, long, env = "SECRETSPEC_PROVIDER")]
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER", add = clap_complete::ArgValueCompleter::new(completion::providers))]
         provider: Option<String>,
         /// Default profile to save without prompting; use "none" to clear it
-        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE")]
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles_or_none))]
         profile: Option<String>,
     },
     /// Show user-global configuration
@@ -311,6 +344,7 @@ enum GlobalProviderAction {
     /// Remove a provider alias
     Remove {
         /// Name of the provider alias to remove
+        #[arg(add = clap_complete::ArgValueCompleter::new(completion::global_provider_aliases))]
         name: String,
     },
     /// List all configured provider aliases
@@ -341,6 +375,7 @@ enum ProviderAction {
     #[command(hide = true)]
     Remove {
         /// Name of the provider alias to remove
+        #[arg(add = clap_complete::ArgValueCompleter::new(completion::global_provider_aliases))]
         name: String,
     },
     /// List all configured provider aliases
@@ -349,6 +384,7 @@ enum ProviderAction {
     /// Store the credentials declared by a provider alias
     Login {
         /// Name of the provider alias to store credentials for
+        #[arg(add = clap_complete::ArgValueCompleter::new(completion::provider_aliases))]
         name: String,
     },
 }
@@ -874,6 +910,7 @@ fn caller_context(cli: &Cli) -> Result<Option<CallerContext>> {
 /// * `Err` - If any error occurred during execution
 #[doc(hidden)]
 pub fn main() -> Result<()> {
+    completion::complete();
     let cli = Cli::parse();
     let caller = caller_context(&cli)?;
 
@@ -916,6 +953,7 @@ pub fn main() -> Result<()> {
 
             // Create provider from the specification string.
             let provider: Box<dyn Provider> = from.as_str().try_into().into_diagnostic()?;
+            let source_reads = crate::provider::spec_provider_reads(&from);
 
             // Discover declarations in the namespace the new manifest will use.
             let secrets = provider
@@ -967,18 +1005,34 @@ pub fn main() -> Result<()> {
             // If we discovered a populated provider, explain how to copy its
             // values after reviewing the declarations.
             if secret_count > 0 {
-                println!("\nTo migrate your secrets from {}:", from);
-                println!("  1. Review secretspec.toml and adjust as needed");
-                println!(
-                    "  2. {}    # Import secret values",
-                    migration_command(&from, &profile)
-                );
+                if source_reads {
+                    println!("\nTo migrate your secrets from {}:", from);
+                    println!("  1. Review secretspec.toml and adjust as needed");
+                    println!(
+                        "  2. {}    # Import secret values",
+                        migration_command(&from, &profile)
+                    );
+                } else {
+                    println!(
+                        "\nDiscovered secret names from {from}, but this write-only provider cannot return plaintext values to import."
+                    );
+                }
             }
 
             println!("\nNext steps:");
-            println!("  1. secretspec config global init    # Set up user defaults (0.17+)");
-            println!("  2. secretspec check          # Verify all secrets and set them");
-            println!("  3. secretspec run -- your-command  # Run with secrets");
+            if source_reads {
+                println!("  1. secretspec config global init    # Set up user defaults (0.17+)");
+                println!("  2. secretspec check          # Verify all secrets and set them");
+                println!("  3. secretspec run -- your-command  # Run with secrets");
+            } else {
+                println!("  1. Review secretspec.toml and adjust the discovered names");
+                println!(
+                    "  2. secretspec config global init    # Set up defaults for readable providers"
+                );
+                println!(
+                    "  3. Use secretspec set with an explicit provider to publish secret values"
+                );
+            }
 
             Ok(())
         }
@@ -1198,6 +1252,9 @@ pub fn main() -> Result<()> {
                         let app = load_secrets(&cli.file, &cli.reason, &caller)?;
                         let credentials =
                             app.declared_provider_credentials(&name).into_diagnostic()?;
+                        let provider_reads = crate::provider::spec_provider_reads(
+                            &app.resolve_provider_spec(name.clone()),
+                        );
                         if credentials.is_empty() {
                             println!("Provider alias '{name}' declares no credentials.");
                             return Ok(());
@@ -1223,9 +1280,15 @@ pub fn main() -> Result<()> {
                                 .into_diagnostic()?;
                             println!("✓ stored {credential_name} in {location}");
                         }
-                        println!(
-                            "\nRun 'secretspec check --provider {name}' to verify authentication."
-                        );
+                        if provider_reads {
+                            println!(
+                                "\nRun 'secretspec check --provider {name}' to verify authentication."
+                            );
+                        } else {
+                            println!(
+                                "\nProvider alias '{name}' is write-only; authentication will be verified on its next write."
+                            );
+                        }
                         Ok(())
                     }
                 }
@@ -1473,6 +1536,10 @@ pub fn main() -> Result<()> {
                     .wrap_err_with(|| format!("Failed to write {}", path.display()))?,
                 None => print!("{}", schema),
             }
+            Ok(())
+        }
+        Commands::Completions { shell } => {
+            generate_completions(shell, &mut std::io::stdout().lock()).into_diagnostic()?;
             Ok(())
         }
         // Import secrets from one provider to another
@@ -2092,6 +2159,57 @@ mod tests {
     fn cli_command_definition_is_valid() {
         use clap::CommandFactory;
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn completions_accept_every_supported_shell() {
+        let cases = [
+            ("bash", CompletionShell::Bash),
+            ("elvish", CompletionShell::Elvish),
+            ("fish", CompletionShell::Fish),
+            ("nushell", CompletionShell::Nushell),
+            ("powershell", CompletionShell::PowerShell),
+            ("zsh", CompletionShell::Zsh),
+        ];
+
+        for (name, expected) in cases {
+            let cli = Cli::try_parse_from(["secretspec", "completions", name]).unwrap();
+            match cli.command {
+                Commands::Completions { shell } => assert_eq!(shell, expected),
+                _ => panic!("expected completions command"),
+            }
+        }
+    }
+
+    #[test]
+    fn completions_reject_an_unknown_shell() {
+        assert!(Cli::try_parse_from(["secretspec", "completions", "tcsh"]).is_err());
+    }
+
+    #[test]
+    fn completion_scripts_register_the_dynamic_engine() {
+        let shells = [
+            CompletionShell::Bash,
+            CompletionShell::Elvish,
+            CompletionShell::Fish,
+            CompletionShell::Nushell,
+            CompletionShell::PowerShell,
+            CompletionShell::Zsh,
+        ];
+
+        for shell in shells {
+            let mut output = Vec::new();
+            generate_completions(shell, &mut output).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(
+                output.contains("secretspec"),
+                "missing binary for {shell:?}"
+            );
+            assert!(
+                output.contains("SECRETSPEC_COMPLETE"),
+                "missing dynamic completion protocol for {shell:?}"
+            );
+        }
     }
 
     #[test]

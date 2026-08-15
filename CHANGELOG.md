@@ -7,17 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Provider behavior, configuration, and supported URIs remain unchanged after
+  reorganizing the shared provider infrastructure into focused modules.
+
 ### Added
 
 - Structured caller context lets CLI and SDK integrations identify the invoking
   software, version, operation, and non-secret resource independently of the
   user-supplied access reason. Audit records and providers receive the context,
   but it never satisfies the `require_reason` policy.
+- The Fly.io `fly` provider publishes and deletes application secrets with
+  `secretspec set` and `secretspec delete`, and discovers their names with
+  `init --from`. Fly.io never exposes plaintext secret values, so the provider
+  clearly rejects read operations and CLI guidance recommends only supported
+  workflows. Writes keep values off process arguments by streaming them to
+  `flyctl secrets set` over stdin, refuse boundary whitespace that `flyctl`
+  would silently trim, and scrub ambient Fly token variables before injecting
+  the token selected through the provider credential mechanism.
+- `secretspec completions <shell>` generates completion scripts for Bash,
+  Elvish, Fish, Nushell, PowerShell, and Zsh directly from the CLI definition,
+  including descriptions and contextual suggestions for profiles, scopes,
+  secret names, providers, aliases, paths, and commands. Completion reads
+  configuration metadata only; it never queries providers or reads secret
+  values.
+- OnePassword: a batch resolution no longer degrades to per-secret `op read`
+  calls when some referenced items don't exist. The provider now identifies
+  missing items with one `op item list` per vault and retries the batch once
+  without them (measured: 153-secret resolve with 3 missing items dropped
+  from ~32s to ~6s). Authentication and unavailable-CLI errors during batch
+  resolution now fail immediately instead of retrying every secret
+  individually.
+- OnePassword optional references whose item names resemble authentication
+  diagnostics are omitted as missing instead of aborting batch resolution.
+
+### Fixed
+
+- The `awssm` provider now accepts a trailing slash in `?prefix=` without
+  inserting a second slash into the AWS secret name. For example,
+  `?prefix=myteam/` resolves to `myteam/secretspec/...`, matching
+  `?prefix=myteam`, and both spellings share one provider identity so import
+  diagnostics still recognize alias-specific references. This avoids silently
+  treating the secret as missing or writing to a distinct double-slash name. Closes
+  [#344](https://github.com/cachix/secretspec/issues/344).
+
+- Infisical secret references no longer require `?env=` in the provider URI: a
+  `ref` names a folder and key but never an environment, so it now falls back to
+  the profile the run resolves under. One alias can therefore serve every profile
+  while naming secrets flat — `ref = { item = "/{key}" }` — instead of needing
+  one alias per environment. An explicit `?env=` still pins the environment.
+  Note that Infisical answers a missing secret, folder, environment and project
+  with the same 404, so a ref pointed at an environment that does not exist reads
+  as an unset secret rather than an error. A credential declared with a `ref`
+  still needs `?env=`, so it resolves the same way whichever profile is running.
+
+- `secretspec set` against an Infisical secret names the environment in its
+  pre-write preview, which the previous description left out.
+
+- Infisical import collision checks now recognize when aliases target the same
+  secret through a profile-derived versus explicit environment, or through an
+  absolute ref that overrides different configured path defaults, preventing
+  aliased destinations from overwriting one another.
+
+## [0.19.1] - 2026-08-11
+
+Republishes 0.19.0's command-line artifacts. The library and CLI behave exactly
+as in 0.19.0.
+
+### Added
+
+- The age provider supports deleting secrets: `secretspec delete`,
+  `secretspec import --delete-source`, and cache invalidation now work with
+  it, so an age-encrypted file can serve as the local store of a cached
+  provider alias — an encrypted-at-rest cache with no keyring daemon or OS
+  keychain involved.
 - Windows ARM64 CLI release artifacts (`aarch64-pc-windows-msvc`), attached to
   the GitHub Release as `secretspec-aarch64-pc-windows-msvc.zip` with a
   checksum. The static installer keeps selecting the x86_64 build on Windows
   ARM64, which runs under emulation, so download the archive directly for a
   native binary.
+
+### Fixed
+
+- The 0.19.0 GitHub Release shipped without its CLI archives, its installer,
+  and the Swift XCFramework, so `curl https://install.secretspec.dev | sh` and
+  `swift package` resolution of 0.19.0 both failed. Every language registry
+  (crates.io, PyPI, npm, RubyGems, Hackage, NuGet) published 0.19.0 normally and
+  is unaffected. Install 0.19.1 instead; SwiftPM version ranges resolve to it
+  automatically.
 
 ## [0.19.0] - 2026-08-10
 
@@ -25,7 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 - A provider URI may no longer carry a credential. A URI with a password
-  (`scheme://user:secret@host`) is rejected, and `onepassword+token://` no
+  (`scheme://user:PASSWORD@host`) is rejected, and `onepassword+token://` no
   longer accepts the service account token in its userinfo
   (`onepassword+token://token@vault`). A URI is committed to `secretspec.toml`,
   echoed into shell history, and printed by CI, so a credential written there is

@@ -303,6 +303,39 @@ passbolt://?template=teams/{project}/{profile}/{key}   # Replace the convention 
 
 **Write limitation**: `go-passbolt-cli` accepts created/updated values only as flags, so a value being written is visible in the child process argv until it exits. See the [Passbolt provider security notes](/providers/passbolt/#security-considerations-and-limitations).
 
+## Fly.io secrets provider (0.20+)
+
+**Availability**: Added in SecretSpec 0.20.
+
+**URI**: `fly://APP[?stage=true][&detach=true]` - Publishes application
+secrets through `flyctl secrets`
+
+```text
+fly://my-app                    # Update Machines and monitor the rollout
+fly://my-app?stage=true         # Register changes without deploying them
+fly://my-app?detach=true        # Start the rollout without monitoring it
+```
+
+**Features (0.20+)**: Write, delete, provider credentials, and name-only
+discovery through `init --from`; secret values are sent to `flyctl` over stdin
+instead of process arguments
+
+**Prerequisites (0.20+)**: `flyctl`, an authenticated login or an
+`access_token` provider credential (`FLY_API_TOKEN` and `FLY_ACCESS_TOKEN` are
+fallbacks), and permission to manage the app named in the URI
+
+**Storage (0.20+)**: Fly app secret `{key}`. The app URI, rather than the
+SecretSpec project or profile name, supplies isolation.
+
+**Read limitation**: Fly.io exposes secret names and digests but never
+plaintext values. `get`, `check`, `run`, fallback reads, generation-on-miss,
+and prompting-on-miss cannot use this write-only provider. See the
+[Fly.io provider guide](/providers/fly/).
+
+**Write limitation (0.20+)**: `flyctl` trims values read from stdin. SecretSpec
+rejects leading or trailing whitespace rather than silently publishing a
+different value.
+
 ## Google Cloud Secret Manager Provider
 
 **URI**: `gcsm://PROJECT_ID` - Stores secrets in Google Cloud Secret Manager
@@ -524,7 +557,8 @@ legacy `INFISICAL_API_URL`, then defaults to Infisical Cloud.
 **Storage**: Secret `{key}` in folder `/secretspec/{project}/{profile}`, in the environment named by the profile (or by `?env=`). Keys are stored verbatim.
 
 By default the SecretSpec profile names the Infisical environment, so a `production` profile reads
-the `production` environment. Projects whose environments do not correspond to profiles pin one with
+the `production` environment. This covers refs as well as convention naming (0.20+).
+Projects whose environments do not correspond to profiles pin one with
 `?env=`; the profile still names the folder, so profiles never share a secret.
 
 Values are read with Infisical's secret references expanded, matching its own CLI, so a value of
@@ -542,7 +576,7 @@ age://secrets.age?identity=/home/alice/.config/age/plugin-identity.txt
 age://secrets.age?recipients-file=secrets.age.recipients # Share with a roster
 ```
 
-**Features**: Read/write, committed-file storage, X25519 and SSH keys, native tagged recipients, and non-interactive `age-plugin-*` recipients and identities
+**Features**: Read/write, delete (0.20+), committed-file storage, X25519 and SSH keys, native tagged recipients, and non-interactive `age-plugin-*` recipients and identities
 **Prerequisites**: An age identity; hybrid ML-KEM-768 + X25519 keys from `age-keygen -pq` are recommended for new setups and currently require the non-interactive `age-plugin-pq` compatibility plugin. Build with `--features age`.
 **Authentication**: The `identity` credential, `AGE_IDENTITY`, or `?identity=`; recipients from `?recipients-file=` or derived from the identity
 **Storage**: One `KEY=value` entry per secret inside the encrypted blob at PATH
@@ -617,6 +651,7 @@ $ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Gopass | ✅ GPG encryption | Local filesystem | ❌ No |
 | Proton Pass | ✅ End-to-end | Cloud (Proton) | ✅ Yes |
 | Passbolt (0.19+) | ✅ End-to-end | Self-hosted (Passbolt server) | ✅ Yes |
+| Fly.io secrets (0.20+) | ✅ Fly.io-managed | Cloud (Fly.io app vault) | ✅ Yes |
 | LastPass | ✅ End-to-end | Cloud (LastPass) | ✅ Yes |
 | Dashlane (0.18+) | ✅ End-to-end | Cloud (Dashlane), synced locally | Yes — `dcli` auto-syncs hourly |
 | 1Password | ✅ End-to-end | Cloud (1Password) | ✅ Yes |

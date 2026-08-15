@@ -1,0 +1,240 @@
+---
+title: Fly.io secrets provider
+description: Publish SecretSpec values to Fly.io application secrets through flyctl
+---
+
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
+The Fly.io provider publishes declared values to an application's encrypted
+secret vault through [`flyctl`](https://fly.io/docs/flyctl/).
+
+:::note[Version compatibility]
+The Fly.io `fly` provider is added in SecretSpec 0.20.
+:::
+
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `fly` (0.20+) |
+| URI | `fly://APP[?stage=true][&detach=true]` |
+| Access | Write, delete, and discover names; plaintext values cannot be read back |
+| Best for | Publishing secrets to a Fly.io app from a separate source of truth |
+| Authentication | `flyctl` login or an app-scoped deploy token |
+| Availability | Built into SecretSpec 0.20+ |
+| Default storage | Fly app secret named `{key}` |
+
+## Quick start
+
+Complete [Setup](#setup) first, then use the checked-in alias from the project
+configuration below:
+
+```bash
+# Publish or replace DATABASE_URL, reading the value securely from the terminal
+$ secretspec set DATABASE_URL --profile production --provider fly_prod
+
+# Remove the Fly app secret
+$ secretspec delete DATABASE_URL --profile production --provider fly_prod
+```
+
+Fly.io never returns the plaintext value, so `secretspec get`, `check`, and
+`run` cannot resolve a value from this provider. Keep the authoritative value
+in a readable provider and use `fly_prod` explicitly when publishing it.
+
+## Setup
+
+### Prerequisites
+
+- SecretSpec 0.20 or newer
+- A Fly.io application
+- [`flyctl`](https://fly.io/docs/flyctl/install/) installed on `PATH`
+- Permission to list and change the selected app's secrets
+
+For local use, authenticate the CLI normally:
+
+```bash
+$ fly auth login
+```
+
+If the executable has another name or location, set
+`SECRETSPEC_FLYCTL_PATH` to it.
+
+### Authentication with provider credentials
+
+SecretSpec 0.20+ declares `access_token` as a
+[provider credential](/reference/provider-credentials/). An app-scoped deploy
+token is the narrowest standard Fly.io token that can update one app:
+
+```bash
+$ fly tokens create deploy -a my-app -x 720h
+```
+
+Load that token from a bootstrap provider instead of committing it in the URI:
+
+```toml title="secretspec.toml"
+[providers]
+bootstrap = "keyring://"
+
+[providers.fly_prod]
+uri = "fly://my-app"
+credentials = { access_token = "bootstrap" }
+
+[profiles.production]
+DATABASE_URL = { description = "Production database URL" }
+```
+
+Store the token once:
+
+```bash
+$ secretspec config provider login fly_prod
+Enter access_token for provider 'fly_prod' (source: bootstrap): ****
+```
+
+SecretSpec passes the token only in the child process environment and passes
+the application secret value over stdin. Neither value is placed in
+`flyctl`'s process arguments. SecretSpec removes both Fly token variables from
+the child environment, then re-injects only the token selected through the
+provider credential mechanism. This prevents `flyctl` from independently
+choosing an ambient token with different precedence.
+
+### Environment fallback
+
+In CI, set `FLY_API_TOKEN` (preferred) or `FLY_ACCESS_TOKEN`. An explicit
+`access_token` provider credential takes precedence, followed by those two
+variables in that order. If none is set, `flyctl` uses its existing login
+session.
+
+## Provider credentials
+
+<ProviderCredentials provider="fly" />
+
+## Configuration
+
+### URI format
+
+```text
+fly://APP[?stage=true][&detach=true]
+```
+
+- `APP` is required and always passed through `--app`; the provider does not
+  depend on a nearby `fly.toml`.
+- `stage=true` registers changes without immediately updating existing
+  Machines.
+- `detach=true` starts the Machine update but returns without monitoring it.
+
+Only the literal values `true` and `false` are accepted. Explicit `false`
+values behave like omitted options and are left out of the provider's
+canonical URI.
+
+### URI examples
+
+```text
+fly://my-app
+fly://my-app?stage=true
+fly://my-app?detach=true
+fly://my-app?stage=true&detach=true
+```
+
+### Project configuration
+
+Use one alias per Fly app. Because an app is the isolation boundary, profiles
+that deploy to different apps should select different aliases:
+
+```toml title="secretspec.toml"
+[providers]
+fly_staging = "fly://my-app-staging?stage=true"
+fly_prod = "fly://my-app-production"
+
+[profiles.staging]
+DATABASE_URL = { description = "Staging database URL" }
+
+[profiles.production]
+DATABASE_URL = { description = "Production database URL" }
+```
+
+```bash
+$ secretspec set DATABASE_URL --profile staging --provider fly_staging
+$ fly secrets deploy --app my-app-staging
+
+$ secretspec set DATABASE_URL --profile production --provider fly_prod
+```
+
+## Storage model
+
+The provider maps a declaration's key directly to a Fly application secret.
+For example, `DATABASE_URL` in any SecretSpec project or profile maps to:
+
+```text
+app:    URI authority (for example, my-app-production)
+secret: DATABASE_URL
+```
+
+Project and profile names are not added to the secret name. The app selected by
+the alias supplies that isolation and lets the value appear under the expected
+environment-variable name inside every Machine.
+
+By default, `flyctl secrets set` updates the app's Machines. This restarts them
+and resets their ephemeral filesystems. Use `stage=true` to group multiple
+changes before running `fly secrets deploy --app APP` yourself.
+
+## Use existing secrets
+
+A [`ref`](/reference/configuration/#secret-references) changes the Fly secret
+name updated or deleted by SecretSpec:
+
+```toml title="secretspec.toml"
+[providers]
+fly_prod = "fly://my-app-production"
+
+[profiles.production]
+DATABASE_URL = {
+  description = "Production database URL",
+  ref = { item = "PRIMARY_DATABASE_URL" }
+}
+```
+
+With `--provider fly_prod`, `set` writes `PRIMARY_DATABASE_URL` and `delete`
+removes it. A ref still cannot read that value; Fly.io exposes only names,
+digests, and deployment status.
+
+## Discover secret names
+
+`flyctl secrets list --json` exposes enough metadata for SecretSpec to discover
+declarations without reading values:
+
+```bash
+$ secretspec init --from fly://my-app-production \
+    --project my-app --profile production
+```
+
+The generated manifest contains required declarations for the listed names,
+not defaults or secret values.
+
+## CI/CD
+
+Install `flyctl`, provide an expiring app-scoped deploy token, and select the
+provider alias explicitly. For example:
+
+```yaml
+- uses: superfly/flyctl-actions/setup-flyctl@master
+- run: secretspec set DATABASE_URL --profile production --provider fly_prod
+  env:
+    FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+```
+
+Use the shortest practical token lifetime and scope it to the app named in the
+provider URI.
+
+## Security considerations and limitations
+
+- Fly.io's API servers encrypt application secrets but cannot decrypt them.
+  This provider therefore cannot support `get`, `check`, `run`, fallback reads,
+  generation-on-miss, prompting-on-miss, or value comparisons.
+- `secretspec set` uses `flyctl secrets set NAME=-` and writes the value to the
+  child process's stdin. The secret is not exposed in argv or the provider URI.
+  Because `flyctl` trims stdin values, SecretSpec refuses values with leading
+  or trailing whitespace instead of silently storing a different value.
+- A normal write or delete updates the app's Machines unless `stage=true` is
+  configured. Review the rollout effect before using the provider in a loop.
+- `secretspec delete` first lists names so it can report whether anything was
+  removed. The listing never contains plaintext values.

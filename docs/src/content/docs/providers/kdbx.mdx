@@ -22,7 +22,7 @@ The KDBX provider is added in SecretSpec 0.17.
 | Best for | Local, portable KeePass-compatible encrypted storage |
 | Authentication | Master password, key file, or both |
 | Build feature | `kdbx` (0.17+) |
-| Default storage | Entry `secretspec/{project}/{profile}/{key}`, field `Password` |
+| Default storage | Nested groups `secretspec` → `{project}` → `{profile}`; entry titled `{key}`; field `Password` |
 
 ## Quick start
 
@@ -129,14 +129,52 @@ DATABASE_URL = { description = "Database URL", providers = ["local_vault"] }
 
 ## Storage model
 
-The default convention address creates groups for `secretspec`, the project,
-and the profile. The final path component is the entry title, and the value is
-stored as its protected `Password` field:
+Yes: the `/` characters in the default convention address separate nested
+KeePass groups. The path starts inside the database's root group; neither the
+database filename nor the root group's display name is part of it. SecretSpec
+then uses the final path component as the entry title and stores the value in
+the entry's protected `Password` field.
+
+For this configuration:
+
+```toml title="secretspec.toml"
+[project]
+name = "my-app"
+revision = "1.0"
+
+[profiles.default]
+DATABASE_URL = { description = "Database URL" }
+```
+
+the KeePass tree is:
 
 ```text
-secretspec/myapp/production/DATABASE_URL
-└── Password = <secret value>
+Database root (its name does not matter)
+└── secretspec                         group
+    └── my-app                         group ([project].name)
+        └── default                    group (active profile)
+            └── DATABASE_URL           entry (secret key)
+                └── Password = <secret value>
 ```
+
+### Set up an entry manually
+
+1. Open the database file named by the provider URI, such as `secrets.kdbx` for
+   `kdbx:./secrets.kdbx`. The file itself can have any name.
+2. Directly below the database's root group, create a group named `secretspec`.
+3. Inside it, create a group whose name exactly matches `[project].name` in
+   `secretspec.toml`.
+4. Inside the project group, create a group whose name exactly matches the
+   active profile, such as `default`.
+5. Inside the profile group, create an entry whose **Title** exactly matches the
+   secret key, such as `DATABASE_URL`, and put the secret value in its
+   **Password** field.
+
+Do not rename the database or its root group to `secretspec`; `secretspec` is a
+child group of the root. Group names and entry titles are case-sensitive. If
+you want SecretSpec to write to a manually created database, save it as KDBX 4.
+You can also let `secretspec set` create the missing groups and entry
+automatically.
 
 Reads open KDBX 3 and KDBX 4 databases. Writes create KDBX 4 databases and
 atomically replace an existing KDBX 4 file only after the complete encrypted

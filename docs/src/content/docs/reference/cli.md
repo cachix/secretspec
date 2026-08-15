@@ -453,10 +453,11 @@ Any cache entry declared for the secret is invalidated so it cannot continue to
 serve the deleted value.
 
 The providers that support deletion in 0.18 are keyring, dotenv, pass, gopass,
-Vault, OpenBao, and Keeper Secrets Manager. Other providers return an explicit
-unsupported-operation error. Vault, OpenBao, and Keeper refuse to delete native
-`ref` entries because their backends would have to destroy a whole externally
-managed path or record rather than only the referenced field.
+Vault, OpenBao, and Keeper Secrets Manager; age supports it starting with
+0.20. Other providers return an explicit unsupported-operation error. Vault,
+OpenBao, and Keeper refuse to delete native `ref` entries because their
+backends would have to destroy a whole externally managed path or record
+rather than only the referenced field.
 
 ### run
 Run a command with secrets injected as environment variables.
@@ -695,6 +696,52 @@ $ secretspec audit --action get -n 5
 # Pipe raw entries to jq
 $ secretspec audit --json | jq 'select(.outcome == "missing")'
 ```
+
+### completions (0.20+)
+
+:::caution[Version compatibility]
+`completions` is available starting with SecretSpec 0.20.
+:::
+
+Generate a completion script that asks the same command definition used by
+`secretspec --help` for suggestions. Completion results include every command,
+option, possible value, and description supported by the target shell. They
+also provide contextual suggestions for profile, scope, secret, provider, and
+provider-alias names. File arguments complete paths, while `secretspec run`
+completes executables and command-argument paths.
+
+When you press Tab, the completion script invokes `secretspec` to calculate the
+current suggestions. SecretSpec reads the nearest `secretspec.toml` (or the
+manifest selected by `--file` or `SECRETSPEC_FILE`) and user configuration to
+discover names and descriptions. It does not contact providers or read secret
+values.
+
+```bash
+$ secretspec completions <SHELL>
+```
+
+Supported shells are `bash`, `elvish`, `fish`, `nushell`, `powershell`, and
+`zsh`. Load completions for the current session with the command for your
+shell:
+
+- Bash: `source <(secretspec completions bash)`
+- Elvish: `eval (secretspec completions elvish | slurp)`
+- Fish: `secretspec completions fish | source`
+- PowerShell: `secretspec completions powershell | Out-String | Invoke-Expression`
+- Zsh: `autoload -U compinit && compinit && source <(secretspec completions zsh)`
+
+For persistent Bash, Elvish, Fish, PowerShell, or Zsh completions, put the
+corresponding command in your shell's startup file. Generating the script at
+startup keeps it synchronized after a SecretSpec upgrade.
+
+Nushell loads completion modules from a file:
+
+```nu
+secretspec completions nushell | save -f ~/.config/nushell/completions-secretspec.nu
+use ~/.config/nushell/completions-secretspec.nu *
+```
+
+Regenerate that file after upgrading SecretSpec.
 
 ## Environment Variables
 

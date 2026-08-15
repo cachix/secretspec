@@ -46,6 +46,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [env](/providers/env/) | Current process environment | ✓ | ✗ | ✗ | — |
 | [null](/providers/null/) (0.19+) | No storage; uses a manifest default, ephemeral generation, or an ephemeral run prompt | ✗ | ✗ | N/A | — |
 | [systemd-credential](/providers/systemd-credential/) (0.17+) | Credentials passed to the current systemd service | ✓ | ✗ | Depends on the unit's credential source | [Via systemd-creds](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html) |
+| [fly](/providers/fly/) (0.20+) | Fly.io application secrets through `flyctl` | ✗ | ✓ | ✓ | — |
 | [pass](/providers/pass/) | Unix `pass` password store | ✓ | ✓ | ✓ | [Via GnuPG](https://gnupg.org/blog/20210315-using-tpm-with-gnupg-2.3.html) |
 | [gopass](/providers/gopass/) (0.15+) | `gopass` password store (git-synced, GPG-encrypted) | ✓ | ✓ | ✓ | [Via GnuPG](https://gnupg.org/blog/20210315-using-tpm-with-gnupg-2.3.html) |
 | [protonpass](/providers/protonpass/) | Proton Pass | ✓ | ✓ | ✓ | — |
@@ -304,7 +305,7 @@ Provider credentials follow these rules:
 - **Names are provider-specific.** The catalog above is exhaustive. Unsupported
   names are rejected before any source is read.
 - **A URI may not carry a credential (0.19+).** A provider URI with a password
-  (`scheme://user:secret@host`) is rejected, as is a service account token in
+  (`scheme://user:PASSWORD@host`) is rejected, as is a service account token in
   the `onepassword+token://` userinfo. A URI is committed to `secretspec.toml`,
   echoed into shell history, and printed by CI, so a credential written there is
   already disclosed. Use a provider credential or the provider's environment

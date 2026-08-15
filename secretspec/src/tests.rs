@@ -10788,3 +10788,82 @@ fn cache_clear_clears_what_it_can_before_reporting_a_failure() {
         "one unclearable cache must not leave the rest of the profile cached"
     );
 }
+
+/// A provider built for an operation carries that operation's profile, so an
+/// Infisical `ref` — whose coordinates name no environment — resolves in the
+/// environment the profile names. Deleting the `set_profile` call at the
+/// construction chokepoint leaves every other test green, so this is the one
+/// that holds the wiring in place.
+#[cfg(feature = "infisical")]
+#[test]
+fn a_built_provider_carries_the_operation_profile() {
+    use crate::provider::Address;
+
+    let config = Config {
+        project: Project {
+            name: "myapp".to_string(),
+            ..Default::default()
+        },
+        profiles: HashMap::new(),
+        providers: None,
+        scopes: None,
+    };
+    let mut secrets = Secrets::new(config, None, None, None);
+    secrets.set_profile("production");
+
+    let reference = crate::config::NativeAddress {
+        item: "/DB_PASSWORD".to_string(),
+        ..Default::default()
+    };
+    let provider = secrets
+        .build_provider(
+            "infisical://app.infisical.com/7e2f1a4c-0000-0000-0000-000000000000".to_string(),
+            None,
+        )
+        .unwrap();
+
+    let target = provider
+        .describe_write_target(Address::Native(&reference))
+        .unwrap();
+    assert!(
+        target.contains("environment production"),
+        "a ref must resolve in the operation's profile environment, got {target}"
+    );
+}
+
+/// A credential source gets no profile, so a `ref`-addressed Infisical
+/// credential still needs an explicit `?env=`. Without this the environment
+/// would come from whichever profile ran: a credential stored under `prod`
+/// would be missing under `dev`, breaking the round-trip
+/// `PROVIDER_CREDENTIAL_SCOPE` promises.
+#[cfg(feature = "infisical")]
+#[test]
+fn a_credential_source_provider_gets_no_profile() {
+    use crate::provider::Address;
+
+    let config = Config {
+        project: Project {
+            name: "myapp".to_string(),
+            ..Default::default()
+        },
+        profiles: HashMap::new(),
+        providers: None,
+        scopes: None,
+    };
+    let mut secrets = Secrets::new(config, None, None, None);
+    secrets.set_profile("production");
+
+    let reference = crate::config::NativeAddress {
+        item: "/ci/VAULT_TOKEN".to_string(),
+        ..Default::default()
+    };
+    let provider = secrets
+        .build_source_provider("infisical://app.infisical.com/7e2f1a4c-0000-0000-0000-000000000000")
+        .unwrap();
+
+    let err = provider
+        .describe_write_target(Address::Native(&reference))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("?env="), "{err}");
+}

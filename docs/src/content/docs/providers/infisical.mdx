@@ -198,7 +198,26 @@ API_KEY = { description = "Pinned key", ref = { item = "/infra/API_KEY", version
   `/secretspec` itself
 - `version`: an Infisical secret version. Version-pinned refs are read-only, since a past version cannot be rewritten
 
-A ref has no profile to name an environment with, so the provider URI must pin one with `?env=`.
+A ref names a folder and key but never an environment. The environment comes from `?env=`, or from
+the profile the run resolves under (0.20+) — the same environment a convention secret reads in that
+run.
+
+With the profile supplying the environment, one alias serves every profile and secrets can be named
+flat, with no `{project}/{profile}` folders:
+
+```toml
+[providers]
+# `production` reads Infisical's production environment, `dev` reads dev
+infisical_flat = { uri = "infisical://app.infisical.com/7e2f1a4c-...", ref = { item = "/{key}" } }
+```
+
+See [Secret References](/concepts/references/#different-coordinates-per-provider-019) for the
+alias-level `ref` template.
+
+A [provider credential](/reference/provider-credentials/) is the exception: it belongs to its alias
+rather than to a profile, and is read the same way whichever profile runs, so a credential declared
+with a `ref` needs `?env=`.
+
 Infisical secrets are single values with no sub-components, so `field`, `section` and `vault` are
 rejected.
 
@@ -252,7 +271,9 @@ so the value is written once the request is approved.
 - The project is addressed by UUID; Infisical's API does not accept a project slug
 - A project or profile whose name is not spellable as an Infisical folder (letters, digits, dashes,
   underscores) is refused rather than rewritten
-- Refs need `?env=`, having no profile to name an environment with
+- A ref reads the environment the profile names unless `?env=` pins one, and a wrong environment
+  reads as an unset secret rather than an error: Infisical answers a missing secret, folder,
+  environment and project with the same 404
 - `secretspec import infisical://…` is not supported: the provider does not enumerate existing
   secrets, so import has nothing to discover
 - The domain variables name a host, not a path: an instance served under a sub-path

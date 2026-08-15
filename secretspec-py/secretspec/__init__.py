@@ -138,13 +138,25 @@ class Resolved:
         after resolve returns; the caller owns their lifetime. Call ``close()``
         (or use this object as a context manager) when done so secret files do
         not accumulate in the temp dir. A file already gone is not an error.
+
+        Every file is attempted even if one cannot be removed; the first such
+        error is re-raised once the rest have been cleaned up. Stopping at the
+        first failure would leave the remaining secrets on disk, which is the
+        one outcome this method exists to prevent. Matches the Go SDK's
+        ``firstErr`` and the .NET SDK's ``firstError``.
         """
+        first_error: Optional[OSError] = None
         for secret in self.secrets.values():
             if secret.as_path and secret.path is not None:
                 try:
                     os.remove(secret.path)
                 except FileNotFoundError:
                     pass
+                except OSError as error:
+                    if first_error is None:
+                        first_error = error
+        if first_error is not None:
+            raise first_error
 
     def __enter__(self) -> "Resolved":
         return self

@@ -66,6 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spelled `n-u-l-l`. The `bw` and `dashlane` providers already behaved this way.
   An `extract` pointer is unchanged: it names one location and still reports a
   `null` there, and the two policies now sit next to each other in one place.
+- The Python and Ruby SDKs' `Resolved.close()`/`Resolved#close` now remove every
+  `as_path` temp file even when one of them cannot be removed, raising the first
+  such error only after the rest are cleaned up. Previously the first failure
+  aborted the loop and left the remaining secret files on disk, which is the
+  outcome `close` exists to prevent. This matches the Go SDK's `firstErr` and the
+  .NET SDK's `firstError`. The Ruby SDK also no longer skips a dangling symlink,
+  which `File.exist?` reports as absent.
 - The `awssm` provider now accepts a trailing slash in `?prefix=` without
   inserting a second slash into the AWS secret name. For example,
   `?prefix=myteam/` resolves to `myteam/secretspec/...`, matching

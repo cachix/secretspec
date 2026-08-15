@@ -396,6 +396,29 @@ pub trait Provider: Send + Sync {
     /// [`Secrets::with_reason`]: crate::Secrets::with_reason
     fn set_reason(&self, _reason: Option<String>) {}
 
+    /// Records the profile this session resolves under. Available starting with
+    /// SecretSpec 0.20.
+    ///
+    /// A [`Convention`](Address::Convention) address carries the profile, so a
+    /// provider whose namespace varies by profile reads it there. A
+    /// [`Native`](Address::Native) address carries coordinates only, and a
+    /// provider that needs the profile for something the coordinates do not name
+    /// — Infisical's environment, say — would otherwise have to reject every
+    /// native address. Such a provider keeps this as a fallback, behind whatever
+    /// its URI states explicitly.
+    ///
+    /// This is context, not naming: it must not change
+    /// [`uri`](Provider::uri) or
+    /// [`storage_identity`](Provider::storage_identity), or one store would take
+    /// a different identity under each profile and invalidate its own cache
+    /// entries.
+    ///
+    /// Takes `&self` (relying on interior mutability) so it can be applied after
+    /// the provider is wrapped in an `Arc` (as preflight-enabled providers are).
+    /// The default implementation ignores it, which is correct for providers
+    /// whose addresses already carry everything they need.
+    fn set_profile(&self, _profile: &str) {}
+
     /// Rebases any relative filesystem paths the provider holds against
     /// `base_dir`, the directory containing the `secretspec.toml` that
     /// configured it.
@@ -693,6 +716,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     }
     fn set_reason(&self, reason: Option<String>) {
         (**self).set_reason(reason);
+    }
+    fn set_profile(&self, profile: &str) {
+        (**self).set_profile(profile);
     }
     fn reflect(
         &self,

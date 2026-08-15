@@ -226,6 +226,10 @@ impl Provider for PreflightGuard {
         self.inner.set_reason(reason);
     }
 
+    fn set_profile(&self, profile: &str) {
+        self.inner.set_profile(profile);
+    }
+
     fn with_base_dir(&mut self, base_dir: &std::path::Path) {
         self.inner.with_base_dir(base_dir);
     }

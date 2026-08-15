@@ -557,7 +557,8 @@ legacy `INFISICAL_API_URL`, then defaults to Infisical Cloud.
 **Storage**: Secret `{key}` in folder `/secretspec/{project}/{profile}`, in the environment named by the profile (or by `?env=`). Keys are stored verbatim.
 
 By default the SecretSpec profile names the Infisical environment, so a `production` profile reads
-the `production` environment. Projects whose environments do not correspond to profiles pin one with
+the `production` environment. This covers refs as well as convention naming (0.20+).
+Projects whose environments do not correspond to profiles pin one with
 `?env=`; the profile still names the folder, so profiles never share a secret.
 
 Values are read with Infisical's secret references expanded, matching its own CLI, so a value of

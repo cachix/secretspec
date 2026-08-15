@@ -12,11 +12,12 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
   create:
     if: github.repository_owner == 'ifiokjr'
+    outputs:
+      is_release_commit: ${{ steps.release_record.outputs.is_release_commit }}
     timeout-minutes: 20
     runs-on: ubuntu-latest
     permissions:
@@ -114,7 +115,7 @@ jobs:
         run: echo "HEAD is already a merged release commit; skipping release PR refresh."
 
   tag:
-    if: github.repository_owner == 'ifiokjr'
+    if: github.repository_owner == 'ifiokjr' && needs.create.outputs.is_release_commit == 'true'
     needs: create
     timeout-minutes: 10
     runs-on: ubuntu-latest
@@ -148,38 +149,21 @@ jobs:
         run: scripts/ci/configure-release-git.sh
         shell: devenv shell -- bash -e {0}
 
-      - name: detect release commit and create tags
-        id: tag_release
-        shell: devenv shell -- bash -e {0}
+      - name: create release tags
         run: |
           set -euo pipefail
           export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
-
-          if is_release_commit="$(monochange --log-level=debug step release-record --from HEAD --format json --jq '.resolved_commit == .record_commit')"; then
-            echo "is_release_commit=${is_release_commit}" >> "$GITHUB_OUTPUT"
-            if [ "${is_release_commit}" = "true" ]; then
-              monochange --log-level=debug step tag-release --from HEAD --push=true --format json | tee /tmp/tag-report.json
-            fi
-          else
-            subject="$(git log -1 --pretty=%s)"
-            if [[ "$subject" == chore\(release\):\ prepare\ release* ]]; then
-              echo "Release-looking commit could not be read as a release record; failing instead of silently skipping release automation."
-              monochange --log-level=debug step release-record --from HEAD --format json
-              exit 1
-            fi
-            echo "is_release_commit=false" >> "$GITHUB_OUTPUT"
-          fi
+          monochange --log-level=debug step tag-release --from HEAD --push=true --format json
+        shell: devenv shell -- bash -e {0}
 
       - name: create draft releases
-        if: steps.tag_release.outputs.is_release_commit == 'true'
         run: |
           set -euo pipefail
           export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"
-          monochange --log-level=debug step publish-release --from-ref="HEAD" --draft --format json | tee /tmp/publish-release.json
+          monochange --log-level=debug step publish-release --from-ref="HEAD" --draft --format json
         shell: devenv shell -- bash -e {0}
 
       - name: comment on released issues
-        if: steps.tag_release.outputs.is_release_commit == 'true'
         run: |
           set -euo pipefail
           export GH_TOKEN="$RELEASE_PR_MERGE_TOKEN"

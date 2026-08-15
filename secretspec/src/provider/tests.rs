@@ -2231,3 +2231,97 @@ fn file_write_read_symmetry() {
 fn mock_provider_write_read_symmetry() {
     assert_write_read_symmetry(&MockProvider::new());
 }
+
+/// A provider that opts into deletion, as the real ones do.
+struct DeletingProvider;
+
+impl Provider for DeletingProvider {
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        Ok(crate::config::NativeAddress {
+            item: format!("{}/{}/{}", project, profile, key),
+            ..Default::default()
+        })
+    }
+
+    fn get(&self, _addr: Address<'_>) -> Result<Option<SecretString>> {
+        Ok(None)
+    }
+
+    fn set(&self, _addr: Address<'_>, _value: &SecretString) -> Result<()> {
+        Ok(())
+    }
+
+    fn delete(&self, _addr: Address<'_>) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn supports_delete(&self) -> bool {
+        true
+    }
+
+    fn name(&self) -> &'static str {
+        "deleting"
+    }
+
+    fn uri(&self) -> String {
+        "deleting://".to_string()
+    }
+}
+
+#[test]
+fn check_deletable_refuses_a_provider_that_cannot_delete() {
+    // The regression. `CountingProvider` inherits the default `delete`, which
+    // errors, so the preflight must refuse it. Previously the default
+    // `check_deletable` only resolved coordinates and returned Ok, so every
+    // such provider passed preflight and failed later in the deletion phase --
+    // after `import --delete-source` had already written the destination.
+    let provider = CountingProvider::new(&[]);
+    let addr = Address::convention("proj", "default", "API_KEY");
+
+    let err = provider
+        .check_deletable(addr)
+        .expect_err("a provider without delete must not pass the deletion preflight");
+
+    assert!(
+        err.to_string()
+            .contains("does not support deleting secrets"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn check_deletable_and_delete_refuse_with_the_same_reason() {
+    // The preflight's promise is that it predicts the operation. If the two
+    // disagreed, the preflight would be reporting on something else.
+    let provider = CountingProvider::new(&[]);
+    let addr = Address::convention("proj", "default", "API_KEY");
+
+    let preflight = provider.check_deletable(addr).unwrap_err().to_string();
+    let attempted = provider.delete(addr).unwrap_err().to_string();
+
+    assert_eq!(preflight, attempted);
+}
+
+#[test]
+fn check_deletable_admits_a_provider_that_opts_in() {
+    // Control: the guard rejects on capability, not unconditionally.
+    let provider = DeletingProvider;
+    let addr = Address::convention("proj", "default", "API_KEY");
+
+    provider
+        .check_deletable(addr)
+        .expect("a provider that implements delete must pass preflight");
+}
+
+#[test]
+fn providers_do_not_support_deletion_unless_they_say_so() {
+    // `supports_delete` defaults to false in lockstep with `delete`, so adding
+    // the method cannot silently make destructive behaviour available.
+    assert!(!CountingProvider::new(&[]).supports_delete());
+    assert!(DeletingProvider.supports_delete());
+}

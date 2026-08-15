@@ -52,6 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   treating the secret as missing or writing to a distinct double-slash name. Closes
   [#344](https://github.com/cachix/secretspec/issues/344).
 
+- `import --delete-source` no longer fails partway through, after already
+  writing the destination, for a provider that cannot delete. `check_deletable`
+  previously answered whether an address's coordinates resolve, not whether
+  the provider supports deletion at all, so a provider inheriting the default
+  `delete` (which errors) still passed preflight. A new `Provider::supports_delete`
+  capability lets `check_deletable` reject those providers up front, before the
+  copy phase runs.
+
 - Infisical secret references no longer require `?env=` in the provider URI: a
   `ref` names a folder and key but never an environment, so it now falls back to
   the profile the run resolves under. One alias can therefore serve every profile

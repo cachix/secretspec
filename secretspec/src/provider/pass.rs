@@ -317,6 +317,10 @@ impl Provider for PassProvider {
             "pass command failed: {stderr}"
         )))
     }
+
+    fn supports_delete(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

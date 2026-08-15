@@ -270,6 +270,10 @@ impl Provider for GoPassProvider {
         )))
     }
 
+    fn supports_delete(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }

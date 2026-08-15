@@ -12,7 +12,7 @@ name = "demo"
 revision = "1.0"
 
 [providers]
-private = "op+token://vault/item"
+private = "onepassword+token://vault"
 
 [profiles.default]
 TOKEN = { description = "Token", required = true }
@@ -33,7 +33,7 @@ OPTIONAL = { description = "Optional", required = false, default = "not-a-secret
 		String::from_utf8_lossy(&output.stderr)
 	);
 	let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
-	assert!(!stdout.contains("op+token"));
+	assert!(!stdout.contains("onepassword+token"));
 	assert!(!stdout.contains("not-a-secret-for-manifest"));
 	let manifest: serde_json::Value = serde_json::from_str(&stdout).expect("manifest json");
 	insta::assert_json_snapshot!(manifest);

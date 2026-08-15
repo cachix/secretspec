@@ -30,10 +30,10 @@ name = "my-app"
 revision = "1.0"
 
 [providers]
-onepassword-ci = "op+token://Production/my-app"
+onepassword-ci = "onepassword+token://Production"
 ```
 
-The `op+token://` provider reads the token from `OP_SERVICE_ACCOUNT_TOKEN` at runtime.
+The `onepassword+token://` provider reads the token from `OP_SERVICE_ACCOUNT_TOKEN` at runtime.
 You can also use other CI-friendly providers such as `env`, `vault`, `gcsm`, `awssm`,
 or `bws`.
 

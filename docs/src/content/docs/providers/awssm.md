@@ -53,28 +53,44 @@ AWS Secrets Manager uses the standard AWS SDK credential chain:
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "SecretspecSecrets",
       "Effect": "Allow",
       "Action": [
         "secretsmanager:GetSecretValue",
-        "secretsmanager:BatchGetSecretValue",
         "secretsmanager:CreateSecret",
         "secretsmanager:PutSecretValue"
       ],
       "Resource": "arn:aws:secretsmanager:*:*:secret:secretspec/*"
+    },
+    {
+      "Sid": "SecretspecBatchFetch",
+      "Effect": "Allow",
+      "Action": "secretsmanager:BatchGetSecretValue",
+      "Resource": "*"
     }
   ]
 }
 ```
 
-If you use a prefix such as `?prefix=myteam`, adjust the resource ARN:
+If you use a prefix such as `?prefix=myteam`, adjust the resource ARN in the
+first statement:
 
 ```
 arn:aws:secretsmanager:*:*:secret:myteam/secretspec/*
 ```
 
 :::note
-The `BatchGetSecretValue` permission is required for batch fetching, which is
-used automatically during `check` and `run` commands to reduce API calls.
+`BatchGetSecretValue` is used automatically during `check` and `run` to fetch
+secrets in batches of 20 instead of one call each.
+
+It must be granted on `"*"`. AWS treats it as an account-level action that takes
+no resource, so a statement scoping it to a secret ARN never grants it and those
+two commands fail with `AccessDeniedException`.
+
+Granting it on `"*"` does not widen which secrets can be read. AWS requires
+`secretsmanager:GetSecretValue` for every secret returned by a batch, and that
+permission stays scoped to the ARN above — so the first statement is still what
+decides access.
 :::
 
 :::note

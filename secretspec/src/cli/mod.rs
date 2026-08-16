@@ -1955,7 +1955,7 @@ mod tests {
 
     #[test]
     fn generate_toml_quotes_dotted_secret_name_and_round_trips() {
-        // dotenvy accepts keys containing dots (e.g. `FOO.BAR`). A bare TOML key
+        // Dotenv accepts keys containing dots (e.g. `FOO.BAR`). A bare TOML key
         // `FOO.BAR` would be parsed as a *dotted* (nested) key, silently losing
         // the secret; toml_edit quotes it so the name round-trips intact.
         let mut secrets = HashMap::new();

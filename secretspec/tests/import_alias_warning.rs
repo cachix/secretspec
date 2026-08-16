@@ -44,9 +44,11 @@ fn assert_success(output: &Output) {
 }
 
 fn env_values(path: &Path) -> HashMap<String, String> {
-    dotenvy::from_path_iter(path)
+    dotenv::EnvLoader::with_path(path)
+        .sequence(dotenv::EnvSequence::InputOnly)
+        .load()
         .unwrap()
-        .map(|item| item.unwrap())
+        .into_iter()
         .collect()
 }
 

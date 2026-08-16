@@ -6200,7 +6200,7 @@ fn write_export(
             // rebuilding and re-sorting a map (which would also re-copy values).
             let content = crate::provider::dotenv::serialize_dotenv_pairs(
                 entries.iter().map(|(key, value)| (*key, *value)),
-            );
+            )?;
             out.write_all(content.as_bytes())
                 .map_err(SecretSpecError::Io)?;
         }
@@ -6478,9 +6478,9 @@ mod export_tests {
     }
 
     #[test]
-    fn dotenv_format_double_quotes_and_escapes() {
+    fn dotenv_format_uses_minimal_round_trip_quoting() {
         let out = rendered(ExportFormat::Dotenv, &[("A", "pa$$"), ("B", "x")]);
-        assert_eq!(out, "A=\"pa\\$\\$\"\nB=\"x\"\n");
+        assert_eq!(out, "A=pa$$\nB=x\n");
     }
 
     /// The runner unescapes add-mask data before registering it, so the data we
@@ -7191,7 +7191,7 @@ mod run_prompt_tests {
         assert_eq!(prompts.load(Ordering::SeqCst), 1);
         assert_eq!(
             std::fs::read_to_string(dotenv_path).unwrap(),
-            "DEPLOY_PASSWORD=\"persisted-answer\"\n"
+            "DEPLOY_PASSWORD=persisted-answer\n"
         );
     }
 

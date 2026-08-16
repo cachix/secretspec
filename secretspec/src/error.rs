@@ -50,7 +50,9 @@ pub enum SecretSpecError {
     #[error("Keyring error: {0}")]
     Keyring(#[from] keyring::Error),
     #[error("Dotenv error: {0}")]
-    Dotenv(#[from] dotenvy::Error),
+    Dotenv(#[from] dotenv::Error),
+    #[error("Dotenv rendering error: {0}")]
+    DotenvRender(#[from] dotenv::RenderError),
     #[error(
         "No provider backend configured.\n\nTo fix this, either:\n  1. Run 'secretspec config global init' to set up your default provider\n  2. Use --provider flag (e.g., 'secretspec check --provider keyring')"
     )]
@@ -126,7 +128,7 @@ impl SecretSpecError {
             SecretSpecError::TomlSer(_) => "toml_ser",
             #[cfg(feature = "keyring")]
             SecretSpecError::Keyring(_) => "keyring",
-            SecretSpecError::Dotenv(_) => "dotenv",
+            SecretSpecError::Dotenv(_) | SecretSpecError::DotenvRender(_) => "dotenv",
             SecretSpecError::NoProviderConfigured => "no_provider_configured",
             SecretSpecError::ProviderNotFound(_) => "provider_not_found",
             SecretSpecError::SecretNotFound(_) => "secret_not_found",

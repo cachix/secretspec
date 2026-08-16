@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Dotenv parsing and rendering now use dotenv-ng throughout the dotenv
+  provider, age-encrypted dotenv blobs, and `secretspec export --format
+  dotenv`. Values containing `$` remain literal, output uses only the quoting
+  needed to round-trip, and bcrypt-style strings containing `$2a$10$...` are
+  no longer corrupted while reading ([#73]). Dotenv keys may include hyphens,
+  leading digits, leading dots, and Unicode. Whitespace, `=`, `#`, and control
+  characters remain invalid in keys.
+
+  [#73]: https://github.com/cachix/secretspec/issues/73
+
 - Provider behavior, configuration, and supported URIs remain unchanged after
   reorganizing the shared provider infrastructure into focused modules.
 

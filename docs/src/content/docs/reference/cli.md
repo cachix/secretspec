@@ -553,7 +553,7 @@ already holds a wider set keeps those values after a scoped `export`, so use
 | Format | Output |
 |--------|--------|
 | `shell` | `export KEY='value'` lines, ready for `eval "$(secretspec export)"` |
-| `dotenv` | `KEY="value"` lines in dotenv syntax (double-quoted, with `\`, `"`, `$`, and newline escaped) |
+| `dotenv` | `KEY=value` lines in dotenv syntax. In 0.20+, values are unquoted when they already round-trip and otherwise double-quoted and escaped; `$` remains literal. |
 | `json` | a single compact JSON object mapping each secret name to its value |
 | `gha` | appends `KEY=value` to the file named by `$GITHUB_ENV` and prints an `::add-mask::` command per value to stdout, so later workflow steps and third-party actions see the secrets |
 

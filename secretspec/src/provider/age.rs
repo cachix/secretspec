@@ -255,7 +255,7 @@ impl AgeProvider {
 
     /// Re-encrypts a full key/value map to the current recipients
     fn store(&self, vars: &HashMap<String, String>) -> Result<()> {
-        let plaintext = super::dotenv::serialize_dotenv(vars);
+        let plaintext = super::dotenv::serialize_dotenv(vars)?;
         let recipients = self.recipients()?;
         let encryptor =
             Encryptor::with_recipients(recipients.iter().map(|r| r.as_ref() as &dyn Recipient))
@@ -297,13 +297,11 @@ impl AgeProvider {
 
 /// Parses decrypted dotenv content into a flat map
 fn parse_dotenv(plaintext: &[u8]) -> Result<HashMap<String, String>> {
-    let mut vars = HashMap::new();
-    for item in dotenvy::from_read_iter(plaintext) {
-        let (key, value) =
-            item.map_err(|e| provider_err(format!("Failed to parse decrypted content: {}", e)))?;
-        vars.insert(key, value);
-    }
-    Ok(vars)
+    dotenv::EnvLoader::with_reader(plaintext)
+        .sequence(dotenv::EnvSequence::InputOnly)
+        .load()
+        .map(|vars| vars.into_iter().collect())
+        .map_err(|e| provider_err(format!("Failed to parse decrypted content: {e}")))
 }
 
 /// Reads a roster file into recipients, skipping comments and blank lines

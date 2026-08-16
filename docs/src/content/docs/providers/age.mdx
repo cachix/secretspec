@@ -145,6 +145,11 @@ Each developer configures their own identity through the `identity` credential, 
 
 Every secret is one `KEY=value` entry inside the blob, keyed by the secret name. Project and profile do not appear in the file; point separate profiles at separate blobs to keep them apart, for example `secrets.prod.age` and `secrets.dev.age`.
 
+Starting in SecretSpec 0.20+, this plaintext uses dotenv-ng syntax: `$` remains
+literal, and values are quoted only when needed to round-trip. Keys may include
+hyphens, leading digits, leading dots, and Unicode, but not whitespace, `=`,
+`#`, or control characters.
+
 ## Use existing secrets
 
 A secret's [`ref`](/reference/configuration/#secret-references) names the key to read inside the blob, so a declared secret can map to a differently named entry. The age provider has no sub-address, so a `ref` sets only `item`.

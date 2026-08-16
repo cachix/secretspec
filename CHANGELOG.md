@@ -59,6 +59,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bare `bws://<project-uuid>` provider URIs now target the Bitwarden US cloud
+  vault instead of the public marketing site, restoring reads and writes while
+  keeping the server pinned independently of ambient `bws` configuration.
+  ([#359](https://github.com/cachix/secretspec/issues/359))
+
 - The `awssm` and `scaleway` providers now treat a JSON `null` in a `ref` field
   as no value, the same as an absent key, so the provider chain continues.
   Previously it was rendered as the four-character string `null`, which

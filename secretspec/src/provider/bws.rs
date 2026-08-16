@@ -15,7 +15,7 @@
 //! `bws://[server-base@]project-uuid`
 //!
 //! Server Base is a hostname pointing to the bitwarden vault instance.
-//! Defaults to bitwarden.com
+//! Defaults to vault.bitwarden.com
 //!
 //! The UUID identifies the Bitwarden Secrets Manager project where secrets are stored.
 //! This provides namespace isolation — different projects use different BWS project IDs.
@@ -116,7 +116,7 @@ pub struct BwsProvider {
 const ACCESS_TOKEN: &str = "access_token";
 const BWS_ACCESS_TOKEN_ENV: &str = "BWS_ACCESS_TOKEN";
 const BWS_CLI_PATH_ENV: &str = "SECRETSPEC_BWS_CLI_PATH";
-const DEFAULT_SERVER_URL: &str = "https://bitwarden.com";
+const DEFAULT_SERVER_URL: &str = "https://vault.bitwarden.com";
 
 /// Fields consumed from `bws secret list --output json`.
 #[derive(Debug, Clone, Deserialize)]
@@ -582,7 +582,12 @@ mod tests {
 
         assert_eq!(
             args,
-            ["--color", "no", "--server-url", "https://bitwarden.com"]
+            [
+                "--color",
+                "no",
+                "--server-url",
+                "https://vault.bitwarden.com"
+            ]
         );
     }
 
@@ -684,7 +689,7 @@ mod tests {
 
         assert_eq!(
             std::fs::read_to_string(args_log).unwrap(),
-            "--color\nno\n--server-url\nhttps://bitwarden.com\nsecret\nedit\n\
+            "--color\nno\n--server-url\nhttps://vault.bitwarden.com\nsecret\nedit\n\
              11111111-1111-1111-1111-111111111111\n--value=--password\n--output\nnone\n"
         );
     }
@@ -717,7 +722,7 @@ mod tests {
 
         assert_eq!(
             std::fs::read_to_string(args_log).unwrap(),
-            "--color\nno\n--server-url\nhttps://bitwarden.com\nsecret\ncreate\n--output\nnone\n--\n\
+            "--color\nno\n--server-url\nhttps://vault.bitwarden.com\nsecret\ncreate\n--output\nnone\n--\n\
              --API_KEY\n--password\na9230ec4-5507-4870-b8b5-b3f500587e4c\n"
         );
     }

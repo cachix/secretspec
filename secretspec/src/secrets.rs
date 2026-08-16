@@ -1777,13 +1777,12 @@ impl Secrets {
                         ),
                     }
                 })?;
-                let selected = match selected {
-                    serde_json::Value::String(value) => value.clone(),
-                    value => {
-                        serde_json::to_string(value).expect("serializing JSON value cannot fail")
-                    }
-                };
-                Ok(SecretString::new(selected.into()))
+                // Rendering is shared with the awssm and scaleway providers.
+                // A null renders as "null" here: this caller was asked for one
+                // pointer and reports what the document holds, unlike a
+                // provider `field`, where a null means "not set" and the chain
+                // continues. See crate::json_field.
+                Ok(crate::json_field::render(selected))
             }
         }
     }

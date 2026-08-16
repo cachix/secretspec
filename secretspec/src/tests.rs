@@ -5339,6 +5339,34 @@ FALLBACK = {{ description = "logical default", providers = ["documents"], ref = 
 }
 
 #[test]
+fn test_json_extract_renders_a_null_while_a_provider_field_treats_it_as_absent() {
+    use crate::config::{ExtractFormat, SecretExtract};
+
+    // An extract pointer names one location and reports what the document
+    // holds there, so a null renders. test_json_extract_resolves_structured_
+    // values_after_decoding pins this end to end.
+    let extract = SecretExtract {
+        format: ExtractFormat::Json,
+        pointer: "/database/password".to_string(),
+    };
+    let rendered =
+        Secrets::extract_stored_value(&extract, "PASSWORD", r#"{"database":{"password":null}}"#)
+            .unwrap();
+    assert_eq!(rendered.expose_secret(), "null");
+
+    // A provider `field` is a lookup that can come up empty, so the same null
+    // is absent and the provider chain continues.
+    let value: serde_json::Value = serde_json::from_str(r#"{"password":null}"#).unwrap();
+    assert!(crate::json_field::render_field(&value["password"]).is_none());
+
+    // Everything that is not null renders identically on both paths.
+    let port =
+        Secrets::extract_stored_value(&extract, "PASSWORD", r#"{"database":{"password":5432}}"#)
+            .unwrap();
+    assert_eq!(port.expose_secret(), "5432");
+}
+
+#[test]
 fn test_json_extract_errors_do_not_expose_stored_documents() {
     use crate::config::{ExtractFormat, SecretExtract};
 

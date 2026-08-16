@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The `awssm` and `scaleway` providers now treat a JSON `null` in a `ref` field
+  as no value, the same as an absent key, so the provider chain continues.
+  Previously it was rendered as the four-character string `null`, which
+  satisfied a required secret and reached the program as a password or token
+  spelled `n-u-l-l`. The `bw` and `dashlane` providers already behaved this way.
+  An `extract` pointer is unchanged: it names one location and still reports a
+  `null` there, and the two policies now sit next to each other in one place.
 - The `awssm` provider now accepts a trailing slash in `?prefix=` without
   inserting a second slash into the AWS secret name. For example,
   `?prefix=myteam/` resolves to `myteam/secretspec/...`, matching

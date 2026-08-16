@@ -494,11 +494,15 @@ impl AacProvider {
         }
     }
 
+    fn http_client_builder() -> reqwest::ClientBuilder {
+        reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
+    }
+
     fn http(&self) -> Result<&reqwest::Client> {
         if let Some(client) = self.http.get() {
             return Ok(client);
         }
-        let client = reqwest::Client::builder()
+        let client = Self::http_client_builder()
             .https_only(true)
             .build()
             .map_err(|error| {
@@ -1842,7 +1846,7 @@ mod tests {
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread::{self, JoinHandle};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[derive(Debug)]
     struct CapturedRequest {
@@ -1978,12 +1982,13 @@ mod tests {
 
     fn read_request(stream: &mut TcpStream) -> CapturedRequest {
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_secs(1)))
             .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
         let mut raw = Vec::new();
         let mut buffer = [0_u8; 4096];
         let header_end = loop {
-            let read = stream.read(&mut buffer).unwrap();
+            let read = read_fixture_bytes(stream, &mut buffer, deadline);
             assert!(read > 0, "request ended before headers");
             raw.extend_from_slice(&buffer[..read]);
             if let Some(index) = raw.windows(4).position(|window| window == b"\r\n\r\n") {
@@ -2004,7 +2009,7 @@ mod tests {
             .map(|value| value.parse::<usize>().unwrap())
             .unwrap_or_default();
         while raw.len() < header_end + content_length {
-            let read = stream.read(&mut buffer).unwrap();
+            let read = read_fixture_bytes(stream, &mut buffer, deadline);
             assert!(read > 0, "request ended before body");
             raw.extend_from_slice(&buffer[..read]);
         }
@@ -2013,6 +2018,20 @@ mod tests {
             target,
             headers,
             body: raw[header_end..header_end + content_length].to_vec(),
+        }
+    }
+
+    fn read_fixture_bytes(stream: &mut TcpStream, buffer: &mut [u8], deadline: Instant) -> usize {
+        loop {
+            match stream.read(buffer) {
+                Ok(read) => return read,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) && Instant::now() < deadline => {}
+                Err(error) => panic!("fixture request read failed: {error}"),
+            }
         }
     }
 
@@ -2046,7 +2065,7 @@ mod tests {
         provider.allow_insecure_loopback = true;
         provider
             .http
-            .set(reqwest::Client::builder().build().unwrap())
+            .set(AacProvider::http_client_builder().build().unwrap())
             .unwrap();
         provider
             .auth
@@ -2495,6 +2514,22 @@ mod tests {
     }
 
     #[test]
+    fn reads_do_not_follow_redirects() {
+        let redirected = HttpFixture::start(|_| vec![StubResponse::empty(200)]);
+        let location = format!("{}stolen", redirected.endpoint);
+        let origin = HttpFixture::start(move |_| {
+            vec![StubResponse::empty(307).header("Location", &location)]
+        });
+        let provider = fixture_provider(&origin.endpoint, "aac://shared");
+
+        let error =
+            super::super::block_on(provider.fetch_key_value("redirected", true)).unwrap_err();
+        assert!(error.to_string().contains("HTTP 307"), "{error}");
+        assert_eq!(origin.finish().len(), 1);
+        assert!(redirected.finish().is_empty());
+    }
+
+    #[test]
     fn reads_reject_records_outside_configured_tag_scope() {
         let fixture = HttpFixture::start(|_| {
             let mut record = key_value("shared-key", "secret-value");
@@ -2585,6 +2620,32 @@ mod tests {
                 .flat_map(|request| request.headers.values())
                 .all(|value| !value.contains("c2lnbmluZy1zZWNyZXQ="))
         );
+    }
+
+    #[test]
+    fn writes_do_not_replay_secret_bodies_across_redirects() {
+        let redirected = HttpFixture::start(|_| vec![StubResponse::empty(200)]);
+        let location = format!("{}stolen", redirected.endpoint);
+        let origin = HttpFixture::start(move |_| {
+            vec![
+                StubResponse::empty(404),
+                StubResponse::empty(307).header("Location", &location),
+            ]
+        });
+        let provider = fixture_provider(&origin.endpoint, "aac://shared");
+        let secret = "redirect-secret-value";
+
+        let error = super::super::block_on(
+            provider.set_async("redirected", &SecretString::new(secret.to_string().into())),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("HTTP 307"), "{error}");
+
+        let requests = origin.finish();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].method, "PUT");
+        assert!(String::from_utf8_lossy(&requests[1].body).contains(secret));
+        assert!(redirected.finish().is_empty());
     }
 
     #[test]

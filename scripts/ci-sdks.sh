@@ -10,6 +10,11 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# Static-link consumers otherwise spend minutes processing a ~1.4 GB archive
+# whose size is mostly debug information. Keep dev's unoptimized code but omit
+# symbols: these suites validate SDK behavior and linking, not Rust backtraces.
+export CARGO_PROFILE_DEV_DEBUG=0
+
 echo "==> Building shared Rust SDK artifacts"
 # Build every Rust-backed SDK in one Cargo invocation. Cargo can then unify the
 # resolver dependency graph instead of serially rebuilding it for the FFI,

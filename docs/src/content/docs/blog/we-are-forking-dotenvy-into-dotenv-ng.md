@@ -13,7 +13,8 @@ changed a secret while reading it.
 
 That may sound contradictory. SecretSpec is still on a mission to [eliminate
 environment variables as a secrets
-interface](/blog/secrets-dont-belong-in-config/), and `.env` should not be the
+interface](/blog/secrets-dont-belong-in-config/), and we have written about
+[where `.env` went wrong](/blog/where-env-went-wrong/). It should not be the
 final home of a secret. But migrating away from `.env` starts with reading it
 correctly.
 

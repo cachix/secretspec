@@ -16,8 +16,80 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Classify changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      if: github.event_name == 'pull_request' || github.event_name == 'push'
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Detect code changes
+      id: classify
+      shell: bash
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        BEFORE_SHA: ${{ github.event.before }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        case "${{ github.event_name }}" in
+          pull_request) range="$BASE_SHA...$HEAD_SHA" ;;
+          push)
+            if [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+              echo "code=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            range="$BEFORE_SHA..${{ github.sha }}"
+            ;;
+          *)
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+            ;;
+        esac
+
+        code=false
+        while IFS= read -r path; do
+          case "$path" in
+            docs/*|*.md|*.mdx) ;;
+            *) code=true; break ;;
+          esac
+        done < <(git diff --name-only "$range")
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: 24
+        cache: npm
+        cache-dependency-path: docs/package-lock.json
+    - name: Install documentation dependencies
+      run: npm --prefix docs ci
+    - name: Build documentation
+      run: npm --prefix docs run build
+    - name: Check documentation links
+      uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+      with:
+        lycheeVersion: v0.21.0
+        workingDirectory: docs
+        args: >-
+          --root-dir "${{ github.workspace }}/docs/dist"
+          --remap "^https://secretspec\\.dev file://${{ github.workspace }}/docs/dist"
+          "dist/**/*.html"
+
   tests:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -26,50 +98,38 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
-    # The full devenv shell includes every SDK toolchain plus the musl static
-    # dependencies. It no longer fits alongside the preinstalled software on
-    # GitHub's Ubuntu image, so reclaim that space before populating /nix.
-    - name: Free up disk space
-      if: runner.os == 'Linux'
-      run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android \
-          /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /opt/ghc \
-          /usr/local/share/boost /usr/local/share/powershell
-        sudo docker image prune --all --force
-        df -h /
-    - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
-    - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+    - name: Download SOPS 3.13.2
+      uses: robinraju/release-downloader@28fc21f50d76778e7023361aa1f863e717d3d56f # v1.13
       with:
-        name: devenv
-    - name: Install devenv.sh
-      run: nix profile install nixpkgs#devenv
+        repository: getsops/sops
+        tag: v3.13.2
+        fileName: sops-v3.13.2.${{ runner.os == 'Linux' && 'linux' || 'darwin' }}.${{ runner.arch == 'ARM64' && 'arm64' || 'amd64' }}
+        out-file-path: sops-bin
+    - name: Add SOPS to PATH
+      shell: bash
+      run: |
+        install -m 0755 sops-bin/sops-* sops-bin/sops
+        echo "$PWD/sops-bin" >> "$GITHUB_PATH"
+    - name: Install Rust (pinned by rust-toolchain.toml)
+      run: |
+        rustup toolchain install
+        rustup component add rustfmt clippy
     - name: Cache Rust builds
       uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:
         key: ${{ matrix.os }}
-        # The tests compile with devenv's pinned Nix toolchain, so use the same
-        # toolchain when rust-cache calculates its compiler and dependency keys.
-        cmd-format: devenv shell -- {0}
 
-    # `devenv test` also starts every configured process. The docs dev server is
-    # unrelated to this suite and makes process-compose wait for its timeout when
-    # docs dependencies are not installed, so run the hooks and tests directly.
-    # rustfmt and clippy are platform-independent; run them once on Linux rather
-    # than paying for a second cold compilation on the slower macOS runner.
-    - name: Run pre-commit hooks
+    # Formatting and linting are platform-independent; run them once on Linux.
+    # The PHP extension is checked in the SDK workflow, where PHP headers are
+    # available; this native Rust job does not need the full multi-SDK shell.
+    - name: Check formatting
       if: runner.os == 'Linux'
-      run: devenv tasks run devenv:git-hooks:run --show-output
-    - name: Install documentation dependencies
+      run: cargo fmt --all -- --check
+    - name: Run Clippy
       if: runner.os == 'Linux'
-      run: devenv shell -- npm --prefix docs ci
-    - name: Build documentation
-      if: runner.os == 'Linux'
-      run: devenv shell -- npm --prefix docs run build
-    - name: Check documentation links
-      if: runner.os == 'Linux'
-      run: devenv shell -- npm --prefix docs run check:links
+      run: cargo clippy --workspace --exclude secretspec-php-native
     - name: Run tests
-      run: devenv shell -- cargo test --all
+      run: cargo test --workspace --exclude secretspec-php-native
 
   # Each optional provider must compile on its own, not just in the default
   # feature set. `cargo test` above cannot catch a missing feature gate: it
@@ -78,6 +138,8 @@ jobs:
   # A provider that forgets to add itself to such a gate only breaks for the
   # user who builds it standalone, which is precisely who `--features` is for.
   features:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,6 +159,8 @@ jobs:
         done
 
   package:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -116,8 +180,10 @@ jobs:
   # Windows runners can't run Nix/devenv, so the suite runs here natively via
   # rustup + cargo. This exists specifically to catch Windows-only path handling
   # regressions (e.g. config discovery and relative `-f` paths, issue #59), which
-  # the Ubuntu/macOS devenv job above can never observe.
+  # the Ubuntu/macOS Rust job above can never observe.
   windows:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -871,6 +871,57 @@ fn every_scheme_rejects_a_userinfo_password() {
     }
 }
 
+/// A profile is runtime context for resolving native addresses, not part of a
+/// provider's name for its store. If one of these identities changed after
+/// `set_profile`, cache planning (which constructs providers without a
+/// profile) could no longer match the provider used during resolution.
+#[test]
+fn set_profile_preserves_provider_identities_across_the_registry() {
+    for reg in super::PROVIDER_REGISTRY {
+        assert!(
+            !reg.info.examples.is_empty(),
+            "provider {:?} has no registered example for the set_profile identity invariant",
+            reg.info.name
+        );
+
+        for &example in reg.info.examples {
+            let provider = Box::<dyn Provider>::try_from(example).unwrap_or_else(|error| {
+                panic!(
+                    "provider {:?} registered an example that could not be built ({example:?}): \
+                     {error}",
+                    reg.info.name
+                )
+            });
+            let uri = provider.uri();
+            let storage_identity = provider.storage_identity();
+            let entry_container_identity = provider.entry_container_identity();
+
+            provider.set_profile("set-profile-identity-invariant");
+
+            assert_eq!(
+                provider.uri(),
+                uri,
+                "provider {:?} changed uri() after set_profile (example {example:?})",
+                reg.info.name
+            );
+            assert_eq!(
+                provider.storage_identity(),
+                storage_identity,
+                "provider {:?} changed storage_identity() after set_profile (example \
+                 {example:?})",
+                reg.info.name
+            );
+            assert_eq!(
+                provider.entry_container_identity(),
+                entry_container_identity,
+                "provider {:?} changed entry_container_identity() after set_profile (example \
+                 {example:?})",
+                reg.info.name
+            );
+        }
+    }
+}
+
 #[test]
 fn test_create_from_string_with_plain_names() {
     // Test plain provider names

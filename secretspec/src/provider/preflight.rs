@@ -262,8 +262,51 @@ impl Provider for PreflightGuard {
 
 #[cfg(test)]
 mod tests {
-    use super::AuthCheckCache;
+    use super::{AuthCheckCache, PreflightGuard, ProviderWithPreflight};
+    use crate::Result;
+    use crate::config::NativeAddress;
+    use crate::provider::{Address, Provider};
+    use secrecy::SecretString;
     use std::cell::Cell;
+    use std::sync::{Arc, Mutex};
+
+    struct ProfileRecordingProvider {
+        profile: Arc<Mutex<Option<String>>>,
+    }
+
+    impl Provider for ProfileRecordingProvider {
+        fn convention_address(
+            &self,
+            _project: &str,
+            _profile: &str,
+            key: &str,
+        ) -> Result<NativeAddress> {
+            Ok(NativeAddress {
+                item: key.to_string(),
+                ..Default::default()
+            })
+        }
+
+        fn get(&self, _addr: Address<'_>) -> Result<Option<SecretString>> {
+            Ok(None)
+        }
+
+        fn set(&self, _addr: Address<'_>, _value: &SecretString) -> Result<()> {
+            Ok(())
+        }
+
+        fn name(&self) -> &'static str {
+            "profile-recording"
+        }
+
+        fn uri(&self) -> String {
+            "profile-recording://".to_string()
+        }
+
+        fn set_profile(&self, profile: &str) {
+            *self.profile.lock().unwrap() = Some(profile.to_string());
+        }
+    }
 
     #[test]
     fn success_probes_once_per_key() {
@@ -308,5 +351,20 @@ mod tests {
             Err("nope".to_string())
         );
         assert_eq!(cache.check("a", || Err("unused".to_string())), Ok(()));
+    }
+
+    #[test]
+    fn set_profile_reaches_the_provider_through_preflight_guard() {
+        let profile = Arc::new(Mutex::new(None));
+        let guard = PreflightGuard::new(ProviderWithPreflight {
+            provider: Box::new(ProfileRecordingProvider {
+                profile: Arc::clone(&profile),
+            }),
+            preflight: Some(Box::new(|| panic!("set_profile must not run preflight"))),
+        });
+
+        guard.set_profile("production");
+
+        assert_eq!(profile.lock().unwrap().as_deref(), Some("production"));
     }
 }

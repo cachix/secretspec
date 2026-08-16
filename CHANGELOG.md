@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Provider behavior, configuration, and supported URIs remain unchanged after
   reorganizing the shared provider infrastructure into focused modules.
+- Applying an active profile preserves each provider's public URI and
+  storage/cache identities, so profile-aware native references continue to
+  match the same provider during planning and resolution.
 
 ### Added
 

@@ -556,9 +556,10 @@ aac://shared?auth=connection_string&key_vault_auth=managed_identity
 declaration discovery, exact label and tag selection, sovereign-cloud endpoint
 configuration, Entra or connection-string authentication, and Key Vault
 reference resolution
-**Prerequisites (0.20+)**: An Azure App Configuration store, matching
-data-plane permissions, and build with `--features aac`; Key Vault
-references also require an Entra identity with secret-read access
+**Prerequisites (0.20+)**: An Azure App Configuration store and matching
+data-plane permissions. Official and default builds include AAC; custom minimal
+builds use `--features aac`. Key Vault references also require an Entra
+identity with secret-read access.
 **Authentication (0.20+)**: `env`, `cli`, `managed_identity`,
 `workload_identity`, or `connection_string`. Prefer Entra authentication so
 workloads use Azure RBAC without distributing App Configuration access keys;

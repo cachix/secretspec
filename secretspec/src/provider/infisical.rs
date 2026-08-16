@@ -269,6 +269,13 @@ struct Location {
     key: String,
 }
 
+/// The distinction an environment diagnostic needs to retain after a secret
+/// read. An HTTP 200 without a usable value is not Infisical's ambiguous 404.
+enum SecretRead {
+    Response(Option<SecretString>),
+    NotFound,
+}
+
 /// Infisical provider.
 pub struct InfisicalProvider {
     config: InfisicalConfig,
@@ -600,6 +607,21 @@ impl InfisicalProvider {
         ]
     }
 
+    /// A metadata-only root listing used solely to check whether an
+    /// environment exists.
+    ///
+    /// Unlike a secret read, this must not retrieve or expand values: every
+    /// secret at the root is unrelated to the missing entry being diagnosed.
+    fn environment_probe_query<'q>(&'q self, environment: &'q str) -> Vec<(&'static str, &'q str)> {
+        vec![
+            ("projectId", self.config.project_id.as_str()),
+            ("environment", environment),
+            ("secretPath", "/"),
+            ("expandSecretReferences", "false"),
+            ("viewSecretValue", "false"),
+        ]
+    }
+
     /// Reads one secret's value from its JSON, rejecting a value Infisical
     /// withheld.
     ///
@@ -643,11 +665,7 @@ impl InfisicalProvider {
     }
 
     /// Reads one secret, by version when the ref pins one.
-    async fn get_async(
-        &self,
-        loc: &Location,
-        version: Option<&str>,
-    ) -> Result<Option<SecretString>> {
+    async fn get_async(&self, loc: &Location, version: Option<&str>) -> Result<SecretRead> {
         let url = self.secret_url(&loc.key)?;
         let mut query = self.read_query(&loc.environment, &loc.secret_path);
         if let Some(version) = version {
@@ -665,20 +683,13 @@ impl InfisicalProvider {
                         "Failed to parse Infisical response: {e}"
                     ))
                 })?;
-                Self::secret_value(&parsed["secret"], &loc.key)
+                Self::secret_value(&parsed["secret"], &loc.key).map(SecretRead::Response)
             }
             // A 404 covers a missing secret, folder, environment and project
-            // alike, and only the message text tells them apart. Probe the
-            // environment's root, which always exists in a real environment,
-            // rather than turning control flow on response prose. This is a
-            // single-secret read, so the miss already means the whole read
-            // failed and the diagnostic request does not penalize a successful
-            // resolution.
-            StatusCode::NOT_FOUND => {
-                self.ensure_environment_exists_async(&loc.environment)
-                    .await?;
-                Ok(None)
-            }
+            // alike. The caller decides when an all-missing operation warrants
+            // an environment probe, so a batch can share one probe across all
+            // of its version-pinned reads.
+            StatusCode::NOT_FOUND => Ok(SecretRead::NotFound),
             _ => Err(self.http_error(status, &body, "reading a secret")),
         }
     }
@@ -786,15 +797,17 @@ impl InfisicalProvider {
     /// HTTP status avoids parsing or exposing any unrelated root-level secrets.
     async fn ensure_environment_exists_async(&self, environment: &str) -> Result<()> {
         let url = format!("{}/api/v4/secrets", self.config.endpoint);
-        let query = self.read_query(environment, "/");
+        let query = self.environment_probe_query(environment);
         let response = self.send(reqwest::Method::GET, &url, &query, None).await?;
         let status = response.status();
-        let body = Self::response_body(response).await?;
 
         match status {
             StatusCode::OK => Ok(()),
             StatusCode::NOT_FOUND => Err(self.missing_environment_error(environment)),
-            _ => Err(self.http_error(status, &body, "checking an environment")),
+            _ => {
+                let body = Self::response_body(response).await?;
+                Err(self.http_error(status, &body, "checking an environment"))
+            }
         }
     }
 
@@ -1139,7 +1152,17 @@ impl Provider for InfisicalProvider {
             Address::Native(native) => native.version.as_deref(),
             Address::Convention { .. } => None,
         };
-        super::block_on(self.get_async(&loc, version))
+        super::block_on(async {
+            let read = self.get_async(&loc, version).await?;
+            if matches!(&read, SecretRead::NotFound) {
+                self.ensure_environment_exists_async(&loc.environment)
+                    .await?;
+            }
+            Ok(match read {
+                SecretRead::Response(value) => value,
+                SecretRead::NotFound => None,
+            })
+        })
     }
 
     /// Secrets sharing a folder and environment are read with one list call
@@ -1152,15 +1175,42 @@ impl Provider for InfisicalProvider {
             |(_, addr)| matches!(addr, Address::Native(native) if native.version.is_some()),
         );
 
-        // Nothing about a versioned read is Infisical-specific, so it keeps the
-        // shared fetch, which already fetches one address once however many
-        // secrets name it, and fetches distinct ones concurrently.
+        // Versioned reads still share the generic deduplicated, concurrent
+        // fetch, but bypass `get`: its per-read diagnostic would issue one root
+        // probe for every miss. Their environments are checked together below
+        // only if the whole provider read is missing.
         let versioned: Vec<(&str, Address<'_>)> = versioned.into_iter().copied().collect();
+        let versioned_misses = Mutex::new(HashSet::new());
         let mut resolved = if versioned.is_empty() {
             HashMap::new()
         } else {
-            super::get_each(self, &versioned)?
+            super::get_each_with(&versioned, |addr| {
+                let loc = self.locate(addr)?;
+                let version = match addr {
+                    Address::Native(native) => native.version.as_deref(),
+                    Address::Convention { .. } => None,
+                };
+                match super::block_on(self.get_async(&loc, version))? {
+                    SecretRead::Response(value) => Ok(value),
+                    SecretRead::NotFound => {
+                        versioned_misses
+                            .lock()
+                            .map_err(|_| {
+                                SecretSpecError::ProviderOperationFailed(
+                                    "Infisical batch diagnostic state was poisoned".to_string(),
+                                )
+                            })?
+                            .insert(loc.environment);
+                        Ok(None)
+                    }
+                }
+            })?
         };
+        let versioned_environments = versioned_misses.into_inner().map_err(|_| {
+            SecretSpecError::ProviderOperationFailed(
+                "Infisical batch diagnostic state was poisoned".to_string(),
+            )
+        })?;
 
         super::block_on(async {
             // One list call per distinct folder and environment.
@@ -1178,7 +1228,7 @@ impl Provider for InfisicalProvider {
             // know the entire provider read missed; successful reads should not
             // pay for diagnostics on an unrelated optional secret.
             let mut known_environments = HashSet::new();
-            let mut uncertain_environments = HashSet::new();
+            let mut uncertain_environments = versioned_environments;
 
             for ((environment, secret_path), wanted) in folders {
                 match self.list_async(&environment, &secret_path).await? {
@@ -1273,11 +1323,25 @@ mod tests {
     fn response_server(
         responses: Vec<(&'static str, &'static str)>,
     ) -> (SocketAddr, std::thread::JoinHandle<Vec<String>>) {
+        response_server_with_lengths(
+            responses
+                .into_iter()
+                .map(|(status, body)| (status, body, body.len()))
+                .collect(),
+        )
+    }
+
+    /// As [`response_server`], with an independently declared content length.
+    /// A deliberately truncated body proves code only inspected the response
+    /// status instead of buffering data it did not need.
+    fn response_server_with_lengths(
+        responses: Vec<(&'static str, &'static str, usize)>,
+    ) -> (SocketAddr, std::thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let mut requests = Vec::new();
-            for (status, body) in responses {
+            for (status, body, content_length) in responses {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(&mut stream);
                 let mut request_line = String::new();
@@ -1294,7 +1358,7 @@ mod tests {
                     stream,
                     "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: \
                      {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
+                    content_length
                 )
                 .unwrap();
             }
@@ -1360,6 +1424,59 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    /// Distinct historical reads share one status-only, metadata-only root
+    /// probe when the whole batch is missing.
+    #[test]
+    fn versioned_batch_misses_probe_the_environment_once_without_values() {
+        let first_body = r#"{"message":"first version not found"}"#;
+        let second_body = r#"{"message":"second version not found"}"#;
+        let root_body = r#"{"secrets":[{"secretValue":"unrelated plaintext"}]}"#;
+        let (endpoint, server) = response_server_with_lengths(vec![
+            ("404 Not Found", first_body, first_body.len()),
+            ("404 Not Found", second_body, second_body.len()),
+            // Closing before the declared length makes consuming this body
+            // fail. A status-only probe succeeds without touching it.
+            ("200 OK", root_body, root_body.len() + 1024),
+        ]);
+        let provider = provider_with_token(endpoint, Some("development"));
+        let first = NativeAddress {
+            item: "/infra/FIRST".into(),
+            version: Some("1".into()),
+            ..Default::default()
+        };
+        let second = NativeAddress {
+            item: "/infra/SECOND".into(),
+            version: Some("2".into()),
+            ..Default::default()
+        };
+
+        assert!(
+            provider
+                .get_many(&[
+                    ("FIRST", Address::Native(&first)),
+                    ("SECOND", Address::Native(&second)),
+                ])
+                .expect("the environment exists")
+                .is_empty()
+        );
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 3);
+        let probes: Vec<_> = requests
+            .iter()
+            .filter(|request| request.starts_with("GET /api/v4/secrets?"))
+            .collect();
+        assert_eq!(probes.len(), 1, "{requests:#?}");
+        assert!(probes[0].contains("secretPath=%2F"), "{}", probes[0]);
+        assert!(
+            probes[0].contains("expandSecretReferences=false"),
+            "{}",
+            probes[0]
+        );
+        assert!(probes[0].contains("viewSecretValue=false"), "{}", probes[0]);
+        assert!(!probes[0].contains("viewSecretValue=true"), "{}", probes[0]);
     }
 
     /// The diagnostic tells users whether to rename a profile or change the

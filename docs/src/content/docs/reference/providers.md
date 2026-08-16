@@ -346,7 +346,7 @@ gcsm://my-gcp-project         # GCP project ID
 
 **Features**: Read/write, cloud sync, profiles, service account support
 **Prerequisites**: `gcloud` CLI, authenticated, Secret Manager API enabled, build with `--features gcsm`
-**Storage**: Secret name `secretspec-{project}-{profile}-{key}`
+**Storage (0.20+)**: Secret name `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}`. Releases through 0.19 used `secretspec-{project}-{profile}-{key}`; existing convention secrets must be re-stored or addressed with an explicit `ref`.
 
 ## AWS Secrets Manager Provider
 

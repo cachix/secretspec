@@ -15,7 +15,11 @@
 //!
 //! # Secret Naming
 //!
-//! Secrets are stored with the naming pattern: `secretspec-{project}-{profile}-{key}`
+//! Starting in SecretSpec 0.20, convention secrets are stored as
+//! `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}`. Encoding
+//! each component separately keeps the mapping injective when project or
+//! profile names contain hyphens. Releases through 0.19 used the ambiguous
+//! `secretspec-{project}-{profile}-{key}` form.
 //!
 //! # Example
 //!
@@ -32,6 +36,7 @@
 
 use super::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
+use data_encoding::BASE32_NOPAD;
 use google_cloud_secretmanager_v1::client::SecretManagerService;
 use google_cloud_secretmanager_v1::model::{Replication, Secret, SecretPayload, replication};
 use secrecy::{ExposeSecret, SecretString};
@@ -187,21 +192,36 @@ impl GcsmProvider {
         Ok(())
     }
 
+    /// Encodes one convention component into a lowercase, GCSM-compatible,
+    /// injective representation. Base32 preserves the original bytes while
+    /// emitting no hyphens, so an encoded component cannot consume or shift
+    /// the `--` delimiters between project, profile, and key.
+    fn encode_name_component(component: &str) -> String {
+        BASE32_NOPAD
+            .encode(component.as_bytes())
+            .to_ascii_lowercase()
+    }
+
     /// Formats and validates the secret name for GCP Secret Manager.
     ///
-    /// Converts the SecretSpec path format to GCP-compatible name:
-    /// `secretspec-{project}-{profile}-{key}`
+    /// Converts the SecretSpec path format to the injective GCP-compatible
+    /// name `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}`.
     ///
     /// GCP Secret Manager secret IDs must:
     /// - Be 1-255 characters long
     /// - Contain only alphanumeric characters, hyphens, and underscores
-    fn format_secret_name(&self, project: &str, profile: &str, key: &str) -> Result<String> {
+    fn format_secret_name(project: &str, profile: &str, key: &str) -> Result<String> {
         // Validate each component
         Self::validate_name_component("project", project)?;
         Self::validate_name_component("profile", profile)?;
         Self::validate_name_component("key", key)?;
 
-        let secret_name = format!("secretspec-{}-{}-{}", project, profile, key);
+        let secret_name = format!(
+            "secretspec--{}--{}--{}",
+            Self::encode_name_component(project),
+            Self::encode_name_component(profile),
+            Self::encode_name_component(key)
+        );
 
         // GCP secret IDs must be 1-255 characters
         if secret_name.len() > 255 {
@@ -343,9 +363,8 @@ impl GcsmProvider {
 }
 
 impl Provider for GcsmProvider {
-    /// Convention secrets are ids of the form
-    /// `secretspec-{project}-{profile}-{key}` (GCP secret ids cannot contain
-    /// slashes), read at their latest version.
+    /// Convention names use separately encoded Base32 components so distinct
+    /// project/profile/key triples always produce distinct GCSM secret ids.
     fn convention_address(
         &self,
         project: &str,
@@ -353,7 +372,7 @@ impl Provider for GcsmProvider {
         key: &str,
     ) -> Result<crate::config::NativeAddress> {
         Ok(crate::config::NativeAddress {
-            item: self.format_secret_name(project, profile, key)?,
+            item: Self::format_secret_name(project, profile, key)?,
             ..Default::default()
         })
     }
@@ -450,5 +469,78 @@ mod reference_tests {
         };
         let err = p.get(Address::Native(&addr)).unwrap_err();
         assert!(err.to_string().contains("`field`"), "{err}");
+    }
+
+    #[test]
+    fn convention_name_is_collision_safe() {
+        let first = GcsmProvider::format_secret_name("my-app", "prod", "K").unwrap();
+        let second = GcsmProvider::format_secret_name("my", "app-prod", "K").unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(first, "secretspec--nv4s2ylqoa--obzg6za--jm",);
+    }
+}
+
+/// Property tests for the injective convention-name mapping.
+#[cfg(test)]
+mod name_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Exactly the component alphabet accepted by `validate_name_component`.
+    /// Delimiter-heavy alternatives are weighted because that is where the
+    /// legacy convention produced collisions.
+    fn component() -> impl Strategy<Value = String> {
+        prop_oneof!["[A-Za-z0-9_-]{1,8}", "[_-]{1,3}"]
+    }
+
+    fn triple() -> impl Strategy<Value = (String, String, String)> {
+        (component(), component(), component())
+    }
+
+    /// A left inverse proves that every encoded name identifies exactly the
+    /// triple that produced it.
+    fn decode_secret_name(name: &str) -> Option<(String, String, String)> {
+        let body = name.strip_prefix("secretspec--")?;
+        let parts: Vec<&str> = body.split("--").collect();
+        let [project, profile, key] = parts.as_slice() else {
+            return None;
+        };
+        let decode = |part: &str| {
+            let bytes = BASE32_NOPAD
+                .decode(part.to_ascii_uppercase().as_bytes())
+                .ok()?;
+            String::from_utf8(bytes).ok()
+        };
+        Some((decode(project)?, decode(profile)?, decode(key)?))
+    }
+
+    proptest! {
+        #[test]
+        fn convention_name_decodes_to_its_original_triple(
+            (project, profile, key) in triple()
+        ) {
+            let name = GcsmProvider::format_secret_name(&project, &profile, &key)
+                .expect("a valid component must format");
+            prop_assert_eq!(
+                decode_secret_name(&name),
+                Some((project, profile, key)),
+            );
+        }
+
+        #[test]
+        fn distinct_triples_never_share_a_convention_name(
+            triples in prop::collection::vec(triple(), 2..24)
+        ) {
+            let mut seen = std::collections::HashMap::new();
+            for (project, profile, key) in triples {
+                let triple = (project, profile, key);
+                let name = GcsmProvider::format_secret_name(&triple.0, &triple.1, &triple.2)
+                    .expect("a valid component must format");
+                if let Some(previous) = seen.insert(name.clone(), triple.clone()) {
+                    prop_assert_eq!(previous, triple, "collision at {}", name);
+                }
+            }
+        }
     }
 }

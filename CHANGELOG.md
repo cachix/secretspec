@@ -62,6 +62,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Google Cloud Secret Manager convention names now encode the project,
+  profile, and key separately with lowercase, unpadded Base32. Distinct
+  logical addresses such as `my-app/prod/K` and `my/app-prod/K` can no longer
+  collide on one stored secret. Convention secrets created by SecretSpec 0.19
+  or earlier keep their old GCSM ids and must be re-stored for the 0.20 naming
+  convention; explicit `ref` addresses remain unchanged. ([#219])
+
+  [#219]: https://github.com/cachix/secretspec/issues/219
+
 - Bare `bws://<project-uuid>` provider URIs now target the Bitwarden US cloud
   vault instead of the public marketing site, restoring reads and writes while
   keeping the server pinned independently of ambient `bws` configuration.

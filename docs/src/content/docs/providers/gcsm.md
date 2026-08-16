@@ -15,7 +15,7 @@ The Google Cloud Secret Manager provider integrates with GCP for centralized sec
 | Best for | Workloads and teams on Google Cloud |
 | Authentication | Google Application Default Credentials |
 | Build feature | `gcsm` |
-| Default storage | `secretspec-{project}-{profile}-{key}` |
+| Default storage | `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}` (0.20+) |
 
 ## Quick start
 
@@ -77,9 +77,34 @@ DATABASE_URL = { description = "Database URL", providers = ["google"] }
 
 ## Storage model
 
-Secrets are stored as `secretspec-{project}-{profile}-{key}`. For example,
-project `myapp`, profile `production`, and key `DATABASE_URL` map to
-`secretspec-myapp-production-DATABASE_URL`.
+:::caution[Version compatibility]
+The collision-safe convention below is used starting with SecretSpec 0.20.
+Releases through 0.19 used `secretspec-{project}-{profile}-{key}`.
+:::
+
+SecretSpec encodes the project, profile, and key separately as lowercase,
+unpadded Base32, then joins them with `--`. Distinct logical addresses therefore
+cannot collapse onto one GCSM secret when a project or profile contains a
+hyphen. For example, project `myapp`, profile `production`, and key
+`DATABASE_URL` map to:
+
+```text
+secretspec--nv4wc4dq--obzg6zdvmn2gs33o--iraviqkcifjukx2vkjga
+```
+
+Existing convention secrets created by SecretSpec 0.19 or earlier retain their
+old GCSM ids and must be re-stored under the 0.20 convention before upgrading.
+To keep reading an old id during migration, address it explicitly with `ref`;
+native references are not renamed:
+
+```toml
+[profiles.production]
+DATABASE_URL = {
+  description = "DB",
+  ref = { item = "secretspec-myapp-production-DATABASE_URL" },
+  providers = ["google"]
+}
+```
 
 ## Use existing secrets
 

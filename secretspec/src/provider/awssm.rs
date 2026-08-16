@@ -262,12 +262,9 @@ impl AwssmProvider {
                 name, json_key, e
             ))
         })?;
-        match json.get(json_key) {
-            Some(serde_json::Value::String(s)) => Ok(Some(SecretString::new(s.clone().into()))),
-            // Non-string JSON values (numbers, bools) are rendered as-is.
-            Some(other) => Ok(Some(SecretString::new(other.to_string().into()))),
-            None => Ok(None),
-        }
+        // Selection is a flat key here; rendering the selected value is shared
+        // with the scaleway provider and Secrets::extract_stored_value.
+        Ok(json.get(json_key).and_then(crate::json_field::render_field))
     }
 
     /// Retrieves a secret by its full name/ARN, optionally extracting one key
@@ -794,6 +791,32 @@ mod tests {
                 .unwrap()
                 .expose_secret(),
             "true"
+        );
+    }
+
+    #[test]
+    fn extract_json_key_null_is_none_not_the_string_null() {
+        // A null value is no value. Rendering it as "null" would satisfy a
+        // required secret and hand the program a password spelled n-u-l-l.
+        let value = r#"{"password": null}"#;
+        assert!(
+            AwssmProvider::extract_json_key("db", value, "password")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn extract_json_key_null_matches_a_missing_key() {
+        let with_null = r#"{"password": null}"#;
+        let without = r#"{"username": "admin"}"#;
+        assert_eq!(
+            AwssmProvider::extract_json_key("db", with_null, "password")
+                .unwrap()
+                .is_none(),
+            AwssmProvider::extract_json_key("db", without, "password")
+                .unwrap()
+                .is_none()
         );
     }
 

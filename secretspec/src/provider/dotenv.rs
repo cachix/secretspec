@@ -380,6 +380,10 @@ impl Provider for DotEnvProvider {
         Ok(true)
     }
 
+    fn supports_delete(&self) -> bool {
+        true
+    }
+
     fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
         self.check_writable(addr)
     }

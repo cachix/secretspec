@@ -195,10 +195,33 @@ pub trait Provider: Send + Sync {
     /// addresses they merely asked about.
     fn delete(&self, addr: Address<'_>) -> Result<bool> {
         let _ = addr;
-        Err(SecretSpecError::ProviderOperationFailed(format!(
+        Err(self.deletion_unsupported())
+    }
+
+    /// Whether this provider implements [`delete`](Provider::delete) at all.
+    ///
+    /// Defaults to `false`, matching the default `delete`. A provider that
+    /// overrides `delete` must override this too, so that
+    /// [`check_deletable`](Provider::check_deletable) can answer the coarse
+    /// question — *can this provider delete anything?* — without performing a
+    /// deletion to find out.
+    ///
+    /// This is deliberately separate from `check_deletable`: that method
+    /// answers whether one specific address is deletable, which a provider may
+    /// refuse for reasons of its own, while this one reports a static property
+    /// of the implementation.
+    fn supports_delete(&self) -> bool {
+        false
+    }
+
+    /// The error both `delete` and `check_deletable` report for a provider that
+    /// cannot delete. Shared so the preflight and the operation cannot disagree
+    /// about the reason.
+    fn deletion_unsupported(&self) -> SecretSpecError {
+        SecretSpecError::ProviderOperationFailed(format!(
             "provider '{}' does not support deleting secrets",
             self.name()
-        )))
+        ))
     }
 
     /// Reports whether this provider can delete `addr`, without changing the
@@ -209,7 +232,18 @@ pub trait Provider: Send + Sync {
     /// source entries have already been removed. Providers with deletion
     /// policies beyond coordinate support must override this method and have
     /// [`delete`](Provider::delete) enforce the same policy.
+    ///
+    /// The default first rejects providers that cannot delete at all. Without
+    /// that, every provider inheriting the default `delete` — which errors —
+    /// still passed preflight, because resolving coordinates says nothing about
+    /// whether the store can be written to. `import --delete-source` then
+    /// aborted in its deletion phase, after the copy phase had already mutated
+    /// the destination, which is the late discovery this method exists to
+    /// prevent.
     fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        if !self.supports_delete() {
+            return Err(self.deletion_unsupported());
+        }
         self.resolve_coords(addr).map(|_| ())
     }
 
@@ -682,6 +716,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     }
     fn delete(&self, addr: Address<'_>) -> Result<bool> {
         (**self).delete(addr)
+    }
+    fn supports_delete(&self) -> bool {
+        (**self).supports_delete()
     }
     fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
         (**self).check_deletable(addr)

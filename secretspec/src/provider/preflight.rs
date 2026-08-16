@@ -163,6 +163,10 @@ impl Provider for PreflightGuard {
         self.inner.delete(addr)
     }
 
+    fn supports_delete(&self) -> bool {
+        self.inner.supports_delete()
+    }
+
     fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
         self.inner.check_deletable(addr)
     }

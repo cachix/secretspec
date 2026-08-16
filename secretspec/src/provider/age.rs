@@ -454,6 +454,10 @@ impl Provider for AgeProvider {
         Ok(true)
     }
 
+    fn supports_delete(&self) -> bool {
+        true
+    }
+
     /// Decrypts the blob once and serves every requested key from it
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
         let vars = self.load()?;

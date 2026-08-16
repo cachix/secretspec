@@ -374,6 +374,10 @@ impl Provider for FileProvider {
         Ok(true)
     }
 
+    fn supports_delete(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }

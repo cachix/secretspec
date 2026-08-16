@@ -332,6 +332,10 @@ impl Provider for FlyProvider {
         self.finish(output).map(|_| ())
     }
 
+    fn supports_delete(&self) -> bool {
+        true
+    }
+
     fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
         self.secret_name(addr).map(|_| ())
     }

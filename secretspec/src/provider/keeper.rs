@@ -520,6 +520,10 @@ impl Provider for KeeperProvider {
         Ok(true)
     }
 
+    fn supports_delete(&self) -> bool {
+        true
+    }
+
     fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
         if matches!(addr, Address::Native(_)) {
             return Err(SecretSpecError::ProviderOperationFailed(

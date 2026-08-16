@@ -214,6 +214,10 @@ impl Provider for KeyringProvider {
             Err(error) => Err(error.into()),
         }
     }
+
+    fn supports_delete(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

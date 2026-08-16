@@ -182,6 +182,10 @@ impl Provider for VaultProvider {
         self.core.delete(&coords)
     }
 
+    fn supports_delete(&self) -> bool {
+        true
+    }
+
     fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
         self.core.check_deletable(addr)
     }

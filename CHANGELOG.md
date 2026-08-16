@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `secretspec add` takes `--optional` and `--required`, writing
+  `required = false` or `required = true` on the new declaration. Omitting both
+  writes no `required` key, exactly as before, leaving the secret to inherit
+  `[defaults] required` from its profile. Previously there was no flag at all,
+  so a secret only some environments need had no CLI path to being optional
+  short of editing the manifest by hand — and in a profile whose defaults set
+  `required = false`, no path to being required either. The two flags are
+  mutually exclusive.
 - Structured caller context lets CLI and SDK integrations identify the invoking
   software, version, operation, and non-secret resource independently of the
   user-supplied access reason. Audit records and providers receive the context,

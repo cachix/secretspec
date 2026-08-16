@@ -351,11 +351,13 @@ TypeScript `Convert.toSecretSpec(resolved.fieldsJson())`, Ruby
 
 Add a secret declaration to an existing `secretspec.toml`. This edits only the
 selected profile and preserves the manifest's comments, formatting, and
-unrelated tables. The new declaration follows the profile's defaults; without
-a `required` profile default, it is required like any other declaration.
+unrelated tables. By default the declaration carries no `required` key at all,
+so it inherits the profile's `[defaults] required` — which is itself required
+unless the profile says otherwise.
 
 ```bash
 $ secretspec add <NAME> [--description <DESCRIPTION>] [--profile <PROFILE>] # 0.18+
+$ secretspec add <NAME> [--description <DESCRIPTION>] [--optional | --required] # 0.20+
 ```
 
 **Arguments and options:**
@@ -367,6 +369,17 @@ $ secretspec add <NAME> [--description <DESCRIPTION>] [--profile <PROFILE>] # 0.
 - `-P, --profile <PROFILE>` - Profile to edit. When omitted, SecretSpec uses the
   normal active-profile resolution, including `SECRETSPEC_PROFILE` and the
   user-global default.
+- `--optional` (0.20+) - Write `required = false`, overriding a profile default
+  of `required = true`. `check` then does not fail *because this secret is
+  unset* — it can still fail for another secret.
+- `--required` (0.20+) - Write `required = true`. Only needed in a profile
+  whose `[defaults]` set `required = false`, where omitting both flags would
+  otherwise inherit optional. Cannot be combined with `--optional`.
+
+Omitting both flags writes exactly what `add` wrote before 0.20. There is no
+flag for the `at_least_one`/`exactly_one` presence-group form of `required`:
+that spans several secrets at once and doesn't fit a single-secret `add`, so
+edit the manifest directly for it.
 
 ```bash
 $ secretspec add API_KEY --description "API access token" # 0.18+

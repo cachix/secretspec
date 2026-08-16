@@ -101,6 +101,13 @@ enum Commands {
         /// Profile to add the secret to
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: Option<String>,
+        /// Declare the secret optional, writing `required = false` (0.20+)
+        #[arg(long, conflicts_with = "required")]
+        optional: bool,
+        /// Declare the secret required, writing `required = true`. Only needed
+        /// in a profile whose `[defaults]` set `required = false` (0.20+)
+        #[arg(long)]
+        required: bool,
     },
     /// Set a secret value
     Set {
@@ -970,7 +977,17 @@ pub fn main() -> Result<()> {
             name,
             description,
             profile,
+            optional,
+            required,
         } => {
+            // Tri-state: neither flag omits the key entirely, leaving the
+            // secret to inherit `[defaults] required` from its profile. clap
+            // guarantees the two are never both set.
+            let requiredness = match (optional, required) {
+                (true, _) => Some(false),
+                (_, true) => Some(true),
+                _ => None,
+            };
             let app = load_secrets(&cli.file, &cli.reason, &caller)?;
             let profile = app.resolve_profile_name(profile.as_deref());
             validate_add_target(&app, &profile, &name)?;
@@ -998,6 +1015,7 @@ pub fn main() -> Result<()> {
                 &profile,
                 &name,
                 description,
+                requiredness,
             )?;
             write_manifest_atomically(&manifest_path, &updated)?;
 
@@ -2212,13 +2230,71 @@ mod tests {
                 name,
                 description,
                 profile,
+                optional,
+                required,
             } => {
                 assert_eq!(name, "API_KEY");
                 assert_eq!(description.as_deref(), Some("API access token"));
                 assert_eq!(profile.as_deref(), Some("production"));
+                assert!(!optional);
+                assert!(!required);
             }
             _ => panic!("expected Add command"),
         }
+    }
+
+    #[test]
+    fn add_parses_each_requiredness_flag() {
+        let parse = |flag: &str| {
+            Cli::try_parse_from([
+                "secretspec",
+                "add",
+                "API_KEY",
+                "--description",
+                "API access token",
+                flag,
+            ])
+            .unwrap()
+            .command
+        };
+
+        match parse("--optional") {
+            Commands::Add {
+                optional, required, ..
+            } => {
+                assert!(optional);
+                assert!(!required);
+            }
+            _ => panic!("expected Add command"),
+        }
+
+        match parse("--required") {
+            Commands::Add {
+                optional, required, ..
+            } => {
+                assert!(!optional);
+                assert!(required);
+            }
+            _ => panic!("expected Add command"),
+        }
+    }
+
+    #[test]
+    fn add_rejects_both_requiredness_flags_at_once() {
+        // They map to one tri-state, so accepting both would force the handler
+        // to silently pick a winner.
+        assert!(
+            Cli::try_parse_from([
+                "secretspec",
+                "add",
+                "API_KEY",
+                "--description",
+                "API access token",
+                "--optional",
+                "--required",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

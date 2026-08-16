@@ -48,34 +48,76 @@ AWS Secrets Manager uses the standard AWS SDK credential chain:
 
 ### Required IAM permissions
 
+For identities used only to read secrets, such as those running
+`secretspec get`, `secretspec check`, or `secretspec run`, use a read-only
+policy. Replace the example region and account ID with your own:
+
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "SecretspecBatchFetch",
       "Effect": "Allow",
-      "Action": [
-        "secretsmanager:GetSecretValue",
-        "secretsmanager:BatchGetSecretValue",
-        "secretsmanager:CreateSecret",
-        "secretsmanager:PutSecretValue"
-      ],
-      "Resource": "arn:aws:secretsmanager:*:*:secret:secretspec/*"
+      "Action": "secretsmanager:BatchGetSecretValue",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "SecretspecRead",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:secretspec/*"
     }
   ]
 }
 ```
 
-If you use a prefix such as `?prefix=myteam`, adjust the resource ARN:
+Identities that run `secretspec set` also need this statement in the policy's
+`Statement` array:
+
+```json
+{
+  "Sid": "SecretspecWrite",
+  "Effect": "Allow",
+  "Action": [
+    "secretsmanager:CreateSecret",
+    "secretsmanager:PutSecretValue"
+  ],
+  "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:secretspec/*"
+}
+```
+
+If you use a prefix such as `?prefix=myteam`, adjust the secret ARN in the read
+and write statements:
 
 ```
-arn:aws:secretsmanager:*:*:secret:myteam/secretspec/*
+arn:aws:secretsmanager:us-east-1:123456789012:secret:myteam/secretspec/*
 ```
 
 :::note
-The `BatchGetSecretValue` permission is required for batch fetching, which is
-used automatically during `check` and `run` commands to reduce API calls.
+`BatchGetSecretValue` is used automatically during `check` and `run` to fetch
+secrets in batches of 20 instead of one call each.
+
+AWS Secrets Manager [does not support resource-level permissions][aws-actions]
+for `BatchGetSecretValue`, so that action must use `"Resource": "*"`. Scoping
+it to a secret ARN does not grant the permission, and the batch request fails
+with `AccessDeniedException`. The `aws:RequestedRegion` condition limits the
+wildcard statement to the configured region.
+
+The wildcard does not authorize access to secret contents by itself. AWS also
+requires `secretsmanager:GetSecretValue` for every secret returned by a batch,
+and that permission remains scoped to the secret ARN. SecretSpec supplies an
+explicit list of secret IDs, so the [filter-only `ListSecrets` permission][batch]
+is not required.
 :::
+
+[aws-actions]: https://docs.aws.amazon.com/service-authorization/latest/reference/list_secretsmanager.html
+[batch]: https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_BatchGetSecretValue.html
 
 :::note
 Using `tag.NAME=VALUE` additionally requires `secretsmanager:TagResource`, and a

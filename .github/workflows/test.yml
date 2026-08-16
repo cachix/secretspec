@@ -78,10 +78,11 @@ jobs:
     - name: Check documentation links
       uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
       with:
+        workingDirectory: docs
         args: >-
           --root-dir "${{ github.workspace }}/docs/dist"
           --remap "^https://secretspec\\.dev file://${{ github.workspace }}/docs/dist"
-          "docs/dist/**/*.html"
+          "dist/**/*.html"
 
   tests:
     needs: changes

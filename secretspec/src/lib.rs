@@ -6,6 +6,7 @@
 //! # Features
 //!
 //! - **Declarative Configuration**: Define secrets in `secretspec.toml`
+//! - **Rust-first Declarations**: Build a [`Spec`] directly in Rust (0.20+)
 //! - **Multiple Providers**: Keyring, dotenv, environment variables, Keeper Secrets Manager (0.18+)
 //! - **Profile Support**: Different configurations for development, staging, production
 //! - **Type Safety**: Optional compile-time code generation for strongly-typed access
@@ -44,7 +45,7 @@
 mod audit;
 mod cache;
 mod caller;
-pub mod codegen;
+mod codegen;
 mod composition;
 mod config;
 mod error;
@@ -55,6 +56,7 @@ mod plan;
 mod report;
 mod resolve;
 mod secrets;
+mod spec;
 mod validation;
 
 pub(crate) mod provider;
@@ -67,19 +69,27 @@ pub mod cli;
 pub use caller::CallerContext;
 pub use config::Resolved;
 
-// Re-export config types for CLI usage only - these are marked #[doc(hidden)]
+/// Implementation details shared with `secretspec-derive`.
+///
+/// These document types are not part of the supported Rust SDK. Use [`Spec`]
+/// and its builder API instead.
 #[doc(hidden)]
-pub use config::{
-    AuditConfig, Config, GlobalConfig, GlobalDefaults, Profile, ProfileDefaults, Project,
-};
+pub mod __private {
+    pub mod codegen {
+        pub use crate::codegen::{CodegenIr, IrField, IrProfile, build_ir, capitalize};
+    }
 
-// Re-export Secret and generation types for secretspec-derive
-#[doc(hidden)]
-pub use config::{
-    ExtractFormat, GenerateConfig, GenerateOptions, Secret, SecretEncoding, SecretExtract,
-};
+    pub use crate::config::{
+        Config, GenerateConfig, GenerateOptions, Profile, ProfileDefaults, Project, Secret,
+    };
+    pub use crate::spec::load_for_codegen;
+}
 
 // Public API exports
+pub use config::{
+    CredentialSource, ExtractFormat, NativeAddress, NativeAddressTemplate, ProviderAlias,
+    ProviderCache, RequireReason, SecretEncoding, SecretExtract,
+};
 pub use error::{Result, SecretSpecError};
 pub use provider::{DiscoveryContext, ProducedValuePersistence, Provider};
 pub use report::{
@@ -91,6 +101,7 @@ pub use resolve::{
 };
 pub use secrets::ExportFormat;
 pub use secrets::Secrets;
+pub use spec::{Generation, PasswordCharset, Profile, Secret, Spec, SpecBuilder};
 pub use validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
 
 #[cfg(test)]

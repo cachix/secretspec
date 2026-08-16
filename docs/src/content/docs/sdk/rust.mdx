@@ -9,6 +9,7 @@ import profilesExample from '../../../../../secretspec-derive/examples/profiles.
 import scopesExample from '../../../../../secretspec-derive/examples/scopes.rs?raw';
 import asPathExample from '../../../../../secretspec-derive/examples/as_path.rs?raw';
 import namedExample from '../../../../../secretspec-derive/examples/named.rs?raw';
+import rustFirstExample from '../../../../../secretspec/examples/rust_first.rs?raw';
 import exampleManifest from '../../../../../secretspec-derive/secretspec.toml?raw';
 
 SecretSpec provides a Rust library with type-safe access to secrets through a
@@ -42,6 +43,49 @@ use with any declared profile:
 Required and defaulted secrets are generated as `String`; secrets that may be
 absent are `Option<String>`. Field names use Rust snake case, so `DATABASE_URL`
 becomes `database_url`.
+
+## Describing secrets in Rust (0.20+)
+
+Starting with SecretSpec 0.20, `Spec` is the format-independent declaration
+API. Build one directly in Rust when an application owns its secret contract
+in code, then pass the validated specification to `Secrets::from_spec`:
+
+<Code code={rustFirstExample} lang="rust" meta='title="rust_first.rs"' />
+
+`Spec::from_toml` and `Spec::try_from(path)` produce the same type through the
+same validation and compilation path. Convert from a path for manifests with
+`extends`, because a TOML string has no directory from which to resolve relative
+paths.
+A spec loaded from a file retains that file's directory for relative provider
+paths. A Rust-built declaration resolves them from the current working directory
+by default; `Secrets::from_spec_at` selects another logical base directory.
+
+`Spec` is immutable so its declarations and compiled view cannot drift apart.
+Use `to_builder()` to edit a copy, or `into_builder()` to consume the original,
+then rebuild to validate the result:
+
+```rust
+let edited = spec
+    .to_builder()
+    .remove_secret("default", "LEGACY_TOKEN")
+    .add_secret(
+        "production",
+        "DEPLOY_TOKEN",
+        Secret::required("Production deployment token"),
+    )
+    .build()?;
+```
+
+`remove_secret` removes the declaration from that profile. Removing an override
+can reveal the declaration inherited from `default`; removing it from `default`
+also removes it from profiles that only inherited it. `build()` rejects dangling
+scope membership, invalid compositions, empty profiles, and other semantic
+errors introduced by an edit. These operations edit the in-memory specification;
+they do not rewrite or preserve the formatting of a TOML document.
+
+The Rust-first API complements `declare_secrets!`: `Spec` describes and
+resolves names dynamically, while the macro continues to generate statically
+typed fields from a manifest at compile time.
 
 ## Profile-specific types
 

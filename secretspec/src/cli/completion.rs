@@ -1,7 +1,7 @@
 use super::{Cli, CompletionShell};
-use crate::manifest::CompiledManifest;
+use crate::config::{Config, GlobalConfig};
+use crate::manifest::CompiledSpec;
 use crate::provider::providers as registered_providers;
-use crate::{Config, GlobalConfig};
 use clap::builder::StyledStr;
 use clap::{ArgMatches, CommandFactory};
 use clap_complete::engine::{CompletionCandidate, PathCompleter, ValueCompleter};
@@ -18,7 +18,7 @@ static CONTEXT: OnceLock<CompletionContext> = OnceLock::new();
 
 struct CompletionContext {
     config: Option<Config>,
-    manifest: Option<CompiledManifest>,
+    manifest: Option<CompiledSpec>,
     global: Option<GlobalConfig>,
     profile: String,
 }

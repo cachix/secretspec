@@ -246,10 +246,7 @@ impl Provider for PreflightGuard {
         self.inner.with_credentials(credentials);
     }
 
-    fn reflect(
-        &self,
-        context: DiscoveryContext<'_>,
-    ) -> Result<HashMap<String, crate::config::Secret>> {
+    fn reflect(&self, context: DiscoveryContext<'_>) -> Result<HashMap<String, crate::Secret>> {
         self.check()?;
         self.inner.reflect(context)
     }

@@ -34,7 +34,7 @@
 //! ```
 
 use crate::composition::Template;
-use crate::manifest::CompiledManifest;
+use crate::manifest::CompiledSpec;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
 use std::fs;
@@ -693,7 +693,7 @@ impl Config {
     /// Validate and return the compiled manifest, so callers that also need the
     /// effective view (e.g. [`crate::Secrets::load_from`]) reuse the single
     /// compile validation already performed instead of recompiling.
-    pub(crate) fn validate_and_compile(&self) -> Result<CompiledManifest, ParseError> {
+    pub(crate) fn validate_and_compile(&self) -> Result<CompiledSpec, ParseError> {
         if self.project.name.is_empty() {
             return Err(ParseError::Validation(
                 "Project name cannot be empty".into(),
@@ -710,7 +710,7 @@ impl Config {
         // checks consume the same compiled manifest as runtime and codegen.
         // Validate `default` first, then remaining profiles in name order so
         // error attribution is deterministic.
-        let compiled = CompiledManifest::compile(self);
+        let compiled = CompiledSpec::compile(self);
         let default_profile = self.profiles.get("default");
         if let Some(default_profile) = default_profile {
             default_profile
@@ -755,7 +755,7 @@ impl Config {
     /// launches the command with every manifest secret scrubbed and none
     /// injected — a green result that guarantees nothing. A blank or repeated
     /// entry is likewise a typo with no meaning, not a subset worth resolving.
-    fn validate_scopes(&self, compiled: &CompiledManifest) -> Result<(), ParseError> {
+    fn validate_scopes(&self, compiled: &CompiledSpec) -> Result<(), ParseError> {
         let Some(scopes) = &self.scopes else {
             return Ok(());
         };
@@ -867,7 +867,7 @@ impl Config {
 }
 
 fn validate_compiled_profile(
-    manifest: &CompiledManifest,
+    manifest: &CompiledSpec,
     profile_name: &str,
 ) -> Result<(), ParseError> {
     let profile = manifest
@@ -1106,6 +1106,7 @@ impl TryFrom<&Path> for Config {
 /// Parsed from `[project].require_reason`, which accepts a boolean or the string
 /// `"agents"`. Defaults to [`RequireReason::Agents`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum RequireReason {
     /// Never require a reason.
     Never,
@@ -2646,6 +2647,7 @@ impl GlobalConfig {
     /// - The config directory cannot be created
     /// - The file cannot be written
     /// - The configuration cannot be serialized
+    #[cfg(feature = "cli")]
     pub fn save(&self) -> Result<(), io::Error> {
         let config_path = Self::path()?;
 
@@ -3300,7 +3302,7 @@ ACCESS_TOKEN = { description = "Access token", required = { at_least_one = ["aut
         .unwrap();
 
         config.validate().unwrap();
-        let compiled = CompiledManifest::compile(&config);
+        let compiled = CompiledSpec::compile(&config);
         let production = compiled.profile("production").unwrap();
         assert_eq!(production.constraints.at_least_one[0].name, "auth");
         assert_eq!(
@@ -3406,7 +3408,7 @@ ACCESS_TOKEN = { required = { at_least_one = "auth" } }
         .unwrap();
 
         config.validate().unwrap();
-        let compiled = CompiledManifest::compile(&config);
+        let compiled = CompiledSpec::compile(&config);
         let password = &compiled.profile("production").unwrap().secrets["PASSWORD"];
         assert!(!password.declared_required);
         assert_eq!(password.config.required, None);

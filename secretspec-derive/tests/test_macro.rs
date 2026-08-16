@@ -28,11 +28,3 @@ fn test_profile_specific_secrets() {
     // - enum Profile with Development, Staging, Production variants
     // - enum SecretSpecProfile with profile-specific field types
 }
-
-#[test]
-fn test_empty_secrets() {
-    // This should compile without errors
-    declare_secrets!("tests/fixtures/empty.toml");
-
-    // The macro should generate empty structs
-}

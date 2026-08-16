@@ -35,6 +35,7 @@ pub(crate) fn display_error_chain(error: &(dyn std::error::Error + 'static)) -> 
 /// This enum represents all possible errors that can occur when working with
 /// the secretspec library.
 #[derive(Error, Debug, Diagnostic)]
+#[non_exhaustive]
 pub enum SecretSpecError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -95,6 +96,9 @@ pub enum SecretSpecError {
     InvalidProfile(String),
     #[error("Invalid scope: {0}")]
     InvalidScope(String),
+    /// A parsed or Rust-built declaration failed semantic validation (0.20+).
+    #[error("Invalid SecretSpec declaration: {0}")]
+    InvalidSpec(String),
     #[error("Validation failed: {0}")]
     ValidationFailed(Box<ValidationErrors>),
     #[error("Secret generation failed: {0}")]
@@ -146,6 +150,7 @@ impl SecretSpecError {
             SecretSpecError::Json(_) => "json",
             SecretSpecError::InvalidProfile(_) => "invalid_profile",
             SecretSpecError::InvalidScope(_) => "invalid_scope",
+            SecretSpecError::InvalidSpec(_) => "invalid_spec",
             SecretSpecError::ValidationFailed(_) => "validation_failed",
             SecretSpecError::GenerationFailed(_) => "generation_failed",
             SecretSpecError::DecodeFailed { .. } => "decode_failed",
@@ -175,9 +180,7 @@ impl From<ParseError> for SecretSpecError {
             ParseError::CircularDependency(msg) => {
                 SecretSpecError::Io(io::Error::new(io::ErrorKind::InvalidData, msg))
             }
-            ParseError::Validation(msg) => {
-                SecretSpecError::Io(io::Error::new(io::ErrorKind::InvalidData, msg))
-            }
+            ParseError::Validation(msg) => SecretSpecError::InvalidSpec(msg),
             ParseError::ExtendedConfigNotFound(path) => {
                 SecretSpecError::ExtendedConfigNotFound(path)
             }
@@ -269,6 +272,10 @@ mod tests {
             (
                 SecretSpecError::InvalidProfile("ghost".into()),
                 "invalid_profile",
+            ),
+            (
+                SecretSpecError::InvalidSpec("bad declaration".into()),
+                "invalid_spec",
             ),
             (
                 SecretSpecError::GenerationFailed("rng".into()),

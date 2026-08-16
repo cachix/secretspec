@@ -1,7 +1,6 @@
+use crate::config::{Config, GlobalConfig, GlobalDefaults, Profile as ConfigProfile, Project};
 use crate::provider::{Provider, providers, spec_names_known_provider};
-use crate::{
-    CallerContext, Config, ExportFormat, GlobalConfig, GlobalDefaults, Profile, Project, Secrets,
-};
+use crate::{CallerContext, ExportFormat, Secrets};
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use std::collections::{HashMap, HashSet};
@@ -567,7 +566,7 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
     Ok(doc.to_string())
 }
 
-/// Rejects names that cannot occupy a flattened secret key in [`Profile`].
+/// Rejects names that cannot occupy a flattened secret key in [`ConfigProfile`].
 fn validate_add_secret_name(name: &str) -> Result<()> {
     if !crate::config::is_valid_identifier(name) {
         return Err(miette!(
@@ -958,13 +957,16 @@ pub fn main() -> Result<()> {
             // Discover declarations in the namespace the new manifest will use.
             let secrets = provider
                 .reflect(crate::DiscoveryContext::new(&project_name, &profile))
-                .into_diagnostic()?;
+                .into_diagnostic()?
+                .into_iter()
+                .map(|(name, secret)| (name, secret.into_config()))
+                .collect();
 
             // Create a new project config
             let mut profiles = HashMap::new();
             profiles.insert(
                 profile.clone(),
-                Profile {
+                ConfigProfile {
                     defaults: None,
                     secrets,
                 },
@@ -1527,7 +1529,7 @@ pub fn main() -> Result<()> {
         // Generate typed accessors for another language (value-free)
         Commands::Schema { profile, output } => {
             let app = load_secrets(&cli.file, &cli.reason, &caller)?;
-            let ir = crate::codegen::build_ir(app.config());
+            let ir = crate::codegen::build_ir_from_manifest(&app.manifest);
             let schema = crate::codegen::schema::emit(&ir, profile.as_deref())
                 .map_err(|e| miette!("{e}"))?;
             match output {
@@ -1786,7 +1788,7 @@ mod tests {
             },
             profiles: HashMap::from([(
                 "default".to_string(),
-                Profile {
+                ConfigProfile {
                     defaults: None,
                     secrets,
                 },
@@ -2024,7 +2026,7 @@ mod tests {
             },
             profiles: HashMap::from([(
                 "default".to_string(),
-                Profile {
+                ConfigProfile {
                     defaults: None,
                     secrets: HashMap::from([(
                         "DATABASE_URL".to_string(),

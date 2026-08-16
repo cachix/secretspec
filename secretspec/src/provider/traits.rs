@@ -502,20 +502,22 @@ pub trait Provider: Send + Sync {
     /// it. Hierarchical providers should use it so discovery stays inside the
     /// same namespace as [`convention_address`](Provider::convention_address).
     /// The default implementation returns an unsupported-operation error.
+    /// Implementations return the public declaration [`Secret`](crate::Secret),
+    /// built with constructors such as [`Secret::required`](crate::Secret::required),
+    /// rather than the raw configuration document type used before 0.20.
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let context = DiscoveryContext::new("payments", "production");
-    /// let secrets = provider.reflect(context)?;
-    /// for (name, secret) in secrets {
-    ///     println!("Found secret: {} = {:?}", name, secret);
-    /// }
+    /// let mut secrets = HashMap::new();
+    /// secrets.insert(
+    ///     "DATABASE_URL".to_string(),
+    ///     Secret::required("Database connection URL"),
+    /// );
+    /// # let _ = context;
     /// ```
-    fn reflect(
-        &self,
-        _context: DiscoveryContext<'_>,
-    ) -> Result<HashMap<String, crate::config::Secret>> {
+    fn reflect(&self, _context: DiscoveryContext<'_>) -> Result<HashMap<String, crate::Secret>> {
         Err(SecretSpecError::ProviderOperationFailed(format!(
             "Provider '{}' does not support reflection",
             self.name()
@@ -773,10 +775,7 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn set_profile(&self, profile: &str) {
         (**self).set_profile(profile);
     }
-    fn reflect(
-        &self,
-        context: DiscoveryContext<'_>,
-    ) -> Result<HashMap<String, crate::config::Secret>> {
+    fn reflect(&self, context: DiscoveryContext<'_>) -> Result<HashMap<String, crate::Secret>> {
         (**self).reflect(context)
     }
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {

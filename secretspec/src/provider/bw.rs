@@ -1125,11 +1125,7 @@ fn declarations_from_items(
 
         declarations.insert(
             item.name.clone(),
-            Secret {
-                description: Some(format!("{} Bitwarden secret", item.name)),
-                required: Some(true),
-                ..Default::default()
-            },
+            Secret::required(format!("{} Bitwarden secret", item.name)),
         );
     }
 
@@ -4109,10 +4105,10 @@ mod tests {
 
         assert_eq!(declarations.len(), 2);
         assert_eq!(
-            declarations["API_KEY"].description.as_deref(),
-            Some("API_KEY Bitwarden secret")
+            declarations["API_KEY"].description(),
+            "API_KEY Bitwarden secret"
         );
-        assert_eq!(declarations["API_KEY"].required, Some(true));
+        assert_eq!(declarations["API_KEY"].required_setting(), Some(true));
         assert!(declarations.contains_key("CARD_TOKEN"));
     }
 
@@ -4985,8 +4981,8 @@ mod tests {
 
             assert_eq!(declarations.len(), 1);
             assert_eq!(
-                declarations["API_KEY"].description.as_deref(),
-                Some("API_KEY Bitwarden secret")
+                declarations["API_KEY"].description(),
+                "API_KEY Bitwarden secret"
             );
             assert!(!format!("{:?}", declarations["API_KEY"]).contains("must-not-appear"));
 

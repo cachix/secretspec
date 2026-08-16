@@ -1,5 +1,5 @@
 use crate::common::TestFixture;
-use secretspec::Config;
+use secretspec::Spec;
 
 // Integration tests for profile inheritance using the public API
 // (Unit tests for detailed inheritance logic are in src/tests.rs)
@@ -9,15 +9,15 @@ fn test_profile_inheritance_end_to_end() {
     let fixture = TestFixture::new();
     let (_, _, base_path) = fixture.create_extends_structure();
 
-    let config = Config::try_from(base_path.as_path()).unwrap();
+    let spec = Spec::try_from(base_path.as_path()).unwrap();
 
     // Verify basic inheritance functionality through public API
-    assert_eq!(config.project.name, "test_project");
+    assert_eq!(spec.project(), "test_project");
 
-    let default_profile = config.profiles.get("default").unwrap();
-    assert!(default_profile.secrets.contains_key("API_KEY"));
-    assert!(default_profile.secrets.contains_key("DATABASE_URL"));
-    assert!(default_profile.secrets.contains_key("REDIS_URL"));
-    assert!(default_profile.secrets.contains_key("JWT_SECRET"));
-    assert!(default_profile.secrets.contains_key("OAUTH_CLIENT_ID"));
+    let default_profile: Vec<_> = spec.secrets("default").unwrap().collect();
+    assert!(default_profile.contains(&"API_KEY"));
+    assert!(default_profile.contains(&"DATABASE_URL"));
+    assert!(default_profile.contains(&"REDIS_URL"));
+    assert!(default_profile.contains(&"JWT_SECRET"));
+    assert!(default_profile.contains(&"OAUTH_CLIENT_ID"));
 }

@@ -188,11 +188,21 @@ pub mod schema {
     fn property_type(field: &IrField) -> Value {
         // Every secret is a string; optional secrets are nullable. `as_path`
         // secrets are also strings (the file path), so they need no special type.
-        if field.optional {
+        let mut property = if field.optional {
             json!({ "type": ["string", "null"] })
         } else {
             json!({ "type": "string" })
+        };
+        if let Some(description) = &field.description {
+            property
+                .as_object_mut()
+                .expect("property_type always builds a JSON object")
+                .insert(
+                    "description".to_string(),
+                    Value::String(description.clone()),
+                );
         }
+        property
     }
 
     fn object_schema(title: &str, fields: &[IrField], additional_properties: bool) -> Value {
@@ -546,6 +556,33 @@ mod tests {
 
         // An unknown profile is an error.
         assert!(schema::emit(&ir, Some("nope")).is_err());
+    }
+
+    #[test]
+    fn schema_emits_description_when_declared() {
+        // quicktype turns a JSON Schema "description" into a native docstring
+        // in every target language, so a declared description should reach the
+        // generated schema even though it plays no role in the type itself.
+        let ir = build_ir(&config_with(vec![(
+            "default",
+            vec![
+                (
+                    "DATABASE_URL",
+                    secret(Some(true), None, Some("Postgres connection string")),
+                ),
+                ("API_KEY", secret(Some(true), None, None)),
+            ],
+        )]));
+
+        let union: serde_json::Value =
+            serde_json::from_str(&schema::emit(&ir, None).unwrap()).unwrap();
+        assert_eq!(
+            union["properties"]["DATABASE_URL"]["description"],
+            "Postgres connection string"
+        );
+        // A field without a declared description carries no key at all, rather
+        // than an empty or null one.
+        assert!(union["properties"]["API_KEY"].get("description").is_none());
     }
 
     #[test]

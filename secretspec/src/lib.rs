@@ -45,7 +45,7 @@
 mod audit;
 mod cache;
 mod caller;
-pub mod codegen;
+mod codegen;
 mod composition;
 mod config;
 mod error;
@@ -75,6 +75,10 @@ pub use config::Resolved;
 /// and its builder API instead.
 #[doc(hidden)]
 pub mod __private {
+    pub mod codegen {
+        pub use crate::codegen::{CodegenIr, IrField, IrProfile, build_ir, capitalize};
+    }
+
     pub use crate::config::{
         Config, GenerateConfig, GenerateOptions, Profile, ProfileDefaults, Project, Secret,
     };

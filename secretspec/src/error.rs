@@ -35,6 +35,7 @@ pub(crate) fn display_error_chain(error: &(dyn std::error::Error + 'static)) -> 
 /// This enum represents all possible errors that can occur when working with
 /// the secretspec library.
 #[derive(Error, Debug, Diagnostic)]
+#[non_exhaustive]
 pub enum SecretSpecError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

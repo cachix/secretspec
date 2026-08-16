@@ -21,7 +21,7 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use secretspec::codegen::{CodegenIr, IrField, build_ir, capitalize};
+use secretspec::__private::codegen::{CodegenIr, IrField, build_ir, capitalize};
 use std::collections::{BTreeMap, HashSet};
 use syn::{LitStr, parse_macro_input};
 
@@ -496,7 +496,7 @@ fn field_name_ident(name: &str) -> proc_macro2::Ident {
 /// Map a shared-IR field's optionality and path-ness to its Rust type.
 ///
 /// This is the only typing decision the derive macro still makes locally; the
-/// underlying optional/as_path facts come from [`secretspec::codegen`].
+/// underlying optional/as_path facts come from SecretSpec's shared codegen IR.
 fn ir_field_type(field: &IrField) -> proc_macro2::TokenStream {
     match (field.optional, field.as_path) {
         (true, true) => quote! { Option<std::path::PathBuf> },

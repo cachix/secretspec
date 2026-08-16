@@ -1106,6 +1106,7 @@ impl TryFrom<&Path> for Config {
 /// Parsed from `[project].require_reason`, which accepts a boolean or the string
 /// `"agents"`. Defaults to [`RequireReason::Agents`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum RequireReason {
     /// Never require a reason.
     Never,

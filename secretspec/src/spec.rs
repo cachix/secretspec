@@ -701,6 +701,7 @@ impl Generation {
 ///
 /// Available starting with SecretSpec 0.20.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PasswordCharset {
     /// ASCII letters and decimal digits.
     Alphanumeric,

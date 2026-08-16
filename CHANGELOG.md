@@ -34,7 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requiredness defaults and explicit opt-outs from inherited path, prompt, and
   generation settings. Existing specs can be copied or consumed back into a
   builder to add, replace, or remove declarations before rebuilding a validated
-  spec.
+  spec. This validated declaration API replaces the previously exposed raw
+  configuration and code-generation implementation types. Custom provider
+  implementations should now return declarations such as
+  `Secret::required(...)` from `Provider::reflect` instead of constructing raw
+  configuration secrets.
 - Structured caller context lets CLI and SDK integrations identify the invoking
   software, version, operation, and non-secret resource independently of the
   user-supplied access reason. Audit records and providers receive the context,

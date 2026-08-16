@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use secretspec::__private::Config;
-    use secretspec::codegen::{CodegenIr, IrField, IrProfile, capitalize};
+    use secretspec::__private::codegen::{CodegenIr, IrField, IrProfile, capitalize};
 
     fn codegen_ir(config: &Config) -> CodegenIr {
         let mut profile_fields: Vec<IrProfile> = config
@@ -182,7 +182,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
 "#;
 
         let spec = secretspec::Spec::from_toml(toml_str).unwrap();
-        let ir = secretspec::codegen::build_ir(&spec);
+        let ir = secretspec::__private::codegen::build_ir(&spec);
         assert!(!ir.union[0].optional, "a default always supplies a value");
     }
 

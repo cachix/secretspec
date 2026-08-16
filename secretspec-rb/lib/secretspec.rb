@@ -87,12 +87,27 @@ module Secretspec
     # block to Builder#load, which closes automatically) when done so secret
     # files do not accumulate in the temp dir. A file already gone is not an
     # error.
+    #
+    # Every file is attempted even if one cannot be removed; the first such
+    # error is re-raised once the rest have been cleaned up. Stopping at the
+    # first failure would leave the remaining secrets on disk, which is the one
+    # outcome this method exists to prevent. Matches the Go SDK's firstErr and
+    # the .NET SDK's firstError.
     def close
+      first_error = nil
       secrets.each_value do |secret|
         next unless secret.as_path && secret.path
 
-        File.delete(secret.path) if File.exist?(secret.path)
+        begin
+          File.delete(secret.path)
+        rescue Errno::ENOENT
+          # already gone
+        rescue SystemCallError => e
+          first_error ||= e
+        end
       end
+      raise first_error if first_error
+
       nil
     end
   end

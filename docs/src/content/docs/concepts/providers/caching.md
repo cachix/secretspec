@@ -125,7 +125,7 @@ rejects such routes during planning. The examples use a separate keyring
 namespace for `local`.
 
 The cache provider must also support deletion: keyring, pass, gopass, dotenv,
-age (0.20+), Azure App Configuration (0.19+), or a Vault/OpenBao KV v2 mount. Other
+age (0.20+), Azure App Configuration (0.20+), or a Vault/OpenBao KV v2 mount. Other
 providers are rejected during planning. An Azure App Configuration cache must
 select a different storage identity and address space from every authoritative
 entry; a separate App Configuration resource is not required.
@@ -259,7 +259,7 @@ and workload identity. Prefer the identity mode that matches the environment;
 do not replace short-lived or workload-bound credentials with long-lived
 credentials solely to reduce latency.
 
-Azure App Configuration (0.19+) supports the same Entra identity modes plus
+Azure App Configuration (0.20+) supports the same Entra identity modes plus
 connection strings. When entries resolve Key Vault references, benchmark both
 the App Configuration request and the separate Key Vault request; a warm cache
 avoids both remote reads.

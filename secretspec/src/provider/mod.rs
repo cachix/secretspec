@@ -38,7 +38,7 @@
 //! - [`openbao::OpenBaoProvider`]: OpenBao integration (0.17+)
 //! - [`bws::BwsProvider`]: Bitwarden Secrets Manager integration
 //! - [`akv::AkvProvider`]: Azure Key Vault integration
-//! - [`aac::AacProvider`]: Azure App Configuration integration (0.19+)
+//! - [`aac::AacProvider`]: Azure App Configuration integration (0.20+)
 //! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
 //! - [`bw::BitwardenProvider`]: Bitwarden Password Manager (0.18+)
 //! - [`sops::SopsProvider`]: SOPS-encrypted file integration (0.17+)

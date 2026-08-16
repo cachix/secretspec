@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Azure App Configuration provider** (`aac://`, 0.20+): select direct
+  values and Azure Key Vault references by label, prefix, and tags, with Entra
+  ID or connection-string authentication and guarded writes, deletion, and
+  declaration discovery. Azure Key Vault references can pin an exact secret
+  version, cached-route validation compares canonical vault endpoints
+  independently of authentication choice, and discovery rejects ambiguous or
+  invalid convention keys.
 - The Rust SDK can describe secrets without TOML through the public `Spec`,
   `SpecBuilder`, `Profile`, and `Secret` API. TOML parsing and code generation
   use the same validated model, so Rust-first and file-backed projects share
@@ -195,12 +202,6 @@ as in 0.19.0.
 - Secrets can set `prompt = true` to request a hidden value from the controlling
   terminal when `secretspec run` finds no stored value. Writable providers save
   the answer for later runs; the `null` provider keeps it invocation-only.
-- **Azure App Configuration provider** (`aac://`, 0.19+): select direct
-  values and Azure Key Vault references by label, prefix, and tags, with Entra
-  ID or connection-string authentication and guarded writes, deletion, and
-  declaration discovery. Azure Key Vault references can pin an exact secret
-  version, and cached-route validation compares canonical vault endpoints
-  independently of authentication choice.
 - Profiles can opt out of inheriting `[profiles.default]` by setting
   `inherit = false` in their profile defaults (0.19+), allowing standalone
   secret sets alongside profiles that still share the default declarations.
@@ -268,9 +269,6 @@ as in 0.19.0.
   coordinate, so a `field` written for one store no longer has to be dropped to
   reach another store that organizes the secret differently.
   ([#266](https://github.com/cachix/secretspec/issues/266))
-- Azure App Configuration declaration discovery now rejects ambiguous nested
-  convention keys and accepts only convention names that can be represented in
-  generated SecretSpec manifests.
 - The Proton Pass provider works with `pass-cli` 2.2.4 and later, which removed
   the `pass-cli test` subcommand the provider ran to check the session before
   every read and write. The check now tries `pass-cli info` and falls back to

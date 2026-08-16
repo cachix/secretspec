@@ -1,4 +1,4 @@
-//! Azure App Configuration provider, available in SecretSpec 0.19+.
+//! Azure App Configuration provider, available in SecretSpec 0.20+.
 //!
 //! Reads and manages ordinary App Configuration key-values and resolves
 //! canonical Azure Key Vault references through SecretSpec's existing Azure
@@ -449,7 +449,7 @@ struct SyncToken {
     value: String,
 }
 
-/// Azure App Configuration provider, available in SecretSpec 0.19+.
+/// Azure App Configuration provider, available in SecretSpec 0.20+.
 pub struct AacProvider {
     config: AacConfig,
     credentials: ProviderCredentials,
@@ -467,7 +467,7 @@ crate::register_provider! {
     struct: AacProvider,
     config: AacConfig,
     name: "aac",
-    description: "Azure App Configuration (0.19+)",
+    description: "Azure App Configuration (0.20+)",
     schemes: ["aac"],
     examples: [
         "aac://payments-production",
@@ -1620,11 +1620,7 @@ impl AacProvider {
         }
         Ok(Some((
             key.to_string(),
-            crate::Secret {
-                description: Some(format!("{key} secret")),
-                required: Some(true),
-                ..Default::default()
-            },
+            crate::Secret::required(format!("{key} secret")),
         )))
     }
 
@@ -1732,6 +1728,10 @@ impl Provider for AacProvider {
         let key = self.resolve_key(addr)?;
         self.initial_request
             .run(|| super::block_on(self.delete_async(&key)))
+    }
+
+    fn supports_delete(&self) -> bool {
+        true
     }
 
     fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
@@ -2735,6 +2735,7 @@ mod tests {
             ]
         });
         let provider = fixture_provider(&fixture.endpoint, "aac://shared");
+        assert!(provider.supports_delete());
         let address = Address::Convention {
             project: "app",
             profile: "prod",
@@ -3311,7 +3312,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(name, "DATABASE_URL");
-        assert_eq!(declaration.required, Some(true));
+        assert_eq!(declaration.required_setting(), Some(true));
         assert!(
             provider
                 .declaration_from_record(

@@ -9,19 +9,19 @@ The Azure App Configuration provider reads and manages ordinary key-values and
 resolves canonical Azure Key Vault references.
 
 :::caution[Version compatibility]
-The `aac` provider is added in SecretSpec 0.19.
+The `aac` provider is added in SecretSpec 0.20.
 :::
 
 ## At a glance
 
 | | |
 | --- | --- |
-| Provider | `aac` (0.19+) |
+| Provider | `aac` (0.20+) |
 | URI | `aac://STORE[?OPTIONS]` |
 | Access | Read, write, delete, and discovery; native references are read-only |
 | Best for | Azure applications that centralize configuration and Key Vault references |
 | Authentication | Service principal, Azure CLI, managed identity, workload identity, or App Configuration connection string |
-| Availability | SecretSpec 0.19+; requires the `aac` build feature |
+| Availability | SecretSpec 0.20+; requires the `aac` build feature |
 | Default storage | `secretspec:{project}:{profile}:{key}` with no label |
 
 ## Quick start
@@ -43,7 +43,7 @@ $ secretspec run --provider aac://payments-production -- your-command
   read-write access key for writes and deletes
 - **Key Vault Secrets User** on each referenced vault when entries are Key
   Vault references
-- Build with `--features aac` (0.19+)
+- Build with `--features aac` (0.20+)
 
 ### Authentication
 
@@ -261,7 +261,7 @@ the active project, profile, prefix, label, and tags. Direct values and Key
 Vault references are discoverable; unsupported special content types stop
 discovery.
 
-Azure App Configuration (0.19+) can be the authoritative side of a
+Azure App Configuration (0.20+) can be the authoritative side of a
 [cached provider route](/concepts/providers/caching/). Use an encrypted cache
 when direct values or resolved Key Vault values must remain encrypted at rest.
 

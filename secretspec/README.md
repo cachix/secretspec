@@ -50,7 +50,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [Bitwarden Password Manager](https://secretspec.dev/providers/bw) (0.18+)
   - [Bitwarden Secrets Manager](https://secretspec.dev/providers/bws) (official `bws` CLI required in SecretSpec 0.17+)
   - [Azure Key Vault](https://secretspec.dev/providers/akv)
-  - [Azure App Configuration](https://secretspec.dev/providers/aac) (0.19+)
+  - [Azure App Configuration](https://secretspec.dev/providers/aac) (0.20+)
   - [Infisical](https://secretspec.dev/providers/infisical) (0.16+)
   - [age](https://secretspec.dev/providers/age) (0.17+)
   - [SOPS](https://secretspec.dev/providers/sops) (0.17+)
@@ -103,7 +103,7 @@ $ secretspec config global init  # 0.17+
   bw: Bitwarden Password Manager (0.18+)
   bws: Bitwarden Secrets Manager
   akv: Azure Key Vault
-  aac: Azure App Configuration (0.19+)
+  aac: Azure App Configuration (0.20+)
   infisical: Infisical secret management (0.16+)
   age: age-encrypted file (0.17+)
   sops: SOPS encrypted files (0.17+)
@@ -225,7 +225,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Bitwarden Password Manager](https://secretspec.dev/providers/bw)** (0.18+) - Bitwarden Password Manager vault via the `bw` CLI
 - **[Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)** - Bitwarden Secrets Manager integration (official `bws` CLI required in SecretSpec 0.17+)
 - **[Azure Key Vault](https://secretspec.dev/providers/akv)** - Azure secret management
-- **[Azure App Configuration](https://secretspec.dev/providers/aac)** (0.19+) - Azure key-value management with Key Vault reference resolution
+- **[Azure App Configuration](https://secretspec.dev/providers/aac)** (0.20+) - Azure key-value management with Key Vault reference resolution
 - **[Infisical](https://secretspec.dev/providers/infisical)** (0.16+) - Infisical secret management
 - **[age](https://secretspec.dev/providers/age)** (0.17+) - age-encrypted file
 - **[SOPS](https://secretspec.dev/providers/sops)** (0.17+) - SOPS-encrypted files

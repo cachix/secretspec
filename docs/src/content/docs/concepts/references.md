@@ -137,9 +137,9 @@ See the [configuration reference](/reference/configuration/#secret-references) f
 the full specification: the coordinate table, how every provider interprets each
 coordinate, and the exact rules.
 
-Azure App Configuration (0.19+) native `ref.item` values name one App
+Azure App Configuration (0.20+) native `ref.item` values name one App
 Configuration key and remain read-only. An App Configuration value can itself
 be a canonical Azure Key Vault reference; SecretSpec follows that stored URI,
 including its optional Key Vault version. This is separate from SecretSpec's
 `ref.version` coordinate, which Azure Key Vault accepts directly starting in
-0.19.
+0.20.

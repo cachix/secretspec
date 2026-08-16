@@ -530,14 +530,14 @@ akv://myvault.vault.azure.cn             # Sovereign cloud (full DNS name)
 akv://myvault?suffix=vault.azure.cn      # Sovereign cloud (explicit suffix, bare vault name)
 ```
 
-**Features**: Read/write, cloud sync, profiles, service principal/managed identity/workload identity auth, version-pinned refs (0.19+)
+**Features**: Read/write, cloud sync, profiles, service principal/managed identity/workload identity auth, version-pinned refs (0.20+)
 **Prerequisites**: An Azure Key Vault instance, authenticated via one of the methods above, build with `--features akv`
 **Storage**: Secret name `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}` (lowercase, unpadded Base32 preserves case and punctuation distinctions within Azure's case-insensitive secret-name namespace)
 
-## Azure App Configuration Provider (0.19+)
+## Azure App Configuration Provider (0.20+)
 
 :::caution[Version compatibility]
-The `aac` provider is added in SecretSpec 0.19.
+The `aac` provider is added in SecretSpec 0.20.
 :::
 
 **URI**:
@@ -552,20 +552,20 @@ aac://shared?tag=app=payments&tag=stage=production
 aac://shared?auth=connection_string&key_vault_auth=managed_identity
 ```
 
-**Features (0.19+)**: Read/write/delete, project and profile namespacing,
+**Features (0.20+)**: Read/write/delete, project and profile namespacing,
 declaration discovery, exact label and tag selection, sovereign-cloud endpoint
 configuration, Entra or connection-string authentication, and Key Vault
 reference resolution
-**Prerequisites (0.19+)**: An Azure App Configuration store, matching
+**Prerequisites (0.20+)**: An Azure App Configuration store, matching
 data-plane permissions, and build with `--features aac`; Key Vault
 references also require an Entra identity with secret-read access
-**Authentication (0.19+)**: `env`, `cli`, `managed_identity`,
+**Authentication (0.20+)**: `env`, `cli`, `managed_identity`,
 `workload_identity`, or `connection_string`. Prefer Entra authentication so
 workloads use Azure RBAC without distributing App Configuration access keys;
 reserve connection strings for environments where Entra is unavailable. See
 the [provider guide](/providers/aac/#authentication) for App
 Configuration and Key Vault identity separation.
-**Storage (0.19+)**:
+**Storage (0.20+)**:
 `{prefix}secretspec:{project}:{profile}:{key}` under one exact label; omission
 selects the null label
 
@@ -700,7 +700,7 @@ $ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | BW (0.18+) | ✅ End-to-end | Cloud (Bitwarden) or self-hosted | ✅ Yes |
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
-| Azure App Configuration (0.19+) | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
+| Azure App Configuration (0.20+) | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
 | Infisical | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |
 | age (0.17+) | ✅ age encryption | Local filesystem | ❌ No |
 | SOPS (0.17+) | ✅ Configured SOPS encryption | Local filesystem | Depends on configured key service |

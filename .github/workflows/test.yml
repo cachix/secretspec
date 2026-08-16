@@ -87,6 +87,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -108,7 +109,9 @@ jobs:
         install -m 0755 sops-bin/sops-* sops-bin/sops
         echo "$PWD/sops-bin" >> "$GITHUB_PATH"
     - name: Install Rust (pinned by rust-toolchain.toml)
-      run: rustup toolchain install
+      run: |
+        rustup toolchain install
+        rustup component add rustfmt clippy
     - name: Cache Rust builds
       uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:

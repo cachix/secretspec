@@ -40,7 +40,13 @@
   # libsecretspec_ffi.a.
   languages.ruby.enable = true;
   # Haskell SDK (secretspec-hs) links the C ABI at build time via the FFI.
-  languages.haskell.enable = true;
+  # Supply its only non-boot dependency from Nix's binary cache. Otherwise a
+  # cold Cabal store compiles aeson and roughly forty transitive packages from
+  # source in every hosted SDK job.
+  languages.haskell = {
+    enable = true;
+    package = pkgs.haskellPackages.ghcWithPackages (hpkgs: [ hpkgs.aeson ]);
+  };
   # C# SDK (secretspec-dotnet) loads the C ABI through P/Invoke. The NuGet
   # package carries runtime-specific cdylibs; local tests use
   # SECRETSPEC_FFI_LIB from scripts/ci-sdks.sh.

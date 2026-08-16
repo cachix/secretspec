@@ -10,36 +10,83 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-echo "==> Building cdylib + staticlib + CLI"
-cargo build -p secretspec-ffi -p secretspec
+# Static-link consumers otherwise spend minutes processing a ~1.4 GB archive
+# whose size is mostly debug information. Keep dev's unoptimized code but omit
+# symbols: these suites validate SDK behavior and linking, not Rust backtraces.
+export CARGO_PROFILE_DEV_DEBUG=0
+
+echo "==> Building shared Rust SDK artifacts"
+# Build every Rust-backed SDK in one Cargo invocation. Cargo can then unify the
+# resolver dependency graph instead of serially rebuilding it for the FFI,
+# Node, and PHP packages after the language suites have started.
+cargo build \
+  -p secretspec-ffi \
+  -p secretspec \
+  -p secretspec-node-native \
+  -p secretspec-php-native
 
 target_dir="$(cargo metadata --no-deps --format-version 1 \
   | grep -o '"target_directory":"[^"]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/')"
 case "$(uname -s)" in
-  Darwin) lib_name="libsecretspec_ffi.dylib" ;;
-  *)      lib_name="libsecretspec_ffi.so" ;;
+  Darwin)
+    lib_name="libsecretspec_ffi.dylib"
+    node_native_name="libsecretspec_node_native.dylib"
+    php_native_name="libsecretspec_php_native.dylib"
+    ;;
+  *)
+    lib_name="libsecretspec_ffi.so"
+    node_native_name="libsecretspec_node_native.so"
+    php_native_name="libsecretspec_php_native.so"
+    ;;
 esac
 # Runtime-dlopen contract (SDKs not yet migrated to static linking still use it).
 export SECRETSPEC_FFI_LIB="$target_dir/debug/$lib_name"
 export SECRETSPEC_BIN="$target_dir/debug/secretspec"
 
-# Static-link contract: SDKs link libsecretspec_ffi.a (the resolver compiled in)
-# instead of dlopening the cdylib. Every leg resolves the archive, its header,
-# and its secretspec_ffi.pc from this one installed prefix.
-echo "==> Installing staticlib + header + pkg-config file"
-SECRETSPEC_FFI_PREFIX="$(mktemp -d)"
-export SECRETSPEC_FFI_PREFIX
-bash secretspec-ffi/scripts/cinstall.sh "$SECRETSPEC_FFI_PREFIX" static debug
-export PKG_CONFIG_PATH="$SECRETSPEC_FFI_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-pkg-config --print-errors --exists secretspec_ffi
-export SECRETSPEC_FFI_STATICLIB="$SECRETSPEC_FFI_PREFIX/lib/libsecretspec_ffi.a"
-export SECRETSPEC_FFI_INCLUDE="$SECRETSPEC_FFI_PREFIX/include"
 # Raw linker flags for the legs that do not call pkg-config. A Rust staticlib
 # does not carry its own native dependency closure; NEVER hardcode this list --
 # it drifts as providers change.
 SECRETSPEC_FFI_NATIVE_LIBS="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
   --print native-static-libs 2>&1 | sed -n 's/^note: native-static-libs: //p' | tail -1)"
 export SECRETSPEC_FFI_NATIVE_LIBS
+
+# Static-link contract: SDKs link libsecretspec_ffi.a (the resolver compiled in)
+# instead of dlopening the cdylib. Stage the artifacts Cargo already built into
+# a test-only prefix. Using cargo-c here would compile the full dependency graph
+# again under target/<host-triple>, adding several minutes without adding test
+# coverage; release/install workflows still exercise cargo-c itself.
+echo "==> Staging staticlib + header + pkg-config file"
+SECRETSPEC_FFI_PREFIX="$target_dir/ci-sdk-prefix"
+export SECRETSPEC_FFI_PREFIX
+mkdir -p \
+  "$SECRETSPEC_FFI_PREFIX/lib/pkgconfig" \
+  "$SECRETSPEC_FFI_PREFIX/include"
+ln -sfn "$target_dir/debug/libsecretspec_ffi.a" \
+  "$SECRETSPEC_FFI_PREFIX/lib/libsecretspec_ffi.a"
+ln -sfn "$repo_root/secretspec-ffi/include/secretspec.h" \
+  "$SECRETSPEC_FFI_PREFIX/include/secretspec.h"
+
+ffi_version="$(cargo pkgid -p secretspec-ffi)"
+ffi_version="${ffi_version##*#}"
+{
+  printf 'prefix=%s\n' "$SECRETSPEC_FFI_PREFIX"
+  printf '%s\n' \
+    'exec_prefix=${prefix}' \
+    'libdir=${prefix}/lib' \
+    'includedir=${prefix}/include' \
+    '' \
+    'Name: secretspec_ffi' \
+    'Description: C ABI for SecretSpec: resolve secrets from any language'
+  printf 'Version: %s\n' "$ffi_version"
+  printf 'Libs: -L${libdir} -lsecretspec_ffi %s\n' "$SECRETSPEC_FFI_NATIVE_LIBS"
+  printf 'Cflags: -I${includedir}\n'
+  printf 'Libs.private: %s\n' "$SECRETSPEC_FFI_NATIVE_LIBS"
+} > "$SECRETSPEC_FFI_PREFIX/lib/pkgconfig/secretspec_ffi.pc"
+
+export PKG_CONFIG_PATH="$SECRETSPEC_FFI_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+pkg-config --print-errors --exists secretspec_ffi
+export SECRETSPEC_FFI_STATICLIB="$SECRETSPEC_FFI_PREFIX/lib/libsecretspec_ffi.a"
+export SECRETSPEC_FFI_INCLUDE="$SECRETSPEC_FFI_PREFIX/include"
 echo "==> SECRETSPEC_FFI_LIB=$SECRETSPEC_FFI_LIB"
 echo "==> SECRETSPEC_FFI_PREFIX=$SECRETSPEC_FFI_PREFIX"
 echo "==> SECRETSPEC_FFI_NATIVE_LIBS=$SECRETSPEC_FFI_NATIVE_LIBS"
@@ -51,6 +98,11 @@ run_python() {
 }
 
 run_go() {
+  # cgo's build cache does not track changes in pkg-config's emitted -L path.
+  # Use an isolated cache so the pkg-config leg can never reuse an object that
+  # points at a temporary prefix from an earlier local run.
+  export GOCACHE="$suite_log_dir/go-build-cache"
+
   echo "==> Go (default purego/dlopen path)"
   ( cd secretspec-go && go test ./... )
 
@@ -75,20 +127,21 @@ run_ruby() {
 
   echo "==> Ruby (pkg-config discovery)"
   # The same link inputs read from secretspec_ffi.pc in the installed prefix
-  # (PKG_CONFIG_PATH above); rebuild the extension and rerun the tests.
+  # (PKG_CONFIG_PATH above); rebuild the extension and rerun the resolver plus
+  # conformance contract. Codegen and cleanup behavior are independent of link
+  # discovery and already ran above; repeating codegen would reinstall its
+  # temporary Ruby dependencies on every cold CI run.
   bash secretspec-rb/scripts/build-ext.sh --enable-pkg-config
-  ( cd secretspec-rb && ruby -e 'Dir["test/test_*.rb"].sort.each { |f| require File.expand_path(f) }' )
+  ( cd secretspec-rb && ruby test/test_resolve.rb )
 }
 
 run_node() {
   echo "==> Node"
-  # The Node SDK uses a napi-rs addon (not the cdylib), built via the @napi-rs/cli
-  # devDependency. Install it and build the addon once up front: the test files
-  # each ensure it exists and would otherwise race to build it in parallel
-  # processes. CI uses the debug profile because release optimization adds no
-  # test coverage and forces a second full resolver build.
+  # The shared Cargo invocation already built the napi-rs addon. Stage it under
+  # Node's required .node suffix after installing the JS test dependencies.
   ( cd secretspec-node && npm ci )
-  SECRETSPEC_NODE_PROFILE=debug bash secretspec-node/scripts/build-addon.sh
+  cp "$target_dir/debug/$node_native_name" secretspec-node/secretspec.node.tmp.$$
+  mv -f secretspec-node/secretspec.node.tmp.$$ secretspec-node/secretspec.node
   ( cd secretspec-node && node --test )
   ( cd secretspec-node && find examples -type f \( -name '*.js' -o -name '*.ts' \) -exec node --check {} \; )
 }
@@ -146,10 +199,10 @@ run_php() {
   ( cd secretspec-php && find examples -name '*.php' -exec php -l {} \; )
 
   echo "==> PHP (secretspec-php-native extension, ext-php-rs)"
-  # Build the extension in debug and load it directly; when it is present the SDK
-  # prefers it over ext-ffi. This also proves the extension registers its functions.
-  CARGO_TARGET_DIR="$target_dir" SECRETSPEC_PHP_PROFILE=debug \
-    bash secretspec-php/scripts/build-ext.sh
+  # The shared Cargo invocation already built the ext-php-rs extension. Stage
+  # it where the PHP client expects it and prove it registers its functions.
+  mkdir -p secretspec-php/lib
+  cp "$target_dir/debug/$php_native_name" secretspec-php/lib/secretspec.so
   ( cd secretspec-php && php -d extension="$PWD/lib/secretspec.so" ./vendor/bin/phpunit )
 }
 
@@ -157,7 +210,7 @@ run_php() {
 # after the shared resolver artifacts are ready, but buffer each suite's output
 # so GitHub log groups remain readable and failures retain their full context.
 suite_log_dir="$(mktemp -d)"
-trap 'rm -rf "$SECRETSPEC_FFI_PREFIX" "$suite_log_dir"' EXIT
+trap 'rm -rf "$suite_log_dir"' EXIT
 suite_names=()
 suite_logs=()
 suite_pids=()
@@ -169,7 +222,11 @@ start_suite() {
   local log="$suite_log_dir/$index.log"
   suite_names+=("$name")
   suite_logs+=("$log")
-  "$function_name" >"$log" 2>&1 &
+  (
+    start_seconds="$SECONDS"
+    "$function_name"
+    printf '==> %s SDK completed in %ss\n' "$name" "$((SECONDS - start_seconds))"
+  ) >"$log" 2>&1 &
   suite_pids+=("$!")
 }
 

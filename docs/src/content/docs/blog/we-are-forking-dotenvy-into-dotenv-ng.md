@@ -15,7 +15,9 @@ That may sound contradictory. SecretSpec is still on a mission to [eliminate
 environment variables as a secrets
 interface](/blog/secrets-dont-belong-in-config/), and we have written about
 [where `.env` went wrong](/blog/where-env-went-wrong/). It should not be the
-final home of a secret. But migrating away from `.env` starts with reading it
+final home of a secret. 
+
+But migrating away from `.env` starts with reading it
 correctly.
 
 ## Why fork dotenvy?
@@ -94,5 +96,5 @@ alias:
 dotenv = { package = "dotenv-ng", version = "1" }
 ```
 
-Starting in SecretSpec 0.20+, dotenv-ng powers dotenv parsing and rendering
+Starting in SecretSpec 0.20, dotenv-ng powers dotenv parsing and rendering
 throughout SecretSpec.

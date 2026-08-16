@@ -102,10 +102,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the profile the run resolves under. One alias can therefore serve every profile
   while naming secrets flat — `ref = { item = "/{key}" }` — instead of needing
   one alias per environment. An explicit `?env=` still pins the environment.
-  Note that Infisical answers a missing secret, folder, environment and project
-  with the same 404, so a ref pointed at an environment that does not exist reads
-  as an unset secret rather than an error. A credential declared with a `ref`
-  still needs `?env=`, so it resolves the same way whichever profile is running.
+  When every requested secret gets Infisical's ambiguous 404, SecretSpec now
+  checks the environment root once and reports a missing environment or project,
+  naming whether the profile or `?env=` selected it. A genuinely absent secret or
+  folder in an existing environment remains unset so provider fallback still
+  works. A credential declared with a `ref` still needs `?env=`, so it resolves
+  the same way whichever profile is running. ([#338])
+
+  [#338]: https://github.com/cachix/secretspec/issues/338
 
 - `secretspec set` against an Infisical secret names the environment in its
   pre-write preview, which the previous description left out.

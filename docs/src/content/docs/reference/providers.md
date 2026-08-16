@@ -561,6 +561,12 @@ the `production` environment. This covers refs as well as convention naming (0.2
 Projects whose environments do not correspond to profiles pin one with
 `?env=`; the profile still names the folder, so profiles never share a secret.
 
+Infisical uses the same 404 for a missing secret, folder, environment, or
+project. In SecretSpec 0.20+, an all-missing read checks the environment root
+once and reports a missing environment or project, including whether the
+profile or `?env=` selected the environment. Ordinary missing secrets and
+folders remain unset so provider fallback continues.
+
 Values are read with Infisical's secret references expanded, matching its own CLI, so a value of
 `postgres://${DB_USER}@host` arrives resolved.
 

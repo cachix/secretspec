@@ -67,6 +67,11 @@
 //! A folder that imports another resolves the imported keys too, with
 //! Infisical's own precedence: a secret defined directly in the folder wins
 //! over an imported one, and a later import wins over an earlier one.
+//!
+//! Starting in 0.20, an all-missing read probes the environment root once to
+//! distinguish an absent environment or project from ordinary absent secrets
+//! and folders. The resulting error names the environment and whether the
+//! profile or `?env=` selected it.
 
 use super::{
     Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env, join_slash_path,
@@ -76,7 +81,7 @@ use crate::{Result, SecretSpecError};
 use reqwest::StatusCode;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 /// Default folder prefix holding SecretSpec's secrets.
@@ -335,6 +340,22 @@ impl InfisicalProvider {
             .map(str::trim)
             .filter(|profile| !profile.is_empty())
             .map(str::to_string)
+    }
+
+    /// Explains which SecretSpec setting selected an environment Infisical
+    /// could not find.
+    fn missing_environment_error(&self, environment: &str) -> SecretSpecError {
+        let source = if self.config.environment.is_some() {
+            "The provider URI selected it with `?env=`."
+        } else {
+            "The active SecretSpec profile selected it because the provider URI does not pin an \
+             environment with `?env=`."
+        };
+        SecretSpecError::ProviderOperationFailed(format!(
+            "Infisical could not find environment '{}' in project {} (or the project itself is \
+             unavailable). {source}",
+            environment, self.config.project_id
+        ))
     }
 
     /// Renders the provider URI with the supplied entry-addressing defaults.
@@ -647,12 +668,17 @@ impl InfisicalProvider {
                 Self::secret_value(&parsed["secret"], &loc.key)
             }
             // A 404 covers a missing secret, folder, environment and project
-            // alike, and only the message text tells them apart. Reading it
-            // would make control flow turn on prose, so all four are taken as
-            // "nothing stored here", which `check` and provider fallback read
-            // as "not set". A misspelled `?env=` therefore looks like an unset
-            // secret until a write reports it.
-            StatusCode::NOT_FOUND => Ok(None),
+            // alike, and only the message text tells them apart. Probe the
+            // environment's root, which always exists in a real environment,
+            // rather than turning control flow on response prose. This is a
+            // single-secret read, so the miss already means the whole read
+            // failed and the diagnostic request does not penalize a successful
+            // resolution.
+            StatusCode::NOT_FOUND => {
+                self.ensure_environment_exists_async(&loc.environment)
+                    .await?;
+                Ok(None)
+            }
             _ => Err(self.http_error(status, &body, "reading a secret")),
         }
     }
@@ -712,7 +738,7 @@ impl InfisicalProvider {
         &self,
         environment: &str,
         secret_path: &str,
-    ) -> Result<HashMap<String, SecretString>> {
+    ) -> Result<Option<HashMap<String, SecretString>>> {
         let url = format!("{}/api/v4/secrets", self.config.endpoint);
         let query = self.read_query(environment, secret_path);
 
@@ -744,11 +770,31 @@ impl InfisicalProvider {
                     }
                 }
                 Self::merge_imports(&parsed, &mut listed)?;
-                Ok(listed)
+                Ok(Some(listed))
             }
-            // An absent folder holds no secrets, exactly like an empty one.
-            StatusCode::NOT_FOUND => Ok(HashMap::new()),
+            // The caller decides whether this is an absent folder or an absent
+            // environment. Infisical uses the same 404 for both.
+            StatusCode::NOT_FOUND => Ok(None),
             _ => Err(self.http_error(status, &body, "listing secrets")),
+        }
+    }
+
+    /// Checks the environment's root to distinguish an ordinary missing
+    /// secret/folder from an environment (or project) Infisical cannot find.
+    ///
+    /// The root folder always exists in a real environment. Inspecting only the
+    /// HTTP status avoids parsing or exposing any unrelated root-level secrets.
+    async fn ensure_environment_exists_async(&self, environment: &str) -> Result<()> {
+        let url = format!("{}/api/v4/secrets", self.config.endpoint);
+        let query = self.read_query(environment, "/");
+        let response = self.send(reqwest::Method::GET, &url, &query, None).await?;
+        let status = response.status();
+        let body = Self::response_body(response).await?;
+
+        match status {
+            StatusCode::OK => Ok(()),
+            StatusCode::NOT_FOUND => Err(self.missing_environment_error(environment)),
+            _ => Err(self.http_error(status, &body, "checking an environment")),
         }
     }
 
@@ -775,11 +821,7 @@ impl InfisicalProvider {
         // The folder is what is missing, unless the secret lives at the root,
         // which always exists -- then the 404 is the environment's.
         if loc.secret_path == "/" {
-            return Err(SecretSpecError::ProviderOperationFailed(format!(
-                "Infisical has no environment '{}' in project {}. Environments are \
-                 SecretSpec profiles here unless the provider URI pins one with `?env=`.",
-                loc.environment, self.config.project_id
-            )));
+            return Err(self.missing_environment_error(&loc.environment));
         }
         let refused = self.create_folder(loc).await?;
 
@@ -1131,12 +1173,41 @@ impl Provider for InfisicalProvider {
                     .push((name, loc.key));
             }
 
+            // A successful listing proves the environment exists. A 404 on a
+            // non-root folder is ambiguous, so defer its root probe until we
+            // know the entire provider read missed; successful reads should not
+            // pay for diagnostics on an unrelated optional secret.
+            let mut known_environments = HashSet::new();
+            let mut uncertain_environments = HashSet::new();
+
             for ((environment, secret_path), wanted) in folders {
-                let listed = self.list_async(&environment, &secret_path).await?;
-                for (name, key) in wanted {
-                    if let Some(value) = listed.get(&key) {
-                        resolved.insert(name.to_string(), value.clone());
+                match self.list_async(&environment, &secret_path).await? {
+                    Some(listed) => {
+                        known_environments.insert(environment);
+                        for (name, key) in wanted {
+                            if let Some(value) = listed.get(&key) {
+                                resolved.insert(name.to_string(), value.clone());
+                            }
+                        }
                     }
+                    None if secret_path == "/" => {
+                        // Listing the root itself removes the folder/secret
+                        // ambiguity without another request.
+                        return Err(self.missing_environment_error(&environment));
+                    }
+                    None => {
+                        uncertain_environments.insert(environment);
+                    }
+                }
+            }
+
+            if resolved.is_empty() {
+                let to_probe: Vec<String> = uncertain_environments
+                    .difference(&known_environments)
+                    .cloned()
+                    .collect();
+                for environment in to_probe {
+                    self.ensure_environment_exists_async(&environment).await?;
                 }
             }
 
@@ -1169,6 +1240,8 @@ impl Provider for InfisicalProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::{SocketAddr, TcpListener};
     use url::Url;
 
     const PROJECT: &str = "7e2f1a4c-0000-0000-0000-000000000000";
@@ -1181,6 +1254,62 @@ mod tests {
         InfisicalProvider::new(config(s))
     }
 
+    fn provider_with_token(endpoint: SocketAddr, environment: Option<&str>) -> InfisicalProvider {
+        let environment =
+            environment.map_or_else(String::new, |environment| format!("&env={environment}"));
+        let mut provider = provider(&format!(
+            "infisical://{endpoint}/{PROJECT}?tls=false{environment}"
+        ));
+        provider.with_credentials(ProviderCredentials::from([(
+            TOKEN.to_string(),
+            SecretString::new("test-token".to_string().into()),
+        )]));
+        provider
+    }
+
+    /// Serves a fixed sequence of Infisical-shaped responses and records the
+    /// request lines. Closing every response keeps the tiny fixture independent
+    /// of reqwest's connection-pool behavior.
+    fn response_server(
+        responses: Vec<(&'static str, &'static str)>,
+    ) -> (SocketAddr, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut request_line = String::new();
+                reader.read_line(&mut request_line).unwrap();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                }
+                requests.push(request_line.trim_end().to_string());
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: \
+                     {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            requests
+        });
+        (endpoint, server)
+    }
+
+    fn one_convention_request() -> [(&'static str, Address<'static>); 1] {
+        [(
+            "API_KEY",
+            Address::convention("myapp", "development", "API_KEY"),
+        )]
+    }
+
     #[test]
     fn uri_defaults_to_infisical_cloud() {
         let c = config(&format!("infisical:///{PROJECT}"));
@@ -1188,6 +1317,66 @@ mod tests {
         assert_eq!(c.project_id, PROJECT);
         assert_eq!(c.path, DEFAULT_PATH);
         assert_eq!(c.environment, None);
+    }
+
+    /// When the requested folder and the environment root both return 404,
+    /// the provider names the missing environment instead of reducing the
+    /// whole profile to a list of unset secrets.
+    #[test]
+    fn an_all_missing_batch_diagnoses_a_missing_profile_environment() {
+        let (endpoint, server) = response_server(vec![
+            ("404 Not Found", r#"{"message":"not found"}"#),
+            ("404 Not Found", r#"{"message":"not found"}"#),
+        ]);
+        let provider = provider_with_token(endpoint, None);
+        let error = provider
+            .get_many(&one_convention_request())
+            .expect_err("the absent environment must be reported")
+            .to_string();
+
+        assert!(error.contains("environment 'development'"), "{error}");
+        assert!(error.contains(PROJECT), "{error}");
+        assert!(error.contains("active SecretSpec profile"), "{error}");
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].contains("environment=development"));
+        assert!(requests[1].contains("secretPath=%2F"));
+    }
+
+    /// A missing non-root folder remains an ordinary miss when the root probe
+    /// proves the environment exists, preserving provider fallback behavior.
+    #[test]
+    fn a_missing_folder_in_an_existing_environment_stays_unset() {
+        let (endpoint, server) = response_server(vec![
+            ("404 Not Found", r#"{"message":"not found"}"#),
+            ("200 OK", r#"{"secrets":[]}"#),
+        ]);
+        let provider = provider_with_token(endpoint, None);
+
+        assert!(
+            provider
+                .get_many(&one_convention_request())
+                .expect("the environment exists")
+                .is_empty()
+        );
+        assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    /// The diagnostic tells users whether to rename a profile or change the
+    /// provider's explicit environment pin.
+    #[test]
+    fn a_missing_environment_names_how_it_was_selected() {
+        let implicit = provider(&format!("infisical://app.infisical.com/{PROJECT}"));
+        let implicit_error = implicit
+            .missing_environment_error("development")
+            .to_string();
+        assert!(implicit_error.contains("active SecretSpec profile"));
+
+        let pinned = provider(&format!(
+            "infisical://app.infisical.com/{PROJECT}?env=shared"
+        ));
+        let pinned_error = pinned.missing_environment_error("shared").to_string();
+        assert!(pinned_error.contains("provider URI selected it with `?env=`"));
     }
 
     #[test]

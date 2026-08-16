@@ -271,15 +271,16 @@ so the value is written once the request is approved.
 - The project is addressed by UUID; Infisical's API does not accept a project slug
 - A project or profile whose name is not spellable as an Infisical folder (letters, digits, dashes,
   underscores) is refused rather than rewritten
-- A ref reads the environment the profile names unless `?env=` pins one, and a wrong environment
-  reads as an unset secret rather than an error: Infisical answers a missing secret, folder,
-  environment and project with the same 404
+- A ref reads the environment the profile names unless `?env=` pins one. Infisical answers a
+  missing secret, folder, environment and project with the same 404. Starting in SecretSpec 0.20,
+  if every requested secret gets that ambiguous response, SecretSpec checks the environment root
+  once. A missing environment or project then becomes an error naming the selected environment and
+  whether the profile or `?env=` selected it; a missing secret or folder in an existing environment
+  remains unset so provider fallback still works
 - `secretspec import infisical://…` is not supported: the provider does not enumerate existing
   secrets, so import has nothing to discover
 - The domain variables name a host, not a path: an instance served under a sub-path
   (`https://example.com/infisical`) is not addressable. A trailing `/api` is the exception and is
   accepted, since Infisical's own CLI takes the domain in that form
-- An environment or project that does not exist reads as an unset secret rather than an error:
-  Infisical answers a missing secret, folder, environment and project with the same bare 404.
-  Writing one reports the environment by name. If a profile does not match an environment slug —
-  Infisical's own default projects use `dev`, `staging` and `prod` — pin the right one with `?env=`
+- If a profile does not match an environment slug — Infisical's own default projects use `dev`,
+  `staging` and `prod` — pin the right one with `?env=`

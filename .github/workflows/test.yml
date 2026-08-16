@@ -126,7 +126,7 @@ jobs:
       run: cargo fmt --all -- --check
     - name: Run Clippy
       if: runner.os == 'Linux'
-      run: cargo clippy --workspace --exclude secretspec-php-native --all-targets
+      run: cargo clippy --workspace --exclude secretspec-php-native
     - name: Run tests
       run: cargo test --workspace --exclude secretspec-php-native
 

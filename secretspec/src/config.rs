@@ -1552,7 +1552,7 @@ pub struct GenerateOptions {
 ///
 /// - `item` (required) and `field` are shared vocabulary every relevant store
 ///   maps: a name, and an optional component within it.
-/// - `vault`, `section` (1Password), and `version` (GCSM) are coordinates only
+/// - `vault`, `section` (1Password), and `version` are coordinates only
 ///   some stores have an equivalent for. Each is named for the concept, not the
 ///   vendor, so another store can adopt one by adding it to its
 ///   [`supported_coords`](crate::provider::Provider::supported_coords); a store
@@ -1584,7 +1584,8 @@ pub struct NativeAddress {
     /// 1Password only: the section containing the field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
-    /// GCSM only: the secret version to read; defaults to the latest.
+    /// The secret version to read on stores that support version-pinned reads;
+    /// defaults to the latest.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
 }

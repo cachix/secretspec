@@ -85,7 +85,13 @@ impl ProviderUrl {
             .into_owned()
     }
 
-    #[cfg(any(feature = "infisical", feature = "openbao", feature = "vault", test))]
+    #[cfg(any(
+        feature = "aac",
+        feature = "infisical",
+        feature = "openbao",
+        feature = "vault",
+        test
+    ))]
     pub fn port(&self) -> Option<u16> {
         self.0.port()
     }

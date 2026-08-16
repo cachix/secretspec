@@ -70,7 +70,10 @@ use azure_identity::{
     ClientSecretCredential, DeveloperToolsCredential, ManagedIdentityCredential,
     WorkloadIdentityCredential,
 };
-use azure_security_keyvault_secrets::{SecretClient, models::SetSecretParameters};
+use azure_security_keyvault_secrets::{
+    SecretClient,
+    models::{SecretClientGetSecretOptions, SetSecretParameters},
+};
 use data_encoding::BASE32_NOPAD;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -89,13 +92,13 @@ use std::sync::{
 /// request completes successfully, the client has both its scope and token and
 /// later requests can safely fan out.
 #[derive(Default)]
-struct InitialRequestGate {
+pub(crate) struct InitialRequestGate {
     ready: AtomicBool,
     lock: Mutex<()>,
 }
 
 impl InitialRequestGate {
-    fn run<T, F>(&self, request: F) -> Result<T>
+    pub(crate) fn run<T, F>(&self, request: F) -> Result<T>
     where
         F: FnOnce() -> Result<T>,
     {
@@ -133,7 +136,7 @@ pub enum AuthMethod {
 
 impl AuthMethod {
     /// The `?auth=` query-string spelling of this auth method.
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             AuthMethod::Env => "env",
             AuthMethod::Cli => "cli",
@@ -184,6 +187,19 @@ pub struct AkvConfig {
 /// name (a host containing a `.`) or an explicit `?suffix=`, since there is
 /// no single suffix that works for all of them.
 const DEFAULT_SUFFIX: &str = "vault.azure.net";
+
+impl AkvConfig {
+    /// Builds Key Vault configuration from a full vault DNS host that the
+    /// caller has already validated.
+    pub(crate) fn from_validated_vault_host(vault_host: String, auth: AuthMethod) -> Self {
+        Self {
+            vault_url: format!("https://{vault_host}/"),
+            vault_host,
+            auth,
+            suffix: None,
+        }
+    }
+}
 
 impl TryFrom<&ProviderUrl> for AkvConfig {
     type Error = SecretSpecError;
@@ -247,6 +263,8 @@ pub struct AkvProvider {
     config: AkvConfig,
     /// Service-principal credentials supplied by the provider alias.
     credentials: ProviderCredentials,
+    /// An externally resolved credential shared with another Azure provider.
+    credential: Option<Arc<dyn TokenCredential>>,
     /// One client per provider, so a batch shares the credential's token cache
     /// instead of authenticating per secret. Every `DeveloperToolsCredential`
     /// starts with an empty cache, and under `auth=cli` filling it spawns the
@@ -264,6 +282,107 @@ const AZURE_TENANT_ID_ENV: &str = "AZURE_TENANT_ID";
 const AZURE_CLIENT_ID_ENV: &str = "AZURE_CLIENT_ID";
 const AZURE_CLIENT_SECRET_ENV: &str = "AZURE_CLIENT_SECRET";
 
+/// Resolves the Azure identity modes shared by Azure-backed providers.
+pub(crate) fn resolve_azure_credential(
+    auth: AuthMethod,
+    credentials: &ProviderCredentials,
+) -> Result<Arc<dyn TokenCredential>> {
+    match auth {
+        AuthMethod::Cli => Ok(DeveloperToolsCredential::new(None).map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to create Azure CLI / azd credential: {}",
+                crate::error::display_error_chain(&e)
+            ))
+        })? as Arc<dyn TokenCredential>),
+        AuthMethod::ManagedIdentity => Ok(ManagedIdentityCredential::new(None).map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to create managed identity credential: {}",
+                crate::error::display_error_chain(&e)
+            ))
+        })? as Arc<dyn TokenCredential>),
+        AuthMethod::WorkloadIdentity => Ok(WorkloadIdentityCredential::new(None).map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to create workload identity credential: {}\n\n\
+                 Requires the AZURE_TENANT_ID, AZURE_CLIENT_ID, and \
+                 AZURE_FEDERATED_TOKEN_FILE environment variables that AKS \
+                 injects automatically for workload-identity-enabled pods.",
+                crate::error::display_error_chain(&e)
+            ))
+        })? as Arc<dyn TokenCredential>),
+        AuthMethod::Env => {
+            let (tenant_id, client_id, client_secret) = service_principal_inputs(credentials);
+
+            match classify_env_credentials(tenant_id, client_id, client_secret)? {
+                Some((tenant_id, client_id, client_secret)) => Ok(ClientSecretCredential::new(
+                    &tenant_id,
+                    client_id,
+                    Secret::new(client_secret),
+                    None,
+                )
+                .map_err(|e| {
+                    SecretSpecError::ProviderOperationFailed(format!(
+                        "Failed to create service principal credential from \
+                         AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET: {}",
+                        crate::error::display_error_chain(&e)
+                    ))
+                })?
+                    as Arc<dyn TokenCredential>),
+                None => Ok(DeveloperToolsCredential::new(None).map_err(|e| {
+                    SecretSpecError::ProviderOperationFailed(format!(
+                        "No AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET set, and \
+                         failed to fall back to the Azure CLI / azd session: {}\n\n\
+                         Either set those three environment variables, or run `az login`.",
+                        crate::error::display_error_chain(&e)
+                    ))
+                })? as Arc<dyn TokenCredential>),
+            }
+        }
+    }
+}
+
+fn service_principal_inputs(
+    credentials: &ProviderCredentials,
+) -> (Option<String>, Option<String>, Option<String>) {
+    (
+        credential_or_env(credentials, TENANT_ID, AZURE_TENANT_ID_ENV),
+        credential_or_env(credentials, CLIENT_ID, AZURE_CLIENT_ID_ENV),
+        credential_or_env(credentials, CLIENT_SECRET, AZURE_CLIENT_SECRET_ENV),
+    )
+}
+
+fn classify_env_credentials(
+    tenant_id: Option<String>,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+) -> Result<Option<(String, String, String)>> {
+    match (tenant_id, client_id, client_secret) {
+        (Some(t), Some(c), Some(s)) => Ok(Some((t, c, s))),
+        (None, None, None) => Ok(None),
+        (tenant_id, client_id, client_secret) => {
+            let missing: Vec<String> = [
+                (TENANT_ID, AZURE_TENANT_ID_ENV, tenant_id.is_none()),
+                (CLIENT_ID, AZURE_CLIENT_ID_ENV, client_id.is_none()),
+                (
+                    CLIENT_SECRET,
+                    AZURE_CLIENT_SECRET_ENV,
+                    client_secret.is_none(),
+                ),
+            ]
+            .into_iter()
+            .filter(|(_, _, is_missing)| *is_missing)
+            .map(|(credential, env, _)| format!("{credential} / {env}"))
+            .collect();
+            Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Partial service principal configuration: the tenant_id, client_id, and \
+                 client_secret provider credentials (or the AZURE_TENANT_ID, AZURE_CLIENT_ID, \
+                 and AZURE_CLIENT_SECRET environment variables) must all be supplied together, \
+                 or none of them (to fall back to `az login`). Missing: {}.",
+                missing.join(", ")
+            )))
+        }
+    }
+}
+
 crate::register_provider! {
     struct: AkvProvider,
     config: AkvConfig,
@@ -280,7 +399,34 @@ impl AkvProvider {
         Self {
             config,
             credentials: ProviderCredentials::new(),
+            credential: None,
             client: OnceLock::new(),
+            initial_request: InitialRequestGate::default(),
+        }
+    }
+
+    /// Creates a provider that reuses a credential resolved by another Azure
+    /// provider.
+    pub(crate) fn with_token_credential(
+        config: AkvConfig,
+        credential: Arc<dyn TokenCredential>,
+    ) -> Self {
+        Self {
+            config,
+            credentials: ProviderCredentials::new(),
+            credential: Some(credential),
+            client: OnceLock::new(),
+            initial_request: InitialRequestGate::default(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_client(config: AkvConfig, client: SecretClient) -> Self {
+        Self {
+            config,
+            credentials: ProviderCredentials::new(),
+            credential: None,
+            client: OnceLock::from(client),
             initial_request: InitialRequestGate::default(),
         }
     }
@@ -352,9 +498,12 @@ impl AkvProvider {
     /// validated but never rewritten -- silently rewriting characters in a
     /// user-specified `ref` could silently point at a different secret than
     /// the one they named.
-    fn resolve_item(&self, addr: Address<'_>) -> Result<String> {
+    fn resolve_address<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, crate::config::NativeAddress>> {
         let coords = self.resolve_coords(addr)?;
-        let item = coords.item.clone();
+        let item = &coords.item;
         let valid = !item.is_empty()
             && item.len() <= 127
             && item.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
@@ -365,121 +514,24 @@ impl AkvProvider {
                  underscores; if this `ref` names a real secret, use the vault's actual name."
             )));
         }
-        Ok(item)
-    }
-
-    /// Resolves each service-principal input from its semantic provider
-    /// credential, retaining the conventional Azure environment variable as a
-    /// fallback when that credential was not supplied.
-    fn service_principal_inputs(&self) -> (Option<String>, Option<String>, Option<String>) {
-        (
-            credential_or_env(&self.credentials, TENANT_ID, AZURE_TENANT_ID_ENV),
-            credential_or_env(&self.credentials, CLIENT_ID, AZURE_CLIENT_ID_ENV),
-            credential_or_env(&self.credentials, CLIENT_SECRET, AZURE_CLIENT_SECRET_ENV),
-        )
-    }
-
-    /// Classifies a service-principal credential triple: all three present
-    /// resolves to `Some`, none present resolves to `None` (fall back to the
-    /// CLI session), and a partial set is an error -- silently falling back
-    /// to a different identity when e.g. only `AZURE_CLIENT_SECRET` is
-    /// missing would be confusing and could authenticate as the wrong
-    /// principal (e.g. the developer's personal `az login` session).
-    fn classify_env_credentials(
-        tenant_id: Option<String>,
-        client_id: Option<String>,
-        client_secret: Option<String>,
-    ) -> Result<Option<(String, String, String)>> {
-        match (tenant_id, client_id, client_secret) {
-            (Some(t), Some(c), Some(s)) => Ok(Some((t, c, s))),
-            (None, None, None) => Ok(None),
-            (tenant_id, client_id, client_secret) => {
-                // Name both the semantic provider credential and its
-                // conventional environment variable, so a user who configured
-                // either form knows which input is missing.
-                let missing: Vec<String> = [
-                    (TENANT_ID, AZURE_TENANT_ID_ENV, tenant_id.is_none()),
-                    (CLIENT_ID, AZURE_CLIENT_ID_ENV, client_id.is_none()),
-                    (
-                        CLIENT_SECRET,
-                        AZURE_CLIENT_SECRET_ENV,
-                        client_secret.is_none(),
-                    ),
-                ]
-                .into_iter()
-                .filter(|(_, _, is_missing)| *is_missing)
-                .map(|(credential, env, _)| format!("{credential} / {env}"))
-                .collect();
-                Err(SecretSpecError::ProviderOperationFailed(format!(
-                    "Partial service principal configuration: the tenant_id, client_id, and \
-                     client_secret provider credentials (or the AZURE_TENANT_ID, AZURE_CLIENT_ID, \
-                     and AZURE_CLIENT_SECRET environment variables) must all be supplied together, \
-                     or none of them (to fall back to `az login`). Missing: {}.",
-                    missing.join(", ")
-                )))
-            }
+        // Azure emits 32-character object versions; reject other shapes before authentication.
+        if let Some(version) = coords.version.as_deref()
+            && (version.len() != 32 || !version.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "'{version}' is not a valid Azure Key Vault secret version: expected a \
+                 32-character ASCII alphanumeric version identifier"
+            )));
         }
+
+        Ok(coords)
     }
 
     /// Resolves the token credential for the configured auth method.
     fn resolve_credential(&self) -> Result<Arc<dyn TokenCredential>> {
-        match self.config.auth {
-            AuthMethod::Cli => Ok(DeveloperToolsCredential::new(None).map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to create Azure CLI / azd credential: {}",
-                    crate::error::display_error_chain(&e)
-                ))
-            })? as Arc<dyn TokenCredential>),
-            AuthMethod::ManagedIdentity => Ok(ManagedIdentityCredential::new(None).map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to create managed identity credential: {}",
-                    crate::error::display_error_chain(&e)
-                ))
-            })? as Arc<dyn TokenCredential>),
-            AuthMethod::WorkloadIdentity => {
-                Ok(WorkloadIdentityCredential::new(None).map_err(|e| {
-                    SecretSpecError::ProviderOperationFailed(format!(
-                        "Failed to create workload identity credential: {}\n\n\
-                        Requires the AZURE_TENANT_ID, AZURE_CLIENT_ID, and \
-                        AZURE_FEDERATED_TOKEN_FILE environment variables that AKS \
-                        injects automatically for workload-identity-enabled pods.",
-                        crate::error::display_error_chain(&e)
-                    ))
-                })? as Arc<dyn TokenCredential>)
-            }
-            AuthMethod::Env => {
-                let (tenant_id, client_id, client_secret) = self.service_principal_inputs();
-
-                match Self::classify_env_credentials(tenant_id, client_id, client_secret)? {
-                    Some((tenant_id, client_id, client_secret)) => Ok(ClientSecretCredential::new(
-                        &tenant_id,
-                        client_id,
-                        Secret::new(client_secret),
-                        None,
-                    )
-                    .map_err(|e| {
-                        SecretSpecError::ProviderOperationFailed(format!(
-                            "Failed to create service principal credential from \
-                                AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET: {}",
-                            crate::error::display_error_chain(&e)
-                        ))
-                    })?
-                        as Arc<dyn TokenCredential>),
-                    None => {
-                        // No service principal env vars: fall back to the signed-in
-                        // Azure CLI / azd session so local development works after
-                        // `az login` without any extra configuration.
-                        Ok(DeveloperToolsCredential::new(None).map_err(|e| {
-                            SecretSpecError::ProviderOperationFailed(format!(
-                                "No AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET set, and \
-                                failed to fall back to the Azure CLI / azd session: {}\n\n\
-                                Either set those three environment variables, or run `az login`.",
-                                crate::error::display_error_chain(&e)
-                            ))
-                        })? as Arc<dyn TokenCredential>)
-                    }
-                }
-            }
+        match &self.credential {
+            Some(credential) => Ok(Arc::clone(credential)),
+            None => resolve_azure_credential(self.config.auth, &self.credentials),
         }
     }
 
@@ -517,10 +569,19 @@ impl AkvProvider {
         e.http_status() == Some(StatusCode::NotFound)
     }
 
-    /// Retrieves a secret's current value by name, mapping "not found" to `None`.
-    async fn get_secret_async(&self, name: &str) -> Result<Option<SecretString>> {
+    /// Retrieves one version of a secret by name, or its latest version when
+    /// `version` is absent, mapping "not found" to `None`.
+    async fn get_secret_async(
+        &self,
+        name: &str,
+        version: Option<&str>,
+    ) -> Result<Option<SecretString>> {
         let client = self.client()?;
-        match client.get_secret(name, None).await {
+        let options = version.map(|version| SecretClientGetSecretOptions {
+            secret_version: Some(version.to_string()),
+            ..Default::default()
+        });
+        match client.get_secret(name, options).await {
             Ok(response) => {
                 let secret = response.into_model().map_err(|e| {
                     SecretSpecError::ProviderOperationFailed(format!(
@@ -617,17 +678,26 @@ impl Provider for AkvProvider {
         uri
     }
 
+    fn storage_identity(&self) -> String {
+        self.config.vault_url.clone()
+    }
+
+    /// An optional `version` pins the secret version to read.
+    fn supported_coords(&self) -> &'static [&'static str] {
+        &["version"]
+    }
+
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
-        let item = self.resolve_item(addr)?;
+        let coords = self.resolve_address(addr)?;
         self.initial_request
-            .run(|| super::block_on(self.get_secret_async(&item)))
+            .run(|| super::block_on(self.get_secret_async(&coords.item, coords.version.as_deref())))
     }
 
     fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
         self.check_writable(addr)?;
-        let item = self.resolve_item(addr)?;
+        let coords = self.resolve_address(addr)?;
         self.initial_request
-            .run(|| super::block_on(self.set_secret_async(&item, value)))
+            .run(|| super::block_on(self.set_secret_async(&coords.item, value)))
     }
 
     /// Native addresses are read-only: they name a secret managed outside
@@ -647,8 +717,15 @@ mod tests {
     use super::*;
     use crate::tests::EnvVarGuard;
     use azure_core::error::ErrorKind;
+    use azure_core::http::{
+        AsyncRawResponse, ClientOptions, HttpClient, Request, StatusCode as HttpStatusCode,
+        Transport, headers::Headers,
+    };
+    use azure_security_keyvault_secrets::SecretClientOptions;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::{
-        Barrier,
+        Barrier, Mutex,
         atomic::{AtomicUsize, Ordering},
     };
     use std::{thread, time::Duration};
@@ -668,6 +745,32 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingHttpClient {
+        paths: Mutex<Vec<String>>,
+    }
+
+    impl HttpClient for RecordingHttpClient {
+        fn execute_request<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            request: &'life1 Request,
+        ) -> Pin<Box<dyn Future<Output = azure_core::Result<AsyncRawResponse>> + Send + 'async_trait>>
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            self.paths.lock().unwrap().push(request.url().path().into());
+            Box::pin(async {
+                Ok(AsyncRawResponse::from_bytes(
+                    HttpStatusCode::Ok,
+                    Headers::new(),
+                    r#"{"value":"secret-value"}"#,
+                ))
+            })
+        }
     }
 
     #[test]
@@ -775,7 +878,7 @@ mod tests {
 
     #[test]
     fn test_classify_env_credentials_all_set() {
-        let result = AkvProvider::classify_env_credentials(
+        let result = classify_env_credentials(
             Some("t".to_string()),
             Some("c".to_string()),
             Some("s".to_string()),
@@ -788,14 +891,13 @@ mod tests {
 
     #[test]
     fn test_classify_env_credentials_none_set() {
-        let result = AkvProvider::classify_env_credentials(None, None, None);
+        let result = classify_env_credentials(None, None, None);
         assert_eq!(result.unwrap(), None);
     }
 
     #[test]
     fn test_classify_env_credentials_partial_errors() {
-        let err =
-            AkvProvider::classify_env_credentials(Some("t".to_string()), None, None).unwrap_err();
+        let err = classify_env_credentials(Some("t".to_string()), None, None).unwrap_err();
         assert!(err.to_string().contains("AZURE_CLIENT_ID"), "{err}");
         assert!(err.to_string().contains("AZURE_CLIENT_SECRET"), "{err}");
         // The message must also name the semantic provider credentials, so a user
@@ -818,7 +920,7 @@ mod tests {
         ]));
 
         assert_eq!(
-            provider.service_principal_inputs(),
+            service_principal_inputs(&provider.credentials),
             (
                 Some("tenant-from-provider".to_string()),
                 Some("client-from-env".to_string()),
@@ -907,6 +1009,38 @@ mod tests {
     }
 
     #[test]
+    fn storage_identity_uses_effective_vault_url_without_auth() {
+        let public = AkvProvider::new(config("akv://myvault"));
+        let cli = AkvProvider::new(config("akv://myvault?auth=cli"));
+        let sovereign = AkvProvider::new(config("akv://myvault?suffix=vault.azure.cn"));
+        let sovereign_fqdn = AkvProvider::new(config("akv://myvault.vault.azure.cn"));
+
+        assert_eq!(public.storage_identity(), cli.storage_identity());
+        assert_eq!(
+            sovereign.storage_identity(),
+            sovereign_fqdn.storage_identity()
+        );
+        assert_ne!(public.storage_identity(), sovereign.storage_identity());
+    }
+
+    #[test]
+    fn validated_vault_host_and_injected_credential_are_reused() {
+        let config = AkvConfig::from_validated_vault_host(
+            "shared.vault.azure.net".to_string(),
+            AuthMethod::ManagedIdentity,
+        );
+        assert_eq!(config.vault_url, "https://shared.vault.azure.net/");
+        assert_eq!(config.vault_host, "shared.vault.azure.net");
+
+        let credential: Arc<dyn TokenCredential> = DeveloperToolsCredential::new(None).unwrap();
+        let provider = AkvProvider::with_token_credential(config, Arc::clone(&credential));
+        assert!(Arc::ptr_eq(
+            &credential,
+            &provider.resolve_credential().unwrap()
+        ));
+    }
+
+    #[test]
     fn test_default_auth_is_env() {
         let c = config("akv://myvault");
         assert_eq!(c.auth, AuthMethod::Env);
@@ -936,6 +1070,105 @@ mod tests {
         assert_eq!(coords.field, None);
     }
 
+    #[test]
+    fn version_coordinate_is_supported_and_distinguishes_entries() {
+        let p = AkvProvider::new(config("akv://myvault"));
+        assert_eq!(p.supported_coords(), &["version"]);
+
+        let first = crate::config::NativeAddress {
+            item: "existing-secret".into(),
+            version: Some("0123456789abcdef0123456789abcdef".into()),
+            ..Default::default()
+        };
+        let second = crate::config::NativeAddress {
+            version: Some("fedcba9876543210fedcba9876543210".into()),
+            ..first.clone()
+        };
+        assert!(
+            !p.same_entries(Address::Native(&first), &p, Address::Native(&second))
+                .unwrap()
+        );
+        assert!(
+            !p.same_entries(
+                Address::Native(&first),
+                &p,
+                Address::Native(&crate::config::NativeAddress {
+                    version: None,
+                    ..first.clone()
+                }),
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn native_reads_request_pinned_or_latest_version() {
+        let transport = Arc::new(RecordingHttpClient::default());
+        let credential = DeveloperToolsCredential::new(None).unwrap();
+        let client = SecretClient::new(
+            "https://myvault.vault.azure.net/",
+            credential,
+            Some(SecretClientOptions {
+                client_options: ClientOptions {
+                    transport: Some(Transport::new(transport.clone())),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        let provider = AkvProvider::with_client(config("akv://myvault"), client);
+        let pinned_version = "0123456789abcdef0123456789abcdef";
+
+        let pinned = crate::config::NativeAddress {
+            item: "existing-secret".into(),
+            version: Some(pinned_version.into()),
+            ..Default::default()
+        };
+        let value = provider.get(Address::Native(&pinned)).unwrap().unwrap();
+        assert_eq!(value.expose_secret(), "secret-value");
+
+        let latest = crate::config::NativeAddress {
+            version: None,
+            ..pinned
+        };
+        let value = provider.get(Address::Native(&latest)).unwrap().unwrap();
+        assert_eq!(value.expose_secret(), "secret-value");
+
+        assert_eq!(
+            *transport.paths.lock().unwrap(),
+            [
+                format!("/secrets/existing-secret/{pinned_version}"),
+                "/secrets/existing-secret/".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn native_address_rejects_invalid_version_before_client_creation() {
+        let p = AkvProvider::new(config("akv://myvault"));
+        for version in [
+            "",
+            "3",
+            "--------------------------------",
+            "0123456789abcdef0123456789abcde/",
+        ] {
+            let addr = crate::config::NativeAddress {
+                item: "existing-secret".into(),
+                version: Some(version.into()),
+                ..Default::default()
+            };
+            let error = p.get(Address::Native(&addr)).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("not a valid Azure Key Vault secret version"),
+                "{version:?}: {error}"
+            );
+            assert!(p.client.get().is_none());
+        }
+    }
+
     /// Native addresses are read-only: they name secrets managed outside
     /// SecretSpec.
     #[test]
@@ -943,6 +1176,7 @@ mod tests {
         let p = AkvProvider::new(config("akv://myvault"));
         let addr = crate::config::NativeAddress {
             item: "existing-secret".into(),
+            version: Some("0123456789abcdef0123456789abcdef".into()),
             ..Default::default()
         };
         let refusal = p.check_writable(Address::Native(&addr)).unwrap_err();

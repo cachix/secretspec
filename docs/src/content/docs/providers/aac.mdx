@@ -1,0 +1,451 @@
+---
+title: Azure App Configuration Provider
+description: Azure App Configuration integration
+---
+
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
+The Azure App Configuration provider reads and manages ordinary key-values and
+resolves canonical Azure Key Vault references.
+
+:::caution[Version compatibility]
+The `aac` provider is added in SecretSpec 0.20.
+:::
+
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `aac` (0.20+) |
+| URI | `aac://STORE[?OPTIONS]` |
+| Access | Read, write, delete, and discovery; native references are read-only |
+| Best for | Azure applications that centralize configuration and Key Vault references |
+| Authentication | Service principal, Azure CLI, managed identity, workload identity, or App Configuration connection string |
+| Availability | SecretSpec 0.20+; included in official and default builds (`aac` feature for custom minimal builds) |
+| Default storage | `secretspec:{project}:{profile}:{key}` with no label |
+
+## Quick start
+
+The official SecretSpec CLI includes the AAC provider. These commands assume
+the store already exists and your signed-in Azure identity has **App
+Configuration Data Owner** on it:
+
+```bash
+$ az login
+$ secretspec set DATABASE_URL --provider aac://payments-production
+$ secretspec get DATABASE_URL --provider aac://payments-production
+$ secretspec run --provider aac://payments-production -- your-command
+```
+
+Use **App Configuration Data Reader** instead for identities that only run
+`get`, `check`, or `run`. See [Assign Azure roles](#assign-azure-roles) for the
+complete setup.
+
+## Setup
+
+### Prerequisites
+
+- An [Azure App Configuration store][create-store]
+- For Entra authentication, [**App Configuration Data Reader**][appconfig-rbac]
+  for reads or
+  **App Configuration Data Owner** for writes and deletes
+- For connection-string authentication, a read-only access key for reads or a
+  read-write access key for writes and deletes
+- **Key Vault Secrets User** on each referenced vault when entries are Key
+  Vault references
+- SecretSpec 0.20+. Official binaries and default Cargo builds include AAC;
+  custom `--no-default-features` builds must enable `--features aac`.
+
+### Authentication
+
+:::tip[Prefer Microsoft Entra ID]
+Use Entra authentication by default, especially managed identity or workload
+identity for deployed workloads. RBAC avoids distributing App Configuration
+access keys. Reserve `auth=connection_string` for environments where Entra
+authentication is unavailable, protect and rotate the connection string as a
+secret, and [keep App Configuration local authentication disabled][access-keys]
+when it is not needed.
+:::
+
+Select authentication with `auth`:
+
+- `env` (default): a complete `tenant_id`, `client_id`, and `client_secret`
+  provider-credential triple, with `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and
+  `AZURE_CLIENT_SECRET` as fallbacks. With none configured, SecretSpec uses the
+  signed-in Azure CLI or Azure Developer CLI session. A partial triple is an
+  error.
+- `cli`: Azure CLI or Azure Developer CLI only.
+- `managed_identity`: system-assigned managed identity.
+- `workload_identity`: Azure workload identity federation.
+- `connection_string`: the `connection_string` provider credential, falling
+  back to `AZURE_APPCONFIG_CONNECTION_STRING`. This environment variable is a
+  SecretSpec fallback name. The connection string's `Endpoint` must exactly
+  match the provider URI's endpoint, so the URI still selects the store and a
+  credential cannot redirect requests to another endpoint. Read-only and
+  read-write access keys can expose direct values and routing metadata across
+  their store permissions; selectors do not narrow those permissions.
+
+### Assign Azure roles
+
+Azure control-plane roles such as **Reader**, **Contributor**, and **App
+Configuration Contributor** do not grant Entra-authenticated access to stored
+key-values. Assign an App Configuration *data-plane* role to the exact user,
+service principal, workload identity, or managed identity that SecretSpec uses.
+
+For a deployed identity, obtain the store resource ID and assign read-only
+access. Replace the principal object ID and use `User` instead of
+`ServicePrincipal` when assigning a human account:
+
+```bash
+$ APP_CONFIG_ID=$(az appconfig show \
+    --name payments-production \
+    --resource-group production \
+    --query id \
+    --output tsv)
+$ az role assignment create \
+    --assignee-object-id "<principal-object-id>" \
+    --assignee-principal-type ServicePrincipal \
+    --role "App Configuration Data Reader" \
+    --scope "$APP_CONFIG_ID"
+```
+
+Change the role to **App Configuration Data Owner** only for an identity that
+runs `set`, `delete`, cache invalidation, or another write path. Azure role
+assignments can take several minutes to propagate, so a new assignment may
+briefly continue returning HTTP 403.
+
+When selected entries can be Key Vault references, grant the same runtime
+identity—or the separate identity selected by `key_vault_auth`—read access to
+each referenced vault:
+
+```bash
+$ KEY_VAULT_ID=$(az keyvault show \
+    --name payments-vault \
+    --resource-group production \
+    --query id \
+    --output tsv)
+$ az role assignment create \
+    --assignee-object-id "<principal-object-id>" \
+    --assignee-principal-type ServicePrincipal \
+    --role "Key Vault Secrets User" \
+    --scope "$KEY_VAULT_ID"
+```
+
+SecretSpec never needs Key Vault write or delete permission. See the Azure CLI
+[`az role assignment create` reference][role-assignment] for other principal
+types and scopes.
+
+## Provider credentials
+
+<ProviderCredentials provider="aac" />
+
+## Configuration
+
+### URI format
+
+```text
+aac://STORE[?auth=env|cli|managed_identity|workload_identity|connection_string]
+  [&suffix=DNS_SUFFIX][&audience=TOKEN_AUDIENCE]
+  [&key_vault_auth=inherit|env|cli|managed_identity|workload_identity]
+  [&key_vault_suffix=DNS_SUFFIX]
+  [&label=LABEL][&prefix=PREFIX][&tag=NAME=VALUE]...
+```
+
+- `STORE`: a bare store name, which uses `.azconfig.io`, or a complete host.
+- `suffix`: App Configuration DNS suffix for a bare store name. Do not combine
+  it with a dotted host.
+- `audience`: Entra token audience. Public Azure defaults to
+  `https://appconfig.azure.com`; non-public hosts require an explicit HTTPS
+  origin. For `env` service-principal or `workload_identity` authentication in
+  a sovereign cloud, also set `AZURE_AUTHORITY_HOST` to that cloud's Entra
+  authority. For `cli`, select the matching Azure cloud before signing in.
+  `audience` controls the requested token scope; it does not select the Entra
+  authority.
+- `label`: selects one exact label. Omitting it selects the null label rather
+  than every label.
+- `prefix`: prepended literally to convention keys. Include any separator the
+  desired key requires.
+- `tag`: exact `NAME=VALUE` selector. Up to five unique tag names may be
+  repeated in the URI; all must match.
+- `key_vault_auth`: identity used to resolve Key Vault references. `inherit`
+  uses the App Configuration Entra identity, and omission behaves as
+  `inherit`. Connection-string authentication cannot be inherited because it
+  does not authenticate to Key Vault.
+- `key_vault_suffix`: allowed Key Vault DNS suffix, defaulting to
+  `vault.azure.net`. Referenced vaults must be direct subdomains of this suffix.
+
+```text
+aac://payments-production
+aac://shared?label=production&prefix=payments:
+aac://shared?tag=app=payments&tag=stage=production
+aac://shared?auth=connection_string&key_vault_auth=managed_identity
+aac://store.example.com?audience=https%3A%2F%2Fappconfig.example.com&key_vault_suffix=vault.example.com
+```
+
+### Project configuration
+
+```toml title="secretspec.toml"
+[providers.app_config]
+uri = "aac://shared?label=production&prefix=payments:"
+
+[providers.app_config.credentials]
+tenant_id = "keyring"
+client_id = "keyring"
+client_secret = "keyring"
+
+[profiles.production]
+DATABASE_URL = { description = "Database URL", providers = ["app_config"] }
+```
+
+Store the declared credentials, then use the alias:
+
+```bash
+$ secretspec config provider login app_config
+$ secretspec run --provider app_config -- deploy
+```
+
+## Storage and selection
+
+Convention entries use
+`{prefix}secretspec:{project}:{profile}:{key}`. Project and profile components
+accept ASCII letters, digits, underscores, and hyphens. Secret keys start with
+an ASCII letter or underscore and continue with ASCII letters, digits, or
+underscores; `defaults` is reserved for profile configuration. App Configuration
+keys cannot contain `%` or be exactly `.` or `..`.
+
+Azure App Configuration identifies an entry by its [key and label][key-values].
+Label, prefix, and tags select values; they do not grant access. Reads require
+the exact key, configured label, and all tag selectors. New entries receive the
+configured tags. Updates preserve existing tags, content type, and description.
+Writes and deletes refuse locked entries, non-matching tags, special content
+types, and concurrent changes detected through ETags.
+
+Azure RBAC applies to the store, not to a SecretSpec prefix, label, or tag
+route. Use a dedicated App Configuration store when workloads must not be able
+to list or read one another's direct values or reference metadata. A narrower
+provider URI is selection configuration, not permission isolation.
+
+## Use existing key-values
+
+A secret's [`ref`](/reference/configuration/#secret-references) names an
+existing App Configuration key through `item`. Other coordinates are rejected.
+Native references are read-only, even when they point to an ordinary direct
+value.
+
+```toml
+[profiles.production]
+DATABASE_URL = {
+  description = "Database URL",
+  ref = { item = "payments:database-url" },
+  providers = ["aac://shared?label=production"]
+}
+```
+
+## Azure Key Vault references
+
+Entries with the [canonical Key Vault-reference content type][key-vault-references]
+`application/vnd.microsoft.appconfig.keyvaultref+json;charset=utf-8` are
+resolved through their HTTPS Key Vault secret URI. A pinned version in that URI
+remains pinned; an unversioned URI reads the latest version. Key Vault
+references are never changed by `set` or `delete`.
+
+Feature flags, snapshot references, and other Azure App Configuration special
+content types are rejected rather than returned as opaque strings. Ordinary
+content types remain direct values.
+
+Connection strings authenticate only App Configuration. When `auth` is
+`connection_string`, select `key_vault_auth=env`, `cli`, `managed_identity`, or
+`workload_identity` before resolving Key Vault references.
+
+## CI/CD
+
+Prefer workload identity or managed identity for deployed workloads. Grant the
+runtime **App Configuration Data Reader** and, only when it resolves Key Vault
+references, **Key Vault Secrets User** on the required vaults:
+
+```bash
+$ secretspec run \
+    --provider 'aac://payments-production?auth=workload_identity' \
+    -- deploy
+```
+
+A provisioning or rotation job that calls `set` or `delete` needs **App
+Configuration Data Owner** instead. Keep that writer identity separate from
+read-only runtime identities. SecretSpec never needs Key Vault write or delete
+permission: Key Vault references are read-only.
+
+For a stored connection string, route the semantic `connection_string`
+provider credential through another SecretSpec provider instead of putting the
+connection string in the URI:
+
+```toml title="secretspec.toml"
+[providers.app_config_ci]
+uri = "aac://payments-production?auth=connection_string"
+
+[providers.app_config_ci.credentials]
+connection_string = "keyring"
+```
+
+In CI, omit that credential route and set
+`AZURE_APPCONFIG_CONNECTION_STRING`, the SecretSpec-defined environment
+fallback for `connection_string`. In either form, the provider URI selects the
+store and the connection string must name that same endpoint.
+
+If selected values may be Key Vault references, add an explicit Entra
+`key_vault_auth` mode to the URI and provide that identity separately. The App
+Configuration connection string cannot authenticate to Key Vault.
+
+## Deployment topologies
+
+| Topology | App Configuration role | Key Vault role | Boundary |
+| --- | --- | --- | --- |
+| Direct values, read-only runtime | App Configuration Data Reader | None | Runtime can read direct values and metadata allowed by store RBAC |
+| Key Vault references, read-only runtime | App Configuration Data Reader | Key Vault Secrets User | App Configuration exposes reference URIs; Key Vault controls resolved values |
+| SecretSpec-managed direct values | App Configuration Data Owner | None | Writer can create, replace, and delete direct values in management scope |
+| Mixed direct values and Key Vault references | Reader or Owner, according to operation | Key Vault Secrets User for referenced vaults | App Configuration and Key Vault permissions remain independent |
+| Dedicated store per trust boundary | Reader or Owner, according to operation | Only when references are used | Azure resource separation enforces isolation that selectors cannot provide |
+
+Shared stores reduce resource count but expose direct values, labels, tags,
+retained revisions, and Key Vault reference URIs to principals with store-level
+data access. Dedicated stores provide a clearer permission boundary. Prefixes,
+labels, and tags can organize a shared store, but cannot turn it into separate
+authorization domains.
+
+Choose Key Vault boundaries from runtime identities, ownership, and rotation
+responsibilities. A separate vault per application or environment is a common
+starting point when those boundaries differ; sharing a vault can be reasonable
+when the same principals and policies intentionally govern every secret. One
+App Configuration route can resolve references across multiple authorized
+vaults without changing its shape.
+
+## Discovery and caching
+
+`secretspec init --from aac://STORE` discovers convention entries for
+the active project, profile, prefix, label, and tags. Direct values and Key
+Vault references are discoverable; unsupported special content types stop
+discovery.
+
+Azure App Configuration (0.20+) can be the authoritative side of a
+[cached provider route](/concepts/providers/caching/). Use an encrypted cache
+when direct values or resolved Key Vault values must remain encrypted at rest.
+
+SecretSpec caches the resolved value, not a Key Vault reference. A local
+plaintext cache therefore exposes the resolved secret directly. Using another
+Azure App Configuration route as the cache writes a logical plaintext/direct
+value, although Azure encrypts it at rest. App Configuration readers can
+retrieve that value, and Azure [retains key-value revisions][revision-history]
+for a tier-dependent history period after update or deletion. `cache clear`
+removes the active cache entry; it is not a
+revision-history purge. Use a distinct store, label, or prefix for the cache;
+changing only authentication or tags does not create a distinct storage
+identity. Choose the cache according to the resolved value's sensitivity.
+
+## Security considerations
+
+App Configuration readers can see direct values, metadata, retained revisions,
+and Key Vault reference URIs within their data-plane permissions. Key Vault
+reference values remain protected by separate Key Vault permissions. Prefer
+Key Vault references for secrets that should not be exposed to App
+Configuration readers, and scope both services' permissions to least privilege.
+
+Store management scope is not value provenance. A `ref.item` proves which key
+SecretSpec requested, not who created or approved its current value. Likewise,
+a Key Vault reference media type proves only that the entry contains a
+syntactically valid reference.
+
+Convention namespace, label, and tags define SecretSpec's management scope;
+they do not prove SecretSpec created every matching direct entry. External
+tools must not place mutable direct values in that scope unless SecretSpec may
+adopt, update, and delete them.
+
+A principal with **App Configuration Data Owner** or a read-write connection
+string can replace a direct value or redirect a Key Vault reference to another
+vault beneath the allowed `key_vault_suffix`. SecretSpec then follows that URI
+with its configured Key Vault identity. Treat App Configuration writers and
+read-write access keys as trusted routing administrators, restrict their
+permissions and distribution, and limit the Key Vault identity to explicitly
+required vaults and secrets. A versionless reference tracks the latest Key
+Vault version; pin the 32-character version in the stored URI when review or
+rollout requires a fixed revision.
+
+## Troubleshooting
+
+### HTTP 403 from App Configuration
+
+Confirm that the identity selected by `auth` has **App Configuration Data
+Reader** or **App Configuration Data Owner** on the store. Azure control-plane
+roles do not provide Entra data-plane access. If the assignment is new, wait
+for role propagation before retrying. With `auth=env`, use `auth=cli`
+temporarily to prove whether the signed-in developer identity behaves
+differently from the configured service principal.
+
+### Partial service-principal configuration
+
+`auth=env` accepts all three of `tenant_id`, `client_id`, and `client_secret`,
+or none of them. If only part of the triple is present across provider
+credentials and `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and
+`AZURE_CLIENT_SECRET`, SecretSpec fails rather than silently using another
+identity. Complete the triple, remove all three inputs to allow the Azure
+CLI/azd fallback, or select `auth=cli` explicitly.
+
+### Connection string rejected
+
+`auth=connection_string` requires the `connection_string` provider credential
+or `AZURE_APPCONFIG_CONNECTION_STRING`. Its `Endpoint` must exactly match the
+store selected by the provider URI. Use the connection string from that store,
+and do not place it directly in the URI.
+
+### Key Vault reference cannot be resolved
+
+App Configuration and Key Vault authenticate independently. Confirm that the
+Key Vault identity has **Key Vault Secrets User**, that the vault host is a
+direct child of `key_vault_suffix`, and that the referenced secret and optional
+version exist. With App Configuration connection-string authentication, set an
+explicit Entra mode such as `key_vault_auth=workload_identity` because a
+connection string cannot authenticate to Key Vault.
+
+### A key is reported as missing
+
+Omitting `label` selects only the null label; it does not search every label.
+All configured tag selectors must also match. `prefix` applies to SecretSpec
+convention keys but is not prepended to a native `ref.item`, which names the
+complete existing App Configuration key.
+
+## Limitations
+
+- One provider instance resolves references from at most 16 distinct Key Vault
+  hosts. Split larger sets across provider aliases.
+- Feature flags, snapshot references, and unknown Azure App Configuration
+  special content types are rejected. Only direct values and canonical Key
+  Vault references are resolved.
+- `init --from` reflects only SecretSpec convention keys for the selected
+  project, profile, prefix, label, and tags. It does not import arbitrary keys
+  from the store; declare those with read-only `ref.item` entries.
+- Tag selectors require non-empty names and values. Empty values and Azure
+  null-valued tags cannot be expressed as `tag=NAME=VALUE` selectors.
+- Native `ref.item` entries are read-only. Entries containing Key Vault
+  references cannot be written or deleted through this provider, and
+  SecretSpec never writes or deletes the referenced Key Vault secret.
+- Provider reads do not create an implicit durable cache, refresh loop, or
+  watch subscription. Configure a SecretSpec cache explicitly and run commands
+  again to observe changes.
+- No store-wide clear or watch operation is exposed. `secretspec cache clear`
+  applies only to configured SecretSpec cache entries.
+- SecretSpec honors an App Configuration key's lock by refusing writes and
+  deletes, but does not create, remove, or manage locks.
+- The provider does not assign a native TTL. When Azure App Configuration is a
+  cache provider, SecretSpec enforces its logical `max_age` and deletes stale
+  entries when encountered; Azure revision history remains separate.
+- AAC does not currently apply Azure-specific retry/backoff to HTTP 429 or 5xx
+  responses or configure a provider-specific request deadline. Apply an outer
+  command timeout and retry policy where a deployment requires bounded
+  execution. After an indeterminate write or delete network error, read the
+  current entry before retrying the mutation.
+
+[access-keys]: https://learn.microsoft.com/azure/azure-app-configuration/howto-disable-access-key-authentication
+[appconfig-rbac]: https://learn.microsoft.com/azure/azure-app-configuration/concept-enable-rbac
+[create-store]: https://learn.microsoft.com/azure/azure-app-configuration/quickstart-azure-app-configuration-create
+[key-values]: https://learn.microsoft.com/azure/azure-app-configuration/concept-key-value
+[key-vault-references]: https://learn.microsoft.com/azure/azure-app-configuration/use-key-vault-references-dotnet-core
+[revision-history]: https://learn.microsoft.com/azure/azure-app-configuration/concept-point-time-snapshot
+[role-assignment]: https://learn.microsoft.com/cli/azure/role/assignment

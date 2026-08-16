@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Azure App Configuration provider** (`aac://`, 0.20+): select direct
+  values and Azure Key Vault references by label, prefix, and tags, with Entra
+  ID or connection-string authentication and guarded writes, deletion, and
+  declaration discovery. Azure Key Vault references can pin an exact secret
+  version, cached-route validation compares canonical vault endpoints
+  independently of authentication choice, and discovery rejects ambiguous or
+  invalid convention keys. HTTP redirects are rejected so reads and
+  secret-bearing writes remain confined to the configured store endpoint.
 - The Rust SDK can describe secrets without TOML through the public `Spec`,
   `SpecBuilder`, `Profile`, and `Secret` API. TOML parsing and code generation
   use the same validated model, so Rust-first and file-backed projects share

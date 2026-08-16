@@ -570,7 +570,7 @@ can answer:
 |-------|------|----------|-------------|
 | `fallback` | array[string] | Yes | Non-empty authoritative provider route. Reads try entries in order; writes use the first entry. |
 | `cache` | table | Yes | Local cache policy containing `provider` and `max_age`. |
-| `cache.provider` | string | Yes | Leaf provider spec used to store cache entries. Must support deletion (keyring, pass, gopass, dotenv, age (0.20+), Vault/OpenBao KV v2) and be a different store from every `fallback` entry. |
+| `cache.provider` | string | Yes | Leaf provider spec used to store cache entries. Must support deletion (keyring, pass, gopass, dotenv, age (0.20+), Azure App Configuration (0.20+), or Vault/OpenBao KV v2) and be a different store from every `fallback` entry. |
 | `cache.max_age` | string | Yes | Positive duration with `s`, `m`, `h`, `d`, or `w` units, such as `30m`, `8h`, or `1d`. |
 
 ```toml title="secretspec.toml"
@@ -590,10 +590,10 @@ accept aliases, provider names, and URIs, but must resolve to leaf providers;
 cached aliases cannot be nested, and the cache must resolve to a different
 store than the route's own authoritative providers, since it holds its entries
 at the same logical address. The cache provider must also be one SecretSpec can
-delete from — keyring, pass, gopass, dotenv, age (0.20+), or a Vault/OpenBao
-KV v2 mount — since every form of invalidation is a delete. Put credentials on
-leaf aliases
-rather than the cached fallback alias.
+delete from — keyring, pass, gopass, dotenv, age (0.20+), Azure App
+Configuration (0.20+), or a Vault/OpenBao KV v2 mount — since every form of
+invalidation is a delete. Put credentials on leaf aliases rather than the
+cached fallback alias.
 See [Provider caching](/concepts/providers/caching/)
 for freshness, failure, invalidation, and clearing behavior.
 
@@ -781,7 +781,7 @@ never silently ignored.
 | `field` | No | A named component inside the item. Rejected by stores whose secrets hold a single value |
 | `vault` | No | The container holding the item. 1Password only; other stores take their container from the provider URI |
 | `section` | No | A named group of fields inside the item. 1Password only; requires `field` |
-| `version` | No | Which revision of the secret to read. Supported by versioned stores such as Google Secret Manager and AWS Parameter Store (0.18+); defaults to the latest |
+| `version` | No | Which revision of the secret to read. Supported by versioned stores such as Google Secret Manager, AWS Parameter Store (0.18+), and Azure Key Vault (0.20+); defaults to the latest |
 
 Stores fall into two groups for `field`:
 
@@ -870,7 +870,8 @@ entry declares neither, it inherits whichever form `[profiles.default]` uses.
 | [AWS Parameter Store (0.18+)](/providers/awsps/#use-existing-parameters) | Parameter name or ARN; `version` selects a version or label | Rejected | Reads the decrypted value | ✅ by unversioned parameter name; version, label, and ARN refs are read-only |
 | [GCSM](/providers/gcsm/#use-existing-secrets) | Secret id; `version` also applies | Rejected | Reads latest or the pinned version | — (read-only) |
 | [Bitwarden (bws)](/providers/bws/#use-existing-secrets) | BWS key name | Rejected | Reads the key | ✅ |
-| [Azure Key Vault (0.15+)](/providers/akv/#use-existing-secrets) | Secret name | Rejected | Reads the secret | — (read-only) |
+| [Azure Key Vault (0.15+)](/providers/akv/#use-existing-secrets) | Secret name; `version` pins a version (0.20+) | Rejected | Reads latest or the pinned version (0.20+) | — (read-only) |
+| [Azure App Configuration (0.20+)](/providers/aac/#use-existing-key-values) | App Configuration key | Rejected | Reads the direct value or resolves its canonical Key Vault reference | — (read-only) |
 | [Infisical (0.16+)](/providers/infisical/#use-existing-secrets) | Folder and key; `version` also applies | Rejected | Reads the latest version | ✅ unless a version is pinned |
 
 A provider rejects coordinates it has no equivalent for, with an error naming

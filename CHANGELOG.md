@@ -79,6 +79,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeping the server pinned independently of ambient `bws` configuration.
   ([#359](https://github.com/cachix/secretspec/issues/359))
 
+- Node SDK processes using `loadAsync()` or `reportAsync()` with AWS Secrets
+  Manager or Parameter Store now exit normally after resolution. Provider
+  runtime and TLS state is torn down on a short-lived resolver thread instead
+  of remaining attached to a persistent libuv worker during macOS process
+  shutdown. ([#343])
+
+  [#343]: https://github.com/cachix/secretspec/issues/343
+
 - The `awssm` and `scaleway` providers now treat a JSON `null` in a `ref` field
   as no value, the same as an absent key, so the provider chain continues.
   Previously it was rendered as the four-character string `null`, which

@@ -18,8 +18,9 @@ pub fn resolve(request_json: String) -> String {
     secretspec::resolve_json(&request_json)
 }
 
-/// Runs `resolve_json` on the libuv threadpool (via [`AsyncTask`]) so it never
-/// runs on the JS thread.
+/// Dispatches `resolve_json` from the libuv threadpool to one short-lived Rust
+/// thread, so it never runs on the JS thread and provider runtime/TLS state is
+/// torn down before the libuv worker is returned to Node.
 pub struct ResolveTask {
     request_json: String,
 }
@@ -29,7 +30,26 @@ impl Task for ResolveTask {
     type JsValue = String;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        Ok(secretspec::resolve_json(&self.request_json))
+        // A libuv threadpool worker lives until Node shuts down. Network stacks
+        // initialized directly on it may retain thread-local runtime/TLS state
+        // until that late teardown; on macOS the AWS clients could then leave a
+        // short-lived Node process stuck after the Promise had resolved. Keep
+        // the N-API async work as the dispatcher, but run providers on a thread
+        // whose lifetime ends with this operation so all per-thread state is
+        // destroyed before `compute` returns the worker to libuv.
+        std::thread::scope(|scope| {
+            let resolver = std::thread::Builder::new()
+                .name("secretspec-resolve".to_string())
+                .spawn_scoped(scope, || secretspec::resolve_json(&self.request_json))
+                .map_err(|error| {
+                    napi::Error::from_reason(format!(
+                        "failed to start the SecretSpec resolver thread: {error}"
+                    ))
+                })?;
+            resolver.join().map_err(|_| {
+                napi::Error::from_reason("the SecretSpec resolver thread panicked".to_string())
+            })
+        })
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -37,9 +57,10 @@ impl Task for ResolveTask {
     }
 }
 
-/// Async variant of [`resolve`]: resolves on the libuv threadpool so a provider
-/// doing network I/O (1Password, LastPass) does not block the Node event loop.
-/// Returns a Promise of the same JSON response envelope string.
+/// Async variant of [`resolve`]: dispatches from the libuv threadpool to a
+/// short-lived resolver thread so a provider doing network I/O does not block
+/// the Node event loop or leave provider thread state on a persistent libuv
+/// worker. Returns a Promise of the same JSON response envelope string.
 #[napi]
 pub fn resolve_async(request_json: String) -> AsyncTask<ResolveTask> {
     AsyncTask::new(ResolveTask { request_json })

@@ -27,6 +27,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Spec` can perform format-preserving single-declaration edits on the document
+  it was loaded from. `add_secret_to_text` and `remove_secret_from_text` return
+  a new fully revalidated `Spec` whose text differs only by that declaration,
+  leaving comments, key order, quoting, and syntax the model does not represent
+  byte for byte intact; `declares_secret_in_text` reports whether a name is
+  declared in this document rather than inherited; `preserved_text` exposes the
+  exact backing text, and `to_toml` renders freshly formatted TOML for any spec,
+  including one built with `Spec::builder`, which has no backing text. Adding a
+  declaration and then removing it restores the original bytes, so tooling that
+  proposes a manifest change as a reviewable one-line diff, or that compares
+  manifests byte for byte, can rely on it. A spec that inherits through
+  `project.extends` keeps its own root document as the preserved text and is
+  revalidated against its parents on every edit, so inherited declarations are
+  never inlined into the child file. The `toml_edit` surgery behind this moved
+  out of `cli` into a `manifest_edit` module behind a new `manifest-edit`
+  feature, so an embedder can take the editing surface without `clap` and
+  `inquire`; `cli` enables it, so nothing changes for existing users.
+
 - **Azure App Configuration provider** (`aac://`, 0.20+): select direct
   values and Azure Key Vault references by label, prefix, and tags, with Entra
   ID or connection-string authentication and guarded writes, deletion, and

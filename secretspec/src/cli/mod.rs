@@ -1,4 +1,5 @@
 use crate::config::{Config, GlobalConfig, GlobalDefaults, Profile as ConfigProfile, Project};
+use crate::manifest_edit::{add_secret_to_manifest, validate_add_secret_name};
 use crate::provider::{Provider, providers, spec_names_known_provider};
 use crate::{CallerContext, ExportFormat, Secrets};
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
@@ -566,25 +567,6 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
     Ok(doc.to_string())
 }
 
-/// Rejects names that cannot occupy a flattened secret key in [`ConfigProfile`].
-fn validate_add_secret_name(name: &str) -> Result<()> {
-    if !crate::config::is_valid_identifier(name) {
-        return Err(miette!(
-            "Invalid secret name '{}': must be a valid identifier (alphanumeric and underscores, not starting with a number)",
-            name
-        ));
-    }
-    // `Profile` reserves this key for its defaults table before flattening all
-    // remaining keys into secret declarations. Without an explicit check, the
-    // edit would be valid TOML but would not actually declare a secret.
-    if name == "defaults" {
-        return Err(miette!(
-            "Secret name 'defaults' is reserved for profile defaults"
-        ));
-    }
-    Ok(())
-}
-
 /// Ensures `add` will create a new effective declaration in an existing profile.
 fn validate_add_target(app: &Secrets, profile: &str, name: &str) -> Result<()> {
     validate_add_secret_name(name)?;
@@ -607,57 +589,6 @@ fn validate_add_target(app: &Secrets, profile: &str, name: &str) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Adds one secret to a manifest document without re-serializing the rest.
-///
-/// `toml_edit` retains the user's comments, whitespace, ordering, and any syntax
-/// that is not represented by [`Config`]. The caller validates the selected
-/// profile against the fully loaded configuration first; this helper creates a
-/// local profile table when that profile currently comes only from `extends`.
-fn add_secret_to_manifest(
-    source: &str,
-    profile: &str,
-    name: &str,
-    description: &str,
-) -> Result<String> {
-    use toml_edit::{DocumentMut, InlineTable, Item, Table, Value};
-
-    validate_add_secret_name(name)?;
-    if description.trim().is_empty() {
-        return Err(miette!("Secret description cannot be empty"));
-    }
-
-    let mut doc = source
-        .parse::<DocumentMut>()
-        .into_diagnostic()
-        .wrap_err("Failed to parse secretspec.toml for editing")?;
-    let profiles = doc
-        .get_mut("profiles")
-        .and_then(Item::as_table_like_mut)
-        .ok_or_else(|| miette!("secretspec.toml does not contain a [profiles] table"))?;
-
-    if !profiles.contains_key(profile) {
-        profiles.insert(profile, Item::Table(Table::new()));
-    }
-    let profile_table = profiles
-        .get_mut(profile)
-        .and_then(Item::as_table_like_mut)
-        .ok_or_else(|| miette!("Profile '{}' is not a TOML table", profile))?;
-
-    if profile_table.contains_key(name) {
-        return Err(miette!(
-            "Secret '{}' is already declared in profile '{}'",
-            name,
-            profile
-        ));
-    }
-
-    let mut secret = InlineTable::new();
-    secret.insert("description", Value::from(description));
-    profile_table.insert(name, toml_edit::value(secret));
-
-    Ok(doc.to_string())
 }
 
 /// Replaces an existing manifest only after its complete replacement has been

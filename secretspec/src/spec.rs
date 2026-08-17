@@ -28,6 +28,15 @@ pub struct Spec {
     pub(crate) config: Config,
     pub(crate) compiled: CompiledSpec,
     pub(crate) base_dir: Option<PathBuf>,
+    /// The exact text this spec was parsed from, when there is one.
+    ///
+    /// The **root document only**, never the merged result of `extends`:
+    /// [`Config::try_from`] folds parents into the child, so retaining the
+    /// merged text and writing it back would silently inline every inherited
+    /// declaration into a file that had only referenced them.
+    ///
+    /// `None` for a [`SpecBuilder`]-built spec, which was never text.
+    pub(crate) source: Option<String>,
 }
 
 impl Spec {
@@ -53,7 +62,9 @@ impl Spec {
                     .to_string(),
             ));
         }
-        Self::from_config_document(config)
+        let mut spec = Self::from_config_document(config)?;
+        spec.source = Some(source.to_string());
+        Ok(spec)
     }
 
     /// The project name used for provider namespacing.
@@ -101,11 +112,139 @@ impl Spec {
             config,
             compiled,
             base_dir: None,
+            source: None,
         })
     }
 
     pub(crate) fn into_parts(self) -> (Config, CompiledSpec) {
         (self.config, self.compiled)
+    }
+
+    /// This spec's exact backing text, when the byte-exactness guarantee holds.
+    ///
+    /// `Spec::from_toml(s)?.preserved_text() == Some(s)`, and for a spec loaded
+    /// from a path this is the root file's own bytes — not the merged result of
+    /// `extends`.
+    ///
+    /// `None` for a [`SpecBuilder`]-built spec, which never had a document.
+    /// That is why this and [`Self::to_toml`] are separate methods: a single
+    /// renderer whose exactness depended on hidden state would silently hand a
+    /// regenerated document to exactly the callers who needed the original.
+    ///
+    /// Available starting with SecretSpec 0.20.
+    pub fn preserved_text(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
+
+    /// Render these declarations as freshly formatted TOML.
+    ///
+    /// Always available, and never byte-exact: key order, whitespace, and
+    /// comments come from the serializer, not from any original document. Use
+    /// [`Self::preserved_text`] when the original formatting matters.
+    ///
+    /// Available starting with SecretSpec 0.20.
+    pub fn to_toml(&self) -> Result<String> {
+        toml::to_string_pretty(&self.config)
+            .map_err(|error| SecretSpecError::InvalidSpec(error.to_string()))
+    }
+
+    /// Whether `profile` declares `name` in this spec's own source text.
+    ///
+    /// Scoped to the retained document, so a declaration this spec only sees
+    /// through `extends` reads as absent — the question being answered is "is
+    /// this name editable here", which is what [`Self::remove_secret_from_text`]
+    /// can act on. [`Self::secrets`] answers the inherited-inclusive question.
+    ///
+    /// Parsed, not searched. A substring test would match the name inside a
+    /// comment or another secret's description, and would do so silently.
+    /// `false` for a spec with no source text, and for one whose text does not
+    /// parse — callers needing to distinguish those should check
+    /// [`Self::preserved_text`] first.
+    ///
+    /// Available starting with SecretSpec 0.20.
+    #[cfg(feature = "manifest-edit")]
+    pub fn declares_secret_in_text(&self, profile: &str, name: &str) -> bool {
+        self.source.as_deref().is_some_and(|source| {
+            crate::manifest_edit::declares_secret(source, profile, name).unwrap_or(false)
+        })
+    }
+
+    /// Add one declaration, returning a new fully revalidated `Spec` whose text
+    /// differs from this one's only by that declaration.
+    ///
+    /// Everything else in the document survives byte for byte: comments, key
+    /// order, quoting, and any syntax the semantic model does not represent.
+    ///
+    /// The new spec's `config` and `compiled` views are re-derived by reparsing
+    /// the edited text through the same validated path every other `Spec` goes
+    /// through, rather than being mutated in parallel with it. There is one
+    /// synchronization point instead of one per method, so the text and the
+    /// semantic view cannot disagree — and an edit that produces an invalid
+    /// spec fails here rather than at some later load.
+    ///
+    /// Errors when this spec has no source text (see [`Self::preserved_text`]),
+    /// when `profile` already declares `name`, or when the result would not
+    /// validate.
+    ///
+    /// Available starting with SecretSpec 0.20.
+    #[cfg(feature = "manifest-edit")]
+    pub fn add_secret_to_text(&self, profile: &str, name: &str, secret: Secret) -> Result<Self> {
+        let source = self.editable_source()?;
+        let edited = crate::manifest_edit::add_secret_value_to_manifest(
+            source,
+            profile,
+            name,
+            &secret.config,
+        )
+        .map_err(|error| SecretSpecError::InvalidSpec(error.to_string()))?;
+        self.reparse(edited)
+    }
+
+    /// Remove one declaration, returning a new fully revalidated `Spec`.
+    ///
+    /// The inverse of [`Self::add_secret_to_text`] and byte-exact in the same
+    /// way: adding a declaration and then removing it restores the original
+    /// document exactly, which is what makes an "undo" usable by callers that
+    /// compare manifests as bytes rather than semantically.
+    ///
+    /// Removing a name the profile does not declare *in this text* is an error
+    /// rather than a silent no-op — including a name it inherits through
+    /// `extends`, which is declared in the parent and cannot be edited here.
+    ///
+    /// Available starting with SecretSpec 0.20.
+    #[cfg(feature = "manifest-edit")]
+    pub fn remove_secret_from_text(&self, profile: &str, name: &str) -> Result<Self> {
+        let source = self.editable_source()?;
+        let edited = crate::manifest_edit::remove_secret_from_manifest(source, profile, name)
+            .map_err(|error| SecretSpecError::InvalidSpec(error.to_string()))?;
+        self.reparse(edited)
+    }
+
+    #[cfg(feature = "manifest-edit")]
+    fn editable_source(&self) -> Result<&str> {
+        self.source.as_deref().ok_or_else(|| {
+            SecretSpecError::InvalidSpec(
+                "this spec has no source text to edit; it was built with Spec::builder".to_string(),
+            )
+        })
+    }
+
+    /// Rebuild from edited text, preserving this spec's inheritance context.
+    ///
+    /// `Spec::from_toml` cannot serve here: it rejects a non-empty
+    /// `project.extends`, having no location to resolve the paths against. This
+    /// spec does have one — `base_dir`, recorded when it was loaded — so the
+    /// reparse resolves inheritance exactly as the original load did.
+    #[cfg(feature = "manifest-edit")]
+    fn reparse(&self, edited: String) -> Result<Self> {
+        let config = match self.base_dir.as_deref() {
+            Some(base_dir) => Config::from_text_in(&edited, base_dir)?,
+            None => Config::from_str(&edited)?,
+        };
+        let mut spec = Self::from_config_document(config)?;
+        spec.base_dir = self.base_dir.clone();
+        spec.source = Some(edited);
+        Ok(spec)
     }
 }
 
@@ -138,6 +277,12 @@ impl TryFrom<&Path> for Spec {
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from(".")),
         );
+        // Read the root file again rather than reusing the loader's merged
+        // result: `config` above is every ancestor folded together, and the
+        // text has to stay the one document a caller could write back.
+        // A file that parsed but cannot be re-read leaves `source` unset, which
+        // degrades editing to unavailable rather than failing the load.
+        spec.source = std::fs::read_to_string(path).ok();
         Ok(spec)
     }
 }
@@ -1023,5 +1168,346 @@ mod tests {
         };
         assert_eq!(options.length, Some(48));
         assert_eq!(options.charset.as_deref(), Some("ascii"));
+    }
+
+    #[cfg(feature = "manifest-edit")]
+    mod text_edits {
+        use super::*;
+
+        /// Deliberately awkward: a comment, non-alphabetical key order, a
+        /// blank line, and a full `[profiles.x.NAME]` table beside inline
+        /// ones. Every one of these is something a regenerating writer would
+        /// silently normalize away.
+        const MANIFEST: &str = r#"[project]
+name = "demo"
+revision = "1.0"
+
+# Team convention: transport secrets first, then credentials.
+[profiles.default]
+ZULU = { description = "sorts last on purpose" }
+ALPHA = { description = "sorts first on purpose" }
+
+[profiles.default.NESTED]
+description = "declared as a full table"
+required = false
+"#;
+
+        #[test]
+        fn a_parsed_spec_preserves_the_exact_text_it_came_from() {
+            // The guarantee the whole surface rests on, stated as the issue
+            // states it: from_toml(s).preserved_text() == Some(s).
+            let spec = Spec::from_toml(MANIFEST).unwrap();
+
+            assert_eq!(spec.preserved_text(), Some(MANIFEST));
+        }
+
+        #[test]
+        fn adding_then_removing_a_declaration_restores_the_original_bytes() {
+            // Byte-exact, not merely semantically equivalent. Callers that
+            // compare manifests as raw bytes -- a drift checker diffing a
+            // runtime manifest against a tracked template -- get a permanent
+            // false positive from anything weaker.
+            let spec = Spec::from_toml(MANIFEST).unwrap();
+
+            let added = spec
+                .add_secret_to_text("default", "SCRATCH", Secret::required("temporary"))
+                .unwrap();
+            assert_ne!(added.preserved_text(), Some(MANIFEST));
+
+            let removed = added.remove_secret_from_text("default", "SCRATCH").unwrap();
+
+            assert_eq!(removed.preserved_text(), Some(MANIFEST));
+        }
+
+        #[test]
+        fn an_edit_leaves_comments_ordering_and_table_shapes_alone() {
+            // The point of doing this with toml_edit rather than a round-trip
+            // through the semantic model, asserted directly rather than only
+            // via the round-trip: a regenerated document would lose the
+            // comment, sort ZULU after ALPHA, and inline the NESTED table.
+            let spec = Spec::from_toml(MANIFEST).unwrap();
+
+            let text = spec
+                .add_secret_to_text("default", "SCRATCH", Secret::required("temporary"))
+                .unwrap();
+            let text = text.preserved_text().unwrap().to_string();
+
+            assert!(text.contains("# Team convention:"), "{text}");
+            assert!(
+                text.find("ZULU").unwrap() < text.find("ALPHA").unwrap(),
+                "declaration order was not preserved: {text}"
+            );
+            assert!(text.contains("[profiles.default.NESTED]"), "{text}");
+        }
+
+        #[test]
+        fn an_edited_spec_is_revalidated_not_just_rewritten() {
+            // The synchronization point. The returned Spec's semantic view is
+            // re-derived from the edited text, so it must already see the new
+            // declaration -- a version that edited text and left `compiled`
+            // stale would pass a bytes-only assertion and fail this.
+            let spec = Spec::from_toml(MANIFEST).unwrap();
+
+            let added = spec
+                .add_secret_to_text("default", "SCRATCH", Secret::required("temporary"))
+                .unwrap();
+
+            let secrets: Vec<&str> = added.secrets("default").unwrap().collect();
+            assert!(secrets.contains(&"SCRATCH"), "{secrets:?}");
+            // ...and the spec it was derived from is untouched.
+            let original: Vec<&str> = spec.secrets("default").unwrap().collect();
+            assert!(!original.contains(&"SCRATCH"), "{original:?}");
+        }
+
+        #[test]
+        fn an_edit_that_would_not_validate_fails_at_the_edit() {
+            // Reparsing through the validated path is what makes this a
+            // failure here rather than a surprise at some later load.
+            let spec = Spec::from_toml(MANIFEST).unwrap();
+
+            let err = spec
+                .add_secret_to_text(
+                    "default",
+                    "COMPOSED",
+                    Secret::required("bad template").composed("${NO_SUCH_SECRET}"),
+                )
+                .unwrap_err();
+
+            assert!(
+                err.to_string().contains("NO_SUCH_SECRET"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn a_declaration_survives_every_field_it_was_given() {
+            // add_secret_to_text takes a whole `Secret`, not a description and
+            // a bool, so the richer fields have to reach the document -- and
+            // `ref`, which serializes as a nested table rather than a scalar,
+            // is exactly where a writer that only knows how to emit scalars
+            // into an inline table breaks.
+            let spec = Spec::from_toml(MANIFEST).unwrap();
+
+            let added = spec
+                .add_secret_to_text(
+                    "default",
+                    "RICH",
+                    Secret::required("fully specified")
+                        .providers(["env", "keyring"])
+                        .as_path(true)
+                        .reference(NativeAddress {
+                            item: "db".into(),
+                            field: Some("password".into()),
+                            ..NativeAddress::default()
+                        }),
+                )
+                .unwrap();
+
+            let text = added.preserved_text().unwrap();
+            assert!(text.contains("RICH = {"), "{text}");
+            assert!(text.contains(r#"providers = ["env", "keyring"]"#), "{text}");
+            assert!(text.contains("as_path = true"), "{text}");
+            assert!(text.contains(r#"item = "db""#), "{text}");
+            assert!(text.contains(r#"field = "password""#), "{text}");
+
+            // And it round-trips: the parser accepts every key the writer
+            // emitted, which is the property that keeps them from drifting.
+            let removed = added.remove_secret_from_text("default", "RICH").unwrap();
+            assert_eq!(removed.preserved_text(), Some(MANIFEST));
+        }
+
+        #[test]
+        fn declaring_a_name_twice_is_an_error() {
+            let spec = Spec::from_toml(MANIFEST).unwrap();
+
+            let err = spec
+                .add_secret_to_text("default", "ALPHA", Secret::required("duplicate"))
+                .unwrap_err();
+
+            assert!(err.to_string().contains("already declared"), "{err}");
+        }
+
+        #[test]
+        fn removing_a_name_that_is_not_declared_is_an_error() {
+            // Not a silent no-op: a caller undeclaring something already
+            // absent has a wrong model of the manifest.
+            let spec = Spec::from_toml(MANIFEST).unwrap();
+
+            let err = spec
+                .remove_secret_from_text("default", "ABSENT")
+                .unwrap_err();
+
+            assert!(err.to_string().contains("not declared"), "{err}");
+        }
+
+        #[test]
+        fn declares_secret_in_text_is_parsed_rather_than_searched() {
+            // Why this is not a substring test. Both of these carry the name
+            // as text while declaring nothing of the sort, and the inverse
+            // mistake would be silent.
+            let manifest = r#"[project]
+name = "demo"
+revision = "1.0"
+
+[profiles.default]
+# TODO: declare LOOKALIKE next release
+OTHER = { description = "unrelated, mentions LOOKALIKE in prose" }
+"#;
+            let spec = Spec::from_toml(manifest).unwrap();
+
+            assert!(spec.declares_secret_in_text("default", "OTHER"));
+            assert!(!spec.declares_secret_in_text("default", "LOOKALIKE"));
+        }
+
+        #[test]
+        fn a_builder_built_spec_has_no_text_and_says_so_rather_than_inventing_one() {
+            // The reason preserved_text() returns Option and to_toml() does
+            // not: a single renderer whose exactness depended on hidden state
+            // would hand this caller a regenerated document and call it the
+            // original.
+            let spec = Spec::builder("embedded")
+                .secret("TOKEN", Secret::required("API token"))
+                .build()
+                .unwrap();
+
+            assert_eq!(spec.preserved_text(), None);
+
+            let err = spec
+                .add_secret_to_text("default", "SCRATCH", Secret::required("temporary"))
+                .unwrap_err();
+            assert!(err.to_string().contains("Spec::builder"), "{err}");
+
+            // to_toml still works -- it never promised exactness.
+            let rendered = spec.to_toml().unwrap();
+            assert!(rendered.contains("TOKEN"), "{rendered}");
+        }
+
+        #[test]
+        fn to_toml_renders_a_spec_that_never_had_a_document() {
+            // Round-trips through the parser, so "freshly formatted" still
+            // means "valid", not merely "printable".
+            let spec = Spec::builder("embedded")
+                .secret("TOKEN", Secret::required("API token"))
+                .build()
+                .unwrap();
+
+            let reparsed = Spec::from_toml(&spec.to_toml().unwrap()).unwrap();
+
+            assert_eq!(reparsed.project(), "embedded");
+            let secrets: Vec<&str> = reparsed.secrets("default").unwrap().collect();
+            assert_eq!(secrets, vec!["TOKEN"]);
+        }
+    }
+
+    /// The `extends` wrinkle, which needs real files on disk.
+    #[cfg(feature = "manifest-edit")]
+    mod text_edits_with_inheritance {
+        use super::*;
+        use std::fs;
+
+        fn project_with_parent() -> tempfile::TempDir {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(
+                dir.path().join("base.toml"),
+                r#"[project]
+name = "demo"
+revision = "1.0"
+
+[profiles.default]
+INHERITED = { description = "declared by the parent" }
+"#,
+            )
+            .unwrap();
+            fs::write(
+                dir.path().join("secretspec.toml"),
+                r#"[project]
+name = "demo"
+revision = "1.0"
+extends = ["base.toml"]
+
+[profiles.default]
+OWN = { description = "declared by the child" }
+"#,
+            )
+            .unwrap();
+            dir
+        }
+
+        #[test]
+        fn the_retained_text_is_the_root_file_not_the_merged_result() {
+            // Config::try_from folds every parent into the child. Retaining
+            // that merged document as the child's text and writing it back
+            // would silently inline the parent's declarations into a file that
+            // had only referenced them -- turning inheritance into a copy.
+            let dir = project_with_parent();
+
+            let spec = Spec::try_from(dir.path().join("secretspec.toml").as_path()).unwrap();
+
+            let text = spec.preserved_text().unwrap();
+            assert!(text.contains("OWN"), "{text}");
+            assert!(
+                !text.contains("INHERITED"),
+                "the parent's declaration leaked into the child's text: {text}"
+            );
+            // ...while the semantic view still sees both.
+            let secrets: Vec<&str> = spec.secrets("default").unwrap().collect();
+            assert!(secrets.contains(&"INHERITED"), "{secrets:?}");
+        }
+
+        #[test]
+        fn editing_a_spec_that_extends_another_revalidates_against_the_parent() {
+            // The wrinkle. Spec::from_toml rejects a non-empty project.extends
+            // outright -- a string has nowhere to resolve the paths from -- so
+            // reparsing the edited text through it would fail on every
+            // inheriting project. The reparse is seeded with base_dir instead.
+            let dir = project_with_parent();
+            let spec = Spec::try_from(dir.path().join("secretspec.toml").as_path()).unwrap();
+
+            let added = spec
+                .add_secret_to_text("default", "SCRATCH", Secret::required("temporary"))
+                .unwrap();
+
+            // Inheritance survived the edit rather than being dropped...
+            let secrets: Vec<&str> = added.secrets("default").unwrap().collect();
+            assert!(secrets.contains(&"INHERITED"), "{secrets:?}");
+            assert!(secrets.contains(&"SCRATCH"), "{secrets:?}");
+            // ...and the edited text is still root-only.
+            assert!(!added.preserved_text().unwrap().contains("INHERITED"));
+
+            // Control: the same text has no chance through from_toml.
+            assert!(Spec::from_toml(added.preserved_text().unwrap()).is_err());
+        }
+
+        #[test]
+        fn an_inherited_declaration_is_not_editable_here() {
+            // declares_secret_in_text answers "can this be edited in this
+            // document", which is what remove_secret_from_text can act on --
+            // deliberately a different question from `secrets()`.
+            let dir = project_with_parent();
+            let spec = Spec::try_from(dir.path().join("secretspec.toml").as_path()).unwrap();
+
+            assert!(spec.declares_secret_in_text("default", "OWN"));
+            assert!(!spec.declares_secret_in_text("default", "INHERITED"));
+
+            let err = spec
+                .remove_secret_from_text("default", "INHERITED")
+                .unwrap_err();
+            assert!(err.to_string().contains("not declared"), "{err}");
+        }
+
+        #[test]
+        fn the_round_trip_still_holds_through_inheritance() {
+            let dir = project_with_parent();
+            let spec = Spec::try_from(dir.path().join("secretspec.toml").as_path()).unwrap();
+            let original = spec.preserved_text().unwrap().to_string();
+
+            let restored = spec
+                .add_secret_to_text("default", "SCRATCH", Secret::required("temporary"))
+                .unwrap()
+                .remove_secret_from_text("default", "SCRATCH")
+                .unwrap();
+
+            assert_eq!(restored.preserved_text(), Some(original.as_str()));
+        }
     }
 }

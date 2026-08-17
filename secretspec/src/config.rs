@@ -1031,6 +1031,56 @@ impl ConfigGraphLoader {
         Ok(merged)
     }
 
+    /// Load a root document supplied as *text*, resolving its `extends` against
+    /// `base_dir`.
+    ///
+    /// [`Self::load`] cannot serve this: it reads the root from disk, and the
+    /// caller here holds a document that exists only in memory — an edited
+    /// manifest being revalidated before anyone commits to writing it.
+    /// Ancestors are still read from disk, and are still deduplicated and
+    /// cycle-checked by canonical path exactly as they would be under `load`.
+    ///
+    /// The root is overlaid last, so it stays the most specific document, which
+    /// is the same precedence `load` produces by emitting it last in post-order.
+    fn load_text(source: &str, base_dir: &Path) -> Result<Config, ParseError> {
+        let root = Config::parse_document(source)?;
+        let mut loader = Self {
+            active: HashSet::new(),
+            emitted: HashSet::new(),
+            documents: Vec::new(),
+        };
+        loader.visit_extends_of(&root, base_dir)?;
+
+        let mut documents = loader.documents.into_iter();
+        let Some(mut merged) = documents.next() else {
+            return Ok(root);
+        };
+        for document in documents {
+            merged.overlay_with(document);
+        }
+        merged.overlay_with(root);
+        Ok(merged)
+    }
+
+    /// Visit every document `config` extends, resolving each against `base_dir`.
+    fn visit_extends_of(&mut self, config: &Config, base_dir: &Path) -> Result<(), ParseError> {
+        for extend_path in config.project.extends.iter().flatten() {
+            let joined_path = base_dir.join(extend_path);
+            let full_path = if extend_path.ends_with(".toml") {
+                joined_path
+            } else {
+                joined_path.join("secretspec.toml")
+            };
+            if !full_path.exists() {
+                return Err(ParseError::ExtendedConfigNotFound(
+                    full_path.display().to_string(),
+                ));
+            }
+            self.visit(&full_path)?;
+        }
+        Ok(())
+    }
+
     fn visit(&mut self, path: &Path) -> Result<(), ParseError> {
         let canonical_path = path.canonicalize().map_err(|e| {
             ParseError::Io(io::Error::new(
@@ -1056,20 +1106,7 @@ impl ConfigGraphLoader {
         // relative to the symlink, not to the file it points at. Cycle detection
         // and dedup still key on `canonical_path`.
         let base_dir = path.parent().unwrap_or(Path::new("."));
-        for extend_path in config.project.extends.iter().flatten() {
-            let joined_path = base_dir.join(extend_path);
-            let full_path = if extend_path.ends_with(".toml") {
-                joined_path
-            } else {
-                joined_path.join("secretspec.toml")
-            };
-            if !full_path.exists() {
-                return Err(ParseError::ExtendedConfigNotFound(
-                    full_path.display().to_string(),
-                ));
-            }
-            self.visit(&full_path)?;
-        }
+        self.visit_extends_of(&config, base_dir)?;
 
         self.active.remove(&canonical_path);
         self.emitted.insert(canonical_path);
@@ -1098,6 +1135,18 @@ impl TryFrom<&Path> for Config {
     /// This supports configuration inheritance via `extends` and circular dependency detection.
     fn try_from(path: &Path) -> Result<Self, Self::Error> {
         ConfigGraphLoader::load(path)
+    }
+}
+
+impl Config {
+    /// Parse and merge a root document held as text, resolving `extends`
+    /// against `base_dir`.
+    ///
+    /// The `extends`-aware counterpart to [`Config::from_str`], which has no
+    /// location to resolve inheritance against and so rejects it. Used to
+    /// revalidate an edited manifest that has not been written anywhere yet.
+    pub(crate) fn from_text_in(source: &str, base_dir: &Path) -> Result<Self, ParseError> {
+        ConfigGraphLoader::load_text(source, base_dir)
     }
 }
 

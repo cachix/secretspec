@@ -60,7 +60,10 @@ age = { workspace = true, optional = true }
 
 [features]
 default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "scaleway", "sops"]
-cli = ["dep:toml_edit", "dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable"]
+cli = ["manifest-edit", "dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable"]
+# Format-preserving declaration edits, without the interactive CLI. Split out
+# so an embedder can take the editing surface without taking `clap`/`inquire`.
+manifest-edit = ["dep:toml_edit"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
 keeper = ["dep:keeper-secrets-manager-core"]

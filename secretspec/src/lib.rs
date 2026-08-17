@@ -65,6 +65,11 @@ pub(crate) mod provider;
 #[cfg(feature = "cli")]
 pub mod cli;
 
+// Format-preserving manifest declaration edits. Its own feature so an
+// embedder can take the editing surface without the interactive CLI.
+#[cfg(feature = "manifest-edit")]
+pub mod manifest_edit;
+
 // Re-export only the types needed by users and generated code
 pub use caller::CallerContext;
 pub use config::Resolved;

@@ -1,1 +1,7 @@
 secretspec/src/provider/sops/test_fixtures/** text eol=lf
+
+# Third-party source built as part of libsecretspec-ipc. Marking it vendored
+# and generated keeps GitHub from counting it toward language statistics and
+# collapses it in pull request review, where it would otherwise be about half
+# of every diff that touches the C client.
+libsecretspec-ipc/vendor/** linguist-vendored linguist-generated=true

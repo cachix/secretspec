@@ -20,7 +20,8 @@
 //! the new namespace from every legacy id, while validated `--` delimiters keep
 //! project, profile, and key boundaries unambiguous. Releases through 0.19 used
 //! the ambiguous `secretspec-{project}-{profile}-{key}` form. A read falls back
-//! to the legacy id when the new one holds no value, so a 0.19 project keeps
+//! to the legacy id when the new one holds no value, including when secret-level
+//! IAM makes an unbound new id appear permission-denied, so a 0.19 project keeps
 //! working untouched; writes always use the new id, so setting a secret is what
 //! moves it.
 //!
@@ -356,6 +357,12 @@ impl GcsmProvider {
         s.contains("NOT_FOUND") || s.contains("notFound")
     }
 
+    /// Checks if an error indicates that the caller cannot access a resource.
+    fn is_permission_denied_error(e: &(impl std::error::Error + 'static)) -> bool {
+        let s = crate::error::display_error_chain(e);
+        s.contains("PERMISSION_DENIED") || s.contains("permissionDenied")
+    }
+
     /// Checks if an error indicates the resource already exists.
     fn is_already_exists_error(e: &(impl std::error::Error + 'static)) -> bool {
         let s = crate::error::display_error_chain(e);
@@ -399,24 +406,24 @@ impl GcsmProvider {
         Self::get_coords_with_backend(&backend, coords).await
     }
 
-    /// Reads the legacy id as a best-effort compatibility source. That id is an
+    /// Reads the legacy id as a compatibility source. That id is an
     /// implementation detail of the fallback rather than an address the caller
     /// chose: a project with secret-level IAM answers PERMISSION_DENIED rather
     /// than NOT_FOUND for an id nobody was granted a binding on, and that must
-    /// not turn an unset secret into a failed read.
+    /// not turn an unset secret into a failed read. All other failures still
+    /// describe a requested backend operation and must reach the caller.
     async fn read_legacy_value(
         backend: &impl GcsmBackend,
         legacy_name: &str,
-    ) -> Option<SecretString> {
-        backend
-            .access_secret_version(legacy_name, "latest")
-            .await
-            .ok()
-            .flatten()
+    ) -> Result<Option<SecretString>> {
+        match backend.access_secret_version(legacy_name, "latest").await {
+            Err(error) if Self::is_permission_denied_error(&error) => Ok(None),
+            result => result,
+        }
     }
 
     /// Reads the 0.20 convention id, falling back to the 0.19 id when the new
-    /// one holds no value.
+    /// one yields no value under the migration-compatible IAM cases.
     ///
     /// The fallback is a read: nothing is created, copied, or deleted. So
     /// credentials that can read secrets but not create them, the common CI
@@ -436,7 +443,7 @@ impl GcsmProvider {
             // represent. Serve what is already stored rather than failing the
             // read; `set` still carries the rename instruction.
             Err(naming_error) => {
-                let Some(value) = Self::read_legacy_value(backend, &legacy_name).await else {
+                let Some(value) = Self::read_legacy_value(backend, &legacy_name).await? else {
                     return Err(naming_error);
                 };
                 UNREPRESENTABLE_NAME_WARNING.call_once(|| {
@@ -451,21 +458,32 @@ impl GcsmProvider {
             }
         };
 
-        if let Some(value) = backend
-            .access_secret_version(&secret_name, "latest")
-            .await?
-        {
-            return Ok(Some(value));
-        }
+        let current_error = match backend.access_secret_version(&secret_name, "latest").await {
+            Ok(Some(value)) => return Ok(Some(value)),
+            Ok(None) => None,
+            Err(error) if Self::is_permission_denied_error(&error) => Some(error),
+            Err(error) => return Err(error),
+        };
 
-        let Some(value) = Self::read_legacy_value(backend, &legacy_name).await else {
-            return Ok(None);
+        let legacy_value = match Self::read_legacy_value(backend, &legacy_name).await {
+            Ok(value) => value,
+            // The current id may exist but be unreadable. If it was denied,
+            // retain that authoritative failure unless the legacy probe
+            // actually supplies the compatibility value.
+            Err(error) => return Err(current_error.unwrap_or(error)),
+        };
+        let Some(value) = legacy_value else {
+            return match current_error {
+                Some(error) => Err(error),
+                None => Ok(None),
+            };
         };
 
         LEGACY_FALLBACK_WARNING.call_once(|| {
             eprintln!(
                 "Warning: reading the SecretSpec 0.19 GCSM secret '{legacy_name}' because \
-                 '{secret_name}' holds no value. Run `secretspec set` for this secret to store it \
+                 '{secret_name}' did not yield a value. Run `secretspec set` for this secret to \
+                 store it \
                  under the current name; the 0.19 secret is left in place either way. Further \
                  secrets read this way are not reported again."
             )
@@ -738,7 +756,7 @@ mod name_properties {
 #[cfg(test)]
 mod legacy_fallback_tests {
     use super::*;
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use std::sync::Mutex;
 
     const LEGACY: &str = "secretspec-my-app-prod-K";
@@ -751,7 +769,7 @@ mod legacy_fallback_tests {
         secrets: Mutex<HashMap<String, Vec<String>>>,
         accesses: Mutex<Vec<String>>,
         writes: Mutex<Vec<String>>,
-        unreadable: Mutex<HashSet<String>>,
+        failures: Mutex<HashMap<String, String>>,
     }
 
     impl FakeGcsmBackend {
@@ -781,7 +799,14 @@ mod legacy_fallback_tests {
         /// Simulates the secret-level IAM binding a caller was never granted:
         /// GCSM answers PERMISSION_DENIED rather than NOT_FOUND.
         fn deny_access(&self, name: &str) {
-            self.unreadable.lock().unwrap().insert(name.to_string());
+            self.fail_access(name, "PERMISSION_DENIED");
+        }
+
+        fn fail_access(&self, name: &str, message: &str) {
+            self.failures
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), message.to_string());
         }
     }
 
@@ -795,9 +820,9 @@ mod legacy_fallback_tests {
                 .lock()
                 .unwrap()
                 .push(format!("{secret_name}@{version}"));
-            if self.unreadable.lock().unwrap().contains(secret_name) {
+            if let Some(message) = self.failures.lock().unwrap().get(secret_name) {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to access secret '{secret_name}': PERMISSION_DENIED"
+                    "Failed to access secret '{secret_name}': {message}"
                 )));
             }
 
@@ -934,16 +959,50 @@ mod legacy_fallback_tests {
         assert!(read(&backend).unwrap().is_none());
     }
 
-    /// The current id is the address the caller did choose, so it still fails
-    /// loudly instead of silently serving a stale 0.19 value.
+    /// A deployment with IAM bound directly to each 0.19 secret cannot read a
+    /// new id that has no binding. The readable legacy value still resolves.
     #[test]
-    fn an_unreadable_current_id_fails_the_read() {
+    fn a_denied_current_id_falls_back_to_the_legacy_value() {
         let backend = FakeGcsmBackend::default();
         backend.insert(LEGACY, "legacy-value");
         backend.deny_access(CURRENT);
 
+        let value = read(&backend).unwrap().unwrap();
+        assert_eq!(value.expose_secret(), "legacy-value");
+    }
+
+    /// If the compatibility probe finds no legacy value, the provider cannot
+    /// assume that the current id is absent: it may exist but be unreadable.
+    #[test]
+    fn a_denied_current_id_without_a_legacy_value_fails_the_read() {
+        let backend = FakeGcsmBackend::default();
+        backend.deny_access(CURRENT);
+
         let error = read(&backend).unwrap_err();
         assert!(error.to_string().contains("PERMISSION_DENIED"), "{error}");
+    }
+
+    #[test]
+    fn a_backend_failure_reading_the_legacy_id_is_preserved() {
+        let backend = FakeGcsmBackend::default();
+        backend.fail_access(LEGACY, "UNAVAILABLE: transient backend failure");
+
+        let error = read(&backend).unwrap_err();
+        assert!(error.to_string().contains("UNAVAILABLE"), "{error}");
+    }
+
+    #[test]
+    fn a_backend_failure_reading_the_current_id_does_not_serve_a_legacy_value() {
+        let backend = FakeGcsmBackend::default();
+        backend.insert(LEGACY, "legacy-value");
+        backend.fail_access(CURRENT, "RESOURCE_EXHAUSTED: retry later");
+
+        let error = read(&backend).unwrap_err();
+        assert!(error.to_string().contains("RESOURCE_EXHAUSTED"), "{error}");
+        assert_eq!(
+            backend.accesses.lock().unwrap().as_slice(),
+            &[format!("{CURRENT}@latest")]
+        );
     }
 
     #[test]

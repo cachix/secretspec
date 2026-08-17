@@ -76,7 +76,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accepted but the new layout cannot represent, such as a project containing
   `--`, keep reading their 0.19 secret with a warning; writing them requires
   renaming the component or addressing the secret with a `ref`.
-  Explicit `ref` addresses remain unchanged. ([#219])
+  Secret-level IAM bindings on 0.19 ids also keep working when an unbound new
+  id returns permission denied, while other access failures remain errors
+  instead of being mistaken for missing values. Explicit `ref` addresses
+  remain unchanged. ([#219])
 
   [#219]: https://github.com/cachix/secretspec/issues/219
 

@@ -111,6 +111,12 @@ read falls back to the 0.19 `secretspec-{project}-{profile}-{key}` id and
 returns its latest value, printing one warning per run. A project upgraded from
 0.19 therefore keeps working with no migration step.
 
+With secret-level IAM, an unbound new id can return `PERMISSION_DENIED` instead
+of `NOT_FOUND`. SecretSpec still probes the legacy id in that case and uses it
+when readable. If the legacy id supplies no value, the original denial remains
+an error; failures other than the expected permission denial from a legacy-id
+probe are also reported rather than treated as a missing secret.
+
 The fallback is a read. Nothing is created, copied, or deleted, so the upgrade
 needs no new permissions: credentials holding only
 `roles/secretmanager.secretAccessor`, the usual CI principal, keep working

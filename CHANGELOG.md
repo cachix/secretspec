@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Applying an active profile preserves each provider's public URI and
   storage/cache identities, so profile-aware native references continue to
   match the same provider during planning and resolution.
+- `secretspec check` writes its report to stdout instead of stderr, so
+  `secretspec check | grep DATABASE_URL` finds the report rather than silently
+  returning nothing. This also makes the existing colour handling correct:
+  `colored` decides whether to emit ANSI escapes by testing stdout, so a report
+  written to stderr could leak raw escape bytes into a redirected log, or drop
+  colour from output being read on a terminal. `check --json` and
+  `check --explain` already wrote to stdout and are unchanged. The report now
+  goes through a locked sink, so a reader that closes the pipe early
+  (`check | head`) reports a broken pipe and exits non-zero instead of
+  panicking, matching `secretspec export`. Scripts that capture the report by
+  redirecting stderr specifically need to capture stdout instead; `2>&1`
+  keeps working.
 
 ### Added
 

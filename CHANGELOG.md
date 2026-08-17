@@ -82,6 +82,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Google Cloud Secret Manager convention names now use the readable,
+  versioned `secretspec2--{project}--{profile}--{key}` layout. Distinct logical
+  addresses such as `my-app/prod/K` and `my/app-prod/K` can no longer collide
+  on one stored secret. When the new id holds no value, reads fall back to the
+  matching 0.19 `secretspec-{project}-{profile}-{key}` secret and warn once per
+  run, so an upgraded project keeps working with no migration step and no new
+  permissions: the fallback only reads, and credentials that cannot create
+  secrets are unaffected. Writes always use the new id, so `secretspec set`
+  moves a secret, after which reads stop consulting the legacy id. The 0.19
+  secret is left in place for rollback and should only be deleted once its
+  value has been written under the new id. Names that releases through 0.19
+  accepted but the new layout cannot represent, such as a project containing
+  `--`, keep reading their 0.19 secret with a warning; writing them requires
+  renaming the component or addressing the secret with a `ref`.
+  Secret-level IAM bindings on 0.19 ids also keep working when an unbound new
+  id returns permission denied, while other access failures remain errors
+  instead of being mistaken for missing values. Explicit `ref` addresses
+  remain unchanged. ([#219])
+
+  [#219]: https://github.com/cachix/secretspec/issues/219
+
 - Bare `bws://<project-uuid>` provider URIs now target the Bitwarden US cloud
   vault instead of the public marketing site, restoring reads and writes while
   keeping the server pinned independently of ambient `bws` configuration.

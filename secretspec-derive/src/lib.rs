@@ -792,6 +792,7 @@ mod secret_spec_generation {
 
         quote! {
             #[derive(Debug, serde::Serialize, serde::Deserialize)]
+            #[serde(crate = "serde")]
             pub struct SecretSpec {
                 #(#fields,)*
             }
@@ -829,6 +830,7 @@ mod secret_spec_generation {
     ) -> proc_macro2::TokenStream {
         quote! {
             #[derive(Debug, serde::Serialize, serde::Deserialize)]
+            #[serde(crate = "serde")]
             pub enum SecretSpecProfile {
                 #(#profile_variants,)*
             }
@@ -1439,7 +1441,7 @@ fn generate_secret_spec_code(ir: CodegenIr) -> proc_macro2::TokenStream {
 
     // Combine all components
     quote! {
-        use ::secrecy::ExposeSecret;
+        use secretspec::__private::{secrecy::ExposeSecret, serde};
 
         #secret_spec_struct
         #secret_spec_profile_enum

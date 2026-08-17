@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Applying an active profile preserves each provider's public URI and
   storage/cache identities, so profile-aware native references continue to
   match the same provider during planning and resolution.
+- The Rust `secretspec-derive` macro now uses the support crates re-exported by
+  `secretspec`, so applications no longer need explicit `serde` or `secrecy`
+  dependencies just to compile generated types.
 
 ### Added
 
@@ -178,7 +181,6 @@ as in 0.19.0.
 ## [0.19.0] - 2026-08-10
 
 ### Changed
-
 
 - A provider URI may no longer carry a credential. A URI with a password
   (`scheme://user:PASSWORD@host`) is rejected, and `onepassword+token://` no

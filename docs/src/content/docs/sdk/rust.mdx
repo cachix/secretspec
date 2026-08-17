@@ -18,15 +18,18 @@ Rust types for its profiles and secrets.
 
 ## Quick start
 
-Add the runtime, derive macro, and the generated code's direct dependencies to
-your `Cargo.toml`:
+Add the runtime and derive macro from the command line:
+
+```shell
+cargo add secretspec secretspec-derive
+```
+
+Alternatively, add both dependencies to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-secretspec = "0.18"
-secretspec-derive = "0.18"
-secrecy = { version = "0.10", features = ["serde"] }
-serde = { version = "1", features = ["derive"] }
+secretspec = "0.20"
+secretspec-derive = "0.20"
 ```
 
 The examples on this page are compiled as Cargo examples in

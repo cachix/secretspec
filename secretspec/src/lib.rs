@@ -75,6 +75,11 @@ pub use config::Resolved;
 /// and its builder API instead.
 #[doc(hidden)]
 pub mod __private {
+    // Generated code uses these re-exports so applications do not need to
+    // depend on the implementation crates just to compile the macro output.
+    pub use ::secrecy;
+    pub use ::serde;
+
     pub mod codegen {
         pub use crate::codegen::{CodegenIr, IrField, IrProfile, build_ir, capitalize};
     }

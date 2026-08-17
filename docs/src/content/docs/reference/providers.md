@@ -346,7 +346,7 @@ gcsm://my-gcp-project         # GCP project ID
 
 **Features**: Read/write, cloud sync, profiles, service account support
 **Prerequisites**: `gcloud` CLI, authenticated, Secret Manager API enabled, build with `--features gcsm`
-**Storage**: Secret name `secretspec-{project}-{profile}-{key}`
+**Storage (0.20+)**: Secret name `secretspec2--{project}--{profile}--{key}` with validated, non-overlapping `--` boundaries. Releases through 0.19 used `secretspec-{project}-{profile}-{key}`. When the new id holds no value, reads fall back to the 0.19 id and warn; the fallback writes nothing, so no new permissions are needed. Writes always use the new id, so `secretspec set` is what moves a secret, and the 0.19 secret is left in place. Names accepted through 0.19 that the new layout cannot represent, such as a project containing `--`, keep reading their 0.19 secret and must be renamed before they can be written. Explicit `ref` addresses are unaffected.
 
 ## AWS Secrets Manager Provider
 

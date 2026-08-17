@@ -2,7 +2,7 @@ use crate::config::{Config, GlobalConfig};
 use crate::{NamedResolution, Secrets};
 use clap::Parser;
 use miette::{IntoDiagnostic, Result, miette};
-use percent_encoding::percent_decode_str;
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
 use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, Write};
@@ -13,6 +13,21 @@ const MAX_ATTRIBUTE_LINE_BYTES: usize = 65_535;
 const EMBEDDED_MANIFEST: &str = include_str!("git-credentials.toml");
 const EMBEDDED_PASSWORD: &str = "PASSWORD";
 const EMBEDDED_USERNAME: &str = "USERNAME";
+// The URL Standard path encode set, plus `%` so decoded percent signs cannot
+// be mistaken for a second layer of encoding, and `\\` because HTTP(S) treats
+// an unescaped backslash as a path separator.
+const CANONICAL_PATH_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'<')
+    .add(b'>')
+    .add(b'`')
+    .add(b'?')
+    .add(b'{')
+    .add(b'}')
+    .add(b'%')
+    .add(b'\\');
 
 pub(crate) struct EmbeddedGitCredentials {
     pub(crate) secrets: Secrets,
@@ -187,11 +202,16 @@ pub(crate) fn canonical_target(url: &Url) -> String {
     if let Some(port) = url.port() {
         target.push_str(&format!(":{port}"));
     }
-    let path = url.path().trim_end_matches('/');
+    let path = decoded_target_path(url);
+    let path = path.trim_end_matches('/');
     if !path.is_empty() {
-        target.push_str(path);
+        target.extend(utf8_percent_encode(path, CANONICAL_PATH_ENCODE_SET));
     }
     target
+}
+
+fn decoded_target_path(url: &Url) -> std::borrow::Cow<'_, str> {
+    percent_decode_str(url.path()).decode_utf8_lossy()
 }
 
 fn hosts_match(target: &Url, candidate: &Url) -> bool {
@@ -285,7 +305,7 @@ fn target_matches(target: &Url, username: Option<&str>, request: &Request) -> bo
         _ => {}
     }
 
-    let expected = percent_decode_str(target.path()).decode_utf8_lossy();
+    let expected = decoded_target_path(target);
     let expected = expected.trim_matches('/');
     if expected.is_empty() {
         return true;
@@ -316,10 +336,35 @@ fn validate_value(name: &str, attribute: &str, value: &SecretString) -> Result<(
     Ok(())
 }
 
-fn load(args: &Args) -> Result<Secrets> {
-    let mut secrets = match &args.file {
-        Some(path) => Secrets::load_from(path)?,
-        None => load_embedded_git_credentials(&args.url, args.username.as_deref())?.secrets,
+struct LoadedGitCredentials {
+    secrets: Secrets,
+    password_secret: String,
+    username_secret: Option<String>,
+}
+
+fn load(args: &Args) -> Result<LoadedGitCredentials> {
+    let (mut secrets, password_secret, username_secret) = match &args.file {
+        Some(path) => (
+            Secrets::load_from(path)?,
+            args.password_secret.clone(),
+            args.username_secret.clone(),
+        ),
+        None => {
+            let embedded = load_embedded_git_credentials(&args.url, args.username.as_deref())?;
+            let password_secret = if args.password_secret == EMBEDDED_PASSWORD {
+                embedded.password_secret.clone()
+            } else {
+                args.password_secret.clone()
+            };
+            let username_secret = args.username_secret.as_ref().map(|name| {
+                if name == EMBEDDED_USERNAME {
+                    embedded.username_secret.clone()
+                } else {
+                    name.clone()
+                }
+            });
+            (embedded.secrets, password_secret, username_secret)
+        }
     };
     if let Some(provider) = &args.provider {
         secrets.set_provider(provider);
@@ -333,7 +378,11 @@ fn load(args: &Args) -> Result<Secrets> {
         secrets = secrets.with_reason(reason);
     }
     secrets.set_ignore_ambient_scope(true);
-    Ok(secrets)
+    Ok(LoadedGitCredentials {
+        secrets,
+        password_secret,
+        username_secret,
+    })
 }
 
 fn resolve(secrets: &Secrets, name: &str) -> Result<Option<SecretString>> {
@@ -373,11 +422,11 @@ fn run(args: Args, input: impl BufRead, mut output: impl Write) -> Result<()> {
         return Ok(());
     }
 
-    let secrets = load(&args)?;
+    let loaded = load(&args)?;
     let username = if args.username.is_none()
-        && let Some(name) = &args.username_secret
+        && let Some(name) = &loaded.username_secret
     {
-        match resolve(&secrets, name)? {
+        match resolve(&loaded.secrets, name)? {
             Some(value) => Some((name, value)),
             None => {
                 if args.file.is_some() {
@@ -396,11 +445,11 @@ fn run(args: Args, input: impl BufRead, mut output: impl Write) -> Result<()> {
         return Ok(());
     }
 
-    let Some(password) = resolve(&secrets, &args.password_secret)? else {
+    let Some(password) = resolve(&loaded.secrets, &loaded.password_secret)? else {
         return Ok(());
     };
 
-    validate_value(&args.password_secret, "password", &password)?;
+    validate_value(&loaded.password_secret, "password", &password)?;
     if let Some((name, value)) = &username {
         validate_value(name, "username", value)?;
     }
@@ -410,7 +459,7 @@ fn run(args: Args, input: impl BufRead, mut output: impl Write) -> Result<()> {
     {
         writeln!(output, "username={}", username.expose_secret()).into_diagnostic()?;
     }
-    write_password(&args.password_secret, &password, output)
+    write_password(&loaded.password_secret, &password, output)
 }
 
 fn write_password(name: &str, password: &SecretString, mut output: impl Write) -> Result<()> {
@@ -707,6 +756,61 @@ GITHUB_TOKEN = { description = "GitHub token", providers = ["null"] }
         assert_ne!(
             embedded_identity(&github, None).unwrap(),
             embedded_identity(&insecure, None).unwrap()
+        );
+    }
+
+    #[test]
+    fn percent_encoded_equivalent_paths_share_a_canonical_identity() {
+        let plain = Url::parse("https://github.com/foo").unwrap();
+        let encoded = Url::parse("https://github.com/%66oo").unwrap();
+        let literal_percent = Url::parse("https://github.com/%2566oo").unwrap();
+
+        assert_eq!(canonical_target(&plain), "https://github.com/foo");
+        assert_eq!(canonical_target(&encoded), canonical_target(&plain));
+        assert_eq!(
+            embedded_identity(&encoded, None).unwrap(),
+            embedded_identity(&plain, None).unwrap()
+        );
+        assert_ne!(canonical_target(&literal_percent), canonical_target(&plain));
+
+        let request = Request {
+            protocol: Some("https".to_string()),
+            host: Some("github.com".to_string()),
+            path: Some("foo/repository".to_string()),
+            username: None,
+        };
+        assert!(target_matches(&plain, None, &request));
+        assert!(target_matches(&encoded, None, &request));
+    }
+
+    #[test]
+    fn conventional_names_alias_identity_scoped_embedded_secrets() {
+        let arguments = Args {
+            url: Url::parse("https://github.com/cachix").unwrap(),
+            username: None,
+            username_secret: Some(EMBEDDED_USERNAME.to_string()),
+            password_secret: EMBEDDED_PASSWORD.to_string(),
+            file: None,
+            profile: None,
+            provider: None,
+            reason: None,
+            operation: "get".to_string(),
+        };
+
+        let loaded = load(&arguments).unwrap();
+        assert_ne!(loaded.password_secret, EMBEDDED_PASSWORD);
+        assert_ne!(loaded.username_secret.as_deref(), Some(EMBEDDED_USERNAME));
+        assert!(
+            loaded
+                .secrets
+                .resolve_secret_config(&loaded.password_secret, None)
+                .is_some()
+        );
+        assert!(
+            loaded
+                .secrets
+                .resolve_secret_config(loaded.username_secret.as_deref().unwrap(), None)
+                .is_some()
         );
     }
 

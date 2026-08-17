@@ -247,7 +247,9 @@ manually.
 The Git credential helper is available in SecretSpec 0.20+.
 
 The default convenience command is equivalent to registering the embedded
-helper yourself. For example:
+helper yourself. In embedded mode, `PASSWORD` and `USERNAME` are stable aliases:
+the helper maps them to the target-specific secret names used by `git login`.
+For example:
 
 ```bash
 $ git config --local credential.https://github.com.username YOUR_USERNAME

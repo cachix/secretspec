@@ -564,6 +564,51 @@ fn embedded_credentials_ignore_the_cwd_manifest_and_isolate_each_target() {
 }
 
 #[test]
+fn manual_embedded_aliases_use_the_canonical_target_identity() {
+    let fixture = Fixture::new();
+    let store = fixture.root.join("manual-git-credentials.env");
+    let provider = format!("dotenv://{}", store.display());
+
+    let output = command_with_stdin(
+        fixture.embedded_command(),
+        &[
+            "git",
+            "login",
+            "https://github.com/%66oo",
+            "--username",
+            "manual-user",
+            "--provider",
+            &provider,
+        ],
+        b"manual-token\n",
+    );
+    assert_success("embedded login with encoded path", &output);
+
+    fixture.git_ok(&[
+        "config",
+        "--local",
+        "credential.https://github.com/foo.useHttpPath",
+        "true",
+    ]);
+    let helper = format!(
+        "secretspec --url https://github.com/foo --password-secret PASSWORD --username-secret USERNAME --provider '{}'",
+        provider.replace('\'', "'\\''")
+    );
+    fixture.git_ok(&[
+        "config",
+        "--local",
+        "credential.https://github.com/foo.helper",
+        &helper,
+    ]);
+
+    let fill = fixture.credential_fill(b"protocol=https\nhost=github.com\npath=foo/repository\n\n");
+    assert_success("manually configured embedded credential fill", &fill);
+    let filled = String::from_utf8(fill.stdout).unwrap();
+    assert!(filled.contains("username=manual-user\n"), "{filled}");
+    assert!(filled.contains("password=manual-token\n"), "{filled}");
+}
+
+#[test]
 fn embedded_and_custom_manifest_options_cannot_be_mixed() {
     let fixture = Fixture::new();
     let output = fixture

@@ -75,11 +75,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   usernames and tokens through SecretSpec providers without duplicating them in
   Git's credential store. Its built-in manifest keeps the default independent
   of the current directory and isolates values by protocol, host, and configured
-  path; `secretspec git login` and `logout` manage those values explicitly.
+  path; equivalent URL encodings select one canonical credential, including for
+  flat-key providers. `secretspec git login` and `logout` manage those values
+  explicitly, and manually registered embedded helpers can use the stable
+  `PASSWORD` and `USERNAME` aliases.
   SMTP credential contexts support `git send-email` without writing
-  `sendemail.smtpPass`, with passwords isolated by server, port, and username.
+  `sendemail.smtpPass`, with passwords isolated by case-insensitive server,
+  port, and username. Path-scoped HTTP(S) credentials take precedence over
+  host-wide fallbacks, and username-bearing Git requests select only the
+  matching credential.
   `configure` and `unconfigure` safely manage repository or global Git
-  configuration without replacing existing helpers, while `--file` retains the
+  configuration without replacing existing helpers. The owner-only managed
+  file is durably written, custom-manifest symlinks are preserved, and failed
+  or repeated include removal leaves recoverable state. Only explicitly passed
+  provider and reason options are persisted, while `--file` retains the
   custom-manifest workflow (0.20+).
 - **Azure App Configuration provider** (`aac://`, 0.20+): select direct
   values and Azure Key Vault references by label, prefix, and tags, with Entra
@@ -135,7 +144,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   diagnostics are omitted as missing instead of aborting batch resolution.
 
 ### Fixed
-
 - Bitwarden Password Manager convention secrets now use
   `secretspec/{project}/{profile}/{key}` item titles, preventing a same-named
   secret in another project or profile from being read or overwritten. The
@@ -187,43 +195,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   [#219]: https://github.com/cachix/secretspec/issues/219
 
-- Embedded Git credentials are now isolated by target with providers that use
-  flat key namespaces, credential paths containing URL-encoded characters and
-  username-scoped HTTP requests are matched correctly, and `cargo run -- ...`
-  continues to select the main SecretSpec CLI (0.20+).
-- Git credential configuration now tries path-scoped HTTP(S) credentials before
-  host-wide fallbacks, preserves custom manifest symlinks for relative paths,
-  and rejects SMTP targets without the explicit port Git will query (0.20+).
-- The managed Git credential file is now restricted to owner-only permissions
-  and flushed to disk by path. Both steps previously applied to a handle Git
-  had already replaced, so the file was never fsynced and its mode depended on
-  Git copying it (0.20+).
-- The Git credential helper now reads the username out of a `url=` request
-  attribute and clears the fields that attribute replaces, matching Git's own
-  handling. A request such as `url=https://alice@github.com/org/repo`
-  previously ignored `alice` and could answer with a different stored username
-  (0.20+).
-- `secretspec git configure` now reports which entry it replaced when a target
-  is reconfigured under a different username, instead of silently switching
-  accounts. Git resolves one helper per credential URL, so this is how a second
-  account on the same SMTP server is selected; no stored password is removed
-  (0.20+).
-- SMTP credential targets are now matched case-insensitively. A mixed-case
-  server name such as `smtp://SMTP.Example.COM:587` previously registered a
-  helper that Git selected but that answered nothing, and sent `login` and
-  `logout` to a different stored identity than the lowercase spelling (0.20+).
-- `secretspec git unconfigure` now removes a Git include that was registered
-  more than once instead of failing partway through. It also unregisters the
-  include before deleting anything, so a failure leaves the managed credentials
-  intact and the command can simply be rerun (0.20+).
-- `secretspec git` no longer treats an exported `SECRETSPEC_FILE`,
-  `SECRETSPEC_PROFILE`, `SECRETSPEC_PROVIDER`, or `SECRETSPEC_REASON` as if the
-  matching flag had been typed. `configure` records `--provider` and `--reason`
-  in the generated helper only when they are passed on the command line, so a
-  variable set for one shell can no longer pin the helper to a provider or
-  attribute every later fetch to an unrelated reason, and `configure`, `login`,
-  and `logout` no longer fail with errors naming flags that were never used
-  (0.20+).
 - Bare `bws://<project-uuid>` provider URIs now target the Bitwarden US cloud
   vault instead of the public marketing site, restoring reads and writes while
   keeping the server pinned independently of ambient `bws` configuration.

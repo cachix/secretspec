@@ -79,8 +79,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   individually.
 - OnePassword optional references whose item names resemble authentication
   diagnostics are omitted as missing instead of aborting batch resolution.
+- A read-only `docker-credential-secretspec` helper lets Docker retrieve
+  registry usernames and tokens through any SecretSpec provider.
+  `secretspec docker configure` and `unconfigure` safely manage per-registry
+  Docker credential-helper settings without replacing existing helpers, while
+  `secretspec docker login` and `logout` manage isolated embedded credentials;
+  custom manifests remain available through `--file` (0.20+).
 
 ### Fixed
+
+- `cargo run` continues to launch the main SecretSpec CLI after installing the
+  Docker credential-helper binary in the same package (0.20+).
+
+- Embedded Docker credentials now remain isolated by registry and Docker
+  configuration when used with flat providers such as Dotenv. Provider keys
+  carry the same stable identity as the embedded project, preventing one
+  registry's login or logout from affecting another (0.20+).
+
+- Docker now reports when `configure` replaces a registry's existing
+  SecretSpec metadata and clarifies that the stored credential was not removed
+  (0.20+).
+
+- Docker can now manage the same registry independently in multiple
+  `DOCKER_CONFIG` directories. Helper lookup and embedded credential storage
+  are isolated by both registry and Docker configuration (0.20+).
+
+- Equivalent `DOCKER_CONFIG` paths that resolve through symlinked directories
+  now share one Docker credential identity, so helper lookup and cleanup work
+  regardless of which path spelling invokes them (0.20+).
+
+- Default Docker audit caller context no longer reports the SecretSpec release
+  as Docker's version. Docker remains identified as the caller while its
+  unknown version is omitted (0.20+).
+
+- Docker's managed credential state is now restricted to owner-only permissions
+  without changing the existing mode of Docker's own `config.json`. Atomic
+  updates and final-entry removal preserve a symlinked state file, and
+  interrupted removal can be resumed when Docker's helper entry was already
+  deleted (0.20+).
+
+- Docker credentials configured through a symlinked custom manifest now retain
+  that logical manifest path, so relative `extends` entries continue to resolve
+  from the directory where the symlink was selected (0.20+).
+
+- `secretspec docker` no longer treats exported `SECRETSPEC_FILE`,
+  `SECRETSPEC_PROFILE`, `SECRETSPEC_PROVIDER`, or `SECRETSPEC_REASON` as typed
+  configuration flags. Only an explicit `--provider` or `--reason` is saved for
+  later helper calls, and ambient manifest/profile settings no longer switch or
+  block the embedded credential workflow (0.20+).
 
 - Google Cloud Secret Manager convention names now use the readable,
   versioned `secretspec2--{project}--{profile}--{key}` layout. Distinct logical

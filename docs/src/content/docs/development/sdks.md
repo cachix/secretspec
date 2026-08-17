@@ -9,12 +9,18 @@ together, how each one is packaged and released, which platforms each artifact
 covers, and what to update when adding a platform or a new SDK. For the
 user-facing architecture and API, see the [SDK overview](/sdk/overview).
 
+:::note[Native library name]
+Starting with SecretSpec 0.20, the embedded C ABI is named `libsecretspec` and
+ships `libsecretspec.*`/`secretspec.dll` artifacts. Releases through 0.19 used
+the component name `secretspec-ffi` and `secretspec_ffi` artifact stem.
+:::
+
 ## One resolver, many packages
 
 All resolution logic lives in the `secretspec` Rust crate. The SDKs reach it
 two ways:
 
-- **Through the C ABI** (`secretspec-ffi`, which builds a `cdylib` for dynamic
+- **Through the C ABI** (`libsecretspec`, which builds a `cdylib` for dynamic
   loading and a `staticlib` for embedding): Ruby (mkmf extension statically
   links the archive), Go (purego `dlopen` of the cdylib, or cgo against the
   archive with `-tags static`), Haskell (GHC FFI against the archive), C#
@@ -31,6 +37,15 @@ cross-language conformance suite (`conformance/`, run by
 `.github/workflows/sdks.yml` on every PR) asserts they all reduce the same
 inputs to the same result.
 
+This embedded boundary remains supported. SecretSpec 0.20+'s
+[IPC architecture](/reference/ipc-architecture) adds an explicit broker option
+for applications that cannot or should not link the resolver and its provider
+graph. Its [Secret Resolution Protocol](/reference/client-protocol) is a
+versioned process boundary; it does not replace `libsecretspec` or silently
+change how existing SDK packages run. See
+[Implementing SecretSpec IPC](/development/ipc-implementation) for the 0.20+
+component layout and conformance requirements.
+
 Package versions for the non-Rust SDKs are not hand-edited: release workflows
 run `scripts/sync-sdk-versions.sh`, which stamps the Cargo workspace version
 into every package manifest.
@@ -45,11 +60,11 @@ platform and publishes on a version tag:
 | Rust | `secretspec` on crates.io (source) | `publish.yml` |
 | Python | `secretspec` wheels on PyPI | `python-wheels.yml` |
 | Node.js | `secretspec` + per-platform packages on npm | `node-addon.yml` |
-| Go | Go module (source) + `secretspec-ffi` release assets | `go-embed.yml`, `go-static.yml`, `ffi-build.yml` |
+| Go | Go module (source) + `libsecretspec` release assets | `go-embed.yml`, `go-static.yml`, `ffi-build.yml` |
 | Ruby | `secretspec` platform gems on RubyGems | `ruby-gems.yml` |
 | C# | `Cachix.SecretSpec` on NuGet | `dotnet-package.yml` |
 | Swift (0.18+) | SwiftPM source package + XCFramework release asset | `swift-package.yml` |
-| PHP | Composer package (source) + prebuilt extension binaries and `secretspec-ffi` release assets | `php-ext.yml`, `ffi-build.yml` |
+| PHP | Composer package (source) + prebuilt extension binaries and `libsecretspec` release assets | `php-ext.yml`, `ffi-build.yml` |
 | Haskell | `secretspec` on Hackage (source) | `haskell-build.yml` |
 
 ## Platform support
@@ -77,7 +92,7 @@ Notes:
   The keyring provider uses a Rust-native D-Bus transport on Linux and does not
   require system libdbus.
 - Hackage distributes source only; the Haskell column records which platforms
-  CI builds and tests, since users link `secretspec-ffi` themselves.
+  CI builds and tests, since users link `libsecretspec` themselves.
 - The Swift package targets macOS 12+ only. Its XCFramework contains native
   Intel and Apple-silicon slices; mobile Apple platforms are intentionally out
   of scope for a development-workflow resolver that launches provider CLIs and
@@ -88,7 +103,7 @@ Notes:
 
 Swift interoperates with C directly through Clang modules, and SwiftPM
 distributes native Apple binaries as XCFramework binary targets. That fits the
-existing `secretspec-ffi` boundary exactly: three ownership-audited C functions
+existing `libsecretspec` boundary exactly: three ownership-audited C functions
 carry one already-versioned JSON contract.
 
 [UniFFI](https://mozilla.github.io/uniffi-rs/latest/) is a good default for a
@@ -136,11 +151,11 @@ GHC's linker at them.
 
 ## Linking through pkg-config (0.19+)
 
-`secretspec-ffi/scripts/cinstall.sh PREFIX static|shared` uses
+`libsecretspec/scripts/cinstall.sh PREFIX static|shared` uses
 [cargo-c](https://github.com/lu-zero/cargo-c) to install one library type, the
-header, and a `secretspec_ffi.pc` carrying its full link line. This lets
+header, and a `libsecretspec.pc` carrying its full link line. This lets
 pkg-config consumers skip the `native-static-libs` capture above. Use separate
-prefixes for the two modes: both metadata files use `-lsecretspec_ffi`, and the
+prefixes for the two modes: both metadata files use `-lsecretspec`, and the
 linker prefers a shared library when both forms are present.
 
 ## Adding a platform to an SDK
@@ -177,3 +192,11 @@ linker prefers a shared library when both forms are present.
 6. Follow the same release-visibility rules as providers: label everything
    with the target version until the release ships (see
    [Adding Providers](/development/adding-providers)).
+
+If the SDK offers broker mode (SecretSpec 0.20+), keep it an explicit backend choice and run the
+IPC conformance suite in addition to the embedded SDK suite. Broker mode must
+use the Rust `secretspec-ipc` client in Rust or bind the pure-C
+`libsecretspec-ipc` client in non-Rust SDKs. The wire protocol remains canonical
+for independent implementations, but supported language bindings must not
+create a different request format or another client state machine. CI runs both
+clients through the same conformance and differential cases.

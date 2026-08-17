@@ -11,33 +11,33 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 echo "==> Building cdylib + staticlib + CLI"
-cargo build -p secretspec-ffi -p secretspec
+cargo build -p libsecretspec -p secretspec
 
 target_dir="$(cargo metadata --no-deps --format-version 1 \
   | grep -o '"target_directory":"[^"]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/')"
 case "$(uname -s)" in
-  Darwin) lib_name="libsecretspec_ffi.dylib" ;;
-  *)      lib_name="libsecretspec_ffi.so" ;;
+  Darwin) lib_name="libsecretspec.dylib" ;;
+  *)      lib_name="libsecretspec.so" ;;
 esac
 # Runtime-dlopen contract (SDKs not yet migrated to static linking still use it).
 export SECRETSPEC_FFI_LIB="$target_dir/debug/$lib_name"
 export SECRETSPEC_BIN="$target_dir/debug/secretspec"
 
-# Static-link contract: SDKs link libsecretspec_ffi.a (the resolver compiled in)
+# Static-link contract: SDKs link libsecretspec.a (the resolver compiled in)
 # instead of dlopening the cdylib. Every leg resolves the archive, its header,
-# and its secretspec_ffi.pc from this one installed prefix.
+# and its libsecretspec.pc from this one installed prefix.
 echo "==> Installing staticlib + header + pkg-config file"
 SECRETSPEC_FFI_PREFIX="$(mktemp -d)"
 export SECRETSPEC_FFI_PREFIX
-bash secretspec-ffi/scripts/cinstall.sh "$SECRETSPEC_FFI_PREFIX" static
+bash libsecretspec/scripts/cinstall.sh "$SECRETSPEC_FFI_PREFIX" static
 export PKG_CONFIG_PATH="$SECRETSPEC_FFI_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-pkg-config --print-errors --exists secretspec_ffi
-export SECRETSPEC_FFI_STATICLIB="$SECRETSPEC_FFI_PREFIX/lib/libsecretspec_ffi.a"
+pkg-config --print-errors --exists libsecretspec
+export SECRETSPEC_FFI_STATICLIB="$SECRETSPEC_FFI_PREFIX/lib/libsecretspec.a"
 export SECRETSPEC_FFI_INCLUDE="$SECRETSPEC_FFI_PREFIX/include"
 # Raw linker flags for the legs that do not call pkg-config. A Rust staticlib
 # does not carry its own native dependency closure; NEVER hardcode this list --
 # it drifts as providers change.
-SECRETSPEC_FFI_NATIVE_LIBS="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
+SECRETSPEC_FFI_NATIVE_LIBS="$(cargo rustc -q -p libsecretspec --crate-type staticlib -- \
   --print native-static-libs 2>&1 | sed -n 's/^note: native-static-libs: //p' | tail -1)"
 export SECRETSPEC_FFI_NATIVE_LIBS
 echo "==> SECRETSPEC_FFI_LIB=$SECRETSPEC_FFI_LIB"
@@ -58,7 +58,7 @@ echo "==> Go (-tags static: cgo links the archive in)"
 ( cd secretspec-go && SECRETSPEC_FFI_PROFILE=debug bash scripts/stage-staticlib.sh )
 ( cd secretspec-go && CGO_ENABLED=1 go test -tags static ./... )
 
-echo "==> Go (-tags pkgconfig: link inputs from secretspec_ffi.pc)"
+echo "==> Go (-tags pkgconfig: link inputs from libsecretspec.pc)"
 ( cd secretspec-go && CGO_ENABLED=1 go test -tags pkgconfig ./... )
 
 echo "==> Ruby"
@@ -69,7 +69,7 @@ bash secretspec-rb/scripts/build-ext.sh
 ( cd secretspec-rb && find examples -name '*.rb' -exec ruby -c {} \; )
 
 echo "==> Ruby (pkg-config discovery)"
-# The same link inputs read from secretspec_ffi.pc in the installed prefix
+# The same link inputs read from libsecretspec.pc in the installed prefix
 # (PKG_CONFIG_PATH above); rebuild the extension and rerun the tests.
 bash secretspec-rb/scripts/build-ext.sh --enable-pkg-config
 ( cd secretspec-rb && ruby -e 'Dir["test/test_*.rb"].sort.each { |f| require File.expand_path(f) }' )
@@ -85,10 +85,10 @@ bash secretspec-node/scripts/build-addon.sh
 ( cd secretspec-node && find examples -type f \( -name '*.js' -o -name '*.ts' \) -exec node --check {} \; )
 
 echo "==> Haskell"
-# The Haskell SDK statically links the secretspec-ffi archive at build time: the
+# The Haskell SDK statically links the libsecretspec archive at build time: the
 # Rust resolver is embedded in the test binary, so there is NO runtime loader path
-# (no LD_LIBRARY_PATH). Stage libsecretspec_ffi.a alone into an isolated dir so
-# -lsecretspec_ffi resolves to the archive (target/debug also holds the .so), and
+# (no LD_LIBRARY_PATH). Stage libsecretspec.a alone into an isolated dir so
+# -lsecretspec resolves to the archive (target/debug also holds the .so), and
 # pass the archive's transitive native deps as linker options.
 (
   cd secretspec-hs

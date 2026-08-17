@@ -37,7 +37,7 @@ on:
     paths:
       - "Package.swift"
       - "secretspec-swift/**"
-      - "secretspec-ffi/**"
+      - "libsecretspec/**"
       - "scripts/build-swift-xcframework.sh"
       - "scripts/sync-sdk-versions.sh"
       - ".github/workflows/swift-package.yml"
@@ -63,16 +63,16 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: "12.0"
           RUSTFLAGS: "-C strip=symbols"
         run: |
-          cargo build -p secretspec-ffi --release \
+          cargo build -p libsecretspec --release \
             --target aarch64-apple-darwin
-          cargo build -p secretspec-ffi --release \
+          cargo build -p libsecretspec --release \
             --target x86_64-apple-darwin
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: swift-native-macos
           path: |
-            target/aarch64-apple-darwin/release/libsecretspec_ffi.dylib
-            target/x86_64-apple-darwin/release/libsecretspec_ffi.dylib
+            target/aarch64-apple-darwin/release/libsecretspec.dylib
+            target/x86_64-apple-darwin/release/libsecretspec.dylib
 
   package:
     name: XCFramework and Swift tests
@@ -97,7 +97,7 @@ jobs:
           libraries=()
           while IFS= read -r library; do
             libraries+=("$library")
-          done < <(find staged -type f -name libsecretspec_ffi.dylib -print | sort)
+          done < <(find staged -type f -name libsecretspec.dylib -print | sort)
           if [[ "${#libraries[@]}" -ne 2 ]]; then
             printf 'expected 2 native libraries, found %s\n' "${#libraries[@]}" >&2
             printf '%s\n' "${libraries[@]}" >&2

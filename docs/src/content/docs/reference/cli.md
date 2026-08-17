@@ -677,6 +677,26 @@ $ secretspec audit --action run -n 5
 $ secretspec audit --json | jq 'select(.outcome == "missing")'
 ```
 
+### broker (0.20+)
+
+:::caution[Version compatibility]
+`broker` is available starting with SecretSpec 0.20.
+:::
+
+Run one private Secret Resolution Protocol session over standard input and
+standard output. SDKs launch this command directly and communicate with bounded
+length-prefixed JSON-RPC frames; it is not intended for interactive terminal
+use or as a network listener.
+
+```bash
+$ secretspec broker --stdio
+```
+
+The client supplies an absolute path or inline manifest plus immutable
+provider, profile, scope, and reason selection during initialization. See the
+[Secret Resolution Protocol](/reference/client-protocol/) for lifecycle,
+least-access resolution, file leases, and reconnect rules.
+
 ### completions (0.20+)
 
 :::caution[Version compatibility]

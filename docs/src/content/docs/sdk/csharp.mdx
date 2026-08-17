@@ -16,6 +16,10 @@ import asPathExample from '../../../../../secretspec-dotnet/examples/as_path/AsP
 > NuGet package is an unsupported bootstrap artifact used to reserve the
 > package ID; use version 0.16 or later for the API below.
 
+> **Native library name:** SecretSpec 0.20+ packages the embedded C ABI as
+> `libsecretspec` (`libsecretspec.*` or `secretspec.dll`). The runtime loader
+> still accepts the pre-0.20 `secretspec_ffi` filenames.
+
 The C# SDK (`Cachix.SecretSpec`) is a thin client over the same Rust resolver as
 the CLI. Every provider, fallback chain, profile, generator, reference, and
 `as_path` secret therefore works without C#-side resolution logic.
@@ -110,6 +114,6 @@ to remove these files deterministically:
 ## Native loading
 
 The NuGet runtime asset is selected automatically. For local SDK development,
-`SECRETSPEC_FFI_LIB` can point to a particular `libsecretspec_ffi` build. From
+`SECRETSPEC_FFI_LIB` can point to a particular `libsecretspec` build. From
 a SecretSpec source checkout, the SDK also searches an ancestor Cargo
 `target/debug` or `target/release` directory.

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "wire.strict-rejections",
+  "targets": ["common"],
+  "timeout_ms": 5000,
+  "actions": [
+    {"kind": "raw_frame", "payload_hex": ""},
+    {"kind": "raw_frame", "payload_utf8": "[]"},
+    {"kind": "raw_frame", "payload_utf8": "{\"jsonrpc\":\"2.0\",\"jsonrpc\":\"2.0\"}"},
+    {"kind": "raw_frame", "declared_length": 1048577}
+  ],
+  "required_events": ["rejected", "closed"]
+}

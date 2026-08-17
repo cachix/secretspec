@@ -182,7 +182,7 @@ impl Provider for SystemdCredentialProvider {
         ))
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 

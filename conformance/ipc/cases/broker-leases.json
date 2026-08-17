@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "broker.file-leases",
+  "targets": ["broker", "rust-server"],
+  "timeout_ms": 10000,
+  "actions": [
+    {"kind": "initialize", "manifest": "inline", "profile": "default"},
+    {"kind": "resolve", "name": "TOKEN", "representation": "value"},
+    {"kind": "resolve", "name": "OPTIONAL", "representation": "value"},
+    {"kind": "resolve", "name": "UNKNOWN", "representation": "auto"},
+    {"kind": "resolve", "name": "CERT", "representation": "file"},
+    {"kind": "release", "duplicates": true},
+    {"kind": "resolve", "name": "CERT", "representation": "file"},
+    {"kind": "disconnect"}
+  ],
+  "required_events": [
+    "initialized",
+    "resolved_value",
+    "missing",
+    "undeclared",
+    "lease_created",
+    "lease_removed",
+    "disconnect_cleanup",
+    "closed"
+  ]
+}

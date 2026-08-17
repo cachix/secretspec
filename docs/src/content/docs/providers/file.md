@@ -146,14 +146,15 @@ Referenced files are writable when filesystem permissions allow it. Treat
 runtime-managed mounts as read-only unless their owner explicitly permits
 SecretSpec to replace or delete entries.
 
-## Extract from JSON (0.19+)
+## Extract from structured files (0.19+)
 
 :::caution[Version compatibility]
 Structured `extract` is available starting in SecretSpec 0.19.
+INI extraction with `format = "ini"` is available starting in SecretSpec 0.20.
 :::
 
-Several declarations can select values from one JSON file without making JSON
-part of the provider itself:
+Several declarations can select values from one structured file without making
+the format part of the provider itself:
 
 ```toml title="secretspec.toml"
 [providers]
@@ -175,10 +176,25 @@ DATABASE_PASSWORD = {
 }
 ```
 
+INI documents are also supported in SecretSpec 0.20+. Use `/key` for an
+unsectioned key or `/section/key` for a key in a named section:
+
+```toml title="secretspec.toml"
+[profiles.production]
+# format = "ini" requires SecretSpec 0.20+
+DATABASE_PASSWORD = {
+  description = "Database password",
+  providers = ["runtime_files"],
+  ref = { item = "application.ini" },
+  extract = { format = "ini", pointer = "/database/password" }
+}
+```
+
 The file provider returns the complete UTF-8 document; SecretSpec then applies
-the RFC 6901 pointer as a provider-independent stored-value transform. Extracted
-declarations are read-only in 0.19 so `set`, `delete`, generation, prompting,
-and import cannot overwrite or remove the containing file. See
+the pointer as a provider-independent stored-value transform. Pointer segments
+use RFC 6901 escaping for both JSON (0.19+) and INI (0.20+). Extracted
+declarations are read-only, so `set`, `delete`, generation, prompting, and
+import cannot overwrite or remove the containing file. See
 [Structured Extraction](/reference/configuration/#structured-extraction-019)
 for value rendering, error behavior, and composition with `encoding`.
 

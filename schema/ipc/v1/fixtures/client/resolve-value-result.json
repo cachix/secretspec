@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":2,"result":{"status":"resolved","representation":"value","value":"IPC_CANARY_NOT_A_REAL_SECRET","source":"provider","source_provider":"keyring://","expires_at_unix_ms":null}}

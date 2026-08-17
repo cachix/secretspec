@@ -142,6 +142,19 @@ pub(crate) struct AuditContext<'a> {
     pub outcome: AuditOutcome,
     pub error_kind: Option<&'a str>,
     pub reason: Option<&'a str>,
+    /// Structured caller context supplied by broker-mode clients (0.20+).
+    /// It is audit attribution only, never identity or authorization input.
+    pub purpose: Option<AuditPurpose<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(crate) struct AuditPurpose<'a> {
+    pub consumer: &'a str,
+    pub operation: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<&'a str>,
 }
 
 /// One serialized audit record (one JSON Lines entry).
@@ -182,6 +195,9 @@ struct AuditEvent<'a> {
     error_kind: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'a str>,
+    /// Broker caller context (SecretSpec 0.20+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    purpose: Option<AuditPurpose<'a>>,
     actor: &'a Actor,
     /// secretspec version that produced the event.
     version: &'static str,
@@ -408,6 +424,7 @@ impl AuditLogger {
             outcome: ctx.outcome,
             error_kind: ctx.error_kind,
             reason: ctx.reason,
+            purpose: ctx.purpose,
             actor: &self.actor,
             version: env!("CARGO_PKG_VERSION"),
         };
@@ -658,6 +675,12 @@ mod tests {
                 outcome: AuditOutcome::Found,
                 error_kind: None,
                 reason: Some("deploy web frontend"),
+                purpose: Some(AuditPurpose {
+                    consumer: "python-sdk",
+                    operation: "resolve",
+                    host: None,
+                    path: Some("/service"),
+                }),
             },
         );
 
@@ -672,6 +695,9 @@ mod tests {
         assert_eq!(event["profile"], "production");
         assert_eq!(event["key"], "DATABASE_URL");
         assert_eq!(event["reason"], "deploy web frontend");
+        assert_eq!(event["purpose"]["consumer"], "python-sdk");
+        assert_eq!(event["purpose"]["operation"], "resolve");
+        assert_eq!(event["purpose"]["path"], "/service");
         assert_eq!(event["session_id"], "test-session");
         assert_eq!(event["seq"], 0);
         // Provider credentials (the `:password`) are redacted; the username,
@@ -701,6 +727,7 @@ mod tests {
                 outcome: AuditOutcome::Found,
                 error_kind: None,
                 reason: None,
+                purpose: None,
             },
         );
 
@@ -734,6 +761,7 @@ mod tests {
                     outcome: AuditOutcome::Written,
                     error_kind: None,
                     reason: None,
+                    purpose: None,
                 },
             );
         }
@@ -892,6 +920,7 @@ mod tests {
                 outcome: AuditOutcome::Found,
                 error_kind: None,
                 reason: None,
+                purpose: None,
             },
         );
 

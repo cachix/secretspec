@@ -1,0 +1,45 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "SecretSpec Secret Resolution Protocol",
+    "version": "1"
+  },
+  "methods": [
+    {
+      "name": "rpc.initialize",
+      "params": [{ "name": "params", "required": true, "schema": { "$ref": "client.schema.json#/$defs/InitializeParams" } }],
+      "result": { "name": "result", "schema": { "$ref": "client.schema.json#/$defs/InitializeResult" } }
+    },
+    {
+      "name": "client.resolve",
+      "params": [{ "name": "params", "required": true, "schema": { "$ref": "client.schema.json#/$defs/ResolveParams" } }],
+      "result": { "name": "result", "schema": { "$ref": "client.schema.json#/$defs/ResolveResult" } },
+      "errors": [{ "$ref": "#/components/errors/CommonError" }]
+    },
+    {
+      "name": "client.release",
+      "params": [{ "name": "params", "required": true, "schema": { "$ref": "client.schema.json#/$defs/ReleaseParams" } }],
+      "result": { "name": "result", "schema": { "$ref": "client.schema.json#/$defs/ReleaseResult" } },
+      "errors": [{ "$ref": "#/components/errors/CommonError" }]
+    },
+    {
+      "name": "rpc.cancel",
+      "params": [{ "name": "params", "required": true, "schema": { "$ref": "common.schema.json#/$defs/CancelParams" } }],
+      "result": { "name": "notification", "schema": { "type": "null" } }
+    },
+    {
+      "name": "rpc.shutdown",
+      "params": [{ "name": "params", "required": true, "schema": { "$ref": "common.schema.json#/$defs/EmptyParams" } }],
+      "result": { "name": "result", "schema": { "$ref": "common.schema.json#/$defs/EmptyResult" } }
+    }
+  ],
+  "components": {
+    "errors": {
+      "CommonError": {
+        "code": -32008,
+        "message": "operation failed",
+        "data": { "$ref": "common.schema.json#/$defs/ErrorData" }
+      }
+    }
+  }
+}

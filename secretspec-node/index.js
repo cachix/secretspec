@@ -45,7 +45,7 @@ function loadNative() {
 
 const native = loadNative();
 
-// Response wire-format version this SDK understands. Tracks secretspec-ffi's
+// Response wire-format version this SDK understands. Tracks libsecretspec's
 // RESOLVE_SCHEMA_VERSION; a mismatch means the native addon is out of sync.
 const RESOLVE_SCHEMA_VERSION = 2;
 

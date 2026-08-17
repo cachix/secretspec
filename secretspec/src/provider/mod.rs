@@ -261,16 +261,19 @@ impl std::fmt::Display for ProviderUrl {
 /// Executes an async future in a blocking context.
 ///
 /// If already inside a tokio runtime, uses `block_in_place` with the
-/// existing runtime handle. Otherwise, creates a new runtime.
+/// existing runtime handle. Otherwise, uses a process-wide runtime so
+/// background tasks owned by long-lived providers remain alive between calls.
 #[allow(dead_code)]
 pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
-        Err(_) => tokio::runtime::Builder::new_current_thread()
+    static PROVIDER_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+        tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .expect("Failed to create tokio runtime")
-            .block_on(future),
+            .expect("Failed to create provider runtime")
+    });
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => PROVIDER_RUNTIME.block_on(future),
     }
 }
 
@@ -289,6 +292,7 @@ pub mod bws;
 pub mod dashlane;
 pub mod dotenv;
 pub mod env;
+pub mod external;
 pub mod file;
 #[cfg(feature = "gcsm")]
 pub mod gcsm;
@@ -461,21 +465,16 @@ impl<'a> Address<'a> {
     }
 }
 
-/// Rejects native-address coordinates a provider has no equivalent for.
+/// Rejects native-address coordinates a provider has no equivalent for, against
+/// a statically declared coordinate list.
 ///
-/// Enforced once for every address inside the default
-/// [`resolve_coords`](Provider::resolve_coords), against the provider's
-/// declared [`supported_coords`](Provider::supported_coords): a coordinate the
-/// provider does not name produces an error that names the coordinate, the ref
-/// it came from, and how to fix it, so a `ref` written for one store fails
-/// loudly when routing points it at a store that cannot honor those
-/// coordinates, instead of silently resolving something else.
-///
-/// Both remedies are offered because dropping the coordinate is only right when
-/// every endpoint should share one address. When the coordinate is meaningful to
-/// the store the ref was written for — a Bitwarden or 1Password item field, say —
-/// and this store simply organizes the secret differently, the fix is a
-/// per-provider address (0.19+), not a lossy edit to the ref.
+/// The default [`resolve_coords`](Provider::resolve_coords) applies the same
+/// rule through [`supports_coord`](Provider::supports_coord), which external
+/// providers override because their list is negotiated rather than compiled in.
+/// This helper remains for providers that check a nested address against a
+/// fixed list of their own; it is `allow(dead_code)` because its only callers
+/// are feature-gated.
+#[allow(dead_code)]
 fn reject_unsupported_coords(
     provider: &str,
     addr: &NativeAddress,
@@ -487,16 +486,33 @@ fn reject_unsupported_coords(
             continue;
         }
         if !supported.contains(&name) {
-            return Err(SecretSpecError::ProviderOperationFailed(format!(
-                "the {provider} provider does not support the `{name}` coordinate. \
-                 Drop `{name}` from the ref for `{item}`, or give this provider its \
-                 own address with `refs.<alias>` or an alias `ref` template (0.19+): \
-                 https://secretspec.dev/concepts/references/#different-coordinates-per-provider-019",
-                item = addr.item
-            )));
+            return Err(unsupported_coord_error(provider, addr, name));
         }
     }
     Ok(())
+}
+
+/// Builds the error for a native-address coordinate a provider has no
+/// equivalent for.
+///
+/// A coordinate the provider does not name produces an error that names the
+/// coordinate, the ref it came from, and how to fix it, so a `ref` written for
+/// one store fails loudly when routing points it at a store that cannot honor
+/// those coordinates, instead of silently resolving something else.
+///
+/// Both remedies are offered because dropping the coordinate is only right when
+/// every endpoint should share one address. When the coordinate is meaningful to
+/// the store the ref was written for (a Bitwarden or 1Password item field, say)
+/// and this store simply organizes the secret differently, the fix is a
+/// per-provider address (0.19+), not a lossy edit to the ref.
+fn unsupported_coord_error(provider: &str, addr: &NativeAddress, name: &str) -> SecretSpecError {
+    SecretSpecError::ProviderOperationFailed(format!(
+        "the {provider} provider does not support the `{name}` coordinate. \
+         Drop `{name}` from the ref for `{item}`, or give this provider its \
+         own address with `refs.<alias>` or an alias `ref` template (0.19+): \
+         https://secretspec.dev/concepts/references/#different-coordinates-per-provider-019",
+        item = addr.item
+    ))
 }
 
 /// Resolves an address for flat stores whose secrets have no sub-components:
@@ -579,26 +595,26 @@ pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
             file::MISSING_DIRECTORY_ERROR.to_string(),
         ));
     }
-    Ok(registration_for_scheme(scheme).is_some())
+    if registration_for_scheme(scheme).is_some() {
+        return Ok(true);
+    }
+    Ok(external::discover(scheme)?.is_some())
 }
 
 /// The semantic credential names accepted by the provider named by `spec`, or
 /// an empty slice for an unknown scheme. Lets alias validation reject a
 /// declaration the provider would silently ignore.
-pub(crate) fn credential_names_for_spec(spec: &str) -> &'static [&'static str] {
+pub(crate) fn credential_names_for_spec(spec: &str) -> Result<Vec<String>> {
     let (scheme, _) = split_spec(spec);
-    registration_for_scheme(scheme).map_or(&[], |reg| reg.credential_names)
-}
-
-/// Whether the provider `spec` names implements [`Provider::delete`].
-///
-/// Read from the registration, so routing that requires an invalidatable store
-/// can be rejected while planning rather than discovered the first time an
-/// invalidation is attempted. An unknown scheme is `false`; callers reach here
-/// only after the spec resolved to a registered provider.
-pub(crate) fn spec_provider_deletes(spec: &str) -> bool {
-    let (scheme, _) = split_spec(spec);
-    registration_for_scheme(scheme).is_some_and(|reg| reg.deletes)
+    if let Some(registration) = registration_for_scheme(scheme) {
+        return Ok(registration
+            .credential_names
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect());
+    }
+    external::discover(scheme)
+        .map(|endpoint| endpoint.map_or_else(Vec::new, |endpoint| endpoint.credential_names))
 }
 
 /// The names of every provider that implements deletion, sorted. Used to say
@@ -612,6 +628,14 @@ pub(crate) fn deleting_provider_names() -> Vec<&'static str> {
         .collect();
     names.sort_unstable();
     names
+}
+
+/// The fixed deletion capability for an in-tree provider named by `spec`.
+/// External providers return `None` because their capability is advertised
+/// during protocol initialization rather than compiled into this registry.
+pub(crate) fn static_delete_capability(spec: &str) -> Option<bool> {
+    let (scheme, _) = split_spec(spec);
+    registration_for_scheme(scheme).map(|registration| registration.deletes)
 }
 
 /// The registered display name for the provider `spec` names, falling back to
@@ -709,6 +733,22 @@ pub trait Provider: Send + Sync {
         &[]
     }
 
+    /// Returns whether this provider understands an optional native-address
+    /// coordinate. Available since SecretSpec 0.20.
+    ///
+    /// Static providers inherit the existing slice-based behavior. External
+    /// providers override this hook because their coordinate list is selected
+    /// during protocol initialization and is therefore owned by the instance.
+    fn supports_coord(&self, name: &str) -> bool {
+        self.supported_coords().contains(&name)
+    }
+
+    /// Reports whether deletion is available for this initialized provider.
+    /// External providers derive this from their negotiated session (0.20+).
+    fn supports_delete(&self) -> bool {
+        registration_for_scheme(self.name()).is_some_and(|registration| registration.deletes)
+    }
+
     /// Resolves any [`Address`] to this store's native coordinates: a `ref`'s
     /// coordinates pass through as-is, a convention address is compiled via
     /// [`convention_address`](Provider::convention_address). Coordinates
@@ -723,7 +763,14 @@ pub trait Provider: Send + Sync {
                 key,
             } => Cow::Owned(self.convention_address(project, profile, key)?),
         };
-        reject_unsupported_coords(self.name(), &coords, self.supported_coords())?;
+        for (name, value) in coords.coordinates() {
+            if name == "item" || value.is_none() {
+                continue;
+            }
+            if !self.supports_coord(name) {
+                return Err(unsupported_coord_error(self.name(), &coords, name));
+            }
+        }
         Ok(coords)
     }
 
@@ -909,7 +956,7 @@ pub trait Provider: Send + Sync {
     /// Returns the name of this provider.
     ///
     /// This should match the name registered with the provider macro.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     /// Returns the full URI representation of this provider.
     ///
@@ -1243,6 +1290,12 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn supported_coords(&self) -> &'static [&'static str] {
         (**self).supported_coords()
     }
+    fn supports_coord(&self, name: &str) -> bool {
+        (**self).supports_coord(name)
+    }
+    fn supports_delete(&self) -> bool {
+        (**self).supports_delete()
+    }
     fn resolve_coords<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
         (**self).resolve_coords(addr)
     }
@@ -1284,7 +1337,7 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn auth_scope_key(&self) -> Option<String> {
         (**self).auth_scope_key()
     }
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         (**self).name()
     }
     fn uri(&self) -> String {
@@ -1390,7 +1443,7 @@ impl<K: std::hash::Hash + Eq + Clone> AuthCheckCache<K> {
 
 /// Auth probes shared across provider instances (see
 /// [`Provider::auth_scope_key`]), keyed by provider name plus scope.
-static PREFLIGHT_AUTH_CACHE: LazyLock<AuthCheckCache<(&'static str, String)>> =
+static PREFLIGHT_AUTH_CACHE: LazyLock<AuthCheckCache<(String, String)>> =
     LazyLock::new(AuthCheckCache::default);
 
 /// Wrapper that runs a preflight check exactly once before any provider
@@ -1419,7 +1472,7 @@ impl PreflightGuard {
         // secret's `providers` chain creates all reuse one probe.
         if let Some(scope) = self.inner.auth_scope_key() {
             return PREFLIGHT_AUTH_CACHE
-                .check((self.inner.name(), scope), || {
+                .check((self.inner.name().to_string(), scope), || {
                     f().map_err(|e| crate::error::display_error_chain(&e))
                 })
                 .map_err(SecretSpecError::ProviderOperationFailed);
@@ -1442,6 +1495,14 @@ impl Provider for PreflightGuard {
 
     fn supported_coords(&self) -> &'static [&'static str] {
         self.inner.supported_coords()
+    }
+
+    fn supports_coord(&self, name: &str) -> bool {
+        self.inner.supports_coord(name)
+    }
+
+    fn supports_delete(&self) -> bool {
+        self.inner.supports_delete()
     }
 
     fn resolve_coords<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
@@ -1507,7 +1568,7 @@ impl Provider for PreflightGuard {
         self.inner.auth_scope_key()
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.inner.name()
     }
 
@@ -1767,17 +1828,30 @@ pub(crate) fn provider_from_url(
     url: &ProviderUrl,
     credentials: ProviderCredentials,
 ) -> Result<Box<dyn Provider>> {
+    provider_from_url_with_discovery(url, credentials, external::discover)
+}
+
+fn provider_from_url_with_discovery(
+    url: &ProviderUrl,
+    credentials: ProviderCredentials,
+    discover: impl FnOnce(&str) -> Result<Option<external::ProviderEndpoint>>,
+) -> Result<Box<dyn Provider>> {
     reject_uri_credential(url)?;
     let scheme = url.scheme();
 
-    let registration = registration_for_scheme(scheme)
-        .ok_or_else(|| SecretSpecError::ProviderNotFound(scheme.to_string()))?;
-
-    let pwp = (registration.factory)(url, credentials)?;
-    if pwp.preflight.is_some() {
-        Ok(Box::new(PreflightGuard::new(pwp)))
+    if let Some(registration) = registration_for_scheme(scheme) {
+        let pwp = (registration.factory)(url, credentials)?;
+        if pwp.preflight.is_some() {
+            Ok(Box::new(PreflightGuard::new(pwp)))
+        } else {
+            Ok(pwp.provider)
+        }
+    } else if let Some(endpoint) = discover(scheme)? {
+        let mut provider = external::ExternalProvider::from_url(endpoint, url);
+        provider.with_credentials(credentials);
+        Ok(Box::new(provider))
     } else {
-        Ok(pwp.provider)
+        Err(SecretSpecError::ProviderNotFound(scheme.to_string()))
     }
 }
 

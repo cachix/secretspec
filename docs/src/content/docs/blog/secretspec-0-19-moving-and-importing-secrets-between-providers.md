@@ -363,6 +363,10 @@ the same manifest can continue to inherit the default profile.
 
 ### pkg-config metadata for secretspec-ffi
 
+> This section describes the 0.19 names. In SecretSpec 0.20+, the component is
+> named `libsecretspec`, installed with `cargo cinstall -p libsecretspec`, and
+> provides `libsecretspec.pc`.
+
 `cargo cinstall -p secretspec-ffi` now installs the library, C header, and a
 `secretspec_ffi.pc` file containing the complete link metadata. Go builds can
 use the `pkgconfig` tag, Ruby native extensions accept `--enable-pkg-config`,

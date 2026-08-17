@@ -8,9 +8,15 @@ import quickStartExample from '../../../../../secretspec-rb/examples/quick_start
 import scopesExample from '../../../../../secretspec-rb/examples/scopes.rb?raw';
 import typedAccessExample from '../../../../../secretspec-rb/examples/typed_access.rb?raw';
 
-The Ruby SDK (`secretspec`) is a thin client over the `secretspec-ffi` C ABI,
+The Ruby SDK (`secretspec`) is a thin client over the `libsecretspec` C ABI,
 linked into a native C extension at build time. Resolution happens in the Rust
 core, so the SDK inherits every provider with no Ruby-side logic.
+
+:::note[SecretSpec 0.20+ library name]
+`libsecretspec` was named `secretspec-ffi` through SecretSpec 0.19. The current
+extension build prefers `libsecretspec.a` and still recognizes a bundled
+pre-0.20 archive.
+:::
 
 ## Quick start
 
@@ -39,7 +45,7 @@ $ secretspec schema | quicktype -s schema --top-level SecretSpec --lang ruby -o 
 
 ## Native library
 
-The published platform gems bundle the `secretspec-ffi` archive and statically
+The published platform gems bundle the `libsecretspec` archive and statically
 link it into the mkmf extension at install time.
 
 ### Linking with pkg-config (0.19+)
@@ -48,7 +54,7 @@ Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
 # Use "static" (the default) or "shared"; use separate prefixes for both.
-$ bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
+$ bash libsecretspec/scripts/cinstall.sh "$PREFIX" static
 ```
 
 Then use the same extension flag for either type:

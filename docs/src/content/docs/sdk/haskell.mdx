@@ -8,9 +8,14 @@ import quickStartExample from '../../../../../secretspec-hs/examples/QuickStart.
 import scopesExample from '../../../../../secretspec-hs/examples/Scopes.hs?raw';
 import reportExample from '../../../../../secretspec-hs/examples/Report.hs?raw';
 
-The Haskell SDK (`secretspec-hs`) is a thin client over the `secretspec-ffi` C
+The Haskell SDK (`secretspec-hs`) is a thin client over the `libsecretspec` C
 ABI, linked at build time via the Haskell FFI. Resolution happens in the Rust
 core, so the SDK inherits every provider with no Haskell-side logic.
+
+:::note[SecretSpec 0.20+ library name]
+`libsecretspec` was named `secretspec-ffi` through SecretSpec 0.19. New static
+builds and pkg-config metadata use `libsecretspec.a` and `libsecretspec.pc`.
+:::
 
 ## Quick start
 
@@ -49,12 +54,12 @@ $ secretspec schema | quicktype -s schema --top-level SecretSpec --lang haskell 
 
 ## Building
 
-The build links the `secretspec-ffi` archive statically. Stage the `.a` in a
+The build links the `libsecretspec` archive statically. Stage the `.a` in a
 directory of its own (so the linker picks the archive, not the co-located
 `.so`) and pass its native dependencies to the linker:
 
 ```bash
-$ cargo build -p secretspec-ffi
+$ cargo build -p libsecretspec
 
 $ TARGET="$(cargo metadata --no-deps --format-version 1 \
   | grep -o '"target_directory":"[^"]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/')"
@@ -62,9 +67,9 @@ $ TARGET="$(cargo metadata --no-deps --format-version 1 \
 # Stage the staticlib alone, and capture its native-static-libs for the linker.
 $ LIBDIR="$(mktemp -d)"
 
-$ cp "$TARGET/debug/libsecretspec_ffi.a" "$LIBDIR/"
+$ cp "$TARGET/debug/libsecretspec.a" "$LIBDIR/"
 
-$ NATIVE_LIBS="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
+$ NATIVE_LIBS="$(cargo rustc -q -p libsecretspec --crate-type staticlib -- \
   --print native-static-libs 2>&1 | sed -n 's/^note: native-static-libs: //p' | tail -1)"
 
 $ cabal build --extra-lib-dirs="$LIBDIR" --ghc-options="-optl${NATIVE_LIBS// / -optl}"
@@ -78,7 +83,7 @@ Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
 # Use "static" (the default) or "shared"; use separate prefixes for both.
-$ bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
+$ bash libsecretspec/scripts/cinstall.sh "$PREFIX" static
 ```
 
 Then use the same Cabal flag for either type:

@@ -841,7 +841,7 @@ fn test_sops_provider_advertises_credentials() {
         "google_oauth_access_token",
     ];
     assert_eq!(
-        crate::provider::credential_names_for_spec("sops://secrets.enc.yaml"),
+        crate::provider::credential_names_for_spec("sops://secrets.enc.yaml").unwrap(),
         expected
     );
 }

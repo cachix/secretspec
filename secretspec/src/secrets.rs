@@ -1,6 +1,6 @@
 //! Core secrets management functionality
 
-use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
+use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome, AuditPurpose};
 use crate::cache::{self, CacheEntryStatus, CacheOwnership};
 use crate::config::{
     Config, CredentialSource, ExtractFormat, GlobalConfig, NativeAddress, Profile, ProviderAlias,
@@ -23,6 +23,8 @@ use data_encoding::{
     BASE64, BASE64_NOPAD, BASE64URL, BASE64URL_NOPAD, Encoding, HEXLOWER, HEXLOWER_PERMISSIVE,
 };
 use secrecy::{ExposeSecret, SecretSlice, SecretString};
+#[cfg(feature = "cli")]
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::env;
@@ -179,7 +181,10 @@ fn group_names(group: &[&PlannedSecret]) -> String {
 /// What a stored cache entry can do for the read that found it.
 enum CachedEntry {
     /// Fresh, and written for this route: serve it.
-    Fresh(SecretString),
+    Fresh {
+        value: SecretString,
+        expires_at_unix_ms: Option<u64>,
+    },
     /// A SecretSpec entry no read will serve: expired regardless of owner, or
     /// ours but unreadable or written for another route or freshness policy.
     /// Safe to drop.
@@ -211,7 +216,13 @@ fn cached_entry(
         &route_fingerprint,
         cache.max_age_secs,
     ) {
-        Ok(CacheEntryStatus::Fresh(value)) => CachedEntry::Fresh(value),
+        Ok(CacheEntryStatus::Fresh {
+            value,
+            expires_at_unix_ms,
+        }) => CachedEntry::Fresh {
+            value,
+            expires_at_unix_ms,
+        },
         Ok(CacheEntryStatus::Stale) => CachedEntry::Stale,
         Ok(CacheEntryStatus::OursUnreadable) => {
             cache_read_warning(&planned.name, "the cache entry could not be read");
@@ -487,6 +498,86 @@ enum PreparedSecret {
     },
 }
 
+/// Named resolution with temporary-file ownership retained by the caller.
+/// The broker converts these owners into session leases; the embedded API
+/// persists them to preserve its existing one-shot path behavior.
+pub(crate) enum OwnedNamedResolution {
+    Undeclared,
+    Missing {
+        required: bool,
+    },
+    Value {
+        value: String,
+        source: ResolvedSource,
+        source_provider: Option<String>,
+        #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+        expires_at_unix_ms: Option<u64>,
+        supporting_files: Vec<tempfile::NamedTempFile>,
+    },
+    File {
+        file: tempfile::NamedTempFile,
+        source: ResolvedSource,
+        source_provider: Option<String>,
+        #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+        expires_at_unix_ms: Option<u64>,
+        supporting_files: Vec<tempfile::NamedTempFile>,
+    },
+}
+
+impl OwnedNamedResolution {
+    fn into_embedded(self) -> Result<NamedResolution> {
+        match self {
+            Self::Undeclared => Ok(NamedResolution::Undeclared),
+            Self::Missing { required } => Ok(NamedResolution::Missing { required }),
+            Self::Value {
+                value,
+                source,
+                source_provider,
+                supporting_files,
+                ..
+            } => {
+                keep_owned_files(supporting_files)?;
+                Ok(NamedResolution::Resolved(ResolvedSecret {
+                    value: Some(value),
+                    path: None,
+                    as_path: false,
+                    source,
+                    source_provider,
+                }))
+            }
+            Self::File {
+                file,
+                source,
+                source_provider,
+                supporting_files,
+                ..
+            } => {
+                keep_owned_files(supporting_files)?;
+                let path = file
+                    .into_temp_path()
+                    .keep()
+                    .map_err(|error| SecretSpecError::Io(error.error))?;
+                Ok(NamedResolution::Resolved(ResolvedSecret {
+                    value: None,
+                    path: Some(path.to_string_lossy().into_owned()),
+                    as_path: true,
+                    source,
+                    source_provider,
+                }))
+            }
+        }
+    }
+}
+
+fn keep_owned_files(files: Vec<tempfile::NamedTempFile>) -> Result<()> {
+    for file in files {
+        file.into_temp_path()
+            .keep()
+            .map_err(|error| SecretSpecError::Io(error.error))?;
+    }
+    Ok(())
+}
+
 /// Whether a resolved string came from a storage boundary and is eligible for
 /// decoding, or is already the logical value produced inside SecretSpec.
 #[derive(Clone, Copy)]
@@ -547,8 +638,14 @@ pub struct Secrets {
     global_config: Option<GlobalConfig>,
     /// The provider to use (if set via builder)
     provider: Option<String>,
+    /// Broker sessions fix provider selection at initialization and must not
+    /// inherit the broker process's provider environment.
+    ignore_ambient_provider: bool,
     /// The profile to use (if set via builder)
     profile: Option<String>,
+    /// Broker sessions fix profile selection at initialization and must not
+    /// inherit the broker process's profile environment.
+    ignore_ambient_profile: bool,
     /// The active secret scope (if set via builder/`--scope`/`SECRETSPEC_SCOPE`).
     /// `None` resolves the complete profile; a scope narrows resolution to the
     /// intersection of the merged profile and the scope's secret list.
@@ -577,6 +674,10 @@ pub struct Secrets {
     /// read. Cleared by [`Secrets::store_provider_credential`] so a freshly
     /// stored credential is re-read.
     provider_credentials_cache: ProviderCredentialsCache,
+    /// Memoized `provider.delete` support for external providers, keyed by
+    /// resolved spec. In-tree providers answer from the static registry and
+    /// never reach this map.
+    external_delete_capability: Mutex<HashMap<String, bool>>,
     /// Optional CLI-owned observer for writes that are about to prompt for or
     /// consume a value. Library and SDK instances leave this unset, so planning
     /// a write never produces unsolicited output outside the CLI.
@@ -746,6 +847,39 @@ struct AuditFields<'a> {
     error_kind: Option<&'a str>,
 }
 
+#[derive(Clone)]
+#[cfg(feature = "cli")]
+pub(crate) struct IpcAuditPurpose {
+    pub consumer: String,
+    pub operation: String,
+    pub host: Option<String>,
+    pub path: Option<String>,
+}
+
+#[cfg(feature = "cli")]
+thread_local! {
+    static IPC_AUDIT_PURPOSE: RefCell<Option<IpcAuditPurpose>> = const { RefCell::new(None) };
+}
+
+#[cfg(feature = "cli")]
+struct IpcPurposeGuard(Option<IpcAuditPurpose>);
+
+#[cfg(feature = "cli")]
+impl Drop for IpcPurposeGuard {
+    fn drop(&mut self) {
+        IPC_AUDIT_PURPOSE.with(|slot| {
+            slot.replace(self.0.take());
+        });
+    }
+}
+
+#[cfg(feature = "cli")]
+fn with_ipc_audit_purpose<T>(purpose: IpcAuditPurpose, operation: impl FnOnce() -> T) -> T {
+    let previous = IPC_AUDIT_PURPOSE.with(|slot| slot.replace(Some(purpose)));
+    let _guard = IpcPurposeGuard(previous);
+    operation()
+}
+
 impl Secrets {
     /// Creates a new `Secrets` instance with the given configurations
     ///
@@ -773,13 +907,16 @@ impl Secrets {
             config_dir: PathBuf::from("."),
             global_config,
             provider,
+            ignore_ambient_provider: false,
             profile,
+            ignore_ambient_profile: false,
             scope: None,
             ignore_ambient_scope: false,
             reason: None,
             require_reason: RequireReason::Never,
             audit: None,
             provider_credentials_cache: ProviderCredentialsCache::default(),
+            external_delete_capability: Mutex::new(HashMap::new()),
             write_target_reporter: None,
             prompt_reader: None,
         }
@@ -824,6 +961,37 @@ impl Secrets {
     /// * `path` - Path to the `secretspec.toml` file
     pub fn load_from(path: &Path) -> Result<Self> {
         let project_config = Config::try_from(path)?;
+        let config_dir = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        Self::from_loaded_config(project_config, config_dir, true)
+    }
+
+    /// Load an explicit path for a broker session without consulting ambient
+    /// provider, profile, scope, or reason variables.
+    #[cfg(feature = "cli")]
+    pub(crate) fn load_from_ipc(path: &Path) -> Result<Self> {
+        let project_config = Config::try_from(path)?;
+        let config_dir = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        Self::from_loaded_config(project_config, config_dir, false)
+    }
+
+    /// Parse an inline broker manifest with inheritance rooted at `base_dir`.
+    #[cfg(feature = "cli")]
+    pub(crate) fn load_inline_ipc(source: &str, base_dir: &Path) -> Result<Self> {
+        let project_config = Config::from_inline(source, base_dir)?;
+        Self::from_loaded_config(project_config, base_dir.to_path_buf(), false)
+    }
+
+    fn from_loaded_config(
+        project_config: Config,
+        config_dir: PathBuf,
+        use_ambient_session: bool,
+    ) -> Result<Self> {
         // Semantic validation (required vs default, ref coordinate rules,
         // generate consistency) runs here so every CLI and SDK entry point
         // enforces the same rules the config documents. The compiled manifest it
@@ -840,16 +1008,6 @@ impl Secrets {
                 .and_then(|g| g.audit.clone())
                 .unwrap_or_default(),
         );
-        // Directory the config lives in, used to resolve relative provider
-        // paths (e.g. `dotenv:.config/.env`) against the project root instead
-        // of the current working directory. Kept logical (not canonicalized) so
-        // a relative `--file` stays relative to the CWD and Windows extended
-        // (`\\?\`) prefixes are never introduced.
-        let config_dir = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-
         Ok(Self {
             require_reason: project_config.project.require_reason.unwrap_or_default(),
             config: project_config,
@@ -857,12 +1015,15 @@ impl Secrets {
             config_dir,
             global_config,
             provider: None,
+            ignore_ambient_provider: !use_ambient_session,
             profile: None,
+            ignore_ambient_profile: !use_ambient_session,
             scope: None,
-            ignore_ambient_scope: false,
-            reason: env_reason(),
+            ignore_ambient_scope: !use_ambient_session,
+            reason: use_ambient_session.then(env_reason).flatten(),
             audit,
             provider_credentials_cache: ProviderCredentialsCache::default(),
+            external_delete_capability: Mutex::new(HashMap::new()),
             write_target_reporter: None,
             prompt_reader: None,
         })
@@ -1077,6 +1238,34 @@ impl Secrets {
         profile: Option<&str>,
     ) -> Result<Box<dyn ProviderTrait>> {
         self.build_provider_for_use(spec, profile, false)
+    }
+
+    pub(crate) fn provider_supports_delete(&self, spec: &str) -> Result<bool> {
+        let resolved = self.resolve_provider_spec(spec.to_string());
+        if let Some(supports_delete) = crate::provider::static_delete_capability(&resolved) {
+            return Ok(supports_delete);
+        }
+        // An external provider advertises deletion during its handshake, so
+        // answering costs a full endpoint launch and teardown. Planning asks
+        // this for every cached alias on every plan build, so the answer is
+        // memoized per resolved spec for the life of this `Secrets`.
+        if let Some(cached) = self
+            .external_delete_capability
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&resolved)
+        {
+            return Ok(*cached);
+        }
+        let profile = self.resolve_profile_name(None);
+        let supports_delete = self
+            .build_provider(spec.to_string(), Some(&profile))
+            .map(|provider| provider.supports_delete())?;
+        self.external_delete_capability
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(resolved, supports_delete);
+        Ok(supports_delete)
     }
 
     /// Builds the authoritative leaf selected by a planned route.
@@ -1348,10 +1537,10 @@ impl Secrets {
             return Ok(());
         };
         let resolved_target = self.resolve_provider_spec(spec.to_string());
-        let supported = crate::provider::credential_names_for_spec(&resolved_target);
+        let supported = crate::provider::credential_names_for_spec(&resolved_target)?;
         let provider_name = crate::provider::provider_display_name_for_spec(&resolved_target);
         for (name, source) in sorted_credential_entries(credentials) {
-            if !supported.contains(&name.as_str()) {
+            if !supported.iter().any(|supported| supported == name) {
                 let supported_display = if supported.is_empty() {
                     "none".to_string()
                 } else {
@@ -1436,6 +1625,17 @@ impl Secrets {
         fields: AuditFields<'_>,
     ) {
         if let Some(logger) = &self.audit {
+            #[cfg(feature = "cli")]
+            let ipc_purpose = IPC_AUDIT_PURPOSE.with(|slot| slot.borrow().clone());
+            #[cfg(feature = "cli")]
+            let purpose = ipc_purpose.as_ref().map(|purpose| AuditPurpose {
+                consumer: &purpose.consumer,
+                operation: &purpose.operation,
+                host: purpose.host.as_deref(),
+                path: purpose.path.as_deref(),
+            });
+            #[cfg(not(feature = "cli"))]
+            let purpose: Option<AuditPurpose<'_>> = None;
             // Scopes affect only these bulk resolution surfaces. `get`, `set`,
             // and `import` deliberately ignore an ambient scope, so attaching it
             // to those events would falsely imply that it constrained the action.
@@ -1464,6 +1664,7 @@ impl Secrets {
                     outcome,
                     error_kind: fields.error_kind,
                     reason: self.reason.as_deref(),
+                    purpose,
                 },
             );
         }
@@ -1711,6 +1912,39 @@ impl Secrets {
                 };
                 Ok(SecretString::new(selected.into()))
             }
+            ExtractFormat::Ini => {
+                let document = ini::Ini::load_from_str_noescape(value).map_err(|error| {
+                    SecretSpecError::DecodeFailed {
+                        name: diagnostic_name.to_string(),
+                        encoding: extract.format.as_str(),
+                        reason: format!(
+                            "stored value is not valid INI at line {}, column {}: {}",
+                            error.line, error.col, error.msg
+                        ),
+                    }
+                })?;
+                let segments = extract
+                    .pointer
+                    .strip_prefix('/')
+                    .into_iter()
+                    .flat_map(|path| path.split('/'))
+                    .map(|segment| segment.replace("~1", "/").replace("~0", "~"))
+                    .collect::<Vec<_>>();
+                let selected = match segments.as_slice() {
+                    [key] => document.get_from(None::<String>, key),
+                    [section, key] => document.get_from(Some(section.as_str()), key),
+                    _ => None,
+                }
+                .ok_or_else(|| SecretSpecError::DecodeFailed {
+                    name: diagnostic_name.to_string(),
+                    encoding: extract.format.as_str(),
+                    reason: format!(
+                        "INI pointer '{}' did not match the stored document",
+                        extract.pointer
+                    ),
+                })?;
+                Ok(SecretString::new(selected.to_string().into()))
+            }
         }
     }
 
@@ -1857,6 +2091,9 @@ impl Secrets {
             .map(|p| p.to_string())
             .or_else(|| self.profile.clone())
             .or_else(|| {
+                if self.ignore_ambient_profile {
+                    return None;
+                }
                 env::var("SECRETSPEC_PROFILE")
                     .ok()
                     .as_deref()
@@ -1893,6 +2130,12 @@ impl Secrets {
                     .as_deref()
                     .and_then(non_blank)
             })
+    }
+
+    #[cfg(feature = "cli")]
+    pub(crate) fn validate_ipc_selection(&self) -> Result<()> {
+        let profile = self.resolve_profile_name(None);
+        Surface::Scoped.names(self, &profile).map(|_| ())
     }
 
     /// The set of secret names the active scope admits, or `None` when no scope
@@ -2240,6 +2483,9 @@ impl Secrets {
             .map(|spec| spec.to_string())
             .or_else(|| self.provider.clone())
             .or_else(|| {
+                if self.ignore_ambient_provider {
+                    return None;
+                }
                 env::var("SECRETSPEC_PROVIDER")
                     .ok()
                     .as_deref()
@@ -2285,7 +2531,7 @@ impl Secrets {
         &self,
         plan: &ResolutionPlan,
         profile: &str,
-    ) -> HashMap<String, (SecretString, String)> {
+    ) -> HashMap<String, (SecretString, String, Option<u64>)> {
         // Grouped by cache spec (not URI) so an alias's `credentials` stays
         // reachable at build time, and sorted so warnings come out in a stable
         // order.
@@ -2333,8 +2579,14 @@ impl Secrets {
                     .and_then(Route::cache)
                     .expect("the group was built from secrets with a cached route");
                 match cached_entry(planned, cache, stored, &self.config.project.name, profile) {
-                    CachedEntry::Fresh(value) => {
-                        cached.insert(planned.name.clone(), (value, uri.clone()));
+                    CachedEntry::Fresh {
+                        value,
+                        expires_at_unix_ms,
+                    } => {
+                        cached.insert(
+                            planned.name.clone(),
+                            (value, uri.clone(), expires_at_unix_ms),
+                        );
                     }
                     CachedEntry::Stale => {
                         self.evict_cache_entry(provider.as_ref(), &planned.name, profile)
@@ -3882,11 +4134,7 @@ impl Secrets {
                 },
             );
 
-            if delete_source
-                && !crate::provider::spec_provider_deletes(
-                    &self.resolve_provider_spec(from_provider.to_string()),
-                )
-            {
+            if delete_source && !from_provider_instance.supports_delete() {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
                     "provider '{}' does not support deleting secrets and cannot be used with import --delete-source",
                     from_provider_instance.name()
@@ -4630,6 +4878,24 @@ impl Secrets {
         self.resolve_named_within(name, Surface::Scoped)
     }
 
+    /// Broker-only named resolution that retains every materialized file owner
+    /// instead of persisting paths beyond the resolver process.
+    #[cfg(feature = "cli")]
+    pub(crate) fn resolve_named_owned(&self, name: &str) -> Result<OwnedNamedResolution> {
+        self.resolve_named_owned_within(name, Surface::Scoped)
+    }
+
+    /// Broker-mode resolution with structured caller attribution scoped to the
+    /// blocking worker that performs the read (0.20+).
+    #[cfg(feature = "cli")]
+    pub(crate) fn resolve_named_owned_for_ipc(
+        &self,
+        name: &str,
+        purpose: IpcAuditPurpose,
+    ) -> Result<OwnedNamedResolution> {
+        with_ipc_audit_purpose(purpose, || self.resolve_named_owned(name))
+    }
+
     /// Shared core of [`Self::resolve_named`] and [`Self::get`].
     ///
     /// They differ only in which surface decides that a name exists: the SDK
@@ -4637,6 +4903,15 @@ impl Secrets {
     /// `get` names one secret and has no `--scope`, so an ambient or configured
     /// scope must not hide a secret from it.
     fn resolve_named_within(&self, name: &str, surface: Surface) -> Result<NamedResolution> {
+        self.resolve_named_owned_within(name, surface)?
+            .into_embedded()
+    }
+
+    fn resolve_named_owned_within(
+        &self,
+        name: &str,
+        surface: Surface,
+    ) -> Result<OwnedNamedResolution> {
         self.ensure_reason_for(AuditAction::Get, Some(name))?;
         let profile_name = self.resolve_profile_name(None);
 
@@ -4655,7 +4930,7 @@ impl Secrets {
             // records an undefined secret). No provider can be attributed.
             let err = SecretSpecError::SecretNotFound(name.to_string());
             self.record_key_error(AuditAction::Get, &profile_name, name, None, None, &err);
-            return Ok(NamedResolution::Undeclared);
+            return Ok(OwnedNamedResolution::Undeclared);
         }
 
         // The target plus its transitive composition inputs: the same
@@ -4715,14 +4990,11 @@ impl Secrets {
                             ..Default::default()
                         },
                     );
-                    return Ok(NamedResolution::Missing {
+                    return Ok(OwnedNamedResolution::Missing {
                         required: entry.required,
                     });
                 }
 
-                // Persist as_path temp files so the returned path stays valid
-                // for the caller, exactly as `resolve` does.
-                validated.keep_temp_files()?;
                 let raw = validated
                     .resolved
                     .secrets
@@ -4730,12 +5002,6 @@ impl Secrets {
                     .expect("a Resolved entry always has a value")
                     .expose_secret()
                     .to_string();
-                let (value, path) = if entry.as_path {
-                    (None, Some(raw))
-                } else {
-                    (Some(raw), None)
-                };
-
                 self.record(
                     AuditAction::Get,
                     &profile_name,
@@ -4751,13 +5017,42 @@ impl Secrets {
                         ..Default::default()
                     },
                 );
-                Ok(NamedResolution::Resolved(ResolvedSecret {
-                    value,
-                    path,
-                    as_path: entry.as_path,
-                    source: resolved_source(&entry),
-                    source_provider: entry.source_provider,
-                }))
+                let source = resolved_source(&entry);
+                let source_provider = entry.source_provider;
+                let expires_at_unix_ms = validated.expiries.remove(name);
+                let mut supporting_files = std::mem::take(&mut validated.temp_files);
+                if entry.as_path {
+                    // Every resolution branch materializes an `as_path` value
+                    // through `insert_resolved`, so the owner is expected to be
+                    // present. This stays an error rather than a panic because
+                    // it runs inside the public SDK entry point and the broker's
+                    // blocking worker, where every other failure is recoverable.
+                    let target = supporting_files
+                        .iter()
+                        .position(|file| file.path().to_string_lossy() == raw)
+                        .ok_or_else(|| {
+                            SecretSpecError::ProviderOperationFailed(format!(
+                                "secret '{name}' is declared `as_path` but its resolved value has \
+                                 no retained file owner"
+                            ))
+                        })?;
+                    let file = supporting_files.swap_remove(target);
+                    Ok(OwnedNamedResolution::File {
+                        file,
+                        source,
+                        source_provider,
+                        expires_at_unix_ms,
+                        supporting_files,
+                    })
+                } else {
+                    Ok(OwnedNamedResolution::Value {
+                        value: raw,
+                        source,
+                        source_provider,
+                        expires_at_unix_ms,
+                        supporting_files,
+                    })
+                }
             }
             Err(errors) => {
                 // Constraints are skipped for this partial plan, so a violation
@@ -4793,7 +5088,7 @@ impl Secrets {
                         ..Default::default()
                     },
                 );
-                Ok(NamedResolution::Missing { required })
+                Ok(OwnedNamedResolution::Missing { required })
             }
         }
     }
@@ -5224,6 +5519,7 @@ impl Secrets {
                 with_defaults: Vec::new(),
                 resolution: Vec::new(),
                 temp_files: Vec::new(),
+                expiries: HashMap::new(),
             }));
         }
 
@@ -5254,12 +5550,16 @@ impl Secrets {
         let mut fetched_values: HashMap<String, SecretString> = HashMap::new();
         let mut failed_primary_uris: HashMap<Option<&str>, SecretSpecError> = HashMap::new();
         let mut cached_uris: HashMap<String, String> = HashMap::new();
+        let mut known_expiries: HashMap<String, u64> = HashMap::new();
 
         // Consult caches before constructing source providers. Cache hits are
         // inserted into the same fetched-values map, and their names are
         // filtered out of source groups below. This ordering is what makes a
         // cached route useful when its remote provider is slow or unavailable.
-        for (name, (value, uri)) in self.read_cached_group(plan, profile) {
+        for (name, (value, uri, expiry)) in self.read_cached_group(plan, profile) {
+            if let Some(expiry) = expiry {
+                known_expiries.insert(name.clone(), expiry);
+            }
             cached_uris.insert(name.clone(), uri);
             fetched_values.insert(name, value);
         }
@@ -5845,6 +6145,7 @@ impl Secrets {
                 with_defaults,
                 resolution,
                 temp_files,
+                expiries: known_expiries,
             }))
         }
     }
@@ -6290,7 +6591,7 @@ mod write_target_tests {
             Ok("described".to_string())
         }
 
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             "counting"
         }
 

@@ -27,6 +27,11 @@ pub struct ValidatedSecrets {
     /// cleaned up when dropped.
     #[doc(hidden)]
     pub(crate) temp_files: Vec<NamedTempFile>,
+    /// Absolute expiry known from a fresh cache envelope, keyed by secret.
+    /// Authoritative providers do not expose read expiry through the legacy
+    /// in-process provider API, so absence means unknown rather than permanent.
+    #[doc(hidden)]
+    pub(crate) expiries: HashMap<String, u64>,
 }
 
 impl ValidatedSecrets {

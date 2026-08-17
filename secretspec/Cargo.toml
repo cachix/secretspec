@@ -33,6 +33,7 @@ dotenvy.workspace = true
 inquire.workspace = true
 miette.workspace = true
 serde_json.workspace = true
+ini.workspace = true
 tempfile.workspace = true
 same-file.workspace = true
 url.workspace = true
@@ -49,7 +50,9 @@ aws-sdk-ssm = { workspace = true, optional = true }
 azure_core = { workspace = true, optional = true }
 azure_identity = { workspace = true, optional = true }
 azure_security_keyvault_secrets = { workspace = true, optional = true }
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "process", "sync", "time"] }
+secretspec-ipc.workspace = true
+async-trait.workspace = true
 reqwest = { workspace = true, optional = true }
 rand.workspace = true
 rsa.workspace = true
@@ -57,6 +60,16 @@ uuid.workspace = true
 data-encoding.workspace = true
 detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
 
 [features]
 default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "infisical", "bw", "age", "scaleway", "sops"]

@@ -333,6 +333,7 @@ fn test_validation_result_structure() {
         with_defaults: Vec::new(),
         resolution: Vec::new(),
         temp_files: Vec::new(),
+        expiries: HashMap::new(),
     };
     assert_eq!(valid_result.missing_optional.len(), 1);
     assert_eq!(valid_result.with_defaults.len(), 0);
@@ -5332,6 +5333,82 @@ fn test_json_extract_errors_do_not_expose_stored_documents() {
 }
 
 #[test]
+fn test_ini_extract_resolves_sectioned_and_unsectioned_values() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let store = temp_dir.path().join("store");
+    fs::create_dir(&store).unwrap();
+    fs::write(
+        store.join("application.ini"),
+        r#"root_token = root-value
+
+[database]
+password = p@ss#word;still-secret
+windows_path = C:\secrets\database
+
+[a/b]
+~key = escaped
+"#,
+    )
+    .unwrap();
+
+    let config_file = temp_dir.path().join("secretspec.toml");
+    let store_uri = toml::Value::String(format!("file:{}", store.display())).to_string();
+    fs::write(
+        &config_file,
+        format!(
+            r#"[project]
+name = "test-ini-extract"
+revision = "1.0"
+require_reason = false
+
+[providers]
+documents = {store_uri}
+
+[profiles.default]
+ROOT = {{ description = "root", providers = ["documents"], ref = {{ item = "application.ini" }}, extract = {{ format = "ini", pointer = "/root_token" }} }}
+PASSWORD = {{ description = "password", providers = ["documents"], ref = {{ item = "application.ini" }}, extract = {{ format = "ini", pointer = "/database/password" }} }}
+WINDOWS_PATH = {{ description = "literal backslashes", providers = ["documents"], ref = {{ item = "application.ini" }}, extract = {{ format = "ini", pointer = "/database/windows_path" }} }}
+ESCAPED = {{ description = "escaped pointer", providers = ["documents"], ref = {{ item = "application.ini" }}, extract = {{ format = "ini", pointer = "/a~1b/~0key" }} }}
+"#
+        ),
+    )
+    .unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    let spec = Secrets::new(config, None, None, None);
+    let validated = spec.validate().unwrap().unwrap();
+    let values = &validated.resolved.secrets;
+    assert_eq!(values["ROOT"].expose_secret(), "root-value");
+    assert_eq!(values["PASSWORD"].expose_secret(), "p@ss#word;still-secret");
+    assert_eq!(
+        values["WINDOWS_PATH"].expose_secret(),
+        r"C:\secrets\database"
+    );
+    assert_eq!(values["ESCAPED"].expose_secret(), "escaped");
+}
+
+#[test]
+fn test_ini_extract_errors_do_not_expose_stored_documents() {
+    use crate::config::{ExtractFormat, SecretExtract};
+
+    let extract = SecretExtract {
+        format: ExtractFormat::Ini,
+        pointer: "/database/password".to_string(),
+    };
+    for stored in [
+        "[database\npassword=sensitive-invalid-document",
+        "[database]\nother=sensitive-missing-pointer",
+    ] {
+        let error = Secrets::extract_stored_value(&extract, "PASSWORD", stored).unwrap_err();
+        assert_eq!(error.kind(), "decode_failed");
+        assert!(error.to_string().contains("using ini"));
+        assert!(!error.to_string().contains("sensitive"));
+    }
+}
+
+#[test]
 fn test_binary_decoded_secret_requires_as_path() {
     use std::fs;
 
@@ -9965,6 +10042,49 @@ fn cached_route_hits_cache_refreshes_after_clear_and_survives_source_loss() {
         "remote-2",
         "a fresh hit must not contact the now-broken authoritative provider"
     );
+}
+
+#[cfg(feature = "cli")]
+#[test]
+fn named_cached_resolution_reports_the_cache_envelopes_expiry() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "8h");
+
+    let first = secrets.resolve_named_owned("API_KEY").unwrap();
+    let crate::secrets::OwnedNamedResolution::Value {
+        expires_at_unix_ms, ..
+    } = first
+    else {
+        panic!("the authoritative read resolves an inline value");
+    };
+    assert_eq!(
+        expires_at_unix_ms, None,
+        "the legacy provider API does not report authoritative read expiry"
+    );
+
+    let (_, stored) = dotenvy::from_path_iter(&cache)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    let payload = stored
+        .strip_prefix(crate::cache::CACHE_ENVELOPE_MARKER)
+        .unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(payload).unwrap();
+    let expected = envelope["expires_at"].as_u64().unwrap() * 1000;
+
+    let second = secrets.resolve_named_owned("API_KEY").unwrap();
+    let crate::secrets::OwnedNamedResolution::Value {
+        expires_at_unix_ms, ..
+    } = second
+    else {
+        panic!("the cache read resolves an inline value");
+    };
+    assert_eq!(expires_at_unix_ms, Some(expected));
 }
 
 #[test]

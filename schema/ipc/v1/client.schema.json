@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secretspec.dev/schema/ipc/v1/client.schema.json",
+  "title": "SecretSpec Secret Resolution Protocol version 1",
+  "$defs": {
+    "PathManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": { "const": "path" },
+        "path": { "type": "string", "minLength": 1, "maxLength": 32768 }
+      }
+    },
+    "InlineManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "toml", "base_dir"],
+      "properties": {
+        "kind": { "const": "inline" },
+        "toml": { "type": "string", "maxLength": 1048576 },
+        "base_dir": { "type": "string", "minLength": 1, "maxLength": 32768 }
+      }
+    },
+    "Manifest": {
+      "oneOf": [
+        { "$ref": "#/$defs/PathManifest" },
+        { "$ref": "#/$defs/InlineManifest" }
+      ]
+    },
+    "InitializeApplication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest", "provider", "profile", "scope", "reason"],
+      "properties": {
+        "manifest": { "$ref": "#/$defs/Manifest" },
+        "provider": { "type": ["string", "null"], "maxLength": 32768 },
+        "profile": { "type": ["string", "null"], "maxLength": 4096 },
+        "scope": { "type": ["string", "null"], "maxLength": 4096 },
+        "reason": { "type": ["string", "null"], "maxLength": 4096 }
+      }
+    },
+    "InitializedApplication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest_kind", "supports_inline_manifest"],
+      "properties": {
+        "manifest_kind": { "type": "string", "enum": ["path", "inline"] },
+        "supports_inline_manifest": { "type": "boolean" }
+      }
+    },
+    "InitializeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "versions", "client", "limits", "application"],
+      "properties": {
+        "protocol": { "const": "secretspec.client" },
+        "versions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 1, "maximum": 4294967295 }
+        },
+        "client": { "$ref": "common.schema.json#/$defs/Product" },
+        "limits": { "$ref": "common.schema.json#/$defs/Limits" },
+        "application": { "$ref": "#/$defs/InitializeApplication" }
+      }
+    },
+    "InitializeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "version", "server", "capabilities", "limits", "application"],
+      "properties": {
+        "protocol": { "const": "secretspec.client" },
+        "version": { "const": 1 },
+        "server": { "$ref": "common.schema.json#/$defs/Product" },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+        },
+        "limits": { "$ref": "common.schema.json#/$defs/Limits" },
+        "application": { "$ref": "#/$defs/InitializedApplication" }
+      }
+    },
+    "Purpose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["consumer", "operation"],
+      "properties": {
+        "consumer": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "operation": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "host": { "type": "string", "maxLength": 4096 },
+        "path": { "type": "string", "maxLength": 4096 }
+      }
+    },
+    "ResolveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "representation", "purpose"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "representation": { "type": "string", "enum": ["auto", "value", "file"] },
+        "purpose": { "$ref": "#/$defs/Purpose" }
+      }
+    },
+    "UndeclaredResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": { "status": { "const": "undeclared" } }
+    },
+    "MissingResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "required"],
+      "properties": {
+        "status": { "const": "missing" },
+        "required": { "type": "boolean" }
+      }
+    },
+    "ResolvedValueResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "representation", "value", "source", "expires_at_unix_ms"],
+      "properties": {
+        "status": { "const": "resolved" },
+        "representation": { "const": "value" },
+        "value": { "type": "string" },
+        "source": { "type": "string", "enum": ["provider", "generated", "default", "composed"] },
+        "source_provider": { "type": "string", "maxLength": 32768 },
+        "expires_at_unix_ms": {
+          "oneOf": [
+            { "$ref": "common.schema.json#/$defs/DeadlineUnixMs" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "ResolvedFileResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "representation", "path", "lease_id", "source", "expires_at_unix_ms"],
+      "properties": {
+        "status": { "const": "resolved" },
+        "representation": { "const": "file" },
+        "path": { "type": "string", "minLength": 1, "maxLength": 32768 },
+        "lease_id": { "type": "string", "minLength": 22, "maxLength": 256 },
+        "source": { "type": "string", "enum": ["provider", "generated", "default", "composed"] },
+        "source_provider": { "type": "string", "maxLength": 32768 },
+        "expires_at_unix_ms": {
+          "oneOf": [
+            { "$ref": "common.schema.json#/$defs/DeadlineUnixMs" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "ResolveResult": {
+      "oneOf": [
+        { "$ref": "#/$defs/UndeclaredResult" },
+        { "$ref": "#/$defs/MissingResult" },
+        { "$ref": "#/$defs/ResolvedValueResult" },
+        { "$ref": "#/$defs/ResolvedFileResult" }
+      ]
+    },
+    "ReleaseParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lease_ids"],
+      "properties": {
+        "lease_ids": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      }
+    },
+    "ReleaseResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["released"],
+      "properties": {
+        "released": { "type": "integer", "minimum": 0, "maximum": 256 }
+      }
+    }
+  }
+}

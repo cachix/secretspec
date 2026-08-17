@@ -2,7 +2,9 @@
 members = [
   "secretspec",
   "secretspec-derive",
-  "secretspec-ffi",
+  "libsecretspec",
+  "secretspec-ipc",
+  "conformance/ipc/runner",
   "secretspec-node",
   "secretspec-php",
   "secretspec-py",
@@ -31,6 +33,7 @@ dotenvy = "0.15"
 inquire = { version = "0.9.4", features = ["experimental-multiline-input"] }
 miette = { version = "7.6", features = ["fancy"] }
 serde_json = "1.0"
+ini = { package = "rust-ini", version = "0.21.3" }
 proptest = "1"
 tempfile = "3.0"
 same-file = "1.0"
@@ -58,12 +61,17 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 secretspec-derive = { version = "0.19.1", path = "./secretspec-derive" }
 secretspec = { version = "0.19.1", path = "./secretspec" }
+secretspec-core = { package = "secretspec", version = "0.19.1", path = "./secretspec" }
 rand = "0.9"
 rsa = { version = "0.9", features = ["pem"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 data-encoding = "2"
 detect-coding-agent = "0.1"
 age = { version = "0.12", features = ["armor", "plugin", "ssh"] }
+async-trait = "0.1"
+tokio-util = { version = "0.7", features = ["rt"] }
+zeroize = { version = "1.8", features = ["derive"] }
+secretspec-ipc = { version = "0.19.1", path = "./secretspec-ipc" }
 
 # The profile that 'dist' will build with
 [profile.dist]

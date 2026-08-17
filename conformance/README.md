@@ -41,7 +41,7 @@ the comparison is deterministic and meaningful across languages.
 ## Running
 
 Run everything with the aggregate runner (inside the project devenv shell). It
-builds the `secretspec-ffi` library once, points the runtime-loading SDKs at the
+builds the `libsecretspec` library once, points the runtime-loading SDKs at the
 cdylib via `SECRETSPEC_FFI_LIB` and stages the staticlib for the SDKs that link
 it (Haskell), runs each language's conformance suite, and prints a combined
 PASS/FAIL/SKIP summary (exiting non-zero if any language fails):
@@ -57,7 +57,7 @@ relative to the repo root:
 - Go: `cd secretspec-go && go test ./...`
 - Ruby: `cd secretspec-rb && ruby test/test_resolve.rb`
 - Node: `cd secretspec-node && node --test`
-- Haskell: `cd secretspec-hs && cabal test` (needs the `secretspec-ffi`
+- Haskell: `cd secretspec-hs && cabal test` (needs the `libsecretspec`
   staticlib staged on `--extra-lib-dirs`; see the Haskell SDK build steps)
 - C#: `cd secretspec-dotnet && dotnet run --project tests/SecretSpec.Tests`
 - PHP: `cd secretspec-php && ./vendor/bin/phpunit tests/ConformanceTest.php`

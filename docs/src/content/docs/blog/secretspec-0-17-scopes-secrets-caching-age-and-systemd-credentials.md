@@ -61,7 +61,8 @@ authorization boundary when the child itself holds provider credentials.
 
 Carrying the selected scope through resolver requests and results required a
 breaking change to
-[`secretspec-ffi`](https://github.com/cachix/secretspec/tree/main/secretspec-ffi).
+[`secretspec-ffi`](https://github.com/cachix/secretspec/tree/main/libsecretspec),
+which is named `libsecretspec` in SecretSpec 0.20+.
 All [SecretSpec SDKs](/sdk/overview/) have been updated for 0.17 to support
 scopes, so applications should upgrade their SDK package and bundled native
 resolver together.

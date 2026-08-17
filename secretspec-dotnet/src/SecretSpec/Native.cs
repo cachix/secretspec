@@ -6,7 +6,7 @@ namespace Cachix.SecretSpec;
 
 internal static partial class Native
 {
-    private const string LibraryName = "secretspec_ffi";
+    private const string LibraryName = "secretspec";
 
     static Native()
     {
@@ -67,14 +67,17 @@ internal static partial class Native
         // normal loader search path); the source-checkout scan below is a
         // development fallback that must not stat ancestor directories, or shadow
         // the packaged asset, in a deployed application.
-        if (NativeLibrary.TryLoad(libraryName, assembly, searchPath, out var packaged))
-            return packaged;
+        foreach (var candidateName in new[] { libraryName, "secretspec_ffi" })
+        {
+            if (NativeLibrary.TryLoad(candidateName, assembly, searchPath, out var packaged))
+                return packaged;
+        }
 
-        var fileName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-            ? "secretspec_ffi.dll"
+        var fileNames = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            ? new[] { "secretspec.dll", "secretspec_ffi.dll" }
             : RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
-                ? "libsecretspec_ffi.dylib"
-                : "libsecretspec_ffi.so";
+                ? new[] { "libsecretspec.dylib", "libsecretspec_ffi.dylib" }
+                : new[] { "libsecretspec.so", "libsecretspec_ffi.so" };
 
         foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
         {
@@ -88,12 +91,15 @@ internal static partial class Native
                 var newestTime = DateTime.MinValue;
                 foreach (var profile in new[] { "release", "debug" })
                 {
-                    var candidate = new FileInfo(
-                        Path.Combine(directory.FullName, "target", profile, fileName));
-                    if (candidate.Exists && candidate.LastWriteTimeUtc >= newestTime)
+                    foreach (var fileName in fileNames)
                     {
-                        newest = candidate.FullName;
-                        newestTime = candidate.LastWriteTimeUtc;
+                        var candidate = new FileInfo(
+                            Path.Combine(directory.FullName, "target", profile, fileName));
+                        if (candidate.Exists && candidate.LastWriteTimeUtc >= newestTime)
+                        {
+                            newest = candidate.FullName;
+                            newestTime = candidate.LastWriteTimeUtc;
+                        }
                     }
                 }
                 if (newest is not null)

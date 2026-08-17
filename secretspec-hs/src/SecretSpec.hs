@@ -3,7 +3,7 @@
 
 -- | Haskell SDK for SecretSpec, a declarative secrets manager.
 --
--- A thin client over the @secretspec-ffi@ C ABI, linked at build time.
+-- A thin client over the @libsecretspec@ C ABI, linked at build time.
 -- Resolution (providers, fallback chains, profiles, generation, @as_path@)
 -- happens entirely in the Rust core; this module marshals a JSON request to
 -- @secretspec_resolve@, parses the response envelope, and exposes it with the
@@ -347,7 +347,7 @@ versionError got expected kind =
     T.concat
       [ "unsupported ", kind, " schema version ", T.pack (show got)
       , " (expected ", T.pack (show expected)
-      , "); the secretspec-ffi library and this SDK are out of sync"
+      , "); the libsecretspec library and this SDK are out of sync"
       ]
 
 fromResult :: Either String a -> IO a

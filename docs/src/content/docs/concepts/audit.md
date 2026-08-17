@@ -46,6 +46,7 @@ and how to turn it off.
   "provider": "keyring://",
   "outcome": "found",
   "reason": "deploy web frontend",
+  "purpose": { "consumer": "python-sdk", "operation": "resolve" },
   "actor": { "user": "alice", "agent": "claude-code", "is_agent": true },
   "version": "0.11.0"
 }
@@ -69,6 +70,7 @@ and how to turn it off.
 | | A cached route writing its local entry is recorded as `cache_refresh`/`written`, never as `set`: no authoritative store was written. Dropping an entry — `cache clear`, or an entry a write superseded — is `cache_clear`/`deleted`. |
 | `error_kind` | A non-sensitive tag when `outcome` is `error` |
 | `reason` | The reason supplied via `--reason` / `SECRETSPEC_REASON` / the SDK, if any |
+| `purpose` | Structured broker-client attribution (`consumer`, `operation`, and optional `host`/`path`); present only for broker resolution in SecretSpec 0.20+. It is audit context, never identity or authorization input. |
 | `actor` | The OS user, the detected coding agent (if any), and whether this is an agent session |
 
 This pairs naturally with the [`require_reason`](/reference/configuration/#requiring-a-reason-for-secret-access)

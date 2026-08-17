@@ -8,10 +8,16 @@ import quickStartExample from '../../../../../secretspec-go/examples/quick_start
 import scopesExample from '../../../../../secretspec-go/examples/scopes/main.go?raw';
 import typedAccessExample from '../../../../../secretspec-go/examples/typed_access/main.go?raw';
 
-The Go SDK (`secretspec-go`) is a thin client over the `secretspec-ffi` C ABI,
+The Go SDK (`secretspec-go`) is a thin client over the `libsecretspec` C ABI,
 loaded via [purego](https://github.com/ebitengine/purego) (dlopen, no cgo).
 Resolution happens in the Rust core, so the SDK inherits every provider with no
 Go-side logic.
+
+:::note[SecretSpec 0.20+ library name]
+`libsecretspec` was named `secretspec-ffi` through SecretSpec 0.19. The current
+Go loader prefers the new artifact name and still accepts pre-0.20 shared
+libraries.
+:::
 
 ## Quick start
 
@@ -40,7 +46,7 @@ $ secretspec schema | quicktype -s schema --top-level SecretSpec --lang go -o se
 
 ## Library discovery
 
-The native `secretspec-ffi` cdylib is resolved at runtime, in order:
+The native `libsecretspec` cdylib is resolved at runtime, in order:
 
 1. The `SECRETSPEC_FFI_LIB` environment variable (an explicit path).
 2. A library embedded at build time with `-tags embed_lib`.
@@ -48,7 +54,7 @@ The native `secretspec-ffi` cdylib is resolved at runtime, in order:
    (the development path).
 
 The SDK uses [purego](https://github.com/ebitengine/purego), so the cdylib is
-loaded at runtime, not linked. Either install/build `libsecretspec_ffi` and set
+loaded at runtime, not linked. Either install/build `libsecretspec` and set
 `SECRETSPEC_FFI_LIB`, or stage the per-platform library into `lib/` and build
 with `-tags embed_lib` for a self-contained binary. The embedded library is
 extracted to a per-user, owner-only cache directory at first use, and is not
@@ -57,7 +63,7 @@ distributed through the Go module proxy.
 ## Static linking
 
 For a self-contained binary with no runtime library to locate, build with
-`-tags static` instead. This uses cgo and links `libsecretspec_ffi.a` directly
+`-tags static` instead. This uses cgo and links `libsecretspec.a` directly
 into the Go binary. In a development checkout:
 
 ```bash
@@ -72,7 +78,7 @@ Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
 # Use "static" (the default) or "shared"; use separate prefixes for both.
-$ bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
+$ bash libsecretspec/scripts/cinstall.sh "$PREFIX" static
 ```
 
 Then use the same build command for either type:

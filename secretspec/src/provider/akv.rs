@@ -597,7 +597,7 @@ impl Provider for AkvProvider {
         self.credentials = credentials;
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -830,7 +830,7 @@ mod tests {
     #[test]
     fn registration_advertises_service_principal_credentials() {
         assert_eq!(
-            crate::provider::credential_names_for_spec("akv://myvault"),
+            crate::provider::credential_names_for_spec("akv://myvault").unwrap(),
             &[TENANT_ID, CLIENT_ID, CLIENT_SECRET]
         );
     }

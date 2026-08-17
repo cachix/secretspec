@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":2,"error":{"code":-32005,"message":"permission denied","data":{"kind":"permission_denied","retryable":false}}}

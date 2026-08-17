@@ -9,12 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- SecretSpec 0.20+ adds versioned local IPC: a private stdio resolution broker,
+  trusted out-of-tree provider endpoints, independent Rust and pure-C clients,
+  exact-name resolution with broker-owned file leases, and shared
+  schema/OpenRPC/conformance contracts, including executable common-case
+  drivers for both clients, the Rust provider endpoint and external adapter,
+  plus the real broker process. Provider IPC preserves structured error kinds,
+  never uses protocol streams for prompts, and isolates endpoint state by URI
+  and reason; discovery precedence and non-replay are covered by executable
+  tests. IPC deadlines live once on the request envelope, endpoints advertise
+  their supported application methods, Rust exposes owned typed sessions and
+  endpoint helpers, and the C client includes a synchronous call convenience
+  API alongside cancellable call handles. The embedded C ABI is now named `libsecretspec`,
+  with `libsecretspec.so`/`.dylib`, `secretspec.dll`, `libsecretspec.a`, and
+  `libsecretspec.pc` as its public artifacts; runtime SDK loaders continue to
+  recognize the pre-0.20 `secretspec-ffi` filenames.
+- `extract` supports INI documents in SecretSpec 0.20+, selecting an
+  unsectioned key with `/key` or a named-section key with `/section/key`.
 - `secretspec completions <shell>` generates completion scripts for Bash,
   Elvish, Fish, Nushell, PowerShell, and Zsh directly from the CLI definition,
   including descriptions and contextual suggestions for profiles, scopes,
   secret names, providers, aliases, paths, and commands. Completion reads
   configuration metadata only; it never queries providers or reads secret
   values.
+
+### Fixed
+
+- SecretSpec 0.20+ IPC enforces Windows ACL isolation for provider discovery
+  and broker lease files, bounds cancellation and child-process cleanup by
+  request deadlines, and validates the same protocol constraints in its Rust
+  and C clients. Request deadlines are clamped to 300 seconds in the future by
+  both clients, so a peer cannot hold an in-flight slot indefinitely; a
+  provider endpoint that ignores shutdown is now always reaped rather than
+  left behind; and a transport failure still cancels in-flight work and runs
+  session cleanup. Correcting a rejected base directory or credential set
+  recovers an external provider instead of disabling it permanently, and a
+  rejected credential set no longer replaces the accepted one.
 
 ## [0.19.1] - 2026-08-11
 

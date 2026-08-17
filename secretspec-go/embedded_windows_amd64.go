@@ -4,7 +4,7 @@ package secretspec
 
 import _ "embed"
 
-//go:embed lib/secretspec_ffi_windows_amd64.dll
+//go:embed lib/secretspec_windows_amd64.dll
 var embeddedLib []byte
 
-const embeddedLibName = "secretspec_ffi.dll"
+const embeddedLibName = "secretspec.dll"

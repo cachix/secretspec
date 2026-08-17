@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "provider.session-isolation",
+  "targets": ["external-adapter"],
+  "timeout_ms": 10000,
+  "actions": [
+    {"kind": "initialize", "uri": "memory://session-a", "reason": "session-a"},
+    {"kind": "call", "method": "provider.set", "address": "shared-address"},
+    {"kind": "shutdown"},
+    {"kind": "initialize", "uri": "memory://session-b", "reason": "session-b"},
+    {"kind": "call", "method": "provider.get", "address": "shared-address", "expect": "missing"},
+    {"kind": "change_reason", "reason": "session-b-reason-2"},
+    {"kind": "call", "method": "provider.get", "address": "shared-address", "expect": "missing"},
+    {"kind": "shutdown"}
+  ],
+  "required_events": [
+    "session_a_initialized",
+    "session_a_closed",
+    "session_b_initialized",
+    "uri_isolated",
+    "reason_isolated",
+    "closed"
+  ]
+}

@@ -82,6 +82,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Closing the output pipe now ends the CLI quietly on Unix, so
+  `secretspec export | head` and `secretspec check --json | head` behave like
+  any other Unix tool. Previously `export` reported `IO error: Broken pipe`
+  and exited 1, and `check --json` panicked with `failed printing to stdout`,
+  because Rust ignores `SIGPIPE` by default and surfaced `EPIPE` instead. The
+  entry point now restores the default `SIGPIPE` disposition, which covers
+  every command that writes to stdout.
+
 - Google Cloud Secret Manager convention names now use the readable,
   versioned `secretspec2--{project}--{profile}--{key}` layout. Distinct logical
   addresses such as `my-app/prod/K` and `my/app-prod/K` can no longer collide

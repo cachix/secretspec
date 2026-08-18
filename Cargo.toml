@@ -21,6 +21,7 @@ is_executable = "1.0"
 keyring = "4.1.6"
 keepass = { version = "0.13.17", features = ["save_kdbx4"] }
 keeper-secrets-manager-core = { version = "17.3.0", default-features = false, features = ["blocking"] }
+libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.9"
 toml_edit = "0.23"

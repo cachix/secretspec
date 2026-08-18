@@ -58,6 +58,9 @@ data-encoding.workspace = true
 detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [features]
 default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "scaleway", "sops"]
 cli = ["dep:toml_edit", "dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable"]

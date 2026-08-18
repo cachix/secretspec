@@ -660,6 +660,29 @@ per project/profile. A single-file provider supports `ref = { item = "..." }`
 as a root key (or a key in `[DEFAULT]` for INI); extra coordinates and refs
 through templated paths are rejected.
 
+
+## Kubernetes Provider (0.20+)
+
+:::caution[Version compatibility]
+The `kubernetes` provider is added in SecretSpec 0.20.
+:::
+
+**URI**: `k8s+KIND://NAME[@NAMESPACE]` - Stores secrets in a Kubernetes
+ConfigMap or Secret
+
+```text
+k8s+configmap://db-config@db-postgres
+k8s+configmap://db-config
+k8s+secret://db-credentials@db-postgres
+```
+
+**Features**: Read/write Kubernetes ConfigMaps and Secrets
+**Prerequisites**: A Kubernetes configuration in `$KUBECONFIG` or
+`$HOME/.kube/config`; build with `--features kubernetes` (0.20+)
+**Authentication**: Configured in Kubernetes configuration
+**Storage**: `secretspec-{project}-{profile}-{key}` key under `.data` in the
+Kubernetes object
+
 ## Provider Selection
 
 ### Command Line
@@ -720,3 +743,4 @@ $ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Infisical | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |
 | age (0.17+) | ✅ age encryption | Local filesystem | ❌ No |
 | SOPS (0.17+) | ✅ Configured SOPS encryption | Local filesystem | Depends on configured key service |
+| Kubernetes (0.20+) | ❌ ConfigMap ✅ Secret if configured | Kubernetes server | ✅ Yes |

@@ -42,6 +42,7 @@
 //! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
 //! - [`bw::BitwardenProvider`]: Bitwarden Password Manager (0.18+)
 //! - [`sops::SopsProvider`]: SOPS-encrypted file integration (0.17+)
+//! - [`kubernetes::KubernetesProvider`]: Kubernetes integration (0.20+)
 //!
 //! ## URI-Based Configuration
 //!
@@ -165,6 +166,8 @@ pub mod kdbx;
 pub mod keeper;
 #[cfg(feature = "keyring")]
 pub mod keyring;
+#[cfg(feature = "kubernetes")]
+pub mod kubernetes;
 pub mod lastpass;
 pub mod null;
 pub mod onepassword;

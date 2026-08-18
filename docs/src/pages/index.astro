@@ -73,6 +73,7 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'linux', slug: 'keyring', label: 'Secret Service' },
   { slug: 'keyring', label: 'Credential Manager' },
   { icon: { src: sopsLogo, type: 'bundled' }, slug: 'sops', label: 'SOPS (0.17+)' },
+  { icon: 'kubernetes', slug: 'kubernetes', label: 'Kubernetes (0.20+)' },
 ];
 
 type ConsumerMetadata = {
@@ -160,6 +161,7 @@ const providerColors: Record<string, SyntaxColorName> = {
   'systemd-credential': 'blue',
   fly: 'magenta',
   sops: 'magenta',
+  kubernetes: 'blue',
 };
 
 const consumerColors: Record<string, SyntaxColorName> = {
@@ -558,6 +560,7 @@ const reelScriptData = {
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-orange)" href="/providers/awsps/"><span class="provider-name">awsps</span>: AWS Systems Manager Parameter Store (0.18+)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-magenta)" href="/providers/scaleway/"><span class="provider-name">scaleway</span>: Scaleway Secret Manager (0.17+)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/dashlane/"><span class="provider-name">dashlane</span>: Dashlane password manager, read-only (0.18+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-blue)" href="/providers/kubernetes/"><span class="provider-name">kubernetes</span>: Kubernetes (0.20+)</a>
 <span class="landing-ok">✓</span> Saved to ~/.config/secretspec/config.toml</span>
 
 <span class="landing-run-step"><span class="tok-com"># 3. Run your app with secrets injected</span>

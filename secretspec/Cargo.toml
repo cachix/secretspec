@@ -66,13 +66,15 @@ data-encoding.workspace = true
 sha2.workspace = true
 detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
+kube = { workspace = true, optional = true }
+k8s-openapi = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 signal-hook.workspace = true
 
 [features]
-default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "scaleway", "sops"]
+default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "scaleway", "sops", "kubernetes"]
 cli = ["dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable", "dep:dunce"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
@@ -97,6 +99,7 @@ akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secr
 aac = ["akv", "dep:reqwest", "azure_core/hmac_rust"]
 age = ["dep:age"]
 sops = []
+kubernetes = ["dep:kube", "dep:k8s-openapi"]
 
 [dev-dependencies]
 # Validates serialized resolution reports against the committed JSON Schema.

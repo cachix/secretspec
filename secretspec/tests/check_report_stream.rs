@@ -178,7 +178,7 @@ fn a_reader_that_closes_the_pipe_early_does_not_panic() {
          check --no-prompt --provider 'dotenv://{env}' | head -1",
         bin = shell_quote(env!("CARGO_BIN_EXE_secretspec")),
         manifest = shell_quote(project.path().join("secretspec.toml").to_str().unwrap()),
-        env = env_path.display(),
+        env = shell_quote(env_path.to_str().unwrap()),
     );
 
     let output = Command::new("sh")

@@ -530,7 +530,7 @@ fn find_config_file_from(start: PathBuf) -> Result<PathBuf> {
 ///
 /// // Load configuration and validate secrets
 /// let mut spec = Secrets::load().unwrap();
-/// spec.check(false).unwrap();
+/// spec.check(false, &mut std::io::stdout()).unwrap();
 /// ```
 pub struct Secrets {
     /// The project-specific configuration
@@ -813,7 +813,7 @@ impl Secrets {
     ///
     /// let mut spec = Secrets::load().unwrap();
     /// spec.set_provider("keyring");
-    /// spec.check(false).unwrap();
+    /// spec.check(false, &mut std::io::stdout()).unwrap();
     /// ```
     pub fn load() -> Result<Self> {
         let config_path = find_config_file()?;
@@ -926,7 +926,7 @@ impl Secrets {
     ///
     /// let mut spec = Secrets::load().unwrap();
     /// spec.set_provider("dotenv:.env.production");
-    /// spec.check(false).unwrap();
+    /// spec.check(false, &mut std::io::stdout()).unwrap();
     /// ```
     pub fn set_provider(&mut self, provider: impl Into<String>) {
         if let Some(provider) = non_blank(&provider.into()) {
@@ -950,7 +950,7 @@ impl Secrets {
     ///
     /// let mut spec = Secrets::load().unwrap();
     /// spec.set_profile("production");
-    /// spec.check(false).unwrap();
+    /// spec.check(false, &mut std::io::stdout()).unwrap();
     /// ```
     pub fn set_profile(&mut self, profile: impl Into<String>) {
         if let Some(profile) = non_blank(&profile.into()) {
@@ -1014,7 +1014,7 @@ impl Secrets {
     /// use secretspec::Secrets;
     ///
     /// let spec = Secrets::load().unwrap().with_reason("deploy web frontend");
-    /// spec.check(false).unwrap();
+    /// spec.check(false, &mut std::io::stdout()).unwrap();
     /// ```
     pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
         if let Some(reason) = normalize_reason(&reason.into()) {
@@ -1046,7 +1046,7 @@ impl Secrets {
     ///         .with_operation("credential_get")
     ///         .with_resource("github.com"),
     /// );
-    /// spec.check(false).unwrap();
+    /// spec.check(false, &mut std::io::stdout()).unwrap();
     /// ```
     pub fn with_caller(mut self, caller: CallerContext) -> Self {
         if let Some(caller) = caller.normalized() {
@@ -1081,7 +1081,7 @@ impl Secrets {
     ///
     /// // Uses SECRETSPEC_REASON when the caller set one, "nightly export" otherwise.
     /// let spec = Secrets::load().unwrap().with_default_reason("nightly export");
-    /// spec.check(false).unwrap();
+    /// spec.check(false, &mut std::io::stdout()).unwrap();
     /// ```
     pub fn with_default_reason(mut self, reason: impl Into<String>) -> Self {
         if self.reason.is_none() {
@@ -3648,9 +3648,18 @@ impl Secrets {
     /// showing which are present, missing, or using defaults. Unless `no_prompt` is set,
     /// it then prompts the user to provide values for any missing required secrets.
     ///
+    /// Output is written to `out` rather than directly to stdout, for the same
+    /// reason as [`Self::export`]: an SDK/FFI caller can capture the formatted
+    /// report, and a broken pipe (`check | head`) surfaces as a returned error
+    /// instead of a panic. The CLI passes an unlocked stdout handle rather than
+    /// a held lock, since `validate()` below fans out onto `std::thread::scope`
+    /// workers and a lock held across that call would serialize against any
+    /// output those workers might someday produce.
+    ///
     /// # Arguments
     ///
     /// * `no_prompt` - If true, don't prompt for missing secrets and return an error instead
+    /// * `out` - Where the status report is written, e.g. `&mut std::io::stdout()`
     ///
     /// # Returns
     ///
@@ -3669,22 +3678,11 @@ impl Secrets {
     /// use secretspec::Secrets;
     ///
     /// let mut spec = Secrets::load().unwrap();
-    /// let validated = spec.check(false).unwrap();
+    /// let validated = spec.check(false, &mut std::io::stdout()).unwrap();
     /// ```
-    pub fn check(&self, no_prompt: bool) -> Result<ValidatedSecrets> {
+    pub fn check(&self, no_prompt: bool, out: &mut dyn io::Write) -> Result<ValidatedSecrets> {
         self.ensure_reason_for(AuditAction::Check, None)?;
         let profile_display = self.resolve_profile_name(None);
-
-        // The report is this command's output, so it goes to stdout, matching
-        // the `--json` and `--explain` paths above it.
-        //
-        // Written through a sink rather than `println!` for the reason
-        // `write_export` gives: a closed pipe (`check | head`) becomes a
-        // returned error instead of a panic. Locked once so the whole report is
-        // one contended acquisition rather than one per line.
-        use std::io::Write;
-        let stdout = io::stdout();
-        let mut out = stdout.lock();
 
         writeln!(
             out,
@@ -3697,14 +3695,12 @@ impl Secrets {
         // The read is audited inside `validate()`, so no bulk event here.
         match self.validate()? {
             Ok(valid) => {
-                self.display_validation_success(&mut out, &valid)?;
+                self.display_validation_success(out, &valid)?;
                 // All secrets present - return early without re-validating
                 Ok(valid)
             }
             Err(errors) => {
-                self.display_validation_errors(&mut out, &errors)?;
-                // Release the lock before `ensure_secrets`, which prompts.
-                drop(out);
+                self.display_validation_errors(out, &errors)?;
                 // Missing secrets - prompt if interactive (and not no_prompt) and re-validate
                 self.ensure_secrets(None, None, !no_prompt)
             }

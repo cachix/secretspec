@@ -31,8 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written to stderr could leak raw escape bytes into a redirected log, or drop
   colour from output being read on a terminal. `check --json` and
   `check --explain` already wrote to stdout and are unchanged. The report now
-  goes through a locked sink, so a reader that closes the pipe early
-  (`check | head`) reports a broken pipe and exits non-zero instead of
+  goes through a sink rather than `println!`, so a reader that closes the pipe
+  early (`check | head`) reports a broken pipe and exits non-zero instead of
   panicking, matching `secretspec export`. Scripts that capture the report by
   redirecting stderr specifically need to capture stdout instead; `2>&1`
   keeps working.

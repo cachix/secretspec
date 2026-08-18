@@ -7688,7 +7688,9 @@ fn test_check_returns_ok_when_required_present() {
         &temp_dir,
     );
 
-    let validated = spec.check(true).expect("check should succeed");
+    let validated = spec
+        .check(true, &mut Vec::new())
+        .expect("check should succeed");
     assert!(validated.resolved.secrets.contains_key("REQUIRED"));
 }
 
@@ -7700,7 +7702,7 @@ fn test_check_no_prompt_errors_when_required_missing() {
 
     assert!(
         matches!(
-            spec.check(true),
+            spec.check(true, &mut Vec::new()),
             Err(SecretSpecError::RequiredSecretMissing(_))
         ),
         "expected RequiredSecretMissing when a required secret is absent"
@@ -7760,7 +7762,8 @@ fn audit_check_emits_single_check_event() {
     let (logger, lines) = crate::audit::test_support::collecting_logger();
     spec.set_audit_for_test(logger);
 
-    spec.check(true).expect("check should succeed");
+    spec.check(true, &mut Vec::new())
+        .expect("check should succeed");
 
     // Exactly one `check` event — not the 2-3 that the repeated internal
     // re-validations used to produce.
@@ -9657,7 +9660,8 @@ secrets = ["PG_ARGS"]
         let (logger, lines) = crate::audit::test_support::collecting_logger();
         spec.set_audit_for_test(logger);
 
-        spec.check(true).expect("the scoped check resolves");
+        spec.check(true, &mut Vec::new())
+            .expect("the scoped check resolves");
 
         let events = super::audit_events(&lines);
         let check = events
@@ -9750,7 +9754,7 @@ secrets = ["PG_ARGS"]
         let (logger, lines) = crate::audit::test_support::collecting_logger();
         spec.set_audit_for_test(logger);
 
-        assert!(spec.check(true).is_err());
+        assert!(spec.check(true, &mut Vec::new()).is_err());
 
         let events = super::audit_events(&lines);
         let check = events

@@ -17,7 +17,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 mod claude;
+mod codex;
 mod completion;
+mod credential_integration;
 mod docker;
 mod git;
 
@@ -282,6 +284,11 @@ enum Commands {
     Claude {
         #[command(subcommand)]
         action: claude::ClaudeAction,
+    },
+    #[command(about = "Manage Codex API-key integration (0.20+)")]
+    Codex {
+        #[command(subcommand)]
+        action: codex::CodexAction,
     },
     /// Import secrets from a provider to another provider
     Import {
@@ -966,6 +973,7 @@ pub fn main() -> Result<()> {
 
     match cli.command {
         Commands::Claude { action } => claude::run(action, &cli.file, &cli.reason, &caller, typed),
+        Commands::Codex { action } => codex::run(action, &cli.file, &cli.reason, &caller, typed),
         Commands::Docker { action } => docker::run(action, &cli.file, &cli.reason, &caller, typed),
         // Initialize a new secretspec.toml configuration file
         Commands::Init {

@@ -469,6 +469,16 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
           ],
         },
         {
+          label: "Integrations",
+          items: [
+            {
+              label: "Claude Code",
+              slug: "integrations/claude-code",
+              badge: { text: "0.20+", variant: "note" },
+            },
+          ],
+        },
+        {
           label: "CI",
           items: [
             { label: "GitHub Actions", slug: "ci/github-actions" },

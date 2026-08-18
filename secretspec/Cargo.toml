@@ -55,6 +55,7 @@ rand.workspace = true
 rsa.workspace = true
 uuid.workspace = true
 data-encoding.workspace = true
+sha2.workspace = true
 detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
 

@@ -222,6 +222,83 @@ Run 'secretspec check --provider bws' to verify authentication.
 
 A read-only source provider is rejected. An alias that declares no credentials reports that there is nothing to store.
 
+### claude configure (0.20+)
+
+Configure Claude Code's `apiKeyHelper` to retrieve an API or gateway credential
+through SecretSpec. Personal project settings in the Git repository's main
+checkout `.claude/settings.local.json` are the default; outside Git, the command
+uses the current directory.
+
+```bash
+$ secretspec claude configure [OPTIONS]
+```
+
+**Options:**
+
+- `--token-secret <KEY>` - Custom manifest key containing the credential;
+  requires `--file`
+- `-P, --profile <PROFILE>` - Custom manifest profile; requires `--file`
+- `-p, --provider <PROVIDER>` - Provider override the helper should use
+- `--resource <RESOURCE>` - Non-secret API host recorded in audit caller
+  context; defaults to `api.anthropic.com`
+- `--global` - Configure `$CLAUDE_CONFIG_DIR/settings.json`, or the current
+  user's `~/.claude/settings.json` when the variable is unset
+- `-y, --yes` - Confirm a user-level change non-interactively; requires
+  `--global`
+
+Without `--file`, the command creates an embedded credential identity isolated
+by settings scope and audit resource, then prints the corresponding
+`secretspec claude login` command. Changing the resource selects a new embedded
+credential without deleting the previous one, so log out before reconfiguring
+when the old credential should be removed. With `--file`, `--token-secret` is
+required. The command preserves unrelated Claude settings and refuses to
+replace an `apiKeyHelper` it does not manage.
+User-level changes prompt with a default of **No**. See
+[Claude Code](/integrations/claude-code/) for API, gateway, custom-manifest, and
+authentication-precedence details.
+
+### claude login (0.20+)
+
+Store an API or gateway credential in the embedded Claude Code credential
+store, prompting securely on a terminal or reading it from piped standard
+input.
+
+```bash
+$ secretspec claude login [--global] [--provider <PROVIDER>]
+```
+
+The command selects the current project's managed configuration, or the user
+configuration with `--global`, and automatically uses its provider and audit
+resource. An explicit provider overrides the recorded provider for this
+operation. `claude login` rejects `--file`; use `secretspec set` for a custom
+manifest.
+
+### claude logout (0.20+)
+
+Remove the embedded Claude Code credential without removing `apiKeyHelper`:
+
+```bash
+$ secretspec claude logout [--global] [--provider <PROVIDER>]
+```
+
+The command uses the same scope, provider, and audit resource selection as
+`login`, and remains available after `unconfigure`. `claude logout` rejects
+`--file`; use `secretspec delete` for a custom manifest.
+
+### claude unconfigure (0.20+)
+
+Remove the SecretSpec-managed `apiKeyHelper` from the selected Claude Code
+settings file.
+
+```bash
+$ secretspec claude unconfigure
+$ secretspec claude unconfigure --global
+```
+
+Use `--yes` to confirm a user-level change non-interactively. The command
+preserves the stored credential and unrelated Claude settings. It refuses to
+remove an `apiKeyHelper` that changed outside SecretSpec.
+
 ### check
 Check if all required secrets are available, with interactive prompting for missing secrets.
 

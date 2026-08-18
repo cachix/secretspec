@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Claude Code can retrieve Anthropic API and LLM gateway credentials from any
+  SecretSpec provider through its native `apiKeyHelper`. `secretspec claude
+  configure` and `unconfigure` safely manage repository or user settings,
+  including worktrees and `CLAUDE_CONFIG_DIR`, without replacing unrelated
+  helpers. `login` and `logout` manage credentials isolated by settings scope
+  and API resource; custom manifests remain available through `--file` (0.20+).
 - **Azure App Configuration provider** (`aac://`, 0.20+): select direct
   values and Azure Key Vault references by label, prefix, and tags, with Entra
   ID or connection-string authentication and guarded writes, deletion, and

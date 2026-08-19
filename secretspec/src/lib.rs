@@ -50,6 +50,7 @@ mod composition;
 mod config;
 mod error;
 pub(crate) mod generator;
+pub(crate) mod ini_field;
 pub(crate) mod json_field;
 mod manifest;
 mod plan;

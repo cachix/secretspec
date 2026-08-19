@@ -33,6 +33,7 @@ dotenv.workspace = true
 inquire.workspace = true
 miette.workspace = true
 serde_json.workspace = true
+ini.workspace = true
 tempfile.workspace = true
 same-file.workspace = true
 url.workspace = true

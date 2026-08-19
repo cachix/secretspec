@@ -1771,23 +1771,20 @@ impl Secrets {
         diagnostic_name: &str,
         value: &str,
     ) -> Result<SecretString> {
+        let failed = |reason: String| SecretSpecError::DecodeFailed {
+            name: diagnostic_name.to_string(),
+            encoding: extract.format.as_str(),
+            reason,
+        };
         match extract.format {
             ExtractFormat::Json => {
-                let document: serde_json::Value =
-                    serde_json::from_str(value).map_err(|error| SecretSpecError::DecodeFailed {
-                        name: diagnostic_name.to_string(),
-                        encoding: extract.format.as_str(),
-                        reason: format!("stored value is not valid JSON: {error}"),
-                    })?;
+                let document: serde_json::Value = serde_json::from_str(value)
+                    .map_err(|error| failed(format!("stored value is not valid JSON: {error}")))?;
                 let selected = document.pointer(&extract.pointer).ok_or_else(|| {
-                    SecretSpecError::DecodeFailed {
-                        name: diagnostic_name.to_string(),
-                        encoding: extract.format.as_str(),
-                        reason: format!(
-                            "JSON Pointer '{}' did not match the stored document",
-                            extract.pointer
-                        ),
-                    }
+                    failed(format!(
+                        "JSON Pointer '{}' did not match the stored document",
+                        extract.pointer
+                    ))
                 })?;
                 // Rendering is shared with the awssm and scaleway providers.
                 // A null renders as "null" here: this caller was asked for one
@@ -1796,6 +1793,12 @@ impl Secrets {
                 // continues. See crate::json_field.
                 Ok(crate::json_field::render(selected))
             }
+            // The pointer grammar and the lookup that follows it live together
+            // in crate::ini_field, next to the validation that rejects every
+            // other shape at config time.
+            ExtractFormat::Ini => crate::ini_field::select(value, &extract.pointer)
+                .map(|selected| SecretString::new(selected.into()))
+                .map_err(failed),
         }
     }
 

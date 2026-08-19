@@ -164,7 +164,7 @@ Each secret variable is defined as a table with the following fields:
 | `refs` (0.19+) | table | No | Provider-alias-scoped coordinates, keyed by leaf alias (e.g. `refs = { source = { item = "old" }, target = { item = "new" } }`); mutually exclusive with `ref` |
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
 | `encoding` (0.19+) | `"base64"`, `"base64url"`, or `"hex"` | No | Encode logical values before storage writes and decode stored values after reads |
-| `extract` (0.19+) | table | No | Select one logical value from stored structured data, for example `extract = { format = "json", pointer = "/database/password" }` |
+| `extract` (0.19+) | table | No | Select one logical value from stored JSON (0.19+) or INI (0.20+) data with a pointer |
 | `type` | string | No | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
 | `generate` | boolean or table | No | Enable auto-generation when secret is missing |
 | `prompt` (0.19+) | boolean | No | Securely prompt for a missing value during `secretspec run`; the selected provider controls persistence |
@@ -701,11 +701,12 @@ double encoding.
 
 :::caution[Version compatibility]
 Available starting in SecretSpec 0.19.
+INI extraction with `format = "ini"` is available starting in SecretSpec 0.20.
 :::
 
 `extract` (0.19+) selects one logical secret from structured text read from a
-provider or cache. JSON is the initial supported format, and `pointer` is an
-[RFC 6901 JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901):
+provider or cache. It supports JSON (0.19+) and INI (0.20+). JSON `pointer`
+values are [RFC 6901 JSON Pointers](https://www.rfc-editor.org/rfc/rfc6901):
 
 ```toml
 [providers]
@@ -737,6 +738,29 @@ pointer that does not match is a decoding error. Once a provider returns a
 document, extraction failure is not treated as a provider miss and does not
 continue along a fallback chain.
 
+INI extraction (0.20+) uses the same RFC 6901 escaping for pointer segments but
+accepts only value selectors. `/key` selects an unsectioned key, while
+`/section/key` selects a key in a named section:
+
+```toml
+[profiles.default]
+# format = "ini" requires SecretSpec 0.20+
+DB_PASSWORD = {
+  description = "Database password",
+  providers = ["documents"],
+  ref = { item = "application.ini" },
+  extract = { format = "ini", pointer = "/database/password" }
+}
+```
+
+For example, that pointer reads `password` from `[database]`. An explicit
+`[DEFAULT]` section is selected as `/DEFAULT/key`; it is distinct from an
+unsectioned `/key`. Section and key matching is case-sensitive. `~1` selects a
+literal `/` and `~0` selects a literal `~`, just as in JSON Pointer. INI values
+always remain strings, and literal backslashes are preserved. Empty pointers,
+pointers deeper than `/section/key`, malformed INI, and unmatched pointers are
+decoding errors.
+
 Stored-value transforms run in this order:
 
 ```text
@@ -749,7 +773,7 @@ both `encoding = "base64"` (0.19+) and `extract` (0.19+). A provider-native
 selected further. Defaults and composed values are already logical and are not
 extracted.
 
-Extracted secrets are read-only in 0.19. `set`, `delete`, interactive prompting,
+Extracted secrets are read-only. `set`, `delete`, interactive prompting,
 generation, and `import` reject them rather than replacing or removing the
 containing document and its sibling values. Update the document through its
 owning system instead.

@@ -32,6 +32,7 @@ dotenv = { package = "dotenv-ng", version = "1.0.0" }
 inquire = { version = "0.9.4", features = ["experimental-multiline-input"] }
 miette = { version = "7.6", features = ["fancy"] }
 serde_json = "1.0"
+ini = { package = "rust-ini", version = "0.21.3" }
 proptest = "1"
 tempfile = "3.0"
 same-file = "1.0"

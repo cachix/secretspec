@@ -2010,6 +2010,11 @@ impl SecretEncoding {
 pub enum ExtractFormat {
     /// A JSON document selected with an RFC 6901 JSON Pointer.
     Json,
+    /// An INI document selected with an RFC 6901-escaped `/key` or
+    /// `/section/key` pointer.
+    ///
+    /// Available since SecretSpec 0.20.
+    Ini,
 }
 
 impl ExtractFormat {
@@ -2017,6 +2022,7 @@ impl ExtractFormat {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Json => "json",
+            Self::Ini => "ini",
         }
     }
 }
@@ -2033,7 +2039,9 @@ impl ExtractFormat {
 pub struct SecretExtract {
     /// The structured-data format of the stored value.
     pub format: ExtractFormat,
-    /// RFC 6901 JSON Pointer selecting the logical value.
+    /// Slash-delimited pointer selecting the logical value. JSON accepts a
+    /// complete RFC 6901 JSON Pointer; INI accepts `/key` or `/section/key`
+    /// with RFC 6901 escaping for each segment.
     pub pointer: String,
 }
 
@@ -2041,6 +2049,7 @@ impl SecretExtract {
     fn validate(&self) -> Result<(), String> {
         match self.format {
             ExtractFormat::Json => validate_json_pointer(&self.pointer),
+            ExtractFormat::Ini => crate::ini_field::validate_pointer(&self.pointer),
         }
     }
 }
@@ -2048,7 +2057,7 @@ impl SecretExtract {
 /// Validate the JSON Pointer grammar independently of any particular document.
 /// An empty pointer selects the whole document; every non-empty pointer starts
 /// with `/`, and `~` escapes only `~0` and `~1`.
-fn validate_json_pointer(pointer: &str) -> Result<(), String> {
+pub(crate) fn validate_json_pointer(pointer: &str) -> Result<(), String> {
     if pointer.is_empty() {
         return Ok(());
     }
@@ -2138,9 +2147,11 @@ pub struct Secret {
     /// Available since SecretSpec 0.19.
     pub encoding: Option<SecretEncoding>,
     /// Structured stored-value extraction applied after optional decoding.
-    /// JSON extraction uses an RFC 6901 pointer. Extracted secrets are
-    /// read-only because a selected value cannot reconstruct its containing
-    /// document for a storage write.
+    /// JSON extraction uses an RFC 6901 pointer. INI extraction (0.20+) uses
+    /// `/key` for an unsectioned key or `/section/key` for a named section,
+    /// with RFC 6901 segment escaping. Extracted secrets are read-only because
+    /// a selected value cannot reconstruct its containing document for a
+    /// storage write.
     ///
     /// Available since SecretSpec 0.19.
     pub extract: Option<SecretExtract>,
@@ -4071,11 +4082,7 @@ encoding = "rot13""#,
 
     #[test]
     fn secret_extract_parses_round_trips_and_inherits() {
-        let secret: Secret = toml::from_str(
-            r#"description = "selected"
-extract = { format = "json", pointer = "/database/password" }"#,
-        )
-        .unwrap();
+        let secret = extract_secret("json", "/database/password");
         assert_eq!(
             secret.extract,
             Some(SecretExtract {
@@ -4104,16 +4111,30 @@ extract = { format = "json", pointer = "/database/password" }"#,
         )
         .unwrap();
         assert_eq!(inherited.extract, secret.extract);
+
+        let ini = extract_secret("ini", "/database/password");
+        assert_eq!(
+            ini.extract,
+            Some(SecretExtract {
+                format: ExtractFormat::Ini,
+                pointer: "/database/password".to_string(),
+            })
+        );
+        assert!(toml::to_string(&ini).unwrap().contains("format = \"ini\""));
+    }
+
+    /// A secret declaring nothing but the extract table under test.
+    fn extract_secret(format: &str, pointer: &str) -> Secret {
+        toml::from_str(&format!(
+            "description = \"selected\"\nextract = {{ format = \"{format}\", pointer = \"{pointer}\" }}"
+        ))
+        .unwrap()
     }
 
     #[test]
     fn secret_extract_validates_json_pointer_and_table_shape() {
         for pointer in ["database/password", "/bad~", "/bad~2escape"] {
-            let secret: Secret = toml::from_str(&format!(
-                "description = \"selected\"\nextract = {{ format = \"json\", pointer = \"{pointer}\" }}"
-            ))
-            .unwrap();
-            let error = secret.validate().unwrap_err();
+            let error = extract_secret("json", pointer).validate().unwrap_err();
             assert!(error.contains("`extract.pointer`"), "{error}");
         }
 
@@ -4137,11 +4158,27 @@ extract = { format = "yaml", pointer = "/x" }"#,
     #[test]
     fn secret_extract_accepts_root_and_escaped_json_pointers() {
         for pointer in ["", "/a~1b/~0key", "/items/0"] {
-            let secret: Secret = toml::from_str(&format!(
-                "description = \"selected\"\nextract = {{ format = \"json\", pointer = \"{pointer}\" }}"
-            ))
-            .unwrap();
-            secret.validate().unwrap();
+            extract_secret("json", pointer).validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn secret_extract_validates_ini_pointer_shape() {
+        for pointer in ["/token", "/database/password", "/a~1b/~0key"] {
+            extract_secret("ini", pointer).validate().unwrap();
+        }
+
+        for pointer in [
+            "",
+            "token",
+            "/",
+            "//password",
+            "/database/",
+            "/database/password/extra",
+            "/bad~2escape",
+        ] {
+            let error = extract_secret("ini", pointer).validate().unwrap_err();
+            assert!(error.contains("`extract.pointer`"), "{pointer}: {error}");
         }
     }
 

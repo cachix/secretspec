@@ -8,7 +8,7 @@ use crate::validation::{ValidatedSecrets, ValidationErrors};
 use secrecy::ExposeSecret;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::{fs, io};
 use tempfile::TempDir;
@@ -5232,14 +5232,46 @@ BAD = { description = "invalid base64", encoding = "base64" }
     assert!(!error.to_string().contains("%%%"));
 }
 
-#[test]
-fn test_json_extract_resolves_structured_values_after_decoding() {
-    use std::fs;
-
+/// A store of documents on disk and a spec whose secrets extract from them.
+/// `secret_rows` is the `[profiles.default]` body. The returned `TempDir` must
+/// outlive the spec, and the returned path is the store root.
+fn extract_document_spec(
+    project: &str,
+    documents: &[(&str, &str)],
+    secret_rows: &str,
+) -> (TempDir, PathBuf, Secrets) {
     let temp_dir = TempDir::new().unwrap();
     let store = temp_dir.path().join("store");
     fs::create_dir(&store).unwrap();
-    let document_path = store.join("application.json");
+    for (name, contents) in documents {
+        fs::write(store.join(name), contents).unwrap();
+    }
+
+    let config_file = temp_dir.path().join("secretspec.toml");
+    let store_uri = toml::Value::String(format!("file:{}", store.display())).to_string();
+    fs::write(
+        &config_file,
+        format!(
+            r#"[project]
+name = "{project}"
+revision = "1.0"
+require_reason = false
+
+[providers]
+documents = {store_uri}
+
+[profiles.default]
+{secret_rows}"#
+        ),
+    )
+    .unwrap();
+
+    let config = Config::try_from(config_file.as_path()).unwrap();
+    (temp_dir, store, Secrets::new(config, None, None, None))
+}
+
+#[test]
+fn test_json_extract_resolves_structured_values_after_decoding() {
     let document = r#"{
   "database": {
     "password": "p@ss\nword",
@@ -5251,44 +5283,25 @@ fn test_json_extract_resolves_structured_values_after_decoding() {
   },
   "a/b": { "~key": "escaped" }
 }"#;
-    fs::write(&document_path, document).unwrap();
-    fs::write(
-        store.join("encoded.json"),
-        "eyJkYXRhIjp7InRva2VuIjoiYWJjIn19",
-    )
-    .unwrap();
-
-    let config_file = temp_dir.path().join("secretspec.toml");
-    let store_uri = toml::Value::String(format!("file:{}", store.display())).to_string();
-    fs::write(
-        &config_file,
-        format!(
-            r#"[project]
-name = "test-json-extract"
-revision = "1.0"
-require_reason = false
-
-[providers]
-documents = {store_uri}
-
-[profiles.default]
-PASSWORD = {{ description = "password", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/database/password" }} }}
-PORT = {{ description = "port", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/database/port" }} }}
-ENABLED = {{ description = "enabled", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/database/enabled" }} }}
-NULL_VALUE = {{ description = "null", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/database/nullable" }} }}
-OPTIONS = {{ description = "object", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/database/options" }} }}
-HOSTS = {{ description = "array", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/database/hosts" }} }}
-ESCAPED = {{ description = "escaped pointer", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/a~1b/~0key" }} }}
-OPTIONS_FILE = {{ description = "object as file", providers = ["documents"], ref = {{ item = "application.json" }}, extract = {{ format = "json", pointer = "/database/options" }}, as_path = true }}
-ENCODED = {{ description = "decoded document", providers = ["documents"], ref = {{ item = "encoded.json" }}, encoding = "base64", extract = {{ format = "json", pointer = "/data/token" }} }}
-FALLBACK = {{ description = "logical default", providers = ["documents"], ref = {{ item = "missing.json" }}, extract = {{ format = "json", pointer = "/ignored" }}, default = "already-logical" }}
-"#
-        ),
-    )
-    .unwrap();
-
-    let config = Config::try_from(config_file.as_path()).unwrap();
-    let spec = Secrets::new(config, None, None, None);
+    let (_temp_dir, store, spec) = extract_document_spec(
+        "test-json-extract",
+        &[
+            ("application.json", document),
+            ("encoded.json", "eyJkYXRhIjp7InRva2VuIjoiYWJjIn19"),
+        ],
+        r#"PASSWORD = { description = "password", providers = ["documents"], ref = { item = "application.json" }, extract = { format = "json", pointer = "/database/password" } }
+PORT = { description = "port", providers = ["documents"], ref = { item = "application.json" }, extract = { format = "json", pointer = "/database/port" } }
+ENABLED = { description = "enabled", providers = ["documents"], ref = { item = "application.json" }, extract = { format = "json", pointer = "/database/enabled" } }
+NULL_VALUE = { description = "null", providers = ["documents"], ref = { item = "application.json" }, extract = { format = "json", pointer = "/database/nullable" } }
+OPTIONS = { description = "object", providers = ["documents"], ref = { item = "application.json" }, extract = { format = "json", pointer = "/database/options" } }
+HOSTS = { description = "array", providers = ["documents"], ref = { item = "application.json" }, extract = { format = "json", pointer = "/database/hosts" } }
+ESCAPED = { description = "escaped pointer", providers = ["documents"], ref = { item = "application.json" }, extract = { format = "json", pointer = "/a~1b/~0key" } }
+OPTIONS_FILE = { description = "object as file", providers = ["documents"], ref = { item = "application.json" }, extract = { format = "json", pointer = "/database/options" }, as_path = true }
+ENCODED = { description = "decoded document", providers = ["documents"], ref = { item = "encoded.json" }, encoding = "base64", extract = { format = "json", pointer = "/data/token" } }
+FALLBACK = { description = "logical default", providers = ["documents"], ref = { item = "missing.json" }, extract = { format = "json", pointer = "/ignored" }, default = "already-logical" }
+"#,
+    );
+    let document_path = store.join("application.json");
     let validated = spec.validate().unwrap().unwrap();
     let values = &validated.resolved.secrets;
     assert_eq!(values["PASSWORD"].expose_secret(), "p@ss\nword");
@@ -5355,21 +5368,75 @@ fn test_json_extract_renders_a_null_while_a_provider_field_treats_it_as_absent()
 }
 
 #[test]
-fn test_json_extract_errors_do_not_expose_stored_documents() {
+fn test_ini_extract_resolves_sectioned_and_unsectioned_values() {
+    let (_temp_dir, _store, spec) = extract_document_spec(
+        "test-ini-extract",
+        &[(
+            "application.ini",
+            r#"root_token = root-value
+
+[database]
+password = p@ss#word;still-secret
+windows_path = C:\secrets\database
+
+[a/b]
+~key = escaped
+"#,
+        )],
+        r#"ROOT = { description = "root", providers = ["documents"], ref = { item = "application.ini" }, extract = { format = "ini", pointer = "/root_token" } }
+PASSWORD = { description = "password", providers = ["documents"], ref = { item = "application.ini" }, extract = { format = "ini", pointer = "/database/password" } }
+WINDOWS_PATH = { description = "literal backslashes", providers = ["documents"], ref = { item = "application.ini" }, extract = { format = "ini", pointer = "/database/windows_path" } }
+ESCAPED = { description = "escaped pointer", providers = ["documents"], ref = { item = "application.ini" }, extract = { format = "ini", pointer = "/a~1b/~0key" } }
+"#,
+    );
+    let validated = spec.validate().unwrap().unwrap();
+    let values = &validated.resolved.secrets;
+    assert_eq!(values["ROOT"].expose_secret(), "root-value");
+    assert_eq!(values["PASSWORD"].expose_secret(), "p@ss#word;still-secret");
+    assert_eq!(
+        values["WINDOWS_PATH"].expose_secret(),
+        r"C:\secrets\database"
+    );
+    assert_eq!(values["ESCAPED"].expose_secret(), "escaped");
+}
+
+/// No extract format may quote the stored document or the selected value in a
+/// failure. Every format is covered here so a new one inherits the invariant.
+#[test]
+fn test_extract_errors_do_not_expose_stored_documents() {
     use crate::config::{ExtractFormat, SecretExtract};
 
-    let extract = SecretExtract {
-        format: ExtractFormat::Json,
-        pointer: "/database/password".to_string(),
-    };
-    for stored in [
-        r#"{"database":"sensitive-invalid-document""#,
-        r#"{"other":"sensitive-missing-pointer"}"#,
-    ] {
-        let error = Secrets::extract_stored_value(&extract, "PASSWORD", stored).unwrap_err();
-        assert_eq!(error.kind(), "decode_failed");
-        assert!(error.to_string().contains("using json"));
-        assert!(!error.to_string().contains("sensitive"));
+    let cases = [
+        (
+            ExtractFormat::Json,
+            [
+                r#"{"database":"sensitive-invalid-document""#,
+                r#"{"other":"sensitive-missing-pointer"}"#,
+            ],
+        ),
+        (
+            ExtractFormat::Ini,
+            [
+                "[database\npassword=sensitive-invalid-document",
+                "[database]\nother=sensitive-missing-pointer",
+            ],
+        ),
+    ];
+    for (format, documents) in cases {
+        let extract = SecretExtract {
+            format,
+            pointer: "/database/password".to_string(),
+        };
+        for stored in documents {
+            let error = Secrets::extract_stored_value(&extract, "PASSWORD", stored).unwrap_err();
+            assert_eq!(error.kind(), "decode_failed", "{format:?}");
+            let message = error.to_string();
+            assert!(
+                message.contains(&format!("using {}", format.as_str())),
+                "{message}"
+            );
+            assert!(!message.contains("sensitive"), "{message}");
+        }
     }
 }
 

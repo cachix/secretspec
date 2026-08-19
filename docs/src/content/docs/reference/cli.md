@@ -299,6 +299,80 @@ Use `--yes` to confirm a user-level change non-interactively. The command
 preserves the stored credential and unrelated Claude settings. It refuses to
 remove an `apiKeyHelper` that changed outside SecretSpec.
 
+### codex configure (0.20+)
+
+Configure the current user's Codex custom model provider to retrieve an OpenAI
+or compatible gateway API key through SecretSpec:
+
+```bash
+$ secretspec codex configure [OPTIONS]
+```
+
+**Options:**
+
+- `--token-secret <KEY>` - Custom manifest key containing the API key;
+  requires `--file`
+- `-P, --profile <PROFILE>` - Custom manifest profile; requires `--file`
+- `-p, --provider <PROVIDER>` - Provider override the credential command should
+  use
+- `--base-url <URL>` - OpenAI-compatible Responses API endpoint; defaults to
+  `https://api.openai.com/v1`
+- `--model <MODEL>` - Model to set when the user configuration has no
+  top-level `model`
+- `-y, --yes` - Confirm the user-level Codex configuration change
+  non-interactively
+
+The command safely updates `$CODEX_HOME/config.toml`, or
+`~/.codex/config.toml` when `CODEX_HOME` is unset. It preserves unrelated Codex
+configuration and the previous `model_provider`, and refuses to replace a
+managed provider changed outside SecretSpec. Confirmation defaults to **No**.
+When no top-level model exists, `--model` is required to avoid Codex omitting
+agent tools with an implicit custom-provider model. SecretSpec removes a model
+it added during `unconfigure` and never replaces an existing model.
+Without `--file`, the embedded credential is isolated by Codex home and API
+endpoint. With `--file`, `--token-secret` is required. See
+[Codex](/integrations/codex/) for gateway, custom-manifest, precedence, and
+native-login details.
+
+### codex login (0.20+)
+
+Store an API key in the embedded Codex credential store, prompting securely on
+a terminal or reading it from piped standard input:
+
+```bash
+$ secretspec codex login [--provider <PROVIDER>]
+```
+
+The command automatically reuses the provider, access reason, endpoint, and
+audit resource recorded by `configure`. An operation-level provider overrides
+the recorded provider. `codex login` rejects `--file`; use `secretspec set` for
+a custom manifest.
+
+### codex logout (0.20+)
+
+Remove the embedded Codex API key without changing Codex configuration:
+
+```bash
+$ secretspec codex logout [--provider <PROVIDER>]
+```
+
+The command uses the same selection as `login` and remains available after
+`unconfigure`. `codex logout` rejects `--file`; use `secretspec delete` for a
+custom manifest.
+
+### codex unconfigure (0.20+)
+
+Remove the SecretSpec-managed custom provider and restore the previous Codex
+`model_provider`:
+
+```bash
+$ secretspec codex unconfigure
+```
+
+Use `--yes` to confirm non-interactively. The command preserves the stored
+credential and unrelated Codex configuration. It refuses to remove the custom
+provider or restore a selection that changed outside SecretSpec.
+
 ### check
 Check if all required secrets are available, with interactive prompting for missing secrets.
 

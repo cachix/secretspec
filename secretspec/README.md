@@ -63,6 +63,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
 - **[Audit Logging](https://secretspec.dev/concepts/audit/)**: Every secret access recorded locally (who, when, why, outcome) — on by default, secret values never logged
 - **[Discovery](https://secretspec.dev/reference/cli#init)**: `secretspec init` to discover secrets from existing `.env` files
 - **[Claude Code credential integration](https://secretspec.dev/integrations/claude-code/)** (0.20+): Configure, store, and remove API or gateway credentials through Claude Code's native `apiKeyHelper`
+- **[Codex API-key integration](https://secretspec.dev/integrations/codex/)** (0.20+): Configure, store, and remove OpenAI or gateway API keys through Codex's native command-backed provider authentication
 
 ## Quick Start
 

@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Codex can retrieve OpenAI and compatible gateway API keys from any SecretSpec
+  provider through native command-backed model-provider authentication.
+  `secretspec codex configure` and `unconfigure` safely preserve unrelated user
+  configuration and the previous model provider; `login` and `logout` manage
+  credentials isolated by Codex home and API endpoint. ChatGPT OAuth and Codex
+  access-token lifecycle remain managed by Codex (0.20+).
 - Claude Code can retrieve Anthropic API and LLM gateway credentials from any
   SecretSpec provider through its native `apiKeyHelper`. `secretspec claude
   configure` and `unconfigure` safely manage repository or user settings,

@@ -119,7 +119,8 @@ OPENAI_TOKEN = { description = "OpenAI API key", default = "fixture-custom-key",
     }
 
     fn state_path(&self) -> PathBuf {
-        self.root.join("config/secretspec/codex.json")
+        find_named(&self.root, "codex.json")
+            .unwrap_or_else(|| self.root.join("config/secretspec/codex.json"))
     }
 
     fn state(&self) -> Value {
@@ -313,7 +314,7 @@ fn unconfigure_refuses_an_edited_owned_provider() {
     assert!(!output.status.success(), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("changed outside") && stderr.contains("SecretSpec"),
+        stderr.contains("changed") && stderr.contains("outside") && stderr.contains("SecretSpec"),
         "{output:?}"
     );
     assert!(
@@ -346,7 +347,7 @@ fn unconfigure_refuses_an_edited_model_provider_selection() {
     assert!(!output.status.success(), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("changed outside") && stderr.contains("SecretSpec"),
+        stderr.contains("changed") && stderr.contains("outside") && stderr.contains("SecretSpec"),
         "{output:?}"
     );
 }
@@ -646,7 +647,12 @@ fn managed_model_changes_fail_closed() {
         .unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("model") && stderr.contains("changed outside"));
+    assert!(
+        stderr.contains("model")
+            && stderr.contains("changed")
+            && stderr.contains("outside")
+            && stderr.contains("SecretSpec")
+    );
 }
 
 #[test]

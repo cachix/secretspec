@@ -1,10 +1,55 @@
 plugins {
     `java-library`
+    `maven-publish`
 }
 
 group = "org.cachix"
 
 version = providers.gradleProperty("secretspec.version").get()
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+
+            artifactId = "secretspec-jvm"
+            version = project.version.toString().removeSuffix("-SNAPSHOT")
+
+            pom {
+                name.set("SecretSpec JVM SDK")
+                description.set("JVM SDK for SecretSpec secret resolution")
+                url.set("https://secretspec.dev")
+                scm {
+                    connection.set("scm:git:https://github.com/cachix/secretspec.git")
+                    developerConnection.set("scm:git:ssh://github.com/cachix/secretspec.git")
+                    url.set("https://github.com/cachix/secretspec")
+                }
+                licenses {
+                    license {
+                        name.set("Apache-2.0")
+                        url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                    }
+                }
+                developers {
+                    developer {
+                        id.set("cachix-oss")
+                        name.set("Cachix Team & Open-Source Contributors")
+                        organization.set("Cachix")
+                        organizationUrl.set("https://www.cachix.org")
+                    }
+                }
+                issueManagement {
+                    system.set("GitHub Issues")
+                    url.set("https://github.com/cachix/secretspec/issues")
+                }
+                ciManagement {
+                    system.set("GitHub Actions")
+                    url.set("https://github.com/cachix/secretspec/actions")
+                }
+            }
+        }
+    }
+}
 
 base {
     archivesName.set("secretspec-jvm")

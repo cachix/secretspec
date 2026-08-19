@@ -1,8 +1,8 @@
 package org.cachix.secretspec;
 
-import java.util.Objects;
-
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.Objects;
 
 
 /**
@@ -10,55 +10,65 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  */
 public final class SecretReport {
 
-    @JsonProperty("name")
-    private String name = "";
+    private final String name;
+    private final String status;
+    private final boolean required;
+    private final String sourceProvider;
+    private final boolean defaultApplied;
+    private final boolean generated;
+    private final boolean asPath;
 
-    @JsonProperty("status")
-    private String status = "";
-
-    @JsonProperty("required")
-    private boolean required;
-
-    @JsonProperty("source_provider")
-    private String sourceProvider;
-
-    @JsonProperty("default_applied")
-    private boolean defaultApplied;
-
-    @JsonProperty("generated")
-    private boolean generated;
-
-    @JsonProperty("as_path")
-    private boolean asPath;
-
-    public SecretReport() {
+    @JsonCreator
+    public SecretReport(
+        @JsonProperty("name") String name,
+        @JsonProperty("status") String status,
+        @JsonProperty("required") boolean required,
+        @JsonProperty("source_provider") String sourceProvider,
+        @JsonProperty("default_applied") boolean defaultApplied,
+        @JsonProperty("generated") boolean generated,
+        @JsonProperty("as_path") boolean asPath
+    ) {
+        this.name = name != null ? name : "";
+        this.status = status != null ? status : "";
+        this.required = required;
+        this.sourceProvider = sourceProvider;
+        this.defaultApplied = defaultApplied;
+        this.generated = generated;
+        this.asPath = asPath;
     }
 
-    public String getName() {
+    @JsonProperty("name")
+    public String name() {
         return name;
     }
 
-    public String getStatus() {
+    @JsonProperty("status")
+    public String status() {
         return status;
     }
 
-    public boolean isRequired() {
+    @JsonProperty("required")
+    public boolean required() {
         return required;
     }
 
-    public String getSourceProvider() {
+    @JsonProperty("source_provider")
+    public String sourceProvider() {
         return sourceProvider;
     }
 
-    public boolean isDefaultApplied() {
+    @JsonProperty("default_applied")
+    public boolean defaultApplied() {
         return defaultApplied;
     }
 
-    public boolean isGenerated() {
+    @JsonProperty("generated")
+    public boolean generated() {
         return generated;
     }
 
-    public boolean isAsPath() {
+    @JsonProperty("as_path")
+    public boolean asPath() {
         return asPath;
     }
 

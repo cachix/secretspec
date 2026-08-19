@@ -1,9 +1,9 @@
 package org.cachix.secretspec;
 
-import static java.util.stream.Collectors.toUnmodifiableList;
-
 import java.util.List;
 import java.util.stream.StreamSupport;
+
+import static java.util.stream.Collectors.toUnmodifiableList;
 
 
 /**
@@ -22,10 +22,10 @@ public final class MissingRequiredException extends SecretSpecException {
      */
     private final List<String> missing;
 
-    public List<String> getMissing() {
+    public List<String> missing() {
         return missing;
     }
-    
+
     private static String buildMessage(Iterable<String> missing) {
         return "missing required secret(s): " + String.join(", ", missing);
     }

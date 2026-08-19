@@ -79,6 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   individually.
 - OnePassword optional references whose item names resemble authentication
   diagnostics are omitted as missing instead of aborting batch resolution.
+- **JVM SDK** (0.20+): use SecretSpec from languages such as Java or Kotlin.
 
 ### Fixed
 

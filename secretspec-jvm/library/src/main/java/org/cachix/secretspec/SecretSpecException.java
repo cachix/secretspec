@@ -16,12 +16,12 @@ public class SecretSpecException extends RuntimeException {
         this.kind = kind;
     }
 
-    /** 
+    /**
      * A stable machine-readable error category.
      */
     private final String kind;
 
-    public String getKind() {
+    public String kind() {
         return kind;
-    }   
+    }
 }

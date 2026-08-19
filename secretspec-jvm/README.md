@@ -1,6 +1,6 @@
 # SecretSpec for the Java Virtual Machine
 
-> Supported starting with SecretSpec 0.XX.
+> Supported starting with SecretSpec 0.20.
 
 `org.cachix.SecretSpec` is the Java SDK for
 [SecretSpec](https://secretspec.dev/), the declarative secrets manager. It is a

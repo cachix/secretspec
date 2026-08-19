@@ -1,20 +1,24 @@
 package org.cachix.secretspec;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.List;
+
+import static java.util.Collections.unmodifiableList;
 
 
 final class JsonContracts {
 
     static final int RESOLVE_SCHEMA_VERSION = 2;
     static final int REPORT_SCHEMA_VERSION = 1;
-    
+
     private JsonContracts() {
         // No instances
     }
@@ -24,15 +28,13 @@ final class SecretSpecJsonContext {
 
     public static final ObjectMapper MAPPER = JsonMapper.builder()
             .defaultPropertyInclusion(JsonInclude.Value.construct(JsonInclude.Include.NON_NULL, JsonInclude.Include.USE_DEFAULTS))
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
             .build();
 
     public static final TypeReference<Envelope<ResolveResponseContract>> RESOLVE_ENVELOPE =
             new TypeReference<>() {};
 
     public static final TypeReference<Envelope<ReportResponseContract>> REPORT_ENVELOPE =
-            new TypeReference<>() {};
-
-    public static final TypeReference<Map<String, String>> SECRET_FIELDS =
             new TypeReference<>() {};
 
     private SecretSpecJsonContext() {
@@ -42,94 +44,74 @@ final class SecretSpecJsonContext {
 
 final class ResolveRequest {
 
+    private final String path;
+    private final String provider;
+    private final String profile;
+    private final String scope;
+    private final String reason;
+    private final boolean noValues;
+    private final String mode;
+    private final Caller caller;
+
+    @JsonCreator
+    public ResolveRequest(
+        @JsonProperty("path") String path,
+        @JsonProperty("provider") String provider,
+        @JsonProperty("profile") String profile,
+        @JsonProperty("scope") String scope,
+        @JsonProperty("reason") String reason,
+        @JsonProperty("no_values") boolean noValues,
+        @JsonProperty("mode") String mode,
+        @JsonProperty("caller") Caller caller
+    ) {
+        this.path = path;
+        this.provider = provider;
+        this.profile = profile;
+        this.scope = scope;
+        this.reason = reason;
+        this.noValues = noValues;
+        this.mode = mode;
+        this.caller = caller;
+    }
+
     @JsonProperty("path")
-    private String path;
-
-    @JsonProperty("provider")
-    private String provider;
-
-    @JsonProperty("profile")
-    private String profile;
-
-    @JsonProperty("scope")
-    private String scope;
-
-    @JsonProperty("reason")
-    private String reason;
-
-    @JsonProperty("no_values")
-    private boolean noValues;
-
-    @JsonProperty("mode")
-    private String mode;
-
-    public ResolveRequest() {
-    }
-   
-    public ResolveRequest(ResolveRequest request) {
-        this.path = request.path;
-        this.provider = request.provider;
-        this.profile = request.profile;
-        this.scope = request.scope;
-        this.reason = request.reason;
-        this.noValues = request.noValues;
-        this.mode = request.mode;
-    }
-
-    public String getPath() {
+    public String path() {
         return path;
     }
 
-    public void setPath(String path) {
-        this.path = path;
-    }
-
-    public String getProvider() {
+    @JsonProperty("provider")
+    public String provider() {
         return provider;
     }
 
-    public void setProvider(String provider) {
-        this.provider = provider;
-    }
-
-    public String getProfile() {
+    @JsonProperty("profile")
+    public String profile() {
         return profile;
     }
 
-    public void setProfile(String profile) {
-        this.profile = profile;
-    }
-
-    public String getScope() {
+    @JsonProperty("scope")
+    public String scope() {
         return scope;
     }
 
-    public void setScope(String scope) {
-        this.scope = scope;
-    }
-
-    public String getReason() {
+    @JsonProperty("reason")
+    public String reason() {
         return reason;
     }
 
-    public void setReason(String reason) {
-        this.reason = reason;
-    }
-
-    public boolean isNoValues() {
+    @JsonProperty("no_values")
+    public boolean noValues() {
         return noValues;
     }
 
-    public void setNoValues(boolean noValues) {
-        this.noValues = noValues;
-    }
-
-    public String getMode() {
+    @JsonProperty("mode")
+    public String mode() {
         return mode;
     }
 
-    public void setMode(String mode) {
-        this.mode = mode;
+    @JsonProperty("caller")
+    public Caller caller() {
+        return caller;
     }
 
     @Override
@@ -141,7 +123,8 @@ final class ResolveRequest {
             scope,
             reason,
             noValues,
-            mode
+            mode,
+            caller
         );
     }
 
@@ -160,33 +143,40 @@ final class ResolveRequest {
             && Objects.equals(scope, other.scope)
             && Objects.equals(reason, other.reason)
             && noValues == other.noValues
-            && Objects.equals(mode, other.mode);
+            && Objects.equals(mode, other.mode)
+            && Objects.equals(caller, other.caller);
     }
 }
 
 final class Envelope<T> {
 
-    @JsonProperty("ok")
-    private boolean ok;
+    private final boolean ok;
+    private final T response;
+    private final ErrorContract error;
 
-    @JsonProperty("response")
-    private T response;
-
-    @JsonProperty("error")
-    private ErrorContract error;
-
-    public Envelope() {
+    @JsonCreator
+    public Envelope(
+        @JsonProperty("ok") boolean ok,
+        @JsonProperty("response") T response,
+        @JsonProperty("error") ErrorContract error
+    ) {
+        this.ok = ok;
+        this.response = response;
+        this.error = error;
     }
 
-    public boolean isOk() {
+    @JsonProperty("ok")
+    public boolean ok() {
         return ok;
     }
 
-    public T getResponse() {
+    @JsonProperty("response")
+    public T response() {
         return response;
     }
 
-    public ErrorContract getError() {
+    @JsonProperty("error")
+    public ErrorContract error() {
         return error;
     }
 
@@ -218,20 +208,25 @@ final class Envelope<T> {
 
 final class ErrorContract {
 
-    @JsonProperty("kind")
-    private String kind;
+    private final String kind;
+    private final String message;
 
-    @JsonProperty("message")
-    private String message;
-
-    public ErrorContract() {
+    @JsonCreator
+    public ErrorContract(
+        @JsonProperty("kind") String kind,
+        @JsonProperty("message") String message
+        ) {
+        this.kind = kind;
+        this.message = message;
     }
 
-    public String getKind() {
+    @JsonProperty("kind")
+    public String kind() {
         return kind;
     }
 
-    public String getMessage() {
+    @JsonProperty("message")
+    public String message() {
         return message;
     }
 
@@ -259,55 +254,65 @@ final class ErrorContract {
 
 final class ResolveResponseContract {
 
-    @JsonProperty("schema_version")
-    private int schemaVersion;
+    private final int schemaVersion;
+    private final String provider;
+    private final String profile;
+    private final String scope;
+    private final Map<String, ResolvedSecret> secrets;
+    private final List<String> missingRequired;
+    private final List<String> missingOptional;
 
-    @JsonProperty("provider")
-    private String provider;
-
-    @JsonProperty("profile")
-    private String profile;
-
-    @JsonProperty("scope")
-    private String scope;
-
-    @JsonProperty("secrets")
-    private Map<String, ResolvedSecret> secrets;
-
-    @JsonProperty("missing_required")
-    private List<String> missingRequired;
-
-    @JsonProperty("missing_optional")
-    private List<String> missingOptional;
-
-    public ResolveResponseContract() {
+    @JsonCreator
+    public ResolveResponseContract(
+        @JsonProperty("schema_version") int schemaVersion,
+        @JsonProperty("provider") String provider,
+        @JsonProperty("profile") String profile,
+        @JsonProperty("scope") String scope,
+        @JsonProperty("secrets") Map<String, ResolvedSecret> secrets,
+        @JsonProperty("missing_required") List<String> missingRequired,
+        @JsonProperty("missing_optional") List<String> missingOptional
+    ) {
+        this.schemaVersion = schemaVersion;
+        this.provider = provider != null ? provider : "";
+        this.profile = profile != null ? profile : "";
+        this.scope = scope;
+        this.secrets = secrets != null ? secrets : Map.of();
+        this.missingRequired = missingRequired != null ? missingRequired : List.of();
+        this.missingOptional = missingOptional != null ? missingOptional : List.of();
     }
 
-    public int getSchemaVersion() {
+    @JsonProperty("schema_version")
+    public int schemaVersion() {
         return schemaVersion;
     }
 
-    public String getProvider() {
+    @JsonProperty("provider")
+    public String provider() {
         return provider;
     }
 
-    public String getProfile() {
+    @JsonProperty("profile")
+    public String profile() {
         return profile;
     }
 
-    public String getScope() {
+    @JsonProperty("scope")
+    public String scope() {
         return scope;
     }
 
-    public Map<String, ResolvedSecret> getSecrets() {
+    @JsonProperty("secrets")
+    public Map<String, ResolvedSecret> secrets() {
         return secrets;
     }
 
-    public List<String> getMissingRequired() {
+    @JsonProperty("missing_required")
+    public List<String> missingRequired() {
         return missingRequired;
     }
 
-    public List<String> getMissingOptional() {
+    @JsonProperty("missing_optional")
+    public List<String> missingOptional() {
         return missingOptional;
     }
 
@@ -345,45 +350,61 @@ final class ResolveResponseContract {
 
 final class ReportResponseContract {
 
-    @JsonProperty("schema_version")
-    private int schemaVersion;
+    private final int schemaVersion;
+    private final String provider;
+    private final String profile;
+    private final String scope;
+    private final List<SecretReport> secrets;
+    private final List<ConstraintViolation> constraintViolations;
 
-    @JsonProperty("provider")
-    private String provider;
-
-    @JsonProperty("profile")
-    private String profile;
-
-    @JsonProperty("scope")
-    private String scope;
-
-    @JsonProperty("secrets")
-    private List<SecretReport> secrets;
-
-    public ReportResponseContract() {
+    @JsonCreator
+    public ReportResponseContract(
+        @JsonProperty("schema_version") int schemaVersion,
+        @JsonProperty("provider") String provider,
+        @JsonProperty("profile") String profile,
+        @JsonProperty("scope") String scope,
+        @JsonProperty("secrets") List<SecretReport> secrets,
+        @JsonProperty("constraint_violations") List<ConstraintViolation> constraintViolations
+    ) {
+        this.schemaVersion = schemaVersion;
+        this.provider = provider != null ? provider : "";
+        this.profile = profile != null ? profile : "";
+        this.scope = scope;
+        this.secrets = secrets != null ? secrets : List.of();
+        this.constraintViolations = constraintViolations;
     }
 
-    public int getSchemaVersion() {
+    @JsonProperty("schema_version")
+    public int schemaVersion() {
         return schemaVersion;
     }
 
-    public String getProvider() {
+    @JsonProperty("provider")
+    public String provider() {
         return provider;
     }
 
-    public String getProfile() {
+    @JsonProperty("profile")
+    public String profile() {
         return profile;
     }
 
-    public String getScope() {
+    @JsonProperty("scope")
+    public String scope() {
         return scope;
     }
 
-    public List<SecretReport> getSecrets() {
-        return secrets;
+    @JsonProperty("secrets")
+    public List<SecretReport> secrets() {
+        return secrets == null ? null : unmodifiableList(secrets);
     }
 
-        @Override
+    @JsonProperty("constraint_violations")
+    public List<ConstraintViolation> constraintViolations() {
+        return constraintViolations == null ? null : unmodifiableList(constraintViolations);
+    }
+
+    @Override
     public int hashCode() {
         return Objects.hash(
             schemaVersion,

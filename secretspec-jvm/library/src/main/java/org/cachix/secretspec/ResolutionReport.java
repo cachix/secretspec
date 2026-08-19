@@ -4,22 +4,27 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 
+import static java.util.Collections.unmodifiableList;
+import static org.cachix.secretspec.SafeCopy.safeCopyOf;
+
 
 /**
  * A value-free inventory/preflight snapshot.
  */
 public final class ResolutionReport {
-    
+
     ResolutionReport(
         String provider,
         String profile,
         String scope,
-        Collection<SecretReport> secrets
+        Collection<SecretReport> secrets,
+        Collection<ConstraintViolation> constraintViolations
     ) {
         this.provider = provider;
         this.profile = profile;
         this.scope = scope;
-        this.secrets = List.copyOf(secrets);
+        this.secrets = safeCopyOf(secrets);
+        this.constraintViolations = safeCopyOf(constraintViolations);
     }
 
     private final String provider;
@@ -29,30 +34,36 @@ public final class ResolutionReport {
      */
     private final String scope;
     private final List<SecretReport> secrets;
+    private final List<ConstraintViolation> constraintViolations;
 
-    public String getProvider() {
+    public String provider() {
         return provider;
     }
-    
-    public String getProfile() {
+
+    public String profile() {
         return profile;
     }
-    
-    public String getScope() {
+
+    public String scope() {
         return scope;
     }
-    
-    public List<SecretReport> getSecrets() {
-        return secrets;
+
+    public List<SecretReport> secrets() {
+        return unmodifiableList(secrets);
     }
-    
+
+    public List<ConstraintViolation> constraintViolations() {
+        return unmodifiableList(constraintViolations);
+    }
+
     @Override
     public int hashCode() {
         return Objects.hash(
             provider,
             profile,
             scope,
-            secrets
+            secrets,
+            constraintViolations
         );
     }
 
@@ -68,6 +79,7 @@ public final class ResolutionReport {
         return Objects.equals(provider, other.provider)
             && Objects.equals(profile, other.profile)
             && Objects.equals(scope, other.scope)
-            && Objects.equals(secrets, other.secrets);
+            && Objects.equals(secrets, other.secrets)
+            && Objects.equals(constraintViolations, other.constraintViolations);
     }
 }

@@ -430,7 +430,7 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
             {
               label: "JVM",
               slug: "sdk/jvm",
-              badge: { text: "0.XX+", variant: "note" },
+              badge: { text: "0.20+", variant: "note" },
             },
           ],
         },

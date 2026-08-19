@@ -1,4 +1,5 @@
 package org.cachix.secretspec;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -28,7 +29,7 @@ class SecretSpecTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private static final String MANIFEST = 
+    private static final String MANIFEST =
         "[project]\n" +
         "name = \"java-test\"\n" +
         "revision = \"1.0\"\n" +
@@ -53,14 +54,14 @@ class SecretSpecTest {
         try (Project project = Project.create(MANIFEST, "DATABASE_URL=postgres://db\n");
              Resolved resolved = project.builder().load()) {
 
-            assertThat(resolved.getProfile()).isEqualTo("default");
-            assertThat(resolved.getSecrets().get("DATABASE_URL").get()).isEqualTo("postgres://db");
-            assertThat(resolved.getSecrets().get("DATABASE_URL").getSource()).isEqualTo("provider");
-            assertThat(resolved.getSecrets().get("DATABASE_URL").getSourceProvider()).withFailMessage("provider provenance missing").isNotNull();
-            assertThat(resolved.getSecrets().get("DEV_SESSION_SECRET").get()).isEqualTo("development-only-secret");
-            assertThat(resolved.getSecrets().get("DEV_SESSION_SECRET").getSource()).isEqualTo("default");
-            assertThat(resolved.getMissingOptional()).isEqualTo(List.of("SENTRY_DSN"));
-            assertThat(resolved.getSecrets()).withFailMessage("missing optional secret was returned").doesNotContainKey("SENTRY_DSN");
+            assertThat(resolved.profile()).isEqualTo("default");
+            assertThat(resolved.secrets().get("DATABASE_URL").get()).isEqualTo("postgres://db");
+            assertThat(resolved.secrets().get("DATABASE_URL").source()).isEqualTo("provider");
+            assertThat(resolved.secrets().get("DATABASE_URL").sourceProvider()).withFailMessage("provider provenance missing").isNotNull();
+            assertThat(resolved.secrets().get("DEV_SESSION_SECRET").get()).isEqualTo("development-only-secret");
+            assertThat(resolved.secrets().get("DEV_SESSION_SECRET").source()).isEqualTo("default");
+            assertThat(resolved.missingOptional()).isEqualTo(List.of("SENTRY_DSN"));
+            assertThat(resolved.secrets()).withFailMessage("missing optional secret was returned").doesNotContainKey("SENTRY_DSN");
 
             JsonNode fields = readJson(resolved.fieldsJson());
             assertThat(fields.get("DATABASE_URL").asText()).isEqualTo("postgres://db");
@@ -73,17 +74,17 @@ class SecretSpecTest {
                 MANIFEST,
                 "DATABASE_URL=postgres://db\nSENTRY_DSN=https://sentry\n")) {
 
-            SecretSpecBuilder builder = project.builder().withScope("database");
+            SecretSpec.Builder builder = project.builder().withScope("database");
 
             try (Resolved resolved = builder.load()) {
-                assertThat(resolved.getScope()).isEqualTo("database");
-                assertThat(resolved.getSecrets().keySet()).containsExactly("DATABASE_URL");
+                assertThat(resolved.scope()).isEqualTo("database");
+                assertThat(resolved.secrets().keySet()).containsExactly("DATABASE_URL");
             }
 
             ResolutionReport report = builder.report();
-            assertThat(report.getScope()).isEqualTo("database");
-            List<String> reportNames = report.getSecrets().stream()
-                    .map(SecretReport::getName)
+            assertThat(report.scope()).isEqualTo("database");
+            List<String> reportNames = report.secrets().stream()
+                    .map(SecretReport::name)
                     .collect(Collectors.toList());
             assertThat(reportNames).containsExactly("DATABASE_URL");
         }
@@ -93,8 +94,8 @@ class SecretSpecTest {
     void testMissingRequired() {
         try (Project project = Project.create(MANIFEST, "")) {
             MissingRequiredException error = catchThrowableOfType(MissingRequiredException.class, () -> project.builder().load());
-            assertThat(error.getMissing()).containsExactly("DATABASE_URL");
-            assertThat(error.getKind()).isEqualTo("missing_required");
+            assertThat(error.missing()).containsExactly("DATABASE_URL");
+            assertThat(error.kind()).isEqualTo("missing_required");
         }
     }
 
@@ -110,14 +111,14 @@ class SecretSpecTest {
 
         assertThat(error.getClass()).withFailMessage("transport failure became missing-required")
             .isNotEqualTo(MissingRequiredException.class);
-        assertThat(error.getKind()).withFailMessage("error kind was empty")
+        assertThat(error.kind()).withFailMessage("error kind was empty")
             .isNotNull()
             .isNotBlank();
     }
 
     @Test
     void testAsPathCleanup() {
-        String manifest = 
+        String manifest =
             "[project]\n" +
             "name = \"java-test\"\n" +
             "revision = \"1.0\"\n" +
@@ -128,9 +129,9 @@ class SecretSpecTest {
         String path;
         try (Project project = Project.create(manifest, "TLS_CERT=----cert----\n")) {
             try (Resolved resolved = project.builder().load()) {
-                ResolvedSecret cert = resolved.getSecrets().get("TLS_CERT");
-                assertThat(cert.isAsPath()).withFailMessage("TLS_CERT was not marked as_path").isTrue();
-                assertThat(cert.getValue()).withFailMessage("as_path secret exposed an inline value").isNull();
+                ResolvedSecret cert = resolved.secrets().get("TLS_CERT");
+                assertThat(cert.asPath()).withFailMessage("TLS_CERT was not marked as_path").isTrue();
+                assertThat(cert.value()).withFailMessage("as_path secret exposed an inline value").isNull();
 
                 path = cert.get();
                 assertThat(path).withFailMessage("as_path secret had no path").isNotNull();
@@ -146,20 +147,20 @@ class SecretSpecTest {
         try (Project project = Project.create(MANIFEST, "")) {
             ResolutionReport report = project.builder().report();
 
-            assertThat(report.getProfile()).isEqualTo("default");
+            assertThat(report.profile()).isEqualTo("default");
 
-            SecretReport database = report.getSecrets().stream()
-                    .filter(s -> "DATABASE_URL".equals(s.getName()))
+            SecretReport database = report.secrets().stream()
+                    .filter(s -> "DATABASE_URL".equals(s.name()))
                     .findFirst()
                     .orElseThrow(() -> new AssertionError("DATABASE_URL not found"));
-            assertThat(database.getStatus()).isEqualTo("missing_required");
-            assertThat(database.isRequired()).withFailMessage("DATABASE_URL was not reported as required").isTrue();
+            assertThat(database.status()).isEqualTo("missing_required");
+            assertThat(database.required()).withFailMessage("DATABASE_URL was not reported as required").isTrue();
 
-            SecretReport sessionSecret = report.getSecrets().stream()
-                    .filter(s -> "DEV_SESSION_SECRET".equals(s.getName()))
+            SecretReport sessionSecret = report.secrets().stream()
+                    .filter(s -> "DEV_SESSION_SECRET".equals(s.name()))
                     .findFirst()
                     .orElseThrow(() -> new AssertionError("DEV_SESSION_SECRET not found"));
-            assertThat(sessionSecret.isDefaultApplied()).withFailMessage("DEV_SESSION_SECRET default was not reported").isTrue();
+            assertThat(sessionSecret.defaultApplied()).withFailMessage("DEV_SESSION_SECRET default was not reported").isTrue();
         }
     }
 
@@ -176,6 +177,8 @@ class SecretSpecTest {
             finally {
                 if (previous != null) {
                     System.setProperty("DATABASE_URL", previous);
+                } else {
+                    System.clearProperty("DATABASE_URL");
                 }
             }
         }
@@ -200,7 +203,7 @@ class SecretSpecTest {
             String manifest = directory.resolve("secretspec.toml").toString();
             String provider = "dotenv://" + directory.resolve(".env");
 
-            SecretSpecBuilder fixture = SecretSpec.builder()
+            SecretSpec.Builder fixture = SecretSpec.builder()
                     .withPath(manifest)
                     .withProvider(provider)
                     .withReason("conformance");
@@ -213,9 +216,6 @@ class SecretSpecTest {
             }
 
             try (Resolved noValues = fixture.withNoValues(true).load()) {
-                
-                System.out.println(noValues);
-                
                 assertJsonEqual(
                         readString(directory.resolve("expected_no_values.json")),
                         noValues.fieldsJson()
@@ -233,29 +233,29 @@ class SecretSpecTest {
     private static ObjectNode canonicalResolved(Resolved resolved) {
         ObjectNode secrets = MAPPER.createObjectNode();
 
-        for (Map.Entry<String, ResolvedSecret> entry : resolved.getSecrets().entrySet()) {
+        for (Map.Entry<String, ResolvedSecret> entry : resolved.secrets().entrySet()) {
             String name = entry.getKey();
             ResolvedSecret secret = entry.getValue();
 
-            String value = secret.isAsPath()
+            String value = secret.asPath()
                     ? readString(Path.of(Objects.requireNonNull(secret.get(), name + " had no path")))
-                    : secret.getValue();
+                    : secret.value();
 
             ObjectNode secretNode = MAPPER.createObjectNode();
             secretNode.put("value", value);
-            secretNode.put("source", secret.getSource());
-            secretNode.put("as_path", secret.isAsPath());
+            secretNode.put("source", secret.source());
+            secretNode.put("as_path", secret.asPath());
 
             secrets.set(name, secretNode);
         }
 
         ObjectNode root = MAPPER.createObjectNode();
-        root.put("profile", resolved.getProfile());
+        root.put("profile", resolved.profile());
         root.set("secrets", secrets);
         root.set("missing_required", MAPPER.createArrayNode());
 
         ArrayNode missingOptional = MAPPER.createArrayNode();
-        for (String item : resolved.getMissingOptional()) {
+        for (String item : resolved.missingOptional()) {
             missingOptional.add(item);
         }
         root.set("missing_optional", missingOptional);
@@ -266,20 +266,20 @@ class SecretSpecTest {
     private static ObjectNode canonicalReport(ResolutionReport report) {
         ObjectNode secrets = MAPPER.createObjectNode();
 
-        for (SecretReport secret : report.getSecrets()) {
+        for (SecretReport secret : report.secrets()) {
             ObjectNode node = MAPPER.createObjectNode();
-            node.put("status", secret.getStatus());
-            node.put("required", secret.isRequired());
-            node.put("as_path", secret.isAsPath());
-            node.put("generated", secret.isGenerated());
-            node.put("default_applied", secret.isDefaultApplied());
-            node.put("source_provider", secret.getSourceProvider() != null);
+            node.put("status", secret.status());
+            node.put("required", secret.required());
+            node.put("as_path", secret.asPath());
+            node.put("generated", secret.generated());
+            node.put("default_applied", secret.defaultApplied());
+            node.put("source_provider", secret.sourceProvider() != null);
 
-            secrets.set(secret.getName(), node);
+            secrets.set(secret.name(), node);
         }
 
         ObjectNode root = MAPPER.createObjectNode();
-        root.put("profile", report.getProfile());
+        root.put("profile", report.profile());
         root.set("secrets", secrets);
 
         return root;
@@ -344,7 +344,7 @@ class SecretSpecTest {
             this.provider = "dotenv://" + root.resolve(".env");
         }
 
-        SecretSpecBuilder builder() {
+        SecretSpec.Builder builder() {
             return SecretSpec.builder()
                     .withPath(manifestPath)
                     .withProvider(provider)

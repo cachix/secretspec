@@ -1,8 +1,8 @@
 package org.cachix.secretspec;
 
-import java.util.Objects;
-
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.Objects;
 
 
 /**
@@ -11,24 +11,17 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public final class ResolvedSecret {
 
     /**
-     * The inline value, or null for an <c>as_path</c> secret.
+     * The inline value, or null for an {@code as_path} secret.
      */
-    @JsonProperty("value")
     private String value;
 
     /**
      * The materialized file path, or null for an inline secret.
      */
-    @JsonProperty("path")
     private String path;
 
-    @JsonProperty("as_path")
     private boolean asPath;
-
-    @JsonProperty("source")
-    private String source = "";
-
-    @JsonProperty("source_provider")
+    private String source;
     private String sourceProvider;
 
     /** Returns the usable string: the file path for an {@code as_path} secret,
@@ -39,30 +32,46 @@ public final class ResolvedSecret {
         return asPath ? path : value;
     }
 
-    public ResolvedSecret() {
+    @JsonCreator
+    public ResolvedSecret(
+            @JsonProperty("value") String value,
+            @JsonProperty("path") String path,
+            @JsonProperty("as_path") boolean asPath,
+            @JsonProperty("source") String source,
+            @JsonProperty("source_provider") String sourceProvider
+    ) {
+        this.value = value;
+        this.path = path;
+        this.asPath = asPath;
+        this.source = source != null ? source : "";
+        this.sourceProvider = sourceProvider;
     }
 
-    public String getValue() {
+    @JsonProperty("value")
+    public String value() {
         return value;
     }
 
-    public String getPath() {
+    @JsonProperty("path")
+    public String path() {
         return path;
     }
 
-    public boolean isAsPath() {
+    @JsonProperty("as_path")
+    public boolean asPath() {
         return asPath;
     }
 
-    public String getSource() {
+    @JsonProperty("source")
+    public String source() {
         return source;
     }
 
-    public String getSourceProvider() {
+    @JsonProperty("source_provider")
+    public String sourceProvider() {
         return sourceProvider;
     }
 
-    
     @Override
     public int hashCode() {
         return Objects.hash(

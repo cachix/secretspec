@@ -96,11 +96,13 @@
     pkgs.pkg-config
     # Installs the secretspec-ffi archive with its header and pkg-config file
     pkgs.cargo-c
-    # Need JDK 11 as a compilation target, JDK 21 to run gradle
+    # Need JDK 11 as a compilation target
     pkgs.jdk11
-    pkgs.jdk21
   ];
 
+  env = {
+    SECRETSPEC_JVM_TARGET_JDK = "${pkgs.jdk11}";
+  } //
   # Fully-static musl build of the Go SDK (-tags static + -extldflags -static).
   # Keep these Linux-only: interpolating the cross-toolchain paths on macOS makes
   # Nix build a Linux-targeting GCC toolchain from source just to enter the shell.
@@ -110,7 +112,7 @@
   # realised into the store without polluting the host build environment. The
   # CC_/linker vars are musl-target-scoped, so host (glibc) cargo builds are
   # unaffected; MUSL_CC / MUSL_STATIC_LDFLAGS feed the cgo link step.
-  env = lib.optionalAttrs pkgs.stdenv.isLinux (
+  lib.optionalAttrs pkgs.stdenv.isLinux (
     let
       muslcc = "${pkgs.pkgsCross.musl64.stdenv.cc}/bin/x86_64-unknown-linux-musl-gcc";
     in

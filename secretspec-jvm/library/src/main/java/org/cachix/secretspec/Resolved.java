@@ -1,8 +1,6 @@
 package org.cachix.secretspec;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -15,14 +13,13 @@ import java.util.Collection;
 import java.util.HashMap;
 
 import static java.util.Collections.unmodifiableMap;
+import static org.cachix.secretspec.SafeCopy.safeCopyOf;
 
 
 /**
  * A successful, value-carrying resolution.
  */
 public final class Resolved implements AutoCloseable {
-
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private boolean disposed;
 
@@ -36,8 +33,8 @@ public final class Resolved implements AutoCloseable {
         this.provider = provider;
         this.profile = profile;
         this.scope = scope;
-        this.secrets = Map.copyOf(secrets);
-        this.missingOptional = List.copyOf(missingOptional);
+        this.secrets = safeCopyOf(secrets);
+        this.missingOptional = safeCopyOf(missingOptional);
     }
 
     private final String provider;
@@ -49,23 +46,27 @@ public final class Resolved implements AutoCloseable {
     private final Map<String, ResolvedSecret> secrets;
     private final List<String> missingOptional;
 
-    public String getProvider() {
+    public String provider() {
         return provider;
     }
 
-    public String getProfile() {
+    public String profile() {
         return profile;
     }
 
-    public String getScope() {
+    public String scope() {
         return scope;
     }
 
-    public Map<String, ResolvedSecret> getSecrets() {
+    public Map<String, ResolvedSecret> secrets() {
         return secrets;
     }
 
-    public List<String> getMissingOptional() {
+    public ResolvedSecret secret(String name) {
+        return secrets.get(name);
+    }
+
+    public List<String> missingOptional() {
         return missingOptional;
     }
 
@@ -89,9 +90,11 @@ public final class Resolved implements AutoCloseable {
      */
     public Map<String, String> fields() {
         var fields = new HashMap<String, String>();
-        for (var key: secrets.keySet()) {
-            var secret = Optional.ofNullable(secrets.get(key));
-            fields.put(key, secret.map(ResolvedSecret::get).orElse(null));
+        for (var entry: secrets.entrySet()) {
+            var secret = Optional.ofNullable(entry.getValue())
+                                 .map(ResolvedSecret::get)
+                                 .orElse(null);
+            fields.put(entry.getKey(), secret);
         }
         return unmodifiableMap(fields);
     }
@@ -102,7 +105,7 @@ public final class Resolved implements AutoCloseable {
      */
     public String fieldsJson() {
         try {
-            return MAPPER.writeValueAsString(fields());
+            return SecretSpecJsonContext.MAPPER.writeValueAsString(fields());
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to serialize fields to JSON", e);
         }
@@ -118,12 +121,12 @@ public final class Resolved implements AutoCloseable {
         disposed = true;
         UncheckedIOException firstError = null;
         for (var secret : secrets.values()) {
-            if (!secret.isAsPath() || secret.getPath() == null)
+            if (!secret.asPath() || secret.path() == null)
                 continue;
 
             try {
-                var path = Paths.get(secret.getPath());
-                Files.delete(path);
+                var path = Paths.get(secret.path());
+                Files.deleteIfExists(path);
             }
             catch (IOException e) {
                 if (firstError == null)

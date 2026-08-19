@@ -115,7 +115,8 @@ else
   echo "==> SKIP Swift (the XCFramework SDK is macOS-only)"
   names+=("Swift"); statuses+=("SKIP")
 fi
-run "JVM"     jvm   run_jvm
+# The gradle wrapper will download gradle, use "bash" as a placeholder
+run "JVM"     bash   run_jvm
 
 echo
 echo "==> Conformance summary"

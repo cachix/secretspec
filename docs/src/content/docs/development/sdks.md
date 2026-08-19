@@ -68,6 +68,7 @@ the Ruby gem, and the PHP extension binaries is added in SecretSpec 0.17.
 | Swift (0.18+) | — | — | ✓ | ✓ | — | — |
 | PHP | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
 | Haskell (source) | ✓ (CI-covered) | — | — | — | ✓ (CI-covered, 0.17+) | — |
+| JVM (0.20+) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 Notes:
 

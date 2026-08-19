@@ -616,12 +616,15 @@
   overflow-clip-margin: 0.75rem;
   cursor: grab;
   padding-inline: 1rem;
-  touch-action: none;
+  /* The reel is dragged vertically here, so the browser keeps horizontal panning
+     and everything vertical is delivered to the script. */
+  touch-action: pan-x;
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 14%, #000 86%, transparent);
   mask-image: linear-gradient(to bottom, transparent, #000 14%, #000 86%, transparent);
 }
 
-.landing-reel.is-dragging {
+.landing-reel.is-dragging,
+.landing-reel.is-dragging .landing-reel-item {
   cursor: grabbing;
 }
 
@@ -686,6 +689,9 @@
 }
 
 .landing-reel-item {
+  /* Each pill is a link to its provider or SDK page; the gaps between them read
+     as the drag surface. */
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: clamp(0.4rem, 3cqw, 0.7rem);
@@ -1132,6 +1138,9 @@
   }
 
   .landing-reel {
+    /* Laid out horizontally at this width, so vertical swipes have to keep
+       scrolling the page or the reel traps the reader on a phone. */
+    touch-action: pan-y;
     --reel-slot-w: 13.5rem;
     height: 4.75rem;
     -webkit-mask-image: linear-gradient(to right, transparent, #000 10%, #000 90%, transparent);

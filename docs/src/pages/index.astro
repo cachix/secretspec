@@ -595,6 +595,8 @@ const reelScriptData = {
     const SNAP_ANIM_MS = 320;
     const RESUME_AFTER_MS = 4200;
     const DRAG_THRESHOLD_PX = 5;
+    // How long the wheel has to be quiet before the reel settles on a slot.
+    const WHEEL_SETTLE_MS = 140;
     const INERTIA_MIN_VELOCITY = 0.00075;
     const INERTIA_FRICTION = 0.000055;
     const INERTIA_MAX_VELOCITY = 0.05;
@@ -934,13 +936,15 @@ const reelScriptData = {
           startY: e.clientY,
           startScroll: scroll,
           moved: false,
+          captured: false,
           pointerId: e.pointerId,
           lastPos: MOBILE_QUERY.matches ? e.clientX : e.clientY,
           lastTime: performance.now(),
           velocity: 0,
         };
-        try { reelEl.setPointerCapture(e.pointerId); } catch (_) {}
-        reelEl.classList.add('is-dragging');
+        // The pointer is deliberately not captured yet: capturing here would
+        // retarget the click to this container, and the slot's link would never
+        // fire. It is captured in onPointerMove once a drag is under way.
       }
       function onPointerMove(e) {
         if (!dragState) return;
@@ -955,13 +959,21 @@ const reelScriptData = {
         dragState.lastTime = now;
 
         const d = horizontal ? (e.clientX - dragState.startX) : (e.clientY - dragState.startY);
-        if (Math.abs(d) > DRAG_THRESHOLD_PX) dragState.moved = true;
+        if (Math.abs(d) > DRAG_THRESHOLD_PX && !dragState.moved) {
+          dragState.moved = true;
+          // Past the threshold this is a drag, not a click, so take the pointer
+          // to keep receiving moves if it leaves the reel.
+          try { reelEl.setPointerCapture(dragState.pointerId); dragState.captured = true; } catch (_) {}
+          reelEl.classList.add('is-dragging');
+        }
         scroll = dragState.startScroll - d / slotSize;
         applyScroll();
       }
-      function onPointerUp(e) {
+      function onPointerUp() {
         if (!dragState) return;
-        try { reelEl.releasePointerCapture(dragState.pointerId); } catch (_) {}
+        if (dragState.captured) {
+          try { reelEl.releasePointerCapture(dragState.pointerId); } catch (_) {}
+        }
         const moved = dragState.moved;
         const staleMs = performance.now() - dragState.lastTime;
         const releaseVelocity = staleMs > 80 ? dragState.velocity * 0.35 : dragState.velocity;
@@ -969,27 +981,22 @@ const reelScriptData = {
         reelEl.classList.remove('is-dragging');
 
         if (moved) {
+          // Swallow the click the browser sends after a drag; a tap that never
+          // moved is left alone so the slot's link opens as usual.
           startInertia(releaseVelocity);
           suppressNextClick = true;
-        } else {
-          const hit = document.elementFromPoint(e.clientX, e.clientY);
-          const slot = hit && hit.closest && hit.closest('.landing-reel-slot');
-          const idx = slot ? Number(slot.dataset.index) : NaN;
-          if (Number.isFinite(idx) && idx !== Math.round(scroll)) {
-            stopAuto();
-            clearTimeout(resumeTimerId);
-            animateTo(idx, SNAP_ANIM_MS);
-            suppressNextClick = true;
-          }
         }
         scheduleResume();
       }
       function onPointerCancel() {
         if (!dragState) return;
-        try { reelEl.releasePointerCapture(dragState.pointerId); } catch (_) {}
+        if (dragState.captured) {
+          try { reelEl.releasePointerCapture(dragState.pointerId); } catch (_) {}
+        }
+        const moved = dragState.moved;
         dragState = null;
         reelEl.classList.remove('is-dragging');
-        snapToNearest();
+        if (moved) snapToNearest();
         scheduleResume();
       }
       function onClickCapture(e) {
@@ -1000,6 +1007,34 @@ const reelScriptData = {
         }
       }
 
+      // Wheel and trackpad browse the reel, matching a drag pixel for pixel. The
+      // page deliberately does not scroll while the cursor is over a reel.
+      let wheelSettleId = null;
+      function onWheel(e) {
+        const horizontal = MOBILE_QUERY.matches;
+        const slotSize = horizontal ? SLOT_W_MOBILE : SLOT_H;
+        const raw = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+        // deltaMode is lines (1) or pages (2) on some browsers, pixels elsewhere.
+        const pixels = e.deltaMode === 1 ? raw * 16 : e.deltaMode === 2 ? raw * slotSize : raw;
+        if (!pixels) return;
+
+        e.preventDefault();
+        stopAuto();
+        stopAnim();
+        clearTimeout(resumeTimerId);
+
+        scroll += pixels / slotSize;
+        applyScroll();
+
+        clearTimeout(wheelSettleId);
+        wheelSettleId = setTimeout(function () {
+          wheelSettleId = null;
+          snapToNearest();
+          scheduleResume();
+        }, WHEEL_SETTLE_MS);
+      }
+
+      reelEl.addEventListener('wheel', onWheel, { passive: false });
       reelEl.addEventListener('pointerdown', onPointerDown);
       reelEl.addEventListener('pointermove', onPointerMove);
       reelEl.addEventListener('pointerup', onPointerUp);
@@ -1014,7 +1049,7 @@ const reelScriptData = {
       });
       reelEl.addEventListener('mouseleave', () => {
         hovering = false;
-        scheduleResume();
+        if (!wheelSettleId) scheduleResume();
       });
       reelEl.addEventListener('focusin', () => {
         stopAuto();

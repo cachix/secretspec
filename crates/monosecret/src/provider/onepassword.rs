@@ -210,6 +210,13 @@ pub struct OnePasswordConfig {
 	/// Supports placeholders: {project}, {profile}, and {key}.
 	/// Defaults to "monosecret/{project}/{profile}/{key}" if not specified.
 	pub folder_prefix: Option<String>,
+	/// Legacy `op+token://<account>/<basePath>` addressing: these segments are
+	/// prepended to a field reference's item path, so a secret's `path` becomes
+	/// the *section* within a single shared item. For example
+	/// `op+token://Development/Dotfiles` with a secret at `path = ["ai"]` reads
+	/// field `ai` of item `Dotfiles` in vault `Development`.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub reference_base_path: Vec<String>,
 }
 
 impl TryFrom<&ProviderUrl> for OnePasswordConfig {
@@ -224,7 +231,7 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
                     "Invalid scheme '1password'. Use 'onepassword' instead (e.g., onepassword://vault)".to_string()
                 ));
 			}
-			"onepassword" | "onepassword+token" | "op" => {}
+			"onepassword" | "onepassword+token" | "op" | "op+token" => {}
 			_ => {
 				return Err(MonosecretError::ProviderOperationFailed(format!(
 					"Invalid scheme '{}' for OnePassword provider",
@@ -241,18 +248,21 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
 		// Checked for both userinfo positions, since the token was accepted in
 		// either, and independently of the host so it cannot be reached only
 		// through a vault-bearing URI.
-		if scheme == "onepassword+token" && (!url.username().is_empty() || url.password().is_some())
+		if matches!(scheme, "onepassword+token" | "op+token")
+			&& (!url.username().is_empty() || url.password().is_some())
 		{
 			return Err(MonosecretError::ProviderOperationFailed(
-				"onepassword+token:// no longer accepts the service account token in the \
-                 URI, because a URI reaches committed manifests, shell history, and CI \
-                 logs. Keep the scheme without the token \
-                 (`onepassword+token://<vault>`) and supply the token as the \
-                 `service_account_token` provider credential (`monosecret config provider \
-                 login <alias>`, or `credentials = { service_account_token = \"keyring\" }` \
-                 on the alias), or set OP_SERVICE_ACCOUNT_TOKEN. See \
-                 https://monosecret.dev/providers/onepassword/#provider-credentials"
-					.to_string(),
+				format!(
+					"{scheme}:// no longer accepts the service account token in the URI, \
+                     because a URI reaches committed manifests, shell history, and CI \
+                     logs. Keep the scheme without the token \
+                     (`{scheme}://<vault>`) and supply the token as the \
+                     `service_account_token` provider credential (`monosecret config provider \
+                     login <alias>`, or `credentials = {{ service_account_token = \"keyring\" }}` \
+                     on the alias), or set OP_SERVICE_ACCOUNT_TOKEN. See \
+                     https://monosecret.dev/providers/onepassword/#provider-credentials"
+				)
+				.to_string(),
 			));
 		}
 
@@ -272,6 +282,25 @@ impl TryFrom<&ProviderUrl> for OnePasswordConfig {
 				// No username, so the host is the vault
 				config.default_vault = Some(host);
 			}
+		}
+
+		// The legacy `op+token://<account>/<basePath>` form treats the URI path
+		// as a base path prepended to item references: a secret's `path`
+		// becomes a section within a single shared item (see
+		// [`OnePasswordConfig::reference_base_path`]). Other schemes reject a
+		// path, since items are addressed with a secret's `ref`, not the
+		// provider URI.
+		if scheme == "op+token" {
+			let path = url.path();
+			let path = path.trim_matches('/');
+			if !path.is_empty() {
+				config.reference_base_path = path
+					.split('/')
+					.filter(|segment| !segment.is_empty())
+					.map(str::to_string)
+					.collect();
+			}
+			return Ok(config);
 		}
 
 		// Item paths (the `op://vault/item/field` form earlier iterations
@@ -427,8 +456,8 @@ crate::register_provider! {
 	config: OnePasswordConfig,
 	name: "onepassword",
 	description: "OnePassword password manager",
-	schemes: ["onepassword", "onepassword+token", "op"],
-	examples: ["onepassword://vault", "onepassword://work@Production", "onepassword+token://vault"],
+	schemes: ["onepassword", "onepassword+token", "op", "op+token"],
+	examples: ["onepassword://vault", "onepassword://work@Production", "onepassword+token://vault", "op+token://account/basePath"],
 	credential_names: [SERVICE_ACCOUNT_TOKEN],
 	preflight: check_auth,
 }
@@ -644,7 +673,34 @@ impl OnePasswordProvider {
 		if coords.vault.is_none() {
 			coords.vault = Some(self.get_vault_name());
 		}
-		Ok(coords)
+		Ok(self.apply_reference_base_path(coords))
+	}
+
+	/// Prepends the legacy `op+token://` base path to a field reference's item
+	/// path, folding the secret's item into a *section* of the shared base
+	/// item. A no-op when no base path is configured (every current scheme
+	/// except `op+token`).
+	fn apply_reference_base_path(
+		&self,
+		mut coords: crate::config::NativeAddress,
+	) -> crate::config::NativeAddress {
+		if self.config.reference_base_path.is_empty() {
+			return coords;
+		}
+		let mut segments = self.config.reference_base_path.clone();
+		segments.push(coords.item.clone());
+		if let Some(section) = &coords.section {
+			segments.extend(section.split('/').map(str::to_string));
+		}
+		let mut segments = segments.into_iter();
+		coords.item = segments.next().expect("base path is non-empty");
+		let rest: Vec<String> = segments.collect();
+		coords.section = if rest.is_empty() {
+			None
+		} else {
+			Some(rest.join("/"))
+		};
+		coords
 	}
 
 	/// Renders the full `op://` reference string for `op read`.
@@ -1356,6 +1412,59 @@ mod tests {
 		let c = config("onepassword://Production");
 		assert_eq!(c.account, None);
 		assert_eq!(c.default_vault.as_deref(), Some("Production"));
+	}
+
+	#[test]
+	fn op_token_uri_parses_vault_and_reference_base_path() {
+		let c = config("op+token://Development/Dotfiles");
+		assert_eq!(c.account, None);
+		assert_eq!(c.default_vault.as_deref(), Some("Development"));
+		assert_eq!(c.reference_base_path, vec!["Dotfiles"]);
+		// A multi-segment base path is preserved as the shared item path.
+		let nested = config("op+token://Development/Shared/team");
+		assert_eq!(nested.reference_base_path, vec!["Shared", "team"]);
+	}
+
+	#[test]
+	fn op_token_uri_rejects_a_token_in_the_uri() {
+		let err = OnePasswordConfig::try_from(&ProviderUrl::new(
+			Url::parse("op+token://acct:ops_tok@Development/Dotfiles").unwrap(),
+		))
+		.unwrap_err();
+		let msg = format!("{err}");
+		assert!(
+			msg.contains("no longer accepts the service account token in the URI"),
+			"expected a token-in-URI refusal, got: {msg}"
+		);
+	}
+
+	#[test]
+	fn op_token_reference_base_path_folds_item_into_section() {
+		let provider = OnePasswordProvider::new(config("op+token://Development/Dotfiles"));
+		let address = Address::Native(&crate::config::NativeAddress {
+			item: "ai".to_string(),
+			field: Some("OPENAI_API_KEY".to_string()),
+			..Default::default()
+		});
+		let coords = provider.operation_coordinates(address).unwrap();
+		assert_eq!(coords.item, "Dotfiles");
+		assert_eq!(coords.section.as_deref(), Some("ai"));
+		assert_eq!(coords.field.as_deref(), Some("OPENAI_API_KEY"));
+		assert_eq!(coords.vault.as_deref(), Some("Development"));
+	}
+
+	#[test]
+	fn op_token_reference_base_path_is_a_noop_when_unset() {
+		let provider = OnePasswordProvider::new(config("onepassword://Development"));
+		let address = Address::Native(&crate::config::NativeAddress {
+			item: "ai".to_string(),
+			field: Some("OPENAI_API_KEY".to_string()),
+			..Default::default()
+		});
+		let coords = provider.operation_coordinates(address).unwrap();
+		assert_eq!(coords.item, "ai");
+		assert_eq!(coords.section, None);
+		assert_eq!(coords.vault.as_deref(), Some("Development"));
 	}
 
 	#[test]

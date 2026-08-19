@@ -805,6 +805,16 @@
 
 .landing-pipeline-flow-arrow {
   --pipeline-flow-line: calc(var(--pipeline-control-row-height) + 0.75rem + 114px);
+  --pipeline-head-size: 0.42rem;
+  /* Rotating the head 45deg puts its point, and the far end of each of its two
+     strokes, this far from the head's centre. */
+  --pipeline-head-reach: calc(var(--pipeline-head-size) * 0.7071);
+  --pipeline-pulse-length: 0.34rem;
+  /* Where the pulse's centre has to stop for its leading edge to land exactly on
+     the head's point rather than carrying on through it. */
+  --pipeline-pulse-stop: calc(
+    var(--pipeline-head-centre) - var(--pipeline-head-reach) + var(--pipeline-pulse-length) / 2
+  );
 }
 
 .landing-pipeline-flow-arrow::before,
@@ -828,11 +838,40 @@
 
 .landing-pipeline-flow-arrow::after,
 .landing-pipeline-flow-head {
-  width: 0.42rem;
-  height: 0.42rem;
+  width: var(--pipeline-head-size);
+  height: var(--pipeline-head-size);
   border-top: 1.5px solid currentColor;
   border-right: 1.5px solid currentColor;
   transform: translateY(calc(-50% + 0.5px)) rotate(45deg);
+}
+
+/* The shaft pulse used to stop dead at the arrowhead. These two carry it on
+   into the head itself: each starts at the far end of one stroke and runs down
+   to the point, where they meet and the head flares. They move with `translate`
+   and `opacity`, so they stay on the compositor like the rest of the arrow, and
+   they sit above the solid head so they read as light travelling along it. */
+.landing-pipeline-flow-edge {
+  position: absolute;
+  z-index: 1;
+  top: var(--pipeline-flow-line);
+  right: var(--pipeline-head-centre);
+  width: calc(var(--pipeline-head-size) * 0.44);
+  height: 0.085rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-accent-300) 70%, white);
+  box-shadow: 0 0 0.15rem 0.03rem color-mix(in srgb, var(--color-accent-400) 70%, transparent);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.landing-pipeline-flow-edge-a {
+  transform: translate(50%, calc(-50% + 0.5px)) rotate(45deg);
+  animation: landing-pipeline-flow-edge-a 3.2s ease-in-out infinite;
+}
+
+.landing-pipeline-flow-edge-b {
+  transform: translate(50%, calc(-50% + 0.5px)) rotate(-45deg);
+  animation: landing-pipeline-flow-edge-b 3.2s ease-in-out infinite;
 }
 
 /* The arrowhead flare used to animate `filter`, which forced a main-thread
@@ -855,42 +894,59 @@
   will-change: translate, opacity;
 }
 
-.landing-pipeline-flow-arrow-in::before,
-.landing-pipeline-flow-arrow-in .landing-pipeline-flow-rail {
+.landing-pipeline-flow-arrow-in::before {
   left: 0;
   right: 0.55rem;
 }
 
-.landing-pipeline-flow-arrow-in::after,
-.landing-pipeline-flow-arrow-in .landing-pipeline-flow-head {
-  right: 0.5rem;
+.landing-pipeline-flow-arrow-in .landing-pipeline-flow-rail {
+  left: 0;
+  right: var(--pipeline-pulse-stop);
 }
 
-.landing-pipeline-flow-arrow-out::before,
-.landing-pipeline-flow-arrow-out .landing-pipeline-flow-rail {
+.landing-pipeline-flow-arrow-in {
+  --pipeline-head-centre: 0.71rem;
+}
+
+.landing-pipeline-flow-arrow-in::after,
+.landing-pipeline-flow-arrow-in .landing-pipeline-flow-head {
+  right: calc(var(--pipeline-head-centre) - var(--pipeline-head-size) / 2);
+}
+
+.landing-pipeline-flow-arrow-out::before {
   left: 0.55rem;
   right: 0;
 }
 
+.landing-pipeline-flow-arrow-out .landing-pipeline-flow-rail {
+  left: 0.55rem;
+  right: var(--pipeline-pulse-stop);
+}
+
+.landing-pipeline-flow-arrow-out {
+  --pipeline-head-centre: 0.16rem;
+}
+
 .landing-pipeline-flow-arrow-out::after,
 .landing-pipeline-flow-arrow-out .landing-pipeline-flow-head {
-  right: -0.05rem;
+  right: calc(var(--pipeline-head-centre) - var(--pipeline-head-size) / 2);
 }
 
 .landing-pipeline-flow-pulse {
   position: absolute;
   inset: 0 auto 0 0;
-  width: 0.42rem;
+  width: var(--pipeline-pulse-length);
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-accent-300) 58%, white);
   box-shadow:
-    0 0 0.24rem 0.08rem color-mix(in srgb, var(--color-accent-400) 72%, transparent),
-    -0.3rem 0 0.4rem color-mix(in srgb, var(--color-accent-500) 38%, transparent);
+    0 0 0.18rem 0.05rem color-mix(in srgb, var(--color-accent-400) 72%, transparent),
+    -0.28rem 0 0.36rem color-mix(in srgb, var(--color-accent-500) 34%, transparent);
   transform: translateX(-50%);
 }
 
 .landing-pipeline-flow-arrow-out .landing-pipeline-flow-rail,
-.landing-pipeline-flow-arrow-out .landing-pipeline-flow-head {
+.landing-pipeline-flow-arrow-out .landing-pipeline-flow-head,
+.landing-pipeline-flow-arrow-out .landing-pipeline-flow-edge {
   animation-delay: 0.8s;
 }
 
@@ -912,11 +968,48 @@
   }
 }
 
-@keyframes landing-pipeline-arrowhead-glow {
-  0%, 62%, 82%, 100% {
+@keyframes landing-pipeline-flow-edge-a {
+  0%, 66% {
+    translate: var(--pipeline-head-reach) 0;
     opacity: 0;
   }
-  72% {
+  69% {
+    opacity: 1;
+  }
+  76% {
+    translate: 0 calc(-1 * var(--pipeline-head-reach));
+    opacity: 1;
+  }
+  83%, 100% {
+    translate: 0 calc(-1 * var(--pipeline-head-reach));
+    opacity: 0;
+  }
+}
+
+@keyframes landing-pipeline-flow-edge-b {
+  0%, 66% {
+    translate: var(--pipeline-head-reach) 0;
+    opacity: 0;
+  }
+  69% {
+    opacity: 1;
+  }
+  76% {
+    translate: 0 var(--pipeline-head-reach);
+    opacity: 1;
+  }
+  83%, 100% {
+    translate: 0 var(--pipeline-head-reach);
+    opacity: 0;
+  }
+}
+
+/* Peaks as the pulse lands on the point and the two sparks launch from it. */
+@keyframes landing-pipeline-arrowhead-glow {
+  0%, 62%, 84%, 100% {
+    opacity: 0;
+  }
+  71% {
     opacity: 1;
   }
 }
@@ -945,7 +1038,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .landing-pipeline-flow-rail,
-  .landing-pipeline-flow-head {
+  .landing-pipeline-flow-head,
+  .landing-pipeline-flow-edge {
     animation: none;
   }
 }
@@ -1004,6 +1098,7 @@
   }
 
   .landing-pipeline-flow-arrow {
+    --pipeline-head-centre: calc(0.5rem + var(--pipeline-head-size) / 2);
     display: block;
     align-self: auto;
     justify-self: center;
@@ -1030,15 +1125,68 @@
 
   .landing-pipeline-flow-arrow::after,
   .landing-pipeline-flow-head {
-    bottom: 0.5rem;
+    bottom: calc(var(--pipeline-head-centre) - var(--pipeline-head-size) / 2);
     right: auto;
     transform: translateX(-50%) rotate(135deg);
+  }
+
+  .landing-pipeline-flow-edge {
+    top: auto;
+    right: auto;
+    left: 50%;
+    bottom: var(--pipeline-head-centre);
+  }
+
+  .landing-pipeline-flow-edge-a {
+    transform: translate(-50%, 50%) rotate(135deg);
+    animation-name: landing-pipeline-flow-edge-a-mobile;
+  }
+
+  .landing-pipeline-flow-edge-b {
+    transform: translate(-50%, 50%) rotate(45deg);
+    animation-name: landing-pipeline-flow-edge-b-mobile;
+  }
+
+  @keyframes landing-pipeline-flow-edge-a-mobile {
+    0%, 66% {
+      translate: 0 var(--pipeline-head-reach);
+      opacity: 0;
+    }
+    69% {
+      opacity: 1;
+    }
+    76% {
+      translate: var(--pipeline-head-reach) 0;
+      opacity: 1;
+    }
+    83%, 100% {
+      translate: var(--pipeline-head-reach) 0;
+      opacity: 0;
+    }
+  }
+
+  @keyframes landing-pipeline-flow-edge-b-mobile {
+    0%, 66% {
+      translate: 0 var(--pipeline-head-reach);
+      opacity: 0;
+    }
+    69% {
+      opacity: 1;
+    }
+    76% {
+      translate: calc(-1 * var(--pipeline-head-reach)) 0;
+      opacity: 1;
+    }
+    83%, 100% {
+      translate: calc(-1 * var(--pipeline-head-reach)) 0;
+      opacity: 0;
+    }
   }
 
   .landing-pipeline-flow-arrow-in .landing-pipeline-flow-rail,
   .landing-pipeline-flow-arrow-out .landing-pipeline-flow-rail {
     top: 0;
-    bottom: 0.55rem;
+    bottom: var(--pipeline-pulse-stop);
     left: 50%;
     right: auto;
     width: 0.12rem;
@@ -1050,7 +1198,7 @@
   .landing-pipeline-flow-pulse {
     inset: 0 0 auto 0;
     width: auto;
-    height: 0.42rem;
+    height: var(--pipeline-pulse-length);
     box-shadow:
       0 0 0.24rem 0.08rem color-mix(in srgb, var(--color-accent-400) 72%, transparent),
       0 -0.3rem 0.4rem color-mix(in srgb, var(--color-accent-500) 38%, transparent);

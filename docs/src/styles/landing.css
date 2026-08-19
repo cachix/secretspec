@@ -202,6 +202,32 @@
   color: var(--color-gray-300);
 }
 
+/* Inline links inside the hero subtitle. They stay in the paragraph's own color
+   so three of them in one sentence don't compete with the headline; only the
+   underline carries the accent. */
+.landing-subtitle-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-accent-600) 45%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  transition: color 0.15s, text-decoration-color 0.15s;
+}
+
+.landing-subtitle-link:hover {
+  color: var(--color-accent-700);
+  text-decoration-color: var(--color-accent-700);
+}
+
+[data-theme='dark'] .landing-subtitle-link {
+  text-decoration-color: color-mix(in srgb, var(--color-accent-200) 55%, transparent);
+}
+
+[data-theme='dark'] .landing-subtitle-link:hover {
+  color: var(--color-accent-200);
+  text-decoration-color: var(--color-accent-200);
+}
+
 .landing-hero-actions {
   display: flex;
   flex-direction: column;

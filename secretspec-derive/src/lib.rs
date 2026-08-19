@@ -780,7 +780,8 @@ mod secret_spec_generation {
     /// # Generated Code Example
     ///
     /// ```ignore
-    /// #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    /// #[derive(Debug, ::secretspec::__private::serde::Serialize, ::secretspec::__private::serde::Deserialize)]
+    /// #[serde(crate = "::secretspec::__private::serde")]
     /// pub struct SecretSpec {
     ///     pub database_url: String,
     ///     pub api_key: Option<String>,
@@ -791,8 +792,8 @@ mod secret_spec_generation {
         let fields = field_info.values().map(|info| info.generate_struct_field());
 
         quote! {
-            #[derive(Debug, serde::Serialize, serde::Deserialize)]
-            #[serde(crate = "serde")]
+            #[derive(Debug, ::secretspec::__private::serde::Serialize, ::secretspec::__private::serde::Deserialize)]
+            #[serde(crate = "::secretspec::__private::serde")]
             pub struct SecretSpec {
                 #(#fields,)*
             }
@@ -812,7 +813,8 @@ mod secret_spec_generation {
     /// # Generated Code Example
     ///
     /// ```ignore
-    /// #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    /// #[derive(Debug, ::secretspec::__private::serde::Serialize, ::secretspec::__private::serde::Deserialize)]
+    /// #[serde(crate = "::secretspec::__private::serde")]
     /// pub enum SecretSpecProfile {
     ///     Development {
     ///         database_url: String,
@@ -829,8 +831,8 @@ mod secret_spec_generation {
         profile_variants: &[proc_macro2::TokenStream],
     ) -> proc_macro2::TokenStream {
         quote! {
-            #[derive(Debug, serde::Serialize, serde::Deserialize)]
-            #[serde(crate = "serde")]
+            #[derive(Debug, ::secretspec::__private::serde::Serialize, ::secretspec::__private::serde::Deserialize)]
+            #[serde(crate = "::secretspec::__private::serde")]
             pub enum SecretSpecProfile {
                 #(#profile_variants,)*
             }
@@ -1441,7 +1443,7 @@ fn generate_secret_spec_code(ir: CodegenIr) -> proc_macro2::TokenStream {
 
     // Combine all components
     quote! {
-        use secretspec::__private::{secrecy::ExposeSecret, serde};
+        use ::secretspec::__private::secrecy::ExposeSecret;
 
         #secret_spec_struct
         #secret_spec_profile_enum

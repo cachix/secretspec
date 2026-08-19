@@ -32,6 +32,13 @@ secretspec = "0.20"
 secretspec-derive = "0.20"
 ```
 
+:::caution[Version compatibility]
+Generated code reaches `serde` and `secrecy` through `secretspec` starting in
+SecretSpec 0.20. On 0.19 and earlier, also depend on `secrecy = { version =
+"0.10", features = ["serde"] }` and `serde = { version = "1", features =
+["derive"] }`.
+:::
+
 The examples on this page are compiled as Cargo examples in
 `secretspec-derive`. They generate their types from this manifest:
 

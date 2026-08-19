@@ -625,16 +625,26 @@
   cursor: grabbing;
 }
 
+/* The reel's scroll position changes on every animation frame. Declaring it
+   non-inherited keeps that change on the track itself instead of invalidating
+   the style of all ~900 nodes below it. */
+@property --reel-scroll {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0;
+}
+
 .landing-reel-track {
-  --scroll: 0;
+  --reel-scroll: 0;
   display: flex;
   flex-direction: column;
-  will-change: transform;
-  transform: translate3d(0, calc((1 - var(--scroll)) * 76px), 0);
+  /* `transform` holds the resting position; the script animates `translate` on
+     top of it so the move itself can run on the compositor. */
+  will-change: transform, translate;
+  transform: translate3d(0, calc((1 - var(--reel-scroll)) * 76px), 0);
 }
 
 .landing-reel-slot {
-  --i: 0;
   --reel-color: var(--color-accent-500);
   height: 76px;
   display: flex;
@@ -654,19 +664,17 @@
   justify-content: flex-start;
 }
 
+/* Only the handful of slots around the centre are visibly scaled or faded, so
+   the script writes those two values on just those slots. Everything else rests
+   at the far end of the ramp, which is also the correct render without JS. */
 .landing-reel-slot-inner {
-  --d-raw: calc(var(--i) - var(--scroll));
-  --d: max(var(--d-raw), calc(-1 * var(--d-raw)));
-  --p: max(0, min(1, calc(1 - var(--d) / 2.25)));
-  --focus: max(0, min(1, calc(1 - var(--d) * 2)));
-
   display: flex;
   align-items: center;
   min-width: 0;
   max-width: 100%;
   transform-origin: center;
-  transform: scale(calc(0.82 + 0.18 * var(--p)));
-  opacity: calc(0.3 + 0.7 * var(--p));
+  transform: scale(0.82);
+  opacity: 0.3;
 }
 
 .landing-pipeline-side:first-child .landing-reel-slot-inner {
@@ -686,28 +694,47 @@
   border: 1px solid;
   border-radius: 999px;
   font-size: clamp(0.75rem, 6cqw, 0.9375rem);
-  border-color: color-mix(in srgb,
-    var(--reel-color) calc(var(--focus) * 100%),
-    var(--color-gray-200));
-  background: color-mix(in srgb,
-    var(--sl-color-bg) calc(var(--p) * 100%),
-    var(--sl-color-bg-nav));
-  color: color-mix(in srgb,
-    var(--reel-color) calc(var(--focus) * 100%),
-    var(--color-gray-700));
-  font-weight: calc(500 + 100 * var(--focus));
+  position: relative;
+  border-color: var(--color-gray-200);
+  background: var(--sl-color-bg);
+  color: var(--color-gray-700);
+  font-weight: 500;
+  transition: color 0.34s ease;
+}
+
+/* The accent ring and glow sit on their own layer, exactly over the pill's
+   border box, so the highlight cross-fades with `opacity` — which the
+   compositor can run — instead of transitioning `box-shadow` and
+   `border-color`, which repaint a blurred shadow on the main thread. */
+.landing-reel-item::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border: 1px solid var(--reel-color);
+  border-radius: inherit;
   box-shadow:
-    0 0 0 4px color-mix(in srgb, var(--reel-color) calc(var(--focus) * 18%), transparent),
-    0 10px 24px -8px color-mix(in srgb, var(--reel-color) calc(var(--focus) * 45%), transparent);
+    0 0 0 4px color-mix(in srgb, var(--reel-color) 18%, transparent),
+    0 10px 24px -8px color-mix(in srgb, var(--reel-color) 45%, transparent);
+  opacity: 0;
+  transition: opacity 0.34s ease;
+  pointer-events: none;
 }
 
 [data-theme='dark'] .landing-reel-item {
-  border-color: color-mix(in srgb,
-    var(--reel-color) calc(var(--focus) * 100%),
-    var(--color-gray-800));
-  color: color-mix(in srgb,
-    var(--reel-color) calc(var(--focus) * 100%),
-    var(--color-gray-300));
+  border-color: var(--color-gray-800);
+  color: var(--color-gray-300);
+}
+
+/* Only the slot at the centre of the reel carries the accent treatment, so it
+   is driven by a class the script toggles rather than by colour interpolation
+   recomputed for every slot on every frame. */
+.landing-reel-slot.is-active .landing-reel-item {
+  color: var(--reel-color);
+  font-weight: 600;
+}
+
+.landing-reel-slot.is-active .landing-reel-item::after {
+  opacity: 1;
 }
 
 .landing-reel-item span {
@@ -770,11 +797,22 @@
   pointer-events: none;
 }
 
+.landing-pipeline-flow-arrow {
+  --pipeline-flow-line: calc(var(--pipeline-control-row-height) + 0.75rem + 114px);
+}
+
 .landing-pipeline-flow-arrow::before,
 .landing-pipeline-flow-arrow::after {
   content: '';
   position: absolute;
-  top: calc(var(--pipeline-control-row-height) + 0.75rem + 114px);
+  top: var(--pipeline-flow-line);
+}
+
+.landing-pipeline-flow-head,
+.landing-pipeline-flow-rail {
+  position: absolute;
+  top: var(--pipeline-flow-line);
+  pointer-events: none;
 }
 
 .landing-pipeline-flow-arrow::before {
@@ -782,88 +820,98 @@
   background: currentColor;
 }
 
-.landing-pipeline-flow-arrow::after {
+.landing-pipeline-flow-arrow::after,
+.landing-pipeline-flow-head {
   width: 0.42rem;
   height: 0.42rem;
   border-top: 1.5px solid currentColor;
   border-right: 1.5px solid currentColor;
   transform: translateY(calc(-50% + 0.5px)) rotate(45deg);
+}
+
+/* The arrowhead flare used to animate `filter`, which forced a main-thread
+   repaint on every frame for the life of the page. A pre-blurred copy sitting
+   under the solid arrowhead fades in instead, so the compositor can run it. */
+.landing-pipeline-flow-head {
+  filter: drop-shadow(0 0 0.3rem color-mix(in srgb, var(--color-accent-300) 80%, white));
+  opacity: 0;
   animation: landing-pipeline-arrowhead-glow 3.2s ease-in-out infinite;
 }
 
-.landing-pipeline-flow-arrow-in::before {
+/* The rail is exactly as wide as the pulse's travel, so moving the pulse is a
+   composited `translate: 100%` rather than an animated `left`, which relaid
+   out the hero on every frame. */
+.landing-pipeline-flow-rail {
+  height: 0.12rem;
+  opacity: 0;
+  transform: translateY(calc(-50% + 0.5px));
+  animation: landing-pipeline-flow 3.2s ease-in-out infinite;
+  will-change: translate, opacity;
+}
+
+.landing-pipeline-flow-arrow-in::before,
+.landing-pipeline-flow-arrow-in .landing-pipeline-flow-rail {
   left: 0;
   right: 0.55rem;
 }
 
-.landing-pipeline-flow-arrow-in::after {
+.landing-pipeline-flow-arrow-in::after,
+.landing-pipeline-flow-arrow-in .landing-pipeline-flow-head {
   right: 0.5rem;
 }
 
-.landing-pipeline-flow-arrow-in {
-  --pipeline-flow-start: 0rem;
-  --pipeline-flow-end: calc(100% - 0.55rem);
-}
-
-.landing-pipeline-flow-arrow-out::before {
+.landing-pipeline-flow-arrow-out::before,
+.landing-pipeline-flow-arrow-out .landing-pipeline-flow-rail {
   left: 0.55rem;
   right: 0;
 }
 
-.landing-pipeline-flow-arrow-out::after {
+.landing-pipeline-flow-arrow-out::after,
+.landing-pipeline-flow-arrow-out .landing-pipeline-flow-head {
   right: -0.05rem;
-}
-
-.landing-pipeline-flow-arrow-out {
-  --pipeline-flow-start: 0.55rem;
-  --pipeline-flow-end: 100%;
 }
 
 .landing-pipeline-flow-pulse {
   position: absolute;
-  top: calc(var(--pipeline-control-row-height) + 0.75rem + 114px);
-  left: var(--pipeline-flow-start);
+  inset: 0 auto 0 0;
   width: 0.42rem;
-  height: 0.12rem;
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-accent-300) 58%, white);
   box-shadow:
     0 0 0.24rem 0.08rem color-mix(in srgb, var(--color-accent-400) 72%, transparent),
     -0.3rem 0 0.4rem color-mix(in srgb, var(--color-accent-500) 38%, transparent);
-  opacity: 0;
-  transform: translate(-50%, calc(-50% + 0.5px));
-  animation: landing-pipeline-flow 3.2s ease-in-out infinite;
+  transform: translateX(-50%);
 }
 
-.landing-pipeline-flow-arrow-out .landing-pipeline-flow-pulse,
-.landing-pipeline-flow-arrow-out::after {
+.landing-pipeline-flow-arrow-out .landing-pipeline-flow-rail,
+.landing-pipeline-flow-arrow-out .landing-pipeline-flow-head {
   animation-delay: 0.8s;
 }
 
 @keyframes landing-pipeline-flow {
   0%, 10% {
-    left: var(--pipeline-flow-start);
+    translate: 0 0;
     opacity: 0;
   }
   18% {
     opacity: 1;
   }
   72% {
-    left: var(--pipeline-flow-end);
+    translate: 100% 0;
     opacity: 1;
   }
   80%, 100% {
-    left: var(--pipeline-flow-end);
+    translate: 100% 0;
     opacity: 0;
   }
 }
 
 @keyframes landing-pipeline-arrowhead-glow {
   0%, 62%, 82%, 100% {
-    filter: drop-shadow(0 0 0 transparent);
+    opacity: 0;
   }
   72% {
-    filter: drop-shadow(0 0 0.3rem color-mix(in srgb, var(--color-accent-300) 80%, white));
+    opacity: 1;
   }
 }
 
@@ -890,8 +938,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .landing-pipeline-flow-pulse,
-  .landing-pipeline-flow-arrow::after {
+  .landing-pipeline-flow-rail,
+  .landing-pipeline-flow-head {
     animation: none;
   }
 }
@@ -950,8 +998,6 @@
   }
 
   .landing-pipeline-flow-arrow {
-    --pipeline-flow-start: 0rem;
-    --pipeline-flow-end: calc(100% - 0.55rem);
     display: block;
     align-self: auto;
     justify-self: center;
@@ -962,7 +1008,8 @@
   }
 
   .landing-pipeline-flow-arrow::before,
-  .landing-pipeline-flow-arrow::after {
+  .landing-pipeline-flow-arrow::after,
+  .landing-pipeline-flow-head {
     top: auto;
     left: 50%;
   }
@@ -975,38 +1022,49 @@
     height: auto;
   }
 
-  .landing-pipeline-flow-arrow::after {
+  .landing-pipeline-flow-arrow::after,
+  .landing-pipeline-flow-head {
     bottom: 0.5rem;
     right: auto;
     transform: translateX(-50%) rotate(135deg);
   }
 
-  .landing-pipeline-flow-pulse {
-    top: var(--pipeline-flow-start);
+  .landing-pipeline-flow-arrow-in .landing-pipeline-flow-rail,
+  .landing-pipeline-flow-arrow-out .landing-pipeline-flow-rail {
+    top: 0;
+    bottom: 0.55rem;
     left: 50%;
+    right: auto;
     width: 0.12rem;
+    height: auto;
+    transform: translateX(-50%);
+    animation-name: landing-pipeline-flow-mobile;
+  }
+
+  .landing-pipeline-flow-pulse {
+    inset: 0 0 auto 0;
+    width: auto;
     height: 0.42rem;
     box-shadow:
       0 0 0.24rem 0.08rem color-mix(in srgb, var(--color-accent-400) 72%, transparent),
       0 -0.3rem 0.4rem color-mix(in srgb, var(--color-accent-500) 38%, transparent);
-    transform: translate(-50%, -50%);
-    animation-name: landing-pipeline-flow-mobile;
+    transform: translateY(-50%);
   }
 
   @keyframes landing-pipeline-flow-mobile {
     0%, 10% {
-      top: var(--pipeline-flow-start);
+      translate: 0 0;
       opacity: 0;
     }
     18% {
       opacity: 1;
     }
     72% {
-      top: var(--pipeline-flow-end);
+      translate: 0 100%;
       opacity: 1;
     }
     80%, 100% {
-      top: var(--pipeline-flow-end);
+      translate: 0 100%;
       opacity: 0;
     }
   }
@@ -1086,7 +1144,7 @@
     top: 0;
     left: 50%;
     height: 100%;
-    transform: translate3d(calc(-1 * (var(--scroll) + 0.5) * var(--reel-slot-w)), 0, 0);
+    transform: translate3d(calc(-1 * (var(--reel-scroll) + 0.5) * var(--reel-slot-w)), 0, 0);
   }
 
   .landing-reel-slot {

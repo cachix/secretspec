@@ -325,6 +325,14 @@ function animatedCodeLines(html: string) {
 const isReelDuplicate = (index: number, itemCount: number) =>
   index < itemCount || index >= itemCount * 2;
 
+// The reel starts centred on `itemCount`. Rendering the resulting scale and
+// fade up front means the first paint matches what the script would draw.
+const reelSlotStyle = (index: number, itemCount: number) => {
+  const distance = Math.abs(index - itemCount);
+  const proximity = Math.max(0, Math.min(1, 1 - distance / 2.25));
+  return `transform:scale(${(0.82 + 0.18 * proximity).toFixed(4)});opacity:${(0.3 + 0.7 * proximity).toFixed(4)}`;
+};
+
 const reelScriptData = {
   consumers: consumerMetadata.map((c) => ({ secrets: c.secrets })),
   providerCount: providerMetadata.length,
@@ -376,18 +384,18 @@ const reelScriptData = {
       <div class="landing-reel" data-reel="providers" data-direction="down"
            data-item-count={providerMetadata.length}
            aria-label="Scrollable list of secret providers">
-        <div class="landing-reel-track" style={`--scroll:${providerMetadata.length}`}>
+        <div class="landing-reel-track" style={`--reel-scroll:${providerMetadata.length}`}>
           {providerLoop.map((p, i) => (
             <a
               href={`/providers/${p.slug}`}
-              class="landing-reel-slot"
+              class:list={['landing-reel-slot', { 'is-active': i === providerMetadata.length }]}
               data-index={i}
-              style={`--i:${i};--reel-color:${providerTone(p)}`}
+              style={`--reel-color:${providerTone(p)}`}
               draggable="false"
               aria-hidden={isReelDuplicate(i, providerMetadata.length) ? 'true' : undefined}
               tabindex={isReelDuplicate(i, providerMetadata.length) ? -1 : undefined}
             >
-              <div class="landing-reel-slot-inner">
+              <div class="landing-reel-slot-inner" style={reelSlotStyle(i, providerMetadata.length)}>
                 <div class="landing-reel-item">
                   {typeof p.icon === 'string' ? (
                     <>
@@ -409,7 +417,8 @@ const reelScriptData = {
     </div>
 
     <div class="landing-pipeline-flow-arrow landing-pipeline-flow-arrow-in" aria-hidden="true">
-      <span class="landing-pipeline-flow-pulse"></span>
+      <span class="landing-pipeline-flow-rail"><span class="landing-pipeline-flow-pulse"></span></span>
+      <span class="landing-pipeline-flow-head"></span>
     </div>
 
     <div class="landing-pipeline-center">
@@ -434,7 +443,8 @@ const reelScriptData = {
     </div>
 
     <div class="landing-pipeline-flow-arrow landing-pipeline-flow-arrow-out" aria-hidden="true">
-      <span class="landing-pipeline-flow-pulse"></span>
+      <span class="landing-pipeline-flow-rail"><span class="landing-pipeline-flow-pulse"></span></span>
+      <span class="landing-pipeline-flow-head"></span>
     </div>
 
     <div class="landing-pipeline-side">
@@ -444,18 +454,18 @@ const reelScriptData = {
       <div class="landing-reel" data-reel="consumers" data-direction="up"
            data-item-count={consumerMetadata.length}
            aria-label="Scrollable list of SDKs and integrations">
-        <div class="landing-reel-track" style={`--scroll:${consumerMetadata.length}`}>
+        <div class="landing-reel-track" style={`--reel-scroll:${consumerMetadata.length}`}>
           {consumerLoop.map((c, i) => (
             <a
               href={c.href}
-              class="landing-reel-slot"
+              class:list={['landing-reel-slot', { 'is-active': i === consumerMetadata.length }]}
               data-index={i}
-              style={`--i:${i};--reel-color:${consumerTone(c)}`}
+              style={`--reel-color:${consumerTone(c)}`}
               draggable="false"
               aria-hidden={isReelDuplicate(i, consumerMetadata.length) ? 'true' : undefined}
               tabindex={isReelDuplicate(i, consumerMetadata.length) ? -1 : undefined}
             >
-              <div class="landing-reel-slot-inner">
+              <div class="landing-reel-slot-inner" style={reelSlotStyle(i, consumerMetadata.length)}>
                 <div class="landing-reel-item">
                   {c.icon ? (
                     <>
@@ -589,6 +599,18 @@ const reelScriptData = {
     const INERTIA_FRICTION = 0.000055;
     const INERTIA_MAX_VELOCITY = 0.05;
     const AUTO_EPOCH = performance.now();
+    const REDUCE_MOTION = window.matchMedia
+      ? window.matchMedia('(prefers-reduced-motion: reduce)')
+      : null;
+    // Both are needed to run the reel off the main thread: `translate` composes
+    // with the track's own `transform`, and Web Animations hands the work to the
+    // compositor. Without them the reel falls back to animating frame by frame.
+    const CAN_COMPOSITE =
+      typeof Element !== 'undefined' &&
+      typeof Element.prototype.animate === 'function' &&
+      typeof CSS !== 'undefined' &&
+      typeof CSS.supports === 'function' &&
+      CSS.supports('translate', '0px');
 
     function esc(s) {
       return String(s).replace(/[&<>"']/g, (c) => ({
@@ -627,23 +649,83 @@ const reelScriptData = {
     function makeReel(opts) {
       const { reelEl, itemCount, direction, onActiveChange, phase } = opts;
       const trackEl = reelEl.querySelector('.landing-reel-track');
+      const slotEls = trackEl.querySelectorAll('.landing-reel-slot');
+      const innerEls = Array.prototype.map.call(slotEls, (slot) =>
+        slot.querySelector('.landing-reel-slot-inner'));
       let scroll = itemCount;
       let currentActive = -1;
+      let activeSlotEl = null;
+      let windowStart = 0;
+      let windowEnd = -1;
       let rafId = null;
       let autoTimerId = null;
       let autoStartId = null;
       let resumeTimerId = null;
       let dragState = null;
       let suppressNextClick = false;
+      let tween = null;
+      let centreTimerId = null;
 
-      function applyScroll() {
+      // Slots further than this from the centre are already fully scaled down and
+      // faded out, so there is nothing to redraw for them.
+      const WINDOW = 3;
+
+      function ease(t) {
+        return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      }
+
+      function proximityAt(index, scrollValue) {
+        return Math.max(0, Math.min(1, 1 - Math.abs(index - scrollValue) / 2.25));
+      }
+
+      function scaleFor(proximity) {
+        return 'scale(' + (0.82 + 0.18 * proximity) + ')';
+      }
+
+      function opacityFor(proximity) {
+        return String(0.3 + 0.7 * proximity);
+      }
+
+      function wrapScroll(value) {
         const min = itemCount * 0.5;
         const max = itemCount * 2.5;
-        while (scroll < min) scroll += itemCount;
-        while (scroll > max) scroll -= itemCount;
-        trackEl.style.setProperty('--scroll', String(scroll));
+        let wrapped = value;
+        while (wrapped < min) wrapped += itemCount;
+        while (wrapped > max) wrapped -= itemCount;
+        return wrapped;
+      }
 
-        const rounded = Math.round(scroll);
+      function paintWindow(scrollValue, centre) {
+        const from = centre - WINDOW;
+        const to = centre + WINDOW;
+        for (let i = windowStart; i <= windowEnd; i += 1) {
+          if (i < from || i > to) {
+            const el = innerEls[i];
+            if (el) {
+              el.style.transform = 'scale(0.82)';
+              el.style.opacity = '0.3';
+            }
+          }
+        }
+        for (let i = from; i <= to; i += 1) {
+          const el = innerEls[i];
+          if (!el) continue;
+          const proximity = proximityAt(i, scrollValue);
+          el.style.transform = scaleFor(proximity);
+          el.style.opacity = opacityFor(proximity);
+        }
+        windowStart = from;
+        windowEnd = to;
+      }
+
+      function setCentre(rounded) {
+        const centreEl = slotEls[rounded] || null;
+        if (centreEl !== activeSlotEl) {
+          if (activeSlotEl) activeSlotEl.classList.remove('is-active');
+          if (centreEl) centreEl.classList.add('is-active');
+          activeSlotEl = centreEl;
+        }
+
         const active = ((rounded % itemCount) + itemCount) % itemCount;
         if (active !== currentActive) {
           currentActive = active;
@@ -651,9 +733,32 @@ const reelScriptData = {
         }
       }
 
+      function applyScroll() {
+        scroll = wrapScroll(scroll);
+        trackEl.style.setProperty('--reel-scroll', String(scroll));
+
+        const rounded = Math.round(scroll);
+        paintWindow(scroll, rounded);
+        setCentre(rounded);
+      }
+
       function stopAnim() {
         if (rafId) cancelAnimationFrame(rafId);
         rafId = null;
+        if (centreTimerId) {
+          clearTimeout(centreTimerId);
+          centreTimerId = null;
+        }
+        if (tween) {
+          // Hand back the position the reel is actually showing, then drop the
+          // animations so the inline styles below them take over from there.
+          const elapsed = Number(tween.anims[0].currentTime) || 0;
+          const progress = Math.max(0, Math.min(1, elapsed / tween.duration));
+          scroll = tween.start + (tween.target - tween.start) * ease(progress);
+          tween.anims.forEach((anim) => anim.cancel());
+          tween = null;
+          applyScroll();
+        }
       }
 
       function startInertia(initialVelocity) {
@@ -690,14 +795,14 @@ const reelScriptData = {
         rafId = requestAnimationFrame(step);
       }
 
-      function animateTo(target, duration) {
-        stopAnim();
+      // Frame-by-frame fallback, used when the browser cannot run the reel on the
+      // compositor. Every frame costs a style pass and a repaint of each slot.
+      function animateOnMainThread(target, duration) {
         const start = scroll;
         const startTime = performance.now();
         const step = (now) => {
           const t = Math.min(1, (now - startTime) / duration);
-          const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-          scroll = start + (target - start) * e;
+          scroll = start + (target - start) * ease(t);
           applyScroll();
           if (t < 1) {
             rafId = requestAnimationFrame(step);
@@ -708,6 +813,79 @@ const reelScriptData = {
         rafId = requestAnimationFrame(step);
       }
 
+      // Number of keyframes sampled along the eased path. The compositor
+      // interpolates linearly between them, so this only needs to be fine enough
+      // that the sampling error stays under a pixel.
+      const TWEEN_SAMPLES = 12;
+
+      function animateTo(target, duration) {
+        stopAnim();
+
+        if (!CAN_COMPOSITE) {
+          animateOnMainThread(target, duration);
+          return;
+        }
+
+        // Wrapping the target only relabels which copy of the loop is on screen,
+        // so shift the start by the same amount to keep the two in one frame of
+        // reference.
+        const wrapped = wrapScroll(target);
+        const start = scroll + (wrapped - target);
+        if (Math.abs(wrapped - start) < 0.001) return;
+
+        const horizontal = MOBILE_QUERY.matches;
+        const slotSize = horizontal ? SLOT_W_MOBILE : SLOT_H;
+        const centre = Math.round(wrapped);
+        const from = Math.min(Math.round(start), centre) - WINDOW;
+        const to = Math.max(Math.round(start), centre) + WINDOW;
+
+        // Settle on the final state up front. The animations below start from
+        // where the reel is now and end exactly here, so when they stop applying
+        // these values are already what should be on screen: no flicker, and
+        // nothing left to write when the tween ends.
+        scroll = wrapped;
+        trackEl.style.setProperty('--reel-scroll', String(wrapped));
+        paintWindow(wrapped, centre);
+
+        const positions = [];
+        for (let k = 0; k <= TWEEN_SAMPLES; k += 1) {
+          positions.push(start + (wrapped - start) * ease(k / TWEEN_SAMPLES));
+        }
+
+        const anims = [trackEl.animate(
+          positions.map((position) => {
+            const offset = (wrapped - position) * slotSize;
+            return { translate: horizontal ? offset + 'px 0' : '0 ' + offset + 'px' };
+          }),
+          { duration: duration, easing: 'linear' }
+        )];
+
+        for (let i = from; i <= to; i += 1) {
+          const el = innerEls[i];
+          if (!el) continue;
+          anims.push(el.animate(
+            positions.map((position) => {
+              const proximity = proximityAt(i, position);
+              return { transform: scaleFor(proximity), opacity: opacityFor(proximity) };
+            }),
+            { duration: duration, easing: 'linear' }
+          ));
+        }
+
+        tween = { anims: anims, start: start, target: wrapped, duration: duration };
+        anims[0].addEventListener('finish', () => {
+          if (tween && tween.anims === anims) tween = null;
+        });
+
+        // The highlight belongs to whichever slot is nearest the centre, which
+        // changes half way through the move.
+        setCentre(Math.round(start));
+        centreTimerId = setTimeout(() => {
+          centreTimerId = null;
+          setCentre(centre);
+        }, duration / 2);
+      }
+
       function snapToNearest(duration) {
         const target = Math.round(scroll);
         if (Math.abs(target - scroll) < 0.001) return;
@@ -715,12 +893,18 @@ const reelScriptData = {
       }
 
       function autoTick() {
+        // Settle any tween still in flight first, so `scroll` below is the
+        // position actually on screen rather than a stale one.
+        stopAnim();
         const base = Math.round(scroll);
         const target = direction === 'up' ? base + 1 : base - 1;
         animateTo(target, AUTO_ANIM_MS);
       }
 
       function startAuto() {
+        // Checked here rather than at the call sites: the intersection observer
+        // below also calls start(), and its first callback lands after setup.
+        if (REDUCE_MOTION && REDUCE_MOTION.matches) return;
         if (autoTimerId || autoStartId) return;
         const elapsed = performance.now() - AUTO_EPOCH;
         const cyclePos = ((elapsed - (phase || 0)) % AUTO_TICK_MS + AUTO_TICK_MS) % AUTO_TICK_MS;
@@ -883,9 +1067,17 @@ const reelScriptData = {
       consumerCtl.start();
     }
 
-    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      providerCtl.stop();
-      consumerCtl.stop();
+    if (REDUCE_MOTION) {
+      if (REDUCE_MOTION.matches) {
+        providerCtl.stop();
+        consumerCtl.stop();
+      }
+      REDUCE_MOTION.addEventListener('change', function () {
+        if (REDUCE_MOTION.matches) {
+          providerCtl.stop();
+          consumerCtl.stop();
+        }
+      });
     }
   })();
 </script>
@@ -2617,19 +2809,25 @@ REDIS_URL=redis://…</code></pre>
 
     let nextOrderIndex = 1;
     let autoSelectTimer: number | undefined;
+    let selectedLine: HTMLElement | undefined;
+    let lineOffsets: number[] = [];
 
-    function lineOffset(line: HTMLElement) {
-      return line.getBoundingClientRect().top - firstLine.getBoundingClientRect().top;
+    // Offsets only change when the list is laid out again, so they are measured
+    // in one batch instead of being read back on every selection.
+    function measureLines() {
+      const base = firstLine.getBoundingClientRect().top;
+      lineOffsets = lines.map((line) => line.getBoundingClientRect().top - base);
     }
 
     function selectLine(line: HTMLElement) {
-      lines.forEach(function (line) {
-        line.classList.remove('is-selected');
-      });
+      if (selectedLine === line) return;
+      if (selectedLine) selectedLine.classList.remove('is-selected');
+      selectedLine = line;
       line.classList.add('is-selected');
+      const offset = lineOffsets[lines.indexOf(line)] ?? 0;
       cursorEl.style.setProperty(
         '--landing-provider-cursor-transform',
-        `translate(0.28rem, ${lineOffset(line)}px)`
+        `translate(0.28rem, ${offset}px)`
       );
       providerListEl.style.setProperty(
         '--run-selected',
@@ -2682,8 +2880,43 @@ REDIS_URL=redis://…</code></pre>
       line.addEventListener('blur', function () { resumeAutoSelect(line); });
     });
 
+    measureLines();
     selectLine(firstLine);
-    startAutoSelect();
+
+    if ('ResizeObserver' in window) {
+      let measured = false;
+      new ResizeObserver(function () {
+        // The first callback fires on observe, before anything has changed.
+        if (!measured) {
+          measured = true;
+          return;
+        }
+        measureLines();
+        if (selectedLine) {
+          const offset = lineOffsets[lines.indexOf(selectedLine)] ?? 0;
+          cursorEl.style.setProperty(
+            '--landing-provider-cursor-transform',
+            `translate(0.28rem, ${offset}px)`
+          );
+        }
+      }).observe(providerListEl);
+    }
+
+    // Without this the list keeps cycling for the whole session, long after the
+    // reader has scrolled past it.
+    if ('IntersectionObserver' in window) {
+      new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) {
+            startAutoSelect();
+          } else {
+            stopAutoSelect();
+          }
+        });
+      }, { threshold: 0.2 }).observe(providerListEl);
+    } else {
+      startAutoSelect();
+    }
 
     reduceMotion.addEventListener('change', function () {
       if (reduceMotion.matches) {

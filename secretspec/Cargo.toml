@@ -5,6 +5,7 @@ edition.workspace = true
 repository = "https://github.com/cachix/secretspec"
 description = "A declarative interface for every secret provider."
 license = "Apache-2.0"
+default-run = "secretspec"
 
 [lib]
 name = "secretspec"
@@ -13,6 +14,11 @@ path = "src/lib.rs"
 [[bin]]
 name = "secretspec"
 path = "src/bin/secretspec.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "docker-credential-secretspec"
+path = "src/bin/docker-credential-secretspec.rs"
 required-features = ["cli"]
 
 [dependencies]
@@ -30,6 +36,7 @@ thiserror.workspace = true
 etcetera.workspace = true
 colored.workspace = true
 dotenv.workspace = true
+dunce = { workspace = true, optional = true }
 inquire.workspace = true
 miette.workspace = true
 serde_json.workspace = true
@@ -55,12 +62,13 @@ rand.workspace = true
 rsa.workspace = true
 uuid.workspace = true
 data-encoding.workspace = true
+sha2.workspace = true
 detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
 
 [features]
 default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "scaleway", "sops"]
-cli = ["dep:toml_edit", "dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable"]
+cli = ["dep:toml_edit", "dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable", "dep:dunce"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
 keeper = ["dep:keeper-secrets-manager-core"]

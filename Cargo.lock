@@ -5272,6 +5272,7 @@ dependencies = [
  "keepass",
  "keeper-secrets-manager-core",
  "keyring",
+ "libc",
  "linkme",
  "miette",
  "percent-encoding",

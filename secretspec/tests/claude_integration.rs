@@ -137,7 +137,12 @@ CLAUDE_TOKEN = { description = "Claude token", default = "fixture-claude-token",
     }
 
     fn state(&self) -> Value {
-        read_json(&self.root.join("config/secretspec/claude-code.json"))
+        read_json(&self.state_path())
+    }
+
+    fn state_path(&self) -> PathBuf {
+        find_named(&self.root, "claude-code.json")
+            .unwrap_or_else(|| self.root.join("config/secretspec/claude-code.json"))
     }
 }
 
@@ -553,7 +558,7 @@ fn logout_remains_available_after_unconfigure() {
 fn managed_state_rejects_relative_settings_paths() {
     let fixture = Fixture::new();
     assert_success("Claude configure", &fixture.embedded_configure("null"));
-    let state_path = fixture.root.join("config/secretspec/claude-code.json");
+    let state_path = fixture.state_path();
     let mut state = read_json(&state_path);
     state["settings"][0]["settings"] = Value::String("relative/settings.json".to_string());
     fs::write(&state_path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
@@ -652,7 +657,7 @@ fn new_state_and_settings_files_are_owner_only() {
     let fixture = Fixture::new();
     fs::remove_file(&fixture.settings).unwrap();
     assert_success("Claude configure", &fixture.embedded_configure("null"));
-    let state = fixture.root.join("config/secretspec/claude-code.json");
+    let state = fixture.state_path();
     assert_eq!(
         fs::metadata(&fixture.settings)
             .unwrap()

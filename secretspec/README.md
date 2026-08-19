@@ -62,6 +62,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
 - **[Configuration Inheritance](https://secretspec.dev/concepts/inheritance/)**: Extend and override shared configurations using the `extends` feature
 - **[Audit Logging](https://secretspec.dev/concepts/audit/)**: Every secret access recorded locally (who, when, why, outcome) — on by default, secret values never logged
 - **[Discovery](https://secretspec.dev/reference/cli#init)**: `secretspec init` to discover secrets from existing `.env` files
+- **[Claude Code credential integration](https://secretspec.dev/integrations/claude-code/)** (0.20+): Configure, store, and remove API or gateway credentials through Claude Code's native `apiKeyHelper`
 
 ## Quick Start
 

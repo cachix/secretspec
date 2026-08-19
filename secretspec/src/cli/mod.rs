@@ -1,7 +1,8 @@
 use crate::config::{Config, GlobalConfig, GlobalDefaults, Profile as ConfigProfile, Project};
 use crate::provider::{Provider, providers, spec_names_known_provider};
 use crate::{CallerContext, ExportFormat, Secrets};
-use clap::{Parser, Subcommand, ValueEnum, ValueHint};
+use clap::parser::ValueSource;
+use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum, ValueHint};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -10,7 +11,39 @@ use std::io::{IsTerminal, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+mod claude;
 mod completion;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TypedArgs {
+    pub(crate) file: bool,
+    pub(crate) profile: bool,
+    pub(crate) provider: bool,
+    pub(crate) reason: bool,
+}
+
+impl TypedArgs {
+    fn from_matches(matches: &ArgMatches) -> Self {
+        let mut typed = Self::default();
+        let mut current = Some(matches);
+        while let Some(matches) = current {
+            for (id, typed) in [
+                ("file", &mut typed.file),
+                ("profile", &mut typed.profile),
+                ("provider", &mut typed.provider),
+                ("reason", &mut typed.reason),
+            ] {
+                if matches.ids().any(|known| known.as_str() == id)
+                    && matches.value_source(id) == Some(ValueSource::CommandLine)
+                {
+                    *typed = true;
+                }
+            }
+            current = matches.subcommand().map(|(_, matches)| matches);
+        }
+        typed
+    }
+}
 
 /// Main CLI structure for the secretspec application.
 ///
@@ -226,6 +259,11 @@ enum Commands {
     Config {
         #[command(subcommand)]
         action: ConfigAction,
+    },
+    #[command(about = "Manage Claude Code API credential integration (0.20+)")]
+    Claude {
+        #[command(subcommand)]
+        action: claude::ClaudeAction,
     },
     /// Import secrets from a provider to another provider
     Import {
@@ -910,10 +948,16 @@ fn caller_context(cli: &Cli) -> Result<Option<CallerContext>> {
 #[doc(hidden)]
 pub fn main() -> Result<()> {
     completion::complete();
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let typed = TypedArgs::from_matches(&matches);
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
+    };
     let caller = caller_context(&cli)?;
 
     match cli.command {
+        Commands::Claude { action } => claude::run(action, &cli.file, &cli.reason, &caller, typed),
         // Initialize a new secretspec.toml configuration file
         Commands::Init {
             from,

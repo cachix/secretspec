@@ -148,6 +148,24 @@ intentionally leaves the checksum alone, making a missing checksum refresh
 visible during release review. There is no Swift registry credential or
 separate repository.
 
+### WinGet — bootstrap submission pending
+
+[`winget-releaser`](https://github.com/vedantmgoyal9/winget-releaser)
+requires one package version in the WinGet Community Repository before it can
+derive future manifests. `Cachix.SecretSpec` 0.18.0 is the manual bootstrap:
+
+1. Merge the initial manifest submission in
+   [microsoft/winget-pkgs#413776](https://github.com/microsoft/winget-pkgs/pull/413776).
+2. Create a classic GitHub personal access token for `domenkozar` with only the
+   `public_repo` scope. The action does not support fine-grained tokens.
+3. Store it as the `WINGET_TOKEN` repository secret. The action uses the
+   `domenkozar/winget-pkgs` fork created for the bootstrap submission.
+
+After this one-time setup, `winget.yml` runs after each successful stable
+`Release` workflow and submits the matching
+`secretspec-x86_64-pc-windows-msvc.zip`. Manual dispatch accepts an existing
+published release tag for recovery or retry. Prerelease tags are skipped.
+
 ## Python (PyPI) — `python-wheels.yml`
 
 - **Build:** the Rust resolver is statically linked into a pyo3 extension

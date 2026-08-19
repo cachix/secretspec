@@ -1,0 +1,43 @@
+name: Publish to WinGet
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Published GitHub release tag to submit (for example, v0.19.0)"
+        required: true
+        type: string
+  # cargo-dist creates the GitHub Release with GITHUB_TOKEN, which does not
+  # emit another `release` workflow event. Wait for the Release workflow
+  # instead so WinGet Releaser sees the published Windows ZIP.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: winget-${{ inputs.release_tag || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        startsWith(github.event.workflow_run.head_branch, 'v') &&
+        !contains(github.event.workflow_run.head_branch, '-')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Submit WinGet manifest
+        uses: vedantmgoyal9/winget-releaser@b3a5dae0047c6180023acba3f548c55fdf6b7193 # main
+        with:
+          identifier: Cachix.SecretSpec
+          installers-regex: '^secretspec-x86_64-pc-windows-msvc\.zip$'
+          release-tag: ${{ inputs.release_tag || github.event.workflow_run.head_branch }}
+          fork-user: domenkozar
+          token: ${{ secrets.WINGET_TOKEN }}
